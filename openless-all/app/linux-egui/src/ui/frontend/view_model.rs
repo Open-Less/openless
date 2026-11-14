@@ -451,6 +451,8 @@ pub enum SettingsProviderAuth {
     Other,
     /// Endpoint + Model + API Key.
     ApiKey,
+    /// Endpoint + API Key, without model selection.
+    ApiKeyWithoutModel,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]

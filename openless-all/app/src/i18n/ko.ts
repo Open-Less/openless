@@ -1685,6 +1685,7 @@ export const ko: typeof zhCN = {
         asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan 실시간 ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrDeepseek: 'DeepSeek ASR',
         asrSherpaOnnxLocal: '로컬 sherpa-onnx(실험적)',
         asrFoundryLocalWhisper: '로컬 Whisper(Foundry Local)',
         asrLocalWhisper: '로컬 Whisper(배치)',
@@ -1705,6 +1706,8 @@ export const ko: typeof zhCN = {
         'gemini-3.5-transcribe와 gemini-3.5-transcribe-live는 스마트 전사를 지원합니다. Live는 말하는 동안 초안을 표시하며, 녹음은 한 번에 최대 10분까지 가능합니다. 녹음이 끝나면 군더더기 표현을 제거하고 말로 한 정정을 반영하며 최종 텍스트를 정리합니다. 두 모델 모두 작업 언어와 사전 용어를 지원하지만 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
       validateSuccessAudio:
         '짧은 무음 샘플로 오디오 연결을 확인했습니다. 짧은 녹음으로 전사 품질도 확인하세요.',
+      deepseekAsrNotice:
+        '녹음이 끝나면 DeepSeek에 오디오를 업로드합니다. 긴 녹음은 최대 120초 단위로 나눕니다. API 키만 필요하며 모델 선택이나 음성 인식 사전 키워드는 지원하지 않습니다.',
       elevenLabsUploadNotice:
         'ElevenLabs는 녹음 오디오를 설정된 엔드포인트에 업로드해 일괄 전사합니다.',
       zenmuxVocabularyNote:

@@ -325,6 +325,18 @@
   },
   {
     "kind": "asr",
+    "providerType": "deepseek",
+    "labelKey": "asrDeepseek",
+    "defaultEndpoint": "https://api.deepseek.com/v1",
+    "defaultModel": null,
+    "authRequirement": "api_key_without_model",
+    "validationProbe": "asr_silence",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "asr",
     "providerType": "bailian",
     "labelKey": "asrBailian",
     "defaultEndpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference/",

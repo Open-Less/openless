@@ -1735,6 +1735,7 @@ export const es: typeof zhCN = {
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek ASR en tiempo real',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrDeepseek: 'DeepSeek ASR',
         asrSherpaOnnxLocal: 'sherpa-onnx local (experimental)',
         asrFoundryLocalWhisper: 'Whisper local (Foundry Local)',
         asrLocalWhisper: 'Whisper local (por lotes)',
@@ -1755,6 +1756,8 @@ export const es: typeof zhCN = {
         'gemini-3.5-transcribe y gemini-3.5-transcribe-live permiten transcripción inteligente. Live muestra un borrador mientras hablas, con un máximo de 10 minutos por grabación. Al terminar, elimina muletillas, aplica correcciones habladas y da formato al texto final. Ambos modelos admiten idiomas de trabajo y términos del diccionario, pero no instrucciones de estilo, traducción, edición de texto ni preguntas y respuestas; usa el modo tradicional con un LLM para esas tareas.',
       validateSuccessAudio:
         'Conexión de audio verificada con una breve muestra de silencio. Confirma la calidad de transcripción con una grabación corta.',
+      deepseekAsrNotice:
+        'El audio se sube a DeepSeek al terminar de grabar. Las grabaciones largas se dividen en segmentos de hasta 120 segundos. Solo se necesita una clave API, sin selección de modelo ni palabras del diccionario para el reconocimiento.',
       elevenLabsUploadNotice:
         'ElevenLabs sube el audio grabado a la dirección configurada para transcribirlo por lotes.',
       zenmuxVocabularyNote:

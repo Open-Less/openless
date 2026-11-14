@@ -4,6 +4,9 @@ import { presetsFor } from './ChannelList';
 import { filterOrcaRouterModels } from '../../lib/ipc/asr-credentials';
 
 const atlascloudPreset = LLM_LABELS.find((p) => p.id === 'atlascloud');
+if (ASR_LABELS.find((p) => p.id === 'deepseek')?.nameKey !== 'asrDeepseek') {
+  throw new Error('DeepSeek ASR label is missing');
+}
 if (LLM_LABELS.find((p) => p.id === 'opencode')?.nameKey !== 'opencode') {
   throw new Error('OpenCode LLM label is missing');
 }

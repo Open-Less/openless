@@ -27,6 +27,7 @@ const GEMINI_PROVIDER_ID: &str = "gemini";
 const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("volcengine", "asrVolcengine"),
     ("elevenlabs", "asrElevenLabs"),
+    ("deepseek", "asrDeepseek"),
     ("bailian", "asrBailian"),
     ("bailian-qwen3-realtime", "asrBailianQwen3"),
     ("bailian-fun-asr-flash", "asrBailianFunAsrFlash"),
@@ -126,6 +127,8 @@ pub enum AuthRequirement {
     Siwc,
     None,
     ApiKey,
+    /// API key and endpoint, with no model selection in the provider protocol.
+    ApiKeyWithoutModel,
     EndpointModelOptionalApiKey,
     ApiKeyUnlessCustomEndpoint,
     Volcengine,
@@ -253,6 +256,7 @@ fn provider_descriptor_with_label(
             default_asr_endpoint(&id),
             default_asr_model(&id),
             match id.as_str() {
+                "deepseek" => AuthRequirement::ApiKeyWithoutModel,
                 "volcengine" => AuthRequirement::Volcengine,
                 XFYUN_PROVIDER_ID => AuthRequirement::Xfyun,
                 TENCENT_CLOUD_PROVIDER_ID => AuthRequirement::TencentCloud,
@@ -509,6 +513,7 @@ pub fn auth_requirement_satisfied(
     match descriptor.auth_requirement {
         AuthRequirement::None => true,
         AuthRequirement::ApiKey => api_key && endpoint && model,
+        AuthRequirement::ApiKeyWithoutModel => api_key && endpoint,
         AuthRequirement::EndpointModelOptionalApiKey => endpoint && model,
         AuthRequirement::ApiKeyUnlessCustomEndpoint => {
             endpoint
@@ -575,6 +580,7 @@ pub fn equivalent_endpoint(left: &str, right: &str) -> bool {
 pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "elevenlabs" => Some("https://api.elevenlabs.io/v1"),
+        "deepseek" => Some("https://api.deepseek.com/v1"),
         "bailian" => Some(BAILIAN_DEFAULT_ENDPOINT),
         "bailian-qwen3-realtime" => Some(QWEN3_REALTIME_DEFAULT_ENDPOINT),
         "bailian-fun-asr-flash" => Some(DASHSCOPE_MULTIMODAL_DEFAULT_ENDPOINT),
@@ -843,6 +849,7 @@ pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
         "whisper"
+            | "deepseek"
             | "siliconflow"
             | "zhipu"
             | "groq"
@@ -1104,6 +1111,8 @@ const DEFAULT_BATCH_ASR_CHUNK_MS: u64 = 600_000;
 pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) -> Option<u64> {
     match provider_id {
         "zhipu" | "openrouter" | "zenmux" => Some(30_000),
+        // DeepSeek caps each upload at 120 seconds, below 8 MiB at 16 kHz mono.
+        "deepseek" => Some(120_000),
         // Preserve the custom provider's "0/blank = send the whole clip" setting.
         OPENAI_COMPATIBLE_ASR_PROVIDER_ID => advanced.chunk_duration_ms,
         _ => advanced
@@ -1115,12 +1124,14 @@ pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrRequestFormat {
     Multipart,
+    MultipartFileOnly,
     OpenRouterJson,
     ZenMuxJson,
 }
 
 pub fn whisper_request_format(provider_id: &str) -> AsrRequestFormat {
     match provider_id {
+        "deepseek" => AsrRequestFormat::MultipartFileOnly,
         "openrouter" => AsrRequestFormat::OpenRouterJson,
         "zenmux" => AsrRequestFormat::ZenMuxJson,
         _ => AsrRequestFormat::Multipart,
@@ -1329,6 +1340,60 @@ mod tests {
             assert_eq!(limit, None);
             assert_eq!(chunks[0].len(), pcm.len());
         }
+    }
+
+    #[test]
+    fn deepseek_asr_requires_a_key_but_no_model_and_caps_uploads() {
+        let descriptor = provider_descriptor(ProviderKind::Asr, "deepseek").unwrap();
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert_eq!(descriptor.default_model, None);
+        assert!(descriptor.static_models.is_empty());
+        assert_eq!(
+            descriptor.auth_requirement,
+            AuthRequirement::ApiKeyWithoutModel
+        );
+        let mut configuration = CredentialConfiguration::default();
+        assert!(!asr_configured("deepseek", &configuration, None));
+        configuration.asr_api_key = true;
+        assert!(asr_configured("deepseek", &configuration, None));
+        assert!(api_key_required(
+            ProviderKind::Asr,
+            "deepseek",
+            Some("http://localhost/v1")
+        ));
+        assert_eq!(
+            active_asr_provider_kind("deepseek"),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
+        assert_eq!(
+            whisper_request_format("deepseek"),
+            AsrRequestFormat::MultipartFileOnly
+        );
+        let advanced = AdvancedAsrConfig {
+            chunk_duration_ms: Some(600_000),
+            ..Default::default()
+        };
+        let limit = batch_asr_chunk_limit_ms("deepseek", advanced);
+        assert_eq!(limit, Some(120_000));
+        let pcm = vec![0; 32_000 * 241];
+        let chunks = crate::asr::whisper::split_pcm_by_duration(&pcm, limit);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(
+            chunks.iter().map(|chunk| chunk.len()).sum::<usize>(),
+            pcm.len()
+        );
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.len() <= 32_000 * 120 && chunk.len() + 44 <= 8 * 1024 * 1024));
+        let llm = provider_descriptor(ProviderKind::Llm, "deepseek").unwrap();
+        assert_eq!(
+            llm.auth_requirement,
+            AuthRequirement::ApiKeyUnlessCustomEndpoint
+        );
+        assert!(llm.default_model.is_some());
     }
 
     #[test]

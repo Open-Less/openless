@@ -4283,6 +4283,20 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.providers.presets.asrDeepseek",
+        text: row("DeepSeek ASR", "DeepSeek ASR", "DeepSeek ASR", "DeepSeek ASR", "DeepSeek ASR"),
+    },
+    Msg {
+        key: "settings.providers.deepseekAsrNotice",
+        text: row(
+            "录音结束后上传至 DeepSeek 识别，长录音自动按最多 120 秒分段。只需 API Key，无需选择模型；语音识别不支持词典热词。",
+            "錄音結束後上傳至 DeepSeek 識別，長錄音自動以最多 120 秒分段。只需 API Key，無需選擇模型；語音識別不支援詞典熱詞。",
+            "Audio is uploaded to DeepSeek after recording stops. Long recordings are split into chunks of up to 120 seconds. Only an API key is needed, with no model selection or ASR dictionary hotwords.",
+            "録音終了後に音声を DeepSeek にアップロードします。長い録音は最大 120 秒ごとに分割されます。API キーのみ必要で、モデル選択や音声認識の辞書キーワードには対応していません。",
+            "녹음이 끝나면 DeepSeek에 오디오를 업로드합니다. 긴 녹음은 최대 120초 단위로 나눕니다. API 키만 필요하며 모델 선택이나 음성 인식 사전 키워드는 지원하지 않습니다.",
+        ),
+    },
+    Msg {
         key: "settings.providers.presets.asrElevenLabs",
         text: row(
             "ElevenLabs Scribe",

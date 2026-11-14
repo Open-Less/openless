@@ -1624,6 +1624,7 @@ export const zhCN = {
         asrTencentCloud: '腾讯云混元实时 ASR',
         asrGemini: 'Google Gemini 专用转写',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrDeepseek: 'DeepSeek ASR',
         asrSherpaOnnxLocal: '本地 sherpa-onnx（实验性）',
         asrFoundryLocalWhisper: '本地 Whisper（Foundry Local）',
         asrLocalWhisper: '本地 Whisper（批量解码）',
@@ -1643,6 +1644,8 @@ export const zhCN = {
       geminiTranscribeOmniNotice:
         'gemini-3.5-transcribe 和 gemini-3.5-transcribe-live 均支持智能转写。Live 边说边显示草稿，每次录音最长 10 分钟；录音结束后，智能转写会去除口头语、处理口述纠正并整理最终文本。两个模型均支持工作语言和词典词汇，但不使用风格提示词，也不支持翻译、纯文本润色或问答；这些任务请使用传统模式搭配 LLM。',
       validateSuccessAudio: '已通过短静音音频的连接验证，请再用短录音确认转写效果。',
+      deepseekAsrNotice:
+        '录音结束后上传至 DeepSeek 识别，长录音自动按最多 120 秒分段。只需 API Key，无需选择模型；语音识别不支持词典热词。',
       elevenLabsUploadNotice: 'ElevenLabs 会将录音上传到所配置的端点进行批量转写。',
       zenmuxVocabularyNote:
         'ZenMux 走 JSON 转写协议，不发送词典热词（prompt/hotwords）；词典仍会进入润色链路，但不会参与语音识别偏置。',
