@@ -3501,13 +3501,13 @@ fn deepseek_tts_credentials(root: &CredsRoot) -> Result<(openless_core::SecretVa
     let config: openless_core::web_search::WebSearchConfig = root.web_search.as_deref()
         .map(serde_json::from_str).transpose()?.unwrap_or_default();
     let entry = root.providers.llm.get(&config.tts_channel)
-        .ok_or_else(|| anyhow!("DeepSeek speech is not configured"))?;
+        .ok_or_else(|| anyhow::anyhow!("DeepSeek speech is not configured"))?;
     let provider = entry.channel.providerType.as_deref().unwrap_or(&config.tts_channel);
     let endpoint = entry.baseURL.as_deref().filter(|s| !s.is_empty()).unwrap_or("https://api.deepseek.com/v1");
     anyhow::ensure!(provider == "deepseek" && openless_core::web_search::native_deepseek(endpoint, "deepseek-flash"),
         "Speech requires an official DeepSeek channel");
     let key = entry.apiKey.as_deref().filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| anyhow!("DeepSeek API key is missing"))?;
+        .ok_or_else(|| anyhow::anyhow!("DeepSeek API key is missing"))?;
     Ok((openless_core::SecretValue::new(key), config.voice))
 }
 
