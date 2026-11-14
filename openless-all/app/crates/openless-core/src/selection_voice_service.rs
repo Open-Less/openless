@@ -448,8 +448,7 @@ impl SelectionVoiceWorkflow {
         let output = if context.pipeline_mode == PipelineMode::Multimodal
             && !crate::provider_rules::omni_uses_text_provider_for_auxiliary(
                 &context.omni.provider_type,
-            )
-        {
+            ) {
             crate::cloud_providers::polish_with_omni_text(
                 self.credential_store.as_ref(),
                 &context,

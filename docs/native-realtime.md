@@ -62,7 +62,7 @@ does not currently list `none`.
 Audio buffers while the connection opens, then streams during recording.
 Stopping sends the remaining audio and requests the final text.
 Styles, vocabulary, output language, Chinese-script preference, preview and
-insertion use the existing OpenLess workflow. Conversation context includes up
+insertion use the existing OpenLess workflow. Enabled conversation context includes up
 to two recent final texts, capped at 2,000 characters each.
 
 Questions spoken during ordinary dictation stay as text. Clear self-corrections

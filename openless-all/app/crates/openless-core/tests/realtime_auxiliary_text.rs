@@ -12,10 +12,10 @@ use openless_core::{
     answer_qa_with_context, BackendConfig, BackendDependencies, BackendError, BackendRepositories,
     ChannelKind, ChannelMutation, ChannelMutationResult, CredentialDirectory, CredentialKey,
     CredentialNamespace, CredentialStore, DictationStartOptions, InMemoryCredentialStore,
-    InsertOutcome, OpenLessBackend, PolishMode, ProviderSlot, QaMessage, QaProgress, QaProgressSink,
-    SecretValue, SelectionCapture, SelectionPolishOutputMode, SelectionPolishRequest,
-    SelectionVoiceIntentMode, SelectionVoiceManualIntent, SelectionVoiceRoute, SessionId,
-    SharedCloudTextPolisher, UserPreferences,
+    InsertOutcome, OpenLessBackend, PolishMode, ProviderSlot, QaMessage, QaProgress,
+    QaProgressSink, SecretValue, SelectionCapture, SelectionPolishOutputMode,
+    SelectionPolishRequest, SelectionVoiceIntentMode, SelectionVoiceManualIntent,
+    SelectionVoiceRoute, SessionId, SharedCloudTextPolisher, UserPreferences,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -97,7 +97,12 @@ async fn backend(
     endpoint: &str,
     legacy_llm: bool,
     output: SelectionPolishOutputMode,
-) -> (OpenLessBackend, Arc<InMemoryCredentialStore>, String, std::path::PathBuf) {
+) -> (
+    OpenLessBackend,
+    Arc<InMemoryCredentialStore>,
+    String,
+    std::path::PathBuf,
+) {
     let store = Arc::new(InMemoryCredentialStore::default());
     let directory = CredentialDirectory::new(store.clone());
     let llm_id = if legacy_llm {
@@ -127,7 +132,8 @@ async fn backend(
     ] {
         store
             .write(
-                CredentialKey::new(CredentialNamespace::Llm, Some(llm_id.clone()), account).unwrap(),
+                CredentialKey::new(CredentialNamespace::Llm, Some(llm_id.clone()), account)
+                    .unwrap(),
                 SecretValue::new(value),
             )
             .await
@@ -139,8 +145,12 @@ async fn backend(
         .unwrap();
     store
         .write(
-            CredentialKey::new(CredentialNamespace::Omni, Some(profile.into()), OMNI_MODEL_ACCOUNT)
-                .unwrap(),
+            CredentialKey::new(
+                CredentialNamespace::Omni,
+                Some(profile.into()),
+                OMNI_MODEL_ACCOUNT,
+            )
+            .unwrap(),
             SecretValue::new("saved-qwen-audio-model"),
         )
         .await
@@ -175,7 +185,10 @@ async fn backend(
         InsertOutcome::Inserted,
     )));
     let backend = OpenLessBackend::new_with_repositories(
-        BackendConfig { data_dir: data_dir.clone(), ..BackendConfig::default() },
+        BackendConfig {
+            data_dir: data_dir.clone(),
+            ..BackendConfig::default()
+        },
         dependencies,
         repositories,
     )
@@ -189,18 +202,35 @@ async fn qwen_realtime_qa_resolves_saved_channel_and_legacy_models() {
         for legacy in [false, true] {
             let (endpoint, server) = text_server(vec!["text answer"]).await;
             let (backend, store, llm_id, data_dir) = backend(
-                profile, &endpoint, legacy, SelectionPolishOutputMode::PreviewConfirm,
-            ).await;
-            let context = backend.capture_host_dictation_context(DictationStartOptions::default())
-                .await.unwrap();
+                profile,
+                &endpoint,
+                legacy,
+                SelectionPolishOutputMode::PreviewConfirm,
+            )
+            .await;
+            let context = backend
+                .capture_host_dictation_context(DictationStartOptions::default())
+                .await
+                .unwrap();
             assert_eq!(context.llm.provider_id, llm_id);
             assert_eq!(context.llm.model.as_deref(), Some(MODEL));
             assert_eq!(context.omni.provider_type, profile);
             let answer = answer_qa_with_context(
-                store, context,
-                vec![QaMessage { id: "question".into(), role: "user".into(), content: "Explain this.".into(), selection_text: None }],
-                None, SessionId::new(), Arc::new(DiscardQaProgress), Arc::new(AtomicBool::new(false)),
-            ).await.unwrap();
+                store,
+                context,
+                vec![QaMessage {
+                    id: "question".into(),
+                    role: "user".into(),
+                    content: "Explain this.".into(),
+                    selection_text: None,
+                }],
+                None,
+                SessionId::new(),
+                Arc::new(DiscardQaProgress),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+            .unwrap();
             assert_eq!(answer, "text answer");
             assert_eq!(server.await.unwrap().len(), 1);
             drop(backend);
@@ -212,14 +242,21 @@ async fn qwen_realtime_qa_resolves_saved_channel_and_legacy_models() {
 #[tokio::test]
 async fn qwen_realtime_selection_polish_uses_text_channel_in_both_output_modes() {
     for profile in QWEN_PROFILES {
-        for output in [SelectionPolishOutputMode::DirectReplace, SelectionPolishOutputMode::PreviewConfirm] {
+        for output in [
+            SelectionPolishOutputMode::DirectReplace,
+            SelectionPolishOutputMode::PreviewConfirm,
+        ] {
             let (endpoint, server) = text_server(vec!["alpha gamma"]).await;
             let (backend, _, llm_id, data_dir) = backend(profile, &endpoint, false, output).await;
             let selection = &backend.services().selection;
-            let session_id = selection.begin_polish(SelectionPolishRequest {
-                selected_text: Some("alpha beta".into()), mode: PolishMode::Light,
-                instruction: Some("replace beta with gamma".into()),
-            }).await.unwrap();
+            let session_id = selection
+                .begin_polish(SelectionPolishRequest {
+                    selected_text: Some("alpha beta".into()),
+                    mode: PolishMode::Light,
+                    instruction: Some("replace beta with gamma".into()),
+                })
+                .await
+                .unwrap();
             if output == SelectionPolishOutputMode::PreviewConfirm {
                 selection.confirm(session_id, None).await.unwrap();
             }
@@ -241,12 +278,29 @@ async fn qwen_realtime_selection_voice_polishes_and_builds_edit_plan_via_text_ch
             "replace beta with gamma",
             "<edit_plan><summary>rename</summary><literal_replace><find>beta</find><replace>gamma</replace></literal_replace></edit_plan>",
         ]).await;
-        let (backend, _, _, data_dir) = backend(profile, &endpoint, false, SelectionPolishOutputMode::DirectReplace).await;
+        let (backend, _, _, data_dir) = backend(
+            profile,
+            &endpoint,
+            false,
+            SelectionPolishOutputMode::DirectReplace,
+        )
+        .await;
         let voice = &backend.services().selection_voice;
-        let session_id = voice.begin(SelectionCapture { text: "alpha beta".into(), source_app: None }).await.unwrap();
+        let session_id = voice
+            .begin(SelectionCapture {
+                text: "alpha beta".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
         voice.mark_processing(session_id).await.unwrap();
-        let disposition = voice.process_transcript(session_id, "replace beta".into()).await.unwrap();
-        let SelectionVoiceRoute::ReadyToApply { preview } = voice.route_disposition(disposition).await.unwrap() else {
+        let disposition = voice
+            .process_transcript(session_id, "replace beta".into())
+            .await
+            .unwrap();
+        let SelectionVoiceRoute::ReadyToApply { preview } =
+            voice.route_disposition(disposition).await.unwrap()
+        else {
             panic!("expected a ready edit preview");
         };
         assert_eq!(preview.text, "alpha gamma");

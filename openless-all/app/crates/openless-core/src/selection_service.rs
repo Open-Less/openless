@@ -482,8 +482,7 @@ impl SelectionServiceInner {
         let (text_provider_id, text_model) = if context.pipeline_mode == PipelineMode::Multimodal
             && !crate::provider_rules::omni_uses_text_provider_for_auxiliary(
                 &context.omni.provider_type,
-            )
-        {
+            ) {
             (context.omni.provider_id.clone(), context.omni.model.clone())
         } else {
             (context.llm.provider_id.clone(), context.llm.model.clone())
@@ -730,8 +729,7 @@ impl SelectionApi for SelectionService {
                     let mut output = if context.pipeline_mode == PipelineMode::Multimodal
                         && !crate::provider_rules::omni_uses_text_provider_for_auxiliary(
                             &context.omni.provider_type,
-                        )
-                    {
+                        ) {
                         crate::cloud_providers::polish_with_omni_text(
                             inner.credential_store.as_ref(),
                             context.as_ref(),
