@@ -36,4 +36,15 @@ for (const kind of ['asr', 'llm', 'omni'] as ProviderKind[]) {
     ids.add(descriptor.providerType);
   }
 }
+const deepseekAsr = (await listProviderDescriptors('asr')).find(
+  (descriptor) => descriptor.providerType === 'deepseek',
+);
+if (
+  deepseekAsr?.authRequirement !== 'api_key_without_model' ||
+  deepseekAsr.defaultModel !== null ||
+  deepseekAsr.defaultEndpoint !== 'https://api.deepseek.com/v1' ||
+  !generated.asr.some((descriptor) => descriptor.providerType === 'deepseek')
+) {
+  throw new Error('DeepSeek ASR preview must expose key-only configuration without a model');
+}
 console.log('browser provider catalog exposes ASR, LLM and Omni editors');

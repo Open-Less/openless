@@ -7,6 +7,7 @@ export type LlmRequestFormat = 'chat_completions' | 'responses' | 'messages';
 export type AuthRequirement =
   | 'none'
   | 'api_key'
+  | 'api_key_without_model'
   | 'endpoint_model_optional_api_key'
   | 'api_key_unless_custom_endpoint'
   | 'volcengine'

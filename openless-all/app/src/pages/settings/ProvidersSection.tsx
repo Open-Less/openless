@@ -251,6 +251,7 @@ export function ChannelCredentialFields({
 
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const unifiedBailian = providerType === 'bailian';
+  const modelOptional = descriptor?.authRequirement === 'api_key_without_model';
   const [bailianModel, setBailianModel] = useState('');
   const [bailianProtocol, setBailianProtocol] = useState<BailianProtocol>('auto');
   const [volcengineAuthMode, setVolcengineAuthMode] = useState<'app_id_token' | 'api_key'>(
@@ -860,28 +861,32 @@ export function ChannelCredentialFields({
         defaultValue={defaultEndpoint || undefined}
         onUserMutation={onUserMutation}
       />
-      <div style={channelSectionStyle}>
-        <ChannelSectionHeading
-          icon="settings"
-          title={t('settings.channels.modelTitle')}
-          description={t('settings.channels.modelHint')}
-        />
-      </div>
-      <CredentialField
-        key={`${channelId}:model:${asrModelRevision}`}
-        label={t('settings.providers.modelLabel')}
-        account="asr.model"
-        provider={channelId}
-        placeholder={defaultModel || 'model-name'}
-        defaultValue={defaultModel || undefined}
-        onUserMutation={onUserMutation}
-        onValueChange={unifiedBailian ? setBailianModel : undefined}
-        options={
-          descriptor?.staticModels?.length
-            ? descriptor.staticModels.map((model) => ({ value: model, label: model }))
-            : undefined
-        }
-      />
+      {!modelOptional && (
+        <>
+          <div style={channelSectionStyle}>
+            <ChannelSectionHeading
+              icon="settings"
+              title={t('settings.channels.modelTitle')}
+              description={t('settings.channels.modelHint')}
+            />
+          </div>
+          <CredentialField
+            key={`${channelId}:model:${asrModelRevision}`}
+            label={t('settings.providers.modelLabel')}
+            account="asr.model"
+            provider={channelId}
+            placeholder={defaultModel || 'model-name'}
+            defaultValue={defaultModel || undefined}
+            onUserMutation={onUserMutation}
+            onValueChange={unifiedBailian ? setBailianModel : undefined}
+            options={
+              descriptor?.staticModels?.length
+                ? descriptor.staticModels.map((model) => ({ value: model, label: model }))
+                : undefined
+            }
+          />
+        </>
+      )}
       {unifiedBailian && (
         <BailianProtocolField
           key={channelId}
@@ -918,6 +923,11 @@ export function ChannelCredentialFields({
             </div>
           </>
         )}
+      {modelOptional && (
+        <div role="note" style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+          {t('settings.providers.deepseekAsrNotice')}
+        </div>
+      )}
       {providerType === 'elevenlabs' && (
         <div
           role="note"
@@ -949,6 +959,8 @@ export function ChannelCredentialFields({
       <ProviderTools
         kind="asr"
         disabled={Object.values(blockedFields).some(Boolean)}
+        showFetchModels={!modelOptional}
+        audioValidation={modelOptional}
         modelAccount="asr.model"
         provider={channelId}
         onModelSelected={() => setAsrModelRevision((v) => v + 1)}

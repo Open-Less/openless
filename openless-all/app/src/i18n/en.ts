@@ -1709,6 +1709,7 @@ export const en: typeof zhCN = {
         asrTencentCloud: 'Tencent Cloud Hunyuan Realtime ASR',
         asrGemini: 'Google Gemini Transcribe',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrDeepseek: 'DeepSeek ASR',
         asrSherpaOnnxLocal: 'Local sherpa-onnx (Experimental)',
         asrFoundryLocalWhisper: 'Local Whisper (Foundry Local)',
         asrLocalWhisper: 'Local Whisper (batch)',
@@ -1729,6 +1730,8 @@ export const en: typeof zhCN = {
         'Use gemini-3.5-transcribe or gemini-3.5-transcribe-live for Smart transcription. Live shows a draft while you speak, for up to 10 minutes per recording. Smart removes fillers, applies spoken corrections and formats the final transcript after recording stops. Both models support working languages and dictionary terms, but not style prompts, translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
       validateSuccessAudio:
         'Audio connectivity passed using a short silence sample. Confirm transcription quality with a short recording.',
+      deepseekAsrNotice:
+        'Audio is uploaded to DeepSeek after recording stops. Long recordings are split into chunks of up to 120 seconds. Only an API key is needed, with no model selection or ASR dictionary hotwords.',
       elevenLabsUploadNotice:
         'ElevenLabs uploads recorded audio to the configured endpoint for batch transcription.',
       zenmuxVocabularyNote:

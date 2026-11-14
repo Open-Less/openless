@@ -28,6 +28,18 @@
       "validationProbe": "asr_silence"
     },
     {
+      "authRequirement": "api_key_without_model",
+      "defaultEndpoint": "https://api.deepseek.com/v1",
+      "defaultModel": null,
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrDeepseek",
+      "providerType": "deepseek",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "asr_silence"
+    },
+    {
       "authRequirement": "api_key",
       "defaultEndpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference/",
       "defaultModel": "fun-asr-realtime",
@@ -500,6 +512,18 @@
         "gpt-5.4",
         "gpt-5.5"
       ],
+      "supportedRequestFormats": [],
+      "validationProbe": "llm_text"
+    },
+    {
+      "authRequirement": "siwc",
+      "defaultEndpoint": "https://api.openai.com/v1",
+      "defaultModel": null,
+      "defaultRequestFormat": null,
+      "kind": "llm",
+      "labelKey": "chatgptSiwc",
+      "providerType": "chatgpt_siwc",
+      "staticModels": [],
       "supportedRequestFormats": [],
       "validationProbe": "llm_text"
     },

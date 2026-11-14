@@ -50,6 +50,7 @@ use crate::types::SessionId;
 pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "volcengine",
     "elevenlabs",
+    "deepseek",
     "bailian",
     "bailian-qwen3-realtime",
     "bailian-fun-asr-flash",
@@ -797,8 +798,16 @@ async fn build_cloud_transcription_session(
         ActiveAsrProviderKind::WhisperCompatible => {
             let default_endpoint = default_asr_endpoint(provider_type).unwrap_or("");
             let default_model = default_asr_model(provider_type).unwrap_or("whisper-1");
-            let effective_model =
-                non_blank_owned(model).unwrap_or_else(|| default_model.to_string());
+            let model_optional = provider_descriptor(crate::ProviderKind::Asr, provider_type)
+                .is_some_and(|descriptor| {
+                    descriptor.auth_requirement
+                        == crate::provider_rules::AuthRequirement::ApiKeyWithoutModel
+                });
+            let effective_model = if model_optional {
+                String::new()
+            } else {
+                non_blank_owned(model).unwrap_or_else(|| default_model.to_string())
+            };
             let mut provider = WhisperBatchASR::new(
                 api_key,
                 non_blank_owned(endpoint).unwrap_or_else(|| default_endpoint.to_string()),
@@ -816,6 +825,8 @@ async fn build_cloud_transcription_session(
             .with_request_format(crate::provider_rules::whisper_request_format(provider_type));
             if provider_type == "minimax" {
                 provider = provider.with_endpoint_path("/speech_to_text");
+            } else if provider_type == "deepseek" {
+                provider = provider.with_endpoint_path("/tools/asr");
             }
             if crate::provider_rules::whisper_uses_hotwords(provider_type) {
                 provider = provider.with_hotwords(context.polish.hotwords.clone());
@@ -834,7 +845,7 @@ async fn build_cloud_transcription_session(
             }
             (
                 CloudTranscriptionSessionKind::Whisper(Arc::new(provider)),
-                Some(effective_model),
+                (!model_optional).then_some(effective_model),
             )
         }
         ActiveAsrProviderKind::Volcengine => {

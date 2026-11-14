@@ -347,6 +347,15 @@ impl ProviderService {
                 result = service.list_models(&resolved.provider_id) => result.map(|models| ProviderModelsResult { models: models.into_iter().map(|m| m.slug).collect() }).map_err(crate::siwc::SiwcError::into_backend),
             };
         }
+        if provider_descriptor(resolved.kind, &resolved.provider_type).is_some_and(|descriptor| {
+            descriptor.auth_requirement == AuthRequirement::ApiKeyWithoutModel
+        }) {
+            if cancellation.is_cancelled() {
+                return Err(cancelled_request());
+            }
+            validate_configuration(&resolved, false)?;
+            return Ok(ProviderModelsResult { models: Vec::new() });
+        }
         if let Some(models) = static_models(&resolved) {
             if cancellation.is_cancelled() {
                 return Err(cancelled_request());
@@ -517,6 +526,7 @@ fn validate_configuration(
         && !matches!(
             descriptor.auth_requirement,
             AuthRequirement::None
+                | AuthRequirement::ApiKeyWithoutModel
                 | AuthRequirement::Volcengine
                 | AuthRequirement::Xfyun
                 | AuthRequirement::TencentCloud
@@ -1310,6 +1320,79 @@ mod tests {
             assert!(request.starts_with("get /v1/models "));
             if format == "messages" { assert!(request.contains("x-api-key: fixture-key")); }
             else { assert!(request.contains("authorization: bearer fixture-key")); }
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_asr_validates_without_a_model_and_never_lists_chat_models() {
+        for full_endpoint in [false, true] {
+            let (endpoint, request) = spawn_http_response(
+                "200 OK",
+                "application/json",
+                r#"{"request_id":"fixture","text":"","duration_ms":500}"#,
+            );
+            let endpoint = if full_endpoint {
+                format!("{endpoint}/tools/asr")
+            } else {
+                endpoint
+            };
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Asr,
+                "deepseek",
+                &[
+                    (ASR_ENDPOINT_ACCOUNT, &endpoint),
+                    (ASR_API_KEY_ACCOUNT, "fixture-key"),
+                ],
+            )
+            .await;
+            let service =
+                ProviderService::new(credentials.clone(), Arc::new(crate::TokioTaskSpawner));
+            let provider_request = ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Asr,
+                channel_id: Some(channel.clone()),
+            };
+            assert!(service
+                .list_models(provider_request.clone())
+                .await
+                .unwrap()
+                .models
+                .is_empty());
+            service.validate(provider_request).await.unwrap();
+            let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
+            let request = String::from_utf8_lossy(&request);
+            assert!(request.starts_with("POST /v1/tools/asr "));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer fixture-key"));
+            assert!(request.contains("multipart/form-data"));
+            assert!(request.contains("name=\"file\"; filename=\"audio.wav\""));
+            assert!(request.contains("RIFF") && request.contains("WAVE"));
+            assert_eq!(
+                request.matches("Content-Disposition: form-data;").count(),
+                1
+            );
+            // Stale model/prompt/vocabulary must not affect this model-less protocol.
+            let mut context = DictationContext {
+                asr: ProviderInvocation::new(&channel, "deepseek"),
+                ..Default::default()
+            };
+            context.asr.model = Some("stale-model".into());
+            context.asr.prompt = Some("vocabulary".into());
+            context.polish.hotwords = vec!["OpenLess".into()];
+            let engine = SharedCloudTranscriptionEngine::new(credentials);
+            let session = engine
+                .start(
+                    SessionId::new(),
+                    Arc::new(context),
+                    Arc::new(DiscardTextStream),
+                )
+                .await
+                .unwrap();
+            assert_eq!(session.asr_call_label().unwrap().model, None);
+            session.cancel().await.unwrap();
         }
     }
 

@@ -1694,6 +1694,7 @@ export const ja: typeof zhCN = {
         asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan リアルタイム ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrDeepseek: 'DeepSeek ASR',
         asrSherpaOnnxLocal: 'ローカル sherpa-onnx（実験的）',
         asrFoundryLocalWhisper: 'ローカル Whisper（Foundry Local）',
         asrLocalWhisper: 'ローカル Whisper（バッチ）',
@@ -1714,6 +1715,8 @@ export const ja: typeof zhCN = {
         'gemini-3.5-transcribe と gemini-3.5-transcribe-live はスマート文字起こしに対応します。Live は話している間に下書きを表示し、1 回の録音は最大 10 分です。録音終了後にフィラーの除去、言い直しの反映、最終テキストの整形を行います。両モデルとも作業言語と辞書を利用できますが、スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
       validateSuccessAudio:
         '短い無音データで音声接続を確認しました。短い録音で文字起こしの品質も確認してください。',
+      deepseekAsrNotice:
+        '録音終了後に音声を DeepSeek にアップロードします。長い録音は最大 120 秒ごとに分割されます。API キーのみ必要で、モデル選択や音声認識の辞書キーワードには対応していません。',
       elevenLabsUploadNotice:
         'ElevenLabs は録音音声を設定済みのエンドポイントへアップロードしてバッチ文字起こしします。',
       zenmuxVocabularyNote:

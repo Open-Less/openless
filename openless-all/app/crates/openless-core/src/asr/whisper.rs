@@ -185,47 +185,49 @@ impl WhisperBatchASR {
         let client = crate::net::http();
 
         let request = match self.request_format {
-            AsrRequestFormat::Multipart => {
+            AsrRequestFormat::Multipart | AsrRequestFormat::MultipartFileOnly => {
                 let wav_part = reqwest::multipart::Part::bytes(wav)
                     .file_name("audio.wav")
                     .mime_str("audio/wav")
                     .context("set MIME type")?;
-                let mut form = reqwest::multipart::Form::new()
-                    .part("file", wav_part)
-                    .text("model", self.model.clone());
+                let mut form = reqwest::multipart::Form::new().part("file", wav_part);
+                // DeepSeek accepts only the file, with no model or vocabulary fields.
+                if self.request_format == AsrRequestFormat::Multipart {
+                    form = form.text("model", self.model.clone());
 
-                // Only verbose_json-capable providers (OpenAI / Groq) get a
-                // request for segment metadata, with temperature pinned to 0.
-                // Don't send it to providers without support (SiliconFlow
-                // SenseVoice / TeleSpeech etc.) to avoid 4xx on unknown params.
-                if self.verbose_json {
-                    form = form
-                        .text("response_format", "verbose_json")
-                        .text("temperature", "0");
-                }
-
-                // Never send an empty `prompt`: some OpenAI-compatible
-                // implementations error on it (Groq tolerates it, skip
-                // defensively). `trim()` also excludes whitespace-only values.
-                if let Some(prompt) = self.prompt.as_ref() {
-                    let trimmed = prompt.trim();
-                    if !trimmed.is_empty() {
-                        form = form.text("prompt", trimmed.to_string());
+                    // Only verbose_json-capable providers (OpenAI / Groq) get a
+                    // request for segment metadata, with temperature pinned to 0.
+                    // Don't send it to providers without support (SiliconFlow
+                    // SenseVoice / TeleSpeech etc.) to avoid 4xx on unknown params.
+                    if self.verbose_json {
+                        form = form
+                            .text("response_format", "verbose_json")
+                            .text("temperature", "0");
                     }
-                }
 
-                // First-class hotwords (StepFun shape: a parseable JSON array
-                // string like `["hotword1","hotword2"]`). Filter out blank
-                // entries before encoding; if all are blank, omit the field.
-                let hotwords: Vec<&str> = self
-                    .hotwords
-                    .iter()
-                    .map(|w| w.trim())
-                    .filter(|w| !w.is_empty())
-                    .collect();
-                if !hotwords.is_empty() {
-                    if let Ok(encoded) = serde_json::to_string(&hotwords) {
-                        form = form.text("hotwords", encoded);
+                    // Never send an empty `prompt`: some OpenAI-compatible
+                    // implementations error on it (Groq tolerates it, skip
+                    // defensively). `trim()` also excludes whitespace-only values.
+                    if let Some(prompt) = self.prompt.as_ref() {
+                        let trimmed = prompt.trim();
+                        if !trimmed.is_empty() {
+                            form = form.text("prompt", trimmed.to_string());
+                        }
+                    }
+
+                    // First-class hotwords (StepFun shape: a parseable JSON array
+                    // string like `["hotword1","hotword2"]`). Filter out blank
+                    // entries before encoding; if all are blank, omit the field.
+                    let hotwords: Vec<&str> = self
+                        .hotwords
+                        .iter()
+                        .map(|w| w.trim())
+                        .filter(|w| !w.is_empty())
+                        .collect();
+                    if !hotwords.is_empty() {
+                        if let Ok(encoded) = serde_json::to_string(&hotwords) {
+                            form = form.text("hotwords", encoded);
+                        }
                     }
                 }
 
@@ -307,7 +309,7 @@ impl WhisperBatchASR {
                 anyhow::bail!("MiniMax API error {}: {}", status_code, msg);
             }
         }
-        if self.verbose_json {
+        if self.verbose_json && self.request_format != AsrRequestFormat::MultipartFileOnly {
             // verbose_json: assemble the body from segment metadata, dropping
             // hallucinations. Falls back to plain text when segments are absent.
             Ok(extract_confident_text(&json))
@@ -316,7 +318,14 @@ impl WhisperBatchASR {
             // only of `#` (or `##`...) for silent/weak audio (issue #787).
             // Normalize to an empty transcript so the existing empty-transcript
             // guard keeps placeholders out of user input.
-            let text = json["text"].as_str().unwrap_or("").trim();
+            let text = if self.request_format == AsrRequestFormat::MultipartFileOnly {
+                json["text"]
+                    .as_str()
+                    .context("ASR response is missing text")?
+            } else {
+                json["text"].as_str().unwrap_or("")
+            }
+            .trim();
             if is_placeholder_heading(text) {
                 Ok(String::new())
             } else {
@@ -938,6 +947,29 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_transcription_url_accepts_base_proxy_and_full_endpoint() {
+        for (endpoint, expected) in [
+            (
+                "https://api.deepseek.com/v1",
+                "https://api.deepseek.com/v1/tools/asr",
+            ),
+            (
+                "https://proxy.example/deepseek/v1/",
+                "https://proxy.example/deepseek/v1/tools/asr",
+            ),
+            (
+                "https://proxy.example/v1/tools/asr?tenant=test",
+                "https://proxy.example/v1/tools/asr?tenant=test",
+            ),
+        ] {
+            assert_eq!(
+                transcription_url(endpoint, Some("/tools/asr")).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn minimax_routing_does_not_capture_unrelated_custom_endpoints() {
         for endpoint in [
             "https://notminimaxi.com/v1",
@@ -1171,6 +1203,68 @@ mod tests {
 
         assert_eq!(transcript.text, "你好 world 尾");
         assert_eq!(transcript.duration_ms, 65_000);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_only_asr_omits_optional_fields_and_preserves_audio_on_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            for (status, body) in [
+                ("503 Service Unavailable", r#"{"error":"busy"}"#),
+                ("200 OK", r#"{"request_id":"missing-text"}"#),
+                ("200 OK", r#"{"text":"你好 OpenLess","duration_ms":1000}"#),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request = read_http_request(&mut stream);
+                let request = String::from_utf8_lossy(&request);
+                assert!(request.starts_with("POST /v1/tools/asr "));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer key"));
+                assert!(request.contains("name=\"file\"; filename=\"audio.wav\""));
+                assert_eq!(
+                    request.matches("Content-Disposition: form-data;").count(),
+                    1
+                );
+                assert!(request.contains("RIFF") && request.contains("WAVE"));
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let asr = WhisperBatchASR::new(
+            "key".into(),
+            endpoint,
+            "ignored-model".into(),
+            Some("ignored prompt".into()),
+            Some(120_000),
+            true,
+        )
+        .with_hotwords(vec!["ignored hotword".into()])
+        .with_endpoint_path("/tools/asr")
+        .with_request_format(AsrRequestFormat::MultipartFileOnly);
+        asr.consume_pcm_chunk(&vec![0; 32_000]);
+        assert!(asr
+            .transcribe()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("503"));
+        assert_eq!(asr.buffer_duration_ms(), 1000);
+        assert!(asr
+            .transcribe()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("missing text"));
+        assert_eq!(asr.buffer_duration_ms(), 1000);
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "你好 OpenLess");
+        assert_eq!(transcript.duration_ms, 1000);
+        assert_eq!(asr.buffer_duration_ms(), 0);
         server.join().unwrap();
     }
 

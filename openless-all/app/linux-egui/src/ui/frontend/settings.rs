@@ -3744,6 +3744,14 @@ fn provider_model_block(
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
+    if editor.auth == SettingsProviderAuth::ApiKeyWithoutModel {
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.providers.deepseekAsrNotice"))
+                .size(11.5)
+                .color(theme::INK_4),
+        );
+        return;
+    }
     ui.add_space(6.0);
     ui.label(
         egui::RichText::new(tr_l10n(lang, "settings.channels.modelTitle"))
@@ -4733,7 +4741,7 @@ fn provider_editor_body(
                     .color(theme::INK_4),
             );
         }
-        SettingsProviderAuth::ApiKey => {
+        SettingsProviderAuth::ApiKey | SettingsProviderAuth::ApiKeyWithoutModel => {
             provider_field(
                 ui,
                 &editor.channel_id,
@@ -6458,6 +6466,7 @@ mod tests {
             SettingsProviderAuth::Xfyun,
             SettingsProviderAuth::Other,
             SettingsProviderAuth::ApiKey,
+            SettingsProviderAuth::ApiKeyWithoutModel,
         ];
         for auth in shapes {
             let editor = SettingsProviderEditor {
@@ -6532,6 +6541,14 @@ mod tests {
                 busy: false,
             }
         };
+        let mut model_less = editor(Vec::new(), false, false);
+        model_less.is_asr = true;
+        model_less.auth = SettingsProviderAuth::ApiKeyWithoutModel;
+        let painted = painted_provider_editor(&model_less);
+        assert!(painted.contains(tr_l10n(Lang::ZhCn, "settings.providers.deepseekAsrNotice")));
+        assert!(!painted.contains(tr_l10n(Lang::ZhCn, "settings.channels.modelTitle")));
+        assert!(!painted.contains(tr_l10n(Lang::ZhCn, "settings.providers.fetchModels")));
+
         let presets = vec!["doubao-lite".to_string(), "doubao-pro".to_string()];
 
         // 预设模式：分区标题、提示、当前值、可用模型的选择入口都在。

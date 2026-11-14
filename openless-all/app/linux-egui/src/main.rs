@@ -8001,6 +8001,7 @@ mod linux_app {
         use openless_core::AuthRequirement as Core;
         match requirement {
             Core::None => Ui::None,
+            Core::ApiKeyWithoutModel => Ui::ApiKeyWithoutModel,
             Core::Volcengine => Ui::Volcengine,
             Core::Xfyun => Ui::Xfyun,
             Core::OAuth => Ui::OAuth,
