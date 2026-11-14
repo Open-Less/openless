@@ -79,10 +79,12 @@ export function DeepSeekSuiteSection() {
           setStatus('');
           try {
             let llmId = '';
+            const prepared: { kind: 'asr' | 'llm'; id: string }[] = [];
             for (const kind of ['asr', 'llm'] as const) {
               const channels = await listChannels(kind);
               const existing = channels.find((c) => c.providerType === 'deepseek');
               const id = existing?.id ?? (await createChannel(kind, 'deepseek', 'DeepSeek'));
+              if (!existing) await setChannelEnabled(kind, id, false);
               const prefix = kind === 'asr' ? 'asr' : 'ark';
               await setCredential(`${prefix}.api_key`, key.trim(), id);
               await setCredential(`${prefix}.endpoint`, 'https://api.deepseek.com/v1', id);
@@ -95,13 +97,16 @@ export function DeepSeekSuiteSection() {
                 llmId = id;
                 await setCredential('ark.request_format', 'chat_completions', id);
               }
+              prepared.push({ kind, id });
+            }
+            await saveSearchConfig({ ...(await loadSearchConfig()), ttsChannel: llmId, voice });
+            for (const { kind, id } of prepared) {
               await setChannelEnabled(kind, id, true);
               await reorderChannels(kind, [
                 id,
                 ...(await listChannels(kind)).filter((c) => c.id !== id).map((c) => c.id),
               ]);
             }
-            await saveSearchConfig({ ...(await loadSearchConfig()), ttsChannel: llmId, voice });
             await updatePrefs((p) => ({ ...p, pipelineMode: 'traditional' }));
             window.dispatchEvent(new Event('ol-channels-changed'));
             setStatus(

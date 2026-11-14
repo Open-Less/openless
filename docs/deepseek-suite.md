@@ -33,7 +33,7 @@ search path. Native final-chunk citations become clickable source links;
 content-filter and stream-error responses discard the partial answer.
 
 Other models, including multimodal Q&A, first choose a short query or no search.
-When requested, at most five bounded snippets are passed to the answering model
+For free search, up to three public result pages are fetched with bounded time and size, DNS pinning and no redirects or credentials; unavailable pages retain their snippets. When requested, at most five bounded snippets are passed to the answering model
 as untrusted evidence. This planning call incurs normal model usage even when no
 search is needed. Missing weather location requires clarification. Free search
 requires no key, but its public RSS interface can be unavailable or rate-limited.

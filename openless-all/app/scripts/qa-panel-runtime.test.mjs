@@ -123,6 +123,7 @@ function context(native = true, embedded = false) {
       confirm: [],
       revert: [],
       dismiss: 0,
+      stopReading: 0,
       close: 0,
     };
   const pending = {};
@@ -145,6 +146,9 @@ function context(native = true, embedded = false) {
     useGithubLogin: () => '',
     useChatPanelLifecycle: () => lifecycle,
     isTauri: native,
+    stopDeepSeekReading: () => {
+      calls.stopReading++;
+    },
     ...helpers,
     qaWindowSetExpanded: async (next) => {
       calls.resize.push(next);
@@ -591,6 +595,7 @@ await test('embedded skip native resize, preserve existing parent close path and
     0,
   );
   assert.equal(c.keys.size, 0);
+  assert(c.calls.stopReading > 0, 'closing a panel cancels active speech');
 });
 await test('composer IME enter, WebKit 229 and form submission guards; genuine enter sends', async () => {
   const c = context();

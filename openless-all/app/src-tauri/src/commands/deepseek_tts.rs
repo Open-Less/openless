@@ -35,7 +35,6 @@ pub fn deepseek_tts_stop(window: Window, request_id: String) {
 #[tauri::command]
 pub async fn deepseek_tts_start(
     window: Window,
-    core: CoreState<'_>,
     text: String,
     request_id: String,
     audio: tauri::ipc::Channel<Vec<u8>>,
@@ -55,35 +54,13 @@ pub async fn deepseek_tts_start(
         owner: window.label().into(),
         token: token.clone(),
     };
-    let config_key = openless_core::CredentialKey::new(
-        openless_core::CredentialNamespace::Application,
-        None,
-        "web_search.config",
-    )
-    .map_err(|e| e.message)?;
-    let raw = core
-        .read_credential(config_key)
-        .await
-        .map_err(|e| e.message)?;
-    let config: openless_core::web_search::WebSearchConfig = raw
-        .map(|s| serde_json::from_str(s.expose_secret()))
-        .transpose()
-        .map_err(|_| "Invalid speech configuration")?
-        .unwrap_or_default();
-    if config.tts_channel.is_empty() {
-        return Err("Configure DeepSeek suite in Model services to enable read aloud".into());
-    }
-    let key = openless_core::CredentialKey::new(
-        openless_core::CredentialNamespace::Llm,
-        Some(config.tts_channel),
-        "ark.api_key",
-    )
-    .map_err(|e| e.message)?;
-    let secret = core
-        .read_credential(key)
-        .await
-        .map_err(|_| "Could not read DeepSeek API key")?
-        .ok_or("DeepSeek API key is missing")?;
+    // Resolve the channel identity and key from one vault snapshot so a channel
+    // repurposed for another vendor cannot send that vendor's secret to DeepSeek.
+    let (secret, voice) =
+        tokio::task::spawn_blocking(CredentialsVault::get_deepseek_tts_credentials)
+            .await
+            .map_err(|_| "Could not read speech configuration")?
+            .map_err(|_| "Configure an official DeepSeek channel in Model services")?;
     let cancelled = async {
         while !token.load(Ordering::Acquire) {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -91,6 +68,6 @@ pub async fn deepseek_tts_start(
     };
     tokio::select! {
         _ = cancelled => Ok(()),
-        result = tokio::time::timeout(std::time::Duration::from_secs(1800), openless_core::deepseek_tts::stream(secret.expose_secret(), &text, &config.voice, |bytes| audio.send(bytes).map_err(|_| "Playback window closed".into()))) => result.map_err(|_| "Speech playback timed out".to_string())?,
+        result = tokio::time::timeout(std::time::Duration::from_secs(1800), openless_core::deepseek_tts::stream(secret.expose_secret(), &text, &voice, |bytes| audio.send(bytes).map_err(|_| "Playback window closed".into()))) => result.map_err(|_| "Speech playback timed out".to_string())?,
     }
 }
