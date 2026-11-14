@@ -20,6 +20,14 @@ pub(super) type Socket = WebSocketStream<reqwest::Upgraded>;
 /// Retain gateway prefixes and routing queries, but never forward query credentials.
 pub(crate) fn api_root(base: &str) -> Result<url::Url, LLMError> {
     let invalid = || LLMError::ParseError("Invalid Realtime endpoint".into());
+    let raw = base.trim();
+    if raw.split_once("://").is_some_and(|(_, rest)| {
+        rest.split(['/', '?', '#', '\\'])
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    }) {
+        return Err(invalid());
+    }
     let mut url = url::Url::parse(if base.trim().is_empty() {
         "https://api.openai.com/v1"
     } else {
@@ -48,12 +56,7 @@ pub(crate) fn api_root(base: &str) -> Result<url::Url, LLMError> {
     url.set_path(&root);
     let query = url
         .query_pairs()
-        .filter(|(name, _)| {
-            !matches!(
-                name.to_ascii_lowercase().as_str(),
-                "model" | "key" | "api_key" | "api-key" | "access_token" | "authorization"
-            )
-        })
+        .filter(|(name, _)| !credential_or_model_query(name))
         .map(|(name, value)| (name.into_owned(), value.into_owned()))
         .collect::<Vec<_>>();
     url.set_query(None);
@@ -144,4 +147,48 @@ pub(super) async fn connect(config: &OmniConfig) -> Result<Socket, LLMError> {
         .max_message_size(Some(4 * 1024 * 1024))
         .max_frame_size(Some(4 * 1024 * 1024));
     Ok(WebSocketStream::from_raw_socket(stream, Role::Client, Some(limits)).await)
+}
+
+/// Query names are decoded by `query_pairs` before comparison. Normalize common
+/// header/camelCase/snake_case spellings so they cannot leak a pasted API key.
+pub(super) fn credential_or_model_query(name: &str) -> bool {
+    let canonical = name
+        .bytes()
+        .filter(u8::is_ascii_alphanumeric)
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect::<String>();
+    matches!(
+        canonical.as_str(),
+        "model"
+            | "key"
+            | "apikey"
+            | "xapikey"
+            | "xdashscopeapikey"
+            | "accesskey"
+            | "accesskeyid"
+            | "secretaccesskey"
+            | "xapiaccesskey"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+            | "authtoken"
+            | "securitytoken"
+            | "authorization"
+            | "auth"
+            | "bearer"
+            | "secret"
+            | "clientsecret"
+            | "clientkey"
+            | "privatekey"
+            | "password"
+            | "passwd"
+            | "signature"
+            | "sig"
+            | "credential"
+            | "credentials"
+            | "xamzcredential"
+            | "xamzsignature"
+            | "xamzsecuritytoken"
+    )
 }

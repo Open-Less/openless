@@ -17,7 +17,6 @@ pub mod realtime_options;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ports::AudioConsumer;
 use base64::Engine;
 use serde_json::{json, Value};
 

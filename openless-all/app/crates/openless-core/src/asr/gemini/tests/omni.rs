@@ -17,6 +17,7 @@ fn omni_provider(endpoint: String) -> OmniProvider {
         extra_headers: Default::default(),
         temperature: Some(0.3),
         thinking_enabled: true,
+        realtime_options: Default::default(),
     })
 }
 
@@ -92,7 +93,6 @@ async fn omni_verify_preserves_http_errors() {
             kind: ProviderKind::Omni,
             channel_id: None,
             thinking_enabled: false,
-            realtime_options: Default::default(),
         })
         .await
         .unwrap_err();

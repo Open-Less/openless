@@ -10,6 +10,8 @@
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::transport::credential_or_model_query;
+
 use crate::polish::LLMError;
 
 const DEFAULT_BASE: &str = "https://dashscope.aliyuncs.com";
@@ -135,50 +137,6 @@ fn official_host(host: &str) -> bool {
         host,
         "dashscope.aliyuncs.com" | "dashscope-intl.aliyuncs.com"
     ) || host.ends_with(".maas.aliyuncs.com")
-}
-
-/// Query names are decoded by `query_pairs` before comparison. Normalize common
-/// header/camelCase/snake_case spellings so they cannot leak a pasted API key.
-fn credential_or_model_query(name: &str) -> bool {
-    let canonical = name
-        .bytes()
-        .filter(u8::is_ascii_alphanumeric)
-        .map(|byte| byte.to_ascii_lowercase() as char)
-        .collect::<String>();
-    matches!(
-        canonical.as_str(),
-        "model"
-            | "key"
-            | "apikey"
-            | "xapikey"
-            | "xdashscopeapikey"
-            | "accesskey"
-            | "accesskeyid"
-            | "secretaccesskey"
-            | "xapiaccesskey"
-            | "token"
-            | "accesstoken"
-            | "refreshtoken"
-            | "idtoken"
-            | "authtoken"
-            | "securitytoken"
-            | "authorization"
-            | "auth"
-            | "bearer"
-            | "secret"
-            | "clientsecret"
-            | "clientkey"
-            | "privatekey"
-            | "password"
-            | "passwd"
-            | "signature"
-            | "sig"
-            | "credential"
-            | "credentials"
-            | "xamzcredential"
-            | "xamzsignature"
-            | "xamzsecuritytoken"
-    )
 }
 
 #[cfg(test)]
