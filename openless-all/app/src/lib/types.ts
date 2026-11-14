@@ -31,7 +31,7 @@ export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 /** Recognition pipeline mode (issue #902): traditional = two-stage ASR + LLM;
  *  multimodal = one multimodal model turns audio + prompt into final text in a single step.
  *  The two configurations are fully isolated in the credentials vault; runtime reads only the current mode. */
-export type PipelineMode = 'traditional' | 'multimodal';
+export type PipelineMode = 'traditional' | 'multimodal' | 'deepseek';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
@@ -792,6 +792,7 @@ export type CapsuleState =
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
+  qa?: boolean;
   /** Session generation that owns this capsule frame. */
   sessionId?: string | null;
   state: CapsuleState;

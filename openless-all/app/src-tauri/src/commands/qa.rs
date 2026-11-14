@@ -343,3 +343,33 @@ pub async fn less_computer_approve(
         .await
         .map_err(|error| error.to_string())
 }
+
+#[tauri::command]
+pub async fn qa_cancel_turn(core: CoreState<'_>) -> Result<(), String> {
+    core.services()
+        .qa
+        .cancel(None)
+        .await
+        .map_err(|error| error.message)
+}
+
+#[tauri::command]
+pub async fn qa_stop_recording(core: CoreState<'_>) -> Result<(), String> {
+    let snapshot = core
+        .services()
+        .qa
+        .snapshot()
+        .await
+        .map_err(|error| error.message)?;
+    if snapshot.phase != openless_core::QaPhase::Recording {
+        return Ok(());
+    }
+    if let Some(id) = snapshot.session_id {
+        core.services()
+            .qa
+            .stop_recording(id)
+            .await
+            .map_err(|error| error.message)?;
+    }
+    Ok(())
+}

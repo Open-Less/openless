@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 188,
+  "total": 190,
   "wired": 103,
-  "missing": 85,
+  "missing": 87,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -789,6 +789,13 @@
       "implementation": "rust"
     },
     {
+      "name": "qa_cancel_turn",
+      "calledFrom": [
+        "src/lib/ipc/qa.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "qa_get_snapshot",
       "calledFrom": [
         "src/lib/ipc/qa.ts"
@@ -797,6 +804,13 @@
     },
     {
       "name": "qa_set_edit_instruction_mode",
+      "calledFrom": [
+        "src/lib/ipc/qa.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "qa_stop_recording",
       "calledFrom": [
         "src/lib/ipc/qa.ts"
       ],

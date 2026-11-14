@@ -522,6 +522,7 @@ pub type LlmUsageObserver =
     std::sync::Arc<dyn Fn(uuid::Uuid, crate::usage_ledger::ReportedTokens) + Send + Sync>;
 
 pub struct OpenAICompatibleLLMProvider {
+    qa_web_search: bool,
     config: OpenAICompatibleConfig,
     siwc_access: Option<std::sync::Arc<crate::siwc::SiwcAccess>>,
     dictation_session_id: Option<crate::types::SessionId>,
@@ -554,11 +555,19 @@ impl OpenAICompatibleLLMProvider {
             });
         Self {
             config,
+            qa_web_search: false,
             dictation_session_id: None,
             siwc_access: None,
             polish_client,
             usage_observer: None,
         }
+    }
+
+    pub(crate) fn configure_qa_web_search(&mut self, enabled: bool) -> bool {
+        self.qa_web_search = enabled
+            && self.config.protocol.format == LlmRequestFormat::ChatCompletions
+            && crate::web_search::native_deepseek(&self.config.base_url, &self.config.model);
+        self.qa_web_search
     }
 
     /// The observer must return promptly and receives no request text.
@@ -876,6 +885,10 @@ impl OpenAICompatibleLLMProvider {
             "stream": stream,
             "messages": messages,
         });
+        if self.qa_web_search {
+            body["tools"] = json!([{"type":"deepseek_web_search"}, {"type":"deepseek_read_url"}]);
+            body["safety_check"] = json!({"level":"high"});
+        }
         if stream
             && self.usage_observer.is_some()
             && crate::prompt_cache::supports_usage(&self.config)
@@ -2837,6 +2850,25 @@ mod tests {
         assert_eq!(output, "你🙂好");
         assert_eq!(*deltas.lock().unwrap(), "你🙂好");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn deepseek_search_is_scoped_to_qa_and_supported_endpoints() {
+        let mut provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek",
+            "https://api.deepseek.com/v1",
+            "key",
+            "deepseek-flash",
+        ));
+        assert!(provider.chat_body(true, vec![]).get("tools").is_none());
+        assert!(provider.configure_qa_web_search(true));
+        let body = provider.chat_body(true, vec![]);
+        assert_eq!(body["tools"][0]["type"], "deepseek_web_search");
+        assert_eq!(body["safety_check"]["level"], "high");
+        provider.config.model = "deepseek-v4-flash".into();
+        assert!(!provider.configure_qa_web_search(true));
+        assert!(provider.chat_body(true, vec![]).get("tools").is_none());
     }
 
     #[tokio::test]

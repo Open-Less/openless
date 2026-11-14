@@ -73,6 +73,55 @@ fn with_voice_edit_uia<T>(
     }
 }
 
+pub(super) fn read_qa_selection() -> Option<String> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if element
+            .CurrentIsPassword()
+            .map_err(|_| "selectionUnavailable".to_string())?
+            .as_bool()
+        {
+            return Ok(None);
+        }
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionUnavailable".to_string())?
+            != 1
+        {
+            return Ok(None);
+        }
+        let range = ranges
+            .GetElement(0)
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if range
+            .CompareEndpoints(
+                TextPatternRangeEndpoint_Start,
+                &range,
+                TextPatternRangeEndpoint_End,
+            )
+            .map_err(|_| "selectionUnavailable".to_string())?
+            == 0
+        {
+            return Ok(None);
+        }
+        let text = range
+            .GetText(16000)
+            .map_err(|_| "selectionUnavailable".to_string())?
+            .to_string();
+        Ok((!text.trim().is_empty()).then_some(text))
+    })
+    .ok()
+    .flatten()
+}
+
 unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
     use windows::Win32::System::Ole::{
         SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,

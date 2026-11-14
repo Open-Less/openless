@@ -2319,8 +2319,8 @@ pub(super) async fn handle_window_hotkey_event(
             .map(|snapshot| snapshot.phase != openless_core::QaPhase::Idle)
             .unwrap_or(false);
         if panel_visible || qa_active {
-            if let Err(error) = inner.backend.services().qa.dismiss().await {
-                log::warn!("[coord] QA dismiss from Escape failed: {error}");
+            if let Err(error) = inner.backend.services().qa.cancel(None).await {
+                log::warn!("[coord] QA cancellation from Escape failed: {error}");
             }
         } else {
             super::dictation::cancel_active_session(inner).await;
@@ -2818,6 +2818,7 @@ pub(crate) mod windows_less_computer_tests {
             translation: true,
             operating: true,
             selection_polish: false,
+            qa: false,
             capsule_style: CapsuleStyle::Classic,
         };
         coordinator.present_core_capsule(expected.clone());

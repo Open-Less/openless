@@ -393,7 +393,7 @@ impl SelectionVoiceWorkflow {
                 ProviderInvocation::for_provider("selection-voice-unused-llm"),
                 text,
             ),
-            PipelineMode::Traditional => (
+            PipelineMode::Traditional | PipelineMode::Deepseek => (
                 text,
                 ProviderInvocation::for_provider("selection-voice-unused-omni"),
             ),
@@ -720,6 +720,7 @@ impl SelectionVoicePersistence {
             preferences.pipeline_mode,
         ) {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let session = DictationSession {

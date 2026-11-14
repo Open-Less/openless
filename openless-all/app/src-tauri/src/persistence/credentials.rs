@@ -619,6 +619,10 @@ fn reset_credentials_cache_for_tests() {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[allow(non_snake_case)]
 struct CredsRoot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    web_search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deepseek_suite: Option<String>,
     #[serde(default = "credsroot_default_version")]
     version: u32,
     #[serde(default)]
@@ -3495,7 +3499,53 @@ fn apply_sync_credentials_root(
 /// Credential vault — the system credential store; the legacy JSON file is a migration source only.
 pub struct CredentialsVault;
 
+fn deepseek_tts_credentials(root: &CredsRoot) -> Result<(openless_core::SecretValue, String)> {
+    let config = match root.deepseek_suite.as_deref() {
+        Some(raw) => openless_core::deepseek_suite::DeepSeekSuiteConfig::parse(raw)?,
+        None => openless_core::deepseek_suite::DeepSeekSuiteConfig::default(),
+    };
+    anyhow::ensure!(config.configured(), "DeepSeek suite API key is missing");
+    Ok((
+        openless_core::SecretValue::new(config.api_key),
+        config.voice,
+    ))
+}
+
 impl CredentialsVault {
+    pub fn get_deepseek_suite_config() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(load_credentials_for_update()?.deepseek_suite)
+    }
+    pub fn set_deepseek_suite_config(value: &str) -> Result<()> {
+        if !value.is_empty() {
+            openless_core::deepseek_suite::DeepSeekSuiteConfig::parse(value)?;
+        }
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.deepseek_suite = (!value.is_empty()).then(|| value.to_string());
+            Ok(true)
+        })
+    }
+
+    pub fn get_deepseek_tts_credentials() -> Result<(openless_core::SecretValue, String)> {
+        let _guard = credentials_lock().lock();
+        deepseek_tts_credentials(&load_credentials_for_update()?)
+    }
+
+    pub fn get_web_search_config() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(load_credentials_for_update()?.web_search)
+    }
+
+    pub fn set_web_search_config(value: &str) -> Result<()> {
+        if !value.is_empty() {
+            serde_json::from_str::<openless_core::web_search::WebSearchConfig>(value)?;
+        }
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.web_search = (!value.is_empty()).then(|| value.to_string());
+            Ok(true)
+        })
+    }
+
     /// System credential store service name; maps to the Keychain service on macOS.
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 
@@ -4108,6 +4158,21 @@ mod tests {
     use anyhow::anyhow;
     use parking_lot::Mutex;
     use std::collections::HashMap;
+
+    #[test]
+    fn speech_uses_only_the_dedicated_suite_key() {
+        let mut root = CredsRoot::default();
+        root.web_search = Some(r#"{"ttsChannel":"voice"}"#.into());
+        let mut entry = CredsLlmEntry::default();
+        entry.channel.providerType = Some("deepseek".into());
+        entry.apiKey = Some("traditional-key".into());
+        root.providers.llm.insert("voice".into(), entry);
+        assert!(super::deepseek_tts_credentials(&root).is_err());
+        root.deepseek_suite = Some(r#"{"apiKey":"suite-key","voice":"tide"}"#.into());
+        let (key, voice) = super::deepseek_tts_credentials(&root).unwrap();
+        assert_eq!(key.expose_secret(), "suite-key");
+        assert_eq!(voice, "tide");
+    }
 
     #[test]
     fn macos_credentials_read_one_item_after_legacy_chunk_migration() {

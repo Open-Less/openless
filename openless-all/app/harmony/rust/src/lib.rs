@@ -169,6 +169,10 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
     let account = required(args, "account")?;
     let namespace = if account == openless_core::MARKETPLACE_GITHUB_TOKEN_ACCOUNT {
         openless_core::CredentialNamespace::Marketplace
+    } else if account == openless_core::web_search::CONFIG_ACCOUNT
+        || account == openless_core::deepseek_suite::CONFIG_ACCOUNT
+    {
+        openless_core::CredentialNamespace::Application
     } else if account.starts_with("ark.") {
         openless_core::CredentialNamespace::Llm
     } else if account.starts_with("omni.") {
@@ -957,5 +961,18 @@ pub unsafe extern "C" fn openless_feed_pcm(
 pub unsafe extern "C" fn openless_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
+    }
+}
+
+#[cfg(test)]
+mod web_search_config_tests {
+    #[test]
+    fn search_settings_share_the_core_application_namespace() {
+        let key = super::credential_key(&serde_json::json!({
+            "account": openless_core::web_search::CONFIG_ACCOUNT
+        }))
+        .unwrap();
+        assert_eq!(key.namespace, openless_core::CredentialNamespace::Application);
+        assert!(key.provider_id.is_none());
     }
 }

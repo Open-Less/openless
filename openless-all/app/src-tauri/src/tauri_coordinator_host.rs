@@ -646,11 +646,9 @@ fn capsule_window_action(
     fallback_card_active: bool,
     show_capsule: bool,
     state: CapsuleState,
-    qa_voice_active: bool,
+    _qa_voice_active: bool,
 ) -> CapsuleWindowAction {
-    if qa_voice_active {
-        CapsuleWindowAction::HideCapsule
-    } else if fallback_card_active {
+    if fallback_card_active {
         CapsuleWindowAction::PreserveFallbackCard
     } else if show_capsule && !matches!(state, CapsuleState::Idle) {
         CapsuleWindowAction::ShowCapsule
@@ -1756,7 +1754,6 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn show_for_recording(&self, reassert_spaces: bool) {
-        if self.state.qa_voice_active.load(Ordering::SeqCst) { let _ = self.hide(); return; }
         self.state.capsule_visible.store(true, Ordering::SeqCst);
         if let Some(window) = self.window() {
             show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
@@ -2196,12 +2193,7 @@ impl TauriCoordinatorHost {
     }
 
     pub(crate) fn set_qa_voice_active(&self, active: bool) {
-        if self.capsule.qa_voice_active.swap(active, Ordering::SeqCst) == active { return; }
-        if active {
-            if let Some(capsule) = self.capsule_window() {
-                let _ = capsule.run_on_main_thread(|capsule| { let _ = capsule.hide(); });
-            }
-        }
+        self.capsule.qa_voice_active.store(active, Ordering::SeqCst);
     }
 
     pub(crate) fn cached_capsule_style(&self) -> CapsuleStyle {
@@ -2683,13 +2675,21 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_qa_voice_hides_all_shared_capsule_presentations() {
-        for state in [CapsuleState::Recording, CapsuleState::Transcribing, CapsuleState::Polishing, CapsuleState::Done, CapsuleState::Error, CapsuleState::Idle] {
-            for fallback in [true, false] {
-                assert_eq!(capsule_window_action(fallback, true, state, true), CapsuleWindowAction::HideCapsule);
-            }
+    fn qa_voice_uses_the_capsule_without_hiding_the_answer_window() {
+        for state in [
+            CapsuleState::Recording,
+            CapsuleState::Transcribing,
+            CapsuleState::Polishing,
+        ] {
+            assert_eq!(
+                capsule_window_action(false, true, state, true),
+                CapsuleWindowAction::ShowCapsule
+            );
         }
-        assert_eq!(capsule_window_action(false, true, CapsuleState::Recording, false), CapsuleWindowAction::ShowCapsule);
+        assert_eq!(
+            capsule_window_action(false, true, CapsuleState::Idle, true),
+            CapsuleWindowAction::HideCapsule
+        );
     }
 
     #[test]

@@ -1209,6 +1209,8 @@ export const de: typeof zhCN = {
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Texteingabe',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
@@ -1699,10 +1701,11 @@ export const de: typeof zhCN = {
       pipelineModeLabel: 'Verarbeitungsmodus',
       pipelineModeHint:
         'Klassisch = ASR + LLM in zwei Schritten. Multimodal = ein audiotaugliches Modell in einem Durchgang.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Klassisch',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.',
+        'Die drei Pipelines speichern ihre Konfiguration getrennt. Die Auswahl bleibt beim Schließen der Einstellungen oder des Fensters und nach einem Neustart erhalten. Beim Zurückwechseln wird die bisherige Konfiguration verwendet.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
@@ -2425,6 +2428,7 @@ export const de: typeof zhCN = {
     experimentsTitle: 'Experimente und Erweiterungen',
     experimentsDescription: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Diensteinstellungen',
       llm: 'Sprachmodelle',
       asr: 'Spracherkennung',
@@ -2448,6 +2452,8 @@ export const de: typeof zhCN = {
     backToAdvanced: 'Zurück zu erweiterten Funktionen',
     back: 'Zurück',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Live-Transkript im Eingabefeld konfigurieren.',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       customSyncServer:

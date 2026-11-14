@@ -44,6 +44,13 @@ fn matches(required: &str, physical: &str) -> bool {
         || matches!(required, "cmd" | "ctrl" | "alt" | "shift") && physical.starts_with(required)
 }
 impl ChordState {
+    fn sync_fn(&mut self, pressed: bool) {
+        if pressed {
+            self.held.insert("fn".into());
+        } else {
+            self.held.remove("fn");
+        }
+    }
     fn event(&mut self, physical: &str, pressed: bool) -> (bool, bool) {
         let physical = key(physical);
         let auxiliary = key(&self.auxiliary);
@@ -114,6 +121,11 @@ pub(crate) fn reset_held() {
     route.state.held.clear();
     route.state.consumed = false;
 }
+/// Reconcile Fn from the current keyboard event, even if its modifier edge was missed.
+pub(crate) fn sync_fn(pressed: bool) {
+    let mut route = route().lock().unwrap();
+    route.state.sync_fn(pressed);
+}
 pub(crate) fn claimed() -> bool {
     route().lock().unwrap().state.consumed
 }
@@ -145,6 +157,17 @@ mod tests {
             auxiliary: "Space".into(),
             ..Default::default()
         }
+    }
+    #[test]
+    fn event_snapshot_consumes_fn_space_but_not_a_standalone_space() {
+        let mut s = state("Fn", &[]);
+        s.sync_fn(true);
+        assert_eq!(s.event("Space", true), (true, true));
+        s.sync_fn(false);
+        assert_eq!(s.event("Space", false), (true, false));
+        s.held.insert("fn".into());
+        s.sync_fn(false);
+        assert_eq!(s.event("Space", true), (false, false));
     }
     #[test]
     fn side_specific_recording_is_the_only_anchor_and_repeats_are_suppressed() {
