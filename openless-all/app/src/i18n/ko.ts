@@ -302,6 +302,7 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
+    asking: '무엇이든 질문',
     thinking: 'thinking',
     using: 'using',
     cancelled: '취소됨',

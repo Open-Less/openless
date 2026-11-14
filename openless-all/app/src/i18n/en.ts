@@ -317,6 +317,7 @@ export const en: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    asking: 'Ask anything',
     thinking: 'thinking',
     using: 'using',
     cancelled: 'Cancelled',

@@ -49,6 +49,32 @@ test('a hidden capsule receives theme changes before the next recording', async 
   await expect(page.locator('.ol-default-capsule')).toHaveCSS('color-scheme', 'dark');
 });
 
+test('the ask-anything badge remains readable in both app themes', async ({ page }) => {
+  await page.goto(fixture + '&full=1');
+  await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
+  await page.evaluate(() =>
+    (window as any).fixture.emit('capsule:state', {
+      state: 'recording',
+      qa: true,
+      level: 0.2,
+      capsuleStyle: 'classic',
+    }),
+  );
+  const badge = page.locator('.ol-qa-capsule-badge');
+  await expect(badge).toHaveText('随便问');
+  for (const theme of ['light', 'dark'] as const) {
+    await preference(page, theme);
+    await expect(badge).toHaveCSS(
+      'color',
+      theme === 'light' ? 'rgb(24, 24, 27)' : 'rgb(244, 247, 251)',
+    );
+    await expect(badge).toHaveCSS(
+      'background-color',
+      theme === 'light' ? 'rgb(250, 250, 250)' : 'rgb(27, 34, 44)',
+    );
+  }
+});
+
 test('late startup reads cannot overwrite a newer capsule theme', async ({ page }) => {
   await page.goto(fixture + '&holdThemeRead=1');
   await page.waitForFunction(() => (window as any).fixture.themeReads >= 1);

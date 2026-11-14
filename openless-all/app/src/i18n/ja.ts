@@ -308,6 +308,7 @@ export const ja: typeof zhCN = {
     durationMinutes: '{{value}} 分',
   },
   capsule: {
+    asking: 'なんでも質問',
     thinking: 'thinking',
     using: 'using',
     cancelled: 'キャンセルしました',

@@ -317,6 +317,7 @@ export const es: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    asking: 'Pregunta lo que quieras',
     thinking: 'pensando',
     using: 'actuando',
     cancelled: 'Cancelado',

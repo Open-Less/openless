@@ -912,3 +912,38 @@
   content-visibility: visible;
   contain-intrinsic-size: none;
 }
+
+.qa-answer-header {
+  flex: 0 0 42px;
+  min-height: 42px;
+  z-index: 3;
+  background: #fff;
+}
+.qa-answer-header::after {
+  content: '';
+  position: absolute;
+  inset: 100% 0 auto;
+  height: 24px;
+  background: linear-gradient(to bottom, #fff, rgb(255 255 255 / 0%));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
+  mask-image: linear-gradient(to bottom, #000, transparent);
+  pointer-events: none;
+}
+.qa-answer-panel[data-platform='mac'] .qa-window-actions {
+  left: 12px;
+  right: auto;
+}
+.qa-answer-header .qa-close {
+  margin: 0;
+}
+.qa-answer-scroll [data-slot='message-scroller-viewport'] {
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
+}
+.qa-answer-scroll [data-slot='message-scroller-viewport']::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

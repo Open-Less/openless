@@ -5,15 +5,15 @@ import {
   saveDeepSeekSuiteConfig,
   type DeepSeekSuiteConfig,
 } from '../../lib/deepseekSuite';
+import { emitSaved } from '../../lib/savedEvent';
 import { Btn, Card } from '../_atoms';
 import { inputStyle, SettingRow } from './shared';
 
 export function DeepSeekSuiteSection() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const text = (zh: string, en: string) => (i18n.language.startsWith('zh') ? zh : en);
   const [config, setConfig] = useState<DeepSeekSuiteConfig | null>(null);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
   useEffect(() => {
     let active = true;
     void ensureDeepSeekSuiteConfig()
@@ -21,7 +21,8 @@ export function DeepSeekSuiteSection() {
         if (active) setConfig(value);
       })
       .catch(() => {
-        if (active) setStatus(text('读取配置失败，请重试。', 'Could not load configuration.'));
+        if (active)
+          emitSaved('failed', text('读取配置失败，请重试。', 'Could not load configuration.'));
       });
     return () => {
       active = false;
@@ -74,12 +75,12 @@ export function DeepSeekSuiteSection() {
             disabled={busy}
             onClick={async () => {
               setBusy(true);
-              setStatus('');
+              emitSaved('saving', t('common.saving'));
               try {
                 await saveDeepSeekSuiteConfig({ ...config, apiKey: config.apiKey.trim() });
-                setStatus(text('已保存独立配置', 'Independent configuration saved'));
+                emitSaved('saved', t('common.saved'));
               } catch {
-                setStatus(text('保存失败，请重试。', 'Could not save. Please retry.'));
+                emitSaved('failed', t('common.operationFailed'));
               } finally {
                 setBusy(false);
               }
@@ -89,7 +90,6 @@ export function DeepSeekSuiteSection() {
           </Btn>
         </>
       )}
-      {status && <p role="status">{status}</p>}
     </Card>
   );
 }

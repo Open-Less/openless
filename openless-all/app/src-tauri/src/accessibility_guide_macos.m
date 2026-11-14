@@ -1,7 +1,8 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
+#include <math.h>
 
-static const NSWindowStyleMask OLGuideStyle = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable;
+static const NSWindowStyleMask OLGuideStyle = NSWindowStyleMaskBorderless;
 static const NSWindowCollectionBehavior OLGuideCollectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorMoveToActiveSpace;
 
 static NSString *OLGuideText(NSString *zh, NSString *en) {
@@ -48,12 +49,84 @@ static BOOL OLSettingsWindowFrame(NSRect *frame) {
     return NO;
 }
 
-@interface OLAccessibilityGuideController : NSObject <NSWindowDelegate>
+@protocol OLGuideDragOwner <NSObject>
+- (void)guideDragEnded;
+@end
+
+@interface OLGuideApplicationView : NSView <NSDraggingSource>
+@property(nonatomic, strong) NSURL *applicationURL;
+@property(nonatomic, strong) NSImage *applicationIcon;
+@property(nonatomic, strong) NSEvent *mouseDownEvent;
+@property(nonatomic, weak) id<OLGuideDragOwner> dragOwner;
+@property(nonatomic) BOOL dragging;
+@end
+
+@implementation OLGuideApplicationView
+- (instancetype)initWithFrame:(NSRect)frame applicationURL:(NSURL *)url {
+    self = [super initWithFrame:frame];
+    if (!self) return nil;
+    _applicationURL = url;
+    _applicationIcon = [NSWorkspace.sharedWorkspace iconForFile:url.path];
+    self.accessibilityElement = YES;
+    self.accessibilityRole = NSAccessibilityImageRole;
+    self.accessibilityLabel = @"OpenLess";
+    self.accessibilityHelp = OLGuideText(@"将此应用拖入上方的授权列表。", @"Drag this application into the access list above.");
+    return self;
+}
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
+- (BOOL)mouseDownCanMoveWindow { return NO; }
+- (void)resetCursorRects { [self addCursorRect:self.bounds cursor:NSCursor.openHandCursor]; }
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    [self.applicationIcon drawInRect:NSMakeRect(0, 6, 40, 40)];
+    [@"OpenLess" drawAtPoint:NSMakePoint(56, 13) withAttributes:@{
+        NSFontAttributeName: [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: NSColor.labelColor
+    }];
+}
+- (NSDraggingItem *)applicationDraggingItem {
+    // NSURL writes the native file URL flavor expected by Finder and System Settings.
+    NSDraggingItem *item = [[NSDraggingItem alloc] initWithPasteboardWriter:self.applicationURL];
+    [item setDraggingFrame:NSMakeRect(0, 6, 40, 40) contents:self.applicationIcon];
+    return item;
+}
+- (void)mouseDown:(NSEvent *)event { self.mouseDownEvent = event; }
+- (void)mouseUp:(NSEvent *)event { (void)event; self.mouseDownEvent = nil; }
+- (void)mouseDragged:(NSEvent *)event {
+    if (!self.mouseDownEvent || self.dragging) return;
+    NSPoint start = self.mouseDownEvent.locationInWindow;
+    NSPoint current = event.locationInWindow;
+    if (hypot(current.x - start.x, current.y - start.y) < 3) return;
+    self.dragging = YES;
+    NSEvent *mouseDown = self.mouseDownEvent;
+    self.mouseDownEvent = nil;
+    NSDraggingSession *session = [self beginDraggingSessionWithItems:@[[self applicationDraggingItem]] event:mouseDown source:self];
+    if (!session) { self.dragging = NO; return; }
+    session.animatesToStartingPositionsOnCancelOrFail = YES;
+}
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    (void)session; (void)context;
+    // The application itself must never be moved out of Applications.
+    return NSDragOperationCopy;
+}
+- (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession *)session { (void)session; return YES; }
+- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {
+    (void)session; (void)point; (void)operation;
+    self.dragging = NO;
+    self.mouseDownEvent = nil;
+    [self.dragOwner guideDragEnded];
+}
+@end
+
+@interface OLAccessibilityGuideController : NSObject <NSWindowDelegate, OLGuideDragOwner>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSTimer *timer;
 @property(nonatomic, strong) NSURL *applicationURL;
 @property(nonatomic) NSTimeInterval startedAt;
 @property(nonatomic) BOOL shown;
+@property(nonatomic) BOOL closeAfterDrag;
+@property(nonatomic, strong) OLGuideApplicationView *applicationView;
+- (void)applyApplicationAppearance;
 - (void)close;
 - (void)refresh;
 @end
@@ -66,51 +139,67 @@ static OLAccessibilityGuideController *guideController;
     if (!self) return nil;
     _applicationURL = url;
     _startedAt = NSProcessInfo.processInfo.systemUptime;
-    // An ordinary, bounded window avoids nonactivating/all-Spaces WindowServer state.
-    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 118)
+    // Keep one bounded window without nonactivating or all-Spaces panel state.
+    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 136)
         styleMask:OLGuideStyle backing:NSBackingStoreBuffered defer:NO];
-    _window.title = OLGuideText(@"辅助功能授权", @"Accessibility access");
+    _window.title = OLGuideText(@"OpenLess 授权引导", @"OpenLess access guide");
     _window.level = NSFloatingWindowLevel;
     _window.releasedWhenClosed = NO;
     _window.excludedFromWindowsMenu = YES;
     _window.collectionBehavior = OLGuideCollectionBehavior;
     _window.sharingType = NSWindowSharingReadOnly;
     _window.delegate = self;
-    _window.backgroundColor = NSColor.windowBackgroundColor;
-
-    NSView *content = _window.contentView;
+    _window.opaque = NO;
+    _window.backgroundColor = NSColor.clearColor;
+    _window.hasShadow = YES;
+    _window.movable = NO;
+    NSVisualEffectView *content = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, 420, 136)];
+    content.material = NSVisualEffectMaterialPopover;
+    content.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    content.state = NSVisualEffectStateActive;
+    content.wantsLayer = YES;
+    content.layer.cornerRadius = 14;
+    content.layer.masksToBounds = YES;
+    NSImage *mask = [NSImage imageWithSize:NSMakeSize(29, 29) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+        [NSColor.blackColor setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:14 yRadius:14] fill];
+        return YES;
+    }];
+    mask.capInsets = NSEdgeInsetsMake(14, 14, 14, 14);
+    mask.resizingMode = NSImageResizingModeStretch;
+    content.maskImage = mask;
+    _window.contentView = content;
+    [_window invalidateShadow];
+    [self applyApplicationAppearance];
     NSTextField *hint = [NSTextField wrappingLabelWithString:OLGuideText(
-        @"将下方的 OpenLess 图标拖入辅助功能列表，然后打开开关。",
-        @"Drag the OpenLess icon below into the Accessibility list, then enable it.")];
-    hint.frame = NSMakeRect(16, 64, 388, 40);
+        @"将下方的 OpenLess 拖入上方列表，按系统提示完成授权。",
+        @"Drag OpenLess into the list above, then follow the system prompt.")];
+    hint.frame = NSMakeRect(20, 84, 380, 36);
     hint.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     hint.textColor = NSColor.labelColor;
-    hint.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     [content addSubview:hint];
-
-    // NSPathControl owns file dragging, its tracking loop and drag-image cleanup.
-    NSPathControl *path = [[NSPathControl alloc] initWithFrame:NSMakeRect(16, 20, 250, 32)];
-    path.pathStyle = NSPathStylePopUp;
-    path.URL = url;
-    path.editable = NO;
-    path.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-    path.backgroundColor = NSColor.controlBackgroundColor;
-    path.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    path.accessibilityLabel = @"OpenLess";
-    [content addSubview:path];
-    NSButton *finder = [NSButton buttonWithTitle:OLGuideText(@"在访达中显示", @"Show in Finder") target:self action:@selector(reveal:)];
-    finder.frame = NSMakeRect(278, 20, 126, 32);
-    finder.bezelStyle = NSBezelStyleRounded;
-    finder.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-    [content addSubview:finder];
+    self.applicationView = [[OLGuideApplicationView alloc] initWithFrame:NSMakeRect(20, 18, 380, 52) applicationURL:url];
+    self.applicationView.dragOwner = self;
+    [content addSubview:self.applicationView];
     return self;
 }
-- (void)reveal:(id)sender {
-    (void)sender;
-    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[self.applicationURL]];
-    [self close];
+- (void)applyApplicationAppearance {
+    // Tauri maps the app's explicit Light/Dark preference to NSApp.appearance.
+    // Nil retains the app's System preference; do not force the desktop appearance.
+    self.window.appearance = NSApp.appearance;
+}
+- (void)guideDragEnded {
+    // AppKit still owns the drag callback stack. Defer teardown to the next turn.
+    __weak OLAccessibilityGuideController *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        OLAccessibilityGuideController *controller = weakSelf;
+        if (controller.closeAfterDrag) [controller close];
+        else [controller refresh];
+    });
 }
 - (void)refresh {
+    [self applyApplicationAppearance];
+    if (self.applicationView.dragging) return;
     if (AXIsProcessTrusted()) { [self close]; return; }
     NSRect settings;
     if (!OLSettingsWindowFrame(&settings)) {
@@ -142,6 +231,9 @@ static OLAccessibilityGuideController *guideController;
     [self refresh];
 }
 - (void)close {
+    if (self.applicationView.dragging) { self.closeAfterDrag = YES; return; }
+    self.applicationView.dragOwner = nil;
+    self.applicationView = nil;
     [self.timer invalidate]; self.timer = nil;
     NSWindow *window = self.window;
     window.delegate = nil;
@@ -154,6 +246,8 @@ static OLAccessibilityGuideController *guideController;
     if (notification.object != self.window) return;
     [self.timer invalidate]; self.timer = nil;
     self.window.delegate = nil;
+    self.applicationView.dragOwner = nil;
+    self.applicationView = nil;
     self.window = nil;
     if (guideController == self) guideController = nil;
 }

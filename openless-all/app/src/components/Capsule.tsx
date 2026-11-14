@@ -257,7 +257,7 @@ function ClassicCapsule({
             className="ol-qa-capsule-badge"
             data-visible={['recording', 'transcribing', 'polishing'].includes(state) && !leaving}
           >
-            {t('askAnything.question')}
+            {t('capsule.asking')}
           </div>
         ) : (
           <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
@@ -963,7 +963,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                     boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
                   }}
                 />
-                {qa ? t('askAnything.question') : t('capsule.translating')}
+                {qa ? t('capsule.asking') : t('capsule.translating')}
               </div>
             </div>
             <div className="ol-siri-capsule-stack">

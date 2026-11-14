@@ -322,6 +322,7 @@ export const fr: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    asking: 'Posez une question',
     thinking: 'réflexion',
     using: 'action',
     cancelled: 'Annulé',

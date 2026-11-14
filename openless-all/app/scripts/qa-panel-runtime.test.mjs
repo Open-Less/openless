@@ -147,6 +147,7 @@ function context(native = true, embedded = false) {
     useChatPanelLifecycle: () => lifecycle,
     isTauri: native,
     useQaPipeline: () => 'traditional',
+    detectOS: () => 'mac',
     qaSources: (text) => ({ body: text, sources: [] }),
     qaCancelTurn: async () => {},
     stopDeepSeekReading: () => {

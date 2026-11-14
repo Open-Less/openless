@@ -29,7 +29,12 @@ test('three pipelines retain separate credentials and the selected pipeline afte
   await page.getByLabel('DeepSeek suite API Key').fill('dedicated-fixture-key');
   await page.getByLabel('朗读音色', { exact: true }).selectOption('tide');
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
-  await expect(dialog.getByRole('status')).toContainText('已保存独立配置');
+  const toast = page.getByRole('status').filter({ hasText: '已保存' });
+  await expect(toast).toBeVisible();
+  await expect(dialog.getByText('已保存独立配置', { exact: true })).toHaveCount(0);
+  const toastBox = await toast.boundingBox();
+  expect(toastBox!.x).toBeGreaterThan(900);
+  expect(toastBox!.y).toBeLessThan(180);
   for (const mode of ['传统模式', '多模态模式', 'DeepSeek 大统一']) {
     await pipeline.getByRole('button', { name: mode, exact: true }).click();
     await expect(pipeline.getByRole('button', { name: mode, exact: true })).toHaveAttribute(

@@ -1,3 +1,4 @@
+import { detectOS } from '../components/WindowChrome';
 import { QaAnswerFooter } from '../components/QaAnswerFooter';
 import { qaSources } from '../lib/qaSources';
 import { useQaPipeline } from '../lib/useQaPipeline';
@@ -808,7 +809,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         <>
           {status === 'recording' && (
             <div className="qa-voice-hint" title={selectionPreview || undefined}>
-              {selectionPreview ? t('selectionAsk.title') : t('askAnything.question')}
+              {selectionPreview ? t('selectionAsk.title') : t('capsule.asking')}
               {selectionPreview ? ` · ${truncate(selectionPreview, 32)}` : ''}
             </div>
           )}
@@ -824,12 +825,13 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         </>
       )}
       {expanded && (
-        <section className="qa-answer-panel" aria-label={t('qa.title')}>
+        <section
+          className="qa-answer-panel"
+          data-platform={detectOS()}
+          aria-label={t('capsule.asking')}
+        >
           <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
-            <span className="qa-symbol" aria-hidden="true">
-              ✳
-            </span>
-            <h1 data-tauri-drag-region={embedded ? undefined : true}>OpenLess</h1>
+            <h1 data-tauri-drag-region={embedded ? undefined : true}>{t('capsule.asking')}</h1>
             <div className="qa-window-actions">
               <button
                 type="button"

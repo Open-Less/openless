@@ -582,8 +582,8 @@
 .ol-qa-capsule-badge {
   padding: 5px 12px;
   border-radius: 9px;
-  background: var(--ol-capsule-pill-bg, rgba(32, 32, 32, 0.9));
-  color: var(--ol-capsule-pill-ink, #fff);
+  background: var(--ol-capsule-badge-bg);
+  color: var(--ol-capsule-center-ink);
   font-size: 12px;
   white-space: nowrap;
   opacity: 0;
