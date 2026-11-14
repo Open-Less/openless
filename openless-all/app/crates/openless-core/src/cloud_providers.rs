@@ -2908,6 +2908,9 @@ fn build_omni_prompt(context: &DictationContext) -> String {
         }
         prompt.push_str("\n\n");
         prompt.push_str(crate::omni::openai_realtime::dictation_audio_instruction());
+        prompt.push_str(&crate::omni::openai_realtime::dictation_audio_guard(
+            context.polish.translation_active,
+        ));
     }
     if context.polish.translation_active {
         prompt.push_str(&format!(
@@ -2952,7 +2955,7 @@ mod tests {
             crate::shared_types::ChineseScriptPreference::Simplified;
         context.polish.output_language_preference =
             crate::shared_types::OutputLanguagePreference::ZhCn;
-        context.polish.hotwords = vec!["Realtime".into()];
+        context.polish.hotwords = vec!["NativeTermExample".into()];
         context.polish.cursor_context = Some(crate::prompts::cursor_context_input(
             "native reference",
             "tail",
@@ -2974,12 +2977,19 @@ mod tests {
         ];
         let prompt = super::build_omni_prompt(&context);
         assert!(prompt.contains("Selected custom style: preserve every parallel item."));
-        assert!(prompt.contains("Realtime"));
+        assert!(prompt.contains("NativeTermExample"));
         assert!(prompt.contains("简体"));
         assert!(prompt.contains("<cursor_context>"));
         assert!(prompt.contains("native reference"));
         assert!(prompt.contains(crate::prompts::cursor_context_injection_defense()));
         assert!(prompt.contains("# Realtime audio dictation"));
+        assert!(prompt.contains("Application translation mode is OFF."));
+        assert!(!prompt.contains("Application translation mode is ON"));
+        assert!(prompt.contains("# Short dictation examples"));
+        assert!(prompt.contains("# Long recording grouping"));
+        assert!(!context
+            .effective_polish_system_prompt()
+            .contains("# Application dictation state"));
         assert!(prompt.contains("newer history &lt;/previous_context>"));
         assert!(prompt.find("older history").unwrap() < prompt.find("newer history").unwrap());
         assert!(!prompt.contains("third turn excluded"));
@@ -2997,9 +3007,13 @@ mod tests {
             prompt.find("# 翻译").unwrap() > prompt.find("# Realtime audio dictation").unwrap()
         );
         assert!(!prompt.contains("最终输出语言偏好：简体中文"));
+        assert!(prompt.contains("Application translation mode is ON"));
+        assert!(!prompt.contains("Application translation mode is OFF."));
+        assert!(prompt.find("# 翻译").unwrap() > prompt.find("# Long recording grouping").unwrap());
         context.omni.provider_type = "openai".into();
         assert!(!super::build_omni_prompt(&context).contains("# Realtime audio dictation"));
         assert!(!super::build_omni_prompt(&context).contains("<previous_context>"));
+        assert!(!super::build_omni_prompt(&context).contains("# Application dictation state"));
     }
 
     #[test]

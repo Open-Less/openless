@@ -522,7 +522,12 @@ async fn setup_rejection_is_an_error_even_if_audio_and_stop_were_already_queued(
 async fn recorded_retry_preserves_user_text_beside_audio_and_text_only_requests_skip_commit() {
     for with_audio in [true, false] {
         let (endpoint, server) = serve(move |mut socket| async move {
-            ready(&mut socket).await;
+            let setup = ready(&mut socket).await;
+            assert_eq!(setup["session"]["instructions"], "prompt");
+            assert!(!setup["session"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("# Application dictation state"));
             let item = receive(&mut socket).await;
             assert_eq!(item["type"], "conversation.item.create");
             assert_eq!(
@@ -530,6 +535,12 @@ async fn recorded_retry_preserves_user_text_beside_audio_and_text_only_requests_
                 json!({"type":"input_text", "text":"selected text or question"})
             );
             let events = until_response(&mut socket).await;
+            for update in events
+                .iter()
+                .filter(|event| event["type"] == "session.update")
+            {
+                assert_eq!(update["session"]["instructions"], "prompt");
+            }
             assert_eq!(
                 events
                     .iter()
