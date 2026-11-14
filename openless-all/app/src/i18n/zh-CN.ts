@@ -1576,7 +1576,7 @@ export const zhCN = {
       asrDesc: '用于将录制的语音转写为文本。',
       omniTitle: '多模态模型',
       openaiRealtimeOmniNotice:
-        '选择支持音频输入的 Realtime 模型，直接将录音整理为文字，无需独立润色。固定使用最低 low 推理等级，仅输出文字、不生成语音。使用 OpenAI API Key 和 API 额度；Codex 或 ChatGPT 登录不能代替 API Key。其他 OpenAI 模型不一定支持音频。',
+        '选择支持音频输入的 Realtime 模型，直接将录音整理为文字，无需独立润色。固定使用 low 推理等级，仅输出文字、不生成语音。使用 OpenAI API Key 和 API 额度；Codex 或 ChatGPT 登录不能代替 API Key。其他 OpenAI 模型不一定支持音频。',
       omniDesc: '一个模型直接接收「提示词 + 音频」一步输出最终文本（实验性管线）。',
       pipelineModeLabel: '识别管线',
       pipelineModeHint: '传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。',

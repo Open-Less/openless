@@ -2986,6 +2986,11 @@ mod tests {
         assert!(prompt.contains("Application translation mode is OFF."));
         assert!(!prompt.contains("Application translation mode is ON"));
         assert!(prompt.contains("# Short dictation examples"));
+        assert!(prompt.contains("# Local self-revision"));
+        assert!(
+            prompt.find("# Local self-revision").unwrap()
+                < prompt.find("# Short dictation examples").unwrap()
+        );
         assert!(prompt.contains("# Long recording grouping"));
         assert!(!context
             .effective_polish_system_prompt()
@@ -3009,6 +3014,7 @@ mod tests {
         assert!(!prompt.contains("最终输出语言偏好：简体中文"));
         assert!(prompt.contains("Application translation mode is ON"));
         assert!(!prompt.contains("Application translation mode is OFF."));
+        assert!(prompt.contains("# Local self-revision"));
         assert!(prompt.find("# 翻译").unwrap() > prompt.find("# Long recording grouping").unwrap());
         context.omni.provider_type = "openai".into();
         assert!(!super::build_omni_prompt(&context).contains("# Realtime audio dictation"));

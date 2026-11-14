@@ -29,6 +29,14 @@ The final result follows the existing preview, script conversion, insertion and
 history pipeline. Auxiliary text operations and recorded-audio retries use the
 same transport; retrying a complete file includes connection setup time.
 
+The dictation prompt allows clear, committed self-corrections only to content
+already identified within the current recording. Consecutive corrections keep
+the final value and preserve the other facts; merely quoted, reported, compared,
+rejected or undecided edits remain dictated content. This does not edit cursor
+documents or historical turns. If an earlier-state label is retained, it stays
+paired with its old value, not the replacement; the selected style and explicit
+translation then apply to the revised content.
+
 ## Boundaries
 
 - The queue accepts up to ten minutes of PCM16 mono 16 kHz audio and converts it

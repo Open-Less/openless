@@ -18,7 +18,7 @@ pub(super) fn setup(config: &OmniConfig, instructions: &str) -> Message {
     });
     // The 2.1 family exposes reasoning effort; older GA Realtime models do not.
     if config.model.trim().starts_with("gpt-realtime-2") {
-        // Dictation favors the lowest supported effort. Do not inherit an unrelated
+        // Dictation currently uses fixed low effort. Do not inherit an unrelated
         // text model's thinking toggle or misrepresent low as disabled reasoning.
         session["reasoning"] = json!({"effort": "low"});
     }

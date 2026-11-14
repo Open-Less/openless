@@ -1644,7 +1644,7 @@ export const ja: typeof zhCN = {
       asrDesc: '録音した音声をテキストに文字起こしします。',
       omniTitle: 'マルチモーダルモデル',
       openaiRealtimeOmniNotice:
-        '音声入力に対応する Realtime モデルを選ぶと、別の推敲処理なしで録音から整えたテキストを直接生成します。推論レベルは最低の low に固定し、音声は生成しません。OpenAI API キーと API 利用枠が必要です。Codex や ChatGPT のログインは API キーの代わりにはなりません。他の OpenAI モデルが音声対応とは限りません。',
+        '音声入力に対応する Realtime モデルを選ぶと、別の推敲処理なしで録音から整えたテキストを直接生成します。推論レベルは low に固定し、音声は生成しません。OpenAI API キーと API 利用枠が必要です。Codex や ChatGPT のログインは API キーの代わりにはなりません。他の OpenAI モデルが音声対応とは限りません。',
       omniDesc:
         '1つのモデルが「プロンプト + 音声」から最終テキストを直接出力します（実験的パイプライン）。',
       pipelineModeLabel: '認識パイプライン',

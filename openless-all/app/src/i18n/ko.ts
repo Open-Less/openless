@@ -1635,7 +1635,7 @@ export const ko: typeof zhCN = {
       asrDesc: '녹음된 음성을 텍스트로 전사합니다.',
       omniTitle: '멀티모달 모델',
       openaiRealtimeOmniNotice:
-        '오디오 입력을 지원하는 Realtime 모델을 선택하면 별도의 다듬기 단계 없이 녹음을 정리된 텍스트로 바로 출력합니다. 추론 수준은 최저 low로 고정하며 음성은 생성하지 않습니다. OpenAI API 키와 API 크레딧이 필요하며 Codex 또는 ChatGPT 로그인으로 키를 대신할 수 없습니다. 다른 OpenAI 모델은 오디오를 지원하지 않을 수 있습니다.',
+        '오디오 입력을 지원하는 Realtime 모델을 선택하면 별도의 다듬기 단계 없이 녹음을 정리된 텍스트로 바로 출력합니다. 추론 수준은 low로 고정하며 음성은 생성하지 않습니다. OpenAI API 키와 API 크레딧이 필요하며 Codex 또는 ChatGPT 로그인으로 키를 대신할 수 없습니다. 다른 OpenAI 모델은 오디오를 지원하지 않을 수 있습니다.',
       omniDesc:
         '하나의 모델이 프롬프트 + 오디오를 받아 최종 텍스트를 한 번에 출력합니다(실험적 파이프라인).',
       pipelineModeLabel: '인식 파이프라인',

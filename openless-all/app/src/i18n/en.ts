@@ -1659,7 +1659,7 @@ export const en: typeof zhCN = {
       asrDesc: 'Used to turn recorded speech into text.',
       omniTitle: 'Multimodal model',
       openaiRealtimeOmniNotice:
-        'Choose an audio-capable Realtime model to turn recordings directly into prepared text, without a separate polishing pass. Uses the lowest low reasoning level and returns text, not generated speech. Requires an OpenAI API key and API credits; a Codex or ChatGPT login cannot replace the key. Other OpenAI models may not accept audio.',
+        'Choose an audio-capable Realtime model to turn recordings directly into prepared text, without a separate polishing pass. Uses a fixed low reasoning effort and returns text, not generated speech. Requires an OpenAI API key and API credits; a Codex or ChatGPT login cannot replace the key. Other OpenAI models may not accept audio.',
       omniDesc:
         'One model that turns audio + prompt into the final text directly (experimental pipeline).',
       pipelineModeLabel: 'Pipeline mode',

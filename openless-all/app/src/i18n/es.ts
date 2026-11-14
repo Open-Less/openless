@@ -1685,7 +1685,7 @@ export const es: typeof zhCN = {
       asrDesc: 'Convierte las grabaciones de voz en texto.',
       omniTitle: 'Modelo multimodal',
       openaiRealtimeOmniNotice:
-        'Elige un modelo Realtime compatible con audio para convertir las grabaciones directamente en texto organizado, sin una fase adicional de edición. Usa el nivel mínimo de razonamiento low y solo devuelve texto, sin generar voz. Requiere una clave API y créditos de OpenAI; iniciar sesión en Codex o ChatGPT no sustituye la clave. Otros modelos de OpenAI pueden no admitir audio.',
+        'Elige un modelo Realtime compatible con audio para convertir las grabaciones directamente en texto organizado, sin una fase adicional de edición. Usa siempre el nivel de razonamiento low y solo devuelve texto, sin generar voz. Requiere una clave API y créditos de OpenAI; iniciar sesión en Codex o ChatGPT no sustituye la clave. Otros modelos de OpenAI pueden no admitir audio.',
       omniDesc:
         'Un modelo convierte directamente el audio y las instrucciones en el texto final (flujo experimental).',
       pipelineModeLabel: 'Modo de procesamiento',

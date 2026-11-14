@@ -1697,7 +1697,7 @@ export const de: typeof zhCN = {
       asrDesc: 'Wandelt aufgenommene Sprache in Text um.',
       omniTitle: 'Multimodales Modell',
       openaiRealtimeOmniNotice:
-        'Wähle ein Realtime-Modell mit Audioeingabe, um Aufnahmen ohne zusätzlichen Überarbeitungsschritt direkt in geordneten Text umzuwandeln. Die Denkstufe bleibt auf dem niedrigsten Wert low; ausgegeben wird nur Text, keine erzeugte Sprache. Dafür werden ein OpenAI-API-Schlüssel und API-Guthaben benötigt; eine Codex- oder ChatGPT-Anmeldung ersetzt den Schlüssel nicht. Andere OpenAI-Modelle unterstützen möglicherweise kein Audio.',
+        'Wähle ein Realtime-Modell mit Audioeingabe, um Aufnahmen ohne zusätzlichen Überarbeitungsschritt direkt in geordneten Text umzuwandeln. Die Denkstufe bleibt fest auf low eingestellt; ausgegeben wird nur Text, keine erzeugte Sprache. Dafür werden ein OpenAI-API-Schlüssel und API-Guthaben benötigt; eine Codex- oder ChatGPT-Anmeldung ersetzt den Schlüssel nicht. Andere OpenAI-Modelle unterstützen möglicherweise kein Audio.',
       omniDesc:
         'Ein Modell erzeugt direkt aus Audio und Prompt den fertigen Text (experimenteller Ablauf).',
       pipelineModeLabel: 'Verarbeitungsmodus',
