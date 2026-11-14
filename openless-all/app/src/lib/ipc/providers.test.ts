@@ -40,43 +40,68 @@ for (const kind of ['asr', 'llm', 'omni'] as ProviderKind[]) {
 console.log('browser provider catalog exposes ASR, LLM and Omni editors');
 
 const omniDescriptors = await listProviderDescriptors('omni');
-const realtime = omniDescriptors.find(
-  (descriptor) => descriptor.providerType === 'openai-realtime',
-);
-const generatedRealtime = generated.omni.find(
-  (descriptor) => descriptor.providerType === 'openai-realtime',
-);
-if (!realtime || !generatedRealtime)
-  throw new Error('Native OpenAI Realtime Omni preset is missing');
-if (
-  Object.entries(realtime).some(
-    ([key, value]) =>
-      JSON.stringify(value) !==
-      JSON.stringify(generatedRealtime[key as keyof typeof generatedRealtime]),
+const realtimeProfiles = [
+  {
+    id: 'openai-realtime',
+    labelKey: 'omniOpenaiRealtime',
+    endpoint: 'https://api.openai.com/v1',
+    models: ['gpt-realtime-2.1', 'gpt-realtime-2.1-mini'],
+  },
+  {
+    id: 'dashscope-realtime',
+    labelKey: 'omniDashscopeRealtime',
+    endpoint: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
+    models: [
+      'qwen3.5-omni-flash-realtime',
+      'qwen3.5-omni-plus-realtime',
+      'qwen3.8-omni-flash-realtime',
+    ],
+  },
+  {
+    id: 'dashscope-realtime-legacy',
+    labelKey: 'omniDashscopeRealtimeLegacy',
+    endpoint: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
+    models: ['qwen3-omni-flash-realtime-2025-09-15'],
+  },
+];
+for (const profile of realtimeProfiles) {
+  const realtime = omniDescriptors.find((descriptor) => descriptor.providerType === profile.id);
+  const generatedRealtime = generated.omni.find(
+    (descriptor) => descriptor.providerType === profile.id,
+  );
+  if (!realtime || !generatedRealtime)
+    throw new Error(`${profile.id}: native Realtime Omni preset is missing`);
+  if (
+    Object.entries(realtime).some(
+      ([key, value]) =>
+        JSON.stringify(value) !==
+        JSON.stringify(generatedRealtime[key as keyof typeof generatedRealtime]),
+    )
   )
-)
-  throw new Error('OpenAI Realtime preview catalogs must agree');
-if (
-  realtime.defaultEndpoint !== 'https://api.openai.com/v1' ||
-  realtime.defaultModel !== 'gpt-realtime-2.1' ||
-  realtime.authRequirement !== 'api_key' ||
-  realtime.labelKey !== 'omniOpenaiRealtime'
-)
-  throw new Error('Realtime must use the explicit native Omni API-key preset');
-const realtimeModels = await listProviderModels('omni', undefined, 'openai-realtime');
-if (realtimeModels.models.join(',') !== 'gpt-realtime-2.1,gpt-realtime-2.1-mini')
-  throw new Error('Realtime model picker must not expose unrelated OpenAI models as audio-capable');
+    throw new Error(`${profile.id}: Realtime preview catalogs must agree`);
+  if (
+    realtime.defaultEndpoint !== profile.endpoint ||
+    realtime.defaultModel !== profile.models[0] ||
+    realtime.authRequirement !== 'endpoint_model_optional_api_key' ||
+    realtime.labelKey !== profile.labelKey ||
+    realtime.validationProbe !== 'omni_text'
+  )
+    throw new Error(`${profile.id}: typed Realtime authentication and defaults must be explicit`);
+  const realtimeModels = await listProviderModels('omni', undefined, profile.id);
+  if (realtimeModels.models.join(',') !== profile.models.join(','))
+    throw new Error(`${profile.id}: model candidates must remain scoped to the chosen protocol`);
+  if (
+    (await listProviderDescriptors('asr')).some(
+      (descriptor) => descriptor.providerType === profile.id,
+    )
+  )
+    throw new Error(`${profile.id}: Realtime must be native Omni, not a disguised ASR bridge`);
+}
 if (
   omniDescriptors.find((descriptor) => descriptor.providerType === 'openai')?.defaultModel !==
   'gpt-4o-audio-preview'
 )
   throw new Error('Adding Realtime must preserve existing OpenAI Omni configuration defaults');
-if (
-  (await listProviderDescriptors('asr')).some(
-    (descriptor) => descriptor.providerType === 'openai-realtime',
-  )
-)
-  throw new Error('Realtime must be offered as a native Omni provider, not a disguised ASR bridge');
 console.log(
-  'native Realtime Omni preview exposes scoped models and preserves OpenAI Chat defaults',
+  'three native Realtime Omni previews expose typed auth, scoped models and preserve Chat defaults',
 );
