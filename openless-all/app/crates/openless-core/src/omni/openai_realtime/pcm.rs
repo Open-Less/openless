@@ -23,7 +23,8 @@ impl Resampler {
             self.source_index += 1;
             while self.next_output * 2 <= self.source_index * 3 {
                 let fraction = (self.next_output * 2 - (self.source_index - 1) * 3) as i32;
-                let sample = ((previous as i32 * (3 - fraction) + current as i32 * fraction) / 3) as i16;
+                let sample =
+                    ((previous as i32 * (3 - fraction) + current as i32 * fraction) / 3) as i16;
                 output.extend_from_slice(&sample.to_le_bytes());
                 self.next_output += 1;
             }

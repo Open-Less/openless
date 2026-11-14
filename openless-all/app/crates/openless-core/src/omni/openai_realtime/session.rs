@@ -7,26 +7,36 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use super::{pcm::Resampler, protocol, transport, Command, FINISH_TIMEOUT, WRITE_TIMEOUT};
 use super::super::OmniConfig;
+use super::{pcm::Resampler, protocol, transport, Command, FINISH_TIMEOUT, WRITE_TIMEOUT};
 use crate::asr::RawTranscript;
 use crate::polish::LLMError;
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
-pub(super) async fn connect(config: &OmniConfig, instructions: &str, user_text: &str) -> Result<transport::Socket, LLMError> {
+pub(super) async fn connect(
+    config: &OmniConfig,
+    instructions: &str,
+    user_text: &str,
+) -> Result<transport::Socket, LLMError> {
     let mut socket = transport::connect(config).await?;
     loop {
         if let Some(value) = receive(&mut socket).await? {
-            if value["type"] == "session.created" { break; }
+            if value["type"] == "session.created" {
+                break;
+            }
         }
     }
     send(&mut socket, protocol::setup(config, instructions)).await?;
     loop {
         if let Some(value) = receive(&mut socket).await? {
-            if value["type"] == "session.updated" { break; }
+            if value["type"] == "session.updated" {
+                break;
+            }
         }
     }
-    if !user_text.trim().is_empty() { send(&mut socket, protocol::user_text(user_text)).await?; }
+    if !user_text.trim().is_empty() {
+        send(&mut socket, protocol::user_text(user_text)).await?;
+    }
     Ok(socket)
 }
 
@@ -43,10 +53,16 @@ pub(super) async fn run(
     }
 }
 
-pub(super) async fn cancellation(cancelled: &mut watch::Receiver<Option<&'static str>>) -> &'static str {
+pub(super) async fn cancellation(
+    cancelled: &mut watch::Receiver<Option<&'static str>>,
+) -> &'static str {
     loop {
-        if let Some(reason) = *cancelled.borrow_and_update() { return reason; }
-        if cancelled.changed().await.is_err() { return "OpenAI Realtime session dropped"; }
+        if let Some(reason) = *cancelled.borrow_and_update() {
+            return reason;
+        }
+        if cancelled.changed().await.is_err() {
+            return "OpenAI Realtime session dropped";
+        }
     }
 }
 
@@ -114,20 +130,29 @@ async fn compose(
 }
 
 async fn receive(socket: &mut transport::Socket) -> Result<Option<serde_json::Value>, LLMError> {
-    let message = socket.next().await
-        .ok_or_else(|| LLMError::Network("OpenAI Realtime disconnected before final response".into()))?
+    let message = socket
+        .next()
+        .await
+        .ok_or_else(|| {
+            LLMError::Network("OpenAI Realtime disconnected before final response".into())
+        })?
         .map_err(|_| LLMError::Network("OpenAI Realtime receive failed".into()))?;
     let value = protocol::decode(message)?;
     if value.is_none() {
-        tokio::time::timeout(WRITE_TIMEOUT, socket.flush()).await
+        tokio::time::timeout(WRITE_TIMEOUT, socket.flush())
+            .await
             .map_err(|_| LLMError::Timeout)?
             .map_err(|_| LLMError::Network("OpenAI Realtime socket flush failed".into()))?;
     }
     Ok(value)
 }
 
-async fn send(socket: &mut transport::Socket, message: tokio_tungstenite::tungstenite::Message) -> Result<(), LLMError> {
-    tokio::time::timeout(WRITE_TIMEOUT, socket.send(message)).await
+async fn send(
+    socket: &mut transport::Socket,
+    message: tokio_tungstenite::tungstenite::Message,
+) -> Result<(), LLMError> {
+    tokio::time::timeout(WRITE_TIMEOUT, socket.send(message))
+        .await
         .map_err(|_| LLMError::Timeout)?
         .map_err(|_| LLMError::Network("OpenAI Realtime send failed".into()))
 }

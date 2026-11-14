@@ -1445,10 +1445,15 @@ mod tests {
         assert!(provider_descriptor(ProviderKind::Asr, OPENAI_REALTIME_OMNI_PROVIDER_ID).is_none());
         assert!(!provider_descriptors(ProviderKind::Llm)
             .iter()
-            .any(|descriptor| descriptor.provider_type.as_str() == OPENAI_REALTIME_OMNI_PROVIDER_ID));
+            .any(
+                |descriptor| descriptor.provider_type.as_str() == OPENAI_REALTIME_OMNI_PROVIDER_ID
+            ));
 
         let openai = provider_descriptor(ProviderKind::Omni, "openai").unwrap();
-        assert_eq!(openai.default_model.as_deref(), Some("gpt-4o-audio-preview"));
+        assert_eq!(
+            openai.default_model.as_deref(),
+            Some("gpt-4o-audio-preview")
+        );
         assert!(openai.static_models.is_empty());
     }
 

@@ -16,9 +16,9 @@ pub(crate) mod openai_realtime;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ports::AudioConsumer;
 use base64::Engine;
 use serde_json::{json, Value};
-use crate::ports::AudioConsumer;
 
 use crate::polish::{
     append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
@@ -349,8 +349,8 @@ impl OpenAICompatibleOmni {
     }
 }
 
-/// Unified multimodal-channel entry point: routes by config to the Gemini
-/// native or OpenAI-compatible client.
+/// Unified multimodal-channel entry point: native Realtime, Gemini,
+/// or OpenAI-compatible Chat Completions, selected by the explicit protocol.
 pub enum OmniProvider {
     GeminiTranscribe {
         provider: gemini_transcribe::GeminiTranscribeOmni,
@@ -386,10 +386,19 @@ impl crate::ports::AudioConsumer for LiveOmniSession {
 }
 
 impl LiveOmniSession {
-    pub(crate) async fn finish(&self, instructions: &str) -> Result<crate::asr::RawTranscript, LiveOmniError> {
+    pub(crate) async fn finish(
+        &self,
+        instructions: &str,
+    ) -> Result<crate::asr::RawTranscript, LiveOmniError> {
         match self {
-            Self::Gemini(provider) => provider.finish().await.map_err(LiveOmniError::Transcription),
-            Self::OpenAI(provider) => provider.finish(instructions).await.map_err(LiveOmniError::Composition),
+            Self::Gemini(provider) => provider
+                .finish()
+                .await
+                .map_err(LiveOmniError::Transcription),
+            Self::OpenAI(provider) => provider
+                .finish(instructions)
+                .await
+                .map_err(LiveOmniError::Composition),
         }
     }
 
@@ -468,20 +477,27 @@ impl OmniProvider {
     pub(crate) async fn validate_connection(&self) -> Result<(), LLMError> {
         match self {
             Self::OpenAIRealtime(provider) => provider.validate_connection().await,
-            _ => Err(LLMError::ParseError("Session validation is only available for OpenAI Realtime".into())),
+            _ => Err(LLMError::ParseError(
+                "Session validation is only available for OpenAI Realtime".into(),
+            )),
         }
     }
 
-    /// Open a real-time audio session when the selected dedicated model supports it.
+    /// Open a live audio session. Composition models receive the existing frozen
+    /// prompt; dedicated transcription keeps its structured-hint-only contract.
     pub(crate) async fn start_live_transcription(
         &self,
         system_prompt: &str,
         partials: std::sync::Arc<dyn crate::ports::TextStreamSink>,
     ) -> Result<Option<std::sync::Arc<LiveOmniSession>>, LLMError> {
         match self {
-            Self::GeminiTranscribe { provider, .. } => provider.start_live(partials).await
+            Self::GeminiTranscribe { provider, .. } => provider
+                .start_live(partials)
+                .await
                 .map(|session| session.map(|session| Arc::new(LiveOmniSession::Gemini(session)))),
-            Self::OpenAIRealtime(provider) => provider.connect(system_prompt, partials).await
+            Self::OpenAIRealtime(provider) => provider
+                .connect(system_prompt, partials)
+                .await
                 .map(|session| Some(Arc::new(LiveOmniSession::OpenAI(session)))),
             _ => Ok(None),
         }
@@ -516,7 +532,11 @@ impl OmniProvider {
                     .await
             }
             Self::OpenAI(provider) => provider.complete(system_prompt, user_text, wav_bytes).await,
-            Self::OpenAIRealtime(provider) => provider.complete_streaming(system_prompt, user_text, wav_bytes, |_| {}, || false).await,
+            Self::OpenAIRealtime(provider) => {
+                provider
+                    .complete_streaming(system_prompt, user_text, wav_bytes, |_| {}, || false)
+                    .await
+            }
         }
     }
 
@@ -560,9 +580,17 @@ impl OmniProvider {
                     )
                     .await
             }
-            Self::OpenAIRealtime(provider) => provider.complete_streaming(
-                system_prompt, user_text, wav_bytes, on_delta, should_cancel,
-            ).await,
+            Self::OpenAIRealtime(provider) => {
+                provider
+                    .complete_streaming(
+                        system_prompt,
+                        user_text,
+                        wav_bytes,
+                        on_delta,
+                        should_cancel,
+                    )
+                    .await
+            }
         }
     }
 }

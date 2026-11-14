@@ -6,9 +6,9 @@
 mod pcm;
 mod protocol;
 mod session;
-pub(crate) mod transport;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transport;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,8 +76,13 @@ pub struct OpenAIRealtime {
 impl OpenAIRealtime {
     pub(crate) fn new(mut config: OmniConfig, task_spawner: Arc<dyn TaskSpawner>) -> Self {
         config.provider_id = PROVIDER_ID.to_owned();
-        if config.model.trim().is_empty() { config.model = DEFAULT_MODEL.to_owned(); }
-        Self { config, task_spawner }
+        if config.model.trim().is_empty() {
+            config.model = DEFAULT_MODEL.to_owned();
+        }
+        Self {
+            config,
+            task_spawner,
+        }
     }
 
     pub(crate) async fn connect(
@@ -96,19 +101,22 @@ impl OpenAIRealtime {
     ) -> Result<Arc<OpenAIRealtimeSession>, LLMError> {
         // The local queue is ready immediately. Never delay microphone startup on a
         // network handshake: short recordings and their stop marker can arrive first.
-        if self.config.api_key.trim().is_empty() { return Err(LLMError::MissingCredentials); }
+        if self.config.api_key.trim().is_empty() {
+            return Err(LLMError::MissingCredentials);
+        }
         transport::endpoint(&self.config.base_url, &self.config.model)?;
         let (sender, receiver) = mpsc::channel(QUEUE_FRAMES);
         let (result_tx, result_rx) = oneshot::channel();
         let (shutdown, mut cancelled) = watch::channel(None);
+        let audio = Arc::new(Mutex::new(AudioState {
+            sender: Some(sender),
+            pending: Vec::new(),
+            bytes: 0,
+            silence: true,
+            text_input: !user_text.trim().is_empty(),
+        }));
         let provider = Arc::new(OpenAIRealtimeSession {
-            audio: Mutex::new(AudioState {
-                sender: Some(sender),
-                pending: Vec::new(),
-                bytes: 0,
-                silence: true,
-                text_input: !user_text.trim().is_empty(),
-            }),
+            audio: Arc::clone(&audio),
             result: Mutex::new(Some(result_rx)),
             shutdown,
         });
@@ -125,12 +133,16 @@ impl OpenAIRealtime {
             match connected {
                 Ok(mut socket) => {
                     let result = session::run(&mut socket, receiver, cancelled, partials).await;
+                    release_audio_queue(&audio);
                     let _ = result_tx.send(result);
                     // Release text before best-effort cleanup; a slow close handshake
                     // must not add to stop-to-insertion latency.
                     let _ = tokio::time::timeout(Duration::from_millis(500), socket.close(None)).await;
                 }
-                Err(error) => { let _ = result_tx.send(Err(error)); }
+                Err(error) => {
+                    release_audio_queue(&audio);
+                    let _ = result_tx.send(Err(error));
+                }
             }
         }));
         Ok(provider)
@@ -141,7 +153,11 @@ impl OpenAIRealtime {
     pub(crate) async fn validate_connection(&self) -> Result<(), LLMError> {
         let mut socket = tokio::time::timeout(
             CONNECT_TIMEOUT,
-            session::connect(&self.config, "This connection is being validated. Do not respond.", ""),
+            session::connect(
+                &self.config,
+                "This connection is being validated. Do not respond.",
+                "",
+            ),
         )
         .await
         .map_err(|_| LLMError::Timeout)??;
@@ -171,22 +187,42 @@ impl OpenAIRealtime {
         C: Fn() -> bool + Send + Sync,
     {
         if should_cancel() {
-            return Err(LLMError::Network("OpenAI Realtime request cancelled".into()));
+            return Err(LLMError::Network(
+                "OpenAI Realtime request cancelled".into(),
+            ));
         }
-        let pcm = wav_bytes.map(crate::audio::decode_dictation_wav).transpose()
-            .map_err(|_| LLMError::ParseError("OpenAI Realtime requires PCM16 mono 16 kHz WAV".into()))?;
+        let pcm = wav_bytes
+            .map(crate::audio::decode_dictation_wav)
+            .transpose()
+            .map_err(|_| {
+                LLMError::ParseError("OpenAI Realtime requires PCM16 mono 16 kHz WAV".into())
+            })?;
         if pcm.is_none() && user_text.trim().is_empty() {
-            return Err(LLMError::ParseError("OpenAI Realtime requires audio or user text".into()));
+            return Err(LLMError::ParseError(
+                "OpenAI Realtime requires audio or user text".into(),
+            ));
         }
         if pcm.as_ref().is_some_and(|pcm| pcm.len() > MAX_AUDIO_BYTES) {
-            return Err(LLMError::ParseError("OpenAI Realtime recordings are limited to 10 minutes".into()));
+            return Err(LLMError::ParseError(
+                "OpenAI Realtime recordings are limited to 10 minutes".into(),
+            ));
         }
         let (sender, mut deltas) = mpsc::unbounded_channel();
-        let active = self.connect_with_text(instructions, user_text, Arc::new(ForwardDeltas(sender))).await?;
-        if let Some(pcm) = pcm { active.consume_pcm_chunk(pcm); }
+        let active = self
+            .connect_with_text(instructions, user_text, Arc::new(ForwardDeltas(sender)))
+            .await?;
+        if let Some(pcm) = pcm {
+            active.consume_pcm_chunk(pcm);
+        }
         let finished = active.finish(instructions);
         tokio::pin!(finished);
         loop {
+            if should_cancel() {
+                active.cancel();
+                return Err(LLMError::Network(
+                    "OpenAI Realtime request cancelled".into(),
+                ));
+            }
             tokio::select! {
                 result = &mut finished => {
                     while let Ok(chunk) = deltas.try_recv() { on_delta(&chunk.text); }
@@ -207,16 +243,26 @@ impl OpenAIRealtime {
 struct ForwardDeltas(mpsc::UnboundedSender<crate::ports::TextStreamChunk>);
 impl TextStreamSink for ForwardDeltas {
     fn publish(&self, chunk: crate::ports::TextStreamChunk) -> Result<(), crate::BackendError> {
-        self.0.send(chunk).map_err(|_| crate::BackendError::new(
-            crate::BackendErrorCode::Cancelled, "OpenAI Realtime preview consumer closed"))
+        self.0.send(chunk).map_err(|_| {
+            crate::BackendError::new(
+                crate::BackendErrorCode::Cancelled,
+                "OpenAI Realtime preview consumer closed",
+            )
+        })
     }
 }
 
 /// Owns one bounded recording. Dropping a retained finish future also closes its worker.
 pub(crate) struct OpenAIRealtimeSession {
-    audio: Mutex<AudioState>,
+    audio: Arc<Mutex<AudioState>>,
     result: Mutex<Option<oneshot::Receiver<Result<RawTranscript, LLMError>>>>,
     shutdown: watch::Sender<Option<&'static str>>,
+}
+
+fn release_audio_queue(audio: &Mutex<AudioState>) {
+    let mut state = audio.lock();
+    state.sender.take();
+    state.pending.clear();
 }
 
 impl OpenAIRealtimeSession {
@@ -231,24 +277,32 @@ impl OpenAIRealtimeSession {
                 if !audio.pending.len().is_multiple_of(2) {
                     self.fail("OpenAI Realtime received an incomplete PCM sample");
                 } else if (audio.bytes == 0 && !audio.text_input)
-                    || (audio.bytes > 0 && (audio.bytes < 3_200 || audio.silence)) {
+                    || (audio.bytes > 0 && (audio.bytes < 3_200 || audio.silence))
+                {
                     self.fail("OpenAI Realtime recording is too short or contains no audio");
                 } else {
                     let tail = std::mem::take(&mut audio.pending);
                     if !tail.is_empty() && sender.try_send(Command::Audio(tail)).is_err() {
                         self.fail("OpenAI Realtime audio queue is unavailable");
                     }
-                    if sender.try_send(Command::Finish {
-                        duration_ms: crate::asr::pcm::pcm_duration_ms_from_bytes(audio.bytes as u64),
-                        instructions: instructions.to_owned(),
-                        has_audio: audio.bytes > 0,
-                    }).is_err() {
+                    if sender
+                        .try_send(Command::Finish {
+                            duration_ms: crate::asr::pcm::pcm_duration_ms_from_bytes(
+                                audio.bytes as u64,
+                            ),
+                            instructions: instructions.to_owned(),
+                            has_audio: audio.bytes > 0,
+                        })
+                        .is_err()
+                    {
                         self.fail("OpenAI Realtime audio queue is unavailable");
                     }
                 }
             }
         }
-        result.await.map_err(|_| LLMError::Network("OpenAI Realtime worker stopped".into()))?
+        result
+            .await
+            .map_err(|_| LLMError::Network("OpenAI Realtime worker stopped".into()))?
     }
 
     pub(crate) fn cancel(&self) {
@@ -260,7 +314,12 @@ impl OpenAIRealtimeSession {
 
     fn fail(&self, reason: &'static str) {
         self.shutdown.send_if_modified(|current| {
-            if current.is_some() { false } else { *current = Some(reason); true }
+            if current.is_some() {
+                false
+            } else {
+                *current = Some(reason);
+                true
+            }
         });
     }
 }
@@ -268,7 +327,9 @@ impl OpenAIRealtimeSession {
 impl AudioConsumer for OpenAIRealtimeSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         let mut audio = self.audio.lock();
-        let Some(sender) = audio.sender.clone() else { return; };
+        let Some(sender) = audio.sender.clone() else {
+            return;
+        };
         if pcm.is_empty() || self.shutdown.borrow().is_some() {
             return;
         }
@@ -301,6 +362,7 @@ impl Drop for OpenAIRealtimeSession {
 struct CancelOnDrop(watch::Sender<Option<&'static str>>);
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        self.0.send_replace(Some("OpenAI Realtime dictation cancelled"));
+        self.0
+            .send_replace(Some("OpenAI Realtime dictation cancelled"));
     }
 }
