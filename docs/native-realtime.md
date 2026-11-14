@@ -1,160 +1,106 @@
-# Native Realtime dictation
+# Realtime voice typing
 
-OpenLess streams microphone audio to a generative Realtime model and receives
-text using the existing dictation style and context. No helper process is needed.
-A WebSocket URL alone does not establish protocol compatibility.
+OpenLess streams microphone audio to a Realtime model and inserts the resulting
+text using your existing style, vocabulary and cursor context.
 
-## Choose a protocol in settings
+## Setup
 
-In **Settings → AI services and models**, choose the **Multimodal** pipeline and
-select the matching provider. Enter its endpoint, model and authentication,
-then use **Validate** before trying a real recording.
+Open **Settings → AI services and models → Multimodal**. Choose a provider,
+enter the model, endpoint and credentials, then click **Validate**.
 
-| Provider ID | Protocol and candidate models | Audio sent |
+| Provider | Models | PCM audio |
 | --- | --- | --- |
-| `openai-realtime` | OpenAI Realtime GA; `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, or an explicitly compatible gateway alias | PCM16 mono, 24 kHz |
-| `dashscope-realtime` | Current Qwen Omni Realtime; `qwen3.5-omni-flash-realtime`, `qwen3.5-omni-plus-realtime`, `qwen3.8-omni-flash-realtime` | PCM16 mono, 16 kHz |
-| `dashscope-realtime-legacy` | Legacy Qwen Omni; `qwen3-omni-flash-realtime-2025-09-15`, using its flat audio-format fields | PCM16 mono, 16 kHz |
+| `openai-realtime` | `gpt-realtime-2.1`, `gpt-realtime-2.1-mini` | 24 kHz, mono, 16-bit |
+| `dashscope-realtime` | `qwen3.5-omni-flash-realtime`, `qwen3.5-omni-plus-realtime`, `qwen3.8-omni-flash-realtime` | 16 kHz, mono, 16-bit |
+| `dashscope-realtime-legacy` | `qwen3-omni-flash-realtime-2025-09-15` | 16 kHz, mono, 16-bit |
 
-The profile is explicit, not inferred from a model name. Existing HTTP
-**OpenAI**, **Qwen Omni** and **Custom** providers retain their HTTP behavior.
-OpenAI's old beta interface has been [retired](https://developers.openai.com/api/docs/deprecations).
+Select the protocol your service implements. Gateways can use custom model names.
 
-The [OpenAI GA reference](https://developers.openai.com/api/reference/resources/realtime/client-events)
-uses `output_modalities: ["text"]` and nested `audio.input.turn_detection`.
-[Qwen Omni](https://help.aliyun.com/zh/model-studio/client-events) uses
-`modalities: ["text"]` and top-level `turn_detection: null`. Current Qwen uses
-nested `audio.input.format` with `sample_rate: 16000`; legacy Qwen uses
-`input_audio_format: "pcm"`. Neither Qwen profile sends OpenAI reasoning fields.
-This distinction also follows the
-[official DashScope SDK serializer](https://github.com/dashscope/dashscope-sdk-python/blob/2cb05b1ec87bdfa104ce3732f6b65db685469e2a/dashscope/resources/audio/realtime.py#L392).
+## Endpoint and authentication
 
-## Set the endpoint and authentication
-
-Use an HTTP(S) API root, or a WS(S) URL with the complete WebSocket path:
-
-| Input | Resulting route |
+| Service | Endpoint |
 | --- | --- |
-| OpenAI: `https://api.openai.com/v1` | `/v1/realtime?model=…` |
-| Qwen: `https://dashscope.aliyuncs.com` | `/api-ws/v1/realtime?model=…` |
-| HTTP gateway API root: `https://gateway.example/team/v1` | `/team/v1/realtime?model=…` |
-| Complete WS gateway endpoint: `wss://gateway.example/team/socket` | `/team/socket?model=…` |
+| OpenAI | `https://api.openai.com/v1` |
+| Qwen 3 / 3.5 | `https://dashscope.aliyuncs.com` or the regional shared host |
+| Qwen 3.8 | Your workspace host, e.g. `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com` |
+| Gateway | Its HTTP(S) API root or complete WS(S) endpoint |
 
-Custom gateway prefixes are retained. A non-root WS(S) path is complete, without
-another `/realtime` suffix. Qwen maps
-HTTP `/v1` and `/compatible-mode/v1` to its Realtime route only on official
-DashScope/workspace hosts. For a nonstandard gateway route, provide its complete
-WS(S) URL. Existing routing queries survive; the model is encoded once, URL
-userinfo is rejected, and credential query parameters and fragments are removed.
-Put credentials in headers, not the URL.
+OpenAI API roots append `/realtime`; Qwen's official hosts use
+`/api-ws/v1/realtime`. Gateway path prefixes and routing queries are preserved.
+For a custom WebSocket route, enter its complete WS(S) URL.
+Qwen 3.8 needs a region-matched workspace host; see
+[Qwen endpoint setup](https://help.aliyun.com/zh/model-studio/omni-realtime-websocket-access).
 
-For Qwen 3.8, replace the shared host with the workspace host for the API key's
-region, such as `{WorkspaceId}.cn-beijing.maas.aliyuncs.com` or
-`{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com`. Qwen 3.8 requires this dedicated
-host; older models can continue using the shared Beijing or Singapore host.
-See [official Qwen endpoint requirements](https://help.aliyun.com/zh/model-studio/omni-realtime-websocket-access).
+Authentication options:
 
-The GUI exposes three authentication modes:
+- **Bearer**: sends the API key as `Authorization: Bearer …`.
+- **api-key**: sends the API key in the `api-key` header.
+- **Custom headers only**: enter a JSON object in Extra headers; the API-key field is optional.
 
-- **Bearer**: the main API-key field becomes `Authorization: Bearer …`.
-- **api-key**: the main field becomes an `api-key` header for gateways that
-  require it. This does not change the selected wire protocol.
-- **Custom headers only**: supply the gateway's authentication in Extra headers
-  as a JSON object of string values. The main API-key field is optional and is
-  not used in this mode.
+Put credentials in headers. Bearer and api-key modes manage their authentication
+headers; the client manages WebSocket framing headers.
 
-Bearer and api-key modes control their own authentication headers; conflicting
-Extra headers do not override them. Framing headers are rejected:
-`Host`, `Connection`, `Upgrade`, `Content-Length`, `Transfer-Encoding`,
-`Proxy-Authorization` and every `Sec-WebSocket-*` header. Invalid header names,
-duplicate names with different casing, and CR/LF values are rejected too.
+## OpenAI reasoning
 
-## Choose OpenAI reasoning effort
-
-The GUI offers `auto`, `omit`, `none`, `minimal`, `low`, `medium`, `high` and
-`xhigh` for the OpenAI GA profile. This is separate from the text LLM's thinking
-toggle.
-
-- **auto**, the default, sends `low` for recognized `gpt-realtime-2.x` names and
-  omits the field for other names. It is the conservative starting point for
-  normal dictation.
-- **omit** leaves reasoning to the server; it does not mean reasoning is off.
-- **minimal** through **xhigh** request an explicit level. `minimal` is below
-  `low`; `low` is not the lowest documented level. Known legacy OpenAI model
-  names omit unsupported reasoning fields even if an explicit level is saved.
-  Custom aliases require the gateway to support the requested setting.
-- **none is experimental**. It is not in the public Realtime effort enum, even
-  though selected endpoints have accepted it. It is not guaranteed for every
-  model or gateway. See the [official Realtime effort schema](https://developers.openai.com/api/reference/resources/realtime/client-events)
-  and [reasoning guidance](https://developers.openai.com/api/docs/guides/voice-prompting?voice-api=realtime).
-
-With fallback enabled, an initial setup error explicitly rejecting experimental
-`none` at `reasoning.effort` causes one setup retry with `low`, before audio is
-sent. Disable fallback to surface that rejection directly. Authentication,
-quota, rate-limit, connection and unrelated errors never trigger this fallback;
-a second rejection fails.
-
-## Recording, context and auxiliary actions
-
-Microphone PCM is queued during connection setup, then streamed while recording.
-Stopping flushes audio, commits the turn and sends `response.create`; Qwen uses
-a bare event rather than the GA response payload. Server VAD is disabled.
-The result is text, without generated speech or a second polishing call.
-
-All profiles reuse native style, vocabulary, working-language, Chinese-script
-and translation settings. Cursor context uses the existing host snapshot and
-switch, with no second window reader. Enabled conversation context includes up
-to two filtered final texts, at most 2,000 Unicode characters each. References
-resolve terms without becoming dictated content or executable instructions.
-
-Dictation transcribes questions and requests rather than answering them. Clear,
-committed self-corrections affect only this recording; quoted or undecided edits
-remain content. Explicit application translation takes precedence. Results use
-normal script conversion, preview, insertion and history. Failed, cancelled,
-empty or incomplete responses are not accepted as successful partial dictations.
-
-For the **Qwen profiles**, the selection assistant's initial audio-to-instruction
-step is available, but subsequent text editing and text Q&A use the configured
-text LLM. Keep that LLM configured for those actions. Direct audio-attachment Q&A
-through these Qwen profiles is explicitly unsupported; choose text Q&A or an
-audio-Q&A provider. The OpenAI GA profile also supports native text requests.
-
-The ordinary dictation/selection/voice-Q&A pipeline is separate from the history
-page's **Retranscribe** operation. Current multimodal entries do not offer that
-operation; older traditional entries and applicable quick notes still use the
-selected ASR channel. When retiring an external ASR bridge, configure a usable
-native ASR channel for these older recordings instead of leaving it pointed at
-the stopped localhost service.
-
-## Model candidates, validation and other WebSocket services
-
-The model catalog supplies candidates, not proof of access. Custom model names
-must implement the selected protocol. **Validate** performs a real handshake,
-waits for session configuration acknowledgement and closes. It neither opens
-the microphone, sends audio nor calls `response.create`: no billable model
-response is generated, and dictation quality is not tested.
-
-Existing WebSocket speech-recognition channels and Gemini Live Smart/ASR support
-remain separate. Use those channels for ASR; a shared WS transport does not make
-an ASR service a generative Omni provider.
-
-Other services are not automatically supported by these three profiles:
-
-| Service | Relevant boundary |
+| Setting | Behavior |
 | --- | --- |
-| [Gemini Live](https://ai.google.dev/gemini-api/docs/live-api/capabilities) | Uses Google's BidiGenerateContent protocol. Current native-audio models require AUDIO output; an output transcription is not text-only generation. |
-| [xAI Voice Agent](https://docs.x.ai/developers/rest-api-reference/inference/voice) | Has similar event names, but no xAI generative profile is implemented here. A text delta event alone does not establish the full text-only session contract. |
-| [Doubao Seeduplex](https://docs.volcengine.com/docs/doubao-voice/end-to-end-real-time-voice-full-duplex-version?lang=zh) | Uses its own session creation, audio formats and keep-alive rules, with a separate older binary protocol as well. Neither is implemented by these profiles. |
-| [StepAudio Realtime](https://platform.stepfun.ai/docs/en/api-reference/realtime/chat) | Its public Realtime schema fixes output to text plus audio. This is not a text-only Omni adapter; existing StepFun ASR is a different service. |
+| `auto` (default) | Uses `low` for recognized `gpt-realtime-2.x` models; omits reasoning for other names |
+| `omit` | Uses the server's default |
+| `minimal`, `low`, `medium`, `high`, `xhigh` | Requests that effort level |
+| `none` (experimental) | Requests no reasoning; availability depends on the endpoint |
 
-## OpenAI subscription API credits
+Start with **gpt-realtime-2.1 / Auto**. Legacy OpenAI models omit reasoning
+parameters. For custom aliases, check the gateway's supported settings.
 
-Eligible paid ChatGPT Pro subscribers can activate API credits by linking a
-same-email API organization they own; the subscription must be at least seven
-days old. Allowances depend on the plan. Grants recur on eligible subscription
-renewals while the benefit is offered; the first is prorated, and unused credits
-expire at the billing-cycle boundary without rollover. OpenAI explicitly covers
-Realtime API usage billed to that linked organization. Use its project API key,
-check the current balance and model access, and do not assume permanent free
-usage or coverage for third-party gateways. See the current
-[official eligibility and activation conditions](https://developers.openai.com/api/docs/guides/chatgpt-api-credits).
+The optional `none → low` fallback retries setup once if the server rejects
+`reasoning.effort=none`, before audio upload. Other errors are reported normally.
+The [public effort schema](https://developers.openai.com/api/reference/resources/realtime/client-events)
+does not currently list `none`.
+
+## Dictation and editing
+
+Audio buffers while the connection opens, then streams during recording.
+Stopping sends the remaining audio and requests the final text.
+Styles, vocabulary, output language, Chinese-script preference, preview and
+insertion use the existing OpenLess workflow. Conversation context includes up
+to two recent final texts, capped at 2,000 characters each.
+
+Questions spoken during ordinary dictation stay as text. Clear self-corrections
+revise the current recording. The app's translation command selects translation.
+
+| Action | OpenAI Realtime | Qwen Realtime |
+| --- | --- | --- |
+| Dictation / selection voice recognition | Realtime model | Realtime model |
+| Selection polish, voice editing, text Q&A | Realtime model | Configured text LLM |
+| Audio-attachment Q&A | Supported | Choose another provider |
+
+Keep a text LLM configured for Qwen editing and Q&A. These actions use the saved
+LLM channel and model. Ordinary Qwen dictation works independently.
+
+Old traditional history entries and applicable quick notes use the selected
+**ASR channel** for Retranscribe. Configure that channel separately if you retire
+an external bridge.
+
+**Validate** checks the real connection and session settings. Test a short
+recording afterward to check recognition and insertion.
+
+## Protocol details
+
+OpenAI GA uses nested audio settings, `output_modalities: ["text"]` and
+`response.create` with GA options. Current Qwen uses nested 16 kHz audio settings,
+`modalities: ["text"]` and a bare `response.create`; legacy Qwen uses the flat
+`input_audio_format: "pcm"` field. Each profile disables server VAD and generates text.
+
+References: [OpenAI GA events](https://developers.openai.com/api/reference/resources/realtime/client-events),
+[Qwen events](https://help.aliyun.com/zh/model-studio/client-events),
+[DashScope SDK](https://github.com/dashscope/dashscope-sdk-python/blob/2cb05b1ec87bdfa104ce3732f6b65db685469e2a/dashscope/resources/audio/realtime.py#L392).
+
+Gemini Live, xAI Voice Agent, Doubao dialogue and StepAudio need their own
+adapters. Existing HTTP Omni and WebSocket ASR channels remain available.
+
+## OpenAI API credits
+
+Eligible ChatGPT Pro subscribers can activate subscription API credits for an
+owned API organization. Realtime usage is covered. Use that organization's
+project API key and check its credit balance.
+[Eligibility and activation](https://developers.openai.com/api/docs/guides/chatgpt-api-credits).

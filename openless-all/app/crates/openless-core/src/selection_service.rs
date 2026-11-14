@@ -243,7 +243,7 @@ impl SelectionServiceInner {
                 &preferences,
             )
             .await?;
-            // Only the active pipeline's text channel is required.
+            // Qwen Realtime delegates text editing to the saved LLM channel.
             match mode {
                 PipelineMode::Multimodal => {
                     let llm = if crate::provider_rules::omni_uses_text_provider_for_auxiliary(

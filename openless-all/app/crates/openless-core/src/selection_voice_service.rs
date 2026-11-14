@@ -387,7 +387,7 @@ impl SelectionVoiceWorkflow {
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
-        // Only the active pipeline's text channel is required.
+        // Qwen Realtime delegates text editing to the saved LLM channel.
         let (llm, omni) = match mode {
             PipelineMode::Multimodal => {
                 let llm = if crate::provider_rules::omni_uses_text_provider_for_auxiliary(

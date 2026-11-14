@@ -9664,6 +9664,40 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn qa_realtime_capture_requires_llm_only_for_qwen_qa() {
+        for profile in ["openai-realtime", "dashscope-realtime", "dashscope-realtime-legacy"] {
+            let (backend, _) = backend();
+            let llm = backend.create_channel(
+                ChannelKind::Llm, "openai-compatible".into(), "Disabled text channel".into(),
+            ).await.unwrap();
+            backend.set_channel_enabled(ChannelKind::Llm, llm, false).await.unwrap();
+            backend.set_active_provider(ProviderSlot::Omni, profile.into()).await.unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.multimodal_pipeline_enabled = true;
+            preferences.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+            backend.set_preferences(preferences).unwrap();
+            for purpose in [
+                DictationContextPurpose::Dictation,
+                DictationContextPurpose::AuxiliaryVoice,
+                DictationContextPurpose::QaText,
+                DictationContextPurpose::QaVoice,
+            ] {
+                let result = backend.capture_dictation_context(
+                    &DictationStartOptions::default(), purpose,
+                ).await;
+                let qwen_qa = profile != "openai-realtime" && matches!(
+                    purpose, DictationContextPurpose::QaText | DictationContextPurpose::QaVoice,
+                );
+                if qwen_qa {
+                    assert_eq!(result.unwrap_err().code, BackendErrorCode::InvalidState);
+                } else {
+                    assert_eq!(result.unwrap().pipeline_mode, crate::shared_types::PipelineMode::Multimodal);
+                }
+            }
+        }
+    }
+
     #[test]
     fn vocabulary_learning_settings_migrate_normalize_and_roundtrip() {
         let old: UserPreferences = serde_json::from_str("{}").unwrap();
