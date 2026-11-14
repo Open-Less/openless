@@ -346,7 +346,6 @@ mod tests {
             provider: SearchProvider::Searxng,
             endpoint,
             api_key: "private-key".into(),
-            ..Default::default()
         };
         let results = search(&config, "Shanghai weather").await.unwrap();
         assert_eq!(results.len(), 1);

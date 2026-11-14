@@ -906,3 +906,9 @@
     animation: none;
   }
 }
+
+/* Q&A uses actual card geometry so skipped content cannot move the jump control. */
+.qa-messages > [data-message-id] {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
