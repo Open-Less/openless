@@ -1,3 +1,4 @@
+import { qaCancelTurn, qaStopRecording } from '../lib/ipc';
 import { collectCapsuleInputRegions } from '../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -191,6 +192,7 @@ interface ClassicCapsuleProps {
   transcriptInSameWindow?: boolean;
   operating: boolean;
   translation: boolean;
+  qa: boolean;
   leaving: boolean;
   warming: boolean;
 }
@@ -212,16 +214,18 @@ function ClassicCapsule({
   transcriptInSameWindow = true,
   operating,
   translation,
+  qa,
   leaving,
   warming,
 }: ClassicCapsuleProps) {
-  const hostMetrics = getCapsuleHostMetrics(os, false, 'classic');
+  const { t } = useTranslation();
+  const hostMetrics = getCapsuleHostMetrics(os, translation || qa, 'classic');
   const onCancel = useCallback(() => {
-    void cancelDictation();
-  }, []);
+    void (qa ? qaCancelTurn() : cancelDictation());
+  }, [qa]);
   const onConfirm = useCallback(() => {
-    void stopDictation();
-  }, []);
+    void (qa ? qaStopRecording() : stopDictation());
+  }, [qa]);
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
@@ -248,7 +252,16 @@ function ClassicCapsule({
           pointerEvents: 'none',
         }}
       >
-        <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+        {qa ? (
+          <div
+            className="ol-qa-capsule-badge"
+            data-visible={['recording', 'transcribing', 'polishing'].includes(state) && !leaving}
+          >
+            {t('askAnything.question')}
+          </div>
+        ) : (
+          <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+        )}
       </div>
       <div className="ol-classic-capsule-stack">
         {liveText && (
@@ -379,6 +392,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const transcriptViewRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
+  const [qa, setQa] = useState(false);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
@@ -425,7 +439,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Insert-failure fallback card. Same pattern as the vocab card: own event channel,
   // not part of the session state machine.
   const [insertFallback, setInsertFallback] = useState<InsertFallbackCardPayload | null>(null);
-  const hostMetrics = getCapsuleHostMetrics(os, translation, capsuleStyle);
+  const hostMetrics = getCapsuleHostMetrics(os, translation || qa, capsuleStyle);
   const badgeBottom = Math.round(metrics.height * 0.73);
 
   // Only the selected Siri style needs a GPU warmup; classic/typeless never allocate it.
@@ -528,6 +542,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
+        setQa(p.qa === true);
         const style = parseCapsuleStyle(p.capsuleStyle);
         if (style && !stylePreferenceReadyRef.current) setCapsuleStyle(style);
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
@@ -896,6 +911,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             transcriptInSameWindow={!splitTranscriptRail}
             operating={operatingRef.current}
             translation={translation}
+            qa={qa}
             leaving={leaving}
             warming={warming}
           />
@@ -930,8 +946,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   letterSpacing: '0.02em',
                   whiteSpace: 'nowrap',
                   // Hidden: starts just below the orb; shown: settles above the orb.
-                  opacity: translation ? 1 : 0,
-                  transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
+                  opacity: translation || qa ? 1 : 0,
+                  transform:
+                    translation || qa ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
                   transformOrigin: 'center bottom',
                   transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
                   willChange: 'opacity, transform',
@@ -946,7 +963,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                     boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
                   }}
                 />
-                {t('capsule.translating')}
+                {qa ? t('askAnything.question') : t('capsule.translating')}
               </div>
             </div>
             <div className="ol-siri-capsule-stack">

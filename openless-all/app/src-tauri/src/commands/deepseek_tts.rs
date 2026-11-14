@@ -74,12 +74,16 @@ pub fn deepseek_tts_stop(window: Window, request_id: String) {
 #[tauri::command]
 pub async fn deepseek_tts_start(
     window: Window,
+    core: CoreState<'_>,
     text: String,
     request_id: String,
     audio: tauri::ipc::Channel<Vec<u8>>,
 ) -> Result<(), String> {
     if !matches!(window.label(), "qa" | "main") {
         return Err("qa_window_required".into());
+    }
+    if core.get_preferences().pipeline_mode != openless_core::shared_types::PipelineMode::Deepseek {
+        return Err("Read aloud is available only in DeepSeek suite mode".into());
     }
     if request_id.is_empty() || request_id.len() > 128 {
         return Err("Invalid speech request id".into());
@@ -105,7 +109,10 @@ pub async fn deepseek_tts_start(
             .map_err(|_| "Could not read speech configuration")?
             .map_err(|_| "Configure an official DeepSeek channel in Model services")?;
     let cancelled = async {
-        while !token.load(Ordering::Acquire) {
+        while !token.load(Ordering::Acquire)
+            && core.get_preferences().pipeline_mode
+                == openless_core::shared_types::PipelineMode::Deepseek
+        {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     };

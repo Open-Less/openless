@@ -445,7 +445,9 @@
   border: 0;
   background: var(--qa-paper);
   color: var(--qa-ink);
-  box-shadow: inset 0 0 0 1px var(--qa-line), 0 2px 8px rgb(0 0 0 / 6%);
+  box-shadow:
+    inset 0 0 0 1px var(--qa-line),
+    0 2px 8px rgb(0 0 0 / 6%);
 }
 .qa-error {
   padding: 12px;
@@ -647,7 +649,9 @@
   border-radius: var(--ol-r-xl);
   background: #f3f2f0;
   border: 0;
-  box-shadow: inset 0 0 0 1px #deddda, 0 3px 10px rgb(0 0 0 / 12%);
+  box-shadow:
+    inset 0 0 0 1px #deddda,
+    0 3px 10px rgb(0 0 0 / 12%);
 }
 .qa-answer-header {
   position: relative;
@@ -803,4 +807,102 @@
 }
 .qa-capsule-shell.is-capsule {
   gap: 5px;
+}
+
+.qa-answer-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  animation: qa-footer-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.qa-answer-sources,
+.qa-answer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.qa-answer-actions {
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+.qa-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--ol-ink-3);
+  background: var(--ol-surface-2);
+  text-decoration: none;
+  animation: qa-footer-enter 180ms both;
+  transition:
+    background 160ms ease,
+    transform 160ms ease,
+    color 160ms ease;
+}
+.qa-source-link img {
+  width: 13px;
+  height: 13px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+.qa-source-link:hover {
+  color: var(--ol-ink);
+  background: var(--ol-control-muted-strong);
+  transform: translateY(-1px);
+}
+.qa-source-link:active,
+.qa-answer-actions button:active {
+  transform: scale(0.94);
+}
+.qa-answer-actions button {
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+@keyframes qa-footer-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qa-answer-footer,
+  .qa-source-link {
+    animation: none;
+  }
+  .qa-source-link,
+  .qa-answer-actions button {
+    transition: none;
+  }
+}
+
+.qa-read-aloud {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 36px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.qa-read-aloud[aria-pressed='true'] {
+  animation: qa-reading-pulse 1.2s ease-in-out infinite;
+}
+@keyframes qa-reading-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qa-read-aloud[aria-pressed='true'] {
+    animation: none;
+  }
 }

@@ -1,3 +1,6 @@
+import { QaAnswerFooter } from '../components/QaAnswerFooter';
+import { qaSources } from '../lib/qaSources';
+import { useQaPipeline } from '../lib/useQaPipeline';
 // Compact QA composer. Native desktop starts at 480×80 and expands downwards
 // after submission; embedded hosts retain their own frame and close callback.
 import {
@@ -28,7 +31,7 @@ import {
   MessageScrollerViewport,
 } from '../components/chat/ui/message-scroller';
 import { OpenLessPill } from '../components/OpenLessCapsule';
-import { DeepSeekReadAloud, stopDeepSeekReading } from '../components/DeepSeekReadAloud';
+import { stopDeepSeekReading } from '../components/DeepSeekReadAloud';
 import { QaSurface } from '../components/QaSurface';
 import { VoiceWaveform } from '../components/chat/VoiceWaveform';
 import { AssistantMarkdown } from '../components/chat/markdown';
@@ -45,6 +48,7 @@ import {
   qaSubmitText,
   qaToggleRecording,
   qaWindowDismiss,
+  qaCancelTurn,
   qaWindowSetExpanded,
   qaGetSnapshot,
   revertSelectionVoicePreview,
@@ -66,6 +70,7 @@ interface QaLevelPayload {
 }
 
 export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {}) {
+  const pipelineMode = useQaPipeline();
   const { t } = useTranslation();
   const [messages, setMessages] = useState<QaChatMessage[]>([]);
   const [status, setStatus] = useState<Status>('idle');
@@ -383,11 +388,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     embedded ||
     polishResult !== null ||
     status === 'error' ||
-    (status !== 'recording' &&
-      status !== 'thinking' &&
-      (messages.some((message) => message.role === 'assistant') ||
-        editApplyAvailable ||
-        editRevertAvailable));
+    messages.some((message) => message.role === 'assistant') ||
+    editApplyAvailable ||
+    editRevertAvailable;
   const activityLabel =
     activity?.kind === 'searching_web'
       ? t('qa.activity.searchingWeb')
@@ -471,7 +474,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           });
         return;
       }
-      void onClose();
+      void qaCancelTurn();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -805,7 +808,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         <>
           {status === 'recording' && (
             <div className="qa-voice-hint" title={selectionPreview || undefined}>
-              {t('selectionAsk.title')}
+              {selectionPreview ? t('selectionAsk.title') : t('askAnything.question')}
               {selectionPreview ? ` · ${truncate(selectionPreview, 32)}` : ''}
             </div>
           )}
@@ -814,7 +817,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             warming={status === 'idle' && !submitted}
             level={level}
             message={status === 'thinking' ? activityLabel : undefined}
-            onCancel={onClose}
+            onCancel={() => void qaCancelTurn()}
             onConfirm={onToggleRecording}
             leaving={presentationClosing}
           />
@@ -857,7 +860,13 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                     aria-busy={status === 'thinking' || undefined}
                   >
                     {messages.map((message, index) => (
-                      <MessageRow key={index} index={index} message={message} t={t} />
+                      <MessageRow
+                        key={index}
+                        index={index}
+                        message={message}
+                        t={t}
+                        canReadAloud={pipelineMode === 'deepseek'}
+                      />
                     ))}
                     {streamingAnswer && (
                       <MessageScrollerItem messageId="streaming">
@@ -1095,11 +1104,14 @@ function MessageRow({
   index,
   message,
   t,
+  canReadAloud = false,
 }: {
+  canReadAloud?: boolean;
   index: number;
   message: QaChatMessage;
   t: Translate;
 }) {
+  const answer = qaSources(message.content);
   if (message.role === 'user') {
     const { selection, question } = splitQaUserMessage(message);
     return (
@@ -1122,10 +1134,14 @@ function MessageRow({
       <div className="qa-assistant-message" aria-label={t('qa.compact.answer')}>
         <div className="qa-answer-label-row">
           <AssistantLabel />
-          <CopyMessage text={message.content} />
-          <DeepSeekReadAloud text={message.content} />
         </div>
-        <AssistantMarkdown markdown={message.content} />
+        <AssistantMarkdown markdown={answer.body} />
+        <QaAnswerFooter
+          text={message.content}
+          sources={answer.sources}
+          speechText={answer.body}
+          canReadAloud={canReadAloud}
+        />
       </div>
     </MessageScrollerItem>
   );

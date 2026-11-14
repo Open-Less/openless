@@ -284,14 +284,23 @@ impl GeminiProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let system_prompt = compose_qa_system_prompt(
+        let mut system_prompt = compose_qa_system_prompt(
             working_languages,
             chinese_script_preference,
             output_language_preference,
             front_app,
         );
 
-        let contents = qa_messages_to_contents(messages);
+        for message in messages.iter().filter(|message| message.role == "system") {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&message.content);
+        }
+        let history: Vec<_> = messages
+            .iter()
+            .filter(|message| message.role != "system")
+            .cloned()
+            .collect();
+        let contents = qa_messages_to_contents(&history);
         let body = self.build_generate_body(&system_prompt, contents);
         let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
 

@@ -123,7 +123,10 @@ impl TauriQaHostContext {
             *self.focus_target.lock() = Some(target);
         }
         let _ = crate::coordinator::restore_focus_target_if_possible(*self.focus_target.lock());
-        let (selection, selection_target) = crate::selection::resolve_selection_workspace_capture();
+        if let Some(front) = crate::coordinator::capture_frontmost_app() {
+            *self.front_app.lock() = Some(front);
+        }
+        let (selection, selection_target) = crate::selection::capture_explicit_qa_selection();
         // Voice Ask keeps the original app focused throughout capture/recording.
         // The result window is non-activating; there is no composer to focus.
         let _ = app;

@@ -1712,10 +1712,11 @@ export const fr: typeof zhCN = {
       pipelineModeLabel: 'Mode de traitement',
       pipelineModeHint:
         'Traditionnel : deux étapes, ASR + LLM. Multimodal : un seul passage avec un modèle capable de traiter l’audio.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Traditionnel',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Les deux modes conservent des identifiants distincts. Changer de mode garde l’autre configuration sans l’utiliser ; elle est restaurée à votre retour.',
+        'Les trois pipelines conservent leurs réglages séparément. Le choix reste actif après la fermeture des réglages ou de la fenêtre et au redémarrage. Revenir à un pipeline restaure sa configuration.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',

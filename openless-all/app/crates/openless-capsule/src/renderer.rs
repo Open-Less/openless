@@ -16,8 +16,7 @@ const CAPSULE_BOTTOM_INSET: f32 = 16.0;
 /// 徽章与药丸之间的间距（Tauri `badgeGap`）。
 const CAPSULE_BADGE_GAP: f32 = 8.0;
 
-fn translating_badge(ui: &mut egui::Ui, pill: egui::Rect, labels: &CapsuleLabels) {
-    let label = labels.translating.as_str();
+fn context_badge(ui: &mut egui::Ui, pill: egui::Rect, label: &str) {
     let text_width = layout::text_width(ui, label, 10.5);
     let width = text_width + 5.0 + 5.0 + 20.0;
     let height = 19.0;
@@ -71,8 +70,16 @@ pub fn dictation_capsule(
                 egui::vec2(PILL_WIDTH, PILL_HEIGHT),
             );
             let _ = ui.allocate_rect(rect, egui::Sense::hover());
-            if state.translation_active {
-                translating_badge(ui, rect, labels);
+            if state.translation_active || state.qa {
+                context_badge(
+                    ui,
+                    rect,
+                    if state.qa {
+                        &labels.asking
+                    } else {
+                        &labels.translating
+                    },
+                );
             }
             let center = rect.shrink(3.0);
             let processing = matches!(

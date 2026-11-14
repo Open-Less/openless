@@ -1639,10 +1639,11 @@ export const ko: typeof zhCN = {
       pipelineModeLabel: '인식 파이프라인',
       pipelineModeHint:
         '전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: '전통 모드',
       pipelineModeMultimodal: '멀티모달 모드',
       pipelineIsolationNotice:
-        '두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.',
+        '세 파이프라인은 설정을 각각 저장합니다. 설정이나 창을 닫고 앱을 다시 시작해도 선택은 유지되며, 다시 전환하면 기존 설정을 사용합니다.',
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK (Volcengine Ark)',

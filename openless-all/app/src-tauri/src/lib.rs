@@ -461,6 +461,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
+            commands::qa_cancel_turn,
+            commands::qa_stop_recording,
             commands::qa_window_set_expanded,
             commands::qa_get_snapshot,
             commands::qa_toggle_recording,
@@ -695,6 +697,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::voice_edit_window_open,
             $crate::commands::voice_edit_window_close,
             $crate::commands::qa_window_dismiss,
+            $crate::commands::qa_cancel_turn,
+            $crate::commands::qa_stop_recording,
             $crate::commands::qa_window_set_expanded,
             $crate::commands::qa_get_snapshot,
             $crate::commands::qa_toggle_recording,
@@ -2306,13 +2310,13 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
-/// QA records in a compact bottom-anchored capsule, then reveals a wide result card.
+/// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
 const QA_WINDOW_EXPANDED_WIDTH: f64 = 760.0;
 const QA_WINDOW_EXPANDED_HEIGHT: f64 = 416.0;
-/// Gap between the capsule and the QA window; matches the design spec.
-const QA_WINDOW_BOTTOM_INSET: f64 = 8.0;
+/// Reserve room for the independent recording capsule and its context badge.
+const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
 const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
@@ -3077,6 +3081,9 @@ fn make_chat_window_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow
             // Floating level (NSFloatingWindowLevel): above normal windows, below the
             // menu bar / capsule (25).
             panel.set_level(3);
+            if tag == "qa" {
+                panel.set_hides_on_deactivate(false);
+            }
             panel.set_collection_behaviour(
                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,

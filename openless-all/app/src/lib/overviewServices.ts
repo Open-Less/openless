@@ -37,6 +37,11 @@ export async function loadOverviewServiceDetails(
   prefs: UserPreferences | null,
   reader: ServiceReader,
 ): Promise<Partial<Record<ProviderKind, OverviewServiceDetails>>> {
+  if (credentials.pipelineMode === 'deepseek')
+    return {
+      asr: { model: 'deepseek-asr', error: false },
+      llm: { model: 'deepseek-flash', error: false },
+    };
   const kinds: ProviderKind[] =
     credentials.pipelineMode === 'multimodal' ? ['omni'] : ['asr', 'llm'];
   const entries = await Promise.all(

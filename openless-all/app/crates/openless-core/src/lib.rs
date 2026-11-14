@@ -30,6 +30,7 @@ pub mod config;
 pub mod correction;
 pub mod credentials;
 pub mod credentials_legacy;
+pub mod deepseek_suite;
 pub mod dictation_context;
 pub mod dictation_engine;
 pub mod domains;

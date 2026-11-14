@@ -1701,10 +1701,11 @@ export const de: typeof zhCN = {
       pipelineModeLabel: 'Verarbeitungsmodus',
       pipelineModeHint:
         'Klassisch = ASR + LLM in zwei Schritten. Multimodal = ein audiotaugliches Modell in einem Durchgang.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Klassisch',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.',
+        'Die drei Pipelines speichern ihre Konfiguration getrennt. Die Auswahl bleibt beim Schließen der Einstellungen oder des Fensters und nach einem Neustart erhalten. Beim Zurückwechseln wird die bisherige Konfiguration verwendet.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',

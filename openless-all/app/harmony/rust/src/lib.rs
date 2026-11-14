@@ -169,7 +169,9 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
     let account = required(args, "account")?;
     let namespace = if account == openless_core::MARKETPLACE_GITHUB_TOKEN_ACCOUNT {
         openless_core::CredentialNamespace::Marketplace
-    } else if account == openless_core::web_search::CONFIG_ACCOUNT {
+    } else if account == openless_core::web_search::CONFIG_ACCOUNT
+        || account == openless_core::deepseek_suite::CONFIG_ACCOUNT
+    {
         openless_core::CredentialNamespace::Application
     } else if account.starts_with("ark.") {
         openless_core::CredentialNamespace::Llm

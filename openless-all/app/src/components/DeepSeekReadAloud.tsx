@@ -41,7 +41,8 @@ export function DeepSeekReadAloud({ text }: { text: string }) {
     <>
       <button
         type="button"
-        className="qa-copy"
+        className="qa-copy qa-read-aloud"
+        aria-pressed={playing}
         aria-label={
           playing ? (zh ? '停止朗读' : 'Stop reading') : zh ? 'DeepSeek 朗读' : 'Read with DeepSeek'
         }

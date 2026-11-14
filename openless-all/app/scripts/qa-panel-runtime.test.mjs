@@ -146,6 +146,9 @@ function context(native = true, embedded = false) {
     useGithubLogin: () => '',
     useChatPanelLifecycle: () => lifecycle,
     isTauri: native,
+    useQaPipeline: () => 'traditional',
+    qaSources: (text) => ({ body: text, sources: [] }),
+    qaCancelTurn: async () => {},
     stopDeepSeekReading: () => {
       calls.stopReading++;
     },
@@ -230,6 +233,27 @@ async function test(name, fn) {
     failed++;
   }
 }
+await test('an open answer remains expanded throughout a follow-up recording and thinking turn', async () => {
+  const c = context(true);
+  c.render();
+  await tick();
+  const messages = [
+    { role: 'user', content: 'First question' },
+    { role: 'assistant', content: 'Earlier answer' },
+  ];
+  for (const kind of ['completed', 'recording', 'thinking']) {
+    c.emit('qa:state', { kind, sessionId: 'follow-up', messages });
+    const tree = c.render();
+    assert(tree.props.className.includes('is-expanded'), kind);
+    assert(
+      nodes(tree).some(
+        (n) => n.type === c.api.MessageRow && n.props.message.content === 'Earlier answer',
+      ),
+      kind,
+    );
+  }
+  assert.equal(c.calls.close, 0);
+});
 await test('browser compact has no demo conversations and cannot execute native actions', async () => {
   const c = context(false);
   let tree = c.render();

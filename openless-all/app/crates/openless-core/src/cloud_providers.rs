@@ -423,6 +423,17 @@ async fn read_asr_channel_credentials(
     credentials: &dyn CredentialStore,
     channel_id: &str,
 ) -> Result<HashMap<&'static str, Option<String>>, BackendError> {
+    if channel_id == crate::deepseek_suite::CHANNEL_ID {
+        let config = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        return Ok(HashMap::from([
+            (ASR_API_KEY_ACCOUNT, Some(config.api_key)),
+            (
+                ASR_ENDPOINT_ACCOUNT,
+                Some(crate::deepseek_suite::ENDPOINT.into()),
+            ),
+            (ASR_MODEL_ACCOUNT, Some("deepseek-asr".into())),
+        ]));
+    }
     let mut values = HashMap::new();
     for account in ASR_SNAPSHOT_ACCOUNTS {
         values.insert(
@@ -1467,6 +1478,11 @@ pub(crate) async fn llm_channel_configured(
     provider_type: &str,
     model: Option<&str>,
 ) -> bool {
+    if channel_id == crate::deepseek_suite::CHANNEL_ID {
+        return crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials)
+            .await
+            .is_ok_and(|config| config.configured());
+    }
     let channel_id = channel_id.trim();
     let provider_type = provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
@@ -1523,6 +1539,23 @@ async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<CloudPolisherProvider, BackendError> {
+    if context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+        let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        require_configured(&suite.api_key, "DeepSeek suite API key")?;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek suite",
+            crate::deepseek_suite::ENDPOINT,
+            suite.api_key,
+            crate::deepseek_suite::MODEL,
+        )
+        .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::OpenAI(
+                crate::polish::OpenAICompatibleLLMProvider::new(config),
+            ),
+        ));
+    }
     let channel_id = context.llm.provider_id.trim();
     let provider_type = context.llm.provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
@@ -1814,7 +1847,7 @@ pub async fn answer_qa_with_context(
     progress: Arc<dyn crate::QaProgressSink>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<String, BackendError> {
-    let messages = messages
+    let mut messages = messages
         .into_iter()
         .map(|message| crate::shared_types::QaChatMessage {
             role: message.role,
@@ -1840,17 +1873,31 @@ pub async fn answer_qa_with_context(
     let should_cancel =
         move || cancelled.load(Ordering::Acquire) || publish_error_for_cancel.lock().is_some();
 
-    let search_config = crate::web_search::WebSearchConfig::load(credentials.as_ref()).await?;
-    let result = if audio_wav.is_some()
+    let suite_mode = context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek;
+    let search_config = if suite_mode {
+        crate::web_search::WebSearchConfig::default()
+    } else {
+        crate::web_search::WebSearchConfig::load(credentials.as_ref()).await?
+    };
+    messages.insert(
+        0,
+        crate::shared_types::QaChatMessage {
+            role: "system".into(),
+            content: crate::web_search::backend_prompt(&search_config, suite_mode),
+            selection_text: None,
+        },
+    );
+    let result = if (audio_wav.is_some() && !suite_mode)
         || context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal
     {
         let provider = build_omni_provider(credentials.as_ref(), &context).await?;
-        let system_prompt = crate::compose_qa_system_prompt(
+        let mut system_prompt = crate::compose_qa_system_prompt(
             &context.polish.working_languages,
             context.polish.chinese_script_preference,
             context.polish.output_language_preference,
             context.polish.front_app.as_deref(),
         );
+        system_prompt.push_str(&crate::web_search::backend_prompt(&search_config, false));
         let mut user_text = messages
             .iter()
             .map(|message| format!("{}: {}", message.role, message.content))
@@ -1884,15 +1931,15 @@ pub async fn answer_qa_with_context(
             .map_err(map_omni_error)
     } else {
         let mut provider = build_cloud_polisher_provider(credentials.as_ref(), &context).await?;
-        let native = search_config.provider == crate::web_search::SearchProvider::Auto
-            && match &mut provider {
-                CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(p)) => {
-                    p.enable_qa_web_search()
-                }
-                _ => false,
-            };
+        let native = configure_qa_search(&mut provider, context.pipeline_mode);
+        if suite_mode && !native {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "DeepSeek native search is unavailable",
+            ));
+        }
         let mut messages = messages;
-        if !native && search_config.provider != crate::web_search::SearchProvider::Off {
+        if !suite_mode && search_config.provider != crate::web_search::SearchProvider::Off {
             let mut planning = messages.clone();
             planning.push(crate::shared_types::QaChatMessage {
                 role: "user".into(),
@@ -1915,6 +1962,18 @@ pub async fn answer_qa_with_context(
         return Err(error);
     }
     result
+}
+
+fn configure_qa_search(
+    provider: &mut CloudPolisherProvider,
+    mode: crate::shared_types::PipelineMode,
+) -> bool {
+    match provider {
+        CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(provider)) => {
+            provider.configure_qa_web_search(mode == crate::shared_types::PipelineMode::Deepseek)
+        }
+        _ => false,
+    }
 }
 
 async fn qa_search_context<C>(
@@ -2927,6 +2986,38 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_search_is_exclusive_to_the_deepseek_pipeline() {
+        use super::*;
+        use crate::shared_types::PipelineMode;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek",
+            crate::deepseek_suite::ENDPOINT,
+            "key",
+            crate::deepseek_suite::MODEL,
+        );
+        let mut provider = CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
+            crate::polish::OpenAICompatibleLLMProvider::new(config),
+        ));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Traditional
+        ));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Multimodal
+        ));
+        assert!(configure_qa_search(&mut provider, PipelineMode::Deepseek));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Traditional
+        ));
+        let search = crate::web_search::WebSearchConfig::default();
+        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
+    }
+
     #[tokio::test]
     async fn qa_search_cancels_while_waiting_for_a_response() {
         use super::*;

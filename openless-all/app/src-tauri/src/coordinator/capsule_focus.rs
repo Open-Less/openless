@@ -211,6 +211,7 @@ fn emit_capsule_with_context_locked(
             )
             && !dictation.recording_ready,
         selection_polish,
+        qa: false,
         capsule_style: inner.host.cached_capsule_style(),
     };
     let captured_revision = inner.host.capsule_revision();
@@ -516,6 +517,7 @@ mod tests {
             operating: false,
             warming: false,
             selection_polish: false,
+            qa: false,
             capsule_style: CapsuleStyle::Siri,
         }
     }

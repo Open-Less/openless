@@ -563,8 +563,9 @@ impl OpenAICompatibleLLMProvider {
         }
     }
 
-    pub(crate) fn enable_qa_web_search(&mut self) -> bool {
-        self.qa_web_search = self.config.protocol.format == LlmRequestFormat::ChatCompletions
+    pub(crate) fn configure_qa_web_search(&mut self, enabled: bool) -> bool {
+        self.qa_web_search = enabled
+            && self.config.protocol.format == LlmRequestFormat::ChatCompletions
             && crate::web_search::native_deepseek(&self.config.base_url, &self.config.model);
         self.qa_web_search
     }
@@ -2861,12 +2862,12 @@ mod tests {
             "deepseek-flash",
         ));
         assert!(provider.chat_body(true, vec![]).get("tools").is_none());
-        assert!(provider.enable_qa_web_search());
+        assert!(provider.configure_qa_web_search(true));
         let body = provider.chat_body(true, vec![]);
         assert_eq!(body["tools"][0]["type"], "deepseek_web_search");
         assert_eq!(body["safety_check"]["level"], "high");
         provider.config.model = "deepseek-v4-flash".into();
-        assert!(!provider.enable_qa_web_search());
+        assert!(!provider.configure_qa_web_search(true));
         assert!(provider.chat_body(true, vec![]).get("tools").is_none());
     }
 

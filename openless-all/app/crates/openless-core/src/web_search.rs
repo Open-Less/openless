@@ -7,8 +7,8 @@ pub const CONFIG_ACCOUNT: &str = "web_search.config";
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchProvider {
-    #[default]
     Auto,
+    #[default]
     Free,
     Tavily,
     Brave,
@@ -21,17 +21,13 @@ pub struct WebSearchConfig {
     pub provider: SearchProvider,
     pub api_key: String,
     pub endpoint: String,
-    pub tts_channel: String,
-    pub voice: String,
 }
 impl Default for WebSearchConfig {
     fn default() -> Self {
         Self {
-            provider: SearchProvider::Auto,
+            provider: SearchProvider::Free,
             api_key: String::new(),
             endpoint: String::new(),
-            tts_channel: String::new(),
-            voice: "stella".into(),
         }
     }
 }
@@ -93,6 +89,23 @@ pub fn planned_query(text: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.chars().take(400).collect())
+}
+pub fn backend_prompt(config: &WebSearchConfig, suite: bool) -> String {
+    let engine = if suite {
+        "DeepSeek 原生联网搜索（deepseek_web_search）与网页读取"
+    } else {
+        match config.provider {
+            SearchProvider::Auto | SearchProvider::Free => {
+                "Bing 免费网页搜索（RSS 与公开网页读取）"
+            }
+            SearchProvider::Tavily => "Tavily Search",
+            SearchProvider::Brave => "Brave Search",
+            SearchProvider::Searxng => "用户配置的 SearXNG",
+            SearchProvider::Off => "未启用联网搜索",
+        }
+    };
+    format!("\n\n# 运行环境\n当前网页搜索后端：{engine}。{} 仅在与问题相关时使用实际检索结果；不要假称调用了其他搜索引擎。直接回答用户，不必主动解释是否存在选区。",
+        if suite { "当前模式为 DeepSeek 大统一。" } else { "当前为普通问答管线，搜索由独立 Web Search 服务提供，不使用 DeepSeek 大统一的搜索或朗读。" })
 }
 pub fn planner_prompt() -> String {
     format!("Today is {}. Decide whether the user's latest question requires current or external factual information (weather, news, prices, verification, explicit web search). Return ONLY JSON {{\"query\":\"short public search query\"}} or {{\"query\":null}} when search is unnecessary, or a required location is missing. Never include private selected text, credentials or personal data in a query. Resolve follow-up references from the conversation. Do not answer the question.", chrono::Local::now().format("%Y-%m-%d"))

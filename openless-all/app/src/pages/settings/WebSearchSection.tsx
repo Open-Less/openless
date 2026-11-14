@@ -8,20 +8,22 @@ export interface WebSearchConfig {
   provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';
   apiKey: string;
   endpoint: string;
-  ttsChannel: string;
-  voice: 'stella' | 'tide';
 }
 export const defaultSearchConfig: WebSearchConfig = {
-  provider: 'auto',
+  provider: 'free',
   apiKey: '',
   endpoint: '',
-  ttsChannel: '',
-  voice: 'stella',
 };
 export async function loadSearchConfig(): Promise<WebSearchConfig> {
   const raw = await readCredential('web_search.config');
-  return raw ? { ...defaultSearchConfig, ...JSON.parse(raw) } : { ...defaultSearchConfig };
+  const parsed = raw ? JSON.parse(raw) : {};
+  return {
+    provider: parsed.provider === 'auto' ? 'free' : (parsed.provider ?? 'free'),
+    apiKey: parsed.apiKey ?? '',
+    endpoint: parsed.endpoint ?? '',
+  };
 }
+
 export function saveSearchConfig(value: WebSearchConfig): Promise<void> {
   return setCredential('web_search.config', JSON.stringify(value));
 }
@@ -49,8 +51,8 @@ export function WebSearchSection() {
       </p>
       <p>
         {text(
-          '自动：DeepSeek 官方 deepseek-flash 使用原生联网（按官方计费）；其他模型使用免费 Bing 网页搜索，无需 API Key。免费网页接口可能受网络或限流影响。',
-          'Auto: official DeepSeek deepseek-flash uses native search (provider charges apply); other models use free Bing web search without an API key. Free search availability depends on connectivity and rate limits.',
+          '仅用于传统和多模态管线。默认使用免费 Bing 网页搜索，无需 API Key；可改用自己的搜索服务。DeepSeek 大统一使用独立的原生搜索。免费网页接口可能受网络或限流影响。',
+          'For traditional and multimodal pipelines. Auto uses free Bing web search without an API key, or choose your own search service. DeepSeek suite uses its separate native search. Free search availability depends on connectivity and rate limits.',
         )}
       </p>
       {config && (
@@ -69,7 +71,6 @@ export function WebSearchSection() {
                 })
               }
             >
-              <option value="auto">{text('自动（推荐）', 'Auto (recommended)')}</option>
               <option value="free">{text('Bing 免费网页搜索', 'Bing free web search')}</option>
               <option value="tavily">Tavily</option>
               <option value="brave">Brave Search</option>

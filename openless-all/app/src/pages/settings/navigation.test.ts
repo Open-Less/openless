@@ -213,7 +213,7 @@ assert.equal(
 const serviceViews = availableServiceViews(true);
 assert.deepEqual(
   serviceViews,
-  ['llm', 'asr', 'omni', 'deepseek', 'models', 'connections'],
+  ['llm', 'asr', 'omni', 'models', 'connections'],
   'both pipeline configurations remain visible in the same order',
 );
 assert.equal(
@@ -274,7 +274,7 @@ assert.equal(
 );
 assert.deepEqual(
   phoneViews,
-  ['llm', 'asr', 'omni', 'deepseek', 'connections'],
+  ['llm', 'asr', 'omni', 'connections'],
   'mobile service tabs stay stable',
 );
 console.log('settings service view tests passed');

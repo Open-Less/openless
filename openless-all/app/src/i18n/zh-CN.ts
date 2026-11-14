@@ -1577,11 +1577,13 @@ export const zhCN = {
       omniTitle: '多模态模型',
       omniDesc: '一个模型直接接收「提示词 + 音频」一步输出最终文本（实验性管线）。',
       pipelineModeLabel: '识别管线',
-      pipelineModeHint: '传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。',
+      pipelineModeHint:
+        '传统使用 ASR + LLM；多模态使用单个音频模型；DeepSeek 大统一组合自家的语音、语言和搜索服务。',
+      pipelineModeDeepseek: 'DeepSeek 大统一',
       pipelineModeTraditional: '传统模式',
       pipelineModeMultimodal: '多模态模式',
       pipelineIsolationNotice:
-        '两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。',
+        '三种管线分别保存配置。所选管线在关闭设置、关闭窗口和重启应用后保持不变；切回即可恢复原配置。',
       presets: {
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',

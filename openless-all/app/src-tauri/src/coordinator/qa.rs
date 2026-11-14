@@ -23,7 +23,7 @@ pub(super) fn install_recording_companion(inner: &Arc<Inner>) {
 }
 
 /// One chord owns the complete question: start → record → finish. Processing
-/// never queues another question and a completed result is replaced by a fresh turn.
+/// never queues another question. Later turns retain the conversation until dismissal.
 pub(super) async fn handle_qa_hotkey_pressed(inner: &Arc<Inner>) {
     let Ok(_handoff) = inner.overlay_qa_handoff.try_lock() else {
         return;

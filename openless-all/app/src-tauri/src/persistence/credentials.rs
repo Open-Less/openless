@@ -621,6 +621,8 @@ fn reset_credentials_cache_for_tests() {
 struct CredsRoot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     web_search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deepseek_suite: Option<String>,
     #[serde(default = "credsroot_default_version")]
     version: u32,
     #[serde(default)]
@@ -3498,20 +3500,32 @@ fn apply_sync_credentials_root(
 pub struct CredentialsVault;
 
 fn deepseek_tts_credentials(root: &CredsRoot) -> Result<(openless_core::SecretValue, String)> {
-    let config: openless_core::web_search::WebSearchConfig = root.web_search.as_deref()
-        .map(serde_json::from_str).transpose()?.unwrap_or_default();
-    let entry = root.providers.llm.get(&config.tts_channel)
-        .ok_or_else(|| anyhow::anyhow!("DeepSeek speech is not configured"))?;
-    let provider = entry.channel.providerType.as_deref().unwrap_or(&config.tts_channel);
-    let endpoint = entry.baseURL.as_deref().filter(|s| !s.is_empty()).unwrap_or("https://api.deepseek.com/v1");
-    anyhow::ensure!(provider == "deepseek" && openless_core::web_search::native_deepseek(endpoint, "deepseek-flash"),
-        "Speech requires an official DeepSeek channel");
-    let key = entry.apiKey.as_deref().filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("DeepSeek API key is missing"))?;
-    Ok((openless_core::SecretValue::new(key), config.voice))
+    let config = match root.deepseek_suite.as_deref() {
+        Some(raw) => openless_core::deepseek_suite::DeepSeekSuiteConfig::parse(raw)?,
+        None => openless_core::deepseek_suite::DeepSeekSuiteConfig::default(),
+    };
+    anyhow::ensure!(config.configured(), "DeepSeek suite API key is missing");
+    Ok((
+        openless_core::SecretValue::new(config.api_key),
+        config.voice,
+    ))
 }
 
 impl CredentialsVault {
+    pub fn get_deepseek_suite_config() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(load_credentials_for_update()?.deepseek_suite)
+    }
+    pub fn set_deepseek_suite_config(value: &str) -> Result<()> {
+        if !value.is_empty() {
+            openless_core::deepseek_suite::DeepSeekSuiteConfig::parse(value)?;
+        }
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.deepseek_suite = (!value.is_empty()).then(|| value.to_string());
+            Ok(true)
+        })
+    }
+
     pub fn get_deepseek_tts_credentials() -> Result<(openless_core::SecretValue, String)> {
         let _guard = credentials_lock().lock();
         deepseek_tts_credentials(&load_credentials_for_update()?)
@@ -4146,19 +4160,18 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn speech_rejects_a_repurposed_channel_without_exposing_its_key() {
+    fn speech_uses_only_the_dedicated_suite_key() {
         let mut root = CredsRoot::default();
         root.web_search = Some(r#"{"ttsChannel":"voice"}"#.into());
         let mut entry = CredsLlmEntry::default();
         entry.channel.providerType = Some("deepseek".into());
-        entry.apiKey = Some("private-key".into());
+        entry.apiKey = Some("traditional-key".into());
         root.providers.llm.insert("voice".into(), entry);
-        assert!(super::deepseek_tts_credentials(&root).is_ok());
-        root.providers.llm.get_mut("voice").unwrap().baseURL = Some("https://gateway.example/v1".into());
-        assert!(!super::deepseek_tts_credentials(&root).unwrap_err().to_string().contains("private-key"));
-        root.providers.llm.get_mut("voice").unwrap().baseURL = None;
-        root.providers.llm.get_mut("voice").unwrap().channel.providerType = Some("openai".into());
         assert!(super::deepseek_tts_credentials(&root).is_err());
+        root.deepseek_suite = Some(r#"{"apiKey":"suite-key","voice":"tide"}"#.into());
+        let (key, voice) = super::deepseek_tts_credentials(&root).unwrap();
+        assert_eq!(key.expose_secret(), "suite-key");
+        assert_eq!(voice, "tide");
     }
 
     #[test]

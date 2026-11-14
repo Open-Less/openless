@@ -432,6 +432,9 @@ fn read_vault_credential(
         (openless_core::CredentialNamespace::Application, "web_search.config") => {
             CredentialsVault::get_web_search_config()
         }
+        (openless_core::CredentialNamespace::Application, "deepseek_suite.config") => {
+            CredentialsVault::get_deepseek_suite_config()
+        }
         (openless_core::CredentialNamespace::Application, _) => {
             return Err(invalid_credential_key(key));
         }
@@ -515,6 +518,9 @@ fn write_vault_credential(
         }
         (openless_core::CredentialNamespace::Application, "web_search.config") => {
             CredentialsVault::set_web_search_config(value)
+        }
+        (openless_core::CredentialNamespace::Application, "deepseek_suite.config") => {
+            CredentialsVault::set_deepseek_suite_config(value)
         }
         (openless_core::CredentialNamespace::Application, _) => {
             return Err(invalid_credential_key(key));
@@ -934,7 +940,9 @@ fn credential_key(
             openless_core::CredentialNamespace::Omni
         }
         MARKETPLACE_GITHUB_TOKEN_ACCOUNT => openless_core::CredentialNamespace::Marketplace,
-        CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT | "web_search.config" => openless_core::CredentialNamespace::Application,
+        CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT | "web_search.config" | "deepseek_suite.config" => {
+            openless_core::CredentialNamespace::Application
+        }
         _ => {
             let parsed = parse_account(account)?;
             match parsed {

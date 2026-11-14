@@ -317,7 +317,7 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
     });
     expect(bounds.verticalOverflow).toBeLessThanOrEqual(1);
     expect(bounds.horizontalOverflow).toBeLessThanOrEqual(1);
-    expect(bounds.entries).toBe(6);
+    expect(bounds.entries).toBe(5);
     expect(bounds.badgesBelowLabels).toBe(true);
     await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
       ratio: 1,
@@ -331,13 +331,13 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
   });
 });
 
-test('pipeline selection stays evenly inset in both modes', async ({ page }) => {
+test('pipeline selection stays evenly inset across three modes', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   const track = dialog.locator('.ol-service-pipeline-track');
-  for (const name of ['传统模式', '多模态模式']) {
+  for (const name of ['传统模式', '多模态模式', 'DeepSeek 大统一']) {
     await dialog.getByRole('button', { name, exact: true }).click();
     await expect
       .poll(() =>
@@ -353,10 +353,14 @@ test('pipeline selection stays evenly inset in both modes', async ({ page }) => 
             Math.abs(inner.width - item.width),
             Math.abs(inner.height - item.height),
             Math.abs(inner.top - outer.top - (outer.bottom - inner.bottom)),
-            Math.abs(
-              (selectedName === '传统模式' ? inner.left - outer.left : outer.right - inner.right) -
-                (inner.top - outer.top),
-            ),
+            selectedName === '多模态模式'
+              ? 0
+              : Math.abs(
+                  (selectedName === '传统模式'
+                    ? inner.left - outer.left
+                    : outer.right - inner.right) -
+                    (inner.top - outer.top),
+                ),
           );
         }, name),
       )

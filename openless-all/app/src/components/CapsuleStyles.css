@@ -578,3 +578,26 @@
     will-change: auto;
   }
 }
+
+.ol-qa-capsule-badge {
+  padding: 5px 12px;
+  border-radius: 9px;
+  background: var(--ol-capsule-pill-bg, rgba(32, 32, 32, 0.9));
+  color: var(--ol-capsule-pill-ink, #fff);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 180ms ease,
+    transform 220ms ease;
+}
+.ol-qa-capsule-badge[data-visible='true'] {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-qa-capsule-badge {
+    transition: none;
+  }
+}

@@ -1689,10 +1689,11 @@ export const es: typeof zhCN = {
       pipelineModeLabel: 'Modo de procesamiento',
       pipelineModeHint:
         'Tradicional: dos etapas, ASR + LLM. Multimodal: una sola pasada con un modelo que admite audio.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Tradicional',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Cada modo conserva sus propias credenciales. Al cambiar, las del otro modo se guardan sin usarse y se restauran cuando vuelves.',
+        'Las tres canalizaciones guardan su configuración por separado. La selección se conserva al cerrar los ajustes o la ventana y al reiniciar la aplicación. Al volver se recupera la configuración anterior.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',

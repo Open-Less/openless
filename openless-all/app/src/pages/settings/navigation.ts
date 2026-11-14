@@ -109,14 +109,13 @@ export function searchSettingsSections<T extends SearchableSettingsSection>(
   });
 }
 
-export type ServiceViewId = 'llm' | 'asr' | 'omni' | 'deepseek' | 'models' | 'connections';
+export type ServiceViewId = 'llm' | 'asr' | 'omni' | 'models' | 'connections';
 
 export function availableServiceViews(localModels: boolean, os?: OS): ServiceViewId[] {
   return [
     'llm',
     'asr',
     'omni',
-    'deepseek',
     ...(localModels || os === 'mac' ? (['models'] as const) : []),
     'connections',
   ];
@@ -128,7 +127,6 @@ export function isServiceViewInactive(
   os?: OS,
   voiceActivationModels = false,
 ): boolean {
-  if (view === 'deepseek') return false;
   if (view === 'models' && os === 'win' && voiceActivationModels) return false;
   if (view === 'models' && os === 'mac') return true;
   return multimodal ? view !== 'omni' && view !== 'connections' : view === 'omni';
