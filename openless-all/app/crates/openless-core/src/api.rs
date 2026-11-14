@@ -2629,7 +2629,7 @@ pub struct OpenLessBackend {
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
-    local_migration_store: Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>,
+    local_migration_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
@@ -2973,11 +2973,19 @@ impl OpenLessBackend {
     /// Construct an explicitly unavailable Core so the native shell can show
     /// its startup error instead of panicking before any window is visible.
     /// This path never opens the user's files or a credential store.
-    pub fn blocked_startup(mut config: BackendConfig, error: BackendError) -> Self {
-        // A blocked backend must never touch the caller's failed data path. Use
-        // an isolated temporary store solely to satisfy the normal constructor.
-        config.data_dir =
+    pub fn blocked_startup(config: BackendConfig, error: BackendError) -> Self {
+        let isolated_path =
             std::env::temp_dir().join(format!("openless-startup-blocked-{}", uuid::Uuid::new_v4()));
+        Self::blocked_startup_at(config, error, isolated_path)
+    }
+
+    fn blocked_startup_at(
+        mut config: BackendConfig,
+        error: BackendError,
+        isolated_path: std::path::PathBuf,
+    ) -> Self {
+        // A blocked backend must not touch either the failed data path or this placeholder.
+        config.data_dir = isolated_path;
         let repositories = BackendRepositories {
             preferences: Arc::new(PreferencesStore::in_memory()),
             history: Arc::new(HistoryStore::at_path(std::path::PathBuf::new())),
@@ -3008,11 +3016,21 @@ impl OpenLessBackend {
         self.startup_error.clone()
     }
 
+    fn local_migration_store(
+        &self,
+    ) -> Result<&crate::cloud_sync_e2ee_store::CoreSyncStore, BackendError> {
+        self.local_migration_store.as_deref().ok_or_else(|| {
+            self.startup_error.clone().unwrap_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidState, "local migration is unavailable")
+            })
+        })
+    }
+
     pub fn bind_restore_runtime_effects(
         &self,
         effects: Arc<dyn crate::config::RestoreRuntimeEffects>,
     ) -> Result<(), BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .bind_runtime_effects(effects)
             .map_err(|_| {
                 BackendError::new(
@@ -3252,16 +3270,19 @@ impl OpenLessBackend {
         } else {
             None
         };
-        let local_migration_store = if let Some(store) = &encrypted_sync_store {
-            Arc::clone(store)
+        let local_migration_store = if restore_guard.is_some() {
+            // Blocked startup must not depend on filesystem or credential availability.
+            None
+        } else if let Some(store) = &encrypted_sync_store {
+            Some(Arc::clone(store))
         } else {
-            crate::cloud_sync_e2ee::build_local_store(
+            Some(crate::cloud_sync_e2ee::build_local_store(
                 &config.data_dir,
                 repositories.clone(),
                 Arc::clone(&deps.credential_store),
                 env!("CARGO_PKG_VERSION").into(),
                 Arc::clone(&deps.task_spawner),
-            )?
+            )?)
         };
         match (
             deps.selection_runtime.take(),
@@ -3334,9 +3355,16 @@ impl OpenLessBackend {
             .remote_input
             .bind_event_publisher(BackendEventPublisher::new(Arc::clone(&events)));
         {
-            let store = &local_migration_store;
-            let guard: crate::domains::RuntimeRestoreGuard = restore_guard.unwrap_or_else(|| {
-                let weak_store = Arc::downgrade(&local_migration_store);
+            let guard: crate::domains::RuntimeRestoreGuard = if let Some(guard) = restore_guard {
+                guard
+            } else {
+                let store = local_migration_store.as_ref().ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "local migration is unavailable",
+                    )
+                })?;
+                let weak_store = Arc::downgrade(store);
                 Arc::new(move || {
                     let store = weak_store.upgrade().ok_or_else(|| {
                         BackendError::new(
@@ -3351,7 +3379,7 @@ impl OpenLessBackend {
                         )
                     })
                 })
-            });
+            };
             voice_sessions.bind_restore_guard(Arc::clone(&guard))?;
             runtime_start_work.bind(Arc::clone(&guard), Arc::clone(&deps.task_spawner))?;
             deps.services
@@ -3371,30 +3399,32 @@ impl OpenLessBackend {
             // Each probe releases its lock before the next one. Starts check
             // Store's already-raised flag while holding the matching lock.
             // Both directions are weak, so neither binding owns the backend.
-            store
-                .bind_runtime_idle_probe(Arc::new(move || {
-                    voice
-                        .upgrade()
-                        .is_some_and(|gate| gate.runtime_restore_idle())
-                        && starts
+            if let Some(store) = &local_migration_store {
+                store
+                    .bind_runtime_idle_probe(Arc::new(move || {
+                        voice
                             .upgrade()
                             .is_some_and(|gate| gate.runtime_restore_idle())
-                        && qa
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                        && selection
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                        && selection_voice
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                }))
-                .map_err(|_| {
-                    BackendError::new(
-                        BackendErrorCode::InvalidState,
-                        "failed to bind encrypted sync runtime barrier",
-                    )
-                })?;
+                            && starts
+                                .upgrade()
+                                .is_some_and(|gate| gate.runtime_restore_idle())
+                            && qa
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                            && selection
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                            && selection_voice
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                    }))
+                    .map_err(|_| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidState,
+                            "failed to bind encrypted sync runtime barrier",
+                        )
+                    })?;
+            }
         }
         Ok(Self {
             config,
@@ -3459,7 +3489,7 @@ impl OpenLessBackend {
         if let Some(error) = &self.startup_error {
             return Err(error.clone());
         }
-        self.local_migration_store
+        self.local_migration_store()?
             .ensure_runtime_available()
             .map_err(|_| {
                 BackendError::new(
@@ -5049,7 +5079,7 @@ impl OpenLessBackend {
         } else {
             // Local migration has the same crash journal as cloud sync, but it
             // has no service startup hook when the user is signed out.
-            let _ = self.local_migration_store.recover_registered().await;
+            let _ = self.local_migration_store()?.recover_registered().await;
         }
         let preferences = self.get_preferences();
         let status = match warmed {
@@ -19759,6 +19789,30 @@ mod tests {
         }
         assert!(selection.runtime_restore_idle());
     }
+    #[tokio::test]
+    async fn blocked_startup_does_not_require_a_usable_temporary_directory() {
+        let fixture = TestDataDir::new("blocked-no-temp");
+        std::fs::create_dir_all(fixture.path()).unwrap();
+        let file = fixture.path().join("not-a-directory");
+        std::fs::write(&file, b"untouched").unwrap();
+        let original = fixture.path().join("original-user-data");
+        let error = BackendError::new(BackendErrorCode::Persistence, "storage unavailable");
+        let backend = OpenLessBackend::blocked_startup_at(
+            BackendConfig {
+                data_dir: original.clone(),
+                ..BackendConfig::default()
+            },
+            error.clone(),
+            file.join("unusable-placeholder"),
+        );
+        assert_eq!(backend.startup_error().unwrap().code, error.code);
+        assert_eq!(backend.local_migration_store().err().unwrap().code, error.code);
+        assert_eq!(backend.start().await.unwrap_err().code, error.code);
+        assert_eq!(backend.ensure_runtime_ready().unwrap_err().code, error.code);
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(file).unwrap(), b"untouched");
+    }
+
     #[tokio::test]
     async fn restore_host_blocked_startup_is_visible_and_never_opens_or_mutates_real_stores() {
         struct ForbiddenRuntime;
