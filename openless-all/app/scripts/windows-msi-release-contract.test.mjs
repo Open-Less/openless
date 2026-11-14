@@ -35,6 +35,15 @@ assert.match(
 );
 const checkout = steps.find((s) => s.uses === 'actions/checkout@v4');
 assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.sha }}');
+// Historical repair tags need not contain the newer repository-local action.
+assert.equal(
+  steps.find((s) => s.uses === './.github/actions/cache-npm').if,
+  "inputs.release_tag == ''",
+);
+assert.equal(
+  steps.find((s) => s.uses === 'actions/setup-node@v4').with.cache,
+  "${{ inputs.release_tag != '' && 'npm' || '' }}",
+);
 const guard = steps.find((s) => s.name === 'Validate targeted draft release repair');
 assert.equal(guard.if, "inputs.release_tag != ''");
 assert.match(guard.run, /permission.*admin/);
@@ -43,7 +52,7 @@ assert.match(guard.run, /INPUT_PLATFORM.*windows/);
 const source = steps.find((s) => s.name === 'Verify repair source CI and version');
 assert.match(source.run, /git rev-parse HEAD/);
 assert.match(source.run, /head_sha=\$source_sha/);
-assert.match(source.run, /total_count == 7/);
+assert.match(source.run, /verify-release-ci\.mjs/);
 const build = steps.find((s) => s.name === 'Build (Windows)');
 const script = build.run.match(/node <<'MSI_CONFIG'\n([\s\S]*?)\nMSI_CONFIG/)[1];
 const originalVersion = (version, signing = false) => {
@@ -80,7 +89,7 @@ for (const version of ['256.0.0', '1.256.0', '1.0.65536', 'invalid'])
 assert.equal(
   (
     build.run.match(
-      /build "\$\{diagnostic_args\[@\]\}" --bundles msi --config src-tauri\/tauri.msi-version.json/g,
+      /bundle "\$\{diagnostic_args\[@\]\}" --bundles msi --config src-tauri\/tauri.msi-version.json/g,
     ) ?? []
   ).length,
   2,
@@ -205,3 +214,24 @@ if (process.platform !== 'win32') {
   }
 }
 console.log('windows-msi-release-contract.test.mjs passed');
+
+// Branch acceptance can build one Mac architecture; tag publishes retain all desktop targets.
+const selected = new Map(
+  [...job.strategy.matrix.include.matchAll(/inputs.platform == '([^']+)' && '(\[[^']+\])'/g)].map(
+    (m) => [m[1], JSON.parse(m[2])],
+  ),
+);
+assert.deepEqual(
+  selected.get('macos-aarch64').map((row) => row['rust-target']),
+  ['aarch64-apple-darwin'],
+);
+assert.deepEqual(
+  selected.get('macos-x86_64').map((row) => row['rust-target']),
+  ['x86_64-apple-darwin'],
+);
+const full = JSON.parse(job.strategy.matrix.include.match(/\|\| '(\[[^']+\])'\) \}\}$/)[1]);
+assert.deepEqual(full.map((row) => row['rust-target']).sort(), [
+  'aarch64-apple-darwin',
+  'x86_64-apple-darwin',
+  'x86_64-pc-windows-msvc',
+]);

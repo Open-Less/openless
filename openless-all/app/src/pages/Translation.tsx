@@ -64,16 +64,13 @@ export function Translation() {
       options.unshift({ value: selected, label: language?.label ?? selected });
     }
     return [
-      { value: '', label: t('translation.target.disabled', { shortcut: translationShortcutLabel }) },
+      {
+        value: '',
+        label: t('translation.target.disabled', { shortcut: translationShortcutLabel }),
+      },
       ...options,
     ];
-  }, [
-    filteredLanguages,
-    languages,
-    prefs?.translationTargetLanguage,
-    t,
-    translationShortcutLabel,
-  ]);
+  }, [filteredLanguages, languages, prefs?.translationTargetLanguage, t, translationShortcutLabel]);
 
   useEffect(
     () => () => {
@@ -175,7 +172,7 @@ export function Translation() {
                 style={{
                   alignSelf: 'flex-start',
                   padding: '6px 12px',
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   border: 0,
                   background: 'var(--ol-blue)',
                   color: '#fff',
@@ -240,7 +237,7 @@ export function Translation() {
               justifyContent: 'space-between',
               gap: 10,
               padding: '8px 12px',
-              borderRadius: 10,
+              borderRadius: 'var(--ol-r-md)',
               border: '0.5px solid rgba(239,68,68,0.22)',
               background: 'rgba(239,68,68,0.07)',
               color: 'var(--ol-red, #ef4444)',
@@ -260,7 +257,7 @@ export function Translation() {
               style={{
                 flex: '0 0 auto',
                 border: 0,
-                borderRadius: 999,
+                borderRadius: 'var(--ol-radius)',
                 background: 'rgba(239,68,68,0.12)',
                 color: 'inherit',
                 padding: '4px 10px',
@@ -371,7 +368,7 @@ export function Translation() {
                   fontSize: 10.5,
                   fontWeight: 'var(--ol-font-weight-semibold)',
                   letterSpacing: '0.04em',
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: enabled ? 'var(--ol-blue-soft)' : 'var(--ol-control-muted)',
                   color: enabled ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
                   textTransform: 'uppercase',
@@ -427,7 +424,7 @@ export function Translation() {
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   padding: '3px 9px',
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'var(--ol-blue-soft)',
                   color: 'var(--ol-blue)',
                   fontSize: 11.5,
@@ -445,7 +442,7 @@ export function Translation() {
                 style={{
                   marginTop: 10,
                   padding: '8px 12px',
-                  borderRadius: 10,
+                  borderRadius: 'var(--ol-r-md)',
                   border: '0.5px solid rgba(217,119,6,0.24)',
                   background: 'rgba(217,119,6,0.08)',
                   color: 'var(--ol-warn, #b45309)',
@@ -494,11 +491,11 @@ export function Translation() {
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    borderRadius: '50%',
+                    borderRadius: 'var(--ol-radius)',
                     background: 'var(--ol-blue-soft)',
                     color: 'var(--ol-blue)',
                     fontSize: 11,
-                    fontWeight: 650,
+                    fontWeight: 'var(--ol-font-weight-demibold)',
                     fontVariantNumeric: 'tabular-nums',
                   }}
                 >

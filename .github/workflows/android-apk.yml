@@ -1,7 +1,7 @@
 name: Android APK (debug)
 
 # Triggers:
-#   - push v*-tauri tag → signed release APK + minisign + updater manifest → GitHub Release
+#   - workflow_call from release-tauri.yml on v*-tauri tags → signed APKs + signatures → shared Release
 #   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
 #     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
 #   - workflow_dispatch + signed_debug=true — debug APK signed with the release
@@ -15,12 +15,19 @@ name: Android APK (debug)
 #   - Tauri still runs plugin-init cargo + android-studio-script per ABI (first ABI twice).
 
 on:
-  push:
-    # Same reasoning as release-tauri: an APK per branch push cost 13-18 minutes
-    # and duplicated the Gradle + Rust trees that `android-check` already keeps
-    # warm. Tags, a weekly smoke build and explicit dispatch cover it.
-    tags:
-      - 'v*-tauri'
+  # Tag releases have exactly one entry point: release-tauri.yml. Keeping a
+  # second tag trigger here would compile/sign all four ABIs twice.
+  workflow_call:
+    inputs:
+      abis:
+        type: string
+        default: aarch64
+      fast_profile:
+        type: boolean
+        default: false
+      signed_debug:
+        type: boolean
+        default: false
   schedule:
     # Monday 05:23 UTC: weekly APK smoke build (debug-grade, not published).
     - cron: '23 5 * * 1'
@@ -39,13 +46,15 @@ on:
         type: boolean
         default: false
 
-# Repeated pushes of the same tag run only the newest; workflow_dispatch isolates by run_id to avoid mutual cancellation.
+# Supersede equivalent manual builds; different ABI/profile/signing requests stay
+# independent. Tag publication must finish once started.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.abis || 'aarch64' }}-${{ inputs.fast_profile || false }}-${{ inputs.signed_debug || false }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') }}
 
 jobs:
   plan:
+    timeout-minutes: 10
     name: Plan Android ABI matrix
     permissions:
       contents: read
@@ -74,7 +83,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          INPUT_SIGNED_DEBUG: ${{ github.event.inputs.signed_debug }}
+          INPUT_SIGNED_DEBUG: ${{ inputs.signed_debug }}
         run: |
           set -euo pipefail
           is_tag=false
@@ -127,8 +136,8 @@ jobs:
         id: abis
         shell: bash
         env:
-          INPUT_ABIS: ${{ github.event.inputs.abis }}
-          INPUT_FAST_PROFILE: ${{ github.event.inputs.fast_profile }}
+          INPUT_ABIS: ${{ inputs.abis }}
+          INPUT_FAST_PROFILE: ${{ inputs.fast_profile }}
         run: |
           set -euo pipefail
           if [ "${{ steps.mode.outputs.is_tag_release }}" = "true" ]; then
@@ -148,6 +157,7 @@ jobs:
           echo "Resolved ABIs: $abi_list (fast_profile=$fast)"
 
   build-android-apk:
+    timeout-minutes: 90
     name: Build Android (${{ matrix.abi }})
     needs: plan
     # Publishing is `publish-android-release`. Branch and schedule builds only
@@ -226,6 +236,7 @@ jobs:
           packages: platform-tools
 
       - name: Install NDK and accept SDK licenses
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
@@ -249,8 +260,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -265,13 +276,15 @@ jobs:
           shared-key: android-${{ matrix.abi }}
           workspaces: openless-all/app/src-tauri -> target
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          # Keep Gradle caches for post-job save; do not wipe ~/.gradle before post.
-          cache-read-only: false
+          # Keep reusable baseline caches; avoid one large copy per release tag.
+          cache-read-only: ${{ github.ref != 'refs/heads/beta' || (github.event_name != 'schedule' && github.event_name != 'workflow_dispatch') }}
 
       - name: Install npm deps
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -318,6 +331,7 @@ jobs:
         run: node scripts/configure-android-release-signing.mjs
 
       - name: Prime Gradle wrapper
+        timeout-minutes: 10
         working-directory: openless-all/app
         shell: bash
         run: |
@@ -333,6 +347,7 @@ jobs:
           exit 1
 
       - name: Build Android debug APK
+        timeout-minutes: 70
         if: needs.plan.outputs.mode == 'debug'
         working-directory: openless-all/app
         env:
@@ -343,6 +358,7 @@ jobs:
         run: npm run tauri:android:build:debug
 
       - name: Build Android release APK
+        timeout-minutes: 70
         if: needs.plan.outputs.mode == 'release'
         working-directory: openless-all/app
         env:
@@ -379,6 +395,7 @@ jobs:
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: ${{ needs.plan.outputs.mode == 'release' && format('openless-android-release-{0}', matrix.gradle_abi) || format('openless-android-debug-{0}', matrix.gradle_abi) }}
           path: ${{ steps.apk.outputs.apk_path }}
           if-no-files-found: error
@@ -413,7 +430,11 @@ jobs:
           fi
 
   publish-android-release:
+    timeout-minutes: 30
     name: Publish Android release assets
+    concurrency:
+      group: openless-release-assets-${{ github.ref_name }}
+      cancel-in-progress: false
     if: needs.plan.outputs.is_tag_release == 'true'
     needs: [plan, build-android-apk]
     permissions:
@@ -431,10 +452,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - name: Install npm deps
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -500,19 +522,6 @@ jobs:
             "$out_dir/OpenLess_${version}_x86.apk" \
             "$out_dir/OpenLess_${version}_x86_64.apk"
 
-      - name: Stage direct download aliases
-        if: needs.plan.outputs.is_tag_release == 'true'
-        working-directory: openless-all/app
-        env:
-          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ steps.stage.outputs.out_dir }}
-          OPENLESS_DOWNLOAD_OUTPUT_DIR: ${{ steps.stage.outputs.out_dir }}
-        run: |
-          set -euo pipefail
-          for arch in aarch64 armv7 i686 x86_64; do
-            OPENLESS_DOWNLOAD_TARGET=android OPENLESS_DOWNLOAD_ARCH="$arch" \
-              node scripts/stage-release-download-aliases.mjs
-          done
-
       - name: Write Android updater manifests
         working-directory: openless-all/app
         env:
@@ -532,22 +541,35 @@ jobs:
       - name: Upload Android updater manifests
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-android-updater-manifests
           if-no-files-found: error
           path: |
             ${{ steps.stage.outputs.out_dir }}/latest-android-*.json
 
-      - name: Append release files (signatures + aliases)
+      - name: Consolidate release signatures
+        timeout-minutes: 5
+        working-directory: openless-all/app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/merge-release-signatures.mjs "${{ steps.stage.outputs.out_dir }}" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+
+      - name: Append release files (originals + signature index)
         id: release_assets
         shell: bash
         run: |
           set -euo pipefail
-          out_dir="${{ steps.stage.outputs.out_dir }}"
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            for f in "$out_dir"/*.apk.sig "$out_dir"/OpenLess_android_*.apk; do
-              [ -e "$f" ] && echo "$f"
-            done
+            index="${{ steps.stage.outputs.out_dir }}/updater-signatures.json"
+            if [ -f "$index" ]; then
+              echo "$index"
+            else
+              # Targeted repairs of historical drafts keep their original format.
+              while IFS= read -r f; do
+                if [ -n "$f" ] && [ -f "$f.sig" ]; then echo "$f.sig"; fi
+              done <<< "${{ steps.stage.outputs.release_files }}"
+            fi
           } > "$RUNNER_TEMP/android-release-files.txt"
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/android-release-files.txt" >> "$GITHUB_OUTPUT"

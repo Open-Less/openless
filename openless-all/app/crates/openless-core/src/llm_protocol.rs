@@ -410,6 +410,7 @@ pub(crate) struct TextEventStream {
     pub done: bool,
     siwc: bool,
     request_id: Option<String>,
+    reported_tokens: crate::usage_ledger::ReportedTokens,
 }
 
 impl TextEventStream {
@@ -422,6 +423,7 @@ impl TextEventStream {
             done: false,
             siwc: false,
             request_id: None,
+            reported_tokens: crate::usage_ledger::ReportedTokens::default(),
         }
     }
 
@@ -433,6 +435,10 @@ impl TextEventStream {
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), LLMError> {
         crate::polish::append_utf8_sse_chunk(&mut self.buffer, &mut self.pending, chunk)
+    }
+
+    pub fn reported_tokens(&self) -> crate::usage_ledger::ReportedTokens {
+        self.reported_tokens
     }
 
     pub fn next(&mut self) -> Result<Option<StreamEvent>, LLMError> {
@@ -463,6 +469,9 @@ impl TextEventStream {
             }
             Err(_) => return Err(response_error("invalid LLM SSE JSON")),
         };
+        if let Some(reported) = crate::usage_ledger::ReportedTokens::from_response(&value) {
+            self.reported_tokens.merge_report(reported);
+        }
         let kind = value["type"]
             .as_str()
             .or_else(|| {
@@ -502,8 +511,10 @@ impl TextEventStream {
                     None
                 }
                 "response.failed" | "response.incomplete" => {
-                    if self.siwc { return Err(LLMError::Siwc(crate::siwc::error("response_incomplete"))); }
-                    return Err(response_error("llmResponseIncomplete"))
+                    if self.siwc {
+                        return Err(LLMError::Siwc(crate::siwc::error("response_incomplete")));
+                    }
+                    return Err(response_error("llmResponseIncomplete"));
                 }
                 _ => None,
             },
@@ -554,6 +565,30 @@ impl TextEventStream {
 mod tests {
     use super::*;
     use crate::credentials::{InMemoryCredentialStore, SecretValue};
+
+    #[test]
+    fn streaming_usage_is_collected_without_discarding_text_or_guessing_counts() {
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n").unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().unwrap() {
+            if let StreamEvent::Text(delta) = event {
+                text.push_str(&delta);
+            }
+        }
+        assert_eq!(text, "hello");
+        assert_eq!(stream.reported_tokens.input, Some(42));
+        assert_eq!(stream.reported_tokens.output, Some(5));
+        assert_eq!(stream.reported_tokens.cached_input, None);
+
+        let mut no_usage = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        no_usage.push(b"data: [DONE]\n\n").unwrap();
+        assert!(matches!(no_usage.next().unwrap(), Some(StreamEvent::Done)));
+        assert_eq!(
+            no_usage.reported_tokens,
+            crate::usage_ledger::ReportedTokens::default()
+        );
+    }
 
     #[tokio::test]
     async fn protocol_defaults_overrides_and_channels_are_independent() {

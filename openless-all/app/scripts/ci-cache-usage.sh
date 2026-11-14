@@ -4,7 +4,10 @@
 # delete the entries that can never be restored again or that are superseded
 # by a newer sibling.
 #
-#   scripts/ci-cache-usage.sh [--prune] [--keep-family N] [--dry-run] [--limit-gb N] [--repo OWNER/NAME]
+#   scripts/ci-cache-usage.sh [--prune] [--keep-family N] [--prune-budget] [--dry-run] [--limit-gb N] [--repo OWNER/NAME]
+# --prune-budget additionally evicts least-recently-used branch caches until
+# inside budget. This is opt-in because even a current baseline may be evicted;
+# tag scopes and open/unreadable PR scopes remain protected.
 #
 # Why this exists: GitHub keeps 10 GB of caches per repository and evicts the
 # least recently used entries. The platform dependency trees are large (the
@@ -33,11 +36,13 @@ limit_gb=${LIMIT_GB:-8}
 prune=0
 keep_family=0
 dry_run=0
+prune_budget=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --prune) prune=1 ;;
     --dry-run) dry_run=1 ;;
+    --prune-budget) prune_budget=1 ;;
     --keep-family)
       keep_family=${2:?--keep-family needs a number}
       shift
@@ -51,7 +56,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     *)
-      echo "usage: $0 [--prune] [--keep-family N] [--dry-run] [--limit-gb N] [--repo OWNER/NAME]" >&2
+      echo "usage: $0 [--prune] [--keep-family N] [--prune-budget] [--dry-run] [--limit-gb N] [--repo OWNER/NAME]" >&2
       exit 2
       ;;
   esac
@@ -64,6 +69,15 @@ case "$keep_family" in
     exit 2
     ;;
 esac
+
+if ! awk -v limit="$limit_gb" 'BEGIN { exit (limit ~ /^[0-9]+([.][0-9]+)?$/ && limit + 0 > 0) ? 0 : 1 }'; then
+  echo "--limit-gb needs a positive number" >&2
+  exit 2
+fi
+if [ "$prune_budget" = 1 ] && [ "$prune" != 1 ]; then
+  echo "--prune-budget requires --prune" >&2
+  exit 2
+fi
 
 command -v gh > /dev/null 2>&1 || {
   echo "gh is required" >&2
@@ -81,13 +95,15 @@ urlencode() {
 }
 
 caches=$(mktemp)
-trap 'rm -f "$caches"' EXIT
+deleted=$(mktemp)
+trap 'rm -f "$caches" "$deleted"' EXIT
 
 gh api --paginate "repos/$repo/actions/caches?per_page=100" \
   --jq '.actions_caches[] | [.ref, .key, .size_in_bytes, .created_at] | @tsv' > "$caches"
 
 count=$(wc -l < "$caches" | tr -d ' ')
-total_gb=$(awk -F'\t' '{ sum += $3 } END { printf "%.2f", sum / 1e9 }' "$caches")
+total_bytes=$(awk -F'\t' '{ sum += $3 } END { printf "%.0f", sum }' "$caches")
+total_gb=$(awk -v size="$total_bytes" 'BEGIN { printf "%.2f", size / 1e9 }')
 
 echo "$repo: $count cache(s), ${total_gb} GB used, budget ${limit_gb} GB"
 echo "largest scopes:"
@@ -99,6 +115,7 @@ delete_cache() {
   # GitHub changed this endpoint: DELETE requires `key`, and `ref` only
   # narrows it. Without both, the call answers HTTP 422.
   local key=$1 ref=$2
+  printf '%s\t%s\n' "$ref" "$key" >> "$deleted"
   if [ "$dry_run" = 1 ]; then
     echo "  would prune $ref $key"
     return 0
@@ -161,7 +178,35 @@ if [ "$prune" = 1 ]; then
   echo "pruned $pruned cache(s)"
 fi
 
-if awk -v used="$total_gb" -v limit="$limit_gb" 'BEGIN { exit (used + 0 > limit + 0) ? 0 : 1 }'; then
+if [ "$prune_budget" = 1 ]; then
+  # Refresh after dead-scope/family pruning so no cache is counted or deleted
+  # twice. Prefer access time over creation time: an old but hot baseline is
+  # more valuable than a recently created cache nobody restores.
+  gh api --paginate "repos/$repo/actions/caches?per_page=100" \
+    --jq '.actions_caches[] | [.ref, .key, .size_in_bytes, (.last_accessed_at // .created_at)] | @tsv' \
+    | awk -F'\t' 'FILENAME == ARGV[1] { removed[$1 "\t" $2] = 1; next } !removed[$1 "\t" $2]' "$deleted" - > "$caches"
+  remaining=$(awk -F'\t' '{ sum += $3 } END { printf "%.0f", sum }' "$caches")
+  while IFS=$(printf '\t') read -r ref key size accessed; do
+    if awk -v used="$remaining" -v limit="$limit_gb" 'BEGIN { exit (used <= limit * 1e9) ? 0 : 1 }'; then
+      break
+    fi
+    echo "  prune  $ref $key (budget LRU, last accessed $accessed)"
+    delete_cache "$key" "$ref"
+    remaining=$((remaining - size))
+  done < <(awk -F'\t' '$1 ~ /^refs\/heads\//' "$caches" | sort -t "$(printf '\t')" -k4,4 -k1,1 -k2,2)
+  if [ "$dry_run" = 1 ]; then
+    echo "projected budget-prune usage: $(awk -v size="$remaining" 'BEGIN { printf "%.2f", size / 1e9 }') GB"
+  fi
+fi
+
+if [ "$prune" = 1 ] && [ "$dry_run" = 0 ]; then
+  total_bytes=$(gh api --paginate "repos/$repo/actions/caches?per_page=100" \
+    --jq '.actions_caches[].size_in_bytes' | awk '{ sum += $1 } END { printf "%.0f", sum }')
+  total_gb=$(awk -v size="$total_bytes" 'BEGIN { printf "%.2f", size / 1e9 }')
+  echo "post-prune usage: ${total_gb} GB"
+fi
+
+if awk -v used="$total_bytes" -v limit="$limit_gb" 'BEGIN { exit (used > limit * 1e9) ? 0 : 1 }'; then
   echo "::error::cache usage ${total_gb} GB exceeds the ${limit_gb} GB budget"
   exit 1
 fi

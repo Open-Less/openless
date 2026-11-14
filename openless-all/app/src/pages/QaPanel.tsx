@@ -1,6 +1,12 @@
 // Compact QA composer. Native desktop starts at 480×80 and expands downwards
 // after submission; embedded hosts retain their own frame and close callback.
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowUpIcon,
@@ -43,6 +49,7 @@ import {
   revertSelectionVoicePreview,
 } from '../lib/ipc';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../lib/qaMessage';
+import { installMessageFollow } from '../lib/messageFollow';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
 import './qa-panel.css';
 
@@ -834,10 +841,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               {t('qa.compact.layoutError')}
             </p>
           )}
-          <div className="qa-answer-scroll">
+          <QaAnswerScroll>
             <MessageScrollerProvider
-              autoScroll
-              defaultScrollPosition="last-anchor"
+              autoScroll={false}
+              defaultScrollPosition="end"
+              scrollEdgeThreshold={120}
               scrollPreviousItemPeek={18}
             >
               <MessageScroller>
@@ -881,10 +889,12 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                     )}
                   </MessageScrollerContent>
                 </MessageScrollerViewport>
-                <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')} />
+                <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')}>
+                  {t('qa.jumpToLatest')}
+                </MessageScrollerButton>
               </MessageScroller>
             </MessageScrollerProvider>
-          </div>
+          </QaAnswerScroll>
           {editApplyAvailable && status === 'idle' && (
             <div className="qa-edit-actions">
               {editRevertAvailable && (
@@ -1158,4 +1168,14 @@ function ErrorContent({ error, t }: { error: string; t: Translate }) {
 }
 function truncate(text: string, max: number) {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+function QaAnswerScroll({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => (ref.current ? installMessageFollow(ref.current) : undefined), []);
+  return (
+    <div ref={ref} className="qa-answer-scroll">
+      {children}
+    </div>
+  );
 }

@@ -1,3 +1,4 @@
+import { measureTabularDigit } from '../lib/tabularTextMetrics';
 import {
   animate,
   motion,
@@ -114,8 +115,12 @@ function measureGlyphWidth(glyph: string, fontSize: number): number {
   if (!measureCanvas) measureCanvas = document.createElement('canvas');
   const ctx = measureCanvas.getContext('2d');
   if (!ctx) return fontSize;
-  ctx.font = `${FONT_WEIGHT} ${fontSize}px ${getSansFont()}`;
-  const raw = ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
+  const weight =
+    getComputedStyle(document.documentElement).getPropertyValue('--ol-font-weight-medium').trim() ||
+    '500';
+  ctx.font = `${weight} ${fontSize}px ${getSansFont()}`;
+  const raw =
+    measureTabularDigit(glyph, ctx.font) ?? ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
   return Math.max(1, raw) + INSERT_TEXT_MOTION.glyphGapPx;
 }
 
@@ -828,7 +833,13 @@ function TranscriptGlyph({
               ...(enhanced ? { scale: ink.bornScale } : {}),
             }
       }
-      animate={{ opacity: 1, y: 0, filter: 'blur(0px)', ...(enhanced ? { scale: 1 } : {}) }}
+      animate={{
+        opacity: 1,
+        y: 0,
+        filter: 'blur(0px)',
+        ...(enhanced ? { scale: 1 } : {}),
+        transitionEnd: { filter: 'none' },
+      }}
       transition={
         reduceMotion
           ? { duration: 0 }

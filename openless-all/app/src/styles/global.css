@@ -1,5 +1,6 @@
 @import '../components/Tooltip.css';
 @import '../components/ui/Select.css';
+@import './continuous-corners.css';
 
 html,
 body,
@@ -382,9 +383,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 32px;
   height: 30px;
   padding: 0;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
-  background: var(--ol-surface);
+  border: 0;
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-surface-raised);
   color: var(--ol-ink-2);
   cursor: pointer;
   transition:
@@ -409,7 +410,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   gap: 4px;
   padding: 5px 8px 5px 4px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   background: transparent;
   color: var(--ol-blue);
   font: inherit;
@@ -420,9 +421,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-blue-soft);
 }
 .ol-settings-category-list {
-  border: 1px solid var(--ol-line);
-  border-radius: 14px;
-  background: var(--ol-surface);
+  border: 0;
+  border-radius: var(--ol-card-radius);
+  background: var(--ol-surface-raised);
   overflow: hidden;
 }
 .ol-settings-category-entry {
@@ -440,7 +441,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   transition: background 160ms ease;
 }
 .ol-settings-category-list > .ol-settings-category-entry + .ol-settings-category-entry {
-  border-top: 1px solid var(--ol-line-soft);
+  border-top: 0;
 }
 .ol-settings-category-entry:hover {
   background: var(--ol-surface-2);
@@ -451,9 +452,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-shrink: 0;
   width: 34px;
   height: 34px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
-  color: var(--ol-blue);
+  color: var(--ol-ink-2);
 }
 .ol-settings-category-copy {
   display: grid;
@@ -465,7 +466,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   font-size: 14px;
   font-weight: var(--ol-font-weight-semibold);
 }
-.ol-settings-category-copy span {
+.ol-settings-category-copy > span {
   color: var(--ol-ink-3);
   font-size: 12px;
   line-height: 1.5;
@@ -476,20 +477,12 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
 }
 .ol-advanced-settings-list {
-  border: 1px solid var(--ol-line);
-  border-radius: 14px;
-  background: var(--ol-surface);
+  border: 0;
+  border-radius: var(--ol-card-radius);
+  background: var(--ol-surface-raised);
   overflow: hidden;
 }
-.ol-advanced-settings-group-title {
-  padding: 13px 18px 7px;
-  color: var(--ol-ink-4);
-  font-size: 11px;
-  font-weight: var(--ol-font-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: var(--ol-surface-2);
-}
+
 .ol-advanced-settings-entry {
   display: flex;
   align-items: center;
@@ -510,7 +503,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   transform: scale(0.985);
 }
 .ol-advanced-settings-list > div + div {
-  border-top: 1px solid var(--ol-line-soft);
+  border-top: 0;
 }
 .ol-advanced-settings-entry:hover {
   background: var(--ol-surface-2);
@@ -518,7 +511,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-advanced-settings-entry:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: -4px;
-  border-radius: 9px;
+  border-radius: var(--ol-r-md);
 }
 .ol-advanced-entry-icon {
   display: grid;
@@ -527,7 +520,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 36px;
   height: 36px;
   border: 1px solid var(--ol-line);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
   color: var(--ol-ink-2);
 }
@@ -629,7 +622,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-chip {
   min-width: 0;
   padding: 6px 10px;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   text-align: center;
   border: 0.5px solid var(--ol-line);
   background: var(--ol-pill-bg);
@@ -681,10 +674,11 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
+  padding: 3.5px;
+  border-radius: var(--ol-radius);
   background: var(--ol-surface-2);
-  border: 0.5px solid var(--ol-line);
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--ol-line);
 }
 .ol-seg-item {
   display: inline-flex;
@@ -692,7 +686,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   gap: 6px;
   padding: 6px 14px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   background: transparent;
   color: var(--ol-ink-3);
   font-family: inherit;
@@ -723,7 +717,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 36px;
   height: 36px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   border: 0.5px solid var(--ol-line);
   background: var(--ol-surface-2);
   transform-origin: right center;
@@ -806,7 +800,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   height: 32px;
   padding: 0 12px 0 10px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   background: var(--ol-surface-2);
   color: var(--ol-ink-2);
   font: inherit;
@@ -860,7 +854,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   height: 18px;
   margin: -9px 0 0 -9px;
   border: 8px solid #cc8ef5;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   box-sizing: border-box;
   pointer-events: none;
   animation: ol-like-bloom 0.56s cubic-bezier(0.25, 0.8, 0.35, 1) both;
@@ -914,11 +908,11 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-range:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: 3px;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
 }
 .ol-range::-webkit-slider-runnable-track {
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   background: var(--ol-line-strong);
 }
 .ol-range::-webkit-slider-thumb {
@@ -926,7 +920,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 18px;
   height: 18px;
   margin-top: -7px;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   background: var(--ol-surface);
   border: 0.5px solid var(--ol-line-strong);
   box-shadow: 0 1px 3px rgba(15, 17, 22, 0.16);
@@ -938,13 +932,13 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-range::-moz-range-track {
   height: 4px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   background: var(--ol-line-strong);
 }
 .ol-range::-moz-range-thumb {
   width: 18px;
   height: 18px;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   background: var(--ol-surface);
   border: 0.5px solid var(--ol-line-strong);
   box-shadow: 0 1px 3px rgba(15, 17, 22, 0.16);
@@ -972,7 +966,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   gap: 8px;
   min-width: 0;
   padding: 9px 12px;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   border: 0.5px solid var(--ol-line);
   background: var(--ol-surface);
   transition:
@@ -1022,7 +1016,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   font-size: 10.5px;
   font-weight: var(--ol-font-weight-semibold);
   display: inline-flex;
@@ -1048,7 +1042,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   background: transparent;
   color: var(--ol-ink-3);
   display: inline-flex;
@@ -1089,6 +1083,19 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 /* Segmented control (components/ui/Segmented), shared by every segmented choice in
    Settings: a white track with the controls' hairline, a neutral chip that slides under
    the selected option (useSelectionMotion), labels in the selection language. */
+.ol-overview-segment {
+  --ol-corner-radius: 10px;
+}
+.ol-overview-segment > button {
+  --ol-corner-radius: 8px;
+}
+@supports not (corner-shape: superellipse(1.5)) {
+  /* The fallback curve spans 1.5 units; keep its footprint equal to the radius. */
+  .ol-overview-segment,
+  .ol-overview-segment > button {
+    --ol-cr: min(calc(var(--ol-corner-radius) / 1.5), 33.3333%);
+  }
+}
 .ol-segmented {
   position: relative;
   isolation: isolate;
@@ -1096,10 +1103,23 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-wrap: wrap;
   gap: 2px;
   max-width: 100%;
-  padding: 2px;
-  border: 0.5px solid var(--ol-line-strong);
-  border-radius: 8px;
+  padding: 3px;
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
+}
+.ol-service-pipeline-track {
+  padding: 3px;
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
+}
+.ol-segmented > :is(.ol-segmented-indicator, .ol-segmented-option) {
+  --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 3px);
+  border-radius: var(--ol-corner-radius);
+}
+.ol-action-button {
+  --ol-corner-radius: 8px;
 }
 .ol-segmented-indicator,
 .ol-service-view-indicator {
@@ -1113,12 +1133,12 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-segmented-indicator {
   z-index: 0;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   background: var(--ol-choice-active-bg);
 }
 .ol-service-view-indicator {
   z-index: 1;
-  border-radius: 2px;
+  border-radius: var(--ol-radius);
   background: var(--ol-choice-active-ink);
 }
 .ol-segmented-option {
@@ -1126,7 +1146,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   z-index: 1;
   padding: 5px 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   background: transparent;
   color: var(--ol-choice-idle-ink);
   font: inherit;
@@ -1223,7 +1243,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-service-status-dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   flex-shrink: 0;
   transition: background 0.16s var(--ol-motion-quick);
 }
@@ -1258,7 +1278,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   color: var(--ol-warn);
   background: var(--ol-warn-soft);
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--ol-radius);
   font-size: 10px;
   font-weight: var(--ol-font-weight-medium);
   max-width: 100%;
@@ -1450,7 +1470,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   gap: 7px;
   padding: 7px 10px;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
   font: 500 12.5px var(--ol-font-sans);
@@ -1478,8 +1498,8 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 }
 .ol-channel-dialog-embedded .ol-channel-form-sheet {
   padding: 18px;
-  border: 1px solid var(--ol-line);
-  border-radius: 14px;
+  border: 0;
+  border-radius: var(--ol-card-radius);
   background: var(--ol-surface);
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-footer {
@@ -1511,7 +1531,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   width: 40px;
   height: 40px;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 11px;
+  border-radius: var(--ol-radius);
   background: var(--ol-style-card-icon-bg);
   color: var(--ol-ink-2);
   cursor: pointer;
@@ -1545,7 +1565,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   width: 16px;
   height: 16px;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
 }
@@ -1559,7 +1579,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   height: 16px;
   padding: 0;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   background: var(--ol-surface);
   color: var(--ol-ink-3);
   cursor: pointer;
@@ -1570,7 +1590,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   justify-content: center;
   padding: 5px 8px;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: transparent;
   color: var(--ol-ink-3);
   cursor: pointer;
@@ -1624,7 +1644,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   gap: 12px;
   margin: 12px 0 20px;
   padding: 14px 16px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
   font-size: 12px;
   line-height: 1.7;
@@ -1648,7 +1668,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-volcengine-auth-guide > a:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: 4px;
-  border-radius: 2px;
+  border-radius: var(--ol-radius);
 }
 .ol-volcengine-auth-guide > a > svg {
   flex-shrink: 0;
@@ -1718,7 +1738,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   width: 42px;
   height: 42px;
   border: 1px solid var(--ol-blue-ring);
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-blue-soft);
   color: var(--ol-blue);
 }
@@ -1742,7 +1762,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-channel-dialog-title > span {
   padding: 2px 7px;
   border: 1px solid var(--ol-line);
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
   color: var(--ol-ink-3);
   font-size: 10.5px;
   line-height: 1.6;
@@ -1761,7 +1781,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   height: 32px;
   padding: 0;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
   color: var(--ol-ink-3);
   cursor: pointer;
@@ -1803,7 +1823,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   margin: 18px 0 0;
   padding: 14px;
   border: 1px solid var(--ol-line);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
   font-size: 12px;
   line-height: 1.7;
@@ -1822,7 +1842,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-channel-dialog .ol-provider-result {
   padding: 9px 11px;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-bg-base);
 }
 .ol-channel-dialog .ol-provider-result[data-status='success'] {
@@ -1863,7 +1883,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   min-height: 34px;
   padding: 6px 12px;
   border: 1px solid rgba(220, 38, 38, 0.3);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: rgba(220, 38, 38, 0.05);
   color: var(--ol-err);
   font: 500 12.5px / 1.5 var(--ol-font-sans);
@@ -1971,7 +1991,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   border-color: var(--ol-ink-3);
 }
 .ol-word-card {
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   animation: none;
 }
 .ol-vocab-delete-selected {
@@ -1980,7 +2000,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   justify-content: center;
   gap: 7px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   border: 1px solid var(--ol-line-strong);
   background: var(--ol-surface);
   color: var(--ol-err);
@@ -2074,7 +2094,7 @@ html:lang(de) {
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   color: var(--ol-ink-2);
 }
@@ -2091,7 +2111,7 @@ html:lang(de) {
 .ol-cloud-sync-backup {
   margin: 0;
   padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   font-size: 13px;
 }
@@ -2259,4 +2279,49 @@ html:lang(de) {
 .ol-services-page {
   flex: 1;
   min-height: 0;
+}
+
+/* Surface luminance carries hierarchy; focus outlines remain explicit. */
+body {
+  font-weight: var(--ol-font-weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+.ol-settings-category-entry + .ol-settings-category-entry,
+.ol-advanced-settings-list > .ol-settings-category-entry + .ol-settings-category-entry {
+  margin-top: 2px;
+}
+.ol-settings-category-list,
+.ol-advanced-settings-list {
+  padding: 4px;
+}
+.ol-settings-category-entry,
+.ol-advanced-settings-entry {
+  border-radius: var(--ol-r-md);
+}
+/* Continuous corners degrade to the same radius scale on older WebKit. */
+
+/* Entry and exit paint the background; only the settled opaque workspace suspends it. */
+.ol-shell-depth[data-ol-settings-occluded='true'] {
+  content-visibility: hidden;
+}
+
+.ol-beta-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 8px;
+  padding: 2px 6px;
+  background: var(--ol-blue-soft);
+  color: var(--ol-blue);
+  border-radius: var(--ol-radius);
+  font-size: 10px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.4;
+  vertical-align: middle;
+}
+
+input:not([type='checkbox']):not([type='radio']),
+textarea,
+select {
+  border-color: transparent !important;
+  background-color: var(--ol-control-muted);
 }

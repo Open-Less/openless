@@ -2,12 +2,63 @@ import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+
+test('style and dictionary action buttons retain compact corners', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '风格', exact: true }).click();
+  await page.getByRole('button', { name: '润色模式', exact: true }).click();
+  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '8px');
+  await expect(page.getByRole('button', { name: '激活', exact: true }).first()).toHaveCSS(
+    'border-radius',
+    '8px',
+  );
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  await expect(page.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
+});
+
 async function openShortcuts(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
   await settleNavigation(page);
 }
+
+test('shortcut search remains visible without focus', async ({ page }) => {
+  await openShortcuts(page);
+  const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
+  await expect(search).toHaveCSS('clip-path', 'none');
+  await expect(search).toHaveCSS('appearance', 'none');
+  await expect(search).toHaveCSS('border-radius', '16px');
+  const colors = await search.evaluate((element) => ({
+    search: getComputedStyle(element).backgroundColor,
+    page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
+      .backgroundColor,
+  }));
+  expect(colors.search).not.toBe('rgba(0, 0, 0, 0)');
+  expect(colors.search).not.toBe(colors.page);
+  await search.focus();
+  await expect(search).toHaveCSS('clip-path', 'none');
+  await search.fill('速记');
+  await expect(page.locator('.ol-shortcut-row')).toHaveCount(1);
+});
+
+test('awareness settings have a dedicated advanced page', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: /^(高级功能|实验与扩展)$/ }).click();
+  await settleNavigation(dialog);
+  await dialog.locator('[data-ol-advanced-entry="cursorContext"]').click();
+  await expect(dialog.locator('[data-ol-advanced-page="cursorContext"]')).toBeVisible();
+  await expect(dialog.getByText('手改学词', { exact: true })).toBeVisible();
+  const expression = dialog.getByRole('switch', { name: '学习表达习惯', exact: true });
+  await expect(expression).toBeVisible();
+  await expect(expression).toHaveAttribute('aria-checked', 'false');
+  await expression.click();
+  await expect(expression).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '清除表达习惯', exact: true }).click();
+  await expect(dialog.getByText('已形成 0 项稳定偏好')).toBeVisible();
+});
 
 test('shortcut search and categories live in the flat settings pane; keyboard close preserves exit', async ({
   page,
@@ -179,7 +230,7 @@ test('every main destination and settings category stays readable on desktop and
     'AI 与模型',
     '外观与语言',
     '权限与数据',
-    '实验与扩展',
+    '高级功能',
     '关于与更新',
   ]) {
     await page
@@ -319,4 +370,35 @@ test('swipe departure is directional, removable and undoable', async ({ page }) 
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(card).toBeVisible();
+});
+
+test('interface corners use continuous curves at the shared 16 px radius', async ({ page }) => {
+  await page.goto(fixture);
+  const support = await page.evaluate(() => ({
+    native: CSS.supports('corner-shape', 'superellipse(1.5)'),
+    fallback: CSS.supports('clip-path', 'shape(from 0 0, line to 100% 0, close)'),
+    radius: getComputedStyle(document.documentElement).getPropertyValue('--ol-radius').trim(),
+  }));
+  expect(support.radius).toBe('16px');
+  const check = async (locator: import('@playwright/test').Locator) => {
+    if (support.native) {
+      await expect(locator).toHaveCSS('border-radius', '16px');
+      expect(
+        await locator.evaluate((node) => getComputedStyle(node).getPropertyValue('corner-shape')),
+      ).toContain('superellipse');
+    } else if (support.fallback) {
+      await expect(locator).toHaveCSS('border-radius', '0px');
+      expect(await locator.evaluate((node) => getComputedStyle(node).clipPath)).toMatch(/^shape\(/);
+    } else {
+      await expect(locator).toHaveCSS('border-radius', '16px');
+    }
+  };
+  const toggle = page.getByRole('switch', { name: 'Switch 0', exact: true });
+  await expect(toggle).toHaveCSS('border-radius', '999px');
+  await expect(toggle).toHaveCSS('clip-path', 'none');
+  const select = page.getByRole('combobox', { name: 'Long menu', exact: true });
+  await expect(select).toHaveCSS('border-radius', '16px');
+  await expect(select).toHaveCSS('clip-path', 'none');
+  await page.getByRole('button', { name: 'Open modal fixture', exact: true }).click();
+  await check(page.locator('.ol-dialog-card'));
 });

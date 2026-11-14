@@ -1521,7 +1521,7 @@ unsafe fn ns_string_to_rust(ns_string: *mut objc2::runtime::AnyObject) -> Option
 }
 
 #[cfg(target_os = "macos")]
-fn current_front_app_pid() -> Option<i32> {
+pub(crate) fn current_front_app_pid() -> Option<i32> {
     current_front_app_snapshot().2
 }
 

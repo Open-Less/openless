@@ -304,7 +304,7 @@ export function RecordingInputSection({
                 marginTop: 4,
                 marginBottom: 8,
                 padding: '12px 14px',
-                borderRadius: 10,
+                borderRadius: 'var(--ol-r-md)',
                 background: 'rgba(37,99,235,0.08)',
                 border: '0.5px solid rgba(37,99,235,0.18)',
               }}
@@ -602,7 +602,7 @@ export function RecordingInputSection({
                   style={{
                     margin: '4px 0 10px',
                     padding: '10px 12px',
-                    borderRadius: 10,
+                    borderRadius: 'var(--ol-r-md)',
                     background: 'var(--ol-surface-2)',
                     border: '0.5px solid var(--ol-line)',
                   }}
@@ -620,7 +620,7 @@ export function RecordingInputSection({
                         gap: 10,
                         marginBottom: 10,
                         padding: '9px 10px',
-                        borderRadius: 8,
+                        borderRadius: 'var(--ol-control-radius)',
                         background: 'rgba(220, 38, 38, 0.08)',
                         border: '0.5px solid var(--ol-err)',
                       }}
@@ -732,7 +732,7 @@ export function RecordingInputSection({
                   fontWeight: 'var(--ol-font-weight-medium)',
                   fontFamily: 'inherit',
                   border: '0.5px solid var(--ol-line-strong)',
-                  borderRadius: 8,
+                  borderRadius: 'var(--ol-control-radius)',
                   background: 'var(--ol-surface-2)',
                   color: 'var(--ol-ink-2)',
                   cursor: 'default',
@@ -916,17 +916,6 @@ export function RecordingInputSection({
               onToggle={(next) => void savePrefs({ ...prefs, streamingInsertSaveClipboard: next })}
             />
           </SettingRow>
-          {capability.adapter === 'windowsLowLevel' && prefs.windowsInsertionMode === 'tsf' && (
-            <SettingRow
-              label={t('settings.advanced.windowsCompositionInputLabel')}
-              desc={t('settings.advanced.windowsCompositionInputDesc')}
-            >
-              <Toggle
-                on={!!prefs.windowsCompositionInput}
-                onToggle={(next) => void savePrefs({ ...prefs, windowsCompositionInput: next })}
-              />
-            </SettingRow>
-          )}
         </Card>
       )}
       {surface === 'text' && showDesktopStartup && (

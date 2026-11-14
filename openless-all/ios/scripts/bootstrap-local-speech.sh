@@ -12,7 +12,8 @@ fetch() {
   # truncate a partially downloaded file back to its initial offset.
   local attempt
   for attempt in 1 2 3 4 5 6; do
-    if curl --http1.1 -fL --continue-at - --connect-timeout 20 "$url" -o "$output.download"; then break; fi
+    if curl --http1.1 -fL --continue-at - --connect-timeout 20 \
+      --max-time 180 --speed-limit 1024 --speed-time 30 "$url" -o "$output.download"; then break; fi
     [ "$attempt" != 6 ] || return 1
     sleep 2
   done

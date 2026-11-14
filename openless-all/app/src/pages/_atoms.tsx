@@ -118,13 +118,13 @@ export function Card({ children, style, padding = 18, glassy = false, className 
       className={['ol-card', className].filter(Boolean).join(' ')}
       data-ol-toggle-group=""
       style={{
-        background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface)',
+        background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface-raised)',
         backdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         WebkitBackdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
-        border: '0.5px solid var(--ol-line)',
+        border: 0,
         borderRadius: 'var(--ol-r-lg)',
         padding,
-        boxShadow: 'var(--ol-shadow-sm)',
+        boxShadow: 'none',
         ...style,
       }}
     >
@@ -148,7 +148,7 @@ export function Pill({ children, tone = 'default', size = 'md', style }: PillPro
     default: { bg: 'var(--ol-pill-bg)', color: 'var(--ol-ink-2)', bd: 'transparent' },
     blue: { bg: 'var(--ol-pill-blue-bg)', color: 'var(--ol-blue)', bd: 'transparent' },
     ok: { bg: 'var(--ol-pill-ok-bg)', color: 'var(--ol-ok)', bd: 'transparent' },
-    outline: { bg: 'transparent', color: 'var(--ol-ink-3)', bd: 'var(--ol-line-strong)' },
+    outline: { bg: 'var(--ol-surface-2)', color: 'var(--ol-ink-3)', bd: 'transparent' },
     dark: {
       bg: 'var(--ol-pill-selected-bg)',
       color: 'var(--ol-pill-selected-ink)',
@@ -166,10 +166,10 @@ export function Pill({ children, tone = 'default', size = 'md', style }: PillPro
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        borderRadius: 999,
+        borderRadius: 'var(--ol-radius)',
         background: t.bg,
         color: t.color,
-        border: t.bd === 'transparent' ? '0.5px solid transparent' : `0.5px solid ${t.bd}`,
+        border: 0,
         fontWeight: 'var(--ol-font-weight-medium)',
         whiteSpace: 'nowrap',
         flexShrink: 0,
@@ -191,6 +191,7 @@ interface BtnProps {
   size?: BtnSize;
   icon?: string;
   ariaLabel?: string;
+  className?: string;
   ariaExpanded?: boolean;
   title?: string;
   style?: CSSProperties;
@@ -204,6 +205,7 @@ export function Btn({
   size = 'md',
   icon,
   ariaLabel,
+  className,
   ariaExpanded,
   title,
   style,
@@ -223,7 +225,7 @@ export function Btn({
       bd: 'transparent',
       sh: 'var(--ol-shadow-sm)',
     },
-    ghost: { bg: 'transparent', color: 'var(--ol-ink-2)', bd: 'var(--ol-line-strong)', sh: 'none' },
+    ghost: { bg: 'var(--ol-surface-2)', color: 'var(--ol-ink-2)', bd: 'transparent', sh: 'none' },
     soft: {
       bg: 'var(--ol-control-muted)',
       color: 'var(--ol-ink-2)',
@@ -240,7 +242,7 @@ export function Btn({
   const muted = disabled && (variant === 'primary' || variant === 'blue');
   return (
     <button
-      className="ol-pressable"
+      className={['ol-pressable', 'ol-action-button', className].filter(Boolean).join(' ')}
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       aria-label={ariaLabel}
@@ -252,8 +254,8 @@ export function Btn({
         gap: 6,
         background: muted ? 'var(--ol-control-muted)' : v.bg,
         color: muted ? 'var(--ol-ink-3)' : v.color,
-        border: v.bd === 'transparent' ? '0.5px solid transparent' : `0.5px solid ${v.bd}`,
-        borderRadius: 8,
+        border: 0,
+        borderRadius: 'var(--ol-control-radius)',
         boxShadow: muted ? 'none' : v.sh,
         fontFamily: 'inherit',
         fontWeight: 'var(--ol-font-weight-medium)',

@@ -85,7 +85,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 background: 'transparent',
                 border: '0.5px solid var(--ol-line)',
                 color: 'var(--ol-ink-3)',
-                borderRadius: 6,
+                borderRadius: 'var(--ol-r-sm)',
                 padding: '6px 10px',
                 fontFamily: 'inherit',
                 fontSize: 12,
@@ -157,7 +157,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                   aria-haspopup="dialog"
                   style={{
                     border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 7,
+                    borderRadius: 'var(--ol-control-radius)',
                     background: 'var(--ol-control-solid)',
                     color: 'var(--ol-ink-2)',
                     padding: '7px 12px',

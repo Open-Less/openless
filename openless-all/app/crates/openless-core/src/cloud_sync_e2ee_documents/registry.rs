@@ -789,6 +789,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "macos_composition_input",
+        key: "macosCompositionInput",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "windows_composition_input",
         key: "windowsCompositionInput",
         class: PreferenceClass::Portable,
@@ -805,6 +812,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "vocabulary_learning_enabled",
         key: "vocabularyLearningEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
+        rust_name: "expression_learning_enabled",
+        key: "expressionLearningEnabled",
         class: PreferenceClass::Excluded,
         shape: PreferenceShape::Boolean,
         reason: "local_consent_or_secret",

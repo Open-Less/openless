@@ -7,8 +7,8 @@
   min-width: 160px;
   max-width: 100%;
   padding: 0 10px;
-  border: 0.5px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border: 0.5px solid transparent;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-select-trigger-bg);
   color: var(--ol-ink);
   font: 12.5px var(--ol-font-sans);
@@ -18,6 +18,9 @@
 .ol-select-trigger:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: 2px;
+}
+html[data-ol-input='pointer'] .ol-select-trigger:focus-visible {
+  outline: none;
 }
 .ol-select-trigger[data-disabled] {
   opacity: 0.5;
@@ -42,11 +45,13 @@
   max-width: calc(var(--available-width, 100vw) / var(--ol-interface-scale, 1));
   max-height: calc(var(--available-height, 100vh) / var(--ol-interface-scale, 1));
   padding: 4px;
-  border: 0.5px solid var(--ol-select-popover-border);
-  border-radius: 10px;
+  border: 0;
+  border-radius: var(--ol-r-md);
   background: var(--ol-select-popover-bg);
   color: var(--ol-ink);
-  box-shadow: var(--ol-select-popover-shadow);
+  box-shadow:
+    inset 0 0 0 0.5px var(--ol-select-popover-border),
+    var(--ol-select-popover-shadow);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   font: 12.5px var(--ol-font-sans);
@@ -78,7 +83,7 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   font-weight: var(--ol-font-weight-medium);
   outline: none;
   cursor: default;
@@ -126,7 +131,7 @@
   padding: 0 9px;
   min-height: 34px;
   border: 0.5px solid var(--ol-line-strong);
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-select-trigger-bg);
 }
 .ol-select-search input {

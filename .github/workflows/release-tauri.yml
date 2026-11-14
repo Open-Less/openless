@@ -1,4 +1,4 @@
-name: Release Tauri (cross-platform)
+name: Release (all platforms)
 # meta: ensure Actions indexes this workflow on forks (no behavior change).
 # Triggers:
 #   - push a v*.*.*-tauri tag (kept distinct from the legacy Swift vX.Y.Z tags, no conflict)
@@ -6,7 +6,7 @@ name: Release Tauri (cross-platform)
 #
 # Outputs:
 #   macOS arm64/x64 .dmg + Windows x64 .msi/.exe, uploaded automatically as GitHub Release assets.
-#   Linux egui is built separately by release-linux-egui.yml; this workflow does not build Linux/Tauri.
+#   Linux egui CI/release is paused; local build/package scripts remain available.
 #
 # macOS distribution:
 #   - With APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
@@ -33,7 +33,7 @@ on:
       platform:
         description: Desktop platforms to build (branch builds do not publish)
         type: choice
-        options: [all, macos, windows]
+        options: [all, macos, macos-aarch64, macos-x86_64, windows]
         default: all
       windows_hang_diagnostics:
         description: Opt-in issue 1266 Windows observation build (branch dispatch only)
@@ -46,15 +46,40 @@ on:
         required: false
         default: ''
 
-# Manual branch builds share a ref group and cancel the older run so duplicate
-# DMG builds do not stack. Tag publishes and draft repairs use a unique group
+# Equivalent manual branch builds cancel the older run so duplicate DMG builds
+# do not stack. Different platform/diagnostic requests stay independent.
+# Tag publishes and draft repairs use a unique group
 # and are not cancelled: cancelling them would abort a release.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag == '' && github.ref || format('{0}-{1}', github.ref, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag == '' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}', github.ref, inputs.platform, inputs.windows_hang_diagnostics) || format('{0}-{1}', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' }}
 
 jobs:
+  prepare-release:
+    name: Prepare shared draft
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare the shared release without modifying published versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node openless-all/app/scripts/prepare-release.mjs "$RELEASE_TAG" "$GITHUB_REPOSITORY"
+
   build:
+    needs: prepare-release
+    # Branch/manual desktop builds still run when the tag-only preflight is skipped.
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     # Read-only. Tag and repair publishes run in `publish`, which is the only
     # job that needs contents: write. The tag/repair guard stays on that job.
     permissions:
@@ -63,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos-aarch64' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos-x86_64' && '[{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     # A release build takes ~33 minutes from a cold cache; anything past this is
     # a hang that would otherwise hold the runner and the release for hours.
@@ -117,14 +142,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: 'openless-all/app/package-lock.json'
+          # Repairs check out historical tags that may predate the local action.
+          # Preserve their existing setup-node cache path instead of requiring
+          # newer workflow tooling to exist in the immutable tagged source.
+          cache: ${{ inputs.release_tag != '' && 'npm' || '' }}
+          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        if: inputs.release_tag == ''
+        uses: ./.github/actions/cache-npm
 
       - name: Verify repair source CI and version
         if: inputs.release_tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOOLING_SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
@@ -134,8 +166,10 @@ jobs:
           [ "${version%%+*}" = "$tag_version" ] || { echo "::error::Tag/application version mismatch"; exit 1; }
           ci_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$source_sha&status=success&per_page=100" --jq "[.workflow_runs[] | select(.name == \"CI\" and .head_sha == \"$source_sha\" and .conclusion == \"success\")][0].id")
           [[ "$ci_id" =~ ^[0-9]+$ ]] || { echo "::error::No green CI for the exact tagged commit"; exit 1; }
-          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" --jq '(.total_count == 7 and all(.jobs[]; .conclusion == "success"))')
-          [ "$green" = true ] || { echo "::error::All seven tagged-commit CI gates must pass"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/release-ci-jobs.json"
+          # The repaired tag may predate this verifier; use the immutable workflow source.
+          gh api "repos/$GITHUB_REPOSITORY/contents/openless-all/app/scripts/verify-release-ci.mjs?ref=$TOOLING_SOURCE_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/verify-release-ci.mjs"
+          node "$RUNNER_TEMP/verify-release-ci.mjs" "$RUNNER_TEMP/release-ci-jobs.json"
           echo "Repair source verified: $source_sha ($version)"
 
       - uses: dtolnay/rust-toolchain@stable
@@ -158,8 +192,9 @@ jobs:
           shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
           cache-on-failure: true
-          # Branch dispatches restore this shared tree and must not replace it.
-          save-if: ${{ github.ref == 'refs/heads/beta' || startsWith(github.ref, 'refs/tags/') }}
+          # Only beta can warm future tag builds. Per-tag copies cannot be
+          # restored by the next tag and evict reusable baseline dependencies.
+          save-if: ${{ github.ref == 'refs/heads/beta' && inputs.release_tag == '' }}
 
       - name: Cache macOS release dependencies
         if: startsWith(matrix.platform, 'macos')
@@ -171,10 +206,11 @@ jobs:
           prefix-key: v0-rust-${{ matrix.rust-target }}
           shared-key: tauri-macos
           workspaces: 'openless-all/app/src-tauri -> target'
-          # Branch dispatches restore this shared tree and must not replace it.
-          save-if: ${{ github.ref == 'refs/heads/beta' || startsWith(github.ref, 'refs/tags/') }}
+          # Weekly beta builds maintain this tree; tags only restore it.
+          save-if: ${{ github.ref == 'refs/heads/beta' && inputs.release_tag == '' }}
 
       - name: Prepare Windows Sherpa static libraries
+        timeout-minutes: 15
         if: matrix.platform == 'windows-latest'
         working-directory: 'openless-all/app'
         shell: pwsh
@@ -288,6 +324,7 @@ jobs:
         if: always() && startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: macos-cargo-timings-${{ matrix.updater-arch }}
           path: openless-all/app/src-tauri/target/cargo-timings/*.html
           if-no-files-found: ignore
@@ -366,7 +403,8 @@ jobs:
           # and any bundler failure makes *all* bundles skip their .sig. MSI always hits ICE80,
           # so a single `tauri build` can never produce the NSIS .exe.sig.
           # Pass 1: NSIS alone — must succeed, producing *_x64-setup.exe(.sig) for the updater.
-          # Pass 2: MSI alone — allowed to fail; the Repair step re-links with light.exe.
+          # Pass 2: bundle MSI from the compiled executable; no second tsc/vite/Cargo pass.
+          # MSI bundling may fail; the Repair step re-links with light.exe.
           # Beta skips MSI: Windows Installer / WiX cannot represent non-numeric prerelease
           # identifiers like `1.2.3-Beta.1`; stable still produces MSI as usual.
           # MSI ProductVersion is numeric and 16-bit bounded. Keep the full app
@@ -385,27 +423,29 @@ jobs:
           msi_config_exit=$?
           if [ "$msi_config_exit" -ne 0 ]; then exit "$msi_config_exit"; fi
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked --timings
             nsis_exit=$?
+            if [ "$nsis_exit" -ne 0 ]; then exit "$nsis_exit"; fi
             if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ] || [ "$msi_supported" -eq 0 ]; then
               echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
               echo "[info] Skipping MSI bundle for unsupported prerelease/channel."
               msi_exit=0
             else
               echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
-              npm run tauri -- build "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
+              npm run tauri -- bundle "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
               msi_exit=$?
             fi
           else
-            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis
+            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis -- --locked --timings
             nsis_exit=$?
+            if [ "$nsis_exit" -ne 0 ]; then exit "$nsis_exit"; fi
             if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ] || [ "$msi_supported" -eq 0 ]; then
               echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
               echo "[info] Skipping MSI bundle for unsupported prerelease/channel."
               msi_exit=0
             else
               echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
-              npm run tauri -- build "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
+              npm run tauri -- bundle "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
               msi_exit=$?
             fi
           fi
@@ -417,6 +457,16 @@ jobs:
           fi
           # MSI failure does not block — the next Repair step re-links with light.exe (with -sice:ICE80).
           exit 0
+
+      - name: Upload Windows Cargo timings
+        if: always() && matrix.platform == 'windows-latest'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cargo-timings-x64
+          retention-days: 7
+          path: openless-all/app/src-tauri/target/cargo-timings/*.html
+          if-no-files-found: ignore
 
       # ── If tauri fails at the wix link stage (candle produced wixobj, but light cannot find
       #    the IME DLL because of cwd-relative wxs Source resolution), manually run light from
@@ -611,30 +661,11 @@ jobs:
             fi
           done
 
-      - name: Stage direct download alias
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
-        working-directory: openless-all/app
-        env:
-          OPENLESS_DOWNLOAD_TARGET: ${{ matrix.updater-target }}
-          OPENLESS_DOWNLOAD_ARCH: ${{ matrix.updater-arch }}
-          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ matrix.updater-target == 'darwin' && 'src-tauri/target/release/bundle/dmg' || 'src-tauri/target/release/bundle/nsis' }}
-          OPENLESS_DOWNLOAD_OUTPUT_DIR: src-tauri/target/release/downloads
-        run: node scripts/stage-release-download-aliases.mjs
-
-      - name: Upload direct download aliases
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
-        timeout-minutes: 10
-        uses: actions/upload-artifact@v4
-        with:
-          name: openless-download-alias-${{ matrix.updater-target }}-${{ matrix.updater-arch }}
-          compression-level: 0
-          path: openless-all/app/src-tauri/target/release/downloads/*
-          if-no-files-found: error
-
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-macos-${{ matrix.updater-arch }}
           compression-level: 0
           path: |
@@ -645,6 +676,7 @@ jobs:
         if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-macos-${{ matrix.updater-arch }}-updater
           compression-level: 0
           path: |
@@ -692,6 +724,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: ${{ env.OPENLESS_HANG_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1266-diagnostics' || 'openless-windows-x64' }}
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
@@ -706,6 +739,7 @@ jobs:
         if: matrix.platform == 'windows-latest' && env.TAURI_SIGNING_PRIVATE_KEY != ''
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-windows-x64-updater
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
@@ -720,6 +754,10 @@ jobs:
   # are not copied into the release.
   publish:
     name: Publish Tauri release
+    # Same lock as Android: merge/upload one shared signature index without races.
+    concurrency:
+      group: openless-release-assets-${{ inputs.release_tag || github.ref_name }}
+      cancel-in-progress: false
     needs: build
     if: >-
       !cancelled() &&
@@ -771,11 +809,19 @@ jobs:
           EOF
           echo "OPENLESS_RELEASE_BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
-      - name: Download built release artifacts
+      # Called workflows share this run's artifacts. Never download the APK/HAP
+      # trees (or store-signed Harmony packages) into the desktop publisher.
+      - name: Download built macOS release artifacts
         timeout-minutes: 20
         uses: actions/download-artifact@v4
         with:
-          pattern: openless-*
+          pattern: openless-macos-*
+          path: ${{ runner.temp }}/openless-release-artifacts
+      - name: Download built Windows release artifacts
+        timeout-minutes: 20
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openless-windows-*
           path: ${{ runner.temp }}/openless-release-artifacts
 
       - name: Stage release files
@@ -791,7 +837,7 @@ jobs:
           while IFS= read -r -d '' file; do
             base=$(basename "$file")
             case "$base" in
-              *.json|*.pdb|openless.exe)
+              OpenLess_macos_*|OpenLess_windows_*|*.json|*.pdb|openless.exe)
                 ;;
               *.dmg|*.dmg.sig|*.msi|*.msi.sig|*.app.tar.gz|*.app.tar.gz.sig|*setup.exe|*setup.exe.sig)
                 cp "$file" "$dest/$base"
@@ -805,6 +851,20 @@ jobs:
           fi
           echo "Staged $copied release file(s):"
           find "$dest" -type f -print
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tooling
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Consolidate release signatures
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node release-tooling/openless-all/app/scripts/merge-release-signatures.mjs release-files "$OPENLESS_RELEASE_TAG" "$GITHUB_REPOSITORY"
 
       - name: Create / update release
         timeout-minutes: 20
@@ -827,75 +887,27 @@ jobs:
           # from the project CDN. The stage step copies installers only.
           files: release-files/*
 
-  # ── Hand the finished tag to the platform workflows that ride the same Release ──
-  # `Release HarmonyOS` and `Release Linux egui` are dispatch-only on purpose: an
-  # unaccepted HAP or deb/rpm must never reach users because someone pushed a
-  # Tauri tag. Nothing used to link them to that tag, though, so both entry
-  # points had **zero runs in their entire history** and every 2.0.x Release
-  # shipped without a `.hap`, a `.deb` or a `.rpm` - the AppGallery upload never
-  # ran either, and the omission was silent. Dispatch them here, once the desktop
-  # matrix finished, so both find the Release they attach to (they wait only ten
-  # minutes for it, less than the desktop matrix needs) and a tag push produces
-  # one complete Release.
-  #
-  # `workflow_dispatch` is one of the two events `GITHUB_TOKEN` may still
-  # trigger, so this needs no PAT - only `actions: write` for this job. The
-  # downstream runs use the same release tag for their workflow definition and
-  # checkout, so the package, workflow and cache inputs stay on one immutable ref.
-  dispatch-platform-releases:
-    needs: [build, publish]
-    # Independent of the desktop result: the HAP and the Linux packages only need
-    # the tag, so a Windows-only or notarization failure must not cost them their
-    # Release entry. A cancelled run still dispatches nothing.
-    if: >-
-      !cancelled() && github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  # Same-run reusable workflows resolve from the caller's immutable commit.
+  # Only the shared draft preflight precedes them; no platform waits for another.
+  android:
+    name: Android release
+    needs: prepare-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
     permissions:
-      actions: write
-      contents: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.ref_name }}
-      # Repository distribution path by default: the HAP is attached to the
-      # GitHub Release unsigned and nothing reaches AppGallery. Set the
-      # `HARMONY_AUTO_CHANNEL` repository variable to `release` (production) or
-      # `test` (test channel) to upload the signed package as the AGC candidate
-      # automatically - the upload never submits it for review, so that decision
-      # stays human either way.
-      HARMONY_CHANNEL: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
-    steps:
-      - name: Dispatch the HarmonyOS and Linux releases
-        run: |
-          set -euo pipefail
-          case "$HARMONY_CHANNEL" in
-            none | release | test) ;;
-            *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test (got '$HARMONY_CHANNEL')"; exit 1 ;;
-          esac
-          gh workflow run release-harmony.yml \
-            --ref "$RELEASE_TAG" \
-            -f "tag=$RELEASE_TAG" \
-            -f "channel=$HARMONY_CHANNEL" \
-            -f publish=true \
-            -f upload_to_appgallery=true
-          gh workflow run release-linux-egui.yml \
-            --ref "$RELEASE_TAG" \
-            -f "tag=$RELEASE_TAG" \
-            -f publish=true
+      contents: write
+    uses: ./.github/workflows/android-apk.yml
+    secrets: inherit
 
-      - name: Report the dispatched runs
-        # Both dispatches already returned a run id; this listing is the log line
-        # that makes the old silent miss visible, so a missing run must not fail
-        # the tag build after every asset is already published.
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          sleep 10
-          for workflow in release-harmony.yml release-linux-egui.yml; do
-            echo "### $workflow"
-            gh run list --workflow="$workflow" --limit 3 \
-              --json createdAt,status,conclusion,url \
-              --jq '.[] | "\(.createdAt) \(.status) \(.conclusion // "-") \(.url)"'
-          done
+  harmony:
+    name: HarmonyOS release
+    needs: prepare-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-harmony.yml
+    with:
+      tag: ${{ github.ref_name }}
+      channel: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
+      publish: true
+      upload_to_appgallery: true
+    secrets: inherit

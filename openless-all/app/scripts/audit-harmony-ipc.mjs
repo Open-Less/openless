@@ -40,7 +40,15 @@ const report = {
   missing: commands.filter((x) => x.implementation === 'unimplemented').length,
   commands,
 };
-fs.writeFileSync(path.join(root, 'harmony/ipc-audit.json'), JSON.stringify(report, null, 2) + '\n');
+const reportPath = path.join(root, 'harmony/ipc-audit.json');
+const serialized = JSON.stringify(report, null, 2) + '\n';
+if (process.argv.includes('--check')) {
+  if (fs.readFileSync(reportPath, 'utf8') !== serialized) {
+    throw new Error('Harmony IPC audit is stale; run node scripts/audit-harmony-ipc.mjs');
+  }
+} else {
+  fs.writeFileSync(reportPath, serialized);
+}
 console.log(
   `Harmony IPC: ${report.wired}/${report.total} wired; ${report.missing} unimplemented. Report: harmony/ipc-audit.json`,
 );

@@ -49,7 +49,10 @@ assert.deepEqual(
 );
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
-assert.equal((loops.match(/lock_host\(&inner\.settings_host_gate/g) ?? []).length, 8);
+for (const kind of ['MainHotkey', 'QaHotkey', 'ComboHotkey', 'ActionHotkey', 'StyleHotkey']) {
+  assert.ok(loops.includes(`lock_host(&inner.settings_host_gate, DebugKind::${kind})`));
+}
+assert.doesNotMatch(loops, /fn coding_agent_hotkey_supervisor_loop/);
 // Both adapters target the same native queue; neither whole-file token presence nor
 // the old host-only dispatcher is sufficient coverage of the reported capsule task.
 const capsuleHost = host.slice(
@@ -153,7 +156,11 @@ assert.match(lib, /observe_issue1266_lifecycle\(&event\);\s*match event/);
 const ciSteps = Object.values(ci.jobs).flatMap((job) => job.steps ?? []);
 assert.ok(ciSteps.some((step) => /test-windows-hang-diagnostics\.py/.test(step.run ?? '')));
 assert.ok(
-  ciSteps.some((step) => /cargo check.*--features issue-1266-diagnostics/.test(step.run ?? '')),
+  ciSteps.some((step) =>
+    /cargo build.*--profile test --lib --bins --features issue-1266-diagnostics/.test(
+      step.run ?? '',
+    ),
+  ),
 );
 const steps = release.jobs.build.steps;
 assert.equal(release.on.workflow_dispatch.inputs.windows_hang_diagnostics.default, false);
@@ -171,7 +178,10 @@ for (const fragment of [
   assert.ok(gate.includes(fragment));
 const build = steps.find((step) => step.name === 'Build (Windows)').run;
 assert.match(build, /diagnostic_args=\(--features issue-1266-diagnostics\)/);
-assert.equal((build.match(/build "\$\{diagnostic_args\[@\]\}" --bundles/g) ?? []).length, 4);
+// Signed and unsigned paths compile NSIS once, then reuse that executable for
+// MSI. Both commands must retain the same diagnostics feature selection.
+assert.equal((build.match(/build "\$\{diagnostic_args\[@\]\}" --bundles nsis/g) ?? []).length, 2);
+assert.equal((build.match(/bundle "\$\{diagnostic_args\[@\]\}" --bundles msi/g) ?? []).length, 2);
 const verify = steps.find((step) => step.name === 'Verify Windows diagnostic symbols');
 assert.match(verify.run, /windows-symbol-pair\.py/);
 const symbolTooling = steps.find((step) => step.name === 'Fetch symbol-pair verification tooling');

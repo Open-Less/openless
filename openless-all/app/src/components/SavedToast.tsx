@@ -67,7 +67,7 @@ export function SavedToast({
     ...offsetStyle,
     zIndex: 99999,
     padding: '4px 11px',
-    borderRadius: 999,
+    borderRadius: 'var(--ol-radius)',
     border: failed ? '0.5px solid rgba(239,68,68,0.22)' : '0.5px solid rgba(37,99,235,0.16)',
     background: failed ? '#fef2f2' : '#eff4ff',
     color: failed ? '#dc2626' : '#2563eb',
@@ -126,7 +126,7 @@ export function SavedToast({
                 background: 'transparent',
                 color: 'inherit',
                 font: 'inherit',
-                fontWeight: 700,
+                fontWeight: 'var(--ol-font-weight-bold)',
                 textDecoration: 'underline',
                 cursor: 'pointer',
               }}

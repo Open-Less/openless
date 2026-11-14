@@ -31,6 +31,9 @@ const bridge = {
     }
   },
   transcriptVisibility: [] as boolean[],
+  inputRegions: [] as any[],
+  regionWrites: [] as any[],
+  dictationActions: [] as string[],
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
   theme: 'light' as ThemeMode,
@@ -69,6 +72,15 @@ window.__TAURI_INTERNALS__ = {
     callbacks.delete(id);
   },
   async invoke(command: string, args: any) {
+    if (command === 'set_capsule_interactive_regions') {
+      bridge.inputRegions = args.rects;
+      bridge.regionWrites.push(args.rects);
+      return;
+    }
+    if (command === 'stop_dictation' || command === 'cancel_dictation') {
+      bridge.dictationActions.push(command);
+      return;
+    }
     if (command === 'plugin:event|listen') {
       const ids = listeners.get(args.event) ?? new Set<number>();
       ids.add(args.handler);
@@ -212,7 +224,7 @@ createRoot(document.getElementById('root')!).render(
         transform: 'translateX(-50%)',
       }}
     >
-      <Capsule />
+      <Capsule os={params.get('os') === 'mac' ? 'mac' : undefined} />
     </div>
   ) : qa ? (
     <div

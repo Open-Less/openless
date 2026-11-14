@@ -14,12 +14,28 @@ name: Release HarmonyOS
 #
 # Dispatch it after the tag exists; it rebuilds that tag, signs it with material
 # from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
-# `release-tauri.yml` dispatches it automatically once the desktop/Android assets
-# for a `v*-tauri` tag are published (see `dispatch-platform-releases`), so a tag
-# push ships the HAP instead of depending on somebody remembering this page. The
-# manual dispatch stays the repair path for a published tag, and the channel it
-# runs with is `vars.HARMONY_AUTO_CHANNEL` (default `none`) on the automatic one.
+# `release-tauri.yml` calls this workflow in parallel with desktop and Android
+# after a short shared-draft preflight, using the same immutable tag commit.
+# Manual dispatch remains the repair path; automatic channel is
+# `vars.HARMONY_AUTO_CHANNEL` (default `none`).
 on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      channel:
+        type: string
+        default: none
+      publish:
+        type: boolean
+        default: true
+      upload_to_appgallery:
+        type: boolean
+        default: true
+      runner_labels:
+        type: string
+        default: '["ubuntu-latest"]'
   workflow_dispatch:
     inputs:
       tag:
@@ -104,9 +120,20 @@ jobs:
       APPGALLERY_CLIENT_SECRET: ${{ secrets.APPGALLERY_CLIENT_SECRET }}
       APPGALLERY_APP_ID: ${{ secrets.APPGALLERY_APP_ID }}
     steps:
+      - name: Validate release channel
+        env:
+          HARMONY_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          case "$HARMONY_CHANNEL" in
+            none | release | test) ;;
+            *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test"; exit 1 ;;
+          esac
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          # Tag calls build the exact triggering commit, even if a tag is moved
+          # while queued. Manual repair still explicitly chooses its input tag.
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.tag }}
           submodules: false
 
       - uses: actions/setup-java@v4
@@ -129,6 +156,7 @@ jobs:
         uses: ./.github/actions/cache-npm
 
       - name: Install frontend dependencies
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -282,6 +310,7 @@ jobs:
       - name: Upload the HAP as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-harmony-hap
           # `-signed` stays in the workflow artifacts for the store upload; the
           # repository never publishes it.
@@ -294,22 +323,16 @@ jobs:
         working-directory: openless-all/app
         run: |
           set -euo pipefail
-          # The desktop workflow creates the Release for this tag; wait for it
-          # rather than racing its creation.
-          for attempt in $(seq 1 40); do
-            if gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" = 40 ]; then
-              echo "::error::release $RELEASE_TAG was not created by the desktop workflow"
-              exit 1
-            fi
-            sleep 15
-          done
+          # Automatic builds already have a shared draft: never wait for desktop.
+          # Direct manual dispatch still supports explicit published-tag repairs.
+          draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+          if [ "${{ github.event_name }}" = push ] && [ "$draft" != true ]; then
+            echo "::error::Release was published while building; refusing automatic mutation"
+            exit 1
+          fi
           output=target/harmony-packages
           gh release upload "$RELEASE_TAG" \
             "$output"/OpenLess_harmony_arm64.hap \
-            "$output"/OpenLess_harmony.hap \
             "$output"/SHA256SUMS \
             --clobber
           echo "attached HarmonyOS assets to $RELEASE_TAG"

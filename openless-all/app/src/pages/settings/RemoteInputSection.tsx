@@ -139,7 +139,7 @@ export function RemoteInputSection() {
 
   const smallBtn: CSSProperties = {
     padding: '4px 10px',
-    borderRadius: 8,
+    borderRadius: 'var(--ol-control-radius)',
     fontSize: 12,
     cursor: 'pointer',
     border: '0.5px solid var(--ol-line-strong)',

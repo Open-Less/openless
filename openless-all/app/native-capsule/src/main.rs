@@ -90,6 +90,10 @@ impl eframe::App for CapsuleApp {
             );
             action
         };
+        platform::update_input_regions(&self.window, &self.capsule.input_regions(frame), ui.ctx().pixels_per_point());
+        // The process exits at idle; while visible this also detects entry from a click-through area.
+        #[cfg(target_os = "macos")]
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         let action = match action {
             CapsuleAction::None => None,
             CapsuleAction::Cancel => Some(Action::Cancel),

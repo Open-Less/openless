@@ -589,7 +589,7 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
         style={{
           width: 32,
           height: 32,
-          borderRadius: 8,
+          borderRadius: 'var(--ol-control-radius)',
           flexShrink: 0,
           background: 'var(--ol-blue-soft)',
           color: 'var(--ol-blue)',
@@ -621,7 +621,14 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
         </span>
         {status === 'configured' ? (
           <Pill tone="ok" size="sm">
-            <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-ok)' }} />
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: 'var(--ol-radius)',
+                background: 'var(--ol-ok)',
+              }}
+            />
             {t('overview.statusConfigured')}
           </Pill>
         ) : (
@@ -770,15 +777,16 @@ function SegmentedToggle<T extends string | number>({
 }) {
   return (
     <div
+      className="ol-overview-segment"
       role="group"
       aria-label={ariaLabel}
       style={{
         display: 'flex',
         gap: 2,
         padding: 2,
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         background: 'var(--ol-surface-2)',
-        border: '0.5px solid var(--ol-line)',
+        boxShadow: 'inset 0 0 0 0.5px var(--ol-line)',
       }}
     >
       {options.map((option) => {
@@ -796,7 +804,7 @@ function SegmentedToggle<T extends string | number>({
                 ? 'var(--ol-font-weight-semibold)'
                 : 'var(--ol-font-weight-medium)',
               border: 0,
-              borderRadius: 6,
+              borderRadius: 'var(--ol-r-sm)',
               background: selected ? 'var(--ol-blue)' : 'transparent',
               color: selected ? '#fff' : 'var(--ol-ink-3)',
               cursor: 'pointer',
@@ -806,7 +814,9 @@ function SegmentedToggle<T extends string | number>({
                 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
             }}
           >
-            {option.label}
+            <span className="ol-segmented-label" data-label={option.label}>
+              {option.label}
+            </span>
           </button>
         );
       })}

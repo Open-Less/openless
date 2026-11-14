@@ -253,15 +253,7 @@ const workflow = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.github/workflows/ci.yml'),
   'utf8',
 );
-const reusable = readFileSync(
-  resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    '../../..',
-    '.github/workflows/check-linux-egui.yml',
-  ),
-  'utf8',
-);
-const areas = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'capsule'];
+const areas = ['tauri', 'msrv', 'harmony', 'frontend', 'android', 'capsule'];
 check(
   'workflow publishes every area',
   areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
@@ -269,7 +261,7 @@ check(
 );
 check(
   'workflow computes every area in the detect step',
-  /for area in tauri msrv linux harmony frontend android capsule; do/.test(workflow),
+  /for area in tauri msrv harmony frontend android capsule ios-device; do/.test(workflow),
   true,
 );
 check(
@@ -288,15 +280,12 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false' &&"),
   false,
 );
+// Windows runs the same pinned checks in parallel, with its own target cache.
 check(
-  'changes job publishes the native-source gate for pinned toolchains',
-  workflow.includes('msrv_needed: ${{ steps.detect.outputs.msrv }}'),
-  true,
-);
-// The secondary platform uses the same native-source gate.
-check(
-  'windows msrv steps follow the source gate',
-  workflow.includes("if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'"),
+  'windows msrv job follows the source gate',
+  /windows-msrv:[\s\S]*?inputs\.platform != 'macos'\) && needs\.changes\.outputs\.msrv != 'false'/.test(
+    workflow,
+  ),
   true,
 );
 // `cargo check` immediately followed by `cargo test --no-run` compiles the graph
@@ -333,30 +322,16 @@ check(
   workflow.includes("needs.changes.outputs.harmony != 'false'"),
   true,
 );
-check(
-  'linux scope defaults to full',
-  workflow.includes("needs.changes.outputs.linux == 'false' && 'none' || 'full'"),
-  true,
-);
-check(
-  'reusable workflow defaults to a full build',
-  /scope:[\s\S]{0,80}default: full/.test(reusable),
-  true,
-);
-check(
-  'reusable workflow gates every build step',
-  (reusable.match(/if: inputs\.scope != 'none'/g) ?? []).length >= 10,
-  true,
-);
+check('Linux CI is paused', workflow.includes('\n  linux-egui-package:'), false);
 
-// Wall-clock guards: the Windows runner is the slowest one, so the frontend
-// suite must not serialise behind the Rust compile, and the Linux tests must not
-// serialise in front of the deb/rpm build.
+// Balance VM count and latency: the small Windows-only subset reuses the
+// existing stable runner; Linux tests and packaging remain parallel.
 check(
-  'windows frontend runs in its own job',
-  /  windows-frontend:[\s\S]*?runs-on: windows-latest/.test(workflow),
+  'windows contracts reuse the stable job',
+  /  cross-platform:[\s\S]*?name: Run the platform-sensitive contracts\n[\s\S]*?if: runner\.os == 'Windows'\n\s+timeout-minutes: 10\n\s+run: node scripts\/frontend-test-runner\.mjs --platform-only windows/.test(workflow),
   true,
 );
+check('no duplicate Windows frontend VM', workflow.includes('\n  windows-frontend:'), false);
 check(
   'windows only runs the platform-sensitive contracts',
   workflow.includes('--platform-only windows'),
@@ -370,7 +345,7 @@ check(
 
 // `tauri::generate_context!()` embeds ../dist at compile time, so any job that
 // compiles the Tauri lib must build the frontend first — including the matrix
-// job on Windows, where the contract suite moved to its own job.
+// job on Windows, which also runs the Windows-specific contract subset.
 check(
   'windows builds the frontend before compiling the Tauri lib',
   /if: runner\.os == 'Windows'\n\s+run: npm run build/.test(workflow),
@@ -392,8 +367,8 @@ for (const [label, changed] of [
     ),
   ],
   [
-    'missing separate frontend job',
-    workflow.replace('\n  windows-frontend:', '\n  removed-frontend:'),
+    'missing Windows contracts in the stable job',
+    workflow.replace('node scripts/frontend-test-runner.mjs --platform-only windows', 'echo missing-windows-contracts'),
   ],
 ]) {
   check(label + ': mutation applied', changed !== workflow, true);
@@ -404,7 +379,6 @@ for (const [label, changed] of [
         wiring,
       {
         workflow: changed,
-        reusable,
         vm,
         check: undefined,
         console: { log() {}, error() {} },

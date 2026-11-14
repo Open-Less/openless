@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
-import vm from 'node:vm';
+import { prepareRelease } from './prepare-release.mjs';
 
 const workflow = (name) =>
   yaml.load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
@@ -9,30 +12,54 @@ for (const name of ['release-tauri.yml', 'android-apk.yml']) {
   const steps = Object.values(workflow(name).jobs).flatMap((job) => job.steps ?? []);
   const publishers = steps.filter((step) => step.uses?.startsWith('softprops/action-gh-release@'));
   assert.equal(publishers.length, 1, `${name} must have one asset publisher`);
-  assert.equal(
-    publishers[0].with.draft,
-    true,
-    `${name}: no channel may publish a partially built release`,
-  );
+  assert.equal(publishers[0].with.draft, true, `${name}: never publish a partial release`);
   assert.match(publishers[0].with.prerelease, /OPENLESS_RELEASE_CHANNEL == 'beta'/);
-  // Updater manifests belong to the CDN, not to the release assets: current clients read
-  // `/updates/{stable,beta}/` (see src-tauri/src/update_source.rs), and cloning them into the
-  // release produced fourteen near-identical files per tag.
-  assert.doesNotMatch(
-    publishers[0].with.files,
-    /latest-[^\s]*\.json/,
-    `${name}: updater manifests must not be attached to the release`,
-  );
+  assert.doesNotMatch(publishers[0].with.files, /latest-[^\s]*\.json/);
   const manifestUploads = steps.filter(
     (step) =>
       step.uses?.startsWith('actions/upload-artifact@') &&
       /latest-[^\s]*\.json/.test(step.with?.path ?? ''),
   );
-  assert.equal(
-    manifestUploads.length,
-    1,
-    `${name}: exactly one artifact must carry the updater manifests for the CDN sync`,
-  );
+  assert.equal(manifestUploads.length, 1, `${name}: updater manifests belong to the CDN artifact`);
+}
+const desktop = workflow('release-tauri.yml');
+assert.doesNotMatch(
+  JSON.stringify(desktop),
+  /stage-release-download-aliases|openless-download-alias/,
+);
+const staging = mkdtempSync(join(tmpdir(), 'openless-release-assets-'));
+try {
+  const source = join(staging, 'openless-release-artifacts', 'desktop');
+  mkdirSync(source, { recursive: true });
+  const originals = [
+    'OpenLess_2.0.2-Beta.7_x64-setup.exe',
+    'OpenLess_2.0.2-Beta.7_x64-setup.exe.sig',
+    'OpenLess_2.0.2-Beta.7_aarch64.dmg',
+    'OpenLess_aarch64.app.tar.gz',
+    'OpenLess_aarch64.app.tar.gz.sig',
+  ];
+  // Old artifacts can survive a partial rerun: do not publish their aliases again.
+  const excluded = [
+    'OpenLess_windows_x86_64-setup.exe',
+    'OpenLess_windows_x86_64-setup.exe.sig',
+    'OpenLess_macos_aarch64.dmg',
+    'latest-darwin-aarch64.json',
+    'openless.exe',
+    'debug.pdb',
+  ];
+  for (const name of [...originals, ...excluded]) writeFileSync(join(source, name), 'fixture');
+  const stage = Object.values(desktop.jobs)
+    .flatMap((job) => job.steps ?? [])
+    .find((step) => step.name === 'Stage release files');
+  assert.ok(stage);
+  const result = spawnSync('bash', ['-c', stage.run], {
+    env: { ...process.env, RUNNER_TEMP: staging, GITHUB_WORKSPACE: staging },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(readdirSync(join(staging, 'release-files')).sort(), originals.sort());
+} finally {
+  rmSync(staging, { recursive: true, force: true });
 }
 const sync = workflow('sync-homebrew-cask.yml');
 assert.deepEqual(sync.on.release.types, ['published']);
@@ -54,62 +81,150 @@ for (const name of [
   'Update Casks/openless.rb',
   'Commit & push cask bump',
 ]) {
-  const step = steps.find((candidate) => candidate.name === name);
   assert.equal(
-    step?.if,
+    steps.find((step) => step.name === name)?.if,
     "steps.publication.outputs.ready == 'true'",
-    `${name}: a draft must not change the public cask`,
+    `${name}: drafts must not change the public cask`,
   );
 }
 
-const linux = workflow('check-linux-egui.yml');
-const publish = linux.jobs['publish-linux-egui'];
-assert.deepEqual(publish.needs, ['test-linux-egui', 'build-linux-egui']);
-assert.equal(linux.jobs['test-linux-egui'].needs, undefined, 'testing must remain parallel');
-assert.equal(linux.jobs['build-linux-egui'].needs, undefined, 'packaging must remain parallel');
-assert.equal(publish.permissions, undefined, 'the reusable job must inherit its caller permission');
-assert.equal(publish.env.GH_REPO, '${{ github.repository }}');
-assert.equal(publish.env.GH_TOKEN, '${{ github.token }}');
-assert.equal(publish.env.RELEASE_TAG, '${{ inputs.release_tag }}');
-assert.doesNotMatch(publish.if, /always\(|failure\(|cancelled\(/);
-for (const [results, inputs, expected] of [
-  [['success', 'success'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, true],
-  [['failure', 'success'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'failure'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['cancelled', 'success'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'skipped'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'success'], { scope: 'none', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'success'], { scope: 'full', publish: false, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'success'], { scope: 'full', publish: true, release_tag: '' }, false],
+const unified = workflow('release-tauri.yml');
+assert.deepEqual(unified.on.push.tags, ['v*-tauri']);
+assert.ok(unified.jobs['prepare-release']);
+assert.match(unified.jobs['prepare-release'].if, /github.event_name == 'push'/);
+assert.equal(unified.jobs['prepare-release'].permissions.contents, 'write');
+assert.ok(
+  unified.jobs['prepare-release'].steps.some((step) =>
+    step.run?.includes('scripts/prepare-release.mjs'),
+  ),
+);
+for (const name of ['build', 'android', 'harmony']) {
+  assert.equal(
+    unified.jobs[name].needs,
+    'prepare-release',
+    `${name} starts after the same short preflight`,
+  );
+}
+assert.match(
+  unified.jobs.build.if,
+  /result == 'skipped'/,
+  'manual/scheduled desktop builds still work',
+);
+for (const [name, file] of [
+  ['android', 'android-apk.yml'],
+  ['harmony', 'release-harmony.yml'],
 ]) {
-  const enabled =
-    results.every((result) => result === 'success') &&
-    Boolean(vm.runInNewContext(publish.if, { inputs }));
-  assert.equal(enabled, expected, JSON.stringify({ results, inputs }));
+  const job = unified.jobs[name];
+  assert.equal(job.uses, `./.github/workflows/${file}`);
+  assert.equal(job.secrets, 'inherit');
+  assert.match(job.if, /github.event_name == 'push'/);
+  assert.match(job.if, /refs\/tags\/v/);
+  assert.equal(job.permissions.contents, 'write');
+  assert.ok(workflow(file).on.workflow_call);
 }
-const downloads = publish.steps.filter((step) => step.uses === 'actions/download-artifact@v8');
-assert.deepEqual(
-  downloads.map((step) => step.with.name),
-  ['openless-linux-egui-x86_64', 'openless-linux-egui-direct-download'],
+assert.equal(unified.jobs['dispatch-platform-releases'], undefined);
+const desktopDownloads = unified.jobs.publish.steps.filter((step) =>
+  step.uses?.startsWith('actions/download-artifact@'),
 );
-const uploads = linux.jobs['build-linux-egui'].steps.filter((step) =>
-  step.uses?.startsWith('actions/upload-artifact@'),
+assert.deepEqual(desktopDownloads.map((step) => step.with.pattern).sort(), [
+  'openless-macos-*',
+  'openless-windows-*',
+]);
+const channelValidation = workflow('release-harmony.yml').jobs['build-harmony-hap'].steps.find(
+  (step) => step.name === 'Validate release channel',
 );
-for (const step of downloads) {
-  assert.ok(uploads.some((upload) => upload.with.name === step.with.name));
-  assert.equal(step.with['run-id'], undefined, 'download only this run');
-  assert.equal(step.with['github-token'], undefined, 'do not enable cross-run downloads');
-}
+assert.ok(channelValidation);
+assert.doesNotMatch(JSON.stringify(unified), /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/);
+const tag = 'v2.0.2-Beta.7-tauri';
+const repository = 'Open-Less/openless';
+const apiCalls = [];
+// Draft lookup must go through `gh release view`: the REST tag endpoint answers
+// 404 for a real draft, which previously looked like "no release yet".
+const missing = (args) => {
+  apiCalls.push(args);
+  assert.notEqual(args[0], 'api', 'never probe drafts through /releases/tags');
+  if (args[1] === 'view')
+    throw Object.assign(new Error('not found'), { stderr: 'release not found' });
+  return '';
+};
+assert.equal(prepareRelease(tag, repository, missing), 'created');
+assert.equal(apiCalls.length, 2);
+assert.equal(apiCalls[0][1], 'view');
+assert.equal(apiCalls[1][1], 'create');
+for (const flag of ['--verify-tag', '--draft', '--prerelease'])
+  assert.ok(apiCalls[1].includes(flag));
+const stableCalls = [];
+prepareRelease('v2.0.2-tauri', repository, (args) => {
+  stableCalls.push(args);
+  if (args[1] === 'view')
+    throw Object.assign(new Error('not found'), { stderr: 'release not found' });
+  return '';
+});
+assert.ok(!stableCalls[1].includes('--prerelease'));
+let reads = 0;
+const existing = { tagName: tag, isDraft: true, isPrerelease: true };
 assert.equal(
-  publish.steps.some((step) => step.uses?.startsWith('actions/checkout@')),
-  false,
+  prepareRelease(tag, repository, () => {
+    reads++;
+    return JSON.stringify(existing);
+  }),
+  'existing draft',
 );
-for (const [name, job] of Object.entries(linux.jobs)) {
-  if (name !== 'publish-linux-egui')
-    assert.ok((job.steps ?? []).every((step) => !step.run?.includes('gh release upload')));
+assert.equal(reads, 1, 'retry reads the draft without changing its body or assets');
+assert.throws(
+  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, isDraft: false })),
+  /already published/,
+);
+assert.throws(
+  () =>
+    prepareRelease(tag, repository, () => JSON.stringify({ ...existing, tagName: 'v2.0.1-tauri' })),
+  /tag mismatch/,
+);
+assert.throws(
+  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, isPrerelease: false })),
+  /channel mismatch/,
+);
+let unavailableCalls = 0;
+assert.throws(
+  () =>
+    prepareRelease(tag, repository, () => {
+      unavailableCalls++;
+      throw Object.assign(new Error('API unavailable'), { stderr: 'HTTP 503' });
+    }),
+  /API unavailable/,
+);
+assert.equal(unavailableCalls, 1, 'API errors cannot trigger release creation');
+assert.throws(
+  () => prepareRelease('main', repository, () => assert.fail('invalid tags cannot call GitHub')),
+  /immutable/,
+);
+const directory = mkdtempSync(join(tmpdir(), 'openless-release-handoff-'));
+try {
+  const calls = join(directory, 'calls');
+  writeFileSync(join(directory, 'gh'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n', {
+    mode: 0o755,
+  });
+  for (const [channel, expected] of [
+    ['none', 0],
+    ['release', 0],
+    ['test', 0],
+    ['invalid', 1],
+  ]) {
+    writeFileSync(calls, '');
+    const result = spawnSync('bash', ['-c', channelValidation.run], {
+      env: {
+        ...process.env,
+        PATH: `${directory}:${process.env.PATH}`,
+        CALLS: calls,
+        RELEASE_TAG: 'v2.0.2-Beta.5-tauri',
+        HARMONY_CHANNEL: channel,
+      },
+    });
+    assert.equal(result.status, expected, channel);
+    const logged = readFileSync(calls, 'utf8');
+    assert.equal(logged, '', 'channel validation must not dispatch another workflow');
+  }
+} finally {
+  rmSync(directory, { recursive: true, force: true });
 }
-const attach = publish.steps.find((step) => step.run?.includes('gh release upload'));
-assert.match(attach.run, /seq 1 40/);
-assert.match(attach.run, /sleep 15/);
-assert.match(attach.run, /--clobber/);
 console.log('release-publication-contract.test.mjs passed');

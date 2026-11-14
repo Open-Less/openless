@@ -89,3 +89,37 @@ test('a retained mirror never drives the primary native transcript rail', async 
   await expect(page.locator('.ol-capsule-pill')).toHaveAttribute('data-leaving', 'true');
   expect(await page.evaluate(() => (window as any).fixture.transcriptVisibility)).toEqual([]);
 });
+
+test('tabular transcript digits use shaped advances and never overlap', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${fixture}?os=win&transcript&label=capsule-rail&rail`);
+  await page.waitForFunction(() => (window as any).fixture.hasListener('backend:event'));
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emitTo('capsule-rail', 'capsule:state', {
+      state: 'recording',
+      sessionId: 'recording-a',
+    });
+    bridge.emit('backend:event', {
+      sequence: 1,
+      sessionId: 'recording-a',
+      kind: {
+        type: 'transcript_delta',
+        payload: { text: '11110000', offset: 0, isFinal: true },
+      },
+    });
+  });
+  const glyphs = page.locator('.ol-live-transcript-char');
+  await expect(glyphs).toHaveCount(8);
+  await expect(glyphs.first()).toHaveCSS('filter', 'none');
+  await expect(glyphs.first()).toHaveCSS('will-change', 'auto');
+  const bounds = await glyphs.evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const r = node.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width };
+    }),
+  );
+  expect(Math.abs(bounds[0].width - bounds[4].width)).toBeLessThan(0.1);
+  for (let i = 0; i < bounds.length - 1; i++)
+    expect(bounds[i + 1].left - bounds[i].right).toBeGreaterThan(0.5);
+});
