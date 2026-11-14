@@ -504,6 +504,18 @@
       "validationProbe": "llm_text"
     },
     {
+      "authRequirement": "siwc",
+      "defaultEndpoint": "https://api.openai.com/v1",
+      "defaultModel": null,
+      "defaultRequestFormat": null,
+      "kind": "llm",
+      "labelKey": "chatgptSiwc",
+      "providerType": "chatgpt_siwc",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "llm_text"
+    },
+    {
       "authRequirement": "api_key_unless_custom_endpoint",
       "defaultEndpoint": "https://api.xiaomimimo.com/v1",
       "defaultModel": "xiaomi/mimo-v2-flash",
