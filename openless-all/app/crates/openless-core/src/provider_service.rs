@@ -17,6 +17,7 @@ use crate::credentials::{
     ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, LLM_API_KEY_ACCOUNT,
     LLM_ENDPOINT_ACCOUNT, LLM_EXTRA_HEADERS_ACCOUNT, LLM_MODEL_ACCOUNT, OMNI_API_KEY_ACCOUNT,
     OMNI_ENDPOINT_ACCOUNT, OMNI_EXTRA_HEADERS_ACCOUNT, OMNI_MODEL_ACCOUNT,
+    OMNI_REALTIME_OPTIONS_ACCOUNT,
 };
 use crate::dictation_context::{DictationContext, ProviderInvocation};
 use crate::domains::{
@@ -109,10 +110,6 @@ impl ProviderService {
                 ChannelKind::Llm,
             ),
         };
-        if request.kind == ProviderKind::Omni && request.channel_id.is_some() {
-            return Err(invalid_request("omni provider does not support channel id"));
-        }
-
         let channel_is_explicit = request.channel_id.is_some();
         let provider_id = match request.channel_id {
             Some(id) if !id.trim().is_empty() => id,
@@ -125,6 +122,12 @@ impl ProviderService {
                 id
             }
         };
+
+        if request.kind == ProviderKind::Omni
+            && provider_descriptor(ProviderKind::Omni, &provider_id).is_none()
+        {
+            return Err(invalid_request("unknown Omni provider scope"));
+        }
 
         let provider_type = if request.kind == ProviderKind::Omni {
             provider_id.clone()
@@ -173,6 +176,18 @@ impl ProviderService {
             Some(account) => self.read(namespace, &provider_id, account).await?,
             None => None,
         };
+        let realtime_options = if request.kind == ProviderKind::Omni
+            && crate::provider_rules::is_realtime_omni_provider(&provider_type)
+        {
+            let raw = self
+                .read(namespace, &provider_id, OMNI_REALTIME_OPTIONS_ACCOUNT)
+                .await?
+                .unwrap_or_default();
+            crate::omni::realtime_options::RealtimeOptions::parse(&raw)
+                .map_err(|_| invalid_request("invalid Realtime options"))?
+        } else {
+            Default::default()
+        };
 
         let bailian_protocol = if request.kind == ProviderKind::Asr {
             let raw = self
@@ -203,6 +218,7 @@ impl ProviderService {
             api_key,
             endpoint,
             extra_headers,
+            realtime_options,
         })
     }
 
@@ -409,6 +425,7 @@ impl ProviderApi for ProviderService {
 
 #[derive(Debug, Clone)]
 struct ResolvedProvider {
+    realtime_options: crate::omni::realtime_options::RealtimeOptions,
     thinking_enabled: bool,
     bailian_protocol: crate::provider_rules::BailianProtocol,
     protocol: LlmProtocolConfig,
@@ -545,15 +562,45 @@ fn validate_configuration(
             return Err(provider_error("provider endpoint is not configured"));
         }
         if let Some(endpoint) = endpoint {
-            validate_provider_endpoint(endpoint, resolved.kind == ProviderKind::Asr)?;
+            validate_provider_endpoint(
+                endpoint,
+                resolved.kind == ProviderKind::Asr || uses_realtime_websocket(resolved),
+            )?;
+            if resolved.kind == ProviderKind::Omni
+                && resolved.provider_type == crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID
+            {
+                crate::omni::openai_realtime::transport::api_root(endpoint)
+                    .map_err(|_| invalid_request("provider endpoint is invalid"))?;
+            }
         }
-        if let Some(headers) = resolved.extra_headers.as_deref() {
+        if uses_realtime_websocket(resolved) {
+            let headers = crate::omni::realtime_options::parse_headers(
+                resolved.extra_headers.as_deref().unwrap_or_default(),
+            )
+            .map_err(|_| invalid_request("invalid Realtime headers"))?;
+            resolved
+                .realtime_options
+                .authenticated_headers(api_key, &headers)
+                .map_err(|error| match error {
+                    crate::polish::LLMError::MissingCredentials => {
+                        provider_error("Omni API key is not configured")
+                    }
+                    _ => invalid_request("invalid Realtime authentication"),
+                })?;
+        } else if let Some(headers) = resolved.extra_headers.as_deref() {
             resolved
                 .protocol
                 .validate_headers(&parse_extra_headers(headers)?)?;
         }
     }
     Ok(())
+}
+
+fn uses_realtime_websocket(resolved: &ResolvedProvider) -> bool {
+    provider_descriptor(resolved.kind, &resolved.provider_type).is_some_and(|descriptor| {
+        descriptor.kind == ProviderKind::Omni
+            && crate::provider_rules::is_realtime_omni_provider(descriptor.provider_type.as_str())
+    })
 }
 
 fn static_models(resolved: &ResolvedProvider) -> Option<Vec<String>> {
@@ -689,7 +736,12 @@ fn provider_no_final_is_valid(error: &BackendError) -> bool {
 }
 
 fn sanitize_validation_error(error: BackendError) -> BackendError {
-    if error.code != BackendErrorCode::Provider || error.details.as_ref().is_some_and(|d| d.get("siwc").is_some()) {
+    if error.code != BackendErrorCode::Provider
+        || error
+            .details
+            .as_ref()
+            .is_some_and(|d| d.get("siwc").is_some())
+    {
         return error;
     }
     let message = error.message.as_str();
@@ -746,7 +798,13 @@ async fn fetch_models(
         })
         .ok_or_else(|| provider_error("provider endpoint is not configured"))?;
     let is_gemini = resolved.kind != ProviderKind::Asr && resolved.provider_type == "gemini";
-    let url = if is_gemini {
+    let url = if resolved.kind == ProviderKind::Omni
+        && resolved.provider_type == crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID
+    {
+        let root = crate::omni::openai_realtime::transport::api_root(endpoint)
+            .map_err(|_| invalid_request("provider endpoint is invalid"))?;
+        models_url(root.as_str())?
+    } else if is_gemini {
         let base = crate::asr::gemini::endpoint_url(endpoint, "")
             .map_err(|_| invalid_request("provider endpoint is invalid"))?;
         models_url(&base)?
@@ -766,30 +824,43 @@ async fn fetch_models(
         }
     });
     let mut request_headers = Vec::new();
-    if let Some(api_key) = resolved
-        .api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        if is_gemini {
-            request_headers.push(("x-goog-api-key".to_string(), api_key.to_string()));
-        } else if orcarouter_filter.is_some() {
-            request_headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
-        } else {
-            request_headers.extend(resolved.protocol.format.headers(api_key));
+    if uses_realtime_websocket(resolved) {
+        let extra = crate::omni::realtime_options::parse_headers(
+            resolved.extra_headers.as_deref().unwrap_or_default(),
+        )
+        .map_err(|_| invalid_request("invalid Realtime headers"))?;
+        request_headers.extend(
+            resolved
+                .realtime_options
+                .authenticated_headers(resolved.api_key.as_deref().unwrap_or_default(), &extra)
+                .map_err(|_| invalid_request("invalid Realtime authentication"))?,
+        );
+    } else {
+        if let Some(api_key) = resolved
+            .api_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            if is_gemini {
+                request_headers.push(("x-goog-api-key".to_string(), api_key.to_string()));
+            } else if orcarouter_filter.is_some() {
+                request_headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+            } else {
+                request_headers.extend(resolved.protocol.format.headers(api_key));
+            }
         }
-    }
-    if orcarouter_filter.is_none()
-        && resolved.protocol.format == LlmRequestFormat::Messages
-        && !request_headers
-            .iter()
-            .any(|(name, _)| name == "anthropic-version")
-    {
-        request_headers.extend(resolved.protocol.format.headers(""));
-    }
-    if let Some(extra_headers) = resolved.extra_headers.as_deref() {
-        for (name, value) in parse_extra_headers(extra_headers)? {
-            request_headers.push((name, value));
+        if orcarouter_filter.is_none()
+            && resolved.protocol.format == LlmRequestFormat::Messages
+            && !request_headers
+                .iter()
+                .any(|(name, _)| name == "anthropic-version")
+        {
+            request_headers.extend(resolved.protocol.format.headers(""));
+        }
+        if let Some(extra_headers) = resolved.extra_headers.as_deref() {
+            for (name, value) in parse_extra_headers(extra_headers)? {
+                request_headers.push((name, value));
+            }
         }
     }
     let response = transport
@@ -1715,7 +1786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn omni_channel_is_rejected_before_credential_access() {
+    async fn unknown_omni_scope_is_rejected_before_credential_access() {
         let credentials = Arc::new(InMemoryCredentialStore::default());
         let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
         let error = service
@@ -1817,6 +1888,221 @@ mod tests {
             url,
             "https://example.com/v1/models?token=query-secret#fragment"
         );
+    }
+
+    fn resolved_endpoint(
+        kind: ProviderKind,
+        provider_type: &str,
+        endpoint: &str,
+    ) -> ResolvedProvider {
+        ResolvedProvider {
+            realtime_options: Default::default(),
+            thinking_enabled: false,
+            bailian_protocol: crate::provider_rules::BailianProtocol::Auto,
+            protocol: LlmProtocolConfig::default(),
+            kind,
+            provider_id: provider_type.into(),
+            provider_type: provider_type.into(),
+            model: Some("fixture-model".into()),
+            api_key: Some("fixture-key".into()),
+            endpoint: Some(endpoint.into()),
+            extra_headers: None,
+        }
+    }
+
+    #[test]
+    fn websocket_omni_endpoints_are_allowed_only_for_the_realtime_provider() {
+        let realtime = crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID;
+        for endpoint in [
+            "ws://localhost:1234/v1/realtime",
+            "wss://example.com/gateway/v1",
+        ] {
+            for provider in [
+                realtime,
+                crate::provider_rules::DASHSCOPE_REALTIME_OMNI_PROVIDER_ID,
+            ] {
+                validate_configuration(
+                    &resolved_endpoint(ProviderKind::Omni, provider, endpoint),
+                    true,
+                )
+                .unwrap();
+            }
+            validate_configuration(
+                &resolved_endpoint(ProviderKind::Asr, "bailian-qwen3-realtime", endpoint),
+                true,
+            )
+            .unwrap();
+            for (kind, provider) in [
+                (ProviderKind::Omni, "openai"),
+                (ProviderKind::Omni, "gemini"),
+                (ProviderKind::Omni, "dashscope-omni"),
+                (ProviderKind::Llm, "openai"),
+                (ProviderKind::Llm, "custom"),
+            ] {
+                let error =
+                    validate_configuration(&resolved_endpoint(kind, provider, endpoint), true)
+                        .unwrap_err();
+                assert_eq!(
+                    error.code,
+                    BackendErrorCode::InvalidArgument,
+                    "{kind:?}/{provider}"
+                );
+                assert_eq!(error.message, "provider endpoint is invalid");
+            }
+        }
+        for endpoint in [
+            "file:///tmp/realtime",
+            "wss://user:secret@example.com/v1/realtime",
+        ] {
+            let error = validate_configuration(
+                &resolved_endpoint(ProviderKind::Omni, realtime, endpoint),
+                true,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+            assert!(!format!("{error:?}").contains("secret"));
+        }
+    }
+
+    #[tokio::test]
+    async fn realtime_remote_model_listing_normalizes_ws_roots_and_removes_query_credentials() {
+        for (endpoint, expected) in [
+            (
+                "wss://example.com/gateway/v1/realtime?model=old&routing=one&key=secret#fragment",
+                "https://example.com/gateway/v1/models?routing=one",
+            ),
+            (
+                "ws://localhost:1234/custom/api/realtime/?tenant=a%2Fb&api_key=secret",
+                "http://localhost:1234/custom/api/models?tenant=a%2Fb",
+            ),
+            ("https://example.com/realtime", "https://example.com/models"),
+        ] {
+            let resolved = resolved_endpoint(
+                ProviderKind::Omni,
+                crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID,
+                endpoint,
+            );
+            let transport = Arc::new(FakeProviderTransport::default());
+            transport.push_response(200, br#"{"data":[{"id":"gpt-realtime"}]}"#);
+            validate_configuration(&resolved, false).unwrap();
+            let models = fetch_models(&resolved, transport.clone(), ProviderCancellation::new())
+                .await
+                .unwrap();
+            assert_eq!(models, vec!["gpt-realtime"]);
+            let requests = transport.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].url, expected);
+            assert!(requests[0]
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                    && value == "Bearer fixture-key"));
+        }
+    }
+
+    #[tokio::test]
+    async fn realtime_ws_management_validation_and_static_models_reach_the_real_handshake() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        for provider in [
+            crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID,
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!(
+                "ws://{}/gateway/v1/realtime",
+                listener.local_addr().unwrap()
+            );
+            let server = tokio::spawn(async move {
+                tokio::time::timeout(Duration::from_secs(5), async move {
+                    for _ in 0..2 {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                        socket
+                            .send(Message::text(r#"{"type":"session.created"}"#))
+                            .await
+                            .unwrap();
+                        let update = socket.next().await.unwrap().unwrap();
+                        let update: serde_json::Value =
+                            serde_json::from_str(update.to_text().unwrap()).unwrap();
+                        assert_eq!(update["type"], "session.update");
+                        socket
+                            .send(Message::text(r#"{"type":"session.updated"}"#))
+                            .await
+                            .unwrap();
+                        assert!(
+                            matches!(
+                                socket.next().await,
+                                None | Some(Ok(Message::Close(_))) | Some(Err(_))
+                            ),
+                            "management probes must not upload audio or create a response"
+                        );
+                    }
+                })
+                .await
+                .expect("fake management Realtime server stalled");
+            });
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            credentials
+                .set_active_provider(ProviderSlot::Omni, "openai".into())
+                .await
+                .unwrap();
+            for (account, value) in [
+                (OMNI_API_KEY_ACCOUNT, "fixture-key"),
+                (OMNI_ENDPOINT_ACCOUNT, endpoint.as_str()),
+            ] {
+                credentials
+                    .write(
+                        CredentialKey::new(
+                            CredentialNamespace::Omni,
+                            Some(provider.into()),
+                            account,
+                        )
+                        .unwrap(),
+                        SecretValue::new(value),
+                    )
+                    .await
+                    .unwrap();
+            }
+            let service =
+                ProviderService::new(credentials.clone(), Arc::new(crate::TokioTaskSpawner));
+            let request = ProviderRequest {
+                kind: ProviderKind::Omni,
+                channel_id: Some(provider.into()),
+                thinking_enabled: false,
+            };
+            service.validate(request.clone()).await.unwrap();
+            assert_eq!(
+                service.list_models(request).await.unwrap().models,
+                provider_descriptor(ProviderKind::Omni, provider)
+                    .unwrap()
+                    .static_models
+            );
+            // Management of an inactive provider must neither read the active
+            // provider's credentials nor switch the dictation pipeline.
+            assert_eq!(
+                credentials
+                    .active_provider(ProviderSlot::Omni)
+                    .await
+                    .unwrap(),
+                "openai"
+            );
+            let active = service
+                .resolve(ProviderRequest {
+                    kind: ProviderKind::Omni,
+                    channel_id: None,
+                    thinking_enabled: false,
+                })
+                .await
+                .unwrap();
+            assert_eq!(active.provider_id, "openai");
+            assert!(active.api_key.is_none());
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
     }
 
     #[test]
@@ -2395,6 +2681,7 @@ mod tests {
         ];
         for (provider_type, expected_models) in expected {
             let resolved = ResolvedProvider {
+                realtime_options: Default::default(),
                 thinking_enabled: false,
                 bailian_protocol: crate::provider_rules::BailianProtocol::Auto,
                 protocol: LlmProtocolConfig::default(),

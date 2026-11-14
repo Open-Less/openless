@@ -778,7 +778,7 @@
       "validationProbe": "omni_text"
     },
     {
-      "authRequirement": "api_key",
+      "authRequirement": "endpoint_model_optional_api_key",
       "defaultEndpoint": "https://api.openai.com/v1",
       "defaultModel": "gpt-realtime-2.1",
       "defaultRequestFormat": null,
@@ -788,6 +788,36 @@
       "staticModels": [
         "gpt-realtime-2.1",
         "gpt-realtime-2.1-mini"
+      ],
+      "supportedRequestFormats": [],
+      "validationProbe": "omni_text"
+    },
+    {
+      "authRequirement": "endpoint_model_optional_api_key",
+      "defaultEndpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+      "defaultModel": "qwen3.5-omni-flash-realtime",
+      "defaultRequestFormat": null,
+      "kind": "omni",
+      "labelKey": "omniDashscopeRealtime",
+      "providerType": "dashscope-realtime",
+      "staticModels": [
+        "qwen3.5-omni-flash-realtime",
+        "qwen3.5-omni-plus-realtime",
+        "qwen3.8-omni-flash-realtime"
+      ],
+      "supportedRequestFormats": [],
+      "validationProbe": "omni_text"
+    },
+    {
+      "authRequirement": "endpoint_model_optional_api_key",
+      "defaultEndpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+      "defaultModel": "qwen3-omni-flash-realtime-2025-09-15",
+      "defaultRequestFormat": null,
+      "kind": "omni",
+      "labelKey": "omniDashscopeRealtimeLegacy",
+      "providerType": "dashscope-realtime-legacy",
+      "staticModels": [
+        "qwen3-omni-flash-realtime-2025-09-15"
       ],
       "supportedRequestFormats": [],
       "validationProbe": "omni_text"

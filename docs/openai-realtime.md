@@ -1,5 +1,8 @@
 # Native OpenAI Realtime dictation
 
+See [Native Realtime setup and protocol compatibility](native-realtime.md) for
+the GUI controls, gateway authentication, Qwen profiles and tested boundaries.
+
 Choose **Multimodal → OpenAI Realtime**, enter an OpenAI API key and select a
 Realtime model. The default API root is `https://api.openai.com/v1`. This provider
 uses the Realtime WebSocket protocol; the existing **OpenAI** provider continues
@@ -12,8 +15,12 @@ OpenLess queues PCM immediately, opens the session in the background and sends
 audio while recording. Stopping recording flushes the final sample, commits the
 audio and requests one text response. Server turn detection is disabled. There
 is no generated speech and no separate ASR service or second polishing request.
-The 2.x models use `low` reasoning effort; the text-LLM thinking toggle does not
-change it. Older custom Realtime model names do not receive this parameter.
+The default **Auto** reasoning setting uses `low` for recognized 2.x models and
+omits the parameter for older models. The Realtime-specific effort dropdown is
+independent of the text-LLM thinking toggle. **Omit** lets the server choose;
+**none** is experimental and can fall back once to `low` only when the initial
+session setup explicitly rejects that effort value. Authentication, quota and
+network failures do not trigger this fallback.
 
 The existing style, vocabulary, working languages, Chinese-script preference,
 cursor context and explicit translation mode form the prompt. Cursor capture is

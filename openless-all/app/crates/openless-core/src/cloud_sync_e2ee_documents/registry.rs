@@ -1101,6 +1101,7 @@ pub const OMNI_ACCOUNTS: &[&str] = &[
     "omni.model",
     "omni.extra_headers",
     "omni.temperature",
+    "omni.realtime_options",
 ];
 pub fn credential_accounts(namespace: SyncNamespace) -> &'static [&'static str] {
     match namespace {
@@ -1128,7 +1129,7 @@ pub fn public_credential_account(namespace: SyncNamespace, account: &str) -> boo
                 | "ark.service_tier"
         ) | (
             SyncNamespace::Omni,
-            "omni.endpoint" | "omni.model" | "omni.temperature"
+            "omni.endpoint" | "omni.model" | "omni.temperature" | "omni.realtime_options"
         )
     )
 }

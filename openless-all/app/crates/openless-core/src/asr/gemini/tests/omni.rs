@@ -92,6 +92,7 @@ async fn omni_verify_preserves_http_errors() {
             kind: ProviderKind::Omni,
             channel_id: None,
             thinking_enabled: false,
+            realtime_options: Default::default(),
         })
         .await
         .unwrap_err();

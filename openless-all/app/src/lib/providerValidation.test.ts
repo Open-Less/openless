@@ -10,6 +10,10 @@ import { fr } from '../i18n/fr';
 import { de } from '../i18n/de';
 
 const realtime = providerValidationCopy('omni', 'openai-realtime');
+for (const provider of ['dashscope-realtime', 'dashscope-realtime-legacy']) {
+  if (JSON.stringify(providerValidationCopy('omni', provider)) !== JSON.stringify(realtime))
+    throw new Error('All Realtime profiles must describe a socket/session configuration check');
+}
 if (
   realtime.hintKey !== 'settings.channels.validationHintRealtime' ||
   realtime.successKey !== 'settings.providers.validateSuccessRealtime'

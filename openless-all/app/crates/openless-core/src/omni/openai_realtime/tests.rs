@@ -23,6 +23,7 @@ fn config(endpoint: &str) -> OmniConfig {
         extra_headers: HashMap::new(),
         temperature: None,
         thinking_enabled: false,
+        realtime_options: Default::default(),
     }
 }
 
@@ -159,6 +160,84 @@ fn endpoint_uses_api_root_and_preserves_gateway_prefix_without_query_credentials
     }
     assert!(transport::endpoint("https://user:secret@example.com/v1", DEFAULT_MODEL).is_err());
     assert!(transport::endpoint("file:///tmp/realtime", DEFAULT_MODEL).is_err());
+}
+
+#[test]
+fn api_root_removes_only_the_realtime_suffix_and_preserves_safe_gateway_queries() {
+    for (source, expected) in [
+        ("https://api.openai.com", "https://api.openai.com/v1"),
+        ("https://api.openai.com/v1", "https://api.openai.com/v1"),
+        (
+            "wss://example.com/gateway/v1/realtime/?routing=one&model=old&API_KEY=secret&access_token=hidden#fragment",
+            "https://example.com/gateway/v1?routing=one",
+        ),
+        (
+            "ws://localhost:18765/custom/api/realtime?tenant=a%2Fb&key=secret",
+            "http://localhost:18765/custom/api?tenant=a%2Fb",
+        ),
+        (
+            "https://example.com/gateway%20one/v1/chat/completions?route=x&model=old",
+            "https://example.com/gateway%20one/v1?route=x",
+        ),
+        ("https://example.com/realtime", "https://example.com/"),
+    ] {
+        assert_eq!(transport::api_root(source).unwrap().as_str(), expected);
+    }
+    for source in [
+        "wss://user:secret@example.com/v1/realtime",
+        "file:///tmp/realtime",
+        "https:///",
+    ] {
+        assert!(transport::api_root(source).is_err());
+    }
+    assert_eq!(
+        transport::endpoint("https://example.com/realtime", DEFAULT_MODEL)
+            .unwrap()
+            .as_str(),
+        "https://example.com/realtime?model=gpt-realtime-2.1"
+    );
+}
+
+#[test]
+fn setup_reasoning_uses_a_version_token_instead_of_a_legacy_date_prefix() {
+    for model in [
+        "gpt-realtime-2",
+        "gpt-realtime-2-mini",
+        "gpt-realtime-2.0",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "gpt-realtime-2.1-2026-10-01",
+        "gpt-realtime-2.1-mini-2026-10-01",
+        " gpt-realtime-2.1 ",
+    ] {
+        let mut cfg = config("https://api.openai.com/v1");
+        cfg.model = model.into();
+        let setup = protocol::decode(protocol::setup(&cfg, "fixture"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(setup["session"]["reasoning"]["effort"], "low", "{model}");
+    }
+    for model in [
+        "gpt-realtime",
+        "gpt-realtime-mini",
+        "gpt-realtime-2025-08-28",
+        "gpt-realtime-mini-2025-12-15",
+        "gpt-realtime-2026-10-01",
+        "gpt-4o-realtime-preview",
+        "gpt-realtime-20",
+        "gpt-realtime-2x",
+        "gpt-realtime-2.foo",
+        "gpt-realtime-2.1x",
+        "gpt-realtime-2.",
+    ] {
+        let mut cfg = config("https://api.openai.com/v1");
+        cfg.model = model.into();
+        cfg.thinking_enabled = true;
+        let setup = protocol::decode(protocol::setup(&cfg, "fixture"))
+            .unwrap()
+            .unwrap();
+        assert!(setup["session"].get("reasoning").is_none(), "{model}");
+    }
 }
 
 #[test]

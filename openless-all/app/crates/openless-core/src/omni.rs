@@ -12,6 +12,7 @@
 
 mod gemini_transcribe;
 pub(crate) mod openai_realtime;
+pub mod realtime_options;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ pub struct OmniConfig {
     pub extra_headers: HashMap<String, String>,
     pub temperature: Option<f32>,
     pub thinking_enabled: bool,
+    pub realtime_options: realtime_options::RealtimeOptions,
 }
 
 impl OmniConfig {
@@ -420,7 +422,7 @@ impl OmniProvider {
         config: OmniConfig,
         task_spawner: Arc<dyn crate::config::TaskSpawner>,
     ) -> Self {
-        if config.provider_id.trim() == crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID {
+        if crate::provider_rules::is_realtime_omni_provider(&config.provider_id) {
             Self::OpenAIRealtime(openai_realtime::OpenAIRealtime::new(config, task_spawner))
         } else if config.is_gemini() {
             let label = OmniCallLabel {
@@ -608,6 +610,7 @@ mod tests {
             extra_headers: HashMap::new(),
             temperature: Some(0.3),
             thinking_enabled: false,
+            realtime_options: Default::default(),
         }
     }
 

@@ -1657,9 +1657,49 @@ export const en: typeof zhCN = {
       asrProviderDesc: 'Switching providers automatically loads the matching credentials.',
       asrTitle: 'ASR (transcription)',
       asrDesc: 'Used to turn recorded speech into text.',
+      realtimeOptions: {
+        bearer: 'Bearer (main key)',
+        apiKey: 'API-Key (main key)',
+        headers: 'Extra Headers only',
+        minimal: 'minimal (lowest documented)',
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        authLabel: 'Realtime authentication',
+        bearerHint:
+          'The main key supplies Authorization: Bearer. Extra Headers cannot override authentication.',
+        apiKeyHint:
+          'The main key supplies the api-key header. Extra Headers cannot override authentication.',
+        headersHint:
+          'Send only the Extra Headers you explicitly provide. The main key may be empty; add the authentication headers required by your service below.',
+        effortLabel: 'Reasoning effort',
+        effortHint:
+          'Auto follows model capabilities; omit leaves the field out and uses the service default. none is experimental and absent from the public enum. Low reasoning is not disabled reasoning.',
+        auto: 'Auto (capability based, default)',
+        omit: 'omit (service default)',
+        none: 'none (experimental)',
+        fallbackLabel: 'Fall back from unsupported none to low once',
+        fallbackHint:
+          'Only a specific protocol/parameter rejection of none triggers fallback. Network timeouts, quota and other errors do not change the effort.',
+        configError:
+          'Realtime options could not be read or saved. Reload or reset this provider’s options.',
+        retry: 'Reload',
+        reset: 'Reset options',
+        optionalKey: 'Main API key (optional in Headers-only mode)',
+        modelCandidates: 'Load model candidates',
+        modelCandidatesHint:
+          'Candidates may come from a built-in catalog or the service, and do not list all models available to your account. Validate the selected configuration.',
+        openaiNotice:
+          'OpenAI GA Realtime-compatible protocol with text output. Recording at 16 kHz is continuously converted to 24 kHz for upload. Default API root: https://api.openai.com/v1. Custom endpoints must implement the same protocol; arbitrary WebSocket services are not automatically compatible.',
+        dashscopeNotice:
+          'DashScope Qwen 3.5 / 3.8 Realtime text composition; 16 kHz PCM upload. Default public endpoint: wss://dashscope.aliyuncs.com/api-ws/v1/realtime. Qwen 3.8 requires your workspace-specific domain. This channel handles audio only; text selection/Q&A tasks use the separately configured text model.',
+        legacyNotice:
+          'Legacy Qwen3 Realtime text composition; 16 kHz PCM upload. Default public endpoint: wss://dashscope.aliyuncs.com/api-ws/v1/realtime. This is separate from the newer protocol and sends no OpenAI reasoning effort. Auxiliary text tasks use the separately configured text model.',
+      },
       omniTitle: 'Multimodal model',
       openaiRealtimeOmniNotice:
-        'Choose an audio-capable Realtime model to turn recordings directly into prepared text, without a separate polishing pass. Uses a fixed low reasoning effort and returns text, not generated speech. Requires an OpenAI API key and API credits; a Codex or ChatGPT login cannot replace the key. Other OpenAI models may not accept audio.',
+        'OpenAI GA Realtime-compatible protocol with text output. Recording at 16 kHz is continuously converted to 24 kHz for upload. Default API root: https://api.openai.com/v1. Custom endpoints must implement the same protocol; arbitrary WebSocket services are not automatically compatible.',
       omniDesc:
         'One model that turns audio + prompt into the final text directly (experimental pipeline).',
       pipelineModeLabel: 'Pipeline mode',
@@ -1724,7 +1764,9 @@ export const en: typeof zhCN = {
         asrLocalQwen3C: 'Local Qwen3-ASR (C / CPU)',
         asrAppleSpeech: 'Apple Speech (macOS)',
         omniOpenai: 'OpenAI (audio-capable)',
-        omniOpenaiRealtime: 'OpenAI Realtime',
+        omniOpenaiRealtime: 'OpenAI GA-compatible Realtime',
+        omniDashscopeRealtime: 'DashScope Realtime (Qwen 3.5 / 3.8)',
+        omniDashscopeRealtimeLegacy: 'DashScope Realtime (legacy Qwen3)',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },

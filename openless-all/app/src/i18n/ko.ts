@@ -1633,9 +1633,48 @@ export const ko: typeof zhCN = {
       asrProviderDesc: '전환 시 해당하는 자격 증명이 자동 선택됩니다.',
       asrTitle: 'ASR 음성(전사)',
       asrDesc: '녹음된 음성을 텍스트로 전사합니다.',
+      realtimeOptions: {
+        bearer: 'Bearer (기본 키)',
+        apiKey: 'API-Key (기본 키)',
+        headers: '추가 Headers만 사용',
+        minimal: 'minimal (문서상 최저)',
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        authLabel: 'Realtime 인증 방식',
+        bearerHint:
+          '기본 키를 Authorization: Bearer에 넣습니다. 추가 Headers는 인증을 덮어쓰지 않습니다.',
+        apiKeyHint: '기본 키를 api-key 헤더에 넣습니다. 추가 Headers는 인증을 덮어쓰지 않습니다.',
+        headersHint:
+          '명시적으로 입력한 추가 Headers만 보냅니다. 기본 키는 비워 둘 수 있습니다. 아래에 서비스가 요구하는 인증 헤더를 입력하세요.',
+        effortLabel: '추론 수준',
+        effortHint:
+          'Auto는 모델 기능에 따릅니다. omit은 필드를 보내지 않고 서비스 기본값을 사용합니다. none은 공개 열거형에 없는 실험 옵션입니다. 낮은 추론은 생각 끄기와 다릅니다.',
+        auto: 'Auto (기능에 따름, 기본값)',
+        omit: 'omit (서비스 기본값)',
+        none: 'none (실험)',
+        fallbackLabel: 'none 미지원 시 low로 한 번 전환',
+        fallbackHint:
+          'none을 명시적으로 거부하는 프로토콜/매개변수 오류에만 적용됩니다. 네트워크 시간 초과, 할당량 등 다른 오류에는 전환하지 않습니다.',
+        configError:
+          'Realtime 옵션을 읽거나 저장하지 못했습니다. 다시 읽거나 이 제공업체의 옵션을 초기화하세요.',
+        retry: '다시 읽기',
+        reset: '옵션 초기화',
+        optionalKey: '기본 API 키 (Headers 전용 모드에서는 선택 사항)',
+        modelCandidates: '모델 후보 불러오기',
+        modelCandidatesHint:
+          '후보는 내장 목록 또는 서비스 응답에서 가져옵니다. 계정의 모든 사용 가능 모델을 의미하지 않습니다. 선택한 설정을 검증하세요.',
+        openaiNotice:
+          '텍스트를 출력하는 OpenAI GA Realtime 호환 프로토콜입니다. 16 kHz 녹음을 연속으로 24 kHz로 변환해 보냅니다. 기본 API 루트: https://api.openai.com/v1. 사용자 지정 주소도 같은 프로토콜을 지원해야 하며 모든 WebSocket이 호환되는 것은 아닙니다.',
+        dashscopeNotice:
+          'Qwen 3.5 / 3.8 Realtime 텍스트 정리, 16 kHz PCM 업로드. 기본 공개 주소: wss://dashscope.aliyuncs.com/api-ws/v1/realtime. Qwen 3.8은 워크스페이스 전용 도메인이 필요합니다. 음성만 처리하며 선택 영역 질문 등 텍스트 작업은 별도 텍스트 모델을 사용합니다.',
+        legacyNotice:
+          '이전 Qwen3 Realtime 텍스트 정리, 16 kHz PCM. 기본 주소: wss://dashscope.aliyuncs.com/api-ws/v1/realtime. 새 프로토콜과 분리되며 OpenAI 추론 값을 보내지 않습니다. 텍스트 보조 작업은 별도 모델을 사용합니다.',
+      },
       omniTitle: '멀티모달 모델',
       openaiRealtimeOmniNotice:
-        '오디오 입력을 지원하는 Realtime 모델을 선택하면 별도의 다듬기 단계 없이 녹음을 정리된 텍스트로 바로 출력합니다. 추론 수준은 low로 고정하며 음성은 생성하지 않습니다. OpenAI API 키와 API 크레딧이 필요하며 Codex 또는 ChatGPT 로그인으로 키를 대신할 수 없습니다. 다른 OpenAI 모델은 오디오를 지원하지 않을 수 있습니다.',
+        '텍스트를 출력하는 OpenAI GA Realtime 호환 프로토콜입니다. 16 kHz 녹음을 연속으로 24 kHz로 변환해 보냅니다. 기본 API 루트: https://api.openai.com/v1. 사용자 지정 주소도 같은 프로토콜을 지원해야 하며 모든 WebSocket이 호환되는 것은 아닙니다.',
       omniDesc:
         '하나의 모델이 프롬프트 + 오디오를 받아 최종 텍스트를 한 번에 출력합니다(실험적 파이프라인).',
       pipelineModeLabel: '인식 파이프라인',
@@ -1700,7 +1739,9 @@ export const ko: typeof zhCN = {
         asrLocalQwen3C: '로컬 Qwen3-ASR(C / CPU)',
         asrAppleSpeech: 'Apple 음성 (macOS)',
         omniOpenai: 'OpenAI (오디오 지원)',
-        omniOpenaiRealtime: 'OpenAI Realtime',
+        omniOpenaiRealtime: 'OpenAI GA 호환 Realtime',
+        omniDashscopeRealtime: 'DashScope Realtime (Qwen 3.5 / 3.8)',
+        omniDashscopeRealtimeLegacy: 'DashScope Realtime (이전 Qwen3)',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },

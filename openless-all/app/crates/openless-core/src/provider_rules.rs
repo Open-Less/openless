@@ -16,6 +16,34 @@ pub const ZENMUX_ASR_PROVIDER_ID: &str = "zenmux";
 /// Explicit Realtime transport; the existing `openai` Omni provider keeps Chat Completions.
 pub const OPENAI_REALTIME_OMNI_PROVIDER_ID: &str = "openai-realtime";
 pub const OPENAI_REALTIME_OMNI_MODELS: &[&str] = &["gpt-realtime-2.1", "gpt-realtime-2.1-mini"];
+pub const DASHSCOPE_REALTIME_OMNI_PROVIDER_ID: &str = "dashscope-realtime";
+pub const DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID: &str = "dashscope-realtime-legacy";
+pub const DASHSCOPE_REALTIME_OMNI_MODELS: &[&str] = &[
+    "qwen3.5-omni-flash-realtime",
+    "qwen3.5-omni-plus-realtime",
+    "qwen3.8-omni-flash-realtime",
+];
+pub const DASHSCOPE_REALTIME_LEGACY_OMNI_MODELS: &[&str] =
+    &["qwen3-omni-flash-realtime-2025-09-15"];
+
+/// Explicit wire protocols, rather than assuming every WebSocket is compatible.
+pub fn is_realtime_omni_provider(provider_type: &str) -> bool {
+    matches!(
+        provider_type.trim(),
+        OPENAI_REALTIME_OMNI_PROVIDER_ID
+            | DASHSCOPE_REALTIME_OMNI_PROVIDER_ID
+            | DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID
+    )
+}
+
+/// The Qwen Realtime text-message contract is not the OpenAI conversation-item
+/// contract. Route auxiliary text work through the configured text provider.
+pub fn omni_uses_text_provider_for_auxiliary(provider_type: &str) -> bool {
+    matches!(
+        provider_type.trim(),
+        DASHSCOPE_REALTIME_OMNI_PROVIDER_ID | DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID
+    )
+}
 
 const BAILIAN_PROVIDER_ID: &str = "bailian";
 const QWEN3_REALTIME_PROVIDER_ID: &str = "bailian-qwen3-realtime";
@@ -89,6 +117,11 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
 const OMNI_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("openai", "omniOpenai"),
     (OPENAI_REALTIME_OMNI_PROVIDER_ID, "omniOpenaiRealtime"),
+    (DASHSCOPE_REALTIME_OMNI_PROVIDER_ID, "omniDashscopeRealtime"),
+    (
+        DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID,
+        "omniDashscopeRealtimeLegacy",
+    ),
     ("gemini", "omniGemini"),
     ("dashscope-omni", "omniDashscope"),
     ("custom", "custom"),
@@ -287,7 +320,11 @@ fn provider_descriptor_with_label(
         ProviderKind::Omni => (
             default_omni_endpoint(&id),
             default_omni_model(&id),
-            AuthRequirement::ApiKey,
+            if is_realtime_omni_provider(&id) {
+                AuthRequirement::EndpointModelOptionalApiKey
+            } else {
+                AuthRequirement::ApiKey
+            },
             ValidationProbe::OmniText,
         ),
     };
@@ -380,6 +417,10 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
         (ProviderKind::Asr, "minimax") => &["asr-1.0"],
         (ProviderKind::Omni, OPENAI_REALTIME_OMNI_PROVIDER_ID) => OPENAI_REALTIME_OMNI_MODELS,
+        (ProviderKind::Omni, DASHSCOPE_REALTIME_OMNI_PROVIDER_ID) => DASHSCOPE_REALTIME_OMNI_MODELS,
+        (ProviderKind::Omni, DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID) => {
+            DASHSCOPE_REALTIME_LEGACY_OMNI_MODELS
+        }
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -486,6 +527,12 @@ pub fn llm_configured(provider_id: &str, configuration: &CredentialConfiguration
 }
 
 pub fn omni_configured(provider_id: &str, configuration: &CredentialConfiguration) -> bool {
+    // Hosts without the typed Realtime-auth UI retain the default Bearer-key
+    // requirement. A host that explicitly selected headers-only auth may supply
+    // its verified auth readiness through omni_api_key for this status check.
+    if is_realtime_omni_provider(provider_id) && !configuration.omni_api_key {
+        return false;
+    }
     provider_descriptor(ProviderKind::Omni, provider_id)
         .is_some_and(|descriptor| auth_requirement_satisfied(&descriptor, configuration))
 }
@@ -743,6 +790,9 @@ pub fn default_omni_endpoint(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "openai" => Some("https://api.openai.com/v1"),
         OPENAI_REALTIME_OMNI_PROVIDER_ID => Some("https://api.openai.com/v1"),
+        DASHSCOPE_REALTIME_OMNI_PROVIDER_ID | DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID => {
+            Some("wss://dashscope.aliyuncs.com/api-ws/v1/realtime")
+        }
         "gemini" => Some("https://generativelanguage.googleapis.com/v1beta"),
         "dashscope-omni" => Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
         _ => None,
@@ -753,6 +803,10 @@ pub fn default_omni_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "openai" => Some("gpt-4o-audio-preview"),
         OPENAI_REALTIME_OMNI_PROVIDER_ID => Some(OPENAI_REALTIME_OMNI_MODELS[0]),
+        DASHSCOPE_REALTIME_OMNI_PROVIDER_ID => Some(DASHSCOPE_REALTIME_OMNI_MODELS[0]),
+        DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID => {
+            Some(DASHSCOPE_REALTIME_LEGACY_OMNI_MODELS[0])
+        }
         "gemini" => Some("gemini-3.5-flash-lite"),
         "dashscope-omni" => Some("qwen3-omni-flash"),
         _ => None,
@@ -1427,7 +1481,10 @@ mod tests {
         );
         assert_eq!(realtime.default_model.as_deref(), Some("gpt-realtime-2.1"));
         assert_eq!(realtime.static_models, OPENAI_REALTIME_OMNI_MODELS);
-        assert_eq!(realtime.auth_requirement, AuthRequirement::ApiKey);
+        assert_eq!(
+            realtime.auth_requirement,
+            AuthRequirement::EndpointModelOptionalApiKey
+        );
         // Hosts use the Omni validation entry point, but Realtime checks only a session handshake.
         assert_eq!(realtime.validation_probe, ValidationProbe::OmniText);
         assert!(realtime.supported_request_formats.is_empty());

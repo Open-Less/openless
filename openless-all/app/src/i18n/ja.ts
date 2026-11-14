@@ -1642,9 +1642,49 @@ export const ja: typeof zhCN = {
       asrProviderDesc: '切り替えると対応する認証情報が自動選択されます。',
       asrTitle: 'ASR 音声（転写）',
       asrDesc: '録音した音声をテキストに文字起こしします。',
+      realtimeOptions: {
+        bearer: 'Bearer（メインキー）',
+        apiKey: 'API-Key（メインキー）',
+        headers: '追加 Headers のみ',
+        minimal: 'minimal（公開仕様の最低値）',
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        authLabel: 'Realtime 認証方式',
+        bearerHint:
+          'メインキーを Authorization: Bearer に設定します。追加 Headers は認証を上書きしません。',
+        apiKeyHint:
+          'メインキーを api-key ヘッダーに設定します。追加 Headers は認証を上書きしません。',
+        headersHint:
+          '明示的に入力した追加 Headers のみを送信します。メインキーは空欄にできます。サービスに必要な認証ヘッダーを下に入力してください。',
+        effortLabel: '推論レベル',
+        effortHint:
+          'Auto はモデルの機能に従います。omit は指定を省略しサービス既定値を使用します。none は公開仕様の列挙値にない実験設定です。低い推論は思考の無効化ではありません。',
+        auto: 'Auto（機能に応じる、既定）',
+        omit: 'omit（サービス既定）',
+        none: 'none（実験）',
+        fallbackLabel: 'none 非対応時に一度だけ low に変更',
+        fallbackHint:
+          'none を明示的に拒否するプロトコル／引数エラーの場合のみ変更します。通信のタイムアウト、利用枠などのエラーでは変更しません。',
+        configError:
+          'Realtime 設定を読み込めないか保存できません。再読み込みまたはこのプロバイダーの設定をリセットしてください。',
+        retry: '再読み込み',
+        reset: '設定をリセット',
+        optionalKey: 'メイン API キー（Headers のみの場合は省略可）',
+        modelCandidates: 'モデル候補を読み込む',
+        modelCandidatesHint:
+          '候補には内蔵一覧またはサービスの応答を使用します。アカウントで利用可能な全モデルの一覧ではありません。選択した設定を検証してください。',
+        openaiNotice:
+          'テキスト出力の OpenAI GA Realtime 互換プロトコルです。16 kHz の録音を連続的に 24 kHz に変換して送信します。既定の API ルートは https://api.openai.com/v1。接続先は同じプロトコルに対応している必要があり、任意の WebSocket には対応しません。',
+        dashscopeNotice:
+          'Qwen 3.5 / 3.8 Realtime のテキスト整形。16 kHz PCM を送信します。既定は wss://dashscope.aliyuncs.com/api-ws/v1/realtime。Qwen 3.8 はワークスペース専用ドメインが必要です。音声専用で、選択テキストの質問などは別途設定したテキストモデルを使います。',
+        legacyNotice:
+          '旧 Qwen3 Realtime のテキスト整形。16 kHz PCM、既定は wss://dashscope.aliyuncs.com/api-ws/v1/realtime。新プロトコルとは別で、OpenAI の推論パラメーターは送りません。テキスト補助機能は別途設定したモデルを使います。',
+      },
       omniTitle: 'マルチモーダルモデル',
       openaiRealtimeOmniNotice:
-        '音声入力に対応する Realtime モデルを選ぶと、別の推敲処理なしで録音から整えたテキストを直接生成します。推論レベルは low に固定し、音声は生成しません。OpenAI API キーと API 利用枠が必要です。Codex や ChatGPT のログインは API キーの代わりにはなりません。他の OpenAI モデルが音声対応とは限りません。',
+        'テキスト出力の OpenAI GA Realtime 互換プロトコルです。16 kHz の録音を連続的に 24 kHz に変換して送信します。既定の API ルートは https://api.openai.com/v1。接続先は同じプロトコルに対応している必要があり、任意の WebSocket には対応しません。',
       omniDesc:
         '1つのモデルが「プロンプト + 音声」から最終テキストを直接出力します（実験的パイプライン）。',
       pipelineModeLabel: '認識パイプライン',
@@ -1709,7 +1749,9 @@ export const ja: typeof zhCN = {
         asrLocalQwen3C: 'ローカル Qwen3-ASR（C / CPU）',
         asrAppleSpeech: 'Apple 音声認識 (macOS)',
         omniOpenai: 'OpenAI（音声対応）',
-        omniOpenaiRealtime: 'OpenAI Realtime',
+        omniOpenaiRealtime: 'OpenAI GA 互換 Realtime',
+        omniDashscopeRealtime: 'DashScope Realtime（Qwen 3.5 / 3.8）',
+        omniDashscopeRealtimeLegacy: 'DashScope Realtime（旧 Qwen3）',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },

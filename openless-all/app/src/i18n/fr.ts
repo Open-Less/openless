@@ -1706,9 +1706,49 @@ export const fr: typeof zhCN = {
         'Changer de fournisseur charge automatiquement les identifiants correspondants.',
       asrTitle: 'ASR (transcription)',
       asrDesc: 'Convertit la voix enregistrée en texte.',
+      realtimeOptions: {
+        bearer: 'Bearer (clé principale)',
+        apiKey: 'API-Key (clé principale)',
+        headers: 'Headers supplémentaires uniquement',
+        minimal: 'minimal (minimum documenté)',
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        authLabel: 'Authentification Realtime',
+        bearerHint:
+          'La clé principale fournit Authorization: Bearer. Les Headers supplémentaires ne remplacent pas cette authentification.',
+        apiKeyHint:
+          'La clé principale fournit le header api-key. Les Headers supplémentaires ne remplacent pas cette authentification.',
+        headersHint:
+          'Seuls les Headers saisis explicitement sont envoyés. La clé principale peut rester vide ; indiquez ci-dessous les en-têtes requis par le service.',
+        effortLabel: 'Niveau de raisonnement',
+        effortHint:
+          'Auto suit les capacités du modèle ; omit utilise le réglage du service. none est expérimental et absent de la liste publique. Un raisonnement faible ne désactive pas la réflexion.',
+        auto: 'Auto (selon les capacités, par défaut)',
+        omit: 'omit (réglage du service)',
+        none: 'none (expérimental)',
+        fallbackLabel: 'Revenir une fois à low si none est refusé',
+        fallbackHint:
+          'Uniquement après un rejet explicite de none par le protocole ou les paramètres. Un délai dépassé, le quota ou toute autre erreur ne change pas le niveau.',
+        configError:
+          'Impossible de lire ou enregistrer les options Realtime. Rechargez ou réinitialisez celles de ce fournisseur.',
+        retry: 'Recharger',
+        reset: 'Réinitialiser',
+        optionalKey: 'Clé API principale (facultative en mode Headers seuls)',
+        modelCandidates: 'Charger les modèles candidats',
+        modelCandidatesHint:
+          'Les candidats viennent du catalogue intégré ou du service, sans garantir tous les modèles accessibles au compte. Vérifiez la configuration choisie.',
+        openaiNotice:
+          'Protocole compatible OpenAI GA Realtime, sortie texte. Le son enregistré à 16 kHz est converti en continu à 24 kHz. Racine API par défaut : https://api.openai.com/v1. Le serveur doit utiliser le même protocole ; un WebSocket quelconque ne suffit pas.',
+        dashscopeNotice:
+          'Composition de texte Qwen 3.5 / 3.8 Realtime, PCM 16 kHz. Adresse publique par défaut : wss://dashscope.aliyuncs.com/api-ws/v1/realtime. Qwen 3.8 nécessite le domaine de votre espace de travail. Audio uniquement ; les fonctions texte utilisent le modèle configuré séparément.',
+        legacyNotice:
+          'Ancien protocole Qwen3 Realtime de composition texte, PCM 16 kHz. Adresse par défaut : wss://dashscope.aliyuncs.com/api-ws/v1/realtime. Aucun paramètre de raisonnement OpenAI. Les fonctions texte utilisent le modèle configuré séparément.',
+      },
       omniTitle: 'Modèle multimodal',
       openaiRealtimeOmniNotice:
-        'Choisissez un modèle Realtime acceptant l’audio pour transformer directement les enregistrements en texte organisé, sans seconde étape de révision. Le raisonnement reste fixé au niveau low et la sortie est textuelle, sans génération vocale. Une clé API et des crédits OpenAI sont nécessaires ; une connexion Codex ou ChatGPT ne remplace pas la clé. Les autres modèles OpenAI n’acceptent pas forcément l’audio.',
+        'Protocole compatible OpenAI GA Realtime, sortie texte. Le son enregistré à 16 kHz est converti en continu à 24 kHz. Racine API par défaut : https://api.openai.com/v1. Le serveur doit utiliser le même protocole ; un WebSocket quelconque ne suffit pas.',
       omniDesc:
         'Un modèle transforme directement l’audio et les instructions en texte final (flux expérimental).',
       pipelineModeLabel: 'Mode de traitement',
@@ -1773,7 +1813,9 @@ export const fr: typeof zhCN = {
         asrLocalQwen3C: 'Qwen3-ASR local (C / CPU)',
         asrAppleSpeech: 'Apple Speech (macOS)',
         omniOpenai: 'OpenAI (avec audio)',
-        omniOpenaiRealtime: 'OpenAI Realtime',
+        omniOpenaiRealtime: 'Realtime compatible OpenAI GA',
+        omniDashscopeRealtime: 'DashScope Realtime (Qwen 3.5 / 3.8)',
+        omniDashscopeRealtimeLegacy: 'DashScope Realtime (ancien Qwen3)',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },

@@ -3,12 +3,16 @@
 //! One worker owns the socket. Credentials, audio and document context are never logged.
 //! The caller supplies the existing frozen Omni prompt; this module never reads a host UI.
 
+mod dashscope;
 mod pcm;
+#[cfg(test)]
+mod profile_tests;
 mod protocol;
 mod session;
 #[cfg(test)]
 mod tests;
 pub(crate) mod transport;
+mod wire;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -118,9 +122,13 @@ pub struct OpenAIRealtime {
 
 impl OpenAIRealtime {
     pub(crate) fn new(mut config: OmniConfig, task_spawner: Arc<dyn TaskSpawner>) -> Self {
-        config.provider_id = PROVIDER_ID.to_owned();
+        if config.provider_id.trim().is_empty() {
+            config.provider_id = PROVIDER_ID.to_owned();
+        }
         if config.model.trim().is_empty() {
-            config.model = DEFAULT_MODEL.to_owned();
+            config.model = crate::provider_rules::default_omni_model(&config.provider_id)
+                .unwrap_or(DEFAULT_MODEL)
+                .to_owned();
         }
         Self {
             config,
@@ -144,10 +152,16 @@ impl OpenAIRealtime {
     ) -> Result<Arc<OpenAIRealtimeSession>, LLMError> {
         // The local queue is ready immediately. Never delay microphone startup on a
         // network handshake: short recordings and their stop marker can arrive first.
-        if self.config.api_key.trim().is_empty() {
-            return Err(LLMError::MissingCredentials);
+        let profile = wire::Profile::from_provider(&self.config.provider_id)?;
+        if !user_text.trim().is_empty() && !profile.supports_text_input() {
+            return Err(LLMError::ParseError(
+                "This Realtime protocol supports audio dictation; use the configured text model for text editing and questions".into(),
+            ));
         }
-        transport::endpoint(&self.config.base_url, &self.config.model)?;
+        self.config
+            .realtime_options
+            .authenticated_headers(&self.config.api_key, &self.config.extra_headers)?;
+        profile.endpoint(&self.config)?;
         let (sender, receiver) = mpsc::channel(QUEUE_FRAMES);
         let (result_tx, result_rx) = oneshot::channel();
         let (shutdown, mut cancelled) = watch::channel(None);
@@ -175,7 +189,7 @@ impl OpenAIRealtime {
             };
             match connected {
                 Ok(mut socket) => {
-                    let result = session::run(&mut socket, receiver, cancelled, partials).await;
+                    let result = session::run(&mut socket, profile, receiver, cancelled, partials).await;
                     release_audio_queue(&audio);
                     let _ = result_tx.send(result);
                     // Release text before best-effort cleanup; a slow close handshake

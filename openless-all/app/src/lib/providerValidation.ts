@@ -1,4 +1,5 @@
 import type { ProviderKind } from './ipc/providers';
+import { isRealtimeOmniProvider } from './realtimeOmni';
 
 /** Validation must describe the request actually sent by the selected transport. */
 export function providerValidationCopy(
@@ -6,7 +7,7 @@ export function providerValidationCopy(
   providerType?: string,
   audioValidation = false,
 ): { hintKey: string; successKey: string } {
-  if (kind === 'omni' && providerType === 'openai-realtime') {
+  if (kind === 'omni' && isRealtimeOmniProvider(providerType ?? '')) {
     return {
       hintKey: 'settings.channels.validationHintRealtime',
       successKey: 'settings.providers.validateSuccessRealtime',

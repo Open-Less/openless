@@ -1575,9 +1575,46 @@ export const zhTW: typeof zhCN = {
       asrProviderDesc: '切換後將自動選用對應憑據。',
       asrTitle: 'ASR 語音（轉寫）',
       asrDesc: '用於將錄製的語音轉寫為文字。',
+      realtimeOptions: {
+        bearer: 'Bearer（主要 Key）',
+        apiKey: 'API-Key（主要 Key）',
+        headers: '僅使用額外 Headers',
+        minimal: 'minimal（最低公開等級）',
+        low: 'low（低）',
+        medium: 'medium（中）',
+        high: 'high（高）',
+        xhigh: 'xhigh（最高）',
+        authLabel: 'Realtime 驗證方式',
+        bearerHint: '主要 Key 寫入 Authorization: Bearer；額外 Headers 不覆寫驗證。',
+        apiKeyHint: '主要 Key 寫入 api-key Header；額外 Headers 不覆寫驗證。',
+        headersHint:
+          '僅傳送你明確填寫的額外 Headers；主要 Key 可留空。請在下方填寫服務要求的驗證 Header。',
+        effortLabel: '推理等級',
+        effortHint:
+          'Auto 依模型能力選擇；omit 不傳送等級，使用服務預設。none 為實驗選項，尚未列入公開介面列舉；低推理不等於關閉思考。',
+        auto: 'Auto（依能力，預設）',
+        omit: 'omit（使用服務預設）',
+        none: 'none（實驗）',
+        fallbackLabel: '不支援 none 時回退 low 一次',
+        fallbackHint:
+          '僅對明確拒絕 none 的協定或參數錯誤回退；網路逾時、額度等其他錯誤不會自動切換。',
+        configError: '無法讀取或儲存 Realtime 設定。可重新讀取或重設此供應商的選項。',
+        retry: '重新讀取',
+        reset: '重設選項',
+        optionalKey: '主要 API Key（僅 Headers 模式可空白）',
+        modelCandidates: '載入模型候選',
+        modelCandidatesHint:
+          '候選可能來自內建目錄或服務回傳，不代表帳號的全部可用模型。請驗證所選設定。',
+        openaiNotice:
+          'OpenAI GA Realtime 相容協定，輸出文字。16 kHz 錄音持續轉為 24 kHz 上傳；預設 API 根網址 https://api.openai.com/v1。自訂網址必須相容同一協定，並非任意 WebSocket 服務都能使用。',
+        dashscopeNotice:
+          '百煉 Qwen 3.5 / 3.8 Realtime 文字整理協定，上傳 16 kHz PCM。預設公共入口 wss://dashscope.aliyuncs.com/api-ws/v1/realtime；Qwen 3.8 必須填寫業務空間專屬網域。本通道僅整理音訊；選取問答等純文字任務仍使用另行設定的文字模型。',
+        legacyNotice:
+          '舊 Qwen3 Realtime 文字整理協定，上傳 16 kHz PCM，預設公共入口 wss://dashscope.aliyuncs.com/api-ws/v1/realtime。與新版協定分開；不傳送 OpenAI 推理參數。純文字輔助任務使用另行設定的文字模型。',
+      },
       omniTitle: '多模態模型',
       openaiRealtimeOmniNotice:
-        '選擇支援音訊輸入的 Realtime 模型，直接將錄音整理為文字，無需獨立潤色。固定使用 low 推理等級，僅輸出文字、不產生語音。使用 OpenAI API Key 和 API 額度；Codex 或 ChatGPT 登入不能代替 API Key。其他 OpenAI 模型不一定支援音訊。',
+        'OpenAI GA Realtime 相容協定，輸出文字。16 kHz 錄音持續轉為 24 kHz 上傳；預設 API 根網址 https://api.openai.com/v1。自訂網址必須相容同一協定，並非任意 WebSocket 服務都能使用。',
       omniDesc: '一個模型直接接收「提示詞 + 音訊」一步輸出最終文字（實驗性管線）。',
       pipelineModeLabel: '識別管線',
       pipelineModeHint: '傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。',
@@ -1640,7 +1677,9 @@ export const zhTW: typeof zhCN = {
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
         asrAppleSpeech: 'Apple 語音（macOS）',
         omniOpenai: 'OpenAI（支援音訊）',
-        omniOpenaiRealtime: 'OpenAI Realtime',
+        omniOpenaiRealtime: 'OpenAI GA 相容 Realtime',
+        omniDashscopeRealtime: '百煉 Realtime（Qwen 3.5 / 3.8）',
+        omniDashscopeRealtimeLegacy: '百煉 Realtime（舊 Qwen3）',
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里雲百煉 Omni',
       },

@@ -26,10 +26,11 @@ use crate::credentials::{
     ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, ASR_VOCABULARY_ID_ACCOUNT,
     LLM_API_KEY_ACCOUNT, LLM_ENDPOINT_ACCOUNT, LLM_EXTRA_HEADERS_ACCOUNT, LLM_TEMPERATURE_ACCOUNT,
     OMNI_API_KEY_ACCOUNT, OMNI_ENDPOINT_ACCOUNT, OMNI_EXTRA_HEADERS_ACCOUNT, OMNI_MODEL_ACCOUNT,
-    OMNI_TEMPERATURE_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT, TENCENT_CLOUD_SECRET_ID_ACCOUNT,
-    TENCENT_CLOUD_SECRET_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
-    VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT,
-    XFYUN_API_KEY_ACCOUNT, XFYUN_APP_ID_ACCOUNT,
+    OMNI_REALTIME_OPTIONS_ACCOUNT, OMNI_TEMPERATURE_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_ID_ACCOUNT, TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+    VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT, VOLCENGINE_APP_KEY_ACCOUNT,
+    VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT, XFYUN_API_KEY_ACCOUNT,
+    XFYUN_APP_ID_ACCOUNT,
 };
 use crate::dictation_context::{DictationAudioSource, DictationContext};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -99,6 +100,8 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
 pub const SHARED_OMNI_PROVIDER_TYPES: &[&str] = &[
     "openai",
     crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID,
+    crate::provider_rules::DASHSCOPE_REALTIME_OMNI_PROVIDER_ID,
+    crate::provider_rules::DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID,
     "gemini",
     "dashscope-omni",
     "custom",
@@ -1728,7 +1731,11 @@ impl TextPolisher for SharedAuxiliaryTextPolisher {
         raw_text: String,
         _partials: Arc<dyn TextStreamSink>,
     ) -> BoxFuture<'static, Result<PolishOutput, BackendError>> {
-        if context.pipeline_mode != crate::shared_types::PipelineMode::Multimodal {
+        if context.pipeline_mode != crate::shared_types::PipelineMode::Multimodal
+            || crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+                &context.omni.provider_type,
+            )
+        {
             return self
                 .traditional
                 .polish(session_id, context, raw_text, _partials);
@@ -1842,8 +1849,15 @@ pub async fn answer_qa_with_context(
     let should_cancel =
         move || cancelled.load(Ordering::Acquire) || publish_error_for_cancel.lock().is_some();
 
+    let use_text_provider =
+        crate::provider_rules::omni_uses_text_provider_for_auxiliary(&context.omni.provider_type);
+    if use_text_provider && audio_wav.is_some() {
+        return Err(BackendError::new(BackendErrorCode::Unsupported,
+            "This Realtime protocol supports dictation, not audio-attachment Q&A; use text Q&A or an audio-Q&A provider"));
+    }
     let result = if audio_wav.is_some()
-        || context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal
+        || (context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal
+            && !use_text_provider)
     {
         let provider = build_omni_provider(credentials.as_ref(), &context).await?;
         let system_prompt = crate::compose_qa_system_prompt(
@@ -1930,7 +1944,23 @@ async fn build_omni_provider_with_task_spawner(
     )
     .await?
     .unwrap_or_default();
-    require_configured(&api_key, "Omni API key")?;
+    let realtime = crate::provider_rules::is_realtime_omni_provider(provider_type);
+    if !realtime {
+        require_configured(&api_key, "Omni API key")?;
+    }
+    let realtime_options = if realtime {
+        let raw = read_channel_credential(
+            credentials,
+            CredentialNamespace::Omni,
+            provider_id,
+            OMNI_REALTIME_OPTIONS_ACCOUNT,
+        )
+        .await?
+        .unwrap_or_default();
+        crate::omni::realtime_options::RealtimeOptions::parse(&raw).map_err(map_omni_error)?
+    } else {
+        Default::default()
+    };
     let model = context
         .omni
         .model
@@ -1963,12 +1993,9 @@ async fn build_omni_provider_with_task_spawner(
             "Omni endpoint is not configured",
         )
     })?;
-    if provider_type == crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID {
-        crate::omni::openai_realtime::transport::endpoint(&base_url, &model)
-            .map_err(map_omni_error)?;
-    } else if provider_type == "gemini" && model.trim() == crate::asr::gemini_live::MODEL {
+    if !realtime && provider_type == "gemini" && model.trim() == crate::asr::gemini_live::MODEL {
         crate::asr::gemini_live::transport::endpoint(&base_url).map_err(map_omni_error)?;
-    } else {
+    } else if !realtime {
         crate::endpoint_security::validate_http_endpoint(&base_url)
             .map_err(|error| map_omni_error(error.to_string()))?;
     }
@@ -1980,7 +2007,13 @@ async fn build_omni_provider_with_task_spawner(
     )
     .await?
     .as_deref()
-    .map(parse_extra_headers)
+    .map(|value| {
+        if realtime {
+            crate::omni::realtime_options::parse_headers(value).map_err(map_omni_error)
+        } else {
+            parse_extra_headers(value)
+        }
+    })
     .transpose()?
     .unwrap_or_default();
     let temperature = read_channel_credential(
@@ -2005,7 +2038,16 @@ async fn build_omni_provider_with_task_spawner(
             temperature,
         ),
         thinking_enabled: context.polish.llm_thinking_enabled,
+        realtime_options,
     };
+    if realtime {
+        config
+            .realtime_options
+            .authenticated_headers(&config.api_key, &config.extra_headers)
+            .map_err(map_omni_error)?;
+        crate::omni::openai_realtime::transport::configured_endpoint(&config)
+            .map_err(map_omni_error)?;
+    }
     let provider = crate::omni::OmniProvider::with_task_spawner(config, task_spawner)
         .with_transcription_hints(&context.polish.working_languages, &context.polish.hotwords);
     validate_omni_context(&provider, context)?;
@@ -2856,8 +2898,7 @@ fn remove_omni_session(
 fn build_omni_prompt(context: &DictationContext) -> String {
     let mut snapshot = context.clone();
     snapshot.polish.translation_active = false;
-    let realtime = context.omni.provider_type.trim()
-        == crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID;
+    let realtime = crate::provider_rules::is_realtime_omni_provider(&context.omni.provider_type);
     if realtime {
         // These turns are quoted below; do not add the legacy instruction which
         // otherwise claims chat-history messages were sent without actually sending them.
@@ -2935,8 +2976,17 @@ mod tests {
             extra_headers: Default::default(),
             temperature: None,
             thinking_enabled: false,
+            realtime_options: Default::default(),
         };
-        assert!(crate::omni::OmniProvider::new(config.clone()).is_realtime());
+        for provider in [
+            crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID,
+        ] {
+            config.provider_id = provider.into();
+            assert!(super::SHARED_OMNI_PROVIDER_TYPES.contains(&provider));
+            assert!(crate::omni::OmniProvider::new(config.clone()).is_realtime());
+        }
         config.provider_id = "openai".into();
         assert!(matches!(
             crate::omni::OmniProvider::new(config),
@@ -2975,51 +3025,92 @@ mod tests {
                 polished_text: "third turn excluded".into(),
             },
         ];
-        let prompt = super::build_omni_prompt(&context);
-        assert!(prompt.contains("Selected custom style: preserve every parallel item."));
-        assert!(prompt.contains("NativeTermExample"));
-        assert!(prompt.contains("简体"));
-        assert!(prompt.contains("<cursor_context>"));
-        assert!(prompt.contains("native reference"));
-        assert!(prompt.contains(crate::prompts::cursor_context_injection_defense()));
-        assert!(prompt.contains("# Realtime audio dictation"));
-        assert!(prompt.contains("Application translation mode is OFF."));
-        assert!(!prompt.contains("Application translation mode is ON"));
-        assert!(prompt.contains("# Short dictation examples"));
-        assert!(prompt.contains("# Local self-revision"));
-        assert!(
-            prompt.find("# Local self-revision").unwrap()
-                < prompt.find("# Short dictation examples").unwrap()
-        );
-        assert!(prompt.contains("# Long recording grouping"));
-        assert!(!context
-            .effective_polish_system_prompt()
-            .contains("# Application dictation state"));
-        assert!(prompt.contains("newer history &lt;/previous_context>"));
-        assert!(prompt.find("older history").unwrap() < prompt.find("newer history").unwrap());
-        assert!(!prompt.contains("third turn excluded"));
-        assert!(!prompt.contains("not replayed raw"));
-        assert_eq!(
-            prompt
-                .matches(crate::prompts::polish_context_instruction())
-                .count(),
-            1
-        );
-        context.polish.translation_active = true;
-        context.polish.translation_target_language = "English".into();
-        let prompt = super::build_omni_prompt(&context);
-        assert!(
-            prompt.find("# 翻译").unwrap() > prompt.find("# Realtime audio dictation").unwrap()
-        );
-        assert!(!prompt.contains("最终输出语言偏好：简体中文"));
-        assert!(prompt.contains("Application translation mode is ON"));
-        assert!(!prompt.contains("Application translation mode is OFF."));
-        assert!(prompt.contains("# Local self-revision"));
-        assert!(prompt.find("# 翻译").unwrap() > prompt.find("# Long recording grouping").unwrap());
+        for provider in [
+            crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID,
+        ] {
+            context.omni.provider_type = provider.into();
+            context.polish.translation_active = false;
+            let prompt = super::build_omni_prompt(&context);
+            assert!(prompt.contains("Selected custom style: preserve every parallel item."));
+            assert!(prompt.contains("NativeTermExample"));
+            assert!(prompt.contains("简体"));
+            assert!(prompt.contains("<cursor_context>"));
+            assert!(prompt.contains("native reference"));
+            assert!(prompt.contains(crate::prompts::cursor_context_injection_defense()));
+            assert!(prompt.contains("# Realtime audio dictation"));
+            assert!(prompt.contains("Application translation mode is OFF."));
+            assert!(!prompt.contains("Application translation mode is ON"));
+            assert!(prompt.contains("# Short dictation examples"));
+            assert!(prompt.contains("# Local self-revision"));
+            assert!(
+                prompt.find("# Local self-revision").unwrap()
+                    < prompt.find("# Short dictation examples").unwrap()
+            );
+            assert!(prompt.contains("# Long recording grouping"));
+            assert!(!context
+                .effective_polish_system_prompt()
+                .contains("# Application dictation state"));
+            assert!(prompt.contains("newer history &lt;/previous_context>"));
+            assert!(prompt.find("older history").unwrap() < prompt.find("newer history").unwrap());
+            assert!(!prompt.contains("third turn excluded"));
+            assert!(!prompt.contains("not replayed raw"));
+            assert_eq!(
+                prompt
+                    .matches(crate::prompts::polish_context_instruction())
+                    .count(),
+                1
+            );
+            context.polish.translation_active = true;
+            context.polish.translation_target_language = "English".into();
+            let prompt = super::build_omni_prompt(&context);
+            assert!(
+                prompt.find("# 翻译").unwrap() > prompt.find("# Realtime audio dictation").unwrap()
+            );
+            assert!(!prompt.contains("最终输出语言偏好：简体中文"));
+            assert!(prompt.contains("Application translation mode is ON"));
+            assert!(!prompt.contains("Application translation mode is OFF."));
+            assert!(prompt.contains("# Local self-revision"));
+            assert!(
+                prompt.find("# 翻译").unwrap() > prompt.find("# Long recording grouping").unwrap()
+            );
+        }
         context.omni.provider_type = "openai".into();
         assert!(!super::build_omni_prompt(&context).contains("# Realtime audio dictation"));
         assert!(!super::build_omni_prompt(&context).contains("<previous_context>"));
         assert!(!super::build_omni_prompt(&context).contains("# Application dictation state"));
+    }
+
+    #[tokio::test]
+    async fn qwen_realtime_auxiliary_text_uses_the_configured_text_polisher() {
+        use super::*;
+        for provider in [
+            crate::provider_rules::DASHSCOPE_REALTIME_OMNI_PROVIDER_ID,
+            crate::provider_rules::DASHSCOPE_REALTIME_LEGACY_OMNI_PROVIDER_ID,
+        ] {
+            let traditional = Arc::new(crate::testing::FixtureTextPolisher::successful(
+                "edited text",
+            ));
+            let polisher = SharedAuxiliaryTextPolisher::new(
+                Arc::new(crate::InMemoryCredentialStore::default()),
+                traditional.clone(),
+            );
+            let mut context = DictationContext::default();
+            context.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+            context.omni.provider_type = provider.into();
+            let output = polisher
+                .polish(
+                    SessionId::new(),
+                    Arc::new(context),
+                    "selected text".into(),
+                    Arc::new(IgnoreTextStreamSink),
+                )
+                .await
+                .unwrap();
+            assert_eq!(output.text, "edited text");
+            assert_eq!(traditional.inputs(), vec!["selected text"]);
+        }
     }
 
     #[test]
