@@ -1,3 +1,4 @@
+import { isOfficialDeepSeekEndpoint } from '../../lib/deepseekEndpoint';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -26,7 +27,13 @@ export function DeepSeekSuiteSection() {
     void (async () => {
       const channels = await listChannels('llm');
       const configured = channels.find((c) => c.providerType === 'deepseek');
-      if (configured) setKey((await readCredential('ark.api_key', configured.id)) ?? '');
+      if (configured) {
+        const endpoint =
+          (await readCredential('ark.endpoint', configured.id)) || 'https://api.deepseek.com/v1';
+        if (isOfficialDeepSeekEndpoint(endpoint)) {
+          setKey((await readCredential('ark.api_key', configured.id)) ?? '');
+        }
+      }
       const config = await loadSearchConfig();
       setVoice(config.voice);
       setReady(true);
