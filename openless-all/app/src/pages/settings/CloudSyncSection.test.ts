@@ -89,7 +89,11 @@ const body = parsed.statements
   .filter((node) => !ts.isImportDeclaration(node))
   .map((node) => node.getFullText(parsed))
   .join('\n')
-  .replace("import('@tauri-apps/api/event')", 'Promise.resolve({listen: __listen})');
+  .replace("import('@tauri-apps/api/event')", 'Promise.resolve({listen: __listen})')
+  .replace(
+    "import('../../lib/hostEventBus')",
+    'Promise.resolve({ listenHostEvent: (name, callback) => { void __listen(name, ({ payload }) => callback(payload)); return () => events.delete(name); } })',
+  );
 const compiled = ts.transpileModule(body, {
   compilerOptions: {
     target: ts.ScriptTarget.ES2020,
@@ -102,6 +106,7 @@ const factory = new Function(
   'exports',
   'require',
   '__listen',
+  'events',
   `${compiled};return {CloudSyncSection,CustomSyncServerSection,PasswordForm,ConsentForm,ProtocolWarning,RestoreReview,normalizeCustomServerOrigin};`,
 );
 
@@ -249,6 +254,7 @@ const components = factory(
     events.set(name, callback);
     return () => events.delete(name);
   },
+  events,
 );
 assert.equal(
   components.normalizeCustomServerOrigin(' https://sync.example.com/ '),

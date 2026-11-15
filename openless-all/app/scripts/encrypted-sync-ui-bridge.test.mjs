@@ -87,6 +87,18 @@ function context({ fresh = false, tauriInitially = true } = {}) {
   const localRequire = (name) =>
     name === './ipc/shared'
       ? shared
+      : name === './hostEventBus'
+        ? {
+            // 桥要判断「有没有原生宿主」，并订阅宿主事件；测试里用假的实现。
+            isNativeHostNow: () => tauriReady,
+            // 桥在原生宿主上用宿主事件总线订阅，测试把它接到同一张 handlers 表，
+            // restore() 之类的派发才能到达桥。
+            listenHostEvent: (name, fn) => {
+              handlers.set(name, fn);
+              return () => handlers.delete(name);
+            },
+            markNativeHost: () => {},
+          }
       : name === '../i18n'
         ? i18n
         : name === './fontScale'
@@ -126,16 +138,15 @@ function context({ fresh = false, tauriInitially = true } = {}) {
       rev++;
     },
     unchecked: () => invoke('cloud_sync_e2ee_set_ui_preferences', { locale, fontScale }),
+    // 宿主事件总线直接把 payload 交给订阅者（不再是 Tauri 的 { payload } 包装）。
     restore: (sequence = '1', scope = {}) =>
       handlers.get('cloud-sync-e2ee:restored')({
-        payload: {
-          sequence,
-          serviceOrigin: status.serviceOrigin,
-          accountId: status.account.githubId,
-          vaultId: status.vaultId,
-          taskId: 'restore',
-          ...scope,
-        },
+        sequence,
+        serviceOrigin: status.serviceOrigin,
+        accountId: status.account.githubId,
+        vaultId: status.vaultId,
+        taskId: 'restore',
+        ...scope,
       }),
   };
 }

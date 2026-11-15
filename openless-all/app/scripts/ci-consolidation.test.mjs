@@ -108,33 +108,35 @@ for (const command of [
 ]) {
   assert.ok(deviceCommands.includes(command), `retain device check: ${command}`);
 }
-assert.equal(ci.jobs['linux-egui-package'], undefined, 'Linux CI is paused');
+// Linux 已恢复：egui 流水线退役，改为 Qt 宿主链路（linux-host-package →
+// check-linux.yml），发布走 release-linux.yml。
+assert.equal(ci.jobs['linux-egui-package'], undefined, 'the egui CI job is retired');
 for (const name of ['check-linux-egui.yml', 'release-linux-egui.yml']) {
-  assert.equal(
-    existsSync(path(name)),
-    false,
-    `${name} must stay removed while Linux automation is paused`,
-  );
+  assert.equal(existsSync(path(name)), false, `${name} must stay removed`);
 }
-assert.equal(ci.jobs.changes.outputs.linux, undefined);
+assert.ok(ci.jobs['linux-host-package'], 'Linux CI runs through check-linux.yml');
+assert.equal(ci.jobs.changes.outputs.linux, '${{ steps.detect.outputs.linux }}');
+// Windows 前端契约在独立作业里跑，cross-platform 不再重复启动第二个 VM。
+const windowsFrontend = ci.jobs['windows-frontend'];
+assert.ok(windowsFrontend, 'windows frontend has its own job');
 assert.equal(
-  ci.jobs['windows-frontend'],
-  undefined,
-  'do not launch a duplicate Windows frontend VM',
+  windowsFrontend.steps.find((s) =>
+    String(s.run ?? '').includes('--platform-only windows'),
+  )?.run,
+  'node scripts/frontend-test-runner.mjs --platform-only windows',
 );
 const stable = ci.jobs['cross-platform'];
-const windowsContracts = stable.steps.find(
-  (s) => s.name === 'Run the platform-sensitive contracts',
+assert.equal(
+  stable.steps.find((s) => s.name === 'Run the platform-sensitive contracts'),
+  undefined,
+  'do not run the Windows-only contracts twice',
 );
-assert.equal(windowsContracts.if, "runner.os == 'Windows'");
-assert.equal(windowsContracts.run, 'node scripts/frontend-test-runner.mjs --platform-only windows');
 const frontend = stable.steps.find((s) => s.name === 'Build the frontend for the Tauri context');
 assert.equal(frontend.if, "runner.os == 'Windows'");
-assert.ok(stable.steps.indexOf(frontend) < stable.steps.indexOf(windowsContracts));
 assert.ok(
-  stable.steps.indexOf(windowsContracts) <
+  stable.steps.indexOf(frontend) <
     stable.steps.findIndex((s) => s.name === 'Compile Rust backend unit tests (Windows)'),
-  'fail fast on contract errors',
+  'build the frontend before compiling the Tauri lib',
 );
 assert.equal(
   stable.steps.find((s) => s.name === 'Check Windows prerequisites').if,
