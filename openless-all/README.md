@@ -141,13 +141,22 @@ cd app
 
 ## Android Build
 
-The Tauri mobile host builds per-ABI release APKs:
+A fresh clone has no generated Android project, and the build script stops until `src-tauri/gen/android` exists. Initialize it, copy the Kotlin/XML scaffolding, and merge the manifests the same way CI does:
 
 ```bash
 cd app
 npm ci
+npm run tauri:android:init                  # creates src-tauri/gen/android
+npm run copy:android-scaffolding            # Kotlin sources + res/xml
+node scripts/merge-android-v1-manifest.mjs  # microphone permission
+node scripts/merge-android-overlay-manifest.mjs
+node scripts/merge-android-shizuku-manifest.mjs
+node scripts/patch-android-shizuku-deps.mjs
+node scripts/merge-android-updater-manifest.mjs   # release builds: in-app update manifest
 npm run tauri:android:build:release
 ```
+
+The same chain, including the local Gradle workflow, is documented in [`app/android/README.md`](app/android/README.md).
 
 APKs are written under `app/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/`. Use `npm run tauri:android:build:debug` for a debug build; the `android-apk.yml` workflow produces debug smoke artifacts for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`. The native keyboard/IME backend lives in `app/android/` and `app/mobile-ime/`.
 
@@ -160,18 +169,27 @@ cd openless-all/app
 bash scripts/build-harmony-frontend.sh
 ```
 
-Requirements: HarmonyOS Command Line Tools, Python 3, and `rustup target add aarch64-unknown-linux-ohos`. The unsigned HAP is written to `app/harmony/openless-project/entry/build/default/outputs/default/`; the `release-harmony.yml` workflow attaches it to releases, while AppGallery packages are submitted manually.
+Requirements: HarmonyOS Command Line Tools, Python 3, and `rustup target add aarch64-unknown-linux-ohos`. The unsigned HAP is written to `app/harmony/openless-project/entry/build/default/outputs/default/`; the `release-harmony.yml` workflow attaches it to releases, while AppGallery packages are submitted manually. Installing on a device additionally needs a Huawei debug certificate for `openless.hm.com` and a debug Profile that contains that device — see [`app/harmony/README.md`](app/harmony/README.md).
 
 ## iOS Build
 
-The native project is independent of the desktop version; see [`ios/README.md`](ios/README.md).
+The native project is independent of the desktop version; see [`ios/README.md`](ios/README.md). Requirements: an Apple Silicon Mac, Xcode with its command-line tools selected, Python 3, CMake, Git, and Rustup.
 
 ```bash
 cd openless-all/ios
-./scripts/bootstrap.sh          # fetch native dependencies
-./scripts/build.sh              # build the unsigned app
-python3 scripts/package-ipa.py  # optional unsigned IPA for personal signing
+./scripts/bootstrap.sh                    # Rust 1.99.0, iOS targets, pinned native deps, XcodeGen
+./scripts/bootstrap-local-speech.sh       # bundled SenseVoice runtime
+./scripts/build-rime.sh                   # Rime data and compiled table
+./scripts/build-core.sh                   # Frameworks/<platform>/libOpenLessCore.a
+python3 scripts/collect-rust-licenses.py
+python3 scripts/validate-project.py
+./scripts/build.sh device Release unsigned
+python3 scripts/package-ipa.py \
+  DerivedData/Build/Products/Release-iphoneos/OpenLess.app \
+  "$HOME/Downloads/OpenLess-0.1.0-16-unsigned.ipa"
 ```
+
+`build.sh` takes `<simulator|device> <Debug|Personal|Release> [unsigned|signed]` and defaults to `simulator Debug unsigned`; it refuses to run until `build-core.sh` and `build-rime.sh` have produced `libOpenLessCore.a`, `libOpenLessRime.a`, the Rime table, and the prediction lexicon. `package-ipa.py` needs the built `.app` plus a new output path, never overwrites an existing IPA, and packages only an unsigned device build for personal signing.
 
 ## Release Signing
 

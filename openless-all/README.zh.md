@@ -129,37 +129,55 @@ cd app
 
 ## Android 构建
 
-Tauri 移动端宿主按 ABI 构建 release APK：
+新克隆的仓库没有生成好的 Android 工程，`src-tauri/gen/android` 不存在时构建脚本会直接报错。先初始化工程、复制 Kotlin/XML 脚手架，再按与 CI 相同的方式合并 manifest：
 
 ```bash
 cd app
 npm ci
+npm run tauri:android:init                  # 生成 src-tauri/gen/android
+npm run copy:android-scaffolding            # Kotlin 源码 + res/xml
+node scripts/merge-android-v1-manifest.mjs  # 麦克风权限
+node scripts/merge-android-overlay-manifest.mjs
+node scripts/merge-android-shizuku-manifest.mjs
+node scripts/patch-android-shizuku-deps.mjs
+node scripts/merge-android-updater-manifest.mjs   # release 需要的应用内更新 manifest
 npm run tauri:android:build:release
 ```
+
+同一条链路（含本地 Gradle 开发流程）见 [`app/android/README.zh.md`](app/android/README.zh.md)。
 
 APK 输出到 `app/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/` 下。调试构建请使用 `npm run tauri:android:build:debug`；`android-apk.yml` 工作流会为 `arm64-v8a`、`armeabi-v7a`、`x86` 和 `x86_64` 生成调试冒烟测试产物。原生键盘/输入法后端位于 `app/android/` 与 `app/mobile-ime/`。
 
 ## HarmonyOS 构建
 
-ArkTS/ArkWeb 宿主通过前端脚本构建；工具链细节参见 [`app/harmony/README.md`](app/harmony/README.md)。
+ArkTS/ArkWeb 宿主通过前端脚本构建；工具链细节参见 [`app/harmony/README.zh.md`](app/harmony/README.zh.md)。
 
 ```bash
 cd openless-all/app
 bash scripts/build-harmony-frontend.sh
 ```
 
-要求：HarmonyOS 命令行工具、Python 3，以及 `rustup target add aarch64-unknown-linux-ohos`。未签名的 HAP 输出到 `app/harmony/openless-project/entry/build/default/outputs/default/`；`release-harmony.yml` 工作流会将其附加到发布中，而 AppGallery 安装包则需手动提交。
+要求：HarmonyOS 命令行工具、Python 3，以及 `rustup target add aarch64-unknown-linux-ohos`。未签名的 HAP 输出到 `app/harmony/openless-project/entry/build/default/outputs/default/`；`release-harmony.yml` 工作流会将其附加到发布中，而 AppGallery 安装包则需手动提交。真机安装还需要 `openless.hm.com` 的华为调试证书和包含该设备的调试 Profile，详见 [`app/harmony/README.zh.md`](app/harmony/README.zh.md)。
 
 ## iOS 构建
 
-原生项目独立于桌面版本；参见 [`ios/README.md`](ios/README.md)。
+原生项目独立于桌面版本；参见 [`ios/README.zh.md`](ios/README.zh.md)。要求：Apple Silicon Mac、已选择命令行工具的 Xcode、Python 3、CMake、Git 与 Rustup。
 
 ```bash
 cd openless-all/ios
-./scripts/bootstrap.sh          # fetch native dependencies
-./scripts/build.sh              # build the unsigned app
-python3 scripts/package-ipa.py  # optional unsigned IPA for personal signing
+./scripts/bootstrap.sh                    # Rust 1.99.0、iOS target、固定版本的原生依赖、XcodeGen
+./scripts/bootstrap-local-speech.sh       # 内置 SenseVoice 运行时
+./scripts/build-rime.sh                   # 词库数据与编译后的码表
+./scripts/build-core.sh                   # Frameworks/<platform>/libOpenLessCore.a
+python3 scripts/collect-rust-licenses.py
+python3 scripts/validate-project.py
+./scripts/build.sh device Release unsigned
+python3 scripts/package-ipa.py \
+  DerivedData/Build/Products/Release-iphoneos/OpenLess.app \
+  "$HOME/Downloads/OpenLess-0.1.0-16-unsigned.ipa"
 ```
+
+`build.sh` 参数为 `<simulator|device> <Debug|Personal|Release> [unsigned|signed]`，默认 `simulator Debug unsigned`；在 `build-core.sh` 与 `build-rime.sh` 产出 `libOpenLessCore.a`、`libOpenLessRime.a`、Rime 码表和预测词典之前会拒绝运行。`package-ipa.py` 需要已构建的 `.app` 和一个新的输出路径，不会覆盖已有 IPA，且只打包未签名真机构建，供个人签名使用。
 
 ## 发布签名
 

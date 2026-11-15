@@ -238,7 +238,7 @@ Every item below is one more layer sedimented into a default — a capability yo
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
 - **Local model management** — manage on-disk local-ASR model storage from Settings.
 - **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Español / Français / Deutsch (auto-detected on first launch).
-- **In-app auto-update on the Tauri hosts** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest, and the HarmonyOS build has no update flow yet.
+- **In-app auto-update on the Tauri hosts** — Settings → About & updates → Check for updates; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest, and the HarmonyOS build has no update flow yet.
 - **Beta channel (opt-in)** — Settings → About & updates → Join Beta channel selects the Beta updater feed; packages are also available from Releases. Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
 - **Distribution channels** — direct DMG/EXE from [Releases](https://github.com/Open-Less/openless/releases), Homebrew Cask (add the project tap first; see installation below), per-ABI Android APKs, and the unsigned HarmonyOS HAP. Linux deb/rpm packages require independent device acceptance and an explicit administrator upload to an existing Release; iOS is built from source and signed with a personal team.
 - **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
@@ -259,7 +259,7 @@ Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
   - **Older 32-bit ARM**: `OpenLess_<version>_armeabi-v7a.apk`
   - **64-bit emulator**: `OpenLess_<version>_x86_64.apk`
   - **32-bit emulator**: `OpenLess_<version>_x86.apk`
-  - In-app updates (Settings → About) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
+  - In-app updates (Settings → About & updates) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
 - **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
@@ -285,7 +285,7 @@ On first launch, grant the permissions the app requests.
 
 **Windows:**
 1. Grant Microphone access when prompted.
-2. Open Settings → Permissions to verify the global hotkey listener is active.
+2. Open Settings → Permissions & data to verify the global hotkey listener is active.
 3. Fill in your Volcengine ASR + Ark credentials in Settings.
 
 For the full end-user walkthrough, see [USAGE.md](USAGE.md).
@@ -357,7 +357,7 @@ Rules of thumb:
 - **Beta work must not leak to Stable.** `main` receives merges only from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
 - **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
 
-Beta release distribution (manual-download opt-in): the in-app updater's Stable channel only ever reads the Stable manifest path, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release), while `v<version>-tauri` produces the Stable release.
+Beta release distribution (manual-download opt-in): the in-app updater's Stable channel only ever reads the Stable manifest path, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About & updates**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release), while `v<version>-tauri` produces the Stable release.
 
 Updater manifests are served from the project CDN, one rolling file per platform and channel:
 

@@ -238,7 +238,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 - **主窗口**：概览 / 历史 / 词典 / 风格 / Marketplace / 设置。常驻托盘图标，以及一个跟随你正在输入的显示器（多屏）的迷你状态胶囊。
 - **本地模型管理**——在设置中管理磁盘上的本地 ASR 模型存储。
 - **多语言界面**——设置 → 语言 可在 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Español / Français / Deutsch 之间切换（首次启动自动检测）。
-- **Tauri 宿主上的应用内自动更新**——设置 → 关于 → 检查；macOS、Windows 与 Android 通过 Tauri updater 插件提供已签名更新产物。Linux deb/rpm 没有应用内更新或 AppImage 清单，鸿蒙构建目前也还没有更新流程。
+- **Tauri 宿主上的应用内自动更新**——设置 → 关于与更新 → 检查更新；macOS、Windows 与 Android 通过 Tauri updater 插件提供已签名更新产物。Linux deb/rpm 没有应用内更新或 AppImage 清单，鸿蒙构建目前也还没有更新流程。
 - **Beta 通道（需主动开启）**——设置 → 关于与更新 → 加入 Beta 通道会切换到 Beta 更新源；安装包也可从 Releases 获取。Beta 版本不会自动触达 Stable 用户（见[贡献流程](#贡献流程)）。
 - **分发渠道**——[Releases](https://github.com/Open-Less/openless/releases) 直链 DMG/EXE、Homebrew Cask（需先添加 tap，见下方安装说明）、按 ABI 分发的 Android APK，以及未签名的鸿蒙 HAP。Linux deb/rpm 需要独立的真机验收并由管理员显式上传到既有 Release；iOS 从源码构建、用个人团队签名。
 - **单实例锁**——防止两个 OpenLess 进程争抢同一个快捷键沿。
@@ -259,7 +259,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
   - **较老的 32 位 ARM**：`OpenLess_<version>_armeabi-v7a.apk`
   - **64 位模拟器**：`OpenLess_<version>_x86_64.apk`
   - **32 位模拟器**：`OpenLess_<version>_x86.apk`
-  - 应用内更新（设置 → 关于）读取 `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`；Beta 用户需在高级设置中加入 Beta，读取对应的 `.../updates/beta/latest-android-{arch}-beta.json`。
+  - 应用内更新（设置 → 关于与更新）读取 `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`；Beta 用户需在高级设置中加入 Beta，读取对应的 `.../updates/beta/latest-android-{arch}-beta.json`。
   - 调试冒烟包：workflow_dispatch 产物中的 `OpenLess-android-debug-{abi}-*.apk`。
   - 拿不准时，执行 `adb shell getprop ro.product.cpu.abi` 选择匹配的 APK。
 - **Linux**：Tauri/WebView 版本已退役。原生 `eframe` 宿主使用共享的 Core 2.0 服务。在 CI 与真实 Ubuntu 上的音频、输入、安装、升级与回滚验收通过后，共享 Release 会包含 deb/rpm 包与 `SHA256SUMS`。Linux 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）；没有 AppImage，也没有应用内更新。
@@ -285,7 +285,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 
 **Windows：**
 1. 出现提示时授予麦克风权限。
-2. 打开 设置 → 权限，确认全局快捷键监听已生效。
+2. 打开 设置 → 权限与数据，确认全局快捷键监听已生效。
 3. 在设置中填入你的火山引擎 ASR + Ark 凭据。
 
 完整的终端用户操作说明见 [USAGE.zh.md](USAGE.zh.md)。
@@ -357,7 +357,7 @@ OpenLess 采用双通道分支模型。
 - **Beta 的工作不得泄漏到 Stable。** `main` 只接受来自 `beta` 的合并，由维护者在双平台冒烟构建成功后执行，不允许直接推 `main`。
 - **正式版从 `main` 切出**：推送 `v<version>-tauri` tag——见下方维护者发布清单。
 
-Beta 版本分发（需手动下载开启）：应用内更新器的 Stable 通道只读取 Stable 清单路径，因此普通用户永远不会通过自动更新收到 Beta 构建。想尝试 Beta 的用户打开 **设置 → 关于**，开启「加入 Beta 通道」，再从应用获取的 GitHub 链接手动下载最新 Beta 安装包。tag 约定：`v<version>-Beta.<N>-tauri` 产出 Beta 版本（标记为 GitHub pre-release），`v<version>-tauri` 产出正式版。
+Beta 版本分发（需手动下载开启）：应用内更新器的 Stable 通道只读取 Stable 清单路径，因此普通用户永远不会通过自动更新收到 Beta 构建。想尝试 Beta 的用户打开 **设置 → 关于与更新**，开启「加入 Beta 通道」，再从应用获取的 GitHub 链接手动下载最新 Beta 安装包。tag 约定：`v<version>-Beta.<N>-tauri` 产出 Beta 版本（标记为 GitHub pre-release），`v<version>-tauri` 产出正式版。
 
 更新清单由项目 CDN 提供，每个平台、每个通道一个滚动文件：
 

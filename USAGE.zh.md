@@ -29,7 +29,7 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载手机对应的 `OpenLess_<版本>_arm64-v8a.apk`（较老的 32 位机型用 `armeabi-v7a`）。
 2. 允许「安装未知来源应用」后安装。
 3. 首次录音时授予麦克风权限；如需用键盘插入，请在系统设置中启用 OpenLess 键盘并设为当前输入法。
-4. 应用内更新在 设置 → 关于。
+4. 应用内更新在 设置 → 关于与更新。
 
 ### iOS
 
@@ -39,8 +39,9 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 ### HarmonyOS（适配中）
 
 1. 从同一个 Release 下载未签名的 `OpenLess_harmony_arm64.hap`。
-2. 通过 DevEco Studio 或 `hdc` 安装到真机；AppGallery 分发包需人工提交。
-3. 首次使用前先打开主应用完成渠道配置，输入法才会拿到可用的语音设置；目前没有更新流程。构建与签名见 [`harmony/README.zh.md`](openless-all/app/harmony/README.zh.md)。
+2. 真机安装前必须自己签名，手机或平板会拒绝未签名的 HAP：调试证书的包名必须是 `openless.hm.com`，调试 Profile 必须包含目标设备，包名不匹配的 Profile 不能复用。用 DevEco Studio 的自动签名（登录华为账号）最省事；走命令行时把证书与 Profile 放进本地签名目录（默认 `~/.local/share/harmony/signing/local-test`，可用 `OPENLESS_HARMONY_SIGNING_DIR` 覆盖），构建会输出 `entry-default-signed.hap`。
+3. 用 DevEco Studio 或 `hdc` 安装签名后的 HAP；AppGallery 分发包需人工提交。
+4. 首次使用前先打开主应用完成渠道配置，输入法才会拿到可用的语音设置；目前没有更新流程。构建与签名见 [`harmony/README.zh.md`](openless-all/app/harmony/README.zh.md)。
 
 ---
 
@@ -56,7 +57,7 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 ### Windows 权限
 
 1. 按系统提示授予**麦克风**权限。
-2. 打开 OpenLess → 「设置 → 权限」，确认全局快捷键监听器状态显示为「已启动」。
+2. 打开 OpenLess → 「设置 → 权限与数据」，确认全局快捷键监听器状态显示为「已启动」。
 
 ### Android 权限
 
@@ -81,7 +82,7 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 不会配火山 ASR 的话，先看这篇图文引导：  
 [OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
 
-用讯飞实时语音转写的话，看 [OpenLess 讯飞 ASR 配置](docs/xfyun-asr.md)（AppID + API Key，设置 → 语音提供商 → 讯飞实时语音转写）。
+用讯飞实时语音转写的话，看 [OpenLess 讯飞 ASR 配置](docs/xfyun-asr.md)（AppID + API Key，设置 → AI 与模型 → 语音识别渠道 → 讯飞实时语音转写）。
 
 打开 OpenLess → **设置**，填入以下字段：
 
@@ -96,7 +97,7 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 
 保存后设置立即生效，无需重启。
 
-火山引擎 ASR + Ark 是最短路径。设置 → 语音提供商 / 模型服务 里还可选择讯飞实时 ASR、腾讯云混元、阿里云百炼、阶跃星辰、智谱 GLM、小米 MiMo、OpenAI 兼容端点等近三十个 ASR 渠道与二十多个润色渠道（完整清单见 [README](README.zh.md) 的「功能现状」）。凭据保存在系统凭据保险库（service = `com.openless.app`）：macOS 钥匙串、Windows 凭据管理器、Linux keyring；不会以明文写入磁盘。
+火山引擎 ASR + Ark 是最短路径。设置 → AI 与模型 → 语音识别渠道 / 文字处理渠道 里还可选择讯飞实时 ASR、腾讯云混元、阿里云百炼、阶跃星辰、智谱 GLM、小米 MiMo、OpenAI 兼容端点等近三十个 ASR 渠道与二十多个润色渠道（完整清单见 [README](README.zh.md) 的「功能现状」）。凭据保存在系统凭据保险库（service = `com.openless.app`）：macOS 钥匙串、Windows 凭据管理器、Linux keyring；不会以明文写入磁盘。
 
 ---
 
@@ -163,7 +164,7 @@ Linux 的全局快捷键由 fcitx5 插件管理，在 fcitx5 配置中绑定；A
 
 **Q: 快捷键没反应？**  
 macOS：确认已授予辅助功能权限，且授权后重启过 OpenLess。  
-Windows：在「设置 → 权限」中检查监听器状态。
+Windows：在「设置 → 权限与数据」中检查监听器状态。
 
 **Q: 识别结果为空或是占位文字？**  
 检查火山引擎 ASR 凭据是否填写正确。填写正确后识别才能正常工作。
@@ -190,7 +191,11 @@ macOS 不存在独占全屏（所有"全屏"都是带 Spaces 的无边框窗口�
 鸿蒙目前没有更新流程，需要重新安装新的 HAP；iOS 需要从源码重新构建并签名。两者都不会收到应用内更新提示。
 
 **Q: 怎么用本地识别，不上传音频？**  
-Windows 可在设置中启用 Foundry Local 或 sherpa-onnx；macOS 在 设置 → 实验与扩展 → 实验性本地语音模型 中开启 TextStream、SenseVoice Small 或 Embedding Gemma——模型按需下载，不随安装包分发。
+本地模型不会自动接管你已经在用的渠道：必须自己把本地渠道设为列表最上方的启用渠道；只有该本地渠道在处理请求时，音频才不出本机。
+
+Windows：在「设置 → AI 与模型 → 本地 ASR 模型」下载模型，再到语音识别渠道列表里添加并启用对应的本地渠道：本地 Whisper（Foundry Local）、本地 sherpa-onnx（实验性）或本地 Whisper（批量解码）。macOS：在「设置 → 实验与扩展 → 实验性本地语音模型」中开启 TextStream、SenseVoice Small 或 Embedding Gemma——模型按需下载，不随安装包分发；下载完成后应用会提示前往渠道列表。
+
+两种平台最后都要在「设置 → AI 与模型 → 语音识别渠道」里启用该渠道并拖到最上方：请求使用第一个已启用的渠道，本地渠道不在最前时音频仍会发往原来的云端渠道。macOS 的实验模型走传统管线（ASR + LLM）；若当前是多模态模式，请先切回传统模式。
 
 ---
 

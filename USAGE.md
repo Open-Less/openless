@@ -29,7 +29,7 @@ Linux runs on a native egui host and does not depend on Tauri or WebKitGTK.
 1. Download the APK for your phone, `OpenLess_<version>_arm64-v8a.apk`, from [Releases](https://github.com/Open-Less/openless/releases/latest) (use `armeabi-v7a` for older 32-bit devices).
 2. Allow "install unknown apps" and install it.
 3. Grant microphone permission on the first recording. To insert text with the keyboard, enable the OpenLess keyboard in system settings and set it as the current input method.
-4. In-app updates live under Settings → About.
+4. In-app updates live under Settings → About & updates.
 
 ### iOS
 
@@ -39,8 +39,9 @@ Linux runs on a native egui host and does not depend on Tauri or WebKitGTK.
 ### HarmonyOS (adapting)
 
 1. Download the unsigned `OpenLess_harmony_arm64.hap` from the same Release.
-2. Install it on a device through DevEco Studio or `hdc`; AppGallery packages are submitted manually.
-3. Open the main app once to finish provider configuration before the keyboard can reuse the voice settings. There is no update flow yet. See [`harmony/README.md`](openless-all/app/harmony/README.md) for build and signing.
+2. Sign it for your own device before installing. A phone or tablet rejects an unsigned HAP: the debug certificate has to match the bundle name `openless.hm.com`, and the debug Profile has to include the target device — a Profile issued for another bundle name cannot be reused. DevEco Studio's automatic signing (Huawei account) does both for you; when building from the CLI, put the certificate and Profile in the local signing directory (default `~/.local/share/harmony/signing/local-test`, override with `OPENLESS_HARMONY_SIGNING_DIR`) and the build emits `entry-default-signed.hap`.
+3. Install the signed HAP with DevEco Studio or `hdc`; AppGallery packages are submitted manually.
+4. Open the main app once to finish provider configuration before the keyboard can reuse the voice settings. There is no update flow yet. See [`harmony/README.md`](openless-all/app/harmony/README.md) for build and signing.
 
 ---
 
@@ -56,7 +57,7 @@ After the first launch, grant the following in System Settings → Privacy & Sec
 ### Windows permissions
 
 1. Grant **microphone** permission when prompted.
-2. Open OpenLess → Settings → Permissions and confirm the global hotkey listener shows as running.
+2. Open OpenLess → Settings → Permissions & data and confirm the global hotkey listener shows as running.
 
 ### Android permissions
 
@@ -81,7 +82,7 @@ After the first launch, grant the following in System Settings → Privacy & Sec
 If you are new to Volcengine ASR, start with the illustrated walkthrough:  
 [OpenLess Volcengine ASR setup](docs/volcengine-setup.md)
 
-For iFlytek real-time transcription, see [OpenLess iFlytek ASR setup](docs/xfyun-asr.md) (AppID + API Key, Settings → Speech providers → iFlytek real-time transcription).
+For iFlytek real-time transcription, see [OpenLess iFlytek ASR setup](docs/xfyun-asr.md) (AppID + API Key, Settings → AI & models → Speech recognition channels → iFlytek real-time transcription).
 
 Open OpenLess → **Settings** and fill in:
 
@@ -96,7 +97,7 @@ Open OpenLess → **Settings** and fill in:
 
 Settings take effect immediately after saving; no restart is needed.
 
-Volcengine ASR + Ark is the shortest path. Under Settings → Speech providers / Model services you can also pick iFlytek real-time ASR, Tencent Hunyuan, Alibaba Bailian, StepFun, Zhipu GLM, Xiaomi MiMo, OpenAI-compatible endpoints, and nearly thirty other ASR providers plus more than twenty polish providers (the full list is in the [README](README.md) "feature status" section). Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, Linux keyring. They are never written to disk in plaintext.
+Volcengine ASR + Ark is the shortest path. Under Settings → AI & models → Speech recognition channels / Text processing channels you can also pick iFlytek real-time ASR, Tencent Hunyuan, Alibaba Bailian, StepFun, Zhipu GLM, Xiaomi MiMo, OpenAI-compatible endpoints, and nearly thirty other ASR providers plus more than twenty polish providers (the full list is in the [README](README.md) "feature status" section). Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, Linux keyring. They are never written to disk in plaintext.
 
 ---
 
@@ -152,7 +153,7 @@ Main window → **History** lists every recording, including the raw transcript 
 
 ## Changing the hotkey
 
-Main window → **Settings → Hotkey**, then pick the trigger key.  
+Main window → **Settings → Shortcuts**, then pick the trigger key.  
 macOS supports the right-side modifiers (Option / Control / Command / Shift); Windows supports left and right modifiers plus mouse side buttons (Mouse4 / Mouse5).
 
 Linux handles the global hotkey through the fcitx5 plugin and its configuration; Android, iOS, and HarmonyOS do not register system-wide hotkeys and use the in-app or keyboard voice button instead.
@@ -163,7 +164,7 @@ Linux handles the global hotkey through the fcitx5 plugin and its configuration;
 
 **Q: The hotkey does nothing?**  
 macOS: make sure Accessibility is granted and that you relaunched OpenLess afterwards.  
-Windows: check the listener status under Settings → Permissions.
+Windows: check the listener status under Settings → Permissions & data.
 
 **Q: The result is empty or placeholder text?**  
 Check that the Volcengine ASR credentials are correct. Recognition only works once they are.
@@ -190,7 +191,11 @@ No. Linux gets deb/rpm packages (after on-device acceptance) and source builds; 
 HarmonyOS has no update flow yet — reinstall a new HAP. iOS means rebuilding from source and re-signing. Neither shows in-app update prompts.
 
 **Q: How do I use local recognition so audio is not uploaded?**  
-On Windows, enable Foundry Local or sherpa-onnx in Settings. On macOS, open Settings → Experiments & extensions → Experimental local speech models and enable TextStream, SenseVoice Small, or Embedding Gemma — models are downloaded on demand and are not bundled with the installer.
+Local models never take over the channel you already use: you still have to make the local channel the first enabled one, and audio leaves the machine only while that channel is serving requests.
+
+On Windows, open Settings → AI & models → Local ASR models, download a model, then add and enable the matching local channel from the speech recognition channel list: Local Whisper (Foundry Local), Local sherpa-onnx (Experimental), or Local Whisper (batch). On macOS, open Settings → Experiments & extensions → Experimental local speech models and enable TextStream, SenseVoice Small, or Embedding Gemma; models are downloaded on demand and are not bundled with the installer, and the app then offers to open the channel list.
+
+In both cases finish in Settings → AI & models → Speech recognition channels: enable the channel and drag it to the top. Requests use the first enabled channel, so until the local one is first, audio still goes to your existing cloud channel. The macOS experimental models run in the traditional pipeline (ASR + LLM); if the pipeline mode is multimodal, switch back first.
 
 ---
 
