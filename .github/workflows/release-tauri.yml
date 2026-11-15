@@ -6,7 +6,7 @@ name: Release (all platforms)
 #
 # Outputs:
 #   macOS arm64/x64 .dmg + Windows x64 .msi/.exe, uploaded automatically as GitHub Release assets.
-#   Linux egui CI/release is paused; local build/package scripts remain available.
+#   Linux is built separately by release-linux.yml (Qt6 WebEngine host + linux-web backend).
 #
 # macOS distribution:
 #   - With APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /

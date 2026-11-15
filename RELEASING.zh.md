@@ -30,7 +30,7 @@ Tauri 宿主发布标签（仅由管理员创建）：
 
 独立的 Android 每周/调试/手动构建以及 HarmonyOS 手动修复仍然可用。桌面分支/手动构建和 Windows 草稿修复保持现有范围。依赖关系图见[发布分发](docs/release-distribution.md)。
 
-Linux 专用的 CI 和发布自动化已暂停：可复用的 Linux 检查与发布入口已被移除，桌面发布也不再派发 Linux。Linux 源码、本地构建/打包/验证脚本以及设备验收要求仍然可用。不会自动构建或附加任何 Linux 产物或别名。在手动分发软件包之前，请针对该确切候选版本完成 [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md) 中的 L01-L12 验收。仅编译通过不等于设备验收。桌面与 Android 交付仍然相互独立；Linux 没有应用内更新器，也没有 AppImage。
+Linux 使用独立工作流：`check-linux.yml` 负责 Core/Host 测试、Qt 宿主编译与 deb/rpm 打包校验，`release-linux.yml` 负责发版。只有该 tag 有真机验收记录（`LINUX_ACCEPTED_RELEASE_TAG`）时才会随桌面发布一起附加 Linux 包；仅编译通过不等于设备验收。Linux 没有应用内更新器，也没有 AppImage。详见 [docs/linux-host-handoff/07-acceptance.md](docs/linux-host-handoff/07-acceptance.md)。
 
 HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并且可以把已签名的软件包（App Pack）上传到 HUAWEI AppGallery Connect。自动的可复用调用使用 `channel: none`，即仓库路径：HAP 以未签名形式附加到 GitHub Release，任何东西都不会到达应用商店。将仓库变量 `HARMONY_AUTO_CHANNEL` 设为 `release`（生产）或 `test`（测试渠道），即可让已签名的软件包自动作为 AGC 候选包上传；该上传绝不会提交审核，因此无论哪种方式，上架提交仍然是人工决定。
 
@@ -53,7 +53,7 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 
 工作流产物的打包结果同时携带两个软件包；Release 步骤只上传那一个未签名的 HAP 及其校验和，AppGallery 步骤只上传已签名的那个。CI 从不签名：`ci.yml` 始终以 `OPENLESS_HARMONY_CHANNEL=none` 构建。
 
-没有商店证书的本地机器仍然可以生成软件包：`OPENLESS_HARMONY_CHANNEL=none` 只构建并交付未签名的 HAP，而 `scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned` 可以在没有设备的情况下检查其内容。对于每个新的 Linux 软件包候选版本，请从上一个 `-N` 后缀递增 `openless-all/app/linux-egui/package-revision`（例如 `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`）。本地打包使用这个显式修订号（Linux CI/标签构建已暂停）；绝不要丢弃它，也不要从 Tauri 标签推导它，后者的 SemVer 仍然是 `2.0.0-Beta.2`。
+没有商店证书的本地机器仍然可以生成软件包：`OPENLESS_HARMONY_CHANNEL=none` 只构建并交付未签名的 HAP，而 `scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned` 可以在没有设备的情况下检查其内容。对于每个新的 Linux 软件包候选版本，请从上一个 `-N` 后缀递增 `openless-all/app/linux-host/package-revision`（例如 `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`）。打包脚本用这个显式修订号并与包内版本交叉校验；绝不要丢弃它，也不要从 Tauri 标签推导它。
 
 ## 下载资产：新发布中不再有重复别名
 
@@ -63,7 +63,7 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 
 网站/CDN 的下载解析必须使用所选发布 API 中的实际资产名称（或指向这些资产的外部重定向），而不是假设旧的固定别名存在于新发布中。此变更不实现网站重定向。Stable 选择可以使用最新的 stable 发布；beta 选择必须显式选择其预发布标签，因为 GitHub 的 `latest` 不包含预发布。历史固定名称链接对历史发布仍然有效。更新器清单生成及其 CDN 产物交接保持不变。
 
-根据 [2026-09-06 2.0 需求](docs/2.0-requirements.md)，Windows 和 macOS 必须完整保留各自 Tauri 1.x 的功能。egui 团队负责 Linux Host/UI 工作和 Linux 产品验收。Linux 应用的缺口不会阻塞 Windows/macOS 交付，但共享 Core 的缺陷会。Linux 软件包在自身产品验收通过之前不得附加。现有的 Android 构建不会把该范围扩大为新的完全支持承诺。
+根据 [2026-09-06 2.0 需求](docs/2.0-requirements.md)，Windows 和 macOS 必须完整保留各自 Tauri 1.x 的功能。Linux 宿主（Qt6 WebEngine 宿主 + `linux-web`）负责 Linux 产品验收。Linux 应用的缺口不会阻塞 Windows/macOS 交付，但共享 Core 的缺陷会。Linux 软件包在自身产品验收通过之前不得附加。现有的 Android 构建不会把该范围扩大为新的完全支持承诺。
 
 ## 版本同步闸门
 
@@ -130,7 +130,7 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 
 Linux 工作流派发已暂停。在手动分发 Linux 软件包（或恢复自动化）之前，必须满足以下全部条件：
 
-1. egui 团队已完成 [Linux Host/UI 缺口与验收](docs/linux-egui-handoff/07-acceptance.md)。现有的 `eframe::App` 只是一个起步实现；它的存在以及打包成功本身并不能证明产品完整。
+1. [Linux 宿主缺口与验收](docs/linux-host-handoff/07-acceptance.md) 已完成。打包成功本身并不能证明产品完整。
 2. Linux core/host 测试、依赖闸门和密钥暴露面闸门在 Ubuntu 上通过。
 3. 为 ELF 依赖、deb/rpm 内容、桌面元数据、fcitx5 插件路径和软件包 SHA-256 校验和运行本地打包验证器。没有 AppImage、minisign 密钥或 Linux 更新器清单。
 4. 检出已审阅的不可变标签，并验证软件包版本与 `package.json` 匹配，从而可证明这些软件包来自已审阅的提交。
@@ -212,7 +212,7 @@ base64 -w0 release.p12       # → HARMONY_RELEASE_KEYSTORE_BASE64
 
 该上传会替换 AppGallery Connect 中的候选包；它绝不会提交应用审核，因为 AGC 要求人工提交。在没有 `APPGALLERY_*` 密钥的情况下，工作流仍会将 HAP 附加到 GitHub Release，并报告商店上传已被跳过。
 
-`openless-all/app/harmony/AppScope/app.json5` 中的 `versionName`/`versionCode` 是开发占位符；打包脚本会为构建重写它们（`versionName` 来自 `package.json`，`versionCode` 来自 `linux-egui/package-revision`，该值只增不减），并在之后恢复该文件。
+`openless-all/app/harmony/AppScope/app.json5` 中的 `versionName`/`versionCode` 是开发占位符；打包脚本会为构建重写它们（`versionName` 来自 `package.json`，`versionCode` 来自 `linux-host/package-revision`，该值只增不减），并在之后恢复该文件。
 
 ## 发布说明与贡献者署名
 

@@ -15,7 +15,7 @@ The runnable sources live in `app/`:
 - `app/crates/openless-core`: framework-independent shared backend Interface and business rules;
 - `app/src`: React frontend for the Tauri hosts;
 - `app/src-tauri`: macOS, Windows, and Android Tauri Host and native adapters;
-- `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK;
+- `app/linux-host` + `app/linux-web` + `app/linux-qt`: Linux adapters, headless backend (HTTP command bridge) and the Qt6 WebEngine host; they do not depend on Tauri or WebKitGTK;
 - `app/harmony`: HarmonyOS host (ArkTS + ArkWeb) with the shared Rust backend;
 - `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
 - `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
@@ -30,17 +30,17 @@ npm run tauri dev
 
 ## Shared backend and Linux host
 
-This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. Remaining Host/UI work and product acceptance are tracked in the [Linux handoff](../docs/linux-egui-handoff/README.md).
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-web` exposes them over `/api/invoke` + `/api/events`, and `linux-qt` renders the official React UI in Qt6 WebEngine. Host status and product acceptance are tracked in the [Linux handoff](../docs/linux-host-handoff/README.md).
 
 ```bash
 cd app
 cargo test -p openless-core --locked
-cargo test -p openless-linux-egui --all-targets --locked
+cargo test -p openless-linux-host --all-targets --locked
 pwsh ./scripts/check-core-deps.ps1
-pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
+pwsh ./scripts/check-core-deps.ps1 openless-linux-host
 ```
 
-Linux packaging is manual while the L01–L12 device acceptance is open: the dedicated CI workflows (`check-linux-egui.yml`, `release-linux-egui.yml`) were removed and desktop releases no longer dispatch Linux. The local scripts still build deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). Restoring automated Linux releases requires the acceptance evidence described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
+Linux packaging runs in its own workflows: `check-linux.yml` compiles the Qt6 host, runs the Core/Host tests and produces deb/rpm (AppImage is retired); `release-linux.yml` publishes it. Automated publication requires the acceptance records described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
 
 ## macOS Build
 
@@ -193,7 +193,7 @@ python3 scripts/package-ipa.py \
 
 ## Release Signing
 
-Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
+Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use their own Linux workflows and an independent minisign secret.
 
 Required GitHub secrets:
 

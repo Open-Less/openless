@@ -32,7 +32,7 @@
 <p align="center">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-14%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square&logo=windows&logoColor=white" />
-  <img alt="Linux" src="https://img.shields.io/badge/Linux-egui-fcc624?style=flat-square&logo=linux&logoColor=black" />
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-Qt6-fcc624?style=flat-square&logo=linux&logoColor=black" />
   <img alt="Android" src="https://img.shields.io/badge/Android-8%2B-3ddc84?style=flat-square&logo=android&logoColor=white" />
   <img alt="iOS" src="https://img.shields.io/badge/iOS-16%2B-000000?style=flat-square&logo=apple&logoColor=white" />
   <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-adapting-0a59f7?style=flat-square" />
@@ -126,7 +126,7 @@ Six hosts share one framework-independent backend (`openless-core`); they differ
 | --- | --- | --- | --- |
 | macOS 14 Sonoma+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app: hotkey, insertion, history, style packs, cursor context, Apple Speech, experimental local ASR | DMG (Apple Silicon / Intel), Homebrew cask |
 | Windows 10+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app, plus a native TSF input method (`windows-ime/`) and Foundry/sherpa local ASR | NSIS installer |
-| Linux | Native egui/eframe host (`linux-egui/`, no Tauri or WebKitGTK) | Core 2.0 services wired to a native UI; the L01–L12 device acceptance is still open | Source build; deb/rpm only after acceptance |
+| Linux | Qt6 WebEngine window host (`linux-qt/`) over the `linux-web` backend bridge, no Tauri or WebKitGTK | Same React UI as the desktop app, driven over `/api/invoke` + `/api/events` | deb/rpm from `check-linux.yml`; publishing needs recorded device acceptance |
 | Android 8.0+ | Tauri mobile host + React, OpenLess keyboard (`android/`, `mobile-ime/`) | App, floating capsule, IME, cursor context, in-app updates | APKs per ABI |
 | iOS 16+ | Native SwiftUI/UIKit app, keyboard extension, recording widget (`openless-all/ios/`) | Chinese/English typing, voice-focused and hold-space modes, speech translation | Unsigned IPA from source, personal signing |
 | HarmonyOS (API 12+) | ArkTS + ArkWeb host and input method extension (`harmony/`, `harmony/rust`) | Host, IME and voice pipeline wired; network recognition, update flow and store listing still in progress | Unsigned HAP on Releases |
@@ -226,7 +226,7 @@ OpenLess is currently in a stability phase. The project is not accepting pull re
 
 Every item below is one more layer sedimented into a default — a capability you authorize once and then never manage again. This is the infrastructure you stand on after launch:
 
-- The shared Rust backend lives in `openless-core`. macOS, Windows and Android use a thin Tauri 2 host with the React/TypeScript frontend; Android also ships a native keyboard, and Windows ships a TSF input method. Linux uses a separate native egui host and never compiles Tauri or WebKitGTK. iOS runs a native SwiftUI/UIKit app with a keyboard extension, and HarmonyOS runs an ArkTS/ArkWeb host over the same napi-exposed Core.
+- The shared Rust backend lives in `openless-core`. macOS, Windows and Android use a thin Tauri 2 host with the React/TypeScript frontend; Android also ships a native keyboard, and Windows ships a TSF input method. Linux uses a Qt6 WebEngine host (`linux-qt`) over a headless Rust backend (`linux-web`) and never compiles Tauri or WebKitGTK. iOS runs a native SwiftUI/UIKit app with a keyboard extension, and HarmonyOS runs an ArkTS/ArkWeb host over the same napi-exposed Core.
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
 - ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
 - **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
@@ -262,7 +262,7 @@ Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
   - In-app updates (Settings → About & updates) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
-- **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
+- **Linux**: the Tauri/WebView build has been retired. A Qt6 WebEngine host (`linux-qt`) renders the official React UI over the shared Core 2.0 services exposed by `linux-web`. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
 - **HarmonyOS** (adapting): download `OpenLess_harmony_arm64.hap` from the same Release. It is unsigned and intended for developer/test installation through DevEco Studio or `hdc`; AppGallery distribution is prepared by the workflow but submitted manually, and no update flow exists yet. Local build and signing steps are in `openless-all/app/harmony/README.md`.
 - **iOS**: there is no downloadable IPA. Build the native app from source and sign it with your own team — see [openless-all/ios/README.md](openless-all/ios/README.md) for bootstrap, build, and keyboard-enable steps.
 - **macOS (Homebrew)**:
@@ -292,9 +292,9 @@ For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend; `src-tauri` hosts macOS/Windows/Android, `linux-egui` contains the native Linux UI and its platform adapters, `harmony/` holds the ArkTS/ArkWeb host plus the `harmony/rust` napi crate, and `openless-all/ios/` is the independent native iOS project. Vendored crates (`cpal`, `tauri-runtime-wry`) are checked in under `src-tauri/vendor/`, so **no Git submodule initialization is required**. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
+The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend; `src-tauri` hosts macOS/Windows/Android, `linux-host` holds the Linux platform adapters, `linux-web` the headless backend + HTTP command bridge, and `linux-qt` the Qt6 WebEngine window host, `harmony/` holds the ArkTS/ArkWeb host plus the `harmony/rust` napi crate, and `openless-all/ios/` is the independent native iOS project. Vendored crates (`cpal`, `tauri-runtime-wry`) are checked in under `src-tauri/vendor/`, so **no Git submodule initialization is required**. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
 
-Rust 1.99 is the minimum supported toolchain for every source tree (`openless-core`, `src-tauri`, `linux-egui`); the latest stable Rust is recommended. CI verifies both Rust 1.99 and stable on macOS and Windows, stable for the Linux egui host, and also builds the Android, iOS and HarmonyOS hosts.
+Rust 1.99 is the minimum supported toolchain for every source tree (`openless-core`, `src-tauri`, `linux-host`, `linux-web`); the latest stable Rust is recommended. CI verifies both Rust 1.99 and stable on macOS and Windows, stable for the Linux host, and also builds the Android, iOS and HarmonyOS hosts.
 
 ```bash
 cd "openless-all/app"
@@ -316,7 +316,7 @@ bash scripts/build-harmony-frontend.sh
 
 # Shared backend and Linux Host/UI (no Tauri/WebKitGTK)
 cargo check -p openless-core
-cargo check -p openless-linux-egui --all-targets
+cargo check -p openless-linux-host -p openless-linux-web --all-targets
 
 # Tauri host type-check
 cargo check --manifest-path "src-tauri/Cargo.toml"
@@ -437,14 +437,14 @@ The application has one shared backend Interface and platform hosts:
 
 ```
 React UI  ── Tauri Adapter (macOS/Windows/Android) ──┐
-egui UI   ── Linux Adapter (no Tauri/WebKitGTK) ────┤
+Qt6 UI    ── Linux Adapter (no Tauri/WebKitGTK) ────┤
 SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── openless-core
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
+`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-host-backend-contract.md`](docs/linux-host-backend-contract.md).
 
-The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux egui packaging is a separate, manual workflow that stays paused until device acceptance; after acceptance an admin attaches the verified deb/rpm packages to the shared Release. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
+The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux packaging runs in the separate `check-linux.yml` / `release-linux.yml` workflows; publishing to the shared Release requires recorded device acceptance for that tag. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 

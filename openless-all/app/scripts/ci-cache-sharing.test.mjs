@@ -86,7 +86,7 @@ assert.ok(sharedKeys(androidApk).some((key) => key.startsWith('android-')));
 // gate and save only from beta, so a run costs ~40 s and the common PR pays no
 // runner for them at all.
 {
-  // 原生胶囊（egui）已删除，CI 里不再有它的作业；这里只锁住「没有回来」。
+  // 原生胶囊渲染器已删除，CI 里不再有它的作业；这里只锁住「没有回来」。
   assert.doesNotMatch(ci, /\n  native-capsule:/, 'the native capsule job is gone');
   assert.doesNotMatch(ci, /outputs\.capsule/, 'the capsule area gate is gone with the crate');
   assert.ok(

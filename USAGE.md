@@ -18,7 +18,7 @@
 
 ### Linux
 
-Linux runs on a native egui host and does not depend on Tauri or WebKitGTK.
+Linux runs on a Qt6 WebEngine host (`linux-qt`) over a headless Rust backend (`linux-web`), and does not depend on Tauri or WebKitGTK.
 
 1. No package is shipped with Releases yet: Linux packaging stays paused until the L01–L12 on-device acceptance is complete, so build from source for now (see the build sections in the [README](README.md)).
 2. Requires glibc ≥ 2.39 (Ubuntu 24.04 or an equivalent distribution).

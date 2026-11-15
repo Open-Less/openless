@@ -6,7 +6,7 @@ param(
 
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\")).Path
 $forbidden = if ($Package -eq "openless-core") {
-    "tauri|wry|webkit2gtk|host|eframe"
+    "tauri|wry|webkit2gtk|host|eframe|egui"
 } else {
     "tauri|wry|webkit2gtk"
 }

@@ -18,7 +18,7 @@
 
 ### Linux
 
-Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
+Linux 使用 Qt6 WebEngine 宿主（`linux-qt`）+ 无头后端 `linux-web`，不依赖 Tauri 或 WebKitGTK。
 
 1. 暂未随 Release 提供安装包：Linux 打包在 L01–L12 真机验收完成前保持暂停，可先从源码构建（见 [README](README.zh.md) 的构建章节）。
 2. 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）。

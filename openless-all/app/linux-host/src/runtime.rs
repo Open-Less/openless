@@ -16,7 +16,7 @@ pub struct LinuxRuntimePumpResult {
 /// shared backend shuts down.
 ///
 /// The UI team may keep this beside its app state and schedule `pump()` on
-/// the host Tokio runtime. No UI/eframe type crosses this interface.
+/// the host Tokio runtime. No UI type crosses this interface.
 pub struct LinuxNativeRuntime {
     host: std::sync::Arc<LinuxHost>,
     startup: openless_core::StartupSnapshot,

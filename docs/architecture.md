@@ -11,7 +11,7 @@
 | 界面（Win/mac/Android） | `src/`（React/TypeScript/i18next，八种界面语言） | 页面、设置、窗口分支；调用 typed IPC，展示快照与事件 |
 | Host（Win/mac/Android） | `src-tauri/`（crate `openless`） | `src/lib.rs` 注册命令；适配窗口、热键、音频、凭据、插入、IME 和生命周期 |
 | 共享 Core | `crates/openless-core/` | 业务规则、会话、服务调用和数据仓储；通过 trait 接入 Host 能力 |
-| Linux Host + UI | `linux-host/`（crate `openless-linux-host`） | `backend.rs` 组装 `OpenLessBackend`，`main.rs` 实现 host/eframe UI，不依赖 Tauri/WebKitGTK |
+| Linux Host | `linux-host/`（crate `openless-linux-host`）+ `linux-web` + `linux-qt` | `backend.rs` 组装 `OpenLessBackend`；`linux-web` 暴露 `/api/invoke` + `/api/events`；`linux-qt` 用 Qt6 WebEngine 画窗口 |
 | HarmonyOS Host + UI | `harmony/`（ArkTS + ArkWeb）与 `harmony/rust`（crate `openless-harmony-host`） | ArkTS 提供输入法/窗口/剪贴板能力，Web 界面复用 `src/` 的 harmony 构建，Rust 侧经 napi 暴露同一套 IPC |
 
 Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Android 与 HarmonyOS 共用的输入法 native 后端在 `mobile-ime/`；HarmonyOS 的构建与分发见 [发布规范](../RELEASING.md)。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-host-handoff/README.md)。

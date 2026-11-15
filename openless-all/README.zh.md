@@ -15,7 +15,7 @@
 - `app/crates/openless-core`：与框架无关的共享后端接口与业务规则；
 - `app/src`：供各 Tauri 宿主使用的 React 前端；
 - `app/src-tauri`：macOS、Windows 与 Android 的 Tauri 宿主及原生适配器；
-- `app/linux-egui`：Linux 宿主与 egui/eframe 界面，不依赖 Tauri 或 WebKitGTK；
+- `app/linux-host` + `app/linux-web` + `app/linux-qt`：Linux 适配层、无头后端（HTTP 命令桥）与 Qt6 WebEngine 宿主，不依赖 Tauri 或 WebKitGTK；
 - `app/harmony`：HarmonyOS 宿主（ArkTS + ArkWeb），配合共享 Rust 后端；
 - `app/mobile-ime`：Android 与 HarmonyOS 共用的原生输入法后端；
 - `app/scripts/linux-fcitx5-plugin`：Linux 听写所经过的 fcitx5 插件。
@@ -30,17 +30,17 @@ npm run tauri dev
 
 ## 共享后端与 Linux 宿主
 
-本仓库提供共享的类型化 Rust 接口、语义事件、fixtures 以及 Linux 适配器。`linux-egui/src/main.rs` 现已实现 egui/eframe 应用，由 `LinuxHost` 和 `LinuxBackendBuilder` 将其接入 Core。剩余的宿主/界面工作与产品验收记录在 [Linux 交接文档](../docs/linux-egui-handoff/README.md) 中。
+本仓库提供共享的类型化 Rust 接口、语义事件、fixtures 以及 Linux 适配器。`linux-web` 把这些能力暴露成 `/api/invoke` 与 `/api/events`，`linux-qt` 用 Qt6 WebEngine 渲染与桌面端同一套 React 界面。宿主状态与产品验收记录在 [Linux 交接文档](../docs/linux-host-handoff/README.md) 中。
 
 ```bash
 cd app
 cargo test -p openless-core --locked
-cargo test -p openless-linux-egui --all-targets --locked
+cargo test -p openless-linux-host --all-targets --locked
 pwsh ./scripts/check-core-deps.ps1
-pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
+pwsh ./scripts/check-core-deps.ps1 openless-linux-host
 ```
 
-在 L01–L12 设备验收尚未完成期间，Linux 打包为手动进行：专用 CI 工作流（`check-linux-egui.yml`、`release-linux-egui.yml`）已移除，桌面版发布也不再分发 Linux。本地脚本仍可在不依赖 WebKitGTK 的情况下构建 deb/rpm 与 fcitx5 插件（AppImage 已弃用）。恢复自动化 Linux 发布需要 [`RELEASING.md`](../RELEASING.md) 和 [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md) 中所述的验收证据。
+Linux 打包由独立工作流完成：`check-linux.yml` 编译 Qt6 宿主、运行 Core/Host 测试并产出 deb/rpm（AppImage 已弃用），`release-linux.yml` 负责发版；自动化发布需要 [`RELEASING.md`](../RELEASING.md) 与 [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md) 中所述的验收记录。
 
 ## macOS 构建
 
@@ -181,7 +181,7 @@ python3 scripts/package-ipa.py \
 
 ## 发布签名
 
-带标签的 Tauri 发布（`v*-tauri`）必须使用 Developer ID 签名并完成公证，这样用户下载后即可直接打开 macOS 应用，无需手动移除隔离属性。Linux 安装包使用单独的手动 egui 工作流和独立的 minisign 密钥。
+带标签的 Tauri 发布（`v*-tauri`）必须使用 Developer ID 签名并完成公证，这样用户下载后即可直接打开 macOS 应用，无需手动移除隔离属性。Linux 安装包使用独立的 Linux 工作流和各自的 minisign 密钥。
 
 必需的 GitHub secrets：
 
