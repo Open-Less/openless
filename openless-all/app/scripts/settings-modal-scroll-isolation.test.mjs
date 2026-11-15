@@ -25,10 +25,7 @@ assertEqual(lockAttributeMatches.length, 1, '背景滚动锁标记应只出现�
 const [lockAttributeMatch] = lockAttributeMatches;
 const lockAttributeExpression = lockAttributeMatch[1];
 const lockAttributeIndex = lockAttributeMatch.index;
-const backgroundScrollerIndex = floatingShellTsx.indexOf(
-  'className="ol-thinscroll',
-  lockAttributeIndex,
-);
+const backgroundScrollerIndex = floatingShellTsx.indexOf('ol-thinscroll', lockAttributeIndex);
 const settingsModalIndex = floatingShellTsx.indexOf('<SettingsModal', lockAttributeIndex);
 
 assertMatch(lockAttributeExpression, /\bsettingsOpen\b/, '背景滚动锁标记应由设置弹窗状态控制');
@@ -38,6 +35,11 @@ if (!(
 )) {
   throw new Error('背景滚动锁标记应先于背景滚动区和设置弹窗声明');
 }
+assertMatch(
+  floatingShellTsx,
+  /displayTab === 'overview' && !mobile[\s\S]*'ol-thinscroll ol-page-fixed'[\s\S]*'ol-thinscroll ol-scroll-fade'/,
+  '桌面概览固定在一屏，其他页面保留细滚动区，设置打开时才能锁住背景',
+);
 assertMatch(
   tokensCss,
   /\[data-ol-settings-open\]\s+\.ol-thinscroll\s*\{[^}]*overflow:\s*hidden\s*!important\s*;?[^}]*\}/s,

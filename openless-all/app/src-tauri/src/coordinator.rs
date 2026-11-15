@@ -443,16 +443,29 @@ fn shared_backend_from_stores(
         preferences: prefs.core(),
         history: history.core(),
         activity: activity.core(),
+        expression_profile: openless_core::expression_observation::open_shared_expression_profile(
+            config.data_dir.join("expression-profile.json"),
+        ),
         vocabulary: vocab.core(),
         correction_rules: correction_rules.core(),
         style_packs: style_packs.core(),
     };
+    #[cfg(not(mobile))]
+    let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(config.data_dir.join("service-usage.json"))
+        .and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start(Arc::new(ledger)))
+    {
+        Ok(recorder) => Some(Arc::new(recorder)),
+        Err(error) => { log::warn!("service usage unavailable: {error}"); None }
+    };
+    #[cfg(mobile)]
+    let usage_recorder = None;
     let backend_slot = crate::core_adapters::backend_slot();
     let mut dependencies = crate::core_adapters::backend_dependencies(
         app,
         Arc::clone(&backend_slot),
         native_asr,
         Arc::clone(&repositories.preferences),
+        usage_recorder,
         hotkey_status,
         qa_context,
     );
@@ -1174,7 +1187,6 @@ impl Coordinator {
                     coord.start_qa_hotkey_listener();
                     #[cfg(not(mobile))]
                     coord.start_selection_polish_hotkey_listener();
-                    coord.start_coding_agent_hotkey_listener();
                     coord.start_combo_hotkey_listener();
                     coord.start_translation_hotkey_listener();
                     coord.start_switch_style_hotkey_listener();
@@ -1219,17 +1231,6 @@ impl Coordinator {
     /// on failure (the user may have changed the combo).
     pub fn start_qa_hotkey_listener(&self) {
         qa::install_recording_companion(&self.inner);
-    }
-
-    /// Starts the "quick Agent" dual-hotkey supervisor, parallel to the QA
-    /// hotkey; the feature is off by default and registered only when
-    /// `coding_agent_enabled`.
-    pub fn start_coding_agent_hotkey_listener(&self) {
-        let inner = Arc::clone(&self.inner);
-        std::thread::Builder::new()
-            .name("openless-coding-agent-hotkey-supervisor".into())
-            .spawn(move || coding_agent_hotkey_supervisor_loop(inner))
-            .ok();
     }
 
     pub fn stop_coding_agent_hotkey_listener(&self) {
@@ -1706,8 +1707,8 @@ impl Coordinator {
         Ok(())
     }
 
-    pub(crate) fn lock_settings_host(&self) -> parking_lot::MutexGuard<'_, ()> {
-        self.inner.settings_host_gate.lock()
+    pub(crate) fn lock_settings_host(&self) -> crate::issue1266_debug::HostGuard<'_> {
+        crate::issue1266_debug::lock_host(&self.inner.settings_host_gate, crate::issue1266_debug::Kind::Settings)
     }
 
     pub(crate) async fn dismiss_less_computer(&self) -> Result<(), String> {

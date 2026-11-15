@@ -200,7 +200,7 @@ export function DebugToolsSection() {
                 fontFamily: 'var(--ol-font-mono)',
                 lineHeight: 1.7,
                 padding: '8px 10px',
-                borderRadius: 8,
+                borderRadius: 'var(--ol-control-radius)',
                 background: 'var(--ol-surface-2)',
                 border: '0.5px solid var(--ol-line-strong)',
                 maxWidth: 420,
@@ -218,7 +218,9 @@ export function DebugToolsSection() {
               {probeResult.window && (
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
                   {probeResult.window.text.slice(0, probeResult.window.cursor)}
-                  <span style={{ color: 'var(--ol-blue)', fontWeight: 700 }}>
+                  <span
+                    style={{ color: 'var(--ol-blue)', fontWeight: 'var(--ol-font-weight-bold)' }}
+                  >
                     ⟦{t('settings.debug.cursorLabel')}⟧
                   </span>
                   {probeResult.window.text.slice(probeResult.window.cursor)}

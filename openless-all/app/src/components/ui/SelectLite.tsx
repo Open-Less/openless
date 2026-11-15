@@ -34,6 +34,7 @@ interface SelectLiteProps {
   open?: boolean;
   side?: 'top' | 'bottom';
   popupStyle?: CSSProperties;
+  popupClassName?: string;
   searchable?: boolean;
   searchPlaceholder?: string;
   emptyMessage?: string;
@@ -51,6 +52,7 @@ export function SelectLite({
   open: controlledOpen,
   side = 'bottom',
   popupStyle,
+  popupClassName,
   searchable = false,
   searchPlaceholder = 'Search…',
   emptyMessage = 'No matching options',
@@ -86,6 +88,7 @@ export function SelectLite({
           open: controlledOpen,
           side,
           popupStyle,
+          popupClassName,
         }}
         onOpenChange={handleOpenChange}
       />
@@ -104,6 +107,7 @@ export function SelectLite({
         open: controlledOpen,
         side,
         popupStyle,
+        popupClassName,
       }}
       onOpenChange={handleOpenChange}
     />
@@ -124,6 +128,7 @@ function SearchableSelect({
   open,
   side = 'bottom',
   popupStyle,
+  popupClassName,
 }: SelectLiteProps) {
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -181,7 +186,11 @@ function SearchableSelect({
           sideOffset={8}
           collisionPadding={8}
         >
-          <Combobox.Popup className="ol-select-popup" initialFocus={inputRef} style={popupStyle}>
+          <Combobox.Popup
+            className={['ol-select-popup', popupClassName].filter(Boolean).join(' ')}
+            initialFocus={inputRef}
+            style={popupStyle}
+          >
             <div className="ol-select-search">
               <Icon name="search" size={13} />
               <Combobox.Input

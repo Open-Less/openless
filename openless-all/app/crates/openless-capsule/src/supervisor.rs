@@ -429,13 +429,15 @@ mod health_tests {
     fn helper(ready: bool) -> Command {
         #[cfg(windows)]
         {
-            let mut command = Command::new("powershell.exe");
+            let mut command = Command::new("cmd.exe");
             let script = if ready {
-                r#"[Console]::WriteLine('{"type":"ready","version":2}'); while ($null -ne ($line = [Console]::ReadLine())) { if ($line.Contains('"type":"shutdown"')) { break } }"#
+                r#"echo {"type":"ready","version":2}&more >nul"#
             } else {
-                "while ($null -ne [Console]::ReadLine()) {}"
+                "more >nul"
             };
-            command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+            // The fixture drains stdin until the supervisor closes it. Avoid
+            // PowerShell cold-start costs in this protocol/lifecycle test.
+            command.args(["/D", "/Q", "/C"]).raw_arg(script);
             command
         }
         #[cfg(not(windows))]
@@ -461,9 +463,7 @@ mod health_tests {
         let action: Arc<dyn Fn(String, Action) + Send + Sync> =
             Arc::new(|_, _| panic!("unexpected action"));
         let mut task = tokio::spawn(async move {
-            // The Windows test fixture cold-starts PowerShell, unlike the
-            // production native helper. Do not make its startup speed part
-            // of the protocol/lifecycle contract. Production retains 5 s.
+            // Keep fixture scheduling separate from the production 5 s budget.
             run_instance_with_handshake_timeout(
                 &mut helper(true),
                 &mut receiver,

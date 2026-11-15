@@ -110,6 +110,12 @@ pub async fn check_accessibility_permission(
 pub async fn request_accessibility_permission(
     core: CoreState<'_>,
 ) -> Result<PermissionStatus, String> {
+    // Ad-hoc beta updates can leave an old code-signing identity checked in
+    // System Settings while AXIsProcessTrusted still returns false. Reset only
+    // when the user explicitly retries this authorization step, then issue the
+    // normal system request against the current app identity.
+    #[cfg(target_os = "macos")]
+    crate::reset_tcc_service_for_restart("Accessibility", "guided authorization retry");
     if let Err(error) = core
         .services()
         .platform
@@ -177,8 +183,15 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
         std::process::Command::new("open")
             .arg(url)
             .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        if pane == "accessibility" {
+            extern "C" {
+                fn openless_show_accessibility_guide();
+            }
+            // The AppKit helper schedules its work on the main thread.
+            unsafe { openless_show_accessibility_guide() };
+        }
+        Ok(())
     }
     #[cfg(target_os = "windows")]
     {

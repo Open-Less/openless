@@ -40,7 +40,7 @@ export function FoundryPrepareProgressBlock({
     <div
       style={{
         padding: '10px 12px',
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         background: 'rgba(0,0,0,0.035)',
         display: 'flex',
         flexDirection: 'column',
@@ -99,7 +99,7 @@ export function FoundryPrepareProgressBlock({
             <div
               style={{
                 height: 6,
-                borderRadius: 3,
+                borderRadius: 'var(--ol-radius)',
                 overflow: 'hidden',
                 background: 'rgba(0,0,0,0.08)',
               }}
@@ -312,7 +312,7 @@ export function ModelRow({
               <div
                 style={{
                   height: 6,
-                  borderRadius: 3,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'rgba(0,0,0,0.06)',
                   overflow: 'hidden',
                 }}
@@ -419,7 +419,7 @@ export function TestResultBlock({ result }: { result: LocalAsrTestResult | { err
         marginTop: 12,
         padding: '10px 12px',
         background: 'var(--ol-surface-2)',
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         fontSize: 12.5,
         color: hasError ? 'var(--ol-err)' : 'var(--ol-ink-2)',
         lineHeight: 1.6,

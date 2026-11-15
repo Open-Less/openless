@@ -66,7 +66,9 @@ export function OrbAvatar({ size = 32 }: { size?: number }) {
       setUnavailable(true);
       return undefined;
     }
-    const unsubscribe = subscribeOrbFrames((source) => {
+    let unsubscribe: (() => void) | null = null;
+    let observer: IntersectionObserver | undefined;
+    const draw = (source: HTMLCanvasElement) => {
       // Center-crop and scale (the source is composed for the capsule; the halo takes
       // only ~1/3 of the frame — crop the outer padding so the ring fills the avatar,
       // animation unchanged).
@@ -77,12 +79,33 @@ export function OrbAvatar({ size = 32 }: { size?: number }) {
       const sy = (source.height - sh) / 2;
       ctx.clearRect(0, 0, target.width, target.height);
       ctx.drawImage(source, sx, sy, sw, sh, 0, 0, target.width, target.height);
-    });
-    if (!unsubscribe) {
-      setUnavailable(true);
-      return undefined;
+    };
+    const visible = (show: boolean) => {
+      if (!show) {
+        unsubscribe?.();
+        unsubscribe = null;
+        return;
+      }
+      if (unsubscribe) return;
+      unsubscribe = subscribeOrbFrames(draw);
+      if (!unsubscribe) {
+        observer?.disconnect();
+        target.width = 0;
+        target.height = 0;
+        setUnavailable(true);
+      }
+    };
+    if (typeof IntersectionObserver === 'undefined') visible(true);
+    else {
+      observer = new IntersectionObserver(([entry]) => visible(entry.isIntersecting));
+      observer.observe(target);
     }
-    return unsubscribe;
+    return () => {
+      observer?.disconnect();
+      unsubscribe?.();
+      target.width = 0;
+      target.height = 0;
+    };
   }, [size]);
 
   if (unavailable) {

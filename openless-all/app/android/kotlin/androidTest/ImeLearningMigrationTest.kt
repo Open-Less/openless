@@ -11,7 +11,7 @@ import org.junit.runner.RunWith
 class ImeLearningMigrationTest {
     @Test fun clearsOnlyLegacyAutomaticLearningAndRunsOnce() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val stores = listOf("openless_english_frequency", "openless_english_custom_words", "openless_pinyin_frequency", "openless_pinyin_learned_phrases")
+        val stores = listOf("openless_english_frequency", "openless_english_custom_words")
         val marker = context.getSharedPreferences("openless_learning_privacy", Context.MODE_PRIVATE)
         assertTrue(marker.edit().clear().commit())
         val unrelated = context.getSharedPreferences("openless_clipboard_history", Context.MODE_PRIVATE)
@@ -35,11 +35,9 @@ class ImeLearningMigrationTest {
         assertTrue(result.applied.isEmpty())
         assertTrue(result.errors.containsKey(OpenLessSettingsExport.Category.HAPTIC))
         assertEquals(80, prefs.getInt("key_haptic_amplitude", 0))
-        val legacy = OpenLessSettingsExport.import(context,
-            """{"openlessSettingsExportVersion":1,"pinyinLearnedPhrases":{"mm":"legacy,3"}}""",
-            setOf(OpenLessSettingsExport.Category.PINYIN_LEARNED_PHRASES))
-        assertTrue(legacy.applied.isEmpty())
-        assertTrue(legacy.errors.isNotEmpty())
+        // LitePinyin backups are no longer offered for import.
+        assertTrue(OpenLessSettingsExport.categoriesPresent(
+            """{"openlessSettingsExportVersion":1,"pinyinLearnedPhrases":{"mm":"legacy,3"}}""").isEmpty())
     }
 
 }

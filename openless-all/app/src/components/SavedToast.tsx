@@ -22,6 +22,8 @@ interface SavedToastProps {
   actionLabel?: string;
   onAction?: () => void;
   durationMs?: number;
+  /** Bump to show the same state again; identical saveState/message would otherwise no-op. */
+  replayKey?: number;
 }
 
 export function SavedToast({
@@ -32,6 +34,7 @@ export function SavedToast({
   actionLabel,
   onAction,
   durationMs,
+  replayKey = 0,
 }: SavedToastProps) {
   // Internal state lets the toast time itself out (even if the parent's timer runs
   // longer than 0.8s).
@@ -49,7 +52,7 @@ export function SavedToast({
       return () => window.clearTimeout(timer);
     }
     setInternalVisible(false);
-  }, [saveState, message, durationMs, onAction]);
+  }, [saveState, message, durationMs, onAction, replayKey]);
 
   const failed = saveState === 'failed';
 
@@ -64,7 +67,7 @@ export function SavedToast({
     ...offsetStyle,
     zIndex: 99999,
     padding: '4px 11px',
-    borderRadius: 999,
+    borderRadius: 'var(--ol-radius)',
     border: failed ? '0.5px solid rgba(239,68,68,0.22)' : '0.5px solid rgba(37,99,235,0.16)',
     background: failed ? '#fef2f2' : '#eff4ff',
     color: failed ? '#dc2626' : '#2563eb',
@@ -123,7 +126,7 @@ export function SavedToast({
                 background: 'transparent',
                 color: 'inherit',
                 font: 'inherit',
-                fontWeight: 700,
+                fontWeight: 'var(--ol-font-weight-bold)',
                 textDecoration: 'underline',
                 cursor: 'pointer',
               }}

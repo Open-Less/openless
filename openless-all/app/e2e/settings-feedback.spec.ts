@@ -1,3 +1,5 @@
+import { openExperiments } from './support/experiments';
+import { settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 // Development React is intentional: production builds hide special-prop/ref warnings.
@@ -22,8 +24,9 @@ async function settings(page: Page, category: string) {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page
     .getByRole('navigation', { name: '设置分类' })
-    .getByRole('button', { name: category, exact: true })
+    .getByRole('button', { name: category === '实验与扩展' ? '高级功能' : category, exact: true })
     .click();
+  await settleNavigation(page);
 }
 
 async function expectInViewport(page: Page) {
@@ -38,7 +41,7 @@ async function expectInViewport(page: Page) {
 test('explanatory labels replace help badges, open beside the words and dismiss with Escape', async ({
   page,
 }) => {
-  await settings(page, 'AI 服务与模型');
+  await settings(page, 'AI 与模型');
   const label = page.getByRole('button', { name: '识别管线', exact: true });
   const row = page.locator('.ol-service-pipeline-row');
   await expect(label).toHaveCSS('text-decoration-style', 'dotted');
@@ -148,7 +151,7 @@ test('narrow windows keep select and long model explanations within the viewport
   expect(bounds.x).toBeGreaterThanOrEqual(0);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(375);
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   await page.locator('[data-ol-advanced-entry="localModels"]').click();
   await page.getByRole('button', { name: 'Embedding Gemma', exact: true }).click();
   await expect(page.getByRole('tooltip')).toBeVisible();
@@ -171,7 +174,7 @@ test.describe('touch hints', () => {
       'aria-checked',
       'false',
     );
-    await page.getByRole('heading', { name: '实验性本地语音模型', exact: true }).tap();
+    await page.getByRole('heading', { name: '实验性本地语音模型 Beta', exact: true }).tap();
     await expect(page.getByRole('tooltip')).toBeHidden();
   });
 });
@@ -193,7 +196,7 @@ test('style card lists mount and switch without the React 18 PopChild ref warnin
 test('Gemini Omni exposes the shared thinking setting and hides it for transcription models', async ({
   page,
 }, testInfo) => {
-  await settings(page, 'AI 服务与模型');
+  await settings(page, 'AI 与模型');
   await page.getByRole('button', { name: '多模态模式', exact: true }).click();
   const card = page.locator('.ol-omni-settings');
   await card.getByRole('combobox', { name: '供应商', exact: true }).click();
@@ -213,6 +216,7 @@ test('Gemini Omni exposes the shared thinking setting and hides it for transcrip
   await page.screenshot({ path: testInfo.outputPath('gemini-omni-desktop.png') });
 
   await page.setViewportSize({ width: 375, height: 812 });
+  await thinking.scrollIntoViewIfNeeded();
   await expect(thinking).toBeInViewport({ ratio: 1 });
   const model = card.getByLabel('模型', { exact: true });
   await model.fill('gemini-3.5-transcribe');

@@ -1,3 +1,4 @@
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type ElementHandle, type Locator, type Page } from '@playwright/test';
 
 // Every switch the user can reach in Settings (plus the services channel lists and the
@@ -148,6 +149,7 @@ function expectAnimated(sample: Sample) {
 }
 
 async function exerciseVisibleSwitches(scope: Locator, label: string) {
+  await settleNavigation(scope.page());
   const page = scope.page();
   // Handles, not positions: flipping a channel can move its row within the list.
   const switches = await scope.locator('[role="switch"]').elementHandles();
@@ -174,7 +176,9 @@ async function exerciseVisibleSwitches(scope: Locator, label: string) {
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await expect(dialog).toHaveCSS('opacity', '1');
+  await expect(page.locator('.ol-settings-workspace')).toHaveCSS('opacity', '1');
+  await expect(page.locator('.ol-settings-workspace')).toHaveCSS('transform', 'none');
+  await settleNavigation(dialog);
   return dialog;
 }
 
@@ -183,6 +187,7 @@ async function openSection(dialog: Locator, name: string) {
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name, exact: true })
     .click();
+  await settleNavigation(dialog);
 }
 
 test('every settings switch slides between on and off', async ({ page }) => {
@@ -204,8 +209,9 @@ test('every settings switch slides between on and off', async ({ page }) => {
       await header.click();
       await expect(header).toHaveAttribute('aria-expanded', 'true');
     }
-    if (section === '实验与扩展') {
-      const entries = dialog.locator('[data-ol-advanced-entry]');
+    if (section === '高级功能') {
+      total += await exerciseVisibleSwitches(dialog, 'advanced:root');
+      const entries = dialog.locator('button[data-ol-advanced-entry]');
       const visibleEntries = () =>
         entries.evaluateAll((items) =>
           items
@@ -215,24 +221,34 @@ test('every settings switch slides between on and off', async ({ page }) => {
       const visit = async (id: string, inside?: () => Promise<void>) => {
         await dialog.locator(`[data-ol-advanced-entry="${id}"]`).click();
         await expect(dialog.locator('.ol-settings-back')).toBeVisible();
-        // Pages visited earlier stay mounted but hidden; only the open page is visible.
+        // Leaving a subpage releases its live controls and effects.
         total += await exerciseVisibleSwitches(dialog, `advanced:${id}`);
         await inside?.();
         await dialog.locator('.ol-settings-back').click();
         await expect(entries.first()).toBeVisible();
+        await settleNavigation(dialog);
       };
-      for (const id of await visibleEntries()) {
-        await visit(id, async () => {
-          if (id !== 'testingFeatures') return;
-          // Testing pages are only listed while their switch is on.
-          const enable = dialog.getByRole('switch', { name: '启用正在测试中的功能' });
-          await enable.click();
-          await expect(enable).toHaveAttribute('aria-checked', 'true');
-          await expect(entries.first()).toBeVisible();
-          for (const testingId of await visibleEntries()) await visit(testingId);
-          await enable.click();
-          await expect(enable).toHaveAttribute('aria-checked', 'false');
-        });
+      for (const id of await visibleEntries()) await visit(id);
+      continue;
+    }
+    const categoryEntries = dialog.locator('.ol-settings-category-entry');
+    const categoryCount = await categoryEntries.count();
+    if (categoryCount > 0) {
+      for (let index = 0; index < categoryCount; index++) {
+        await categoryEntries.nth(index).click();
+        const back = dialog.locator('.ol-settings-back-button');
+        await expect(back).toBeVisible();
+        const subHeaders = dialog.locator('[data-ol-toggle-group] > button[aria-expanded]');
+        for (let headerIndex = 0; headerIndex < (await subHeaders.count()); headerIndex++) {
+          const header = subHeaders.nth(headerIndex);
+          if ((await header.getAttribute('aria-expanded')) !== 'false') continue;
+          await header.click();
+          await expect(header).toHaveAttribute('aria-expanded', 'true');
+        }
+        total += await exerciseVisibleSwitches(dialog, `${section}:${index}`);
+        await back.click();
+        await expect(categoryEntries.first()).toBeVisible();
+        await settleNavigation(dialog);
       }
       continue;
     }
@@ -243,7 +259,7 @@ test('every settings switch slides between on and off', async ({ page }) => {
 
 test('channel enable switches slide in every services list', async ({ page }) => {
   const dialog = await openSettings(page);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   let total = 0;
   for (const view of ['语言模型', '语音识别']) {
     await dialog
@@ -259,7 +275,7 @@ test('channel enable switches slide in every services list', async ({ page }) =>
 
 test('channel sorting waits for a slow knob transition to finish', async ({ page }) => {
   const dialog = await openSettings(page);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   await page.addStyleTag({
     content: '.ol-switch-thumb { transition-duration: 700ms !important; }',
   });
@@ -295,19 +311,23 @@ test('stacked switches ripple their neighbours in collapsible groups and channel
   page,
 }) => {
   const dialog = await openSettings(page);
+  await openMicrophoneSettings(dialog);
   const neighbourMoves = async (group: Locator) => {
     const switches = group.locator('[role="switch"]');
     await expect(switches.nth(1)).toBeVisible();
     await switches.nth(0).click();
     return switches.nth(1).evaluate((element) => element.getAnimations().length);
   };
-  const startup = dialog.getByRole('button', { name: '启动', exact: true });
-  if ((await startup.getAttribute('aria-expanded')) === 'false') await startup.click();
-  // The collapsible's own root is its group: switches ripple only within that list.
-  const startupGroup = startup.locator('xpath=..');
-  await expect(startupGroup).toHaveAttribute('data-ol-toggle-group', '');
-  expect(await neighbourMoves(startupGroup)).toBeGreaterThan(0);
-  await openSection(dialog, 'AI 服务与模型');
+  // Startup is no longer a collapsible on the microphone page. The recognition
+  // card still groups its switches, and that group is what ripples.
+  // The inner locator is queried from each group. A dialog-scoped switch looks
+  // for a nested dialog and matches nothing, even when the switch is visible.
+  const recognition = dialog
+    .locator('[data-ol-toggle-group]')
+    .filter({ has: page.getByRole('switch', { name: '录音时静音', exact: true }) });
+  await expect(recognition).toBeVisible();
+  expect(await neighbourMoves(recognition)).toBeGreaterThan(0);
+  await openSection(dialog, 'AI 与模型');
   const channels = dialog.locator('.ol-reorder-list[data-ol-toggle-group]');
   expect(await neighbourMoves(channels)).toBeGreaterThan(0);
 });

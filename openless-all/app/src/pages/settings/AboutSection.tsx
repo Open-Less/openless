@@ -67,7 +67,7 @@ export function AboutSection() {
               width: appIconSize,
               height: appIconSize,
               flexShrink: 0,
-              borderRadius: 13,
+              borderRadius: 'var(--ol-radius)',
               boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)',
             }}
           />
@@ -96,7 +96,7 @@ export function AboutSection() {
               {t('modal.about.tagline')} · {APP_VERSION_LABEL}
             </div>
           </div>
-          {/* Top right of the icon: stable-channel check-updates button. Beta channel lives on the Advanced page. */}
+          {/* Top right of the icon: stable-channel check-updates button. The Beta section has its own channel check. */}
           {platformCaps?.supportsAutoUpdate === true && (
             <CheckUpdateButton channel="stable" compact={compactLayout} />
           )}
@@ -146,7 +146,7 @@ export function AboutSection() {
                 padding: '4px 10px',
                 fontSize: 12,
                 fontFamily: 'var(--ol-font-mono)',
-                borderRadius: 6,
+                borderRadius: 'var(--ol-r-sm)',
                 background: 'var(--ol-surface-2)',
                 border: '0.5px solid var(--ol-line-strong)',
                 boxShadow: '0 1px 0 rgba(0,0,0,0.04)',

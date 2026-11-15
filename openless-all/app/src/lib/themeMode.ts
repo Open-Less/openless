@@ -1,10 +1,11 @@
 // Theme preference: localStorage boot cache + Rust UserPreferences.theme_mode authority.
 // Applies via html[data-ol-theme] + CSS variables — no React re-render for color changes.
 
-import { getSettings, isTauri } from './ipc';
+import { getSettings } from './ipc/settings';
+import { isTauri } from './ipc/shared';
 import { syncWindowsCaptionTheme } from './platform';
 import { syncMacOSWindowTheme } from './nativeWindowTheme';
-import type { ThemeMode } from './types';
+import type { ThemeMode, UserPreferences } from './types';
 
 export type ThemePreference = ThemeMode;
 export type ResolvedTheme = 'light' | 'dark';
@@ -17,6 +18,7 @@ let systemListener: MediaQueryList | null = null;
 let systemHandler: ((event: MediaQueryListEvent) => void) | null = null;
 let activePreference: ThemePreference = 'system';
 let preferenceRevision = 0;
+let initialized = false;
 
 function readStoredPreference(): ThemePreference {
   try {
@@ -108,6 +110,8 @@ export function setThemePreference(pref: ThemePreference): void {
 }
 
 export function initThemeMode(): void {
+  if (initialized) return;
+  initialized = true;
   activePreference = readStoredPreference();
   if (activePreference === 'system') {
     attachSystemListener();
@@ -116,7 +120,24 @@ export function initThemeMode(): void {
 
   if (!isTauri) return;
   const requestedRevision = preferenceRevision;
-  void getSettings()
+  // This subscription belongs to the WebView lifetime, including hidden capsules
+  // and transcript mirrors that never mount HotkeySettingsProvider.
+  void (async () => {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      await listen<Partial<UserPreferences>>('prefs:changed', ({ payload }) => {
+        const preference = payload?.themeMode;
+        if (preference === 'light' || preference === 'dark' || preference === 'system') {
+          applyThemeFromPreference(preference);
+        }
+      });
+    } catch (error) {
+      console.warn('[theme] failed to subscribe to preference changes', error);
+    }
+    // Subscribe before the boot read. A newer event or local choice invalidates
+    // this response even if a hidden WebView's initial IPC finishes late.
+    return getSettings();
+  })()
     .then((prefs) => {
       if (requestedRevision !== preferenceRevision) return;
       const rustPref = prefs.themeMode ?? 'system';

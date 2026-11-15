@@ -21,11 +21,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -37,11 +33,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -53,11 +45,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -69,11 +57,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -85,11 +69,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -111,12 +91,7 @@
     "defaultModel": "gpt-5.5",
     "authRequirement": "o_auth",
     "validationProbe": "llm_text",
-    "staticModels": [
-      "gpt-5.5",
-      "gpt-5.3-codex",
-      "gpt-5.4",
-      "gpt-5.5"
-    ],
+    "staticModels": ["gpt-5.5", "gpt-5.3-codex", "gpt-5.4", "gpt-5.5"],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },
@@ -142,11 +117,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -158,11 +129,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -174,11 +141,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -190,11 +153,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -206,11 +165,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -222,11 +177,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -238,11 +189,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -254,11 +201,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -270,11 +213,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -286,11 +225,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -302,11 +237,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -342,11 +273,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "chat_completions",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -358,11 +285,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "responses",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "llm",
@@ -374,11 +297,7 @@
     "validationProbe": "llm_text",
     "staticModels": [],
     "defaultRequestFormat": "messages",
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ]
+    "supportedRequestFormats": ["chat_completions", "responses", "messages"]
   },
   {
     "kind": "asr",
@@ -400,9 +319,7 @@
     "defaultModel": "scribe_v2",
     "authRequirement": "api_key",
     "validationProbe": "asr_silence",
-    "staticModels": [
-      "scribe_v2"
-    ],
+    "staticModels": ["scribe_v2"],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },
@@ -457,10 +374,7 @@
     "defaultModel": "fun-asr-flash-2026-06-15",
     "authRequirement": "api_key",
     "validationProbe": "asr_non_silent",
-    "staticModels": [
-      "qwen-audio-3.0-asr-flash",
-      "fun-asr-flash-2026-06-15"
-    ],
+    "staticModels": ["qwen-audio-3.0-asr-flash", "fun-asr-flash-2026-06-15"],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },
@@ -508,9 +422,7 @@
     "defaultModel": "asr-1.0",
     "authRequirement": "api_key",
     "validationProbe": "asr_silence",
-    "staticModels": [
-      "asr-1.0"
-    ],
+    "staticModels": ["asr-1.0"],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },
@@ -594,9 +506,7 @@
     "defaultModel": "mimo-v2.5-asr",
     "authRequirement": "api_key",
     "validationProbe": "asr_silence",
-    "staticModels": [
-      "mimo-v2.5-asr"
-    ],
+    "staticModels": ["mimo-v2.5-asr"],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },
@@ -632,10 +542,7 @@
     "defaultModel": "gemini-3.5-transcribe",
     "authRequirement": "api_key",
     "validationProbe": "asr_silence",
-    "staticModels": [
-      "gemini-3.5-transcribe",
-      "gemini-3.5-transcribe-live"
-    ],
+    "staticModels": ["gemini-3.5-transcribe", "gemini-3.5-transcribe-live"],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },

@@ -38,6 +38,8 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySe
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
+use crate::issue1266_debug::{Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation, Outcome as DebugOutcome, Probe as DebugProbe};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
@@ -83,7 +85,12 @@ pub(crate) fn voice_diagnostic(
     outcome: &'static str,
     safe: serde_json::Value,
 ) {
-    #[cfg(all(target_os = "windows", not(test)))]
+    #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+    {
+        crate::issue1266_debug::legacy(event, outcome);
+        let _ = (probe_id, hypothesis_ids, safe);
+    }
+    #[cfg(all(target_os = "windows", not(feature = "issue-1266-diagnostics"), not(test)))]
     {
         use std::io::Write;
         static WRITER: OnceLock<Option<SyncSender<serde_json::Value>>> = OnceLock::new();
@@ -141,17 +148,12 @@ pub(crate) fn voice_diagnostic(
             }
         }
     }
-    #[cfg(any(not(target_os = "windows"), test))]
+    #[cfg(any(not(target_os = "windows"), all(test, not(feature = "issue-1266-diagnostics"))))]
     let _ = (probe_id, hypothesis_ids, event, outcome, safe);
 }
 
-/// Low-memory mode suppresses optional prewarming, not an explicitly active voice listener.
-pub(crate) fn warm_capture_enabled(
-    low_latency: bool,
-    low_memory: bool,
-    voice_activation: bool,
-) -> bool {
-    voice_activation || (low_latency && !low_memory)
+pub(crate) fn warm_capture_enabled(low_latency: bool, voice_activation: bool) -> bool {
+    voice_activation || low_latency
 }
 
 fn voice_capture_key(generation: u64) -> u64 {
@@ -407,12 +409,27 @@ impl WavArchiveWriter {
     }
 
     fn finish(&self) {
+        self.finish_observed(None);
+    }
+
+    fn finish_observed(&self, parent: Option<DebugOperation>) {
+        let operation = DebugOperation::child(DebugProbe::P5, parent);
+        let _scope = operation.scope();
+        operation.record(DebugEvent::ArchiveSend, DebugOutcome::Observed,
+            DebugFacts { kind: DebugKind::Archive, ..DebugFacts::default() });
         let _ = self.sender.send(WavArchiveMessage::Finish);
+        operation.mark(DebugEvent::ArchiveSent);
+        operation.mark(DebugEvent::JoinLock);
         if let Some(handle) = self.join_handle.lock().take() {
-            if let Err(error) = handle.join() {
+            operation.mark(DebugEvent::JoinEntered);
+            let result = handle.join();
+            operation.record(DebugEvent::JoinReturned,
+                if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
+            if let Err(error) = result {
                 log::warn!("[recorder] wav archive writer join failed: {error:?}");
             }
         }
+        operation.record(DebugEvent::ArchiveReturned, DebugOutcome::Returned, DebugFacts::default());
     }
 }
 
@@ -1968,22 +1985,36 @@ impl Recorder {
     ///
     /// Takes `self` (consuming), matching the Swift API semantics — a one-shot resource.
     pub fn stop(self) {
+        let operation = DebugOperation::new(DebugProbe::P5);
+        let _scope = operation.scope();
+        operation.record(DebugEvent::Entered, DebugOutcome::Observed,
+            DebugFacts { kind: DebugKind::Recorder, ..DebugFacts::default() });
         let Recorder {
             stop_flag,
             join_handle,
             archive_writer,
             state,
         } = self;
+        operation.mark(DebugEvent::ProcessorLock);
         *state.processor_sender.lock() = None;
+        operation.mark(DebugEvent::ProcessorReleased);
         stop_flag.store(true, Ordering::SeqCst);
+        operation.mark(DebugEvent::StopSignalled);
+        operation.mark(DebugEvent::JoinLock);
         if let Some(handle) = join_handle.lock().take() {
-            if let Err(err) = handle.join() {
+            operation.mark(DebugEvent::JoinEntered);
+            let result = handle.join();
+            operation.record(DebugEvent::JoinReturned,
+                if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
+            if let Err(err) = result {
                 log::warn!("recorder 线程 join 失败: {:?}", err);
             }
         }
         if let Some(archive) = archive_writer {
-            archive.finish();
+            operation.mark(DebugEvent::ArchiveFinish);
+            archive.finish_observed(Some(operation));
         }
+        operation.record(DebugEvent::Returned, DebugOutcome::Returned, DebugFacts::default());
     }
 }
 
@@ -3888,16 +3919,10 @@ mod tests {
         );
     }
     #[test]
-    fn low_memory_disables_only_optional_warm_capture() {
-        for low_latency in [false, true] {
-            for low_memory in [false, true] {
-                assert!(warm_capture_enabled(low_latency, low_memory, true));
-            }
-        }
-        assert!(warm_capture_enabled(true, false, false));
-        assert!(!warm_capture_enabled(true, true, false));
-        assert!(!warm_capture_enabled(false, false, false));
-        assert!(!warm_capture_enabled(false, true, false));
+    fn low_latency_or_voice_activation_enables_warm_capture() {
+        assert!(warm_capture_enabled(true, false));
+        assert!(warm_capture_enabled(false, true));
+        assert!(!warm_capture_enabled(false, false));
     }
 
     #[test]

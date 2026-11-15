@@ -19,6 +19,19 @@ struct Presentation {
     foreground_captured: bool,
 }
 
+impl Presentation {
+    fn update_theme(&mut self, theme: openless_capsule::ThemeMode) -> bool {
+        let Some(frame) = self.frame.as_mut() else {
+            return false;
+        };
+        if frame.theme == theme {
+            return false;
+        }
+        frame.theme = theme;
+        true
+    }
+}
+
 pub(crate) struct NativeCapsule {
     executable: std::path::PathBuf,
     on_action: Arc<dyn Fn(String, Action) + Send + Sync>,
@@ -124,6 +137,21 @@ impl NativeCapsule {
     }
     pub(crate) fn set_locale(&self, locale: String) {
         *self.locale.lock() = locale;
+    }
+    fn current_theme(&self) -> openless_capsule::ThemeMode {
+        let coordinator = self.app.state::<Arc<crate::coordinator::Coordinator>>();
+        match coordinator.backend().get_preferences().theme_mode {
+            ThemeMode::System => openless_capsule::ThemeMode::System,
+            ThemeMode::Light => openless_capsule::ThemeMode::Light,
+            ThemeMode::Dark => openless_capsule::ThemeMode::Dark,
+        }
+    }
+    /// Restyle an existing helper without replaying recording state or reversing its exit.
+    pub(crate) fn refresh_theme(&self) {
+        let mut latest = self.latest.lock();
+        if latest.update_theme(self.current_theme()) {
+            self.send_frames(&latest);
+        }
     }
     /// The text also feeds the "transcribing" label, so it is sent even when
     /// the transcript rail is turned off (`Frame::show_transcript`).
@@ -251,7 +279,7 @@ impl NativeCapsule {
         } else {
             String::new()
         };
-        let frame = Frame {
+        let mut frame = Frame {
             session_id: payload.session_id.clone().unwrap_or_default(),
             sequence,
             state: CapsulePopupState {
@@ -289,6 +317,9 @@ impl NativeCapsule {
             preferences.capsule_display_mode,
         );
         let mut latest = self.latest.lock();
+        // Serialize with preference refreshes so an older pending frame cannot
+        // restore the previous theme after a settings event.
+        frame.theme = self.current_theme();
         // A new presentation reverses a running exit on the same helpers.
         self.exit_epoch.fetch_add(1, Ordering::SeqCst);
         let was_idle = latest.frame.is_none();
@@ -471,8 +502,7 @@ pub(crate) fn native_capsule_set_locale(app: tauri::AppHandle, locale: String) {
     ) {
         return;
     }
-    // Save even in regular mode: enabling low-memory mode then restarting
-    // silently must keep the UI language chosen before the restart.
+    // Persist the helper locale so it survives app restarts.
     if let Ok(directory) = app.path().app_config_dir() {
         if std::fs::create_dir_all(&directory).is_ok() {
             let temporary = directory.join("native-capsule.locale.tmp");
@@ -486,5 +516,55 @@ pub(crate) fn native_capsule_set_locale(app: tauri::AppHandle, locale: String) {
     }
     if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
         coordinator.tauri_host().set_native_capsule_locale(locale);
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    #[test]
+    fn a_theme_change_preserves_the_active_session_and_exit_state() {
+        for phase in ["recording", "polishing", "completed"] {
+            for leaving in [false, true] {
+                let frame = Frame {
+                    session_id: "theme-session".into(),
+                    sequence: 42,
+                    state: CapsulePopupState {
+                        phase: phase.into(),
+                        audio_level: Some(0.4),
+                        ..Default::default()
+                    },
+                    transcript: "keep this transcript".into(),
+                    show_transcript: true,
+                    transcript_font_size: 15.0,
+                    labels: CapsuleLabels::for_locale("zh-CN"),
+                    theme: openless_capsule::ThemeMode::Light,
+                    leaving,
+                    bounds: Some([10, 20, 460, 158]),
+                    interactive: !leaving,
+                };
+                let mut expected = frame.clone();
+                expected.theme = openless_capsule::ThemeMode::Dark;
+                let mut presentation = Presentation {
+                    frame: Some(frame),
+                    bounds: vec![Some([10, 20, 460, 158])],
+                    ..Default::default()
+                };
+                assert!(presentation.update_theme(openless_capsule::ThemeMode::Dark));
+                assert_eq!(presentation.frame.as_ref(), Some(&expected));
+                assert_eq!(presentation.bounds, vec![Some([10, 20, 460, 158])]);
+                assert!(!presentation.update_theme(openless_capsule::ThemeMode::Dark));
+                assert!(presentation.update_theme(openless_capsule::ThemeMode::System));
+            }
+        }
+    }
+
+    #[test]
+    fn a_theme_change_does_not_reopen_an_idle_capsule() {
+        let mut presentation = Presentation::default();
+        assert!(!presentation.update_theme(openless_capsule::ThemeMode::Dark));
+        assert!(presentation.frame.is_none());
+        assert!(presentation.bounds.is_empty());
     }
 }
