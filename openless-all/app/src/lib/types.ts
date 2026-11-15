@@ -878,4 +878,6 @@ export interface PlatformCapabilities {
   supportsInAppDictation: boolean;
   supportsAutoUpdate: boolean;
   supportsVoiceEdit: boolean;
+  /** 我们自己的 Linux 宿主（GTK+WebKit / Qt+CEF）。用于「Linux 版本」专属裁剪。 */
+  linuxHost?: boolean;
 }

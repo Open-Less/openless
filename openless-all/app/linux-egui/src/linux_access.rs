@@ -522,7 +522,8 @@ mod tests {
     /// 这两句话在五种语言里都有译文；漏翻会让界面直接显示英文原句。
     #[test]
     fn the_locked_vault_messages_are_localized() {
-        for lang in [Lang::ZhCn, Lang::ZhTw, Lang::En, Lang::Ja, Lang::Ko] {
+        // 英文本来就是原文，不需要"翻译成英文"；其余语言都必须有译文。
+        for lang in [Lang::ZhCn, Lang::ZhTw, Lang::Ja, Lang::Ko, Lang::Es, Lang::Fr, Lang::De] {
             let locked = crate::provider_error_text(lang, super::VAULT_LOCKED_MESSAGE);
             let cancelled = crate::provider_error_text(lang, super::VAULT_UNLOCK_CANCELLED_MESSAGE);
             assert_ne!(locked, super::VAULT_LOCKED_MESSAGE, "{lang:?}");

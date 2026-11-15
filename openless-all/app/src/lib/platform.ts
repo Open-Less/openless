@@ -2,6 +2,8 @@
 // Prefers Tauri `get_platform_capabilities`; falls back to UA / OS heuristics.
 
 import { detectOS } from '../components/WindowChrome';
+import { isGtkHost } from './gtkBridge';
+import { isHttpBridge } from './httpBridge';
 import { invokeHarmony, isHarmonyHost } from './harmonyBridge';
 import type { PlatformCapabilities, PlatformKind } from './types';
 
@@ -59,6 +61,11 @@ export function isDesktop(): boolean {
   return !isMobile();
 }
 
+/** 我们自己的 Linux 宿主（GTK/WebKit 与 Qt/CEF 共用同一份构建）。 */
+export function isLinuxHost(): boolean {
+  return isGtkHost || isHttpBridge || import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk';
+}
+
 export function inferPlatformCapabilities(): PlatformCapabilities {
   if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') {
     return { ...MOBILE_UNAVAILABLE, platform: 'harmony', supportsInAppDictation: true };
@@ -80,6 +87,26 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
 
   if (detectIosFromUa()) {
     return MOBILE_UNAVAILABLE;
+  }
+
+  // Linux 宿主单开一套能力：渲染/窗口层是我们自己实现的，**不做本地模型**。
+  if (isLinuxHost()) {
+    return {
+      platform: 'desktop',
+      linuxHost: true,
+      supportsDesktopHotkey: true,
+      supportsTray: true,
+      supportsOverlay: true,
+      // 输入走 fcitx5 插件，不是 Windows TSF
+      supportsImeInput: false,
+      // Linux 暂时不做本地模型（sherpa / foundry / whisper 全部隐藏）
+      supportsLocalAsr: false,
+      supportsLocalQwen3Mlx: false,
+      supportsInAppDictation: false,
+      supportsAutoUpdate: true,
+      // 语音编辑窗口未实现（选区润色走 fcitx5 插件那条链）
+      supportsVoiceEdit: false,
+    };
   }
 
   const os = detectOS();

@@ -107,10 +107,10 @@ export function presetsFor(
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
     if (p.id === 'local-qwen3-c') return os === 'mac';
     if (p.id === 'local-qwen3') return false;
-    if (p.id === 'foundry-local-whisper') return os === 'win';
+    if (p.id === 'foundry-local-whisper') return os === 'win' && supportsLocalAsr;
     // sherpa-onnx also runs on arm64 Android; the capability is ABI-aware.
     if (p.id === 'sherpa-onnx-local') {
-      return os === 'win' || (os === 'android' && supportsLocalAsr);
+      return supportsLocalAsr && (os === 'win' || os === 'android');
     }
     // The two old Bailian ids are historical aliases; the unified entry is `bailian`, so new cards must not pick them.
     if (p.id === 'bailian-qwen3-realtime' || p.id === 'bailian-fun-asr-flash') return false;

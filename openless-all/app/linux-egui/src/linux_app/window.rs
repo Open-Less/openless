@@ -168,7 +168,7 @@ impl OpenLessEguiApp {
                     return Ok(());
                 }
                 log::warn!(
-                    "[ui-host] OPENLESS_WEB_UI=1 但 {} 不存在，回落到 egui 窗口",
+                    "[ui-host] OPENLESS_WEB_UI=1 but {} is missing; falling back to the egui window",
                     web.display()
                 );
             }

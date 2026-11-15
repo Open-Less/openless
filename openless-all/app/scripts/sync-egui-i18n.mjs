@@ -215,7 +215,7 @@ function scanMessages(source) {
 }
 
 function renderBlock(key, values) {
-  const oneLine = `    Msg {\n        key: "${key}",\n        text: row(${values.map(quote).join(', ')}),\n    },`;
+  const oneLine = `    Msg {\n        key: "${key}",\n        text: row8(${values.map(quote).join(', ')}),\n    },`;
   const anyLong = values.some((value) => value.length > 12);
   if (!anyLong) return oneLine;
   return [

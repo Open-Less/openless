@@ -2256,6 +2256,9 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
                     tr_l10n(lang, "settings.language.en"),
                     tr_l10n(lang, "settings.language.ja"),
                     tr_l10n(lang, "settings.language.ko"),
+                    tr_l10n(lang, "settings.language.es"),
+                    tr_l10n(lang, "settings.language.fr"),
+                    tr_l10n(lang, "settings.language.de"),
                 ],
                 |val| {
                     actions.push(FrontendAction::SettingsCombo(

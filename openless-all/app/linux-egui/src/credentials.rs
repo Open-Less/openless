@@ -353,7 +353,7 @@ impl CredentialStore for LinuxCredentialStore {
             use openless_core::credentials::{
                 SyncChannel, SyncCredentialRecord, SyncCredentials, SyncNamespace,
             };
-            eprintln!("[linux-creds] capture 开始：channels={}", state.metadata.list_channels(ChannelKind::Asr).len() + state.metadata.list_channels(ChannelKind::Llm).len());
+            eprintln!("[linux-creds] capture start: channels={}", state.metadata.list_channels(ChannelKind::Asr).len() + state.metadata.list_channels(ChannelKind::Llm).len());
             let mut snapshot = SyncCredentials {
                 channels: Vec::new(),
                 credentials: Vec::new(),
@@ -450,7 +450,7 @@ impl CredentialStore for LinuxCredentialStore {
                 });
             }
             eprintln!(
-                "[linux-creds] capture 完成：channels={} (asr/llm/omni={}) credentials={}",
+                "[linux-creds] capture done: channels={} (base={}) credentials={}",
                 snapshot.channels.len(),
                 snapshot.channels.len() - omni_channels.len(),
                 snapshot.credentials.len()
@@ -496,7 +496,7 @@ impl CredentialStore for LinuxCredentialStore {
                 ChannelSummary, CredentialKey, CredentialMetadata, SyncNamespace,
             };
             eprintln!(
-                "[linux-creds] replace 开始：channels={} credentials={}",
+                "[linux-creds] replace start: channels={} credentials={}",
                 snapshot.channels.len(),
                 snapshot.credentials.len()
             );
@@ -548,14 +548,14 @@ impl CredentialStore for LinuxCredentialStore {
                     )
                     .map_err(|error| {
                         eprintln!(
-                            "[linux-creds] 恢复失败：key 构造 ns={:?} channel={} account={} err={:?}",
+                            "[linux-creds] restore failed at key build: ns={:?} channel={} account={} err={:?}",
                             record.namespace, record.channel_id, account, error.code
                         );
                         error
                     })?;
                     write_secret(&key, &SecretValue::new(value.clone())).map_err(|error| {
                         eprintln!(
-                            "[linux-creds] 恢复失败：写密钥 channel={} account={} err={:?} {}",
+                            "[linux-creds] restore failed writing secret: channel={} account={} err={:?} {}",
                             record.channel_id, account, error.code, error.message
                         );
                         error
@@ -593,7 +593,7 @@ impl CredentialStore for LinuxCredentialStore {
             state.channel_configuration = channel_configuration;
             state.keys = keys;
             let result = persist_metadata(&metadata_path, &state);
-            eprintln!("[linux-creds] replace 完成：keys={} result={:?}", state.keys.len(), result.is_ok());
+            eprintln!("[linux-creds] replace done: keys={} ok={:?}", state.keys.len(), result.is_ok());
             result
         })
     }
@@ -1905,8 +1905,8 @@ mod sync_credentials_roundtrip {
             .unwrap()
             .block_on(store.export_sync_credentials_readonly())
             .expect("export must succeed");
-        assert!(!snapshot.channels.is_empty(), "export 应包含渠道");
-        assert!(!snapshot.credentials.is_empty(), "export 应包含凭据");
+        assert!(!snapshot.channels.is_empty(), "export must contain channels");
+        assert!(!snapshot.credentials.is_empty(), "export must contain credentials");
 
         runtime
             .block_on(store.replace_sync_credentials(snapshot.clone(), &permit))
@@ -1918,15 +1918,15 @@ mod sync_credentials_roundtrip {
         assert_eq!(
             snapshot.channels.len(),
             again.channels.len(),
-            "replace 后渠道数量应一致"
+            "channel count must survive replace"
         );
         assert_eq!(
             snapshot.credentials, again.credentials,
-            "replace 后凭据内容应完全一致（恢复校验就靠它）"
+            "credentials must round-trip byte for byte (restore verification relies on it)"
         );
         assert_eq!(
             snapshot.channels, again.channels,
-            "replace 后渠道记录必须逐字段一致（含 configuration）"
+            "channel records must round-trip field by field (including configuration)"
         );
     }
 }
@@ -1975,7 +1975,7 @@ mod sync_credentials_preserve {
         let value = runtime
             .block_on(store.read(token_key))
             .unwrap()
-            .expect("Marketplace token 必须仍然可见");
+            .expect("Marketplace token must stay visible");
         assert_eq!(value.expose_secret(), "gho_test");
     }
 }
