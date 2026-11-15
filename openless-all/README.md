@@ -1,5 +1,7 @@
 # OpenLess All-Platform
 
+[English](README.md) | [简体中文](README.zh.md)
+
 This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
 
 ## Native iOS app and keyboard
@@ -18,12 +20,9 @@ The runnable sources live in `app/`:
 - `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
 - `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
 
-The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
+The Tauri manifest includes path dependencies under `app/src-tauri/vendor/` (`cpal`, `tauri-runtime-wry`). These crates are vendored in the repository, so **there are no Git submodules to initialize** — a fresh clone is ready to build. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require them.
 
 ```bash
-# Tauri source development — pull in vendored submodules
-git submodule update --init --recursive
-
 cd app
 npm ci
 npm run tauri dev
@@ -41,7 +40,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
+Linux packaging is manual while the L01–L12 device acceptance is open: the dedicated CI workflows (`check-linux-egui.yml`, `release-linux-egui.yml`) were removed and desktop releases no longer dispatch Linux. The local scripts still build deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). Restoring automated Linux releases requires the acceptance evidence described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
 
 ## macOS Build
 
@@ -139,6 +138,40 @@ cd app
   device-format query alone is not treated as permission granted.
 - Text insertion through `Ctrl+V` is treated as copy fallback unless the app can
   confirm insertion.
+
+## Android Build
+
+The Tauri mobile host builds per-ABI release APKs:
+
+```bash
+cd app
+npm ci
+npm run tauri:android:build:release
+```
+
+APKs are written under `app/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/`. Use `npm run tauri:android:build:debug` for a debug build; the `android-apk.yml` workflow produces debug smoke artifacts for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`. The native keyboard/IME backend lives in `app/android/` and `app/mobile-ime/`.
+
+## HarmonyOS Build
+
+The ArkTS/ArkWeb host builds through the frontend script; see [`app/harmony/README.md`](app/harmony/README.md) for the toolchain details.
+
+```bash
+cd openless-all/app
+bash scripts/build-harmony-frontend.sh
+```
+
+Requirements: HarmonyOS Command Line Tools, Python 3, and `rustup target add aarch64-unknown-linux-ohos`. The unsigned HAP is written to `app/harmony/openless-project/entry/build/default/outputs/default/`; the `release-harmony.yml` workflow attaches it to releases, while AppGallery packages are submitted manually.
+
+## iOS Build
+
+The native project is independent of the desktop version; see [`ios/README.md`](ios/README.md).
+
+```bash
+cd openless-all/ios
+./scripts/bootstrap.sh          # fetch native dependencies
+./scripts/build.sh              # build the unsigned app
+python3 scripts/package-ipa.py  # optional unsigned IPA for personal signing
+```
 
 ## Release Signing
 

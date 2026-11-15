@@ -1,5 +1,7 @@
 # Releasing OpenLess
 
+[English](RELEASING.md) | [简体中文](RELEASING.zh.md)
+
 This document defines who may cut releases and how. It is policy, not a how-to for
 day-to-day development.
 
