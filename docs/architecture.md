@@ -141,6 +141,6 @@ macOS 凭据通过 `persistence/credentials/macos_vault.rs` 共用 `credentials.
 | Tauri 格式与编译 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check`、`cargo check --locked --manifest-path src-tauri/Cargo.toml` |
 | Tauri 库与独立回归 crate | 依平台选 `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib`、`cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml`；适用矩阵见 [CI](../.github/workflows/ci.yml) |
 
-源码构建 Tauri 前执行 `git submodule update --init --recursive`。其 manifest 含受 target 条件控制的本地 path 依赖，Cargo 解析仍需对应子模块；部分 CI 作业通过专用脚本去除非目标依赖。Core/Linux workspace 排除 Tauri，不需要为这些独立检查初始化 Tauri 子模块。
+Tauri manifest 的本地 path 依赖位于 `src-tauri/vendor/`（`cpal`、`tauri-runtime-wry`），这些 crate 已随仓库签入，**无需 `git submodule update` 初始化**，克隆后即可构建；部分 CI 作业通过专用脚本去除非目标依赖。Core/Linux workspace 排除 Tauri，其独立检查不解析 Tauri manifest，也不依赖 vendor 目录。
 
 仅 Markdown 变动检查相对链接、源码路径与描述一致性。平台交付按 [桌面验收](2.0-desktop-acceptance.md)、[Linux 验收](linux-egui-handoff/07-acceptance.md)和 [发布规范](../RELEASING.md)完成。
