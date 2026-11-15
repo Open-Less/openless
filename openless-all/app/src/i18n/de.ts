@@ -567,6 +567,7 @@ export const de: typeof zhCN = {
         tagline: 'Spracheingabe mit lokalem Schwerpunkt',
         releaseNotes: 'Versionshinweise ↗',
         docs: 'Hilfezentrum ↗',
+        credits: 'Komponenten',
       },
     },
     providerPrompt: {
@@ -708,6 +709,9 @@ export const de: typeof zhCN = {
     metricTotalTrend: 'Lokales Archiv (max. 200)',
     activityTitle: 'Aktivität im Jahr',
     activityCount: 'Diktate: {{count}}',
+    activityAppsLabel: 'Meiste Diktate nach App',
+    activityAppsShow: 'Top-Apps anzeigen',
+    activityAppsHide: 'Top-Apps ausblenden',
     activityLoadError: 'Aktivitätsdaten konnten nicht geladen werden',
     period: {
       ariaLabel: 'Auswertungszeitraum',

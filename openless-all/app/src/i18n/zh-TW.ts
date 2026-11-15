@@ -530,6 +530,7 @@ export const zhTW: typeof zhCN = {
         tagline: '本地驅動的語音輸入層',
         releaseNotes: '檢視釋出日誌 ↗',
         docs: '幫助中心 ↗',
+        credits: '元件來源',
       },
     },
     providerPrompt: {
@@ -657,6 +658,9 @@ export const zhTW: typeof zhCN = {
     metricTotalTrend: '本機存檔 (上限 200)',
     activityTitle: '年度活動',
     activityCount: '{{count}} 次聽寫',
+    activityAppsLabel: '語音輸入次數最多的軟體',
+    activityAppsShow: '展開常用軟體',
+    activityAppsHide: '收合常用軟體',
     activityLoadError: '活動資料讀取失敗',
     period: {
       ariaLabel: '統計週期',

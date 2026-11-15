@@ -564,6 +564,7 @@ export const es: typeof zhCN = {
         tagline: 'Entrada de voz centrada en tu dispositivo',
         releaseNotes: 'Notas de la versión ↗',
         docs: 'Centro de ayuda ↗',
+        credits: 'Componentes',
       },
     },
     providerPrompt: {
@@ -704,6 +705,9 @@ export const es: typeof zhCN = {
     metricTotalTrend: 'Archivo local (máx. 200)',
     activityTitle: 'Actividad anual',
     activityCount: '{{count}} dictados',
+    activityAppsLabel: 'Apps con más dictados',
+    activityAppsShow: 'Mostrar apps principales',
+    activityAppsHide: 'Ocultar apps principales',
     activityLoadError: 'No se pudieron cargar los datos de actividad',
     period: {
       ariaLabel: 'Periodo del informe',

@@ -572,6 +572,7 @@ export const fr: typeof zhCN = {
         tagline: 'Saisie vocale privilégiant le traitement local',
         releaseNotes: 'Notes de version ↗',
         docs: 'Centre d’aide ↗',
+        credits: 'Crédits',
       },
     },
     providerPrompt: {
@@ -714,6 +715,9 @@ export const fr: typeof zhCN = {
     metricTotalTrend: 'Archive locale (200 maximum)',
     activityTitle: 'Activité annuelle',
     activityCount: '{{count}} dictée(s)',
+    activityAppsLabel: 'Applications les plus dictées',
+    activityAppsShow: 'Afficher les applis principales',
+    activityAppsHide: 'Masquer les applis principales',
     activityLoadError: 'Impossible de charger l’activité',
     period: {
       ariaLabel: 'Période du rapport',

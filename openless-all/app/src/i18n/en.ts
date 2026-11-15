@@ -560,6 +560,7 @@ export const en: typeof zhCN = {
         tagline: 'Local-first voice input layer',
         releaseNotes: 'Release notes ↗',
         docs: 'Help center ↗',
+        credits: 'Component credits',
       },
     },
     providerPrompt: {
@@ -696,6 +697,9 @@ export const en: typeof zhCN = {
     metricTotalTrend: 'Local archive (max 200)',
     activityTitle: 'Annual activity',
     activityCount: '{{count}} dictation(s)',
+    activityAppsLabel: 'Top apps by dictations',
+    activityAppsShow: 'Show top apps',
+    activityAppsHide: 'Hide top apps',
     activityLoadError: 'Activity data load failed',
     period: {
       ariaLabel: 'Reporting period',

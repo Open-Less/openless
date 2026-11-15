@@ -530,6 +530,7 @@ export const zhCN = {
         tagline: '本地驱动的语音输入层',
         releaseNotes: '查看发布日志 ↗',
         docs: '帮助中心 ↗',
+        credits: '组件来源',
       },
     },
     providerPrompt: {
@@ -657,6 +658,9 @@ export const zhCN = {
     metricTotalTrend: '本机存档 (上限 200)',
     activityTitle: '年度活动',
     activityCount: '{{count}} 次听写',
+    activityAppsLabel: '语音输入次数最多的软件',
+    activityAppsShow: '展开常用软件',
+    activityAppsHide: '收起常用软件',
     activityLoadError: '活动数据读取失败',
     period: {
       ariaLabel: '统计周期',

@@ -551,6 +551,7 @@ export const ja: typeof zhCN = {
         tagline: 'ローカル駆動の音声入力レイヤー',
         releaseNotes: 'リリースノートを見る ↗',
         docs: 'ヘルプセンター ↗',
+        credits: 'コンポーネント',
       },
     },
     providerPrompt: {
@@ -684,6 +685,9 @@ export const ja: typeof zhCN = {
     metricTotalTrend: 'ローカル保存（上限 200）',
     activityTitle: '年間アクティビティ',
     activityCount: '{{count}} 回の入力',
+    activityAppsLabel: '音声入力が多いアプリ',
+    activityAppsShow: 'よく使うアプリを表示',
+    activityAppsHide: 'よく使うアプリを隠す',
     activityLoadError: 'アクティビティの読み込みに失敗',
     period: {
       ariaLabel: '集計期間',

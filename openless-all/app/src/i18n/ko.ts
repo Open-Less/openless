@@ -545,6 +545,7 @@ export const ko: typeof zhCN = {
         tagline: '로컬 기반 음성 입력 레이어',
         releaseNotes: '릴리스 노트 보기 ↗',
         docs: '도움말 센터 ↗',
+        credits: '컴포넌트',
       },
     },
     providerPrompt: {
@@ -678,6 +679,9 @@ export const ko: typeof zhCN = {
     metricTotalTrend: '로컬 보관(상한 200)',
     activityTitle: '연간 활동',
     activityCount: '{{count}}회 받아쓰기',
+    activityAppsLabel: '음성 입력이 많은 앱',
+    activityAppsShow: '자주 쓰는 앱 표시',
+    activityAppsHide: '자주 쓰는 앱 숨기기',
     activityLoadError: '활동 데이터 로드 실패',
     period: {
       ariaLabel: '집계 기간',

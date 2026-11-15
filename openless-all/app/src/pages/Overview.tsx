@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import {
+  getActivityApps,
   getActivityStats,
   getCredentials,
   listHistory,
@@ -37,7 +38,12 @@ import { isHarmonyHost } from '../lib/harmonyBridge';
 import './overview.css';
 import { HarmonyDictation } from '../components/HarmonyDictation';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
-import { Heatmap } from '../components/Heatmap';
+import {
+  GitHubActivity,
+  type ActivityApp,
+  type Contribution,
+  type ContributionLevel,
+} from '../components/ui/GitHubActivity';
 
 type RefreshOutcome = 'ok' | 'stale' | 'error';
 
@@ -329,8 +335,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     onOpenSettings?.(section, serviceView);
 
   return (
-    // Desktop is one dashboard. The page itself does not scroll; the recent-recognition
-    // list is the scroller, and the year heatmap stays fully visible in the left column.
+    // Desktop is one dashboard; the recent-recognition list is the scroller. The yearly
+    // activity card needs its natural width (11px cells ≈ 771px), so it owns a full-width
+    // row and the dashboard scrolls on windows too short to show every block at once.
     // Mobile stacks the same blocks, so that surface still grows with the page.
     <div
       className="ol-overview-dashboard"
@@ -341,7 +348,8 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         height: mobile ? undefined : '100%',
         minHeight: mobile ? undefined : 0,
         minWidth: 0,
-        overflow: mobile ? 'visible' : 'hidden',
+        overflowX: 'hidden',
+        overflowY: mobile ? 'visible' : 'auto',
         gap: 'var(--ol-grid-gutter)',
       }}
     >
@@ -455,7 +463,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       <div
         className={mobile ? 'ol-grid-12' : 'ol-grid-12 ol-grid-fill'}
         data-columns={mobile ? '1' : undefined}
-        style={{ overflow: 'hidden' }}
+        style={{ overflow: 'hidden', minHeight: 288 }}
       >
         <div
           className="ol-col-5"
@@ -477,10 +485,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
             loadError={activityError}
             onRetry={refreshActivity}
           />
-          {!mobile &&
-            prefs?.showOverviewActivityHeatmap !== false &&
-            activity &&
-            activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
         </div>
 
         <Card
@@ -559,6 +563,17 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           </div>
         </Card>
       </div>
+
+      {/* The yearly card is the one block that needs its natural width (11px cells ≈ 771px),
+          so it spans the whole grid instead of being squeezed into the 5-column stack. */}
+      {!mobile &&
+        prefs?.showOverviewActivityHeatmap !== false &&
+        activity &&
+        activity.length > 0 && (
+          <div className="ol-grid-12" style={{ flex: '0 0 auto' }}>
+            <ActivityHeatmapCard className="ol-col-12" activity={activity} />
+          </div>
+        )}
     </div>
   );
 }
@@ -658,67 +673,105 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
   );
 }
 
-/** Yearly activity heatmap card: dictation count per day over the past 365 days. Month/weekday/date labels are generated via Intl in the current language. */
-function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
+/** Yearly activity card: Rare UI's GitHub Activity component fed with local dictation counts.
+ *  Month/weekday/date labels and tooltips are generated with Intl in the current language. */
+function ActivityHeatmapCard({
+  activity,
+  className,
+}: {
+  activity: ActivityDay[];
+  className?: string;
+}) {
   const { t, i18n } = useTranslation();
-  const { endDate, startDate, data, labels } = useMemo(() => {
-    // The year calendar spans the calendar year — from Jan 1 to Dec 31, filled left to right;
-    // the previous rolling 365-day window started month labels mid-year and left the right side empty, looking like missing data.
-    const now = new Date();
-    const year = now.getFullYear();
-    const start = new Date(year, 0, 1);
-    const end = new Date(year, 11, 31);
+  const year = new Date().getFullYear();
+  const [apps, setApps] = useState<ActivityApp[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getActivityApps(year)
+      .then((rows) => {
+        if (cancelled) return;
+        setApps(
+          rows
+            .slice()
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([name, count]) => ({ name, count })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setApps([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [year]);
+
+  const { contributions, total, monthNames, formatDay } = useMemo(() => {
     const lang = i18n.resolvedLanguage || i18n.language || 'en';
     const monthFormat = new Intl.DateTimeFormat(lang, { month: 'short' });
-    const dayFormat = new Intl.DateTimeFormat(lang, { weekday: 'short' });
     const dateFormat = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' });
-    const anchor = new Date(year, 0, 4); // Sunday
-    return {
-      endDate: end,
-      startDate: start,
-      data: activity.map((day) => ({ date: day.date, value: day.count })),
-      labels: {
-        months: Array.from({ length: 12 }, (_, m) => monthFormat.format(new Date(year, m, 1))),
-        days: Array.from({ length: 7 }, (_, d) => {
-          const date = new Date(anchor);
-          date.setDate(anchor.getDate() + d);
-          return dayFormat.format(date);
-        }),
-        date: (date: Date) => dateFormat.format(date),
-      },
+    const byDate = new Map(activity.map((day) => [day.date, day.count]));
+
+    // GitHub grids are weeks of Sunday→Saturday: pad the first column back to the Sunday
+    // on or before Jan 1 so weekday rows line up, and pad the last column to Saturday.
+    const firstDay = new Date(year, 0, 1);
+    const cursor = new Date(firstDay);
+    cursor.setDate(cursor.getDate() - cursor.getDay());
+    const lastDay = new Date(year, 11, 31);
+
+    const raw: { date: string; count: number }[] = [];
+    const key = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+        date.getDate(),
+      ).padStart(2, '0')}`;
+    while (cursor <= lastDay) {
+      raw.push({ date: key(cursor), count: byDate.get(key(cursor)) ?? 0 });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    while (raw.length % 7 !== 0) {
+      raw.push({ date: key(cursor), count: 0 });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const max = raw.reduce((top, day) => Math.max(top, day.count), 0);
+    const level = (count: number): ContributionLevel => {
+      if (count <= 0 || max <= 0) return 0;
+      const ratio = count / max;
+      if (ratio <= 0.25) return 1;
+      if (ratio <= 0.5) return 2;
+      if (ratio <= 0.75) return 3;
+      return 4;
     };
-  }, [activity, i18n.resolvedLanguage, i18n.language]);
+
+    return {
+      contributions: raw.map<Contribution>((day) => ({ ...day, level: level(day.count) })),
+      total: raw.reduce((sum, day) => sum + day.count, 0),
+      monthNames: Array.from({ length: 12 }, (_, month) =>
+        monthFormat.format(new Date(year, month, 1)),
+      ),
+      formatDay: (day: Contribution) =>
+        `${dateFormat.format(new Date(`${day.date}T00:00:00`))} · ${t('overview.activityCount', {
+          count: day.count,
+        })}`,
+    };
+  }, [activity, i18n.resolvedLanguage, i18n.language, year, t]);
+
   return (
-    <Card
-      padding={12}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        minWidth: 0,
-        flex: '0 0 auto',
-      }}
-    >
-      <span
-        style={{
-          fontSize: 13,
-          fontWeight: 'var(--ol-font-weight-semibold)',
-          color: 'var(--ol-ink-2)',
-          flexShrink: 0,
-        }}
-      >
-        {t('overview.activityTitle')}
-      </span>
-      <Heatmap
-        data={data}
-        startDate={startDate}
-        endDate={endDate}
-        monthLabels={labels.months}
-        dayLabels={labels.days}
-        dateDisplay={labels.date}
-        valueDisplay={(count) => t('overview.activityCount', { count })}
-      />
-    </Card>
+    <GitHubActivity
+      className={className}
+      contributions={contributions}
+      apps={apps}
+      year={year}
+      showMonths
+      accent="var(--ol-accent-solid-bg)"
+      heading={`${t('overview.activityCount', { count: total })} · ${year}`}
+      label={t('overview.activityAppsLabel')}
+      showLabel={t('overview.activityAppsShow')}
+      hideLabel={t('overview.activityAppsHide')}
+      monthNames={monthNames}
+      formatDay={formatDay}
+    />
   );
 }
 
@@ -804,8 +857,8 @@ function SegmentedToggle<T extends string | number>({
                 : 'var(--ol-font-weight-medium)',
               border: 0,
               borderRadius: 'var(--ol-r-sm)',
-              background: selected ? 'var(--ol-blue)' : 'transparent',
-              color: selected ? '#fff' : 'var(--ol-ink-3)',
+              background: selected ? 'var(--ol-accent-solid-bg)' : 'transparent',
+              color: selected ? 'var(--ol-accent-solid-ink)' : 'var(--ol-ink-3)',
               cursor: 'pointer',
               fontFamily: 'inherit',
               whiteSpace: 'nowrap',

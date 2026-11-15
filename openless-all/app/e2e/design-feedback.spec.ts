@@ -207,5 +207,11 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await page.waitForTimeout(400);
   await sidebar.getByRole('button', { name: '概览', exact: true }).click();
   await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
-  await expect(page.getByText('年度活动', { exact: true })).toBeVisible();
+  // The yearly card is the ported GitHub Activity component: its heading is the yearly
+  // count line and its grid is made of real day cells.
+  const activityCard = page.locator('.ol-gha');
+  await expect(activityCard).toBeVisible();
+  await expect(activityCard.locator('.ol-gha-heading')).toContainText('次听写');
+  expect(await activityCard.locator('.ol-gha-cell').count()).toBeGreaterThan(300);
+  await expect(activityCard.locator('.ol-gha-app-chips')).toBeVisible();
 });
