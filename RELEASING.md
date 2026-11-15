@@ -46,7 +46,7 @@ See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli
 These tags build the macOS, Windows, and Android Tauri hosts in parallel.
 
 Linux and HarmonyOS have dispatch-only entry points,
-`.github/workflows/release-linux-host.yml` and `.github/workflows/release-harmony.yml`.
+`.github/workflows/release-linux.yml` and `.github/workflows/release-harmony.yml`.
 Neither reacts directly to a tag push. After the desktop build, `release-tauri.yml`
 dispatches HarmonyOS on the same immutable release tag.
 

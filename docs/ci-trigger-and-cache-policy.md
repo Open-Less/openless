@@ -120,7 +120,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 **发版前预热必须在默认分支 `beta` 上执行**：其他分支的缓存不能被未来的 tag 恢复。桌面每周 schedule 在 beta 维护 release 缓存；手动预热也选择 beta。Android 周期构建默认只维护 aarch64；需要全部 release ABI 时在 beta 手动选择 `abis=all`。Tag 和其他分支只读 Rust/Gradle/npm 缓存，避免一次性副本挤掉可复用的基线。缓存命中仍需编译应用本身，不承诺固定发版时长。
 
-Linux 发版不受影响：`release-linux-host.yml` 复用 CI 的同一个 `build-linux-host` job（同名同 key），tag 运行能恢复基线分支的缓存。
+Linux 发版不受影响：`release-linux.yml` 复用 CI 的同一个 `build-linux-host` job（同名同 key），tag 运行能恢复基线分支的缓存。
 
 ## 7. 已知取舍
 

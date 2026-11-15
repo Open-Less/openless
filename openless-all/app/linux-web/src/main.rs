@@ -76,6 +76,10 @@ fn main() {
     static LOGGER: StderrLogger = StderrLogger;
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log::LevelFilter::Info);
+    // 单实例必须在读数据目录之前抢到：两个后端同时跑会互相覆盖历史/凭据。
+    let Some(_instance_guard) = host::claim_single_instance() else {
+        std::process::exit(0);
+    };
     let host = std::sync::Arc::new(init_host());
     let dist = resolve_dist();
     let port = match serve_dir(dist.clone(), host.clone()) {

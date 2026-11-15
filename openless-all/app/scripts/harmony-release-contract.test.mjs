@@ -171,7 +171,7 @@ assert.match(
 assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
 assert.match(
   tauriRelease,
-  /gh workflow run release-linux-host\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
+  /gh workflow run release-linux\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
   'the Linux workflow definition must use the same immutable release tag',
 );
 assert.match(

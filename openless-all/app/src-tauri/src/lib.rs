@@ -10,11 +10,16 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
-// ── Linux 桌面：Tauri v3 + CEF（自带 Chromium）────────────────────────────────
-// 历史上这里用 `compile_error!` 拦住 Linux 构建，因为当时 Tauri 在 Linux 上只有
-// WebKitGTK，渲染和 macOS/Windows 对不齐。Tauri v3 提供了 `tauri-runtime-cef`：
-// 三平台都跑我们自带的同一个 Chromium，渲染一致性问题从根上消失。
-// 详见 docs/linux-render-engine.md。
+// ── Linux 桌面不走 Tauri ────────────────────────────────────────────────────
+// Linux 版是 Qt6 WebEngine 窗口层 + `linux-web` 后端（见 docs/linux-render-engine.md）。
+// Tauri v3 的 CEF runtime 在 Linux 上会强制 X11，做不出透明/不抢焦点的 layer-shell
+// 胶囊，所以这里直接把 Linux 构建挡掉：误在 Linux 上 `cargo build -p openless` 会
+// 得到一个能看懂的报错，而不是一大堆 winit/WebKitGTK 的编译错误。
+#[cfg(target_os = "linux")]
+compile_error!(
+    "Tauri 版已不再支持 Linux 桌面：Linux 构建是 openless-all/app/linux-qt（Qt6 WebEngine \
+     窗口层）+ openless-linux-web（后端与 HTTP 命令桥），见 docs/linux-render-engine.md。"
+);
 
 mod android;
 mod asr;

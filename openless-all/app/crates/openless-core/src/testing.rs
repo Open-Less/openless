@@ -1,7 +1,7 @@
 //! Deterministic adapters for host and UI contract tests.
 //!
 //! These fakes are deliberately small and side-effect free.  They are useful
-//! to the Linux egui team when developing a view model without a microphone,
+//! to the Linux host team when developing a view model without a microphone,
 //! network provider, desktop session or credential store.
 
 use std::collections::VecDeque;

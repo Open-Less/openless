@@ -20,8 +20,8 @@ const read = (name) => readFileSync(join(root, '.github/workflows', name), 'utf8
 const ci = read('ci.yml');
 const release = read('release-tauri.yml');
 const androidApk = read('android-apk.yml');
-const linux = read('check-linux-host.yml');
-const linuxRelease = read('release-linux-host.yml');
+const linux = read('check-linux.yml');
+const linuxRelease = read('release-linux.yml');
 const releaseHarmony = read('release-harmony.yml');
 
 const sharedKeys = (yaml) =>
@@ -40,8 +40,8 @@ for (const [yaml, label] of [
   [ci, 'ci.yml'],
   [release, 'release-tauri.yml'],
   [androidApk, 'android-apk.yml'],
-  [linux, 'check-linux-host.yml'],
-  [linuxRelease, 'release-linux-host.yml'],
+  [linux, 'check-linux.yml'],
+  [linuxRelease, 'release-linux.yml'],
   [releaseHarmony, 'release-harmony.yml'],
 ]) {
   assert.ok(
@@ -87,7 +87,7 @@ assert.ok(sharedKeys(androidApk).some((key) => key.startsWith('android-')));
 
 // 5. Linux already shares one job between CI and release: the release entry point
 //    must reuse the same reusable workflow rather than a second build path.
-assert.match(linuxRelease, /uses: \.\/\.github\/workflows\/check-linux-host\.yml/);
+assert.match(linuxRelease, /uses: \.\/\.github\/workflows\/check-linux\.yml/);
 assert.match(linux, /cargo build --locked --release -p openless-linux-host/);
 
 // 6. Release entry points pin the tag, so the artifacts cannot come from a branch.

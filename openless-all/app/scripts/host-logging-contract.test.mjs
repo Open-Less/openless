@@ -54,7 +54,7 @@ assert.match(
   'logging.rs must keep at least two log archives',
 );
 
-// 3. 心跳节流原本在 egui 的 UI 泵里；随 egui 删除，宿主改为事件驱动，
+// 3. 心跳节流原本在旧 UI 泵里；随旧宿主删除，现在改为事件驱动，
 //    这条契约不再适用（保留注释说明，避免以后有人以为漏测）。
 // 4. The IPC probe is a gauge, not an event.
 assert.ok(
@@ -121,7 +121,7 @@ assert.match(
   /"\[dictation\] start session_id=/,
   'the dictation start boundary must be logged (hotkey pressed but nothing happened)',
 );
-// 8. 单实例与启动顺序原先由 egui 的 `OpenLessEguiApp` 实现，随 egui 删除。
+// 8. 单实例与启动顺序原先由旧宿主应用实现，随旧宿主删除。
 //    现在单实例在 `linux-web/src/host.rs::claim_single_instance`（socket 锁），
 //    启动由各宿主自己负责，这条契约不再适用。
 // 9. Per-event chatter must not sit at info.

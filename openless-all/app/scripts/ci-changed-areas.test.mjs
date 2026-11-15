@@ -257,7 +257,7 @@ const reusable = readFileSync(
   resolve(
     dirname(fileURLToPath(import.meta.url)),
     '../../..',
-    '.github/workflows/check-linux-host.yml',
+    '.github/workflows/check-linux.yml',
   ),
   'utf8',
 );

@@ -13,7 +13,7 @@ The runnable sources live in `app/`:
 - `app/crates/openless-core`: framework-independent shared backend Interface and business rules;
 - `app/src`: React frontend for the Tauri hosts;
 - `app/src-tauri`: macOS, Windows, and Android Tauri Host and native adapters;
-- `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK;
+- `app/linux-host`: Linux backend adapters (audio, credentials, fcitx5, hotkeys, tray); no UI toolkit, no Tauri, no WebKitGTK;
 - `app/harmony`: HarmonyOS host (ArkTS + ArkWeb) with the shared Rust backend;
 - `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
 - `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
@@ -31,17 +31,17 @@ npm run tauri dev
 
 ## Shared backend and Linux host
 
-This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. Remaining Host/UI work and product acceptance are tracked in the [Linux handoff](../docs/linux-egui-handoff/README.md).
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-web` exposes them over an HTTP command bridge (`/api/invoke`, `/api/events`) and `linux-qt` renders the official React UI in Qt6 WebEngine, so the Linux package runs the same frontend as the desktop app. Host status is tracked in the [Linux handoff](../docs/linux-host-handoff/README.md).
 
 ```bash
 cd app
 cargo test -p openless-core --locked
-cargo test -p openless-linux-egui --all-targets --locked
+cargo test -p openless-linux-host --all-targets --locked
 pwsh ./scripts/check-core-deps.ps1
-pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
+pwsh ./scripts/check-core-deps.ps1 openless-linux-host
 ```
 
-The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
+The independent [Linux package workflow](../.github/workflows/release-linux.yml) builds deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
 
 ## macOS Build
 
@@ -142,7 +142,7 @@ cd app
 
 ## Release Signing
 
-Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
+Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual Linux workflow and an independent minisign secret.
 
 Required GitHub secrets:
 

@@ -282,8 +282,8 @@ jobs:
           alias_dir="$RUNNER_TEMP/openless-linux-host-direct-download"
           rm -rf "$alias_dir"
           mkdir -p "$alias_dir"
-          debs=("$output"/OpenLess-Linux-host-*.deb)
-          rpms=("$output"/OpenLess-Linux-host-*.rpm)
+          debs=("$output"/OpenLess-Linux-qt-*.deb)
+          rpms=("$output"/OpenLess-Linux-qt-*.rpm)
           test "${#debs[@]}" -eq 1
           test "${#rpms[@]}" -eq 1
           cp "${debs[0]}" "$alias_dir/OpenLess_linux_x86_64.deb"
@@ -342,7 +342,7 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/openless-linux-host-packages"
           alias_dir="$RUNNER_TEMP/openless-linux-host-direct-download"
-          for file in "$output"/OpenLess-Linux-host-*.deb "$output"/OpenLess-Linux-host-*.rpm \
+          for file in "$output"/OpenLess-Linux-qt-*.deb "$output"/OpenLess-Linux-qt-*.rpm \
               "$output/SHA256SUMS-linux" "$alias_dir/OpenLess_linux_x86_64.deb" \
               "$alias_dir/OpenLess_linux_x86_64.rpm"; do
             [ -s "$file" ] || { echo "::error::missing Linux release asset $file"; exit 1; }
@@ -359,8 +359,8 @@ jobs:
             sleep 15
           done
           gh release upload "$RELEASE_TAG" \
-            "$output"/OpenLess-Linux-host-*.deb \
-            "$output"/OpenLess-Linux-host-*.rpm \
+            "$output"/OpenLess-Linux-qt-*.deb \
+            "$output"/OpenLess-Linux-qt-*.rpm \
             "$output/SHA256SUMS-linux" \
             "$alias_dir/OpenLess_linux_x86_64.deb" \
             "$alias_dir/OpenLess_linux_x86_64.rpm" \

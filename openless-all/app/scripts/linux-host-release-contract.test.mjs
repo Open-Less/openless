@@ -104,7 +104,7 @@ assert.match(
 );
 assert.match(
   tauri,
-  /gh workflow run release-linux-host\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,
+  /gh workflow run release-linux\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,
   'the Linux hand-off must attach the packages for the same tag',
 );
 

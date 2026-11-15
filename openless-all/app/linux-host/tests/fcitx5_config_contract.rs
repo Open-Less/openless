@@ -101,7 +101,7 @@ fn the_host_never_rewrites_the_input_method_configuration() {
     }
     assert!(
         violations.is_empty(),
-        "The Linux egui host must never touch the input method's own configuration: it registers \
+        "The Linux host host must never touch the input method's own configuration: it registers \
          hotkeys with the fcitx5 addon and leaves ~/.config/fcitx5 alone. Found:\n{}",
         violations.join("\n")
     );

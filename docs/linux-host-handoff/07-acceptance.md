@@ -15,7 +15,7 @@
 | Core | `cargo test -p openless-core --locked` |
 | Linux Host/合同 | `cargo test -p openless-linux-host --locked` |
 | Linux 目标编译 | `cargo check -p openless-linux-host --all-targets --target x86_64-unknown-linux-gnu --locked`（需配置好带 `core/std` 的目标工具链） |
-| 打包 | `release-linux-host.yml`（deb/rpm + `SHA256SUMS`；AppImage 已从该渠道下线） |
+| 打包 | `release-linux.yml`（deb/rpm + `SHA256SUMS`；AppImage 已从该渠道下线） |
 
 ## 3. 真机矩阵（L11/L12）
 

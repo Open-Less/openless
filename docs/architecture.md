@@ -22,7 +22,8 @@ Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotl
 flowchart TB
     React["React 页面 / 窗口"] --> IPC["src/lib/ipc · typed wrapper"]
     IPC --> Tauri["Tauri commands / coordinator / core_adapters"]
-    Egui["host UI"] --> Linux["LinuxHost / LinuxBackendBuilder"]
+    Qt["Qt6 WebEngine 窗口层"] --> Bridge["linux-web · /api/invoke + /api/events"]
+    Bridge --> Linux["LinuxHost / LinuxBackendBuilder"]
     Tauri --> Core["OpenLessBackend · Core"]
     Linux --> Core
     Core --> Stores["历史 / 设置 / 词库 / 风格包仓储"]

@@ -19,7 +19,7 @@ const workflow = (name) =>
   load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const ci = workflow('ci.yml');
-const linux = workflow('check-linux-host.yml');
+const linux = workflow('check-linux.yml');
 const harmony = workflow('release-harmony.yml');
 const androidSteps = ci.jobs['android-check'].steps;
 const freeEmulatorSpace = androidSteps.find(
@@ -339,7 +339,7 @@ try {
     for (const [dir, names] of [
       [
         packages,
-        ['OpenLess-Linux-host-test.deb', 'OpenLess-Linux-host-test.rpm', 'SHA256SUMS-linux'],
+        ['OpenLess-Linux-qt-test.deb', 'OpenLess-Linux-qt-test.rpm', 'SHA256SUMS-linux'],
       ],
       [aliases, ['OpenLess_linux_x86_64.deb', 'OpenLess_linux_x86_64.rpm']],
     ]) {
@@ -352,8 +352,8 @@ try {
       .split('\n')
       .find((line) => line.startsWith('gh release upload'));
     for (const asset of [
-      'OpenLess-Linux-host-test.deb',
-      'OpenLess-Linux-host-test.rpm',
+      'OpenLess-Linux-qt-test.deb',
+      'OpenLess-Linux-qt-test.rpm',
       'SHA256SUMS-linux',
       'OpenLess_linux_x86_64.deb',
       'OpenLess_linux_x86_64.rpm',

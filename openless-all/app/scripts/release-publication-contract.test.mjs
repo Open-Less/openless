@@ -65,7 +65,7 @@ for (const name of [
   );
 }
 
-const linux = workflow('check-linux-host.yml');
+const linux = workflow('check-linux.yml');
 const publish = linux.jobs['publish-linux-host'];
 assert.deepEqual(publish.needs, ['test-linux-host', 'build-linux-host']);
 assert.equal(linux.jobs['test-linux-host'].needs, undefined, 'testing must remain parallel');
@@ -159,7 +159,7 @@ try {
     assert.equal(result.status, 0);
     const logged = readFileSync(calls, 'utf8');
     assert.match(logged, /release-harmony\.yml.*channel=none/);
-    assert.equal(logged.includes('release-linux-host.yml'), accepted === 'v2.0.2-Beta.5-tauri');
+    assert.equal(logged.includes('release-linux.yml'), accepted === 'v2.0.2-Beta.5-tauri');
     assert.match(
       readFileSync(summary, 'utf8'),
       accepted

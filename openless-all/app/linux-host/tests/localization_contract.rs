@@ -1,7 +1,7 @@
 //! Localization regression contract (Tauri-free).
 //!
 //! Guards against *new* raw user-visible Simplified-Chinese string literals
-//! sneaking into the Linux egui source outside the translation catalog
+//! sneaking into the Linux host source outside the translation catalog
 //! (`src/i18n.rs`, the one legitimate home for zh-CN source-of-truth text).
 //!
 //! The `src/ui/shell.rs` module is fully localized, so it is held to a strict
@@ -13,82 +13,61 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use openless_linux_host::{fmt_l10n, tr_l10n, Lang, LANGS};
+use openless_linux_host::{tr_l10n, Lang, LANGS};
 
 #[test]
-fn cloud_sync_counts_are_formatted_in_every_language() {
-    for lang in LANGS {
-        let review = fmt_l10n(lang, "cloudSyncE2ee.deviceReview", &[&2]);
-        assert!(!review.contains("{}"), "{lang:?}: {review}");
-        assert_eq!(review.matches('2').count(), 1, "{lang:?}: {review}");
-
-        let retention = fmt_l10n(lang, "cloudSyncE2ee.backupRetention", &[&30]);
-        assert!(!retention.contains("{}"), "{lang:?}: {retention}");
-        assert_eq!(retention.matches("30").count(), 1, "{lang:?}: {retention}");
-
-        let progress = fmt_l10n(lang, "cloudSyncE2ee.conflictProgress", &[&1, &3]);
-        let expected = match lang {
-            Lang::ZhCn => "已处理 1 / 3 项冲突",
-            Lang::ZhTw => "已處理 1 / 3 項衝突",
-            Lang::En => "1 of 3 conflicts resolved",
-            Lang::Ja => "競合を 1 / 3 件解決済み",
-            Lang::Ko => "충돌 1 / 3개 해결",
-            Lang::Es => "1 de 3 conflictos resueltos",
-            Lang::Fr => "1 conflits résolus sur 3",
-            Lang::De => "1 von 3 Konflikten gelöst",
-        };
-        assert_eq!(progress, expected, "{lang:?}");
-        assert!(!progress.contains("{}"), "{lang:?}: {progress}");
+fn native_strings_are_translated_in_every_language() {
+    // 目录只剩原生侧真正会显示的东西：托盘菜单 + core 错误码的本地化文案。
+    // 界面文案在 React 里，不再进这份目录（见 src/i18n.rs 的模块注释）。
+    const KEYS: [&str; 8] = [
+        "tray.show",
+        "tray.previous_style",
+        "tray.quit",
+        "settings.system_default",
+        "settings.microphone",
+        "linuxAccess.keyringLocked",
+        "linuxAccess.keyringUnlockCancelled",
+        "settings.providers.llmThinkingRequired",
+    ];
+    for key in KEYS {
+        let english = tr_l10n(Lang::En, key);
+        assert_ne!(english, key, "missing catalog entry for {key}");
+        for lang in LANGS {
+            let translated = tr_l10n(lang, key);
+            assert!(!translated.trim().is_empty(), "{lang:?}: {key}");
+        }
+        // es/fr/de 曾经整列回落到英文；这几条是用户真会看到的，必须有译文。
+        // 法语对 "Microphone" 这类借词本来就写同一个词，所以法语只要求非空。
+        for lang in [Lang::Es, Lang::De, Lang::Ja, Lang::Ko] {
+            assert_ne!(tr_l10n(lang, key), english, "{lang:?}: English fallback for {key}");
+        }
     }
 }
 
 #[test]
-fn ui_refinement_additions_have_japanese_korean_and_traditional_chinese_translations() {
-    const KEYS: [&str; 22] = [
-        "uiRefinement.family",
-        "uiRefinement.fontHint",
-        "uiRefinement.fontSize",
-        "uiRefinement.storageError",
-        "uiRefinement.typography",
-        "uiRefinement.width",
-        "uiRefinement.back",
-        "uiRefinement.noResults",
-        "uiRefinement.shortcutHint",
-        "uiRefinement.shortcutsSearch",
-        "uiRefinement.unassigned",
-        "uiRefinement.all",
-        "uiRefinement.assigned",
-        "uiRefinement.category",
-        "uiRefinement.recording",
-        "uiRefinement.status",
-        "uiRefinement.styles",
-        "uiRefinement.system",
-        "uiRefinement.comfortable",
-        "uiRefinement.narrow",
-        "uiRefinement.native",
-        "uiRefinement.wide",
-    ];
-    for key in KEYS {
-        let english = tr_l10n(Lang::En, key);
-        for lang in [Lang::Ja, Lang::Ko, Lang::ZhTw] {
-            let translated = tr_l10n(lang, key);
-            assert!(!translated.trim().is_empty(), "{lang:?}: {key}");
-            assert_ne!(translated, key, "{lang:?}: missing {key}");
-            if matches!(lang, Lang::Ja | Lang::Ko) {
-                assert_ne!(translated, english, "{lang:?}: English fallback for {key}");
-            }
-        }
+fn core_error_codes_are_localized_at_display_time() {
+    use openless_linux_host::provider_error_text;
+    // core 以英文常量形式返回，界面要按当前语言显示。
+    let locked = provider_error_text(
+        Lang::De,
+        "The keyring is locked: unlock it in the system dialog and retry. Saved keys were not deleted.",
+    );
+    assert!(locked.starts_with("Der Schlüsselbund"), "unexpected German text: {locked}");
+    assert_ne!(
+        provider_error_text(Lang::Fr, "llmThinkingRequired"),
+        "llmThinkingRequired"
+    );
+    // 未知消息原样返回，不做猜测性替换。
+    assert_eq!(provider_error_text(Lang::Ja, "some other error"), "some other error");
+}
+
+#[test]
+fn language_tags_round_trip() {
+    for lang in LANGS {
+        assert_eq!(Lang::parse(lang.tag()), Some(lang), "{lang:?}");
     }
-    assert_eq!(tr_l10n(Lang::ZhTw, "uiRefinement.family"), "字型系列");
-    assert_eq!(tr_l10n(Lang::ZhTw, "uiRefinement.width"), "閱讀寬度");
-    assert_eq!(
-        tr_l10n(Lang::ZhTw, "uiRefinement.fontHint"),
-        "僅使用已安裝的字型，找不到時改用系統字型。不下載、不掃描，也不發出字型網路請求。"
-    );
-    assert_eq!(
-        tr_l10n(Lang::ZhTw, "uiRefinement.shortcutHint"),
-        "點選按鍵即可重新錄製。Esc 取消；儲存前會檢查快速鍵衝突。"
-    );
+    assert_eq!(Lang::parse("zh-Hant-HK"), Some(Lang::ZhTw));
+    assert_eq!(Lang::parse("ru_RU"), None);
 }
 
 fn strip_comments(source: &str) -> Vec<u8> {
@@ -282,7 +261,7 @@ fn no_new_raw_simplified_chinese_user_visible_literals_outside_catalog_or_baseli
     let added: Vec<&String> = current.difference(&baseline).collect();
     assert!(
         added.is_empty(),
-        "New raw Simplified-Chinese user-visible literal(s) were added to the Linux egui UI \
+        "New raw Simplified-Chinese user-visible literal(s) were added to the Linux host UI \
          outside the localization catalog. Translate them in src/i18n.rs and, if one is \
          deliberately dynamic/error text, refresh the baseline file. Found:\n{}",
         added
