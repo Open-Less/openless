@@ -8,8 +8,10 @@ $source = Get-Content -Raw -LiteralPath $surfaceFile
 $linuxManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/Cargo.toml")
 $coreManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "crates/openless-core/Cargo.toml")
 $coreApi = Get-Content -Raw -LiteralPath (Join-Path $appRoot "crates/openless-core/src/api.rs")
-$mainSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/main.rs")
-$mainSource += (Get-ChildItem -LiteralPath (Join-Path $appRoot "linux-host/src/linux_app") -Filter "*.rs" | Sort-Object Name | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
+# Linux 宿主已经拆成两半：`linux-host` 是纯后端库，`linux-web` 才是可执行入口
+# （Qt 宿主通过 HTTP 命令桥驱动它）。窗口装配的检查跟着入口走。
+$mainSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-web/src/main.rs")
+$mainSource += (Get-ChildItem -LiteralPath (Join-Path $appRoot "linux-web/src") -Filter "*.rs" | Sort-Object Name | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
 $backendSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/backend.rs")
 $qaSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/qa.rs")
 $selectionSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/selection.rs")
@@ -39,14 +41,10 @@ if ($linuxManifest -match 'legacy-preferences-write' -or $coreManifest -match 'l
     exit 1
 }
 
-if ($mainSource -notmatch 'SingleInstanceBroker::acquire_or_forward' -or
-    $mainSource -notmatch 'Fcitx5HotkeyListener::start' -or
-    $mainSource -notmatch 'drain_native_events()') {
-    Write-Error "Linux eframe production UI must wire single-instance and fcitx5 native events"
-    exit 1
-}
-if ($mainSource -match 'LinuxNativeRuntime::start(backend,s*None,s*None)') {
-    Write-Error "Linux eframe production UI must not disable all native adapters"
+# 新的宿主链路：单实例锁 + fcitx5 热键监听都在 linux-web 入口里装配。
+if ($mainSource -notmatch 'claim_single_instance' -or
+    $mainSource -notmatch 'spawn_headless') {
+    Write-Error "Linux backend entrypoint must wire single-instance and fcitx5 hotkeys"
     exit 1
 }
 
@@ -56,9 +54,12 @@ if ($backendSource -match 'qa_runtime:\s*None' -or
     exit 1
 }
 
-$installer = $mainSource.IndexOf('ensure_fcitx5_ready(&config)')
-$listener = $mainSource.IndexOf('Fcitx5HotkeyListener::start')
-if ($installer -lt 0 -or $listener -lt 0 -or $installer -gt $listener) {
+# fcitx5 插件的安装/就绪在 `linux-host` 的 fcitx5 模块里：先装插件，再 prepare
+# （prepare 内部先 require_ready，再重载插件）。
+$fcitxSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/fcitx5.rs")
+$installer = $fcitxSource.IndexOf('pub fn ensure_plugin_installed')
+$prepared = $fcitxSource.IndexOf('pub fn prepare_fcitx5')
+if ($installer -lt 0 -or $prepared -lt 0 -or $installer -gt $prepared) {
     Write-Error "Linux fcitx5 readiness must run before the hotkey listener"
     exit 1
 }

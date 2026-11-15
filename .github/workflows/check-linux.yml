@@ -242,12 +242,15 @@ jobs:
         working-directory: openless-all/app
         run: |
           set -euo pipefail
-          # 用 pkg-config 的 cflags，而不是自己拼 -I：
-          # 发行版把 Qt 头文件放在 /usr/include/<triplet>/qt6，
-          # 手写的 -I$INC/QtQuick 在 Ubuntu 上根本不存在（QQuickWindow 找不到）。
+          # 用 pkg-config 的 cflags，而不是自己拼 -I：发行版把 Qt 头文件放在
+          # /usr/include/<triplet>/qt6，手写的 -I$INC/QtQuick 在 Ubuntu 上根本不存在。
+          # LayerShellQt 的 .pc 名字各发行版不同（有的没有），单独兜底。
+          QT_CFLAGS=$(pkg-config --cflags Qt6Quick Qt6WebEngineWidgets Qt6Widgets Qt6Gui Qt6Core Qt6Network)
+          QT_LIBS=$(pkg-config --libs Qt6Quick Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network)
+          LS_CFLAGS=$(pkg-config --cflags LayerShellQtInterface 2>/dev/null || echo "-I/usr/include")
+          LS_LIBS=$(pkg-config --libs LayerShellQtInterface 2>/dev/null || echo "-lLayerShellQtInterface")
           g++ -std=c++17 -O2 -s -fPIC linux-qt/src/main.cpp -o linux-qt/openless-qt \
-            $(pkg-config --cflags Qt6Quick Qt6WebEngineWidgets Qt6Widgets Qt6Gui Qt6Core Qt6Network LayerShellQtInterface) \
-            $(pkg-config --libs Qt6Quick Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network LayerShellQtInterface)
+            $QT_CFLAGS $LS_CFLAGS $QT_LIBS $LS_LIBS
 
       - name: Build the React frontend bundle
         timeout-minutes: 20
