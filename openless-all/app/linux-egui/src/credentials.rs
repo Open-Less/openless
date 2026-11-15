@@ -400,8 +400,21 @@ impl CredentialStore for LinuxCredentialStore {
                         credential_namespace(record.namespace),
                         Some(record.channel_id.clone()),
                         account.clone(),
-                    )?;
-                    write_secret(&key, &SecretValue::new(value.clone()))?;
+                    )
+                    .map_err(|error| {
+                        eprintln!(
+                            "[linux-creds] 恢复失败：key 构造 ns={:?} channel={} account={} err={:?}",
+                            record.namespace, record.channel_id, account, error.code
+                        );
+                        error
+                    })?;
+                    write_secret(&key, &SecretValue::new(value.clone())).map_err(|error| {
+                        eprintln!(
+                            "[linux-creds] 恢复失败：写密钥 channel={} account={} err={:?} {}",
+                            record.channel_id, account, error.code, error.message
+                        );
+                        error
+                    })?;
                     keys.push(key);
                 }
             }

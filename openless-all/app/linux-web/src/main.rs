@@ -49,12 +49,14 @@ impl openless_core::config::RestoreRuntimeEffects for LinuxRestoreEffects {
         target: openless_core::UserPreferences,
     ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
         Box::pin(async move {
-            openless_core::reject_hotkey_collisions(&target).map_err(|_| {
-                openless_core::BackendError::new(
-                    openless_core::BackendErrorCode::InvalidArgument,
-                    "restore_hotkey_conflict",
-                )
-            })?;
+            // 快捷键冲突**不阻断恢复**：云端偏好是本机自己同步上去的，
+            // 冲突通常来自两台机器的默认值差异。Linux 的热键由 fcitx5 插件
+            // 与监听线程按偏好生效，冲突项会被忽略，不影响其余配置落地。
+            // （Tauri 在这里直接返回 Err 是因为它的桌面路径不支持 Linux，
+            //   那条分支我们是唯一实现者，不能照抄。）
+            if let Err(reason) = openless_core::reject_hotkey_collisions(&target) {
+                eprintln!("[linux-web] 恢复的快捷键有冲突，保留本机设置继续：{reason}");
+            }
             openless_core::net::set_use_system_proxy(target.use_system_proxy);
             Ok(())
         })
