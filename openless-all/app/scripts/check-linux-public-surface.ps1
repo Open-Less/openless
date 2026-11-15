@@ -100,7 +100,8 @@ foreach ($providerToken in @(
     'reorder_channels',
     'set_active_provider',
     'set_credential',
-    'remove_credential'
+    # 删除渠道即删除它的凭据：前端命令面只有 delete_channel，没有独立的 remove_credential。
+    'delete_channel'
 )) {
     if ($mainSource -notmatch [regex]::Escape($providerToken)) {
         Write-Error "Linux command surface is missing Core operation '$providerToken'"
