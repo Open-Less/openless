@@ -3,7 +3,13 @@ import { expect, type Locator, type Page } from '@playwright/test';
 /** Geometry and control tests start after the explicit two-surface handoff;
  * transition tests sample that handoff separately. */
 export async function settleNavigation(scope: Page | Locator) {
-  await expect(scope.locator('.ol-transition-viewport[aria-busy="true"]')).toHaveCount(0);
+  // Both surfaces stay mounted (aria-hidden, pointer-events none) until the incoming
+  // surface finishes its enter animation, so wait for the phase attribute instead.
+  await expect(
+    scope.locator(
+      '.ol-transition-viewport [data-transition-phase]:not([data-transition-phase="settled"])',
+    ),
+  ).toHaveCount(0);
 }
 
 /** Microphone controls live on a subpage. Opening that category unmounts its

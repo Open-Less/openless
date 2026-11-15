@@ -116,7 +116,7 @@ test('settings switches, segmented indicators and popups keep their full outline
   await page.screenshot({ path: test.info().outputPath('capsule-settings.png') });
 });
 
-test('history list keeps its rounded surface and native trackpad scrolling; correction add uses 8px', async ({
+test('history list keeps its rounded surface and native trackpad scrolling; correction add uses the 12px button radius', async ({
   page,
 }) => {
   await page.goto('/');
@@ -156,14 +156,14 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   await settleNavigation(page);
   const add = page.getByRole('button', { name: '添加', exact: true });
   await expect(add).toBeVisible();
-  await expect(add).toHaveCSS('border-radius', '8px');
+  await expect(add).toHaveCSS('border-radius', '12px');
   await expect(add).toHaveCSS('clip-path', 'none');
   await page.screenshot({ path: test.info().outputPath('correction-add.png') });
   expect(
     await add.evaluate((node) =>
       getComputedStyle(node).getPropertyValue('--ol-corner-radius').trim(),
     ),
-  ).toBe('8px');
+  ).toBe('12px');
 });
 
 test('the WebKit fallback preserves capsule, switch and popup exceptions', async ({ page }) => {
@@ -224,6 +224,6 @@ test('the WebKit fallback preserves capsule, switch and popup exceptions', async
     toggle: { radius: '999px', clip: 'none' },
     thumb: { radius: '999px', clip: 'none' },
     popup: { radius: '16px', clip: 'none' },
-    add: { radius: '8px', clip: 'none' },
+    add: { radius: '12px', clip: 'none' },
   });
 });

@@ -405,22 +405,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   outline: 2px solid var(--ol-blue);
   outline-offset: 3px;
 }
-.ol-settings-back-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 8px 5px 4px;
-  border: 0;
-  border-radius: var(--ol-control-radius);
-  background: transparent;
-  color: var(--ol-blue);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.ol-settings-back-button:hover {
-  background: var(--ol-blue-soft);
-}
 .ol-settings-category-list {
   border: 0;
   border-radius: var(--ol-card-radius);
@@ -1125,6 +1109,8 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-segmented > :is(.ol-segmented-indicator, .ol-segmented-option) {
   --ol-corner-radius: var(--ol-button-radius);
   border-radius: var(--ol-corner-radius);
+  clip-path: none !important;
+  corner-shape: round !important;
 }
 .ol-action-button {
   --ol-corner-radius: var(--ol-button-radius);
@@ -1156,6 +1142,33 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 ) {
   --ol-corner-radius: var(--ol-button-radius);
 }
+
+/* The continuous-corner fallback uses clip-path: shape(); in the packaged WKWebView
+   that shape can clip an entire segmented track (or one option) out of paint. Keep
+   the 12px border-radius but never clip interactive controls. */
+:where(
+  button,
+  [data-slot='button'],
+  .ol-pressable,
+  .ol-action-button,
+  .ol-nav-btn,
+  .ol-settings-rail-btn,
+  .ol-settings-return,
+  .ol-settings-back-button,
+  .ol-segmented,
+  .ol-segmented-option,
+  .ol-segmented-indicator,
+  .ol-service-views button,
+  .ol-choice-chips button,
+  .ol-like,
+  .ol-channel-delete-button,
+  .ol-channel-edit-button,
+  .ol-channel-verify,
+  .ol-channel-fetch-models
+) {
+  clip-path: none !important;
+  corner-shape: round !important;
+}
 .ol-segmented-indicator,
 .ol-service-view-indicator {
   position: absolute;
@@ -1167,9 +1180,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   pointer-events: none;
 }
 .ol-segmented-indicator {
-  z-index: 0;
+  z-index: -1;
   border-radius: var(--ol-r-sm);
-  background: var(--ol-choice-active-bg);
+  background: transparent !important;
 }
 .ol-service-view-indicator {
   z-index: 1;
@@ -1221,13 +1234,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   align-items: center;
 }
 .ol-segmented-label::after {
-  content: attr(data-label) / '';
-  height: 0;
-  overflow: hidden;
-  visibility: hidden;
-  font-weight: var(--ol-font-weight-semibold);
-  pointer-events: none;
-  user-select: none;
+  display: none;
 }
 
 .ol-service-views {

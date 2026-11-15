@@ -527,7 +527,7 @@ html .ol-default-processing-cancel {
 }
 html .ol-correction-add {
   --ol-corner-radius: var(--ol-button-radius);
-  border-radius: 8px !important;
+  border-radius: var(--ol-button-radius) !important;
   corner-shape: round !important;
   clip-path: none !important;
 }

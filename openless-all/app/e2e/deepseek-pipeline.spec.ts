@@ -32,9 +32,11 @@ test('three pipelines retain separate credentials and the selected pipeline afte
   const toast = page.getByRole('status').filter({ hasText: '已保存' });
   await expect(toast).toBeVisible();
   await expect(dialog.getByText('已保存独立配置', { exact: true })).toHaveCount(0);
+  // Saved notices dock at the top centre of the window, not at a corner.
   const toastBox = await toast.boundingBox();
-  expect(toastBox!.x).toBeGreaterThan(900);
+  const viewport = page.viewportSize()!;
   expect(toastBox!.y).toBeLessThan(180);
+  expect(Math.abs(toastBox!.x + toastBox!.width / 2 - viewport.width / 2)).toBeLessThan(80);
   for (const mode of ['传统模式', '多模态模式', 'DeepSeek 大统一']) {
     await pipeline.getByRole('button', { name: mode, exact: true }).click();
     await expect(pipeline.getByRole('button', { name: mode, exact: true })).toHaveAttribute(
