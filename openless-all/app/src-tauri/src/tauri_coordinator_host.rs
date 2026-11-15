@@ -2201,20 +2201,8 @@ impl TauriCoordinatorHost {
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
         self.capsule.snapshot.lock().record_backend_event(event);
-        #[cfg(not(mobile))]
-        if matches!(
-            event.kind,
-            openless_core::BackendEventKind::TranscriptDelta(_)
-        ) {
-            // Streaming text may arrive after capture stops, with no further level frames.
-            let (session_id, text) = {
-                let snapshot = self.capsule.snapshot.lock();
-                (snapshot.session_id.clone(), snapshot.text.clone())
-            };
-            if let (Some(session_id), Some(native)) = (session_id, self.native.lock().as_ref()) {
-                native.update_transcript(&session_id, text);
-            }
-        }
+        // 原生胶囊删除后，流式文本由 webview 胶囊直接消费 `TranscriptDelta` 事件，
+        // 这里不再需要把 session/text 转交给额外的渲染进程。
     }
 
     pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {
