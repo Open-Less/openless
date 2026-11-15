@@ -71,14 +71,18 @@ foreach ($action in @('ShowQa', 'HideQa', 'ShowSelectionPreview', 'HideSelection
     }
 }
 
-# Less Computer 在 Linux 端已整体删除：Core 仍会发 `LessComputerEvent`，Linux
-# 宿主刻意不消费它，所以这里不再要求 reducer 出现 LessComputer 相关分支。
-foreach ($replayToken in @(
-    'replay_events_after',
-    'replay.truncated'
-)) {
-    if ($mainSource -notmatch [regex]::Escape($replayToken)) {
-        Write-Error "Linux event reducer/replay is missing '$replayToken'"
+# 事件不再由宿主的 reducer 重放：`linux-web` 把 Core 的事件流直接转成 SSE，
+# 渲染层（Qt / 浏览器）自己消费。这里锁住这条通路的两端。
+$eventsSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-web/src/events.rs")
+foreach ($bridgeToken in @('/api/events', '/api/invoke')) {
+    if ($mainSource -notmatch [regex]::Escape($bridgeToken)) {
+        Write-Error "Linux backend bridge is missing '$bridgeToken'"
+        exit 1
+    }
+}
+foreach ($eventName in @('dictation:state', 'qa:state', 'selection:state', 'cloud-sync-e2ee:restored')) {
+    if ($eventsSource -notmatch [regex]::Escape($eventName)) {
+        Write-Error "Linux event bridge does not map '$eventName'"
         exit 1
     }
 }
@@ -99,13 +103,13 @@ foreach ($providerToken in @(
     'remove_credential'
 )) {
     if ($mainSource -notmatch [regex]::Escape($providerToken)) {
-        Write-Error "Linux provider setup UI is missing Core operation '$providerToken'"
+        Write-Error "Linux command surface is missing Core operation '$providerToken'"
         exit 1
     }
 }
-if ($mainSource -notmatch '(?s)\.provider\s*\.validate\(' -or
-    $mainSource -notmatch '(?s)\.provider\s*\.list_models\(') {
-    Write-Error "Linux provider setup UI must validate and list models through ProviderApi"
+if ($mainSource -notmatch '(?s)provider\.validate\(' -or
+    $mainSource -notmatch '(?s)provider\.list_models\(') {
+    Write-Error "Linux command surface must validate and list models through ProviderApi"
     exit 1
 }
 if ($mainSource -match 'ASR_PRESETS|LLM_PRESETS|OMNI_PRESETS|https://[^\s\"]+/v1') {
