@@ -447,16 +447,28 @@ fn init_host() -> Host {
             // 在冷启动永远是 signed_out（界面据此提示「请重新登录」）。
             // 这里启动后连一次（未启用同步时只是握手，不会上传），
             // 让状态、账号、hasCloudSnapshot 等字段从一开始就是真实的。
+            // 与 Tauri 对齐：启动后只做 ensure_runtime_ready（恢复围栏检查）
+            // 和 remote_input 配置；**不主动 sync_now**。
+            match runtime_parts.backend.ensure_runtime_ready() {
+                Ok(()) => {}
+                Err(error) => eprintln!("[linux-web] 运行时就绪检查未通过：{error}"),
+            }
             {
-                let backend = std::sync::Arc::clone(&runtime_parts.backend);
+                let preferences = runtime_parts.backend.get_preferences();
+                let remote = std::sync::Arc::clone(&runtime_parts.backend);
                 runtime.spawn(async move {
-                    // 只在启动时做一次；失败也不阻塞其它命令。
-                    match backend.cloud_sync_e2ee_sync_now().await {
-                        Ok(status) => println!(
-                            "[linux-web] 云同步会话已恢复：auth={:?} enabled={} account={:?}",
-                            status.auth_state, status.enabled, status.account
-                        ),
-                        Err(error) => println!("[linux-web] 云同步会话恢复失败：{error}"),
+                    if let Err(error) = remote
+                        .services()
+                        .remote_input
+                        .configure(openless_core::RemoteInputConfig {
+                            enabled: preferences.remote_input_enabled,
+                            port: preferences.remote_input_port,
+                        })
+                        .await
+                    {
+                        if error.code != openless_core::BackendErrorCode::Unsupported {
+                            eprintln!("[linux-web] 远程输入启动失败：{error}");
+                        }
                     }
                 });
             }
