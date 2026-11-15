@@ -47,6 +47,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -753,7 +754,14 @@ public:
                 << "SetClipboardText: clipboard addon not loaded";
             return false;
         }
+        // setClipboardV2(name, text, password) 是 fcitx5 5.1.16 才加的；更老的
+        // 发行版只有 setClipboard(name, text)。版本由 CMake 传进来，避免在
+        // 「命名空间 + 结构体」这套声明宏上做 SFINAE。
+#if OPENLESS_FCITX_CLIPBOARD_V2
         clipboard->call<IClipboard::setClipboardV2>("openless", text, false);
+#else
+        clipboard->call<IClipboard::setClipboard>("openless", text);
+#endif
         // 读回校验：KWin 下后台进程没有输入事件序列时，setClipboard 会**静默
         // 失败**（不报错，但选区内容不变）。这里如实返回 false，避免调用方以为
         // 成功了。宿主应改用自己窗口的剪贴板 API。
