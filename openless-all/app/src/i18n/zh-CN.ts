@@ -599,6 +599,8 @@ export const zhCN = {
     actions: {
       refresh: '重新读取',
       services: 'AI 与模型',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '选择语音识别与文字处理服务，管理渠道和网络代理。',
       general: '通用',
       shortcuts: '快捷键',
       privacy: '权限与数据',
@@ -1187,6 +1189,8 @@ export const zhCN = {
       capsuleDesc: '胶囊开关、多屏显示、样式，以及原文的流式显示。',
       textInputTitle: '文字插入',
       textInputDesc: '选区助手、插入与剪贴板、启动。',
+      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
+      textInputDescNoClipboard: '选区助手与启动。',
       phoneTitle: '手机与远程输入',
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },

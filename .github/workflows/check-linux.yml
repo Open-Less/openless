@@ -248,6 +248,18 @@ jobs:
             $(pkg-config --libs Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network) \
             $(pkg-config --libs LayerShellQtInterface)
 
+      - name: Build the React frontend bundle
+        timeout-minutes: 20
+        if: inputs.scope != 'none'
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          # dist/ 不入库：包里的界面必须现场构建，否则会拿旧 bundle 打出
+          # 「代码改了但界面没变」的包（本地就踩过：dist 落后 4 天，
+          # Linux 的能力屏蔽整段没生效）。
+          npm ci --prefer-offline --no-audit --no-fund
+          VITE_OPENLESS_PLATFORM=gtk npx vite build --outDir linux-web/dist --emptyOutDir
+
       - name: Package deb and rpm without Tauri
         timeout-minutes: 10
         if: inputs.scope != 'none'

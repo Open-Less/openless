@@ -599,6 +599,8 @@ export const zhTW: typeof zhCN = {
     actions: {
       refresh: '重新讀取',
       services: 'AI 與模型',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '選擇語音辨識與文字處理服務，管理渠道與網路代理。',
       general: '通用',
       shortcuts: '快捷鍵',
       privacy: '權限與資料',
@@ -1132,6 +1134,8 @@ export const zhTW: typeof zhCN = {
       capsuleDesc: '膠囊開關、多螢幕顯示、樣式，以及原文的串流顯示。',
       textInputTitle: '文字插入',
       textInputDesc: '選取助手、插入與剪貼簿、啟動。',
+      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
+      textInputDescNoClipboard: '選取助手與啟動。',
       phoneTitle: '手機與遠端輸入',
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },

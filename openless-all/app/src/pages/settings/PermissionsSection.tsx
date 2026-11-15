@@ -18,6 +18,7 @@ import {
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
+import { detectOS } from '../../components/WindowChrome';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import {
@@ -270,7 +271,9 @@ export function PermissionsSection() {
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
         <AndroidPermissionsPanel mode="permissionsOnly" />
       )}
-      {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
+      {windowsIme?.state !== 'notWindows' &&
+        detectOS() === 'win' &&
+        platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>
           <div style={permissionActionsStyle}>
             {windowsIme && (

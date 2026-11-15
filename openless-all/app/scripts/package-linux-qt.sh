@@ -41,6 +41,17 @@ require_file() {
 require_file "$QT_BIN"
 require_file "$HOST_BIN"
 require_file "$DIST_DIR/index.html"
+
+# 前端包必须比源码新：之前打过一版包，Rust 改了、dist 还是 11 号的旧构建，
+# 装上去 Linux 的能力屏蔽（本地模型 / 剪贴板插入）全都不生效。
+if [ "${OPENLESS_SKIP_DIST_CHECK:-0}" != "1" ]; then
+  newest_src=$(find "$APP_ROOT/src" -type f -newer "$DIST_DIR/index.html" -print -quit 2>/dev/null || true)
+  if [ -n "$newest_src" ]; then
+    echo "前端 dist 比源码旧（例如 $newest_src）。先重新构建：" >&2
+    echo "  VITE_OPENLESS_PLATFORM=gtk npx vite build --outDir linux-web/dist --emptyOutDir" >&2
+    exit 1
+  fi
+fi
 require_file "$PACKAGING/openless.desktop"
 
 # fcitx5 插件必须现编：仓库里的 build/ 产物可能是旧的。

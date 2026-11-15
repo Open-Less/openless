@@ -645,6 +645,8 @@ export const de: typeof zhCN = {
     actions: {
       refresh: 'Erneut versuchen',
       services: 'KI & Modelle',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: 'Sprach- und Textdienste wählen; Kanäle und Netzwerk-Proxy verwalten.',
       general: 'Allgemein',
       shortcuts: 'Kurzbefehle',
       privacy: 'Berechtigungen und Daten',
@@ -1205,6 +1207,8 @@ export const de: typeof zhCN = {
       capsuleDesc: 'Kapselschalter, mehrere Bildschirme, Stil und gestreamter Originaltext.',
       textInputTitle: 'Texteinfügung',
       textInputDesc: 'Auswahlassistent, Einfügen und Zwischenablage sowie Start.',
+      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
+      textInputDescNoClipboard: 'Auswahlassistent und Start.',
       phoneTitle: 'Telefon und Ferneingabe',
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },

@@ -617,6 +617,8 @@ export const ko: typeof zhCN = {
     actions: {
       refresh: '다시 불러오기',
       services: 'AI와 모델',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '음성 인식과 텍스트 처리 서비스를 선택하고 채널과 네트워크 프록시를 관리합니다.',
       general: '일반',
       shortcuts: '단축키',
       privacy: '권한 및 데이터',
@@ -1162,6 +1164,8 @@ export const ko: typeof zhCN = {
       capsuleDesc: '캡슐 스위치, 여러 화면 표시, 스타일, 원문 스트리밍 표시.',
       textInputTitle: '텍스트 삽입',
       textInputDesc: '선택 도우미, 삽입과 클립보드, 시작.',
+      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
+      textInputDescNoClipboard: '선택 도우미와 시작.',
       phoneTitle: '휴대폰과 원격 입력',
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },

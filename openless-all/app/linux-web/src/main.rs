@@ -1949,10 +1949,14 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "check_accessibility_permission" | "request_accessibility_permission" => {
             Ok(json!("granted"))
         }
+        // Linux 没有 TSF：结构必须和前端的 `WindowsImeStatus` 完全一致，
+        // 少了 `state` 会让设置页的 `state !== 'notWindows'` 恒真，白白显示一行
+        // 「Windows 输入法后端：undefined」。
         "get_windows_ime_status" => Ok(json!({
-            "tsfAvailable": false,
-            "activeProfile": null,
+            "state": "notWindows",
+            "usingTsfBackend": false,
             "message": null,
+            "dllPath": null,
         })),
         "get_hotkey_capability" => {
             // Linux 的能力描述 core 里已经写好了（adapter=Fcitx5 + 各触发键 +

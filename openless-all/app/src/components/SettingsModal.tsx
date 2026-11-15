@@ -12,7 +12,11 @@ import { Icon } from './Icon';
 import { SavedToast } from './SavedToast';
 import { useSavedToastListener } from '../lib/savedEvent';
 import { openExternal } from '../lib/ipc';
-import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../lib/platform';
+import {
+  getPlatformCapabilities,
+  getCachedPlatformCapabilities,
+  isLinuxHost,
+} from '../lib/platform';
 import { useMobileLayout, useConservativeLayout } from '../lib/useMobileLayout';
 import type { OS } from './WindowChrome';
 import {
@@ -140,11 +144,16 @@ export function SettingsModal({
     });
   };
   const supportsShortcuts = platformCaps?.supportsDesktopHotkey ?? os !== 'android';
+  // Linux 宿主没有本地模型，别在「AI 与模型」的文案里承诺它。
+  const descriptionKey = (id: string) =>
+    isLinuxHost() && id === 'services'
+      ? 'modal.descriptions.servicesNoLocalModels'
+      : `modal.descriptions.${id}`;
   const sections = visibleSettingsSections(supportsShortcuts, platformCaps?.platform).map(
     (item) => ({
       ...item,
       title: t(`modal.sections.${item.id}`),
-      description: t(`modal.descriptions.${item.id}`),
+      description: t(descriptionKey(item.id)),
       keywords: t(`modal.searchKeywords.${item.id}`),
     }),
   );
@@ -169,7 +178,7 @@ export function SettingsModal({
       ? t('settings.recording.dsp.description')
       : activeAdvancedPage
         ? t(`modal.advancedPages.${activeAdvancedPage.id}`)
-        : t(`modal.descriptions.${section}`);
+        : t(descriptionKey(section));
 
   useEffect(() => {
     let cancelled = false;

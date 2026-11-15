@@ -7,6 +7,7 @@ import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsP
 import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../components/Tooltip';
 import { detectOS } from '../../components/WindowChrome';
+import { isLinuxHost } from '../../lib/platform';
 import { ExperimentalAsrSection, type ExperimentalAsrController } from './ExperimentalAsrSection';
 import { RecordingInputSection } from './RecordingInputSection';
 import { RemoteInputSection } from './RemoteInputSection';
@@ -98,7 +99,11 @@ export function GeneralTab({
       id: 'textInput' as const,
       icon: 'pencil',
       title: 'settings.generalPages.textInputTitle',
-      description: 'settings.generalPages.textInputDesc',
+      // Linux 没有「插入后恢复剪贴板 / 粘贴快捷键」，副标题也不该提剪贴板。
+      description:
+        (platformCaps?.supportsClipboardPasteInsertion ?? !isLinuxHost()) === false
+          ? 'settings.generalPages.textInputDescNoClipboard'
+          : 'settings.generalPages.textInputDesc',
     },
     {
       id: 'phone' as const,
@@ -743,7 +748,9 @@ export function AdvancedTab({
                   <VocabularyLearningSection />
                 )}
                 {platformCaps?.platform === 'desktop' &&
-                  (detectOS() === 'mac' || detectOS() === 'win') && <ExpressionLearningSection />}
+                  (detectOS() === 'mac' || detectOS() === 'win' || detectOS() === 'linux') && (
+                    <ExpressionLearningSection />
+                  )}
               </div>
             )}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}

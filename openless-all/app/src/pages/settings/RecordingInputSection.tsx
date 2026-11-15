@@ -228,7 +228,10 @@ export function RecordingInputSection({
   }
 
   const isAndroid = platformCaps?.platform === 'android';
-  const showDesktopInsert = showDesktopHotkey;
+  // 「插入与剪贴板」整组只对「写剪贴板 + 模拟粘贴」的插入后端有意义。
+  // Linux 走 fcitx5 插件 commitString，恢复剪贴板/粘贴快捷键都不适用，整组隐藏。
+  const showDesktopInsert =
+    showDesktopHotkey && platformCaps?.supportsClipboardPasteInsertion !== false;
   const showDesktopStartup = showDesktopHotkey;
   const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
   const effectiveCapsuleDisplayMode =

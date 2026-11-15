@@ -1,13 +1,17 @@
 import { type CSSProperties, type ReactNode } from 'react';
+import { isGtkHost } from '../lib/gtkBridge';
+import { isHttpBridge } from '../lib/httpBridge';
 
-export type OS = 'mac' | 'win' | 'android' | 'harmony';
+export type OS = 'mac' | 'win' | 'linux' | 'android' | 'harmony';
 
 export function detectOS(): OS {
   if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') return 'harmony';
-  // 本机 GTK/WebKit 宿主：窗口装饰由 GTK（合成器）提供，前端不能再画一条
-  // 标题栏 —— 否则窗口顶部会多出一块空白（mac 样式标题栏 + 原生标题栏叠在一起）。
-  // 走 win 分支：titlebarHeight=0、无圆角、无自定义标题栏。
-  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk') return 'win';
+  // 本机 Linux 宿主（Qt / GTK / 浏览器版）：窗口装饰由合成器提供，前端不画标题栏。
+  // 这里必须返回 'linux' 而不是借 'win'：借 'win' 会把「Windows 输入法后端」「插入后
+  // 恢复剪贴板」这些 win-only 设置一起放出来，Linux 上根本没有对应的实现。
+  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk' || isHttpBridge || isGtkHost) {
+    return 'linux';
+  }
   if (typeof navigator === 'undefined') return 'mac';
   const uaDataPlatform =
     (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
@@ -33,9 +37,11 @@ interface WindowChromeProps {
 export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChromeProps) {
   // Windows: with decorations:true the shell draws no radius/border/shadow/titlebar,
   // avoiding overlap with the native window.
+  // linux 与 win 一样由合成器画窗口：不要圆角、不要阴影、不要自绘标题栏。
+  const chromeLess = os === 'win' || os === 'linux';
   const shellRadius =
-    os === 'mac' ? 0 : os === 'win' || os === 'android' || os === 'harmony' ? 0 : 14;
-  const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 0;
+    os === 'mac' ? 0 : os === 'win' || os === 'linux' || os === 'android' || os === 'harmony' ? 0 : 14;
+  const consoleRadius = os === 'mac' ? 20 : chromeLess ? WIN_CONSOLE_RADIUS : 0;
   const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : 0;
 
   const useSolidSurface = os === 'android' || os === 'harmony';
@@ -55,18 +61,18 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           borderRadius: 'var(--ol-window-shell-radius)',
           // The shell fills the whole window, so a CSS shadow lands outside the viewport and
           // is clipped; macOS/Windows draw the real window shadow natively.
-          boxShadow: os === 'win' || os === 'mac' ? 'none' : 'var(--ol-shadow-xl)',
+          boxShadow: chromeLess || os === 'mac' ? 'none' : 'var(--ol-shadow-xl)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
           border:
-            os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
+            chromeLess || os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
           background: useSolidSurface ? 'var(--ol-surface)' : 'var(--ol-window-bg)',
           // The main window is opaque; backdrop blur would only add a compositing layer.
           backdropFilter: 'none',
           WebkitBackdropFilter: 'none',
           animation:
-            os === 'win' ? undefined : 'ol-window-enter 0.24s var(--ol-motion-spring) backwards',
+            chromeLess ? undefined : 'ol-window-enter 0.24s var(--ol-motion-spring) backwards',
           transition:
             'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft)',
         } as CSSProperties

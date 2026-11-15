@@ -624,6 +624,8 @@ export const ja: typeof zhCN = {
     actions: {
       refresh: '再読み込み',
       services: 'AI とモデル',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '音声認識とテキスト処理のサービスを選び、チャネルとネットワークプロキシを管理します。',
       general: '一般',
       shortcuts: 'ショートカット',
       privacy: '権限とデータ',
@@ -1169,6 +1171,8 @@ export const ja: typeof zhCN = {
       capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
       textInputTitle: '文字の挿入',
       textInputDesc: '選択アシスタント、挿入とクリップボード、起動。',
+      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
+      textInputDescNoClipboard: '選択アシスタントと起動。',
       phoneTitle: 'スマホとリモート入力',
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },

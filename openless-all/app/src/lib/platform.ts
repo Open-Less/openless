@@ -99,6 +99,8 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
       supportsOverlay: true,
       // 输入走 fcitx5 插件，不是 Windows TSF
       supportsImeInput: false,
+      // 插入是插件直接 commitString，不写剪贴板、不模拟粘贴键
+      supportsClipboardPasteInsertion: false,
       // Linux 暂时不做本地模型（sherpa / foundry / whisper 全部隐藏）
       supportsLocalAsr: false,
       supportsLocalQwen3Mlx: false,
