@@ -80,7 +80,7 @@ const [
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),
   read('src-tauri/src/host_document/macos.rs'),
-  read('linux-egui/src/fcitx5.rs'),
+  read('linux-host/src/fcitx5.rs'),
   read('src/pages/LocalAsr/index.tsx'),
   read('crates/openless-core/src/local_asr_service.rs'),
   read('crates/openless-core/src/credentials.rs'),

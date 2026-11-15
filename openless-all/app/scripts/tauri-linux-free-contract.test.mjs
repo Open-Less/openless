@@ -3,8 +3,8 @@ import { access, constants } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// The Tauri shell no longer ships a Linux desktop target: Linux runs the egui
-// host in `openless-all/app/linux-egui`. This contract keeps that split from
+// The Tauri shell no longer ships a Linux desktop target: Linux runs the host
+// host in `openless-all/app/linux-host`. This contract keeps that split from
 // drifting back — a Linux-only cfg block, a Linux-only dependency, or a Linux
 // branch in the React frontend would silently re-grow an unsupported target.
 //
@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 //   - `src-tauri/src/lib.rs` keeps a `#[cfg(target_os = "linux")] compile_error!`
 //     guard so an accidental Linux build fails with an actionable message.
 //   - i18n platform descriptions may legitimately say "Windows / Linux"
-//     because Linux users still run the product through the egui host.
+//     because Linux users still run the product through the host host.
 
 const appRoot = new URL('..', import.meta.url);
 const tauriSrc = fileURLToPath(new URL('../src-tauri/src', import.meta.url));

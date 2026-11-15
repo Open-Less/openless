@@ -386,7 +386,7 @@ export const es: typeof zhCN = {
     selectionPreview: 'A partir del texto seleccionado:',
     emptyTitle: '¿En qué puedo ayudarte?',
     emptyDesc:
-      'Selecciona un texto para preguntar sobre él o escribe tu pregunta abajo. Las respuestas aparecerán aquí y podrás seguir preguntando.',
+      'Selecciona un texto para preguntar sobre él o escribe tu pregunta abajo. Las respuestas aparecerán aquí y podrás shostr preguntando.',
     recordingHint: 'Grabando… pulsa {{recordHotkey}} de nuevo para enviar',
     mobileRecordLabel: 'botón de grabación',
     mobileRecordStart: 'Iniciar grabación',
@@ -1144,7 +1144,7 @@ export const es: typeof zhCN = {
   },
   selectionAsk: {
     title: 'Pregunta lo que quieras',
-    desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
+    desc: 'Selecciona texto y pregunta por voz, con preguntas de shostmiento.',
     shortcutSettings: 'Ajustes de atajos',
     guide: {
       openTitle: 'Abre el panel',
@@ -1275,7 +1275,7 @@ export const es: typeof zhCN = {
     },
     expressionLearning: {
       clearHint:
-        'Tras borrar, un dictado en curso puede seguir usando las preferencias capturadas al comenzar.',
+        'Tras borrar, un dictado en curso puede shostr usando las preferencias capturadas al comenzar.',
       lineBreaksMore: 'Más saltos de línea',
       lineBreaksLess: 'Menos saltos de línea',
       exclamationsMore: 'Más signos de exclamación',
@@ -1286,7 +1286,7 @@ export const es: typeof zhCN = {
       title: 'Hábitos de expresión',
       enabled: 'Aprender hábitos de expresión',
       description:
-        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede seguir usando las preferencias ya capturadas.',
+        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede shostr usando las preferencias ya capturadas.',
       status: '{{count}} preferencias estables',
       clear: 'Borrar hábitos',
       error: 'No se pudieron leer o guardar los hábitos.',
@@ -1369,7 +1369,7 @@ export const es: typeof zhCN = {
       modeAuto: 'Automático',
       silenceAutoStopLabel: 'Detener tras un silencio',
       silenceAutoStopDesc:
-        'Solo en modo Alternar. Después de detectar voz, detiene y envía la grabación cuando el silencio dura el tiempo elegido. Desactivado de forma predeterminada; puedes seguir pulsando el atajo o Esc.',
+        'Solo en modo Alternar. Después de detectar voz, detiene y envía la grabación cuando el silencio dura el tiempo elegido. Desactivado de forma predeterminada; puedes shostr pulsando el atajo o Esc.',
       silenceAutoStopSecondsLabel: 'Duración del silencio',
       silenceAutoStopSecondsValue: '{{value}}s',
       migrationNoticeTitle: 'El modo de grabación predeterminado ahora es Alternar',
@@ -2245,8 +2245,8 @@ export const es: typeof zhCN = {
       title: 'Idioma de la interfaz',
       desc: 'Cambia el idioma de la interfaz. Se aplica de inmediato y se conserva al volver a iniciar la aplicación.',
       label: 'Idioma',
-      labelDesc: 'Elige «Seguir al sistema» para usar el idioma del sistema operativo al iniciar.',
-      followSystem: 'Seguir al sistema',
+      labelDesc: 'Elige «Shostr al sistema» para usar el idioma del sistema operativo al iniciar.',
+      followSystem: 'Shostr al sistema',
       zh: '简体中文',
       zhTW: '繁體中文',
       en: 'English',
@@ -2268,7 +2268,7 @@ export const es: typeof zhCN = {
       conservativeLayoutLabel: 'Diseño conservador',
       conservativeLayoutDesc:
         'Las páginas de ajustes y funciones usan una columna a todo el ancho para reducir los desbordamientos. No afecta a la página de inicio ni a las barras superior e inferior.',
-      system: 'Seguir al sistema',
+      system: 'Shostr al sistema',
       light: 'Claro',
       dark: 'Oscuro',
     },

@@ -65,11 +65,11 @@ for (const name of [
   );
 }
 
-const linux = workflow('check-linux-egui.yml');
-const publish = linux.jobs['publish-linux-egui'];
-assert.deepEqual(publish.needs, ['test-linux-egui', 'build-linux-egui']);
-assert.equal(linux.jobs['test-linux-egui'].needs, undefined, 'testing must remain parallel');
-assert.equal(linux.jobs['build-linux-egui'].needs, undefined, 'packaging must remain parallel');
+const linux = workflow('check-linux-host.yml');
+const publish = linux.jobs['publish-linux-host'];
+assert.deepEqual(publish.needs, ['test-linux-host', 'build-linux-host']);
+assert.equal(linux.jobs['test-linux-host'].needs, undefined, 'testing must remain parallel');
+assert.equal(linux.jobs['build-linux-host'].needs, undefined, 'packaging must remain parallel');
 assert.equal(publish.permissions, undefined, 'the reusable job must inherit its caller permission');
 assert.equal(publish.env.GH_REPO, '${{ github.repository }}');
 assert.equal(publish.env.GH_TOKEN, '${{ github.token }}');
@@ -93,9 +93,9 @@ for (const [results, inputs, expected] of [
 const downloads = publish.steps.filter((step) => step.uses === 'actions/download-artifact@v8');
 assert.deepEqual(
   downloads.map((step) => step.with.name),
-  ['openless-linux-egui-x86_64', 'openless-linux-egui-direct-download'],
+  ['openless-linux-host-x86_64', 'openless-linux-host-direct-download'],
 );
-const uploads = linux.jobs['build-linux-egui'].steps.filter((step) =>
+const uploads = linux.jobs['build-linux-host'].steps.filter((step) =>
   step.uses?.startsWith('actions/upload-artifact@'),
 );
 for (const step of downloads) {
@@ -108,7 +108,7 @@ assert.equal(
   false,
 );
 for (const [name, job] of Object.entries(linux.jobs)) {
-  if (name !== 'publish-linux-egui')
+  if (name !== 'publish-linux-host')
     assert.ok((job.steps ?? []).every((step) => !step.run?.includes('gh release upload')));
 }
 const attach = publish.steps.find((step) => step.run?.includes('gh release upload'));
@@ -159,7 +159,7 @@ try {
     assert.equal(result.status, 0);
     const logged = readFileSync(calls, 'utf8');
     assert.match(logged, /release-harmony\.yml.*channel=none/);
-    assert.equal(logged.includes('release-linux-egui.yml'), accepted === 'v2.0.2-Beta.5-tauri');
+    assert.equal(logged.includes('release-linux-host.yml'), accepted === 'v2.0.2-Beta.5-tauri');
     assert.match(
       readFileSync(summary, 'utf8'),
       accepted

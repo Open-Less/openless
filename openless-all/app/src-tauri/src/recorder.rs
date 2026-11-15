@@ -433,7 +433,7 @@ impl WavArchiveWriter {
     }
 }
 
-/// 调试录音要落哪几份盘（与 egui 侧同名同义）。
+/// 调试录音要落哪几份盘（与 Linux 宿主侧同名同义）。
 ///
 /// - `processed`：主档案 `<session>.wav`，`write_processed` 时写降噪/增益之后的
 ///   PCM，否则写原始 PCM（只勾「处理前」时用，回退/播放功能不变）。

@@ -211,7 +211,7 @@ impl SideAwareComboMonitor {
         tx: Sender<HotkeyEvent>,
         combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Self, crate::combo_hotkey::ComboHotkeyError> {
-        // Linux accepts the binding too: the egui host owns its own side-aware
+        // Linux accepts the binding too: the Linux host owns its own side-aware
         // modifier layer, so the platform dispatch this file wraps is not the
         // only source of those edges. Rejecting here would hide a working
         // configuration behind a bogus error.

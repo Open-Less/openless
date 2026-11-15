@@ -12,7 +12,7 @@ assert.equal(
     report([
       ...jobs,
       {
-        name: 'Linux Core, egui and deb/rpm checks / publish-linux-egui',
+        name: 'Linux Core, host and deb/rpm checks / publish-linux-host',
         status: 'completed',
         conclusion: 'skipped',
       },

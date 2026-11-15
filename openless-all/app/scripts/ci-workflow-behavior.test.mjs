@@ -19,7 +19,7 @@ const workflow = (name) =>
   load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const ci = workflow('ci.yml');
-const linux = workflow('check-linux-egui.yml');
+const linux = workflow('check-linux-host.yml');
 const harmony = workflow('release-harmony.yml');
 const androidSteps = ci.jobs['android-check'].steps;
 const freeEmulatorSpace = androidSteps.find(
@@ -55,7 +55,7 @@ const install = androidSteps.find(
 const boot = androidSteps.find(
   (step) => step.name === 'Run Android Keystore instrumentation tests',
 ).run;
-const coreTests = linux.jobs['test-linux-egui'].steps.find(
+const coreTests = linux.jobs['test-linux-host'].steps.find(
   (step) => step.name === 'Test Core, Linux host, and platform boundaries',
 ).run;
 const hotkey =
@@ -64,7 +64,7 @@ const hotkey =
     coreTests.indexOf('cargo test --locked -p openless-core --lib'),
     coreTests.indexOf('cargo test --locked -p openless-harmony-host'),
   );
-const publish = linux.jobs['publish-linux-egui'].steps.find((step) =>
+const publish = linux.jobs['publish-linux-host'].steps.find((step) =>
   step.run?.includes('gh release upload'),
 ).run;
 for (const script of [install, boot, hotkey, publish, freeEmulatorSpace.run]) {
@@ -334,12 +334,12 @@ try {
   }
   {
     const test = fixture('publish-assets');
-    const packages = join(test.dir, 'openless-linux-egui-packages');
-    const aliases = join(test.dir, 'openless-linux-egui-direct-download');
+    const packages = join(test.dir, 'openless-linux-host-packages');
+    const aliases = join(test.dir, 'openless-linux-host-direct-download');
     for (const [dir, names] of [
       [
         packages,
-        ['OpenLess-Linux-egui-test.deb', 'OpenLess-Linux-egui-test.rpm', 'SHA256SUMS-linux'],
+        ['OpenLess-Linux-host-test.deb', 'OpenLess-Linux-host-test.rpm', 'SHA256SUMS-linux'],
       ],
       [aliases, ['OpenLess_linux_x86_64.deb', 'OpenLess_linux_x86_64.rpm']],
     ]) {
@@ -352,8 +352,8 @@ try {
       .split('\n')
       .find((line) => line.startsWith('gh release upload'));
     for (const asset of [
-      'OpenLess-Linux-egui-test.deb',
-      'OpenLess-Linux-egui-test.rpm',
+      'OpenLess-Linux-host-test.deb',
+      'OpenLess-Linux-host-test.rpm',
       'SHA256SUMS-linux',
       'OpenLess_linux_x86_64.deb',
       'OpenLess_linux_x86_64.rpm',

@@ -4,7 +4,7 @@ members = [
     "crates/openless-core",
     "crates/micyou-dsp",
     "crates/micyou-infer",
-    "linux-egui",
+    "linux-host",
     "crates/openless-capsule",
     "native-capsule",
     "harmony/rust",

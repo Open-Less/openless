@@ -424,7 +424,7 @@ fn init_host() -> Host {
         ..Default::default()
     };
     let _guard = runtime.enter();
-    match openless_linux_egui::LinuxBackendBuilder::from_shared_providers(config)
+    match openless_linux_host::LinuxBackendBuilder::from_shared_providers(config)
         .and_then(|builder| builder.build())
     {
         Ok(runtime_parts) => {
@@ -623,11 +623,11 @@ fn polish_mode(args: &Value) -> Result<openless_core::PolishMode, String> {
 /// 返回给前端的形状贴近 Tauri 的 `Update`：`version` / `notes` / `pubDate` / `url`，
 /// 外加 `currentVersion` 与 `newer`（前端据此决定是否提示）。
 async fn fetch_update_manifest(
-    channel: openless_linux_egui::update_check::UpdateChannel,
+    channel: openless_linux_host::update_check::UpdateChannel,
 ) -> Result<Option<Value>, String> {
     let (path, suffix) = match channel {
-        openless_linux_egui::update_check::UpdateChannel::Stable => ("stable", ""),
-        openless_linux_egui::update_check::UpdateChannel::Beta => ("beta", "-beta"),
+        openless_linux_host::update_check::UpdateChannel::Stable => ("stable", ""),
+        openless_linux_host::update_check::UpdateChannel::Beta => ("beta", "-beta"),
     };
     let url = format!(
         "https://dl.aeoform.com/updates/{path}/latest-linux-x86_64{suffix}.json"
@@ -649,14 +649,14 @@ async fn fetch_update_manifest(
     let Some(version) = body.get("version").and_then(|value| value.as_str()) else {
         return Ok(None);
     };
-    let current = openless_linux_egui::update_check::app_version();
+    let current = openless_linux_host::update_check::app_version();
     Ok(Some(json!({
         "version": version,
         "notes": body.get("notes").cloned().unwrap_or(Value::Null),
         "pubDate": body.get("pub_date").cloned().unwrap_or(Value::Null),
         "url": format!("https://github.com/Open-Less/openless/releases/tag/v{version}"),
         "currentVersion": current,
-        "newer": openless_linux_egui::update_check::is_newer(current, version),
+        "newer": openless_linux_host::update_check::is_newer(current, version),
     })))
 }
 
@@ -1475,7 +1475,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
             if !text.is_empty() {
-                openless_linux_egui::fcitx5_copy_to_clipboard(text)
+                openless_linux_host::fcitx5_copy_to_clipboard(text)
                     .map_err(|error| error.to_string())?;
                 println!("[linux-web] 已复制到剪贴板（{} 字符）", text.chars().count());
             }
@@ -1484,9 +1484,9 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "check_network" => {
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
             let (state, latency) =
-                runtime.block_on(openless_linux_egui::linux_access::probe_network());
+                runtime.block_on(openless_linux_host::linux_access::probe_network());
             Ok(json!({
-                "online": matches!(state, openless_linux_egui::linux_access::CheckState::Ready),
+                "online": matches!(state, openless_linux_host::linux_access::CheckState::Ready),
                 "latencyMs": latency,
             }))
         }
@@ -1992,12 +1992,12 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "app_check_update_with_channel" | "fetch_latest_beta_release" => {
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
             let channel = if command == "fetch_latest_beta_release" {
-                openless_linux_egui::update_check::UpdateChannel::Beta
+                openless_linux_host::update_check::UpdateChannel::Beta
             } else {
                 match _args.get("channel").and_then(|value| value.as_str()) {
-                    Some("beta") => openless_linux_egui::update_check::UpdateChannel::Beta,
+                    Some("beta") => openless_linux_host::update_check::UpdateChannel::Beta,
                     Some("stable") | None => {
-                        openless_linux_egui::update_check::UpdateChannel::Stable
+                        openless_linux_host::update_check::UpdateChannel::Stable
                     }
                     Some(other) => return Err(format!("未知的更新通道：{other}")),
                 }
@@ -2174,7 +2174,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         }
         // ── 钥匙串（云同步的 E2EE 密钥就存在这里）─────────────────────
         "keyring_state" => {
-            let (keyring, input) = openless_linux_egui::linux_access::probe_session();
+            let (keyring, input) = openless_linux_host::linux_access::probe_session();
             Ok(json!({
                 "keyring": json_value(keyring),
                 "input": json_value(input),
@@ -2183,8 +2183,8 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "unlock_keyring" => {
             // 只由用户动作触发解锁（会自动弹 kwallet 对话框）；
             // 自动启动路径永远不解锁，避免启动时弹窗。
-            let timeout = openless_linux_egui::linux_access::VAULT_UNLOCK_TIMEOUT;
-            match openless_linux_egui::linux_access::unlock_default_vault(timeout) {
+            let timeout = openless_linux_host::linux_access::VAULT_UNLOCK_TIMEOUT;
+            match openless_linux_host::linux_access::unlock_default_vault(timeout) {
                 Ok(()) => Ok(json!({ "unlocked": true })),
                 Err(error) => Err(error.to_string()),
             }

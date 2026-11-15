@@ -5,7 +5,7 @@
 ## 1. 合同文件与启动门
 
 - 公开合同：`openless-all/app/contract/backend-2.0.json`，顶层键 `contractVersion` / `startupSnapshot` / `backendEvent` / `lessComputerVoice` / `androidJni` / `linuxFacade` / `enums`。启动时校验版本；UI 必须先消费 startup snapshot 再渲染状态。
-- 构造：`LinuxBackendBuilder::from_shared_providers(config)`（`linux-egui/src/backend.rs`）创建与 Tauri 同源的 Core 后端；云 ASR/LLM/Omni 实现两端共用，不复制第二套。
+- 构造：`LinuxBackendBuilder::from_shared_providers(config)`（`linux-host/src/backend.rs`）创建与 Tauri 同源的 Core 后端；云 ASR/LLM/Omni 实现两端共用，不复制第二套。
 - 事件：Core `events.rs` 语义事件 → `LinuxHost::drain_events`（`lib.rs`）→ UI reducer；订阅用 `LinuxHost::subscribe` 返回 `EventSubscription`。
 - 会话/取消：所有长操作（听写、转写、下载、QA、Agent）走 Core session 取消语义；UI 只触发与显示，不自建取消规则。
 

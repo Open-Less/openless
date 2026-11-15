@@ -22,7 +22,7 @@
 //   tauri        macOS / Windows desktop shells and the Android build that
 //                shares their dependency graph.
 //   msrv         The pinned Rust 1.99 compile.
-//   linux        The Linux egui host, its tests and the deb/rpm chain.
+//   linux        The Linux host host, its tests and the deb/rpm chain.
 //   harmony      The HarmonyOS host (ArkTS contracts, Rust host, HAP).
 //   frontend     Browser-rendered surface: the Chromium/WebKit motion suite.
 //   ios-device   The Xcode/Rime project layer and the shared Rust crates that
@@ -58,7 +58,7 @@ const PLATFORM_ROOTS = {
   windows: ['openless', 'openless-native-capsule'],
   android: ['openless'],
   // The Linux reusable workflow also owns Harmony Rust unit tests.
-  linux: ['openless-linux-egui', 'openless-harmony-host'],
+  linux: ['openless-linux-host', 'openless-harmony-host'],
   harmony: ['openless-harmony-host'],
   ios: ['openless-core'],
 };
@@ -262,7 +262,7 @@ function classify(file, context) {
   const tags = new Set();
   if (motionSurface(file)) {
     // The bundle is embedded in every shell that renders it. The Linux host uses
-    // a native egui UI and does not consume `dist/` at all, and the Android job
+    // a native host UI and does not consume `dist/` at all, and the Android job
     // only compiles the Rust crate (`npm run build` there just satisfies
     // `generate_context!`), so neither is in scope for a bundle-only change.
     for (const tag of ['frontend', 'macos', 'windows', 'harmony']) tags.add(tag);
@@ -282,7 +282,7 @@ function classify(file, context) {
   // embed them (assets, fixtures, icons).
   if (tags.size === 0) {
     if (file.startsWith('openless-all/app/harmony/')) return new Set(['harmony']);
-    if (file.startsWith('openless-all/app/linux-egui/')) return new Set(['linux']);
+    if (file.startsWith('openless-all/app/linux-host/')) return new Set(['linux']);
     return ALL;
   }
   return tags;

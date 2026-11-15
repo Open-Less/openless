@@ -1,6 +1,6 @@
 # 04：页面与领域操作
 
-状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。页面定义：`linux-egui/src/ui_state.rs` `Page` 枚举（10 页）；主循环与交互：`main.rs`。
+状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。页面定义：`linux-host/src/ui_state.rs` `Page` 枚举（10 页）；主循环与交互：`main.rs`。
 
 ## 1. 十页现状
 

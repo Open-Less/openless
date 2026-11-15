@@ -4,7 +4,7 @@ name: CI
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
 #   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux Core、
-#      remote_tls、egui 和 deb/rpm 统一使用发版构建链检查（PR 不上传 Release）。
+#      remote_tls、host 和 deb/rpm 统一使用发版构建链检查（PR 不上传 Release）。
 # macOS/Windows/Android 不跑完整 Tauri bundle；Linux 则运行完整 deb/rpm 发版构建校验。
 
 on:
@@ -587,22 +587,22 @@ jobs:
           # AppGallery needs a numeric versionName, so the packaging script keeps
           # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
           version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
-          version_code=$(cat linux-egui/package-revision)
+          version_code=$(cat linux-host/package-revision)
           bash scripts/verify-harmony-hap.sh \
             target/harmony-packages/OpenLess_harmony_arm64.hap \
             "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
             "$version_name" "$version_code" --allow-unsigned
 
-  # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
+  # The Linux core/host/deb+rpm checks live in a reusable workflow, which runs
   # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
   # plus the Linux host, fcitx5 and package contracts.
-  linux-egui-package:
+  linux-host-package:
     needs: [changes]
     if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
-    name: Linux Core, egui and deb/rpm checks
+    name: Linux Core, host and deb/rpm checks
     permissions:
       contents: read
-    uses: ./.github/workflows/check-linux-egui.yml
+    uses: ./.github/workflows/check-linux-host.yml
     with:
       # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
       scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}

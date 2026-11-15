@@ -22,7 +22,7 @@ HOST_BIN=${OPENLESS_HOST_BINARY:-$TARGET_DIR/openless-linux-web}
 QT_BIN=${OPENLESS_QT_BINARY:-$APP_ROOT/linux-qt/openless-qt}
 DIST_DIR=${OPENLESS_WEB_DIST:-$APP_ROOT/linux-web/dist}
 PLUGIN_ROOT="$APP_ROOT/scripts/linux-fcitx5-plugin/build"
-PACKAGING="$APP_ROOT/linux-egui/packaging"
+PACKAGING="$APP_ROOT/linux-host/packaging"
 ICON_DIR="$APP_ROOT/src-tauri/icons"
 OUTPUT=${OPENLESS_PACKAGE_OUTPUT:-$APP_ROOT/target/linux-qt-packages}
 

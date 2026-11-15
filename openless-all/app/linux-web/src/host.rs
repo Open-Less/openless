@@ -4,7 +4,7 @@
 //! 注意 `LinuxTray` 不是 `Send`（内部持有 mpsc Receiver），所以**整个托盘对象
 //! 留在自己的线程里**，只把 `TrayCommand` 转发给 GTK 主线程。
 use gtk::prelude::*;
-use openless_linux_egui::{LinuxTray, TrayCommand};
+use openless_linux_host::{LinuxTray, TrayCommand};
 
 /// 单实例：占用 `$XDG_RUNTIME_DIR` 下的一个 socket。
 ///

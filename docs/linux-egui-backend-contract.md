@@ -1,6 +1,6 @@
-# Linux egui 后端接口契约（2.0.0）
+# Linux host 后端接口契约（2.0.0）
 
-状态：canonical（2026-09-07 以源码为准重写）；更新：2026-10-03。范围以[2.0 需求](2.0-requirements.md)为准；本文是长接口与实现参考，交接材料以[交接目录](linux-egui-handoff/README.md)为准。
+状态：canonical（2026-09-07 以源码为准重写）；更新：2026-10-03。范围以[2.0 需求](2.0-requirements.md)为准；本文是长接口与实现参考，交接材料以[交接目录](linux-host-handoff/README.md)为准。
 
 ## 1. 合同文件
 
@@ -10,16 +10,16 @@
 | --- | --- |
 | `startupSnapshot` | 启动快照结构与版本校验规则；UI 必须先消费快照再渲染 |
 | `backendEvent` | 语义事件清单、顺序与重放规则 |
-| `testingFeatures` | 本设备 Beta 总开关、默认关闭、运行门禁与取消合同（Linux egui 已不再消费：Less Computer 在 Linux 端删除） |
-| `lessComputerVoice` | Less Computer 语音事件面（仅 Tauri/移动端消费，Linux egui 不接入） |
+| `testingFeatures` | 本设备 Beta 总开关、默认关闭、运行门禁与取消合同（Linux host 已不再消费：Less Computer 在 Linux 端删除） |
+| `lessComputerVoice` | Less Computer 语音事件面（仅 Tauri/移动端消费，Linux host 不接入） |
 | `androidJni` | Android JNI 合同（src-tauri android 桥接共用） |
 | `linuxFacade` | Linux 专用 facade 面（`LinuxHost` 公开方法对应） |
 | `enums` | 共享枚举（provider 类型、状态、错误等） |
 
 ## 2. Linux 侧公开签名（源码为准）
 
-- `linux-egui/src/lib.rs`：`pub struct LinuxHost`；`LinuxHost::new(Arc<OpenLessBackend>)`、`with_settings_runtime`、`backend()`、`subscribe() -> EventSubscription`、`snapshot() -> BackendSnapshot`、`save_settings(...)`、`update_settings_strict(...)`、`update_preference_fields(...)`（`preference_patch.rs`） 、`drain_events(...)`。
-- `linux-egui/src/backend.rs`：`LinuxBackendRuntime`；`LinuxBackendBuilder::from_shared_providers(BackendConfig)` + `with_task_spawner / with_recorder / with_auxiliary_polisher / with_text_inserter / with_credential_store / with_services / with_settings_runtime / with_polish_failure_policy` → `build() -> LinuxBackendRuntime`。
+- `linux-host/src/lib.rs`：`pub struct LinuxHost`；`LinuxHost::new(Arc<OpenLessBackend>)`、`with_settings_runtime`、`backend()`、`subscribe() -> EventSubscription`、`snapshot() -> BackendSnapshot`、`save_settings(...)`、`update_settings_strict(...)`、`update_preference_fields(...)`（`preference_patch.rs`） 、`drain_events(...)`。
+- `linux-host/src/backend.rs`：`LinuxBackendRuntime`；`LinuxBackendBuilder::from_shared_providers(BackendConfig)` + `with_task_spawner / with_recorder / with_auxiliary_polisher / with_text_inserter / with_credential_store / with_services / with_settings_runtime / with_polish_failure_policy` → `build() -> LinuxBackendRuntime`。
 - 事件消费：`drain_events`（`lib.rs`）批量取走 Core 语义事件；订阅经 `EventSubscription`。
 
 ## 3. 注入接口（`crates/openless-core/src/ports.rs`）
@@ -34,7 +34,7 @@
 
 ## 5. 行为约定（合同级）
 
-- **Linux egui 不再提供 Less Computer / Claude 控制台**：设置页的 Beta 总开关、Agent 配置页、快捷键行、独立面板、fcitx5 的 `SetLessComputerHotkeyRaw` 方法与 `LessComputerKeyEvent`/`LessComputerKeyCombined` 信号、以及 CLI 进程适配器（`linux-egui/src/coding_agent.rs`）均已删除。`UserPreferences.testingFeaturesEnabled` 与 `codingAgent*` 字段仍在 Core（其他平台使用），Linux 只是不再读写它们；删除后 Linux 上不再存在"开关关闭仍可触发"或"开关无效"的表面。
+- **Linux host 不再提供 Less Computer / Claude 控制台**：设置页的 Beta 总开关、Agent 配置页、快捷键行、独立面板、fcitx5 的 `SetLessComputerHotkeyRaw` 方法与 `LessComputerKeyEvent`/`LessComputerKeyCombined` 信号、以及 CLI 进程适配器（`linux-host/src/coding_agent.rs`）均已删除。`UserPreferences.testingFeaturesEnabled` 与 `codingAgent*` 字段仍在 Core（其他平台使用），Linux 只是不再读写它们；删除后 Linux 上不再存在"开关关闭仍可触发"或"开关无效"的表面。
 
 - fcitx5 为生产启动硬依赖：持有单实例锁后检查插件和会话 D-Bus，按需刷新并在 15 秒就绪预算内等待，再启动监听器、注册必需热键、启动 Core 和 Remote Input。失败清理已启动资源并显示错误窗口；关闭后以非零状态退出，外层锁覆盖完整生命周期。
 - 设置保存状态与动作处理位于 `linux_app/settings_save.rs`：按序列化字段生成补丁、串行提交、只重试明确 revision 冲突（最多三次），失败保留草稿并显式重试；Core 合同与持久化格式不变。
@@ -44,4 +44,4 @@
 
 - 原生预加载必须使用请求的 target/provider type；平台无法准备流式时以 `supports_streaming=false` 保留一次性落字。
 - Remote stop 保持可取消的 session；socket 下行只转发本连接所属 session 的事件。
-- 自动 contract 不替代真实平台证据：Ubuntu/Windows/macOS/Android 的设备、安装、升级与签名结果按[验收](linux-egui-handoff/07-acceptance.md)与[桌面验收](2.0-desktop-acceptance.md)分别记录。
+- 自动 contract 不替代真实平台证据：Ubuntu/Windows/macOS/Android 的设备、安装、升级与签名结果按[验收](linux-host-handoff/07-acceptance.md)与[桌面验收](2.0-desktop-acceptance.md)分别记录。

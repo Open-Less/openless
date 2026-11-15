@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 打 Linux Web 宿主（GTK + WebKitGTK 渲染官方 React 前端）的 deb / rpm。
 #
-# 与 package-linux-egui.sh 的区别：
+# 与 package-linux-qt.sh 的区别：
 #   - 可执行文件是 `openless-linux-web`，装成 /usr/bin/openless
 #   - **必须**带上前端产物 `linux-web/dist`（装到 /usr/lib/openless/web/dist）
-#   - 依赖里要有 libwebkit2gtk-4.1（egui 版没有）
+#   - 依赖里要有 libwebkit2gtk-4.1（host 版没有）
 # 相同之处：fcitx5 插件仍要**现编**，不能装仓库里那份旧 build/libopenless.so。
 set -euo pipefail
 
@@ -26,7 +26,7 @@ TARGET_DIR=${CARGO_TARGET_DIR:-$APP_ROOT/target}/release
 BINARY=${OPENLESS_WEB_BINARY:-$TARGET_DIR/openless-linux-web}
 DIST_DIR=${OPENLESS_WEB_DIST:-$APP_ROOT/linux-web/dist}
 PLUGIN_ROOT="$APP_ROOT/scripts/linux-fcitx5-plugin/build"
-PACKAGING="$APP_ROOT/linux-egui/packaging"
+PACKAGING="$APP_ROOT/linux-host/packaging"
 ICON_DIR="$APP_ROOT/src-tauri/icons"
 OUTPUT=${OPENLESS_PACKAGE_OUTPUT:-$APP_ROOT/target/linux-web-packages}
 ARCH=amd64

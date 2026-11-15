@@ -3320,7 +3320,7 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 /// 退出「润色结果」模式。是否顺带关掉面板交给前端：面板可能正处在提问对话中，
-/// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
+/// 不能被润色流程的收尾动作一起关掉（与 Linux 宿主侧 `HideSelectionPreview` 一致）。
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
     clear_selection_polish_preview_pending();
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -3512,7 +3512,7 @@ pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHa
 // Windows/macOS both provide the entry point, hotkey, and chat window, sharing Core
 // sessions and events; native window manipulation stays per-platform — macOS
 // NSWindow/AppKit adjustments must not leak into the Windows build.
-// On Linux the product window is owned by the egui Host, not created in Tauri;
+// On Linux the product window is owned by the Linux Host, not created in Tauri;
 // unsupported platforms keep a no-op.
 
 /// Less Computer defaults to a desktop workspace; users can resize it afterwards.

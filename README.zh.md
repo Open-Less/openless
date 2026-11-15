@@ -32,7 +32,7 @@
 <p align="center">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-12%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square&logo=windows&logoColor=white" />
-  <img alt="Linux" src="https://img.shields.io/badge/Linux-egui-fcc624?style=flat-square&logo=linux&logoColor=black" />
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-host-fcc624?style=flat-square&logo=linux&logoColor=black" />
   <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-2021-ce422b?style=flat-square&logo=rust&logoColor=white" />
 </p>
@@ -281,9 +281,9 @@ OpenLess 当前进入稳定性阶段，项目暂不接受新增产品功能或�
 
 ## 从源码构建(开发者)
 
-活跃 workspace 位于 `openless-all/app/`：`crates/openless-core` 是框架无关后端，`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 包含 Linux 原生 UI 与平台 Adapter。源码构建 Tauri 前需初始化子模块：即使不编译对应平台代码，Cargo 仍会解析 manifest 中的本地 path 依赖，其中包括 `src-tauri/vendor/` 下的 macOS ASR 引擎，如 [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr)。根 Core/Linux workspace 排除了 `src-tauri`，其独立检查不解析 Tauri manifest，也不要求这些子模块。阅读入口为 [docs/index.md](docs/index.md)、[架构](docs/architecture.md)和[目录结构](docs/structure.md)。
+活跃 workspace 位于 `openless-all/app/`：`crates/openless-core` 是框架无关后端，`src-tauri` 承载 macOS/Windows/Android，`linux-host` 包含 Linux 原生 UI 与平台 Adapter。源码构建 Tauri 前需初始化子模块：即使不编译对应平台代码，Cargo 仍会解析 manifest 中的本地 path 依赖，其中包括 `src-tauri/vendor/` 下的 macOS ASR 引擎，如 [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr)。根 Core/Linux workspace 排除了 `src-tauri`，其独立检查不解析 Tauri manifest，也不要求这些子模块。阅读入口为 [docs/index.md](docs/index.md)、[架构](docs/architecture.md)和[目录结构](docs/structure.md)。
 
-Rust 1.99 是整个源码树（`openless-core`、`src-tauri`、`linux-egui`）所支持的最低工具链版本；建议使用最新 stable Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.99 与 stable，Linux egui 宿主按 stable 验证。
+Rust 1.99 是整个源码树（`openless-core`、`src-tauri`、`linux-host`）所支持的最低工具链版本；建议使用最新 stable Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.99 与 stable，Linux host 宿主按 stable 验证。
 
 Apple Silicon 编译可选的 Qwen3-ASR MLX 后端时需要 Xcode 的 MetalToolchain 组件。执行 `xcodebuild -downloadComponent MetalToolchain` 安装，并用 `xcrun --find metal` 验证。它只属于源码构建依赖，已打包的 OpenLess 应用运行时不需要该组件。
 
@@ -302,7 +302,7 @@ INSTALL=0 ./scripts/build-mac.sh   # 仅构建,跳过安装
 
 # 共享后端与 Linux Host/UI（不含 Tauri/WebKitGTK）
 cargo check -p openless-core
-cargo check -p openless-linux-egui --all-targets
+cargo check -p openless-linux-host --all-targets
 
 # Tauri host 类型检查
 cargo check --manifest-path "src-tauri/Cargo.toml"
@@ -424,12 +424,12 @@ Android 上由 OpenLess 键盘在开始录音的那一刻，直接通过自身�
 ```
 React UI ── Tauri Adapter（macOS/Windows/Android）──┐
                                                   ├── openless-core
-egui UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
+host UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
 ```
 
-`openless-core` 负责稳定 DTO、错误、语义事件、repository、凭据契约和面向宿主的 use-case Interface。IPC、窗口、托盘、权限、更新、keyring、fcitx5 与打包资源路径等宿主能力由 Adapter 实现。旧 React command/event 名称只保留在 Tauri 兼容 Adapter；Linux 与 core 同进程，通过类型化 Rust Interface 调用。详细契约见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
+`openless-core` 负责稳定 DTO、错误、语义事件、repository、凭据契约和面向宿主的 use-case Interface。IPC、窗口、托盘、权限、更新、keyring、fcitx5 与打包资源路径等宿主能力由 Adapter 实现。旧 React command/event 名称只保留在 Tauri 兼容 Adapter；Linux 与 core 同进程，通过类型化 Rust Interface 调用。详细契约见 [`docs/linux-host-backend-contract.md`](docs/linux-host-backend-contract.md)。
 
-`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流构建 macOS、Windows、Android 宿主以及独立的 Linux egui deb/rpm。Linux 真机验收完成、管理员创建 tag 后，验证过的 Linux 包自动附到共用 Release；Beta 资产先留在草稿中供管理员核对发布。Linux 不提供 AppImage 或应用内更新清单。
+`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流构建 macOS、Windows、Android 宿主以及独立的 Linux host deb/rpm。Linux 真机验收完成、管理员创建 tag 后，验证过的 Linux 包自动附到共用 Release；Beta 资产先留在草稿中供管理员核对发布。Linux 不提供 AppImage 或应用内更新清单。
 
 听写流水线:`hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`。
 

@@ -1,12 +1,12 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("openless-core", "openless-linux-egui")]
+    [ValidateSet("openless-core", "openless-linux-host")]
     [string]$Package = "openless-core"
 )
 
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\")).Path
 $forbidden = if ($Package -eq "openless-core") {
-    "tauri|wry|webkit2gtk|egui|eframe"
+    "tauri|wry|webkit2gtk|host|eframe"
 } else {
     "tauri|wry|webkit2gtk"
 }

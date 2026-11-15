@@ -1,9 +1,9 @@
-# Linux（egui 宿主）已知缺口登记
+# Linux（host 宿主）已知缺口登记
 
 这份文件记录**已被确认、但当前不打算实现**的 Linux 侧缺口。每条都写明：现象、
 根因（带代码位置）、为什么现在不补、将来若要补需要什么。
 
-补齐后把条目移到对应的验收文档（`docs/linux-egui-handoff/`）。
+补齐后把条目移到对应的验收文档（`docs/linux-host-handoff/`）。
 
 ---
 
@@ -21,7 +21,7 @@
           → 宿主轮询 pending_corrections() → 胶囊窗画卡片
 ```
 
-- `linux-egui/src/backend.rs` 构造 `BackendDependencies` 时**没有设置
+- `linux-host/src/backend.rs` 构造 `BackendDependencies` 时**没有设置
   `edit_observation`**，于是 Core 回退到 `NoopEditObservationAdapter`
   （`crates/openless-core/src/ports.rs`，`arm()` 直接 `Ok(())`）。
 - 因此 `pending_corrections()` 恒为空，`main.rs::refresh_vocab_suggestions()`
@@ -36,12 +36,12 @@
 
 **将来若要补**，最小实现路径：
 
-1. 新增 `linux-egui/src/edit_observation.rs`，实现 `EditObservationAdapter`；
+1. 新增 `linux-host/src/edit_observation.rs`，实现 `EditObservationAdapter`；
 2. 订阅 AT-SPI `org.a11y.atspi.Event.Object::TextChanged`（需要 `atspi` crate，
    以及用户会话开启 `org.a11y.Status.IsEnabled`）；
 3. `publish()` 只上报「落在刚插入文本范围内的替换」，把接受/拒绝的决定权留给
    Core（`CoreEditObservationSink` 已经做了 generation 与范围校验）；
-4. 在 `docs/linux-egui-handoff/` 记录 AT-SPI 不可用时的降级行为（应静默不弹卡）。
+4. 在 `docs/linux-host-handoff/` 记录 AT-SPI 不可用时的降级行为（应静默不弹卡）。
 
 **现有测试**：`main.rs` 里的卡片用例都是直接调用 `queue_pending_correction()`
 构造数据（`vocab_card_message`、`capsule_rebuild_rotates_card_identity_*` 等），

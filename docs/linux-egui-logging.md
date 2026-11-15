@@ -1,6 +1,6 @@
-# Linux egui 日志约定
+# Linux host 日志约定
 
-状态：canonical；更新：2026-10-22。适用于 `openless-all/app/linux-egui`，以及被两个前端共用的 `crates/openless-core`。
+状态：canonical；更新：2026-10-22。适用于 `openless-all/app/linux-host`，以及被两个前端共用的 `crates/openless-core`。
 
 日志是 Linux 用户唯一能交回来的证据：界面出错时他们既没有控制台，也不会跑 gdb。所以这份文件规定的不是文风，而是**「出问题时能不能从日志里读出结论」**。
 
@@ -31,7 +31,7 @@
 两条硬规则：
 
 1. **周期性的东西不许写 `info`。** 每 10 秒一条 = 8640 行/天，轮转后整份日志九成都是它，真正的错误被挤出去。这类日志写 `debug`，`info` 只留状态变化与低频存活证明。
-   - 参考实现：`log_pump_heartbeat`（`linux-egui/src/main.rs`）——状态变化立刻记 `info`，否则每 5 分钟一条，其余 `debug`。
+   - 参考实现：`log_pump_heartbeat`（`linux-host/src/main.rs`）——状态变化立刻记 `info`，否则每 5 分钟一条，其余 `debug`。
 2. **`error` 只写失败，不写进度。** `log::error!("[x] stage=device_id_ok")` 这类 tracer 会让每次启动看起来都像崩了，必须降到 `debug`。
 
 ## 3. 设置里也能改
@@ -70,7 +70,7 @@ systemctl --user edit openless
 启动时的第一行会写明生效的过滤与是否轮转过：
 
 ```
-2026-10-22T23:40:12.423+08:00 [INFO] openless_linux_egui::logging: Linux egui logger ready: level=debug rotated=false path=/home/x/.local/share/OpenLess/logs/openless.log
+2026-10-22T23:40:12.423+08:00 [INFO] openless_linux_host::logging: Linux host logger ready: level=debug rotated=false path=/home/x/.local/share/OpenLess/logs/openless.log
 ```
 
 ## 5. 行格式
@@ -127,11 +127,11 @@ grep 'session_id=<id>' ~/.local/share/OpenLess/logs/openless.log*
 - 用户听写的正文。需要时可记长度或哈希（`[insert-diagnostics]` 就是这么做的：`chars=` / `hash=`）。
 - 完整 `data_dir` 之外的路径通常没必要；`data_dir` 本身要记，因为「日志写在哪」是第一个问题。
 
-`scripts/egui-logging-contract.test.mjs` 会拒绝形如 `api_key=` / `token=` / `password=` 的日志格式化参数，以及 `stage=` 级别的 `error`。
+`scripts/host-logging-contract.test.mjs` 会拒绝形如 `api_key=` / `token=` / `password=` 的日志格式化参数，以及 `stage=` 级别的 `error`。
 
 ## 9. 改动这份约定时
 
 - 新增周期日志 → 必须是 `debug`，或带节流。
 - 新增 `info` → 必须能回答「状态变了什么」。
 - 新增 `error` → 必须对应一次真实的失败分支。
-- 跑 `node scripts/egui-logging-contract.test.mjs`。
+- 跑 `node scripts/host-logging-contract.test.mjs`。

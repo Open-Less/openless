@@ -2,20 +2,20 @@
   "schemaVersion": "1.0",
   "contractVersion": "2.0.0",
   "observedAt": "2026-09-04",
-  "purpose": "M0 compatibility baseline for the Tauri adapter and the Linux egui host",
+  "purpose": "M0 compatibility baseline for the Tauri adapter and the Linux host host",
   "sourceOfTruth": {
     "commands": "openless-all/app/src-tauri/src/lib.rs app_invoke_handler_* macros",
     "reactEvents": "openless-all/app/src/**/*.ts openless-all/app/src/**/*.tsx",
     "tauriEvents": "openless-all/app/src-tauri/src/**/*.rs",
-    "coreContract": "docs/linux-egui-backend-contract.md"
+    "coreContract": "docs/linux-host-backend-contract.md"
   },
   "platformDecision": {
     "windows": "tauri",
     "macos": "tauri",
     "android": "tauri-mobile",
-    "linux": "egui",
+    "linux": "host",
     "coreCallModel": "in-process typed Rust calls",
-    "workspaceIsolation": "root workspace contains openless-core and openless-linux-egui only; Tauri and backend compatibility tests use independent manifests and lockfiles"
+    "workspaceIsolation": "root workspace contains openless-core and openless-linux-host only; Tauri and backend compatibility tests use independent manifests and lockfiles"
   },
   "commands": [
     "accept_pending_correction",

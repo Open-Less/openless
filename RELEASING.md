@@ -46,12 +46,12 @@ See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli
 These tags build the macOS, Windows, and Android Tauri hosts in parallel.
 
 Linux and HarmonyOS have dispatch-only entry points,
-`.github/workflows/release-linux-egui.yml` and `.github/workflows/release-harmony.yml`.
+`.github/workflows/release-linux-host.yml` and `.github/workflows/release-harmony.yml`.
 Neither reacts directly to a tag push. After the desktop build, `release-tauri.yml`
 dispatches HarmonyOS on the same immutable release tag.
 
 Linux is separate: an administrator must complete and record the L01-L12 device
-acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
+acceptance in [docs/linux-host-handoff/07-acceptance.md](docs/linux-host-handoff/07-acceptance.md)
 for the exact candidate, then set the repository variable
 `LINUX_ACCEPTED_RELEASE_TAG` to that release tag. Automatic dispatch occurs only
 when the variable exactly matches the current tag; missing or older acceptance
@@ -115,7 +115,7 @@ A local machine without store certificates can still produce a package:
 `OPENLESS_HARMONY_CHANNEL=none` builds and ships the unsigned HAP only, and
 `scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned`
 checks its contents without a device.
-For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
+For each new Linux package candidate, increment `openless-all/app/linux-host/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Both local packaging and the shared CI/tag build use this explicit revision; never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
@@ -134,9 +134,9 @@ Stable website links use `https://github.com/Open-Less/openless/releases/latest/
 Beta links must use the release tag because `latest` excludes pre-releases:
 `https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
 
-The Tauri and Android workflows attach their aliases automatically. Accepted Linux publications attach the two files from the `openless-linux-egui-direct-download` Actions artifact alongside the versioned packages, behind the same exact-tag acceptance gate. Do not replace the versioned assets; the aliases are an additional website-facing contract.
+The Tauri and Android workflows attach their aliases automatically. Accepted Linux publications attach the two files from the `openless-linux-host-direct-download` Actions artifact alongside the versioned packages, behind the same exact-tag acceptance gate. Do not replace the versioned assets; the aliases are an additional website-facing contract.
 
-Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
+Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The host team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
 ## Version-sync gate
 
@@ -207,7 +207,7 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 
 Before dispatching the Linux release build, additionally require all of the following:
 
-1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
+1. The host team has completed the [Linux Host/UI gaps and acceptance](docs/linux-host-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
 3. The Linux workflow verifies ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
 4. The dispatch pins the tag as an input; the workflow checks that tag out and rejects a `package.json` version mismatch, so the packages provably come from the reviewed commit.
@@ -317,7 +317,7 @@ and reports that the store upload was skipped.
 `versionName`/`versionCode` in `openless-all/app/harmony/AppScope/app.json5` are a
 development placeholder; the packaging script rewrites them for the build
 (`versionName` from `package.json`, `versionCode` from
-`linux-egui/package-revision`, which only increases) and restores the file
+`linux-host/package-revision`, which only increases) and restores the file
 afterwards.
 
 ## Release notes and contributor attribution

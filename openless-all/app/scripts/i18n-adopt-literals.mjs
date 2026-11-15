@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Adopt hardcoded Simplified-Chinese literals into the egui i18n catalog.
+// Adopt hardcoded Simplified-Chinese literals into the host i18n catalog.
 //
-// The legacy egui pages hardcode zh-CN strings. The Tauri catalogs already hold
+// The legacy host pages hardcode zh-CN strings. The Tauri catalogs already hold
 // translations for the same product surfaces, so a literal whose text matches a
 // Tauri zh-CN value can be replaced by a `tr_l10n(lang, "key")` call without a
 // translator touching it.

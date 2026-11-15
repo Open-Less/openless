@@ -123,6 +123,6 @@ pub(super) fn start(
     _diagnostics: &Arc<CaptureDiagnostics>,
 ) -> Result<(PlaybackReference, Arc<ReferenceAudioBuffer>), RecorderError> {
     Err(RecorderError::EngineFailed(
-        "playback reference is unavailable in this host; Linux uses the egui recorder".into(),
+        "playback reference is unavailable in this host; Linux uses the Linux recorder".into(),
     ))
 }

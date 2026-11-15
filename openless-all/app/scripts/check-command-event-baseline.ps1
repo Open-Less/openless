@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrWhiteSpace($BaselinePath)) {
-    $BaselinePath = Join-Path $scriptRoot "../../../docs/linux-egui-command-event-baseline.json"
+    $BaselinePath = Join-Path $scriptRoot "../../../docs/linux-host-command-event-baseline.json"
 }
 if ([string]::IsNullOrWhiteSpace($TauriLibPath)) {
     $TauriLibPath = Join-Path $scriptRoot "../src-tauri/src/lib.rs"

@@ -1,4 +1,4 @@
-//! Adapter from the existing coherent capsule snapshot to a disposable egui UI.
+//! Adapter from the existing coherent capsule snapshot to a disposable Linux UI.
 use crate::capsule_mirrors::{self, MonitorRect};
 use crate::types::{CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle, ThemeMode};
 use openless_capsule::{

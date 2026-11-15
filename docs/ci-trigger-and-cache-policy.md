@@ -25,7 +25,7 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
 | `tauri` | macOS / Windows 桌面检查 | 改动能到达 `openless`（含 vendor 路径依赖）或桌面专属的 `openless-native-capsule` |
 | `android` | Android cargo check | 改动能到达 `openless` 的 Android 闭包，或影响 Android 项目生成/构建的 npm manifest；纯 bundle-only 改动不单独触发 |
 | `msrv` | macOS / Windows Rust 1.99 MSRV | 有任何 `.rs` / `Cargo.toml` / `Cargo.lock` / `rust-toolchain*` / `.github/**` |
-| `linux` | Linux Core/egui 测试与 deb/rpm 打包链 | 改动能到达 `openless-linux-egui` 的闭包。Linux 宿主是原生 egui，不读前端 `dist/` |
+| `linux` | Linux Core/host 测试与 deb/rpm 打包链 | 改动能到达 `openless-linux-host` 的闭包。Linux 宿主是原生 host，不读前端 `dist/` |
 | `harmony` | 鸿蒙 ArkTS 契约、Rust host、HAP | 改动能到达 `openless-harmony-host` 的闭包，或动了它要打包的前端 bundle |
 | `frontend` | Chromium/WebKit UI 动效 | 只动浏览器会渲染的面：`src/**`、`e2e/**`、样式与 vite/playwright 配置；`app/assets/**` / `app/public/**` 按 native consumer 处理 |
 | `capsule` | 胶囊 crates（macOS + Windows 双 runner） | 拥有改动文件的包是 `openless-capsule` / `openless-native-capsule`。它们的 `ui,host` feature 组合不在别处构建，所以保留独立 job，但常见 PR 不再为它付出两台 runner |
@@ -33,17 +33,17 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
 
 契约测试 `scripts/ci-changed-areas.test.mjs` 用真实 git diff 驱动这些判定，双向断言：够不到的必须跳过，其余的必须运行。改动前它抓到的真实故障（`linux` 输出漏写导致 Linux job 被误跳过）就是这条规则存在的理由。
 
-`linux-egui-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链。独立 Linux 手动构建沿用完整检查，只上传 Actions 产物；管理员在产品验收后，针对已接受的现有 tag 构建并单独附加包，见 [发布规范](../RELEASING.md)。
+`linux-host-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链。独立 Linux 手动构建沿用完整检查，只上传 Actions 产物；管理员在产品验收后，针对已接受的现有 tag 构建并单独附加包，见 [发布规范](../RELEASING.md)。
 
 `ui-motion` 使用生产前端构建运行 `npm run test:ui-motion`，在 Chromium 与 WebKit 上验证快速往返切页、弹窗中断、手机抽屉退出以及减少动态效果下的模型入口规则。失败时保留浏览器 trace 和截图；浏览器 mock 验证不替代原生权限与设备交互。
 
 ## 2. MSRV 为什么是独立 job
 
-- `openless-core`、`src-tauri`、`src-tauri/backend-tests`、`linux-egui` 统一声明 `rust-version = "1.99"`，README 对外承诺该版本，因此必须有 CI 用真的 1.99 编译：MSRV 只会被“依赖升级抬高要求”或“自己用了更新的语言特性/API”打破，两者都只有在 1.99 下编译才会暴露。
+- `openless-core`、`src-tauri`、`src-tauri/backend-tests`、`linux-host` 统一声明 `rust-version = "1.99"`，README 对外承诺该版本，因此必须有 CI 用真的 1.99 编译：MSRV 只会被“依赖升级抬高要求”或“自己用了更新的语言特性/API”打破，两者都只有在 1.99 下编译才会暴露。
   该数字由依赖实际要求决定：`tauri 2.12` 要 1.90、`aes 0.9.3`/`uuid 1.28` 要 1.89，代码库选择跟随当前 stable（1.99）以保持单一数字，不再为旧工具链回退依赖。
 - 工具链不同 ⇒ cargo fingerprint 全失效、产物与缓存不能共用。历史上 stable 与 MSRV 挤在同一个 job 里共用缓存，串行 29 分 59 秒（见 [`macos-build-performance.md`](macos-build-performance.md)）；拆成并行独立 job、缓存分开后是 stable 8m36s / MSRV 3m39s。
 - 平台专属依赖图不同，所以 macOS 与 Windows 各自验证：macOS 是 `keyring/apple-native`；Windows 是 `keyring/windows-native`、TSF IME。Windows MSRV 也在独立 job 中运行，避免 stable → MSRV 串行重编译和污染 stable 缓存。`Windows checks` 汇总两路结果，任一路失败、取消或意外跳过都会失败。
-- Linux 宿主 `linux-egui` 与桌面侧同用 `rust-version = "1.99"`（egui 0.37 本身只要求 1.95），Linux 侧按 stable 验证。
+- Linux 宿主 `linux-host` 与桌面侧同用 `rust-version = "1.99"`（host 0.37 本身只要求 1.95），Linux 侧按 stable 验证。
 
 ## 3. 缓存配额分配（10 GB / 仓库）
 
@@ -54,7 +54,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 | job | 缓存 | 命中收益 | 性价比 |
 |---|---|---|---|
 | macOS stable | 0.87 GB | −11.4 min | 786 s/GB |
-| Linux egui | 0.75 GB（+ 旧前缀 1.28 GB 待回收） | −10.8 min | 864 s/GB |
+| Linux host | 0.75 GB（+ 旧前缀 1.28 GB 待回收） | −10.8 min | 864 s/GB |
 | macOS Rust 1.99 MSRV | 0.72 GB | −13.1 min | 1102 s/GB（即使 stable 同号也运行 pinned compiler，见 §2） |
 | Android | 0.85 GB | −2.4 min | 169 s/GB |
 | Windows | 1.57 GB | −4.6 min | 176 s/GB |
@@ -70,7 +70,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 |---|---|---|---|
 | Windows 依赖树 | ~1.6 GB | beta 的 CI / 手动构建 / 周期构建 | 所有 PR、发版 |
 | macOS（stable 0.87 + MSRV 0.72） | ~1.6 GB | 同上 | 同上 |
-| Linux（egui 0.75 + core） | ~1.7 GB | beta `push` / 手动运行 | 同上 |
+| Linux（host 0.75 + core） | ~1.7 GB | beta `push` / 手动运行 | 同上 |
 | Android（Rust 0.85 + Rime 0.40 + gradle 0.31） | ~1.6 GB | beta 的 CI / 手动构建 / 周期构建 | PR、发版 |
 | Harmony Rust host | 0.28 GB | beta `push` / 手动运行 | PR、发版 |
 | Playwright 浏览器 | 0.37 GB | beta `push` / 手动运行 | PR |
@@ -110,9 +110,9 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 | Windows checks | 20m04s | 15m30s | 13m17s |
 | Android | 8m11s | 5m50s | 5m50s |
 | macOS Rust 1.99 MSRV | 16m47s | 3m39s | 3m39s |
-| Linux egui（测试 + 打包） | 17m21s | 6m35s（旧缓存前缀） | 8m08s（新前缀首次命中） |
+| Linux host（测试 + 打包） | 17m21s | 6m35s（旧缓存前缀） | 8m08s（新前缀首次命中） |
 
-同一步骤的冷 / 热对照：`cargo test -p openless-core` 命中 201 s、冷启动 579 s；`cargo build --release -p openless-linux-egui` 命中 124 s、冷启动 463 s。整轮墙钟时间由最慢的 job 决定（本轮 Windows 13m17s），改动前是 20m12s。
+同一步骤的冷 / 热对照：`cargo test -p openless-core` 命中 201 s、冷启动 579 s；`cargo build --release -p openless-linux-host` 命中 124 s、冷启动 463 s。整轮墙钟时间由最慢的 job 决定（本轮 Windows 13m17s），改动前是 20m12s。
 
 ## 6. 发版耗时
 
@@ -120,12 +120,12 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 **发版前预热必须在默认分支 `beta` 上执行**：其他分支的缓存不能被未来的 tag 恢复。桌面每周 schedule 在 beta 维护 release 缓存；手动预热也选择 beta。Android 周期构建默认只维护 aarch64；需要全部 release ABI 时在 beta 手动选择 `abis=all`。Tag 和其他分支只读 Rust/Gradle/npm 缓存，避免一次性副本挤掉可复用的基线。缓存命中仍需编译应用本身，不承诺固定发版时长。
 
-Linux 发版不受影响：`release-linux-egui.yml` 复用 CI 的同一个 `build-linux-egui` job（同名同 key），tag 运行能恢复基线分支的缓存。
+Linux 发版不受影响：`release-linux-host.yml` 复用 CI 的同一个 `build-linux-host` job（同名同 key），tag 运行能恢复基线分支的缓存。
 
 ## 7. 已知取舍
 
 - 改动范围门控只跳过“够不到”的平台；`push` 到 `main`/`beta` 始终全量，所以合并后仍有完整证据。
-- `build-linux-egui` 在 `push` 时仍会构建 release 二进制（保持基线缓存里有 release 产物、并持续验证打包链），但不再上传 Action artifact；artifact 只在 PR 与 tag 运行产生。
+- `build-linux-host` 在 `push` 时仍会构建 release 二进制（保持基线缓存里有 release 产物、并持续验证打包链），但不再上传 Action artifact；artifact 只在 PR 与 tag 运行产生。
 - 所有 job 都设了 `timeout-minutes`，避免卡死的运行长时间占用并发与时间。
 
 ## 桌面整理后的依赖与维护

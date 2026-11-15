@@ -83,7 +83,7 @@ try {
   reset();
 
   // The Linux host is a separate crate in its own target graph.
-  commit({ 'openless-all/app/linux-egui/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
+  commit({ 'openless-all/app/linux-host/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
   expect('linux host source', {
     tauri: 'false',
     msrv: 'true',
@@ -109,7 +109,7 @@ try {
   });
   reset();
 
-  // The Linux workflow owns Harmony Rust unit tests as well as the egui host.
+  // The Linux workflow owns Harmony Rust unit tests as well as the host host.
   commit({ 'openless-all/app/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
   expect('harmony rust', {
     tauri: 'false',
@@ -136,7 +136,7 @@ try {
 
   // ...but its manifest moves the workspace dependency graph for everyone.
   commit(
-    { 'openless-all/app/linux-egui/Cargo.toml': '[package]\nname = "x"\n' },
+    { 'openless-all/app/linux-host/Cargo.toml': '[package]\nname = "x"\n' },
     'linux host manifest',
   );
   expect('linux host manifest', { tauri: 'true', msrv: 'true', linux: 'true', harmony: 'true' });
@@ -166,7 +166,7 @@ try {
   reset();
 
   // The rendered bundle is embedded by every shell that paints it; the Linux
-  // host draws a native egui UI and never reads `dist/`, and the Android job only
+  // host draws a native host UI and never reads `dist/`, and the Android job only
   // compiles Rust, so neither is in scope.
   commit({ 'openless-all/app/src/pages/Style.tsx': 'export const x = 1;\n' }, 'frontend only');
   expect('frontend only', {
@@ -257,7 +257,7 @@ const reusable = readFileSync(
   resolve(
     dirname(fileURLToPath(import.meta.url)),
     '../../..',
-    '.github/workflows/check-linux-egui.yml',
+    '.github/workflows/check-linux-host.yml',
   ),
   'utf8',
 );

@@ -6,7 +6,7 @@ name: Release Tauri (cross-platform)
 #
 # Outputs:
 #   macOS arm64/x64 .dmg + Windows x64 .msi/.exe, uploaded automatically as GitHub Release assets.
-#   Linux egui is built separately by release-linux-egui.yml; this workflow does not build Linux/Tauri.
+#   Linux host is built separately by release-linux-host.yml; this workflow does not build Linux/Tauri.
 #
 # macOS distribution:
 #   - With APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
@@ -900,7 +900,7 @@ jobs:
             -f publish=true \
             -f upload_to_appgallery=true
           if [ "$LINUX_ACCEPTED_RELEASE_TAG" = "$RELEASE_TAG" ]; then
-            gh workflow run release-linux-egui.yml \
+            gh workflow run release-linux-host.yml \
               --ref "$RELEASE_TAG" \
               -f "tag=$RELEASE_TAG" \
               -f publish=true
@@ -917,7 +917,7 @@ jobs:
         run: |
           set -euo pipefail
           sleep 10
-          for workflow in release-harmony.yml release-linux-egui.yml; do
+          for workflow in release-harmony.yml release-linux-host.yml; do
             echo "### $workflow"
             gh run list --workflow="$workflow" --limit 3 \
               --json createdAt,status,conclusion,url \

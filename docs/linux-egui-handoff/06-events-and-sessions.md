@@ -2,7 +2,7 @@
 
 状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
 
-入口：Core `events.rs` / `types.rs`、`linux-egui/src/lib.rs`（`LinuxHost`）、`linux-egui/src/main.rs`（主循环）。
+入口：Core `events.rs` / `types.rs`、`linux-host/src/lib.rs`（`LinuxHost`）、`linux-host/src/main.rs`（主循环）。
 
 ## 1. 订阅与消费
 

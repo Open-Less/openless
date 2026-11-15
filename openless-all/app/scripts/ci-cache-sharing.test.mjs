@@ -20,8 +20,8 @@ const read = (name) => readFileSync(join(root, '.github/workflows', name), 'utf8
 const ci = read('ci.yml');
 const release = read('release-tauri.yml');
 const androidApk = read('android-apk.yml');
-const linux = read('check-linux-egui.yml');
-const linuxRelease = read('release-linux-egui.yml');
+const linux = read('check-linux-host.yml');
+const linuxRelease = read('release-linux-host.yml');
 const releaseHarmony = read('release-harmony.yml');
 
 const sharedKeys = (yaml) =>
@@ -40,8 +40,8 @@ for (const [yaml, label] of [
   [ci, 'ci.yml'],
   [release, 'release-tauri.yml'],
   [androidApk, 'android-apk.yml'],
-  [linux, 'check-linux-egui.yml'],
-  [linuxRelease, 'release-linux-egui.yml'],
+  [linux, 'check-linux-host.yml'],
+  [linuxRelease, 'release-linux-host.yml'],
   [releaseHarmony, 'release-harmony.yml'],
 ]) {
   assert.ok(
@@ -87,8 +87,8 @@ assert.ok(sharedKeys(androidApk).some((key) => key.startsWith('android-')));
 
 // 5. Linux already shares one job between CI and release: the release entry point
 //    must reuse the same reusable workflow rather than a second build path.
-assert.match(linuxRelease, /uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
-assert.match(linux, /cargo build --locked --release -p openless-linux-egui/);
+assert.match(linuxRelease, /uses: \.\/\.github\/workflows\/check-linux-host\.yml/);
+assert.match(linux, /cargo build --locked --release -p openless-linux-host/);
 
 // 6. Release entry points pin the tag, so the artifacts cannot come from a branch.
 assert.match(linuxRelease, /release_tag: \$\{\{ inputs\.tag \}\}/);
@@ -117,8 +117,8 @@ assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 const linuxJob = (name) =>
   linux.match(new RegExp('\\n  ' + name + ':[\\s\\S]*?(?=\\n  [a-z-]+:|$)'))?.[0] ?? '';
-assert.match(linuxJob('test-linux-egui'), /shared-key: test-linux-egui/);
-assert.match(linuxJob('build-linux-egui'), /shared-key: build-linux-egui/);
+assert.match(linuxJob('test-linux-host'), /shared-key: test-linux-host/);
+assert.match(linuxJob('build-linux-host'), /shared-key: build-linux-host/);
 const before = (producer, save) => {
   const producerIndex = ci.indexOf('- name: ' + producer);
   const saveIndex = ci.indexOf('- name: ' + save);

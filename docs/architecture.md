@@ -4,17 +4,17 @@
 
 ## 1. 分层与工作区
 
-应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 成员为 `crates/openless-core` + `linux-egui` + `harmony/rust`；`src-tauri`（及其 `backend-tests` 测试 crate）被 exclude，独立构建。Core 是与 Host 同进程的业务库。
+应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 成员为 `crates/openless-core` + `linux-host` + `harmony/rust`；`src-tauri`（及其 `backend-tests` 测试 crate）被 exclude，独立构建。Core 是与 Host 同进程的业务库。
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | 界面（Win/mac/Android） | `src/`（React/TypeScript/i18next，八种界面语言） | 页面、设置、窗口分支；调用 typed IPC，展示快照与事件 |
 | Host（Win/mac/Android） | `src-tauri/`（crate `openless`） | `src/lib.rs` 注册命令；适配窗口、热键、音频、凭据、插入、IME 和生命周期 |
 | 共享 Core | `crates/openless-core/` | 业务规则、会话、服务调用和数据仓储；通过 trait 接入 Host 能力 |
-| Linux Host + UI | `linux-egui/`（crate `openless-linux-egui`） | `backend.rs` 组装 `OpenLessBackend`，`main.rs` 实现 egui/eframe UI，不依赖 Tauri/WebKitGTK |
+| Linux Host + UI | `linux-host/`（crate `openless-linux-host`） | `backend.rs` 组装 `OpenLessBackend`，`main.rs` 实现 host/eframe UI，不依赖 Tauri/WebKitGTK |
 | HarmonyOS Host + UI | `harmony/`（ArkTS + ArkWeb）与 `harmony/rust`（crate `openless-harmony-host`） | ArkTS 提供输入法/窗口/剪贴板能力，Web 界面复用 `src/` 的 harmony 构建，Rust 侧经 napi 暴露同一套 IPC |
 
-Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Android 与 HarmonyOS 共用的输入法 native 后端在 `mobile-ime/`；HarmonyOS 的构建与分发见 [发布规范](../RELEASING.md)。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。
+Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Android 与 HarmonyOS 共用的输入法 native 后端在 `mobile-ime/`；HarmonyOS 的构建与分发见 [发布规范](../RELEASING.md)。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-host-handoff/README.md)。
 
 ## 2. 数据流
 
@@ -22,7 +22,7 @@ Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotl
 flowchart TB
     React["React 页面 / 窗口"] --> IPC["src/lib/ipc · typed wrapper"]
     IPC --> Tauri["Tauri commands / coordinator / core_adapters"]
-    Egui["egui UI"] --> Linux["LinuxHost / LinuxBackendBuilder"]
+    Egui["host UI"] --> Linux["LinuxHost / LinuxBackendBuilder"]
     Tauri --> Core["OpenLessBackend · Core"]
     Linux --> Core
     Core --> Stores["历史 / 设置 / 词库 / 风格包仓储"]
@@ -35,7 +35,7 @@ flowchart TB
 ```
 
 - 桌面：React → 类型化 IPC 门面（`src/lib/ipc/`）→ Tauri command → Core；Core 事件由 Host 转发回界面。
-- Linux：egui UI → `LinuxHost`（`lib.rs`：`snapshot` / `subscribe` / `save_settings` / `drain_events` 等）→ `OpenLessBackend` → Core，类型化 Rust 接口，不经 IPC。
+- Linux：host UI → `LinuxHost`（`lib.rs`：`snapshot` / `subscribe` / `save_settings` / `drain_events` 等）→ `OpenLessBackend` → Core，类型化 Rust 接口，不经 IPC。
 - 浏览器预览：provider 公开目录由 Core 生成到 `src/lib/ipc/provider-descriptors.generated.json`（`cargo run --locked -p openless-core --example export_provider_descriptors` 重新生成；只含公开元数据，无凭据）；原生端走同一受启动合同保护的 IPC。
 - 语言目录：`contract/language-catalog.json` 是工作语言原生名、识别代码与 Apple locale 的单一来源；React `languageCatalog.ts` 和 Core `language_catalog.rs` 读取同一份数据，识别服务仍在运行时判断具体语种是否可用。界面语言独立保存在 `ol.locale`，启动和切换经既有 `set_remote_locale` 将解析后的语言同步给原生托盘与手机远程输入页。
 - 旧 React command/event 名称只保留在 Tauri 兼容 Adapter；跨平台合同以 `contract/backend-2.0.json` 为准。
@@ -66,13 +66,13 @@ Android IME 通过 `InputConnection` 插入文字；笔画、英文候选与轻�
 
 操作系统集成由 Host 提供。Core 的 `ports.rs`、`config.rs`、`domains.rs` 和 `credentials.rs` 定义录音、插入、任务执行、系统动作、领域运行时及凭据接口；Core 自身仍包含 HTTP 调用和框架无关的文件仓储。
 
-Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装原生依赖并对接已有 persistence。Linux 在 `linux-egui/src/backend.rs` 使用 `LinuxBackendBuilder`，注入音频、凭据、服务、设置、本地 ASR 和平台动作。`BackendConfig` 由 Host 提供数据、缓存、资源路径与平台能力。
+Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装原生依赖并对接已有 persistence。Linux 在 `linux-host/src/backend.rs` 使用 `LinuxBackendBuilder`，注入音频、凭据、服务、设置、本地 ASR 和平台动作。`BackendConfig` 由 Host 提供数据、缓存、资源路径与平台能力。
 
 业务规则缺失时应修复 Core；平台能力缺失时修复对应 Host。设置值、测试 fixture 或 `Unsupported` 实现不能代表原生能力已就绪。
 
 ## 5. 窗口体系
 
-`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
+`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-host/src/single_instance.rs` 守护并转发启动意图。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
 
@@ -80,7 +80,7 @@ macOS 全局热键在后台 CGEventTap 线程读取按键与修饰键边沿。�
 
 Linux 主窗口和 QA 面板由常驻宿主拉起的独立进程承载。QA 空态没有 Core 会话，宿主与面板统一使用空态标识校验操作；文字发送通过 `submit_text_in_context` 在 Core 中检查当前上下文并创建新轮次。早期调用失败回传到对应面板，迟到的失败不能覆盖新轮次。弹窗消息使用宿主递增的序号，不依赖 Core 是否发布了新事件；显式收起 QA 结束窗口进程，隐藏时的 QA 快照只更新宿主状态，下一次打开再创建窗口。没有托盘时，正常关闭主窗口仍会退出应用，托盘注册失败的原因写入启动日志。
 
-Linux 的 Siri 波形包络在分数次幂运算前限制为非负值，避免浮点端点误差生成 NaN。设置和胶囊绘制回归须经过 egui tessellation 并检查生成顶点的有限性，文字快照不能单独证明绘制成功。
+Linux 的 Siri 波形包络在分数次幂运算前限制为非负值，避免浮点端点误差生成 NaN。设置和胶囊绘制回归须经过 host tessellation 并检查生成顶点的有限性，文字快照不能单独证明绘制成功。
 
 QA 与润色预览共用浮窗时，宿主记录实际发送的上下文，只允许当前上下文的隐藏请求结束窗口；切回 QA 会创建新的窗口协议状态，后台 QA 更新不能覆盖正在显示的润色预览。异步 QA 调用结果还绑定窗口代次，空态关闭后重新打开仍没有 Core 会话 ID，旧代次的结果也不能显示到新面板。
 
@@ -137,10 +137,10 @@ macOS 凭据通过 `persistence/credentials/macos_vault.rs` 共用 `credentials.
 | 前端与合同 | `npm test`；`pretest` 先构建，`scripts/frontend-test-runner.mjs` 发现前端测试和脚本合同检查，含 Core 快捷键回归 |
 | Core/Linux 格式 | `cargo fmt --all --check`，仅根 workspace |
 | Core | `cargo test -p openless-core --locked` |
-| Linux Host | `cargo test -p openless-linux-egui --locked`；原生能力在 Linux 目标环境验证 |
+| Linux Host | `cargo test -p openless-linux-host --locked`；原生能力在 Linux 目标环境验证 |
 | Tauri 格式与编译 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check`、`cargo check --locked --manifest-path src-tauri/Cargo.toml` |
 | Tauri 库与独立回归 crate | 依平台选 `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib`、`cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml`；适用矩阵见 [CI](../.github/workflows/ci.yml) |
 
 源码构建 Tauri 前执行 `git submodule update --init --recursive`。其 manifest 含受 target 条件控制的本地 path 依赖，Cargo 解析仍需对应子模块；部分 CI 作业通过专用脚本去除非目标依赖。Core/Linux workspace 排除 Tauri，不需要为这些独立检查初始化 Tauri 子模块。
 
-仅 Markdown 变动检查相对链接、源码路径与描述一致性。平台交付按 [桌面验收](2.0-desktop-acceptance.md)、[Linux 验收](linux-egui-handoff/07-acceptance.md)和 [发布规范](../RELEASING.md)完成。
+仅 Markdown 变动检查相对链接、源码路径与描述一致性。平台交付按 [桌面验收](2.0-desktop-acceptance.md)、[Linux 验收](linux-host-handoff/07-acceptance.md)和 [发布规范](../RELEASING.md)完成。

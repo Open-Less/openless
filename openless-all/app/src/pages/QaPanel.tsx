@@ -296,7 +296,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           else void qaWindowDismiss().catch(() => undefined);
         });
         handles.push(dismissHandle);
-        // 「润色结果」模式的进入/退出复用本面板，与 egui 侧
+        // 「润色结果」模式的进入/退出复用本面板，与 host 侧
         // `HostAction::ShowSelectionPreview` 的落点一致。
         handles.push(
           await listen<unknown>('selection-polish-preview:shown', () => {

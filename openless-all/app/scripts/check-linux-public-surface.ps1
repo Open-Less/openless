@@ -3,17 +3,17 @@ param()
 
 $ErrorActionPreference = "Stop"
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\")).Path
-$surfaceFile = Join-Path $appRoot "linux-egui/src/lib.rs"
+$surfaceFile = Join-Path $appRoot "linux-host/src/lib.rs"
 $source = Get-Content -Raw -LiteralPath $surfaceFile
-$linuxManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/Cargo.toml")
+$linuxManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/Cargo.toml")
 $coreManifest = Get-Content -Raw -LiteralPath (Join-Path $appRoot "crates/openless-core/Cargo.toml")
 $coreApi = Get-Content -Raw -LiteralPath (Join-Path $appRoot "crates/openless-core/src/api.rs")
-$mainSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/main.rs")
-$mainSource += (Get-ChildItem -LiteralPath (Join-Path $appRoot "linux-egui/src/linux_app") -Filter "*.rs" | Sort-Object Name | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
-$backendSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/backend.rs")
-$qaSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/qa.rs")
-$selectionSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/selection.rs")
-$remoteSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-egui/src/remote_input.rs")
+$mainSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/main.rs")
+$mainSource += (Get-ChildItem -LiteralPath (Join-Path $appRoot "linux-host/src/linux_app") -Filter "*.rs" | Sort-Object Name | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
+$backendSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/backend.rs")
+$qaSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/qa.rs")
+$selectionSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/selection.rs")
+$remoteSource = Get-Content -Raw -LiteralPath (Join-Path $appRoot "linux-host/src/remote_input.rs")
 
 $forbidden = @(
     'pub use openless_core::domains::\*',
@@ -30,7 +30,7 @@ $forbidden = @(
 
 $violations = @($forbidden | Where-Object { $source -match $_ })
 if ($violations.Count -gt 0) {
-    Write-Error "Linux egui public surface exposes core implementation details: $($violations -join ', ')"
+    Write-Error "Linux host public surface exposes core implementation details: $($violations -join ', ')"
     exit 1
 }
 
@@ -65,7 +65,7 @@ if ($installer -lt 0 -or $listener -lt 0 -or $installer -gt $listener) {
 
 foreach ($action in @('ShowQa', 'HideQa', 'ShowSelectionPreview', 'HideSelectionPreview')) {
     if ($mainSource -match ("HostAction::{0}\s*=>\s*\{{\s*\}}" -f $action)) {
-        Write-Error "Linux host action '$action' must drive a visible egui surface"
+        Write-Error "Linux host action '$action' must drive a visible host surface"
         exit 1
     }
 }
@@ -159,4 +159,4 @@ foreach ($method in $legacyPreferenceWriters) {
     }
 }
 
-Write-Output "Linux egui public surface gate passed (facade/DTO/event/host-interface/fixture only)."
+Write-Output "Linux host public surface gate passed (facade/DTO/event/host-interface/fixture only)."

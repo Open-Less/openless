@@ -1,4 +1,4 @@
-//! 全局热键：复用 fcitx5 插件的信号（与 egui 版同一套实现）。
+//! 全局热键：复用 fcitx5 插件的信号（与 Linux 宿主是同一套实现）。
 //!
 //! 两个线程约束：
 //! 1. `Fcitx5HotkeyListener` 不是 `Send` —— 必须在它自己的线程里创建和使用；
@@ -7,7 +7,7 @@
 use gtk::glib;
 use gtk::prelude::*;
 use openless_core::OpenLessBackend;
-use openless_linux_egui::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+use openless_linux_host::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
 use std::sync::Arc;
 
 /// 无 GTK 主循环时的热键监听（`OPENLESS_HEADLESS=1` 用）。

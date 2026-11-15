@@ -61,7 +61,7 @@ fi
 
 APP_JSON="$APP_ROOT/harmony/AppScope/app.json5"
 VERSION="${OPENLESS_HARMONY_VERSION:-$(node -p "require('$APP_ROOT/package.json').version" | sed 's/[-+].*//')}"
-VERSION_CODE="${OPENLESS_HARMONY_VERSION_CODE:-$(< "$APP_ROOT/linux-egui/package-revision")}"
+VERSION_CODE="${OPENLESS_HARMONY_VERSION_CODE:-$(< "$APP_ROOT/linux-host/package-revision")}"
 [ -n "$VERSION" ] || {
   echo "cannot resolve the HarmonyOS versionName" >&2
   exit 1
