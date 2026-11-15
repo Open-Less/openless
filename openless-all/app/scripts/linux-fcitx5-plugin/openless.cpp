@@ -387,13 +387,20 @@ public:
         //
         // 之前的实现有三条来源（合成器探针 / 缓存 / 应用自报的 surrounding），
         // 互相抢答，出现「拿到的是上一次的选区」这种不准确的情况。现在只留一条。
-        auto *clipboard = instance_->addonManager().addon("clipboard");
-        if (!clipboard) {
-            FCITX_LOGC(openless, Warn)
-                << "CaptureSelectionTarget: clipboard addon not loaded";
-            return std::string();
+        // 契约用例通过 `setSelectionCacheReader` 注入固定值，替代 clipboard addon；
+        // 运行时没有注入，就走 addon 的 PRIMARY 读取。
+        std::string text;
+        if (selectionCacheReader_) {
+            text = selectionCacheReader_();
+        } else {
+            auto *clipboard = instance_->addonManager().addon("clipboard");
+            if (!clipboard) {
+                FCITX_LOGC(openless, Warn)
+                    << "CaptureSelectionTarget: clipboard addon not loaded";
+                return std::string();
+            }
+            text = clipboard->call<IClipboard::primary>(selectionIc_);
         }
-        std::string text = clipboard->call<IClipboard::primary>(selectionIc_);
         if (text.empty()) {
             FCITX_LOGC(openless, Debug)
                 << "CaptureSelectionTarget: primary selection is empty";
@@ -703,15 +710,20 @@ public:
     /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
         // 与 `captureSelectionTarget` 同一条路径：只问 fcitx5 的 clipboard addon，
-        // 不读我们自己的缓存、不碰合成器探针。
-        auto *clipboard = instance_->addonManager().addon("clipboard");
-        if (!clipboard) {
-            FCITX_LOGC(openless, Debug)
-                << "GetSelectionText: clipboard addon not loaded";
-            return std::string();
+        // 不读我们自己的缓存、不碰合成器探针。契约用例用注入值代替 addon。
+        std::string text;
+        if (selectionCacheReader_) {
+            text = selectionCacheReader_();
+        } else {
+            auto *clipboard = instance_->addonManager().addon("clipboard");
+            if (!clipboard) {
+                FCITX_LOGC(openless, Debug)
+                    << "GetSelectionText: clipboard addon not loaded";
+                return std::string();
+            }
+            // 用热键捕获的那个输入上下文（没有就传 nullptr，addon 内部按全局处理）。
+            text = clipboard->call<IClipboard::primary>(selectionIc_);
         }
-        // 用热键捕获的那个输入上下文（没有就传 nullptr，addon 内部按全局处理）。
-        std::string text = clipboard->call<IClipboard::primary>(selectionIc_);
         FCITX_LOGC(openless, Debug)
             << "GetSelectionText: " << text.size() << " chars";
         return text;
