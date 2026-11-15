@@ -100,6 +100,26 @@ impl LinuxCredentialStore {
         Ok(result)
     }
 
+
+    /// Omni 的账号（`omni.api_key` 等）在前端读写时**不带 provider**，
+    /// 而库里是按活跃 omni provider 存的。这里把 provider 为空的 Omni key
+    /// 解析到当前活跃 provider，否则读写会落到一个不存在的 key 上
+    /// （表现就是「多模态的密钥不显示」）。
+    fn resolve_omni_key(&self, mut key: CredentialKey) -> CredentialKey {
+        if key.namespace == CredentialNamespace::Omni && key.provider_id.is_none() {
+            let active = self
+                .state
+                .lock()
+                .expect("credential metadata lock poisoned")
+                .metadata
+                .active_provider(ProviderSlot::Omni);
+            if !active.trim().is_empty() {
+                key.provider_id = Some(active);
+            }
+        }
+        key
+    }
+
     pub(crate) fn set_active_provider_immediate(
         &self,
         slot: ProviderSlot,
@@ -543,12 +563,26 @@ impl CredentialStore for LinuxCredentialStore {
                     keys.push(key);
                 }
             }
+            // 云端文档可能没有标记 active omni（我们的 capture 在元数据为空时
+            // 全部给 false）。这种情况下按「有 api_key 的第一个」补一个，
+            // 否则 `activeOmniProvider` 是空的，界面里 omni 卡片会显示成未配置。
+            let active_omni = active.get("omni").cloned().unwrap_or_else(|| {
+                let with_key = snapshot
+                    .credentials
+                    .iter()
+                    .filter(|record| record.namespace == SyncNamespace::Omni)
+                    .find(|record| record.accounts.contains_key("omni.api_key"))
+                    .map(|record| record.channel_id.clone());
+                with_key
+                    .or_else(|| omni_channels.first().map(|channel| channel.id.clone()))
+                    .unwrap_or_default()
+            });
             let metadata = CredentialMetadata::from_parts(
                 asr,
                 llm,
                 active.get("asr").cloned().unwrap_or_default(),
                 active.get("llm").cloned().unwrap_or_default(),
-                active.get("omni").cloned().unwrap_or_default(),
+                active_omni,
                 0,
             );
             let mut state = state_handle
@@ -834,6 +868,7 @@ impl CredentialStore for LinuxCredentialStore {
         // succeeded before its metadata rename failed; such an uncommitted entry
         // must not become usable through a freshly recreated channel with the
         // same ID. Migration retries read the destination directly to recover it.
+        let key = self.resolve_omni_key(key);
         let committed = self
             .state
             .lock()
@@ -864,6 +899,7 @@ impl CredentialStore for LinuxCredentialStore {
         value: SecretValue,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let store = self.clone();
+        let key = self.resolve_omni_key(key);
         Box::pin(async move {
             #[cfg(target_os = "linux")]
             {
@@ -896,6 +932,7 @@ impl CredentialStore for LinuxCredentialStore {
 
     fn remove(&self, key: CredentialKey) -> BoxFuture<'static, Result<(), BackendError>> {
         let store = self.clone();
+        let key = self.resolve_omni_key(key);
         Box::pin(async move {
             #[cfg(target_os = "linux")]
             {
