@@ -4409,7 +4409,6 @@ dependencies = [
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "once_cell",
- "openless-capsule",
  "openless-core",
  "parking_lot",
  "raw-window-handle",
@@ -4457,16 +4456,6 @@ dependencies = [
  "x509-parser",
  "zeroize",
  "zip 9.0.5",
-]
-
-[[package]]
-name = "openless-capsule"
-version = "0.1.0"
-dependencies = [
- "log",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
