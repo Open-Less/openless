@@ -184,8 +184,14 @@ public:
         : QWebEngineUrlSchemeHandler(parent) {}
 
     void requestStarted(QWebEngineUrlRequestJob *job) override {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
         QIODevice *body = job->requestBody();
         const QByteArray payload = body ? body->readAll() : QByteArray();
+#else
+        // Qt < 6.6 没有 requestBody()：这条协议只用于「把文本交给宿主剪贴板」，
+        // 老 Qt 上由页面的 navigator.clipboard shim 直接走 alert 通道，这里返回空。
+        const QByteArray payload;
+#endif
         const QString text = QString::fromUtf8(payload);
         QGuiApplication::clipboard()->setText(text, QClipboard::Clipboard);
         qInfo("clipboard: %d chars via host", static_cast<int>(text.size()));
@@ -437,8 +443,12 @@ int main(int argc, char **argv) {
     // 自定义协议必须在 QApplication 之前注册。
     {
         QWebEngineUrlScheme scheme(QByteArrayLiteral("openless"));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
         scheme.setFlags(QWebEngineUrlScheme::FetchApiAllowed |
                         QWebEngineUrlScheme::LocalScheme);
+#else
+        scheme.setFlags(QWebEngineUrlScheme::LocalScheme);
+#endif
         QWebEngineUrlScheme::registerScheme(scheme);
     }
 
@@ -540,7 +550,7 @@ int main(int argc, char **argv) {
     auto *buffer = new QByteArray();
     auto *capsuleHideTimer = new QTimer(&app);
     capsuleHideTimer->setSingleShot(true);
-    QObject::connect(capsuleHideTimer, &QTimer::timeout, &capsule, [&capsule]() {
+    QObject::connect(capsuleHideTimer, &QTimer::timeout, [&capsule]() {
         capsule.setVisible(false);
     });
     QObject::connect(reply, &QNetworkReply::readyRead, &app,
