@@ -303,14 +303,15 @@ npm ci
 # macOS/Windows/Android：Vite 在 :1420 + Tauri 宿主
 npm run tauri dev
 
-# 通过 Tauri 移动宿主构建 Android 正式 APK
+# Android 正式 APK——先跑初始化/脚手架/manifest 链路（src-tauri/gen/android 是生成的），
+# 见 openless-all/README.zh.md 的「Android 构建」
 npm run tauri:android:build:release
 
 # macOS 正式构建（签名、安装、重置 TCC）
 ./scripts/build-mac.sh
 INSTALL=0 ./scripts/build-mac.sh   # 只构建，不安装
 
-# HarmonyOS HAP（需要 HarmonyOS Command Line Tools；见 harmony/README.md）
+# HarmonyOS HAP（需要 HarmonyOS Command Line Tools；见 harmony/README.zh.md）
 bash scripts/build-harmony-frontend.sh
 
 # 共享后端与 Linux 宿主/界面（不编译 Tauri/WebKitGTK）
@@ -326,7 +327,7 @@ npm run build
 
 日志：`~/Library/Logs/OpenLess/openless.log`（macOS）/ `%LOCALAPPDATA%\OpenLess\Logs\openless.log`（Windows）。
 
-**Windows 构建**——MSVC 与 GNU/MinGW 两条路线见 [`openless-all/README.md`](openless-all/README.md)。
+**Windows 构建**——MSVC 与 GNU/MinGW 两条路线见 [`openless-all/README.zh.md`](openless-all/README.zh.md)。
 
 ## 贡献流程
 

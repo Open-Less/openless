@@ -303,7 +303,8 @@ npm ci
 # macOS/Windows/Android: Vite at :1420 + Tauri host
 npm run tauri dev
 
-# Android release APK through the Tauri mobile host
+# Android release APK — run the init/scaffolding/manifest chain first
+# (src-tauri/gen/android is generated); see openless-all/README.md, "Android Build"
 npm run tauri:android:build:release
 
 # macOS release build (signs, installs, resets TCC)

@@ -191,7 +191,7 @@ No. Linux gets deb/rpm packages (after on-device acceptance) and source builds; 
 HarmonyOS has no update flow yet — reinstall a new HAP. iOS means rebuilding from source and re-signing. Neither shows in-app update prompts.
 
 **Q: How do I use local recognition so audio is not uploaded?**  
-Local models never take over the channel you already use: you still have to make the local channel the first enabled one, and audio leaves the machine only while that channel is serving requests.
+Local models never take over the channel you already use: you still have to make the local channel the first enabled one. While that local channel is serving requests, audio stays on the machine; if a cloud channel is first, it is uploaded as usual.
 
 On Windows, open Settings → AI & models → Local ASR models, download a model, then add and enable the matching local channel from the speech recognition channel list: Local Whisper (Foundry Local), Local sherpa-onnx (Experimental), or Local Whisper (batch). On macOS, open Settings → Experiments & extensions → Experimental local speech models and enable TextStream, SenseVoice Small, or Embedding Gemma; models are downloaded on demand and are not bundled with the installer, and the app then offers to open the channel list.
 
