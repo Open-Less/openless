@@ -32,6 +32,7 @@ import { formatHistoryTime, formatLocaleDecimal, formatLocaleNumber } from '../l
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
+import { confirmDialog } from '../lib/confirmDialog';
 import { SelectLite } from '../components/ui/SelectLite';
 
 function useModeLabel(): Record<PolishMode, string> {
@@ -249,7 +250,17 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   const onClear = async () => {
     const clearable = items.filter((entry) => entry.source !== 'quick_note');
     if (clearable.length === 0) return;
-    if (!confirm(t('history.confirmClear', { count: clearable.length }))) return;
+    if (
+      !(await confirmDialog({
+        title: t('common.clear'),
+        description: t('history.confirmClear', { count: clearable.length }),
+        confirmLabel: t('common.clear'),
+        cancelLabel: t('common.cancel'),
+        tone: 'danger',
+        icon: 'trash',
+      }))
+    )
+      return;
     setActionError(null);
     try {
       await clearHistory();

@@ -1092,10 +1092,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
    Settings: a white track with the controls' hairline, a neutral chip that slides under
    the selected option (useSelectionMotion), labels in the selection language. */
 .ol-overview-segment {
-  --ol-corner-radius: 10px;
+  --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-overview-segment > button {
-  --ol-corner-radius: 8px;
+  --ol-corner-radius: var(--ol-button-radius);
 }
 @supports not (corner-shape: superellipse(1.5)) {
   /* The fallback curve spans 1.5 units; keep its footprint equal to the radius. */
@@ -1123,11 +1123,36 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
 }
 .ol-segmented > :is(.ol-segmented-indicator, .ol-segmented-option) {
-  --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 3px);
+  --ol-corner-radius: var(--ol-button-radius);
   border-radius: var(--ol-corner-radius);
 }
 .ol-action-button {
-  --ol-corner-radius: 8px;
+  --ol-corner-radius: var(--ol-button-radius);
+}
+:is(
+  .ol-channel-delete-button,
+  .ol-channel-edit-button,
+  .ol-channel-verify,
+  .ol-channel-fetch-models,
+  .ol-settings-back-button,
+  .ol-tool-button,
+  .ol-startup-retry,
+  .ol-vocab-delete-selected,
+  .ol-word-card-action,
+  .ol-language-choice,
+  .ol-guide-primary,
+  .ol-guide-secondary,
+  .ol-guide-text-button,
+  .ol-guide-choice,
+  .ol-shortcuts-filters button,
+  .ol-choice-chips button,
+  .ol-like,
+  .ol-chip,
+  .ol-nav-btn,
+  .ol-settings-rail-btn,
+  .ol-service-views button
+) {
+  --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-segmented-indicator,
 .ol-service-view-indicator {
@@ -1940,13 +1965,13 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-channel-delete-button svg {
   flex-shrink: 0;
 }
-.ol-channel-delete-dialog {
+.ol-confirm-dialog {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 16px;
 }
-.ol-channel-delete-dialog-icon {
+.ol-confirm-dialog-icon {
   display: grid;
   place-items: center;
   width: 50px;
@@ -1955,21 +1980,28 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   background: rgba(220, 38, 38, 0.1);
   color: var(--ol-err);
 }
-.ol-channel-delete-dialog-title {
+.ol-confirm-dialog[data-tone='default'] .ol-confirm-dialog-icon {
+  background: var(--ol-blue-soft);
+  color: var(--ol-blue);
+}
+.ol-confirm-dialog-title {
   margin: 0;
   color: var(--ol-ink);
   font-size: 20px;
   font-weight: var(--ol-font-weight-semibold);
   letter-spacing: -0.01em;
 }
-.ol-channel-delete-dialog-warning {
+.ol-confirm-dialog-description {
   margin: 0;
-  color: var(--ol-err);
+  color: var(--ol-ink-2);
   font-size: 14.5px;
   font-weight: var(--ol-font-weight-medium);
   line-height: 1.65;
 }
-.ol-channel-delete-dialog-actions {
+.ol-confirm-dialog[data-tone='danger'] .ol-confirm-dialog-description {
+  color: var(--ol-err);
+}
+.ol-confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
   width: 100%;
@@ -1977,10 +2009,33 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   gap: 10px;
   margin-top: 4px;
 }
-.ol-channel-delete-dialog-actions .ol-channel-delete-button {
+.ol-confirm-dialog-actions .ol-channel-delete-button,
+.ol-confirm-cancel,
+.ol-confirm-primary {
   min-height: 40px;
   padding: 0 18px;
-  font-size: 13.5px;
+  font: 500 13.5px / 1.5 var(--ol-font-sans);
+}
+.ol-confirm-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0.5px solid var(--ol-line-strong);
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-control-solid);
+  color: var(--ol-ink-2);
+  cursor: pointer;
+  --ol-corner-radius: var(--ol-button-radius);
+}
+.ol-confirm-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: var(--ol-accent-solid-bg);
+  color: var(--ol-accent-solid-ink);
+  cursor: pointer;
+  --ol-corner-radius: var(--ol-button-radius);
 }
 
 @media (max-width: 600px) {

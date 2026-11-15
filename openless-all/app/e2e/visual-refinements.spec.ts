@@ -31,7 +31,7 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(button).toHaveCSS('cursor', 'pointer');
       await expect(button).toHaveCSS(
         'color',
-        theme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)',
+        theme === 'dark' ? 'rgb(250, 250, 250)' : 'rgb(9, 9, 11)',
       );
       const heading = dialog.getByRole('heading', { name: section, exact: true });
       await expect(heading).toBeVisible();

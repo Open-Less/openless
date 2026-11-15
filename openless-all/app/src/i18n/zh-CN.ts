@@ -275,6 +275,7 @@ export const zhCN = {
     delete: '删除',
     later: '稍后',
     cancel: '取消',
+    confirmAction: '确认',
     close: '关闭',
     show: '显示',
     hide: '隐藏',

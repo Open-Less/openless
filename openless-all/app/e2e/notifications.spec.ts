@@ -60,7 +60,7 @@ test('transient confirmations drop from the window top and replace each other', 
   const savedBg = await savedIcon.evaluate((node) => getComputedStyle(node).backgroundColor);
   const themeBlue = await page.evaluate(() => {
     const probe = document.createElement('div');
-    probe.style.background = 'var(--ol-blue)';
+    probe.style.background = 'var(--ol-accent-solid-bg)';
     document.body.appendChild(probe);
     const value = getComputedStyle(probe).backgroundColor;
     probe.remove();

@@ -275,6 +275,7 @@ export const zhTW: typeof zhCN = {
     delete: '刪除',
     later: '稍後',
     cancel: '取消',
+    confirmAction: '確認',
     close: '關閉',
     show: '顯示',
     hide: '隱藏',

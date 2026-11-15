@@ -57,6 +57,7 @@ import { useMobileLayout, useLayoutStack, useConservativeLayout } from '../lib/u
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ExpandingSearch } from '../components/ExpandingSearch';
 import { LikeButton } from '../components/LikeButton';
+import { confirmDialog } from '../lib/confirmDialog';
 import { readCachedLikes, reduceMarketplaceLikes, writeCachedLikes } from '../lib/marketplaceLikes';
 
 type SortMode = 'popular' | 'new' | 'liked';
@@ -471,8 +472,17 @@ export function Marketplace() {
   const onDelete = async () => {
     if (!detail) return;
     if (detail.authorLogin !== currentLogin) return; // only the author can delete
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(t('marketplace.detail.withdrawConfirm', { name: detail.name }))) return;
+    if (
+      !(await confirmDialog({
+        title: t('marketplace.detail.withdraw'),
+        description: t('marketplace.detail.withdrawConfirm', { name: detail.name }),
+        confirmLabel: t('marketplace.detail.withdrawBtn'),
+        cancelLabel: t('common.cancel'),
+        tone: 'danger',
+        icon: 'trash',
+      }))
+    )
+      return;
     try {
       await marketplaceDelete(detail.id);
       setActionMsg({ kind: 'ok', text: t('marketplace.detail.withdrawSuccess') });
@@ -491,8 +501,17 @@ export function Marketplace() {
 
   const onDeleteMine = async (pack: MarketplaceMyPackItem) => {
     if (pack.authorLogin !== currentLogin) return;
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(t('marketplace.detail.withdrawConfirm', { name: pack.name }))) return;
+    if (
+      !(await confirmDialog({
+        title: t('marketplace.detail.withdraw'),
+        description: t('marketplace.detail.withdrawConfirm', { name: pack.name }),
+        confirmLabel: t('marketplace.detail.withdrawBtn'),
+        cancelLabel: t('common.cancel'),
+        tone: 'danger',
+        icon: 'trash',
+      }))
+    )
+      return;
     try {
       await marketplaceDelete(pack.id);
       setActionMsg({ kind: 'ok', text: t('marketplace.detail.withdrawSuccess') });

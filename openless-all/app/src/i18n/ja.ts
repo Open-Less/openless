@@ -293,6 +293,7 @@ export const ja: typeof zhCN = {
     delete: '削除',
     later: '後で',
     cancel: 'キャンセル',
+    confirmAction: '確認',
     close: '閉じる',
     show: '表示',
     hide: '非表示',

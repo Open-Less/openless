@@ -74,6 +74,8 @@
 
   /* One radius for every rounded interface surface and control. */
   --ol-radius: 16px;
+  /* Text/action buttons use this; cards, inputs, dialogs and toasts stay at --ol-radius. */
+  --ol-button-radius: 12px;
   --ol-shell-radius: var(--ol-radius);
   --ol-surface-radius: var(--ol-radius);
   --ol-panel-radius: var(--ol-radius);

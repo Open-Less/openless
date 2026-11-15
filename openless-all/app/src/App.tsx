@@ -4,6 +4,7 @@ import { CapsuleTranscriptOverlay } from './components/LiveTranscriptPill';
 import { CoreStartupScreen } from './components/CoreStartupScreen';
 import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
 import { NotificationCenter } from './components/NotificationCenter';
+import { ConfirmDialogHost } from './components/ConfirmDialogHost';
 import { detectOS, type OS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
@@ -134,6 +135,7 @@ function ReadyApp({
       <Suspense fallback={null}>
         <>
           <NotificationCenter />
+          <ConfirmDialogHost />
           <QaPanel />
         </>
       </Suspense>
@@ -144,6 +146,7 @@ function ReadyApp({
       <Suspense fallback={null}>
         <>
           <NotificationCenter />
+          <ConfirmDialogHost />
           <SelectionVoiceIntentPicker />
         </>
       </Suspense>
@@ -154,6 +157,7 @@ function ReadyApp({
       <Suspense fallback={null}>
         <>
           <NotificationCenter />
+          <ConfirmDialogHost />
           <VoiceEditPanel />
         </>
       </Suspense>
@@ -513,6 +517,7 @@ function ReadyApp({
         <NotificationCenter>
           <GlobalDownloadProgress />
         </NotificationCenter>
+        <ConfirmDialogHost />
         {platformCaps?.platform === 'android' && (
           <div style={{ display: mobileQaOpen ? 'block' : 'none', height: '100%' }}>
             <QaPanel

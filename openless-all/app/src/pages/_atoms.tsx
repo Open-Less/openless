@@ -255,7 +255,7 @@ export function Btn({
         background: muted ? 'var(--ol-control-muted)' : v.bg,
         color: muted ? 'var(--ol-ink-3)' : v.color,
         border: 0,
-        borderRadius: 'var(--ol-control-radius)',
+        borderRadius: 'var(--ol-button-radius)',
         boxShadow: muted ? 'none' : v.sh,
         fontFamily: 'inherit',
         fontWeight: 'var(--ol-font-weight-medium)',

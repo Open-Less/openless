@@ -287,6 +287,7 @@ export const ko: typeof zhCN = {
     delete: '삭제',
     later: '나중에',
     cancel: '취소',
+    confirmAction: '확인',
     close: '닫기',
     show: '표시',
     hide: '숨기기',

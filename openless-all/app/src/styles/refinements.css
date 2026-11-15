@@ -166,7 +166,7 @@ button:disabled {
   box-shadow: inset 0 0 0 1px var(--ol-blue);
 }
 .ol-expression-clear {
-  --ol-corner-radius: 8px;
+  --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-shortcuts-toolbar {
   display: flex;
@@ -628,7 +628,8 @@ button:disabled {
   font-weight: 700;
 }
 .ol-notification-icon--saved {
-  background: var(--ol-blue);
+  /* Match Btn variant="blue" (the modal close button), not the lighter accent ink. */
+  background: var(--ol-accent-solid-bg);
 }
 .ol-notification-icon--failed,
 .ol-notification-icon--deleted {

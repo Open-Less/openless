@@ -51,12 +51,12 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await expect(page.locator('.ol-channel-dialog')).toBeVisible();
 
   await page.locator('.ol-channel-delete-button').click();
-  const confirm = page.locator('.ol-channel-delete-dialog');
+  const confirm = page.locator('.ol-confirm-dialog');
   await expect(confirm).toBeVisible();
   await page.waitForTimeout(900);
   await expect(confirm).toContainText('删除后该渠道保存的密钥也会一并清除。');
   await expect(page.locator('.ol-channel-delete-confirm')).toHaveCount(0);
-  await expectRed(confirm.locator('.ol-channel-delete-dialog-warning'));
+  await expectRed(confirm.locator('.ol-confirm-dialog-description'));
 
   const box = (await confirm.boundingBox())!;
   const viewport = page.viewportSize()!;

@@ -304,6 +304,7 @@ export const de: typeof zhCN = {
     delete: 'Löschen',
     later: 'Später',
     cancel: 'Abbrechen',
+    confirmAction: 'Bestätigen',
     close: 'Schließen',
     show: 'Einblenden',
     hide: 'Ausblenden',

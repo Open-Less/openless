@@ -4,6 +4,7 @@ import { PresenceModal } from '../../components/ui/Modal';
 import { Collapse } from '../../components/ui/Disclosure';
 import { Icon } from '../../components/Icon';
 import { Btn, Card } from '../_atoms';
+import { confirmDialog } from '../../lib/confirmDialog';
 import { ExperimentalSectionTitle, SettingRow, Toggle } from './shared';
 import {
   downloadPercent,
@@ -146,8 +147,17 @@ export function ExperimentalAsrSection({
                         variant="ghost"
                         disabled={pending.includes(status.model) || status.phase === 'removing'}
                         onClick={() => {
-                          if (window.confirm(t('localAsr.deleteConfirm', { name })))
-                            void remove(status.model).catch(() => {});
+                          void (async () => {
+                            const confirmed = await confirmDialog({
+                              title: t('localAsr.delete'),
+                              description: t('localAsr.deleteConfirm', { name }),
+                              confirmLabel: t('common.delete'),
+                              cancelLabel: t('common.cancel'),
+                              tone: 'danger',
+                              icon: 'trash',
+                            });
+                            if (confirmed) void remove(status.model).catch(() => {});
+                          })();
                         }}
                       >
                         {t('localAsr.delete')}

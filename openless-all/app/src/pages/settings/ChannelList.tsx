@@ -42,6 +42,7 @@ import {
   type ProviderDescriptor,
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
+import { confirmDialog } from '../../lib/confirmDialog';
 import { useExitMount } from '../../lib/useExitMount';
 import {
   useMobileLayout,
@@ -943,11 +944,9 @@ function ChannelModal({
   const [name, setName] = useState(channel.name);
   const [providerType, setProviderType] = useState(channel.providerType);
   const [changingProvider, setChangingProvider] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameId = useId();
-  const deleteTitleId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
   const embedded = Boolean(
     editorHost?.presentation === 'inline' && editorHost.container && editorHost.background,
@@ -1091,6 +1090,15 @@ function ChannelModal({
 
   const remove = async () => {
     if (deleting) return;
+    const confirmed = await confirmDialog({
+      title: t('settings.channels.delete'),
+      description: t('settings.channels.deleteConfirm'),
+      confirmLabel: t('settings.channels.confirmDelete'),
+      cancelLabel: t('common.cancel'),
+      tone: 'danger',
+      icon: 'trash',
+    });
+    if (!confirmed) return;
     setDeleting(true);
     try {
       await deleteChannel(kind, channel.id);
@@ -1207,7 +1215,8 @@ function ChannelModal({
           <button
             type="button"
             className="ol-channel-delete-button"
-            onClick={() => setConfirmDelete(true)}
+            disabled={deleting}
+            onClick={() => void remove()}
           >
             <Icon name="trash" size={15} />
             {t('settings.channels.delete')}
@@ -1224,50 +1233,6 @@ function ChannelModal({
           </div>
         </footer>
       </div>
-      {confirmDelete && (
-        <Modal
-          onClose={() => {
-            if (!deleting) setConfirmDelete(false);
-          }}
-          zIndex={1100}
-          motionVariant="pop"
-          labelledBy={deleteTitleId}
-          width="min(480px, calc(100vw - 40px))"
-          style={{ padding: 30 }}
-        >
-          <div className="ol-channel-delete-dialog">
-            <span className="ol-channel-delete-dialog-icon" aria-hidden="true">
-              <Icon name="trash" size={24} />
-            </span>
-            <h2 id={deleteTitleId} className="ol-channel-delete-dialog-title">
-              {t('settings.channels.delete')}
-            </h2>
-            <p className="ol-channel-delete-dialog-warning">
-              {t('settings.channels.deleteConfirm')}
-            </p>
-            <div className="ol-channel-delete-dialog-actions">
-              <button
-                type="button"
-                className="ol-channel-delete-button"
-                disabled={deleting}
-                onClick={() => void remove()}
-              >
-                <Icon name="trash" size={15} />
-                {t('settings.channels.confirmDelete')}
-              </button>
-              <button
-                type="button"
-                autoFocus
-                disabled={deleting}
-                onClick={() => setConfirmDelete(false)}
-                style={ghostBtn}
-              >
-                {t('common.cancel')}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </ProviderFormContext.Provider>
   );
   return embedded ? (
