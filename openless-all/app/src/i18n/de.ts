@@ -1236,6 +1236,13 @@ export const de: typeof zhCN = {
       title: 'Assistent für Textauswahl',
       hint: 'Wähle Text aus und verwende einen Kurzbefehl: Ohne Sprachbearbeitung wird der Text direkt überarbeitet. Mit Sprachbearbeitung hältst du die Taste gedrückt und sprichst; danach wählst du „Fragen“ oder „Bearbeiten“.',
       polishHotkey: 'Kurzbefehl für den Auswahlassistenten',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        'Das Sprachbearbeitungsfenster gibt es unter Linux noch nicht. Danach lässt sich die Tastenkombination halten, eine Anweisung sprechen und das Modell schreibt die Auswahl um.',
+      polishDeliveryComingSoonDesc:
+        'Linux ersetzt die Auswahl derzeit direkt (die Vorschau braucht eine Bestätigungsoberfläche, daran wird gearbeitet).',
+      previewConfirmComingSoonHint:
+        'Vorschau mit Bestätigung gibt es unter Linux noch nicht: ohne Bestätigungsoberfläche wird das Ergebnis direkt ersetzt.',
       polishHotkeyDesc:
         'Überarbeitet direkt, wenn Sprachbearbeitung aus ist. Andernfalls zum Sprechen gedrückt halten. Für die Aufnahme gelten die globalen Einstellungen.',
       polishDelivery: 'Ergebnis anwenden',

@@ -1,4 +1,5 @@
 import { collectCapsuleInputRegions } from '../lib/capsuleInputRegions';
+import { listenHostEvent } from '../lib/hostEventBus';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
@@ -435,6 +436,30 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     return () => clearTimeout(timer);
   }, [capsuleStyle]);
 
+  // 选区助手：后端润色开始/完成/失败都会推 `selection:state`。
+  // 这条走宿主事件总线（Tauri / GTK / HTTP 都覆盖），不依赖 Tauri 的 listen()。
+  const [selectionNotice, setSelectionNotice] = useState<{
+    state: CapsuleState;
+    message?: string;
+  } | null>(null);
+  useEffect(() => {
+    return listenHostEvent('selection:state', (payload) => {
+      const snapshot = payload as { state?: string; message?: string } | null;
+      const phase = snapshot?.state ?? '';
+      const mapped: CapsuleState | null =
+        phase === 'polishing'
+          ? 'polishing'
+          : phase === 'replaced' || phase === 'done' || phase === 'applied'
+            ? 'done'
+            : phase === 'noSelection' || phase === 'cancelled'
+              ? 'cancelled'
+              : phase === 'failed' || phase === 'error'
+                ? 'error'
+                : null;
+      setSelectionNotice(mapped ? { state: mapped, message: snapshot?.message ?? undefined } : null);
+    });
+  }, []);
+
   useEffect(() => {
     if (!isTauri) return;
     const unlisteners: (() => void)[] = [];
@@ -738,13 +763,20 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // component shape while the capsule switches between the live pill, fallback card,
   // suggestion card, and the hidden idle branch.
   const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
-  const renderedSelectionPolish = state === 'idle' ? lastVisibleSelectionPolish : selectionPolish;
+  const renderedSelectionPolish =
+    selectionNotice != null
+      ? true
+      : state === 'idle'
+        ? lastVisibleSelectionPolish
+        : selectionPolish;
   const renderedMessage =
     state === 'idle'
       ? lastVisibleMessage
       : state === 'transcribing' && localAsrText
         ? localAsrText
         : message;
+  const renderedNoticeState: CapsuleState = selectionNotice?.state ?? renderedState;
+  const renderedNoticeMessage = selectionNotice?.message ?? renderedMessage;
   const liveTranscript = visibleCapsuleTranscript(
     localAsrText,
     transcriptEnabled,
@@ -979,7 +1011,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           </>
         ))}
       {renderedSelectionPolish && (
-        <SelectionPolishNotice state={renderedState} message={renderedMessage} />
+        <SelectionPolishNotice state={renderedNoticeState} message={renderedNoticeMessage} />
       )}
     </div>
   );

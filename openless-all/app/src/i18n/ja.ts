@@ -1199,6 +1199,13 @@ export const ja: typeof zhCN = {
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
       polishHotkey: '選択範囲アシスタントのショートカット',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '音声編集ウィンドウは Linux ではまだ実装されていません。対応後はショートカットを押しながら指示を話すと、モデルが選択範囲を書き換えます。',
+      polishDeliveryComingSoonDesc:
+        'Linux では今のところ選択範囲を直接置き換えます（プレビュー確認には確認 UI が必要で、対応中です）。',
+      previewConfirmComingSoonHint:
+        'プレビュー確認は Linux では未対応です。確認 UI がないため、当面は直接置き換えます。',
       polishHotkeyDesc:
         '音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。',
       polishDelivery: '結果の処理',

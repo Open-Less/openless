@@ -1188,6 +1188,13 @@ export const en: typeof zhCN = {
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
       polishHotkey: 'Selection assistant shortcut',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        'The voice-edit window is not implemented on Linux yet. Once it lands you can hold the shortcut, speak an instruction, and have the model rewrite the selection.',
+      polishDeliveryComingSoonDesc:
+        'Linux replaces the selection directly for now (preview needs a confirmation surface, still in progress).',
+      previewConfirmComingSoonHint:
+        'Preview-and-confirm is not available on Linux yet: there is no confirmation surface, so the result is replaced directly.',
       polishHotkeyDesc:
         'Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).',
       polishDelivery: 'Result handling',

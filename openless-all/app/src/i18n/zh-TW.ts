@@ -1161,6 +1161,13 @@ export const zhTW: typeof zhCN = {
       title: '選區助手',
       hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
       polishHotkey: '選區助手快捷鍵',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '語音編輯視窗還沒在 Linux 上實作：接入後可以按住快捷鍵口述指令，讓模型按指令改寫選取範圍。',
+      polishDeliveryComingSoonDesc:
+        'Linux 目前直接取代選取範圍（預覽確認需要確認介面，還在進行）。',
+      previewConfirmComingSoonHint:
+        '預覽確認在 Linux 上還沒做：缺少確認介面，暫時只能直接取代。',
       polishHotkeyDesc:
         '關閉語音編輯時直接潤色；開啟語音編輯時按住口述指令（錄音方式跟隨全域設定）。',
       polishDelivery: '結果處理',

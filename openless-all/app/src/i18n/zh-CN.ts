@@ -1142,6 +1142,13 @@ export const zhCN = {
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
       polishHotkey: '选区助手快捷键',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '语音编辑窗口还没在 Linux 上实现：接入后可以按住快捷键口述指令，让模型按指令改写选区。',
+      polishDeliveryComingSoonDesc:
+        'Linux 目前直接替换选区（预览确认需要确认界面，还在做）。',
+      previewConfirmComingSoonHint:
+        '预览确认在 Linux 上还没做：缺少确认界面，暂时只能直接替换。',
       polishHotkeyDesc:
         '关闭语音编辑时直接润色；开启语音编辑时按住口述指令（录音方式跟随全局设置）。',
       polishDelivery: '结果处理',

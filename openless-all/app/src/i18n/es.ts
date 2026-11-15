@@ -1229,6 +1229,13 @@ export const es: typeof zhCN = {
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
       polishHotkey: 'Atajo del asistente de selección',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        'La ventana de edición por voz aún no está disponible en Linux. Cuando llegue, podrás mantener el atajo, dictar una instrucción y el modelo reescribirá la selección.',
+      polishDeliveryComingSoonDesc:
+        'Por ahora Linux sustituye la selección directamente (la vista previa necesita una interfaz de confirmación, en curso).',
+      previewConfirmComingSoonHint:
+        'La vista previa con confirmación aún no está disponible en Linux: no hay interfaz de confirmación, así que el resultado se sustituye directamente.',
       polishHotkeyDesc:
         'Mejora el texto directamente sin edición por voz; con ella activada, mantén pulsado para hablar. La grabación sigue los ajustes generales.',
       polishDelivery: 'Tratamiento del resultado',

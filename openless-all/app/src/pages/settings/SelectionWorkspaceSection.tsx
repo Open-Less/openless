@@ -57,7 +57,11 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
       options={outputOptions.map((option) => ({
         value: option.value,
         label: t(`settings.selectionPolish.${option.value}`),
-        title: t(`settings.selectionPolish.${option.value}Hint`),
+        title:
+          option.value === 'previewConfirm' && !showVoice
+            ? t('settings.selectionWorkspace.previewConfirmComingSoonHint')
+            : t(`settings.selectionPolish.${option.value}Hint`),
+        disabled: option.value === 'previewConfirm' && !showVoice,
       }))}
     />
   );
@@ -68,6 +72,16 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
         {t('settings.selectionWorkspace.title')}
       </SectionTitle>
 
+      {!showVoice && (
+        // Linux：语音编辑窗口还没做（选区润色本身已经可用），先显示、整块置灰。
+        <SettingRow
+          comingSoon
+          label={t('voiceEdit.title')}
+          desc={t('settings.selectionWorkspace.voiceEditComingSoonDesc')}
+        >
+          <Toggle on={false} />
+        </SettingRow>
+      )}
       {showVoice && (
         <SettingRow label={t('voiceEdit.title')} desc={t('voiceEdit.description')}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -120,8 +134,11 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
           />
         </SettingRow>
       )}
-      {showDesktop && !voiceEnabled && (
-        <SettingRow label={t('settings.selectionWorkspace.polishDelivery')}>
+      {showDesktop && (!voiceEnabled || !showVoice) && (
+        <SettingRow
+          label={t('settings.selectionWorkspace.polishDelivery')}
+          desc={!showVoice ? t('settings.selectionWorkspace.polishDeliveryComingSoonDesc') : undefined}
+        >
           {deliveryControl}
         </SettingRow>
       )}

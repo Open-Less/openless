@@ -1193,6 +1193,13 @@ export const ko: typeof zhCN = {
       title: '선택 영역 도우미',
       hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
       polishHotkey: '선택 영역 도우미 단축키',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '음성 편집 창은 아직 Linux에서 구현되지 않았습니다. 지원되면 단축키를 누른 채 지시를 말해 모델이 선택 영역을 다시 씁니다.',
+      polishDeliveryComingSoonDesc:
+        'Linux는 현재 선택 영역을 바로 교체합니다(미리보기 확인에는 확인 UI가 필요해 준비 중입니다).',
+      previewConfirmComingSoonHint:
+        '미리보기 확인은 아직 Linux에서 지원되지 않습니다. 확인 UI가 없어 지금은 바로 교체합니다.',
       polishHotkeyDesc:
         '음성 편집 끄면 바로 다듬기, 켜면 누른 채 말하기(녹음 방식은 전역 설정 따름).',
       polishDelivery: '결과 처리',

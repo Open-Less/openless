@@ -38,6 +38,39 @@ pub fn spawn_headless(
                                 }
                             });
                         }
+                        LinuxHotkeyEvent::SelectionPolishPressed => {
+                            // 选区助手：读当前选区（fcitx5 surrounding/selection）→
+                            // 润色 → 用 SelectionRuntimeAdapter 替换回原处。
+                            // previewConfirm 需要预览确认 UI，Linux 还没有，先按直替处理。
+                            let backend = Arc::clone(&backend);
+                            runtime.spawn(async move {
+                                let mode = backend.get_preferences().selection_polish_output_mode;
+                                if mode != openless_core::SelectionPolishOutputMode::DirectReplace
+                                {
+                                    log::warn!(
+                                        "[selection] previewConfirm is not available on Linux yet; \
+                                         applying the polished text directly"
+                                    );
+                                }
+                                match backend
+                                    .services()
+                                    .selection
+                                    .begin_polish(openless_core::SelectionPolishRequest {
+                                        selected_text: None,
+                                        mode: openless_core::PolishMode::Raw,
+                                        instruction: None,
+                                    })
+                                    .await
+                                {
+                                    Ok(session) => {
+                                        log::info!("[selection] polished selection session {session}")
+                                    }
+                                    Err(error) => {
+                                        log::warn!("[selection] polish failed: {error}");
+                                    }
+                                }
+                            });
+                        }
                         LinuxHotkeyEvent::QaPressed => {
                             // 问答热键：开/关一次语音提问，状态通过 qa:state 推给宿主。
                             let backend = Arc::clone(&backend);

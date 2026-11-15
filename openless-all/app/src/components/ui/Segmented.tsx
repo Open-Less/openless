@@ -5,6 +5,8 @@ export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
   title?: string;
+  /** 单个选项在平台/状态下不可用（整条控件仍可操作其它选项）。 */
+  disabled?: boolean;
 }
 
 /** The one segmented control used across Settings: a white track with the controls'
@@ -48,9 +50,10 @@ export function Segmented<T extends string>({
           type="button"
           className="ol-segmented-option"
           aria-pressed={option.value === value}
-          disabled={disabled}
+          disabled={disabled || option.disabled}
           title={option.title}
           onClick={() => {
+            if (option.disabled) return;
             if (option.value !== value) onChange(option.value);
           }}
         >

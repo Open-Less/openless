@@ -37,6 +37,11 @@ pub fn map_event(event: &BackendEvent) -> Option<(&'static str, serde_json::Valu
         ),
         // 云同步（E2EE）：这三个事件前端 CloudSyncSection 与
         // encryptedSyncUiBridge 都在订阅，之前没映射 → 云同步界面永不刷新。
+        // 选区助手：润色开始/完成/失败都走这里，宿主可以据此显示一行提示。
+        BackendEventKind::SelectionStateChanged(state) => (
+            "selection:state",
+            serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
+        ),
         BackendEventKind::CloudSyncStateChanged(event) => (
             "cloud-sync-e2ee:state",
             serde_json::to_value(event).unwrap_or(serde_json::Value::Null),

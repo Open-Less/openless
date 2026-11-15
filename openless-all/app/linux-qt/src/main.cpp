@@ -538,7 +538,13 @@ int main(int argc, char **argv) {
     auto *manager = new QNetworkAccessManager(&app);
     auto *reply = manager->get(QNetworkRequest(QUrl(baseUrl + "/api/events")));
     auto *buffer = new QByteArray();
-    QObject::connect(reply, &QNetworkReply::readyRead, &app, [reply, buffer, &capsule, &qa]() {
+    auto *capsuleHideTimer = new QTimer(&app);
+    capsuleHideTimer->setSingleShot(true);
+    QObject::connect(capsuleHideTimer, &QTimer::timeout, &capsule, [&capsule]() {
+        capsule.setVisible(false);
+    });
+    QObject::connect(reply, &QNetworkReply::readyRead, &app,
+                     [reply, buffer, &capsule, &qa, capsuleHideTimer]() {
         buffer->append(reply->readAll());
         int index;
         while ((index = buffer->indexOf("\n\n")) >= 0) {
@@ -564,6 +570,21 @@ int main(int argc, char **argv) {
                         QStringLiteral("transcribing"), QStringLiteral("polishing"),
                         QStringLiteral("inserting")};
                     capsule.setVisible(activePhases.contains(phase));
+                } else if (name == "selection:state") {
+                    // 选区助手：润色期间把胶囊显示出来（SelectionPolishNotice），
+                    // 出结果后留 2.5 秒给用户看一眼再收起。
+                    const QString phase = inner.value("state").toString();
+                    const bool active = phase == "polishing" || phase == "transcribing";
+                    const bool terminal =
+                        phase == "done" || phase == "replaced" || phase == "applied" ||
+                        phase == "noSelection" || phase == "cancelled" || phase == "failed" ||
+                        phase == "error";
+                    if (active) {
+                        capsuleHideTimer->stop();
+                        capsule.setVisible(true);
+                    } else if (terminal) {
+                        capsuleHideTimer->start(2500);
+                    }
                 } else if (name == "qa:state") {
                     // QaStateEvent 的字段是 `kind`（activity/idle/thinking/…），
                     // 不是 phase/open。旧写法读不到值，导致浮层该显不显、该隐不隐。

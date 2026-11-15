@@ -1246,6 +1246,13 @@ export const fr: typeof zhCN = {
       title: 'Assistant de sélection',
       hint: 'Sélectionnez du texte, puis utilisez un seul raccourci : amélioration directe sans édition vocale ; sinon, maintenez et parlez, puis choisissez Question ou Modification.',
       polishHotkey: 'Raccourci de l’assistant de sélection',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        "La fenêtre d'édition vocale n'est pas encore disponible sous Linux. Une fois prête, vous pourrez maintenir le raccourci, dicter une consigne et le modèle réécrira la sélection.",
+      polishDeliveryComingSoonDesc:
+        'Pour le moment Linux remplace la sélection directement (la prévisualisation demande une interface de confirmation, en cours).',
+      previewConfirmComingSoonHint:
+        "La prévisualisation avec confirmation n'existe pas encore sous Linux : sans interface de confirmation, le résultat est remplacé directement.",
       polishHotkeyDesc:
         'Améliore directement le texte sans édition vocale ; sinon, maintenez pour parler. L’enregistrement suit les réglages généraux.',
       polishDelivery: 'Traitement du résultat',
