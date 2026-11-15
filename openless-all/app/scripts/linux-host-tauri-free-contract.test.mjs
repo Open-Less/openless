@@ -6,7 +6,7 @@ const appRoot = new URL('..', import.meta.url);
 const roots = [
   new URL('../linux-host', import.meta.url),
   new URL('../scripts/package-linux-qt.sh', import.meta.url),
-  new URL('../../../.github/workflows/release-linux-host.yml', import.meta.url),
+  new URL('../../../.github/workflows/release-linux.yml', import.meta.url),
 ];
 const sourceExtensions = new Set(['.rs', '.toml', '.sh', '.yml', '.yaml']);
 

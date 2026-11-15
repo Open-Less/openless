@@ -168,7 +168,7 @@ const fn row(
 }
 
 /// 需要西/法/德真实译文时用它（顺序同上，末尾三个为 es/fr/de）。
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 const fn row8(
     zh: &'static str,
     zh_tw: &'static str,

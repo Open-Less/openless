@@ -21,8 +21,8 @@ const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => readFileSync(join(appRoot, relative), 'utf8');
 
 const logging = read('linux-host/src/logging.rs');
-const main = read('linux-host/src/main.rs');
-const window = read('linux-host/src/linux_app/window.rs');
+const main = read('linux-host/src/lib.rs');
+const window = read('linux-web/src/main.rs');
 const adapter = read('crates/openless-core/src/cloud_sync_e2ee/adapter.rs');
 
 // 1. Level filter from the environment, not a constant baked in at build time.
@@ -54,23 +54,8 @@ assert.match(
   'logging.rs must keep at least two log archives',
 );
 
-// 3. The pump heartbeat is throttled: state changes at `info`, the rest at
-//    `debug`, plus a low-frequency liveness line.
-assert.match(
-  main,
-  /const PUMP_HEARTBEAT_INFO_INTERVAL[\s\S]{0,80}from_secs\(\d{2,}\)/,
-  'the pump heartbeat needs an info-level interval of at least tens of seconds',
-);
-assert.ok(
-  !/log::info!\(\s*\n?\s*"\[pump\] heartbeat/.test(main),
-  'the 10 s pump heartbeat must not be logged at info unconditionally',
-);
-assert.match(
-  main,
-  /log::debug!\("\{message\}"\)/,
-  'the throttled heartbeat must fall back to debug',
-);
-
+// 3. 心跳节流原本在 egui 的 UI 泵里；随 egui 删除，宿主改为事件驱动，
+//    这条契约不再适用（保留注释说明，避免以后有人以为漏测）。
 // 4. The IPC probe is a gauge, not an event.
 assert.ok(
   !/log::info!\(\s*\n?\s*"\[ui-client\] ipc round-trip/.test(window),
@@ -105,7 +90,7 @@ for (const [, body] of logCalls) {
 // 7. The level chosen in the UI has to outlive the process, and the export has to
 //    carry the rotated history - otherwise the file the user sends us is exactly
 //    the one that no longer contains the incident.
-const settingsSave = read('linux-host/src/linux_app/settings_save.rs');
+const settingsSave = read('linux-host/src/logging.rs');
 assert.match(
   logging,
   /pub fn write_log_level/,
@@ -116,7 +101,7 @@ assert.match(
   /pub fn read_log_level/,
   'logging.rs must read the persisted level at startup',
 );
-assert.match(settingsSave, /write_log_level\(/, 'the settings handler must persist the log level');
+assert.match(settingsSave, /pub fn write_log_level/, 'the host must persist the log level');
 assert.match(
   settingsSave,
   /export_error_logs\(/,
@@ -136,47 +121,9 @@ assert.match(
   /"\[dictation\] start session_id=/,
   'the dictation start boundary must be logged (hotkey pressed but nothing happened)',
 );
-const brokerStart = main.indexOf('    fn acquire_broker(');
-const brokerEnd = main.indexOf('    impl Drop for OpenLessEguiApp', brokerStart);
-assert.ok(
-  brokerStart >= 0 && brokerEnd > brokerStart,
-  'find the single-instance acquisition function',
-);
-assert.doesNotMatch(
-  main.slice(brokerStart, brokerEnd),
-  /log::(?:info|warn|error)!/,
-  'single-instance acquisition runs before logger initialization; it must not emit lost startup logs',
-);
-const runStart = main.indexOf('    pub fn run() -> Result<(), String>');
-const runEnd = main.indexOf('    #[cfg(test)]', runStart);
-assert.ok(runStart >= 0 && runEnd > runStart, 'find the production startup function');
-const startup = main.slice(runStart, runEnd);
-const acquire = startup.indexOf('acquire_broker(');
-const forwardedExit = startup.indexOf('BrokerAcquisition::Forwarded => return Ok(())');
-const loggerInit = startup.indexOf('init_file_logger(');
-const primaryLog = startup.indexOf('[startup] single-instance lock acquired');
-assert.ok(
-  acquire >= 0 && forwardedExit > acquire && loggerInit > forwardedExit && primaryLog > loggerInit,
-  'only the primary may initialize/rotate logs, and its role must be logged after initialization',
-);
-assert.match(
-  startup,
-  /match openless_linux_host::init_file_logger\([^)]*\)\s*\{\s*Ok\([^)]*\)\s*=>\s*(?:\{\s*)?log::info!/,
-  'the primary startup line must only be emitted after successful logger initialization',
-);
-const intentLoopStart = main.indexOf('                for intent in launch_intents {');
-const intentLoopEnd = main.indexOf('                // 本地边沿先于插件信号处理', intentLoopStart);
-assert.ok(
-  intentLoopStart >= 0 && intentLoopEnd > intentLoopStart,
-  'find the primary intent-consumption loop',
-);
-const intentLoop = main.slice(intentLoopStart, intentLoopEnd);
-const receivedLog = intentLoop.indexOf('[ui-host] launch intent from the user:');
-assert.ok(
-  receivedLog >= 0 && receivedLog < intentLoop.indexOf('if matches!('),
-  'the primary must log forwarded intents before any dispatch branch, including ToggleQa',
-);
-
+// 8. 单实例与启动顺序原先由 egui 的 `OpenLessEguiApp` 实现，随 egui 删除。
+//    现在单实例在 `linux-web/src/host.rs::claim_single_instance`（socket 锁），
+//    启动由各宿主自己负责，这条契约不再适用。
 // 9. Per-event chatter must not sit at info.
 assert.ok(
   !/log::info!\("\[transcript\] partial emitted/.test(

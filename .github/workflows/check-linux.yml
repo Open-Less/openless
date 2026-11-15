@@ -228,13 +228,50 @@ jobs:
         working-directory: openless-all/app
         run: cargo build --locked --release -p openless-linux-host -p openless-linux-web
 
-      # 打包需要 Qt6 WebEngine 的运行时与头文件（Qt 宿主本身是 C++），
-      # GitHub 托管 runner 上不保证存在，所以 CI 只验证 Rust 侧（后端 + 宿主适配层）。
-      # 打 deb/rpm 请在装有 libqt6webengine* -dev 的机器上跑：
-      #   bash scripts/package-linux-qt.sh
-      - name: Skip packaging (requires Qt6 WebEngine dev packages)
+      - name: Install Qt6 WebEngine toolchain
+        timeout-minutes: 15
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qt6-base-dev qt6-webengine-dev liblayershellqtinterface-dev \
+            qt6-wayland-dev libqt6webenginewidgets6 libqt6webenginecore6
+
+      - name: Build Qt window host
+        timeout-minutes: 25
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          INC=$(pkg-config --variable=includedir Qt6Core)
+          g++ -std=c++17 -O2 -s -fPIC linux-qt/src/main.cpp -o linux-qt/openless-qt \
+            -I"$INC" -I"$INC/QtCore" -I"$INC/QtGui" -I"$INC/QtWidgets" -I"$INC/QtNetwork" \
+            -I"$INC/QtWebEngineCore" -I"$INC/QtWebEngineWidgets" -I"$(pkg-config --variable=includedir LayerShellQt)" \
+            $(pkg-config --libs Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network) \
+            $(pkg-config --libs LayerShellQtInterface)
+
+      - name: Package deb and rpm without Tauri
+        timeout-minutes: 10
         if: inputs.scope != 'none'
-        run: echo "packaging skipped in CI; see scripts/package-linux-qt.sh"
+        working-directory: openless-all/app
+        env:
+          OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
+          OPENLESS_LINUX_ARCH: x86_64
+        run: |
+          # CI runners are disposable. Ignore old outputs restored by a cache.
+          rm -f target/linux-host-packages/*.deb target/linux-host-packages/*.rpm \
+            target/linux-host-packages/SHA256SUMS
+          bash scripts/package-linux-qt.sh
+
+      - name: Generate checksums and verify distributable packages
+        if: inputs.scope != 'none'
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          OUTPUT=target/linux-host-packages
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+          # Release attachment name: the desktop and Android assets carry their own
+          # SHA256SUMS, so the Linux one is published under a distinct name.
+          cp "$OUTPUT/SHA256SUMS" "$OUTPUT/SHA256SUMS-linux"
+          bash scripts/verify-linux-host-packages.sh
 
       - name: Stage direct download aliases
         if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')

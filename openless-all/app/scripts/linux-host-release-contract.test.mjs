@@ -8,9 +8,9 @@ const root = fileURLToPath(new URL('../../..', import.meta.url));
 const load = (path) => readFile(join(root, path), 'utf8');
 const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, buildScript, host] =
   await Promise.all([
-    load('.github/workflows/release-linux-host.yml'),
+    load('.github/workflows/release-linux.yml'),
     load('.github/workflows/ci.yml'),
-    load('.github/workflows/check-linux-host.yml'),
+    load('.github/workflows/check-linux.yml'),
     load('openless-all/app/scripts/package-linux-qt.sh'),
     load('openless-all/app/scripts/verify-linux-host-packages.sh'),
     load('openless-all/app/scripts/check-core-deps.ps1'),
@@ -18,11 +18,11 @@ const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, bu
     load('.github/workflows/release-tauri.yml'),
     load('openless-all/app/linux-host/package-revision'),
     load('openless-all/app/linux-host/build.rs'),
-    load('openless-all/app/linux-host/src/main.rs'),
+    load('openless-all/app/linux-host/src/update_check.rs'),
   ]);
 
 // CI must execute the exact test/build/package/checksum path used for tags.
-assert.match(ci, /linux-host-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux-host\.yml/);
+assert.match(ci, /linux-host-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux.yml/);
 assert.match(ci, /linux-host-package:[\s\S]*?permissions:\s*contents: read/);
 // The release entry point needs write access to attach assets; the CI caller is
 // read-only and must not be able to publish.
@@ -32,7 +32,7 @@ assert.deepEqual(
   ['linux-host-package'],
   'PR CI must expose one Linux job, including Core and remote TLS checks',
 );
-assert.match(release, /uses: \.\/\.github\/workflows\/check-linux-host\.yml/);
+assert.match(release, /uses: \.\/\.github\/workflows\/check-linux.yml/);
 assert.match(
   check,
   /^on:\n  workflow_call:/m,
@@ -126,12 +126,13 @@ assert.match(verify, /test "\$\{#rpms\[@\]\}" -eq 1/);
 assert.match(verify, /test "\$\{#appimages\[@\]\}" -eq 0/);
 assert.match(verify, /sha256sum --check --strict SHA256SUMS/);
 assert.match(verify, /desktop-file-validate/);
-assert.match(verify, /check_elf "\$WORK\/deb\/usr\/bin\/openless"/);
+assert.match(verify, /check_elf "\$WORK\/deb\/usr\/lib\/openless\/openless-qt"/);
+assert.match(verify, /check_elf "\$WORK\/deb\/usr\/lib\/openless\/openless-linux-web"/);
 assert.match(verify, /fcitx5\/libopenless\.so/);
 assert.ok(!existsSync(join(root, 'openless-all/app/linux-host/src/updater.rs')));
 assert.doesNotMatch(manifest, /minisign-verify/);
 const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libvulkan1', 'liblzma5', 'libwayland-client0']) {
+for (const dep of ['fcitx5', 'libqt6webenginecore6', 'libqt6webenginewidgets6', 'libqt6widgets6', 'liblayershellqtinterface6']) {
   assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
 for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
@@ -141,7 +142,7 @@ for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
   );
 }
 const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const dep of ['fcitx5', 'pipewire-libs', 'vulkan-loader', 'libwayland-client']) {
+for (const dep of ['fcitx5', 'qt6-qtwebengine', 'qt6-qtwayland', 'LayerShellQt']) {
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
 for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
@@ -150,7 +151,7 @@ for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
     `rpm must not require ${removed} after the Vulkan migration`,
   );
 }
-assert.match(pack, /^Recommends: mesa-vulkan-drivers$/m, 'packages must recommend a Vulkan driver');
+assert.match(pack, /^Recommends: .*mesa-vulkan-drivers/m, 'packages must recommend a Vulkan driver');
 for (const [file, size] of [
   ['32x32.png', '32x32'],
   ['64x64.png', '64x64'],

@@ -28,7 +28,7 @@ jobs:
   build-linux-host:
     permissions:
       contents: write
-    uses: ./.github/workflows/check-linux-host.yml
+    uses: ./.github/workflows/check-linux.yml
     with:
       scope: full
       release_tag: ${{ inputs.tag }}

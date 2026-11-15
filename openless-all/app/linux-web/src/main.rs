@@ -1,24 +1,20 @@
-//! Linux 宿主：GTK 窗口 + WebKitGTK 渲染**官方 React 界面**（不装 Tauri）。
+//! Linux 后端 + HTTP 命令桥。**不渲染任何界面**：窗口由 Qt 宿主
+//! （`linux-qt`）或任何浏览器提供。
 //!
-//! 桥的形状与 `src/lib/harmonyBridge.ts` 完全一致：
-//!   JS → native : window.webkit.messageHandlers.openless.postMessage(JSON)
-//!   native → JS : window.__openlessResolve(id, JSON)
+//! 三种宿主共用同一条协议：
+//!   `POST /api/invoke {id,command,args}` → `{ok,value|error}`
+//!   `GET  /api/events`（SSE，事件与 GTK/Qt 同一套映射）
 //!
-//! 静态资源用一个只在 127.0.0.1 上监听的小 HTTP 服务提供（WebKit 拒绝 file://
-//! 下的 ES module / fetch），这也是 Tauri/Cog 之类的常规做法。
-#[cfg(feature = "capsule")]
-mod capsule;
+//! 静态资源用一个只在 127.0.0.1 上监听的小 HTTP 服务提供（Chromium 拒绝
+//! file:// 下的 ES module / fetch）。
 mod events;
 mod host;
 mod hotkeys;
 
-use gtk::prelude::*;
-use javascriptcore::ValueExt;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
-use webkit2gtk::{SettingsExt, UserContentManager, UserContentManagerExt, WebViewExt};
 
 struct Host {
     backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
@@ -28,9 +24,6 @@ struct Host {
     qa_expanded: std::sync::Mutex<bool>,
     /// 云同步状态的短缓存（250ms）：界面高频轮询时不必每次重新序列化。
     cloud_sync_status_cache: std::sync::Mutex<Option<(std::time::Instant, Value)>>,
-    /// 交给 GTK 主线程的命令通道。`Host` 要能跨线程（HTTP 桥在线程池里跑），
-    /// 而 GTK 对象不是 `Send`，所以这里只存一个发送端。
-    gui_tx: std::sync::Mutex<Option<gtk::glib::Sender<GuiCommand>>>,
     capsule_transcript_visible: std::sync::Mutex<bool>,
     capsule_language_menu: std::sync::Mutex<bool>,
     shortcut_recording_active: std::sync::Mutex<bool>,
@@ -123,252 +116,16 @@ fn main() {
         }
     }
 
-    let app = gtk::Application::new(Some("com.openless.linuxweb"), Default::default());
-    app.connect_activate(move |app| build_window(app, &url, host.clone()));
-    app.run();
-}
-
-fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
-
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("OpenLess")
-        .default_width(1180)
-        .default_height(820)
-        .build();
-
-    let manager = UserContentManager::new();
-    manager.register_script_message_handler("openless");
-    // 在页面任何脚本之前打上引擎标记：WebKitGTK 在合成器上有几处做不到
-    // Chromium/WebView2 那样的性能（最明显的是全页 `filter: blur()` 过渡），
-    // 前端据此降级动画，而不是让用户看到抖动。
-
-/// 排障用帧探针（`OPENLESS_FRAME_PROBE=1`）：监听页面切换的相位属性变化，
-/// 记录切换期间每帧间隔，最差帧通过 `log_client_error` 打到宿主 stderr。
-/// 只在设了这个环境变量时注入，正式运行不产生任何开销。
-const FRAME_PROBE: &str = r#"
-(() => {
-  const marks = new Map();
-  const watch = () => {
-    const surfaces = document.querySelectorAll('[data-transition-phase]');
-    surfaces.forEach((node) => {
-      const phase = node.getAttribute('data-transition-phase');
-      if (phase === 'settled') return;
-      const started = performance.now();
-      if (marks.has(phase)) return;
-      marks.set(phase, started);
-      let last = started;
-      let worst = 0;
-      // 同时盯住左侧导航与滚动容器的矩形：整窗平移/抖动会让导航也跟着动，
-      // 只有内容变则是局部重排（典型原因：滚动条出现/消失改变可用宽度）。
-      const nav = document.querySelector('nav');
-      const base = nav ? nav.getBoundingClientRect() : null;
-      let navShift = 0;
-      let widthShift = 0;
-      const tick = (now) => {
-        worst = Math.max(worst, now - last);
-        last = now;
-        if (base && nav) {
-          const rect = nav.getBoundingClientRect();
-          navShift = Math.max(navShift, Math.abs(rect.left - base.left), Math.abs(rect.top - base.top));
-          widthShift = Math.max(widthShift, Math.abs(rect.width - base.width));
-        }
-        if (now - started < 420) {
-          requestAnimationFrame(tick);
-        } else {
-          marks.delete(phase);
-          window.webkit.messageHandlers.openless.postMessage(JSON.stringify({
-            id: 'probe-' + Math.random().toString(36).slice(2),
-            command: 'log_client_error',
-            args: JSON.stringify({ message: 'frame-probe ' + phase + ' worst=' + worst.toFixed(1) + 'ms navShift=' + navShift.toFixed(2) + ' navWidthShift=' + widthShift.toFixed(2) }),
-          }));
-        }
-      };
-      requestAnimationFrame(tick);
-    });
-  };
-  new MutationObserver(watch).observe(document.documentElement, {
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['data-transition-phase'],
-  });
-  watch();
-})();
-"#;
-
-
-/// 排障用页面轮换（`OPENLESS_PAGE_SWEEP=1`）：每 900ms 点一个侧栏项，
-/// 让帧探针有真实的页面切换可测。只在设了这个环境变量时注入。
-const PAGE_SWEEP: &str = r#"
-(() => {
-  const tick = () => {
-    const buttons = Array.from(document.querySelectorAll('button.ol-nav-btn'));
-    if (!buttons.length) return void setTimeout(tick, 400);
-    let index = 0;
-    setInterval(() => {
-      index = (index + 1) % buttons.length;
-      buttons[index].click();
-    }, 900);
-  };
-  setTimeout(() => {
-    window.webkit.messageHandlers.openless.postMessage(JSON.stringify({
-      id: 'sweep-engine',
-      command: 'log_client_error',
-      args: JSON.stringify({ message: 'engine=' + (document.documentElement.dataset.olEngine || 'none') }),
-    }));
-    tick();
-  }, 3000);
-})();
-"#;
-
-    if std::env::var("OPENLESS_PAGE_SWEEP").ok().as_deref() == Some("1") {
-        manager.add_script(&webkit2gtk::UserScript::new(
-            PAGE_SWEEP,
-            webkit2gtk::UserContentInjectedFrames::TopFrame,
-            webkit2gtk::UserScriptInjectionTime::End,
-            &[],
-            &[],
-        ));
+    // 窗口渲染由 Qt 宿主（`linux-qt`）负责，这里只做后端 + 命令桥。
+    println!("[linux-web] 后端就绪，等待宿主连接");
+    if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) {
+        hotkeys::spawn_headless(backend, runtime);
     }
-    if std::env::var("OPENLESS_FRAME_PROBE").ok().as_deref() == Some("1") {
-        manager.add_script(&webkit2gtk::UserScript::new(
-            FRAME_PROBE,
-            webkit2gtk::UserContentInjectedFrames::TopFrame,
-            webkit2gtk::UserScriptInjectionTime::End,
-            &[],
-            &[],
-        ));
-    }
-    manager.add_script(&webkit2gtk::UserScript::new(
-        "window.__openlessEngine='webkitgtk';\
-         document.documentElement.dataset.olEngine='webkitgtk';",
-        webkit2gtk::UserContentInjectedFrames::TopFrame,
-        webkit2gtk::UserScriptInjectionTime::Start,
-        &[],
-        &[],
-    ));
-
-    let view = webkit2gtk::WebView::builder()
-        .user_content_manager(&manager)
-        .build();
-
-    if let Some(settings) = WebViewExt::settings(&view) {
-        settings.set_enable_webgl(true);
-        settings.set_enable_developer_extras(true);
-    }
-    // 与产品一致的浅色底；页面自己画卡片。
-    view.set_background_color(&gtk::gdk::RGBA::new(0.96, 0.96, 0.95, 1.0));
-
-    let host_for_ipc = host.clone();
-    let view_for_ipc = view.clone();
-    manager.connect_script_message_received(Some("openless"), move |_m, result| {
-        let Some(value) = result.js_value() else { return };
-        let raw = value.to_str().to_string();
-        let Ok(message) = serde_json::from_str::<Value>(&raw) else {
-            eprintln!("[linux-web] 无法解析桥消息: {raw}");
-            return;
-        };
-        let id = message["id"].as_str().unwrap_or_default().to_string();
-        let command = message["command"].as_str().unwrap_or_default().to_string();
-        let args: Value = message["args"]
-            .as_str()
-            .and_then(|raw| serde_json::from_str(raw).ok())
-            .unwrap_or_else(|| json!({}));
-        let (ok, payload) = match dispatch(&host_for_ipc, &command, &args) {
-            Ok(value) => (true, json!({ "ok": true, "value": value })),
-            Err(error) => (false, json!({ "ok": false, "error": error })),
-        };
-        let js = format!(
-            "window.__openlessResolve({}, {});",
-            json!(id),
-            json!(payload.to_string())
-        );
-        let _ = ok;
-        view_for_ipc.evaluate_javascript(
-            &js,
-            None::<&str>,
-            None::<&str>,
-            None::<&webkit2gtk::gio::Cancellable>,
-            |_| {},
-        );
-    });
-
-    // 排障用：OPENLESS_WEB_TOPMOST=1 让窗口浮在最前（截图/对比时用）。
-    if std::env::var("OPENLESS_WEB_TOPMOST").ok().as_deref() == Some("1") {
-        window.set_keep_above(true);
-    }
-    window.set_child(Some(&view));
-    view.load_uri(url);
-    view.connect_load_changed(|_view, event| {
-        if event == webkit2gtk::LoadEvent::Finished {
-            println!("[linux-web] 页面已加载完成");
-        }
-    });
-    window.show_all();
-    // 托盘与窗口显隐：窗口关掉只是隐藏，进程继续常驻（与 Tauri 版行为一致）。
-    window.connect_delete_event(|window, _| {
-        window.hide();
-        gtk::glib::Propagation::Stop
-    });
-    // GTK 主线程的命令泵：`Host` 只持有发送端，窗口对象留在这里。
-    {
-        #[allow(deprecated)]
-        let (tx, rx) = gtk::glib::MainContext::channel::<GuiCommand>(gtk::glib::Priority::default());
-        let window_for_gui = window.clone();
-        rx.attach(None, move |command: GuiCommand| {
-            match command {
-                GuiCommand::PresentMain => window_for_gui.present(),
-            }
-            gtk::glib::ControlFlow::Continue
-        });
-        *host.gui_tx.lock().unwrap() = Some(tx);
-    }
-    host::start_tray(window.clone());
-    // 后端就绪后立刻开始把事件推给页面（听写状态 / 历史变更 / QA 电平等）。
-    {
-        let backend = host.backend.clone();
-        let runtime = host.runtime.clone();
-        if let (Some(backend), Some(runtime)) = (backend.clone(), runtime.clone()) {
-            events::spawn_backend_events(backend.clone(), runtime.clone(), view.clone());
-            hotkeys::spawn(backend.clone(), runtime.clone(), window.clone());
-            #[cfg(feature = "capsule")]
-            {
-                // 胶囊是独立的 layer surface：不抢焦点、贴底居中，页面走 ?capsule=1。
-                // 排障：OPENLESS_CAPSULE_URL 可以指定任意页面，用来单独验证
-                // 胶囊窗口的透明/定位（正式运行时照旧走 ?window=capsule）。
-                let capsule_url = std::env::var("OPENLESS_CAPSULE_URL")
-                    .unwrap_or_else(|_| format!("{url}?window=capsule"));
-                let capsule = std::sync::Arc::new(capsule::build(
-                    app,
-                    &capsule_url,
-                    CAPSULE_WIDTH,
-                    CAPSULE_HEIGHT,
-                    CAPSULE_BOTTOM_MARGIN,
-                ));
-                // 排障：OPENLESS_CAPSULE_ALWAYS=1 时启动就显示胶囊（截图/对齐用）。
-                if std::env::var("OPENLESS_CAPSULE_ALWAYS").ok().as_deref() == Some("1") {
-                    capsule.window.show_all();
-                }
-                capsule::attach_events(capsule, runtime, backend);
-            }
-        }
+    loop {
+        std::thread::park();
     }
 }
 
-/// 胶囊尺寸与贴底间距（与 Tauri 的胶囊窗口一致：宽 460、底距 12）。
-#[cfg(feature = "capsule")]
-const CAPSULE_WIDTH: i32 = 460;
-#[cfg(feature = "capsule")]
-const CAPSULE_HEIGHT: i32 = 228;
-#[cfg(feature = "capsule")]
-const CAPSULE_BOTTOM_MARGIN: i32 = 12;
-
-// ── 命令分发 ────────────────────────────────────────────────────────────────
-
-/// 前端资源目录的解析顺序：
-/// 1. `OPENLESS_DIST`（排障/自定义安装）
-/// 2. 安装布局 `<prefix>/lib/openless/web/dist`（包内位置，`/usr/bin` 的相对路径）
-/// 3. 源码树 `linux-web/dist`（开发期直接 `cargo run`）
 fn resolve_dist() -> PathBuf {
     if let Ok(dir) = std::env::var("OPENLESS_DIST") {
         return PathBuf::from(dir);
@@ -408,7 +165,6 @@ fn init_host() -> Host {
         shortcut_recording_active: std::sync::Mutex::new(false),
         qa_expanded: std::sync::Mutex::new(false),
         cloud_sync_status_cache: std::sync::Mutex::new(None),
-        gui_tx: std::sync::Mutex::new(None),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
@@ -688,15 +444,10 @@ impl Host {
 }
 
 /// 需要 GTK 主线程执行的动作（`Host` 本身不能持有 GTK 对象）。
-pub enum GuiCommand {
-    PresentMain,
-}
 
 /// 把键盘焦点交回主窗口。
-fn focus_main_window(host: &Host) {
-    if let Some(sender) = host.gui_tx.lock().unwrap().as_ref() {
-        let _ = sender.send(GuiCommand::PresentMain);
-    }
+fn focus_main_window(_host: &Host) {
+    // 窗口归 Qt 宿主所有；前端要「回到主窗口」时由宿主自行处理。
 }
 
 fn json_value<T: serde::Serialize>(value: T) -> Value {

@@ -114,6 +114,7 @@ impl Default for LinuxHostContextAdapter {
 }
 
 impl LinuxHostContextAdapter {
+    #[allow(dead_code)]
     pub fn new(reader: Arc<dyn SurroundingReader>) -> Self {
         Self { reader }
     }
@@ -194,6 +195,7 @@ impl Default for LinuxEditObservationAdapter {
 }
 
 impl LinuxEditObservationAdapter {
+    #[allow(dead_code)]
     pub fn new(reader: Arc<dyn SurroundingReader>) -> Self {
         Self {
             reader,

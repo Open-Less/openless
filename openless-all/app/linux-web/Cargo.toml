@@ -5,9 +5,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-gtk = "0.18"
-webkit2gtk = { version = "2.0", features = ["v2_40"] }
-javascriptcore = { package = "javascriptcore-rs", version = "1.1" }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
@@ -16,10 +13,3 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.54", features = ["rt-multi-thread"] }
 openless-core = { path = "../crates/openless-core" }
 openless-linux-host = { path = "../linux-host" }
-# 胶囊窗口需要 wlr-layer-shell（不给焦点、贴底居中）。默认关闭：日常构建/CI 不装
-# 这个系统库也能过；本地验胶囊时 `--features capsule` 打开。
-gtk-layer-shell = { version = "0.8", optional = true, features = ["v0_6"] }
-
-[features]
-default = []
-capsule = ["dep:gtk-layer-shell"]

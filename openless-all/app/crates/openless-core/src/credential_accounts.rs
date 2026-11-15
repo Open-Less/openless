@@ -113,9 +113,9 @@ pub fn credential_key(
     account: &str,
     provider: Option<String>,
 ) -> Result<CredentialKey, BackendError> {
-    let namespace = if crate::llm_protocol::CONFIG_ACCOUNTS.contains(&account) {
-        CredentialNamespace::Llm
-    } else if account == crate::credentials::LLM_EXTRA_HEADERS_ACCOUNT
+    // 1+2 都是 `Llm`，合成一个条件：clippy 会把两个相同分支报成 identical blocks。
+    let namespace = if crate::llm_protocol::CONFIG_ACCOUNTS.contains(&account)
+        || account == crate::credentials::LLM_EXTRA_HEADERS_ACCOUNT
         || account == crate::credentials::LLM_TEMPERATURE_ACCOUNT
     {
         CredentialNamespace::Llm

@@ -16,6 +16,14 @@ cd "$APP_ROOT"
 
 PKG_NAME=openless
 VERSION=${OPENLESS_LINUX_VERSION:?set OPENLESS_LINUX_VERSION (e.g. 2.0.2-Beta.3-172)}
+# 包序号与 linux-host/package-revision 交叉校验：CI 用它算版本号，
+# 两边不一致会打出同名不同内容的包。
+REVISION=$(cat "$APP_ROOT/linux-host/package-revision")
+EXPECTED_VERSION="${VERSION%-*}-${REVISION}"
+if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
+  echo "OPENLESS_LINUX_VERSION ($VERSION) does not match linux-host/package-revision ($REVISION)" >&2
+  exit 1
+fi
 
 TARGET_DIR=${CARGO_TARGET_DIR:-$APP_ROOT/target}/release
 HOST_BIN=${OPENLESS_HOST_BINARY:-$TARGET_DIR/openless-linux-web}
@@ -23,8 +31,8 @@ QT_BIN=${OPENLESS_QT_BINARY:-$APP_ROOT/linux-qt/openless-qt}
 DIST_DIR=${OPENLESS_WEB_DIST:-$APP_ROOT/linux-web/dist}
 PLUGIN_ROOT="$APP_ROOT/scripts/linux-fcitx5-plugin/build"
 PACKAGING="$APP_ROOT/linux-host/packaging"
-ICON_DIR="$APP_ROOT/src-tauri/icons"
-OUTPUT=${OPENLESS_PACKAGE_OUTPUT:-$APP_ROOT/target/linux-qt-packages}
+ICON_DIR="$APP_ROOT/linux-host/packaging/icons"
+OUTPUT=${OPENLESS_PACKAGE_OUTPUT:-${CARGO_TARGET_DIR:-$APP_ROOT/target}/linux-host-packages}
 
 require_file() {
   [ -s "$1" ] || { echo "missing or empty $1" >&2; exit 1; }
@@ -48,7 +56,9 @@ rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
 
 # 安装/卸载后重启 fcitx5：只重连已存在的用户 DBus 会话，不启 daemon。
-POST_INSTALL="$OUTPUT/openless-fcitx5-postinst"
+WORK="$OUTPUT/.work"
+mkdir -p "$WORK"
+POST_INSTALL="$WORK/openless-fcitx5-postinst"
 cat > "$POST_INSTALL" << 'EOF'
 #!/usr/bin/env bash
 set +e
@@ -59,6 +69,16 @@ for bus in /run/user/[0-9]*/bus; do
   [ "$uid" != "0" ] || continue
   user=$(getent passwd "$uid" | cut -d: -f1)
   [ -n "$user" ] || continue
+  # 只有 fcitx5 **已经**是当前会话的输入法时才重启它。
+  # 不加这一步，dbus-send 会通过 org.fcitx.Fcitx5.service 触发 D-Bus 自动激活，
+  # 把原本用 IBus 的桌面强行换成 fcitx5，用户的中文输入当场失效（issue #1404）。
+  owner=$(runuser -u "$user" -- env \
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+    timeout 5s dbus-send --session --print-reply --dest=org.freedesktop.DBus \
+      /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner \
+      string:org.fcitx.Fcitx5 2>/dev/null | grep -c 'boolean true')
+  [ "$owner" = "1" ] || continue
   runuser -u "$user" -- env \
     XDG_RUNTIME_DIR="$runtime_dir" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
@@ -79,10 +99,14 @@ stage_common() {
 #!/usr/bin/env bash
 set -e
 # 目录相对解析：安装后是 /usr/lib/openless，解包试跑时也能工作。
-here=$(dirname "$(readlink -f "$0")")/../lib/openless
+lib=$(dirname "$(readlink -f "$0")")/../lib/openless
+share=$(dirname "$(readlink -f "$0")")/../share/openless
+if [ "$1" = "--version" ]; then cat "$share/version"; exit 0; fi
 # Qt 宿主负责拉起同目录下的 openless-linux-web（无头）并在退出时回收。
-exec "$here/openless-qt" "$@"
+exec "$lib/openless-qt" "$@"
 LAUNCHER
+  install -d "$root/usr/share/openless"
+  printf 'OpenLess %s\n' "$VERSION" > "$root/usr/share/openless/version"
   install -Dm644 "$PACKAGING/openless.desktop" "$root/usr/share/applications/openless.desktop"
   [ -f "$PACKAGING/top.openless.OpenLess.metainfo.xml" ] && \
     install -Dm644 "$PACKAGING/top.openless.OpenLess.metainfo.xml" \
@@ -103,11 +127,16 @@ LAUNCHER
   done
 }
 
-DEB_ROOT="$OUTPUT/deb-root"
+DEB_ROOT="$WORK/deb-root"
 stage_common "$DEB_ROOT"
 install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
   "$DEB_ROOT/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
 install -Dm644 "$PLUGIN_ROOT/openless.conf" "$DEB_ROOT/usr/share/fcitx5/addon/openless.conf"
+# 记录插件校验和：用户本地残留的旧插件（或被发行版覆盖）能一眼看出来。
+install -d "$DEB_ROOT/usr/share/openless"
+printf 'openless %s fcitx5-addon-sha256 %s\n' "$VERSION" \
+  "$(sha256sum "$DEB_ROOT/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so" | cut -d' ' -f1)" \
+  > "$DEB_ROOT/usr/share/openless/fcitx5-addon.sha256"
 install -d "$DEB_ROOT/DEBIAN"
 cat > "$DEB_ROOT/DEBIAN/control" << EOF
 Package: $PKG_NAME
@@ -118,7 +147,7 @@ Architecture: amd64
 Maintainer: OpenLess Contributors
 Description: OpenLess Linux host (Qt6 WebEngine / Chromium, native Wayland)
 Depends: fcitx5, fcitx5-module-dbus, fcitx5-frontend-qt6, libc6, libgcc-s1, libstdc++6, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6, libqt6webenginecore6, libqt6webenginewidgets6, liblayershellqtinterface6, qt6-wayland, libfcitx5core7, libfcitx5config6, libfcitx5utils2
-Recommends: pavucontrol
+Recommends: pavucontrol, mesa-vulkan-drivers
 Homepage: https://github.com/Open-Less/openless
 EOF
 install -m755 "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postinst"
@@ -126,6 +155,62 @@ cp "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postrm"
 dpkg-deb --build --root-owner-group "$DEB_ROOT" \
   "$OUTPUT/OpenLess-Linux-qt-${VERSION}-x86_64.deb"
 
-(cd "$OUTPUT" && sha256sum ./*.deb > SHA256SUMS)
+# ── rpm ─────────────────────────────────────────────────────────────────────
+if command -v rpmbuild >/dev/null; then
+  RPM_ROOT="$WORK/rpm-root"
+  rm -rf "$RPM_ROOT"
+  cp -a "$DEB_ROOT" "$RPM_ROOT"
+  rm -rf "$RPM_ROOT/DEBIAN"
+  # RPM 系发行版把 fcitx5 插件放在 /usr/lib64
+  mkdir -p "$RPM_ROOT/usr/lib64/fcitx5"
+  mv "$RPM_ROOT/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so" \
+    "$RPM_ROOT/usr/lib64/fcitx5/libopenless.so"
+  cat > "$WORK/openless.spec" << EOF
+Name: $PKG_NAME
+Version: ${VERSION%%-*}
+Release: ${VERSION##*-}
+Summary: OpenLess Linux host (Qt6 WebEngine / Chromium, native Wayland)
+License: AGPL-3.0-only
+BuildArch: x86_64
+# 不要在打包期 strip / 拆 debuginfo：包内字节必须和 deb 里的一致，
+# 否则 /usr/share/openless/fcitx5-addon.sha256 记录的校验和对不上。
+%global debug_package %{nil}
+%global __strip /bin/true
+%global __os_install_post %{nil}
+Requires: fcitx5, fcitx5-frontend-qt6, qt6-qtwebengine, qt6-qtwayland, LayerShellQt
+%description
+OpenLess Linux host rendering the official React UI through Qt6 WebEngine.
+%prep
+%build
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}
+cp -a $RPM_ROOT/. %{buildroot}/
+%files
+/usr/bin/openless
+/usr/lib/openless
+/usr/share/applications/openless.desktop
+/usr/share/icons/hicolor/*/apps/openless.png
+/usr/share/fcitx5/addon/openless.conf
+/usr/lib64/fcitx5/libopenless.so
+/usr/share/doc/openless
+/usr/share/metainfo/top.openless.OpenLess.metainfo.xml
+/usr/share/openless/version
+/usr/share/openless/fcitx5-addon.sha256
+EOF
+  if rpmbuild --define "_topdir $WORK/rpmtop" --define "_rpmdir $WORK/rpmout" -bb \
+      "$WORK/openless.spec" >"$WORK/rpmbuild.log" 2>&1; then
+    dest="$OUTPUT/OpenLess-Linux-qt-$VERSION-x86_64.rpm"
+    while IFS= read -r built; do
+      [ "$built" = "$dest" ] || mv -f "$built" "$dest"
+    done < <(find "$WORK/rpmout" -name '*.rpm')
+  else
+    echo "rpmbuild 失败，日志：$WORK/rpmbuild.log（deb 已产出）" >&2
+  fi
+else
+  echo "跳过 rpm：没有 rpmbuild" >&2
+fi
+
+(cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS 2>/dev/null || sha256sum ./*.deb > SHA256SUMS)
 echo "done: $OUTPUT"
 ls -la "$OUTPUT"/*.deb

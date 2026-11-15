@@ -602,7 +602,7 @@ jobs:
     name: Linux Core, host and deb/rpm checks
     permissions:
       contents: read
-    uses: ./.github/workflows/check-linux-host.yml
+    uses: ./.github/workflows/check-linux.yml
     with:
       # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
       scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}

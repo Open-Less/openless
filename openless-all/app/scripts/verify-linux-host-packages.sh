@@ -42,7 +42,20 @@ check_elf() {
     return 1
   fi
 }
-check_elf "$TARGET_DIR/release/openless-linux-host"
+# 后端/命令桥二进制（纯 Rust，不链 WebKit/Tauri）
+check_elf "$TARGET_DIR/release/openless-linux-web"
+
+# issue #1403：RPM 的 %files 不能声明系统共享目录，否则在 Fedora 上与
+# `filesystem` 包冲突（/usr/bin 等被以不同权限重复声明）导致安装失败。
+if command -v rpm >/dev/null && [ -f "${rpms[0]:-}" ]; then
+  # --dbpath 指向临时目录：CI 里没有 /var/lib/rpm 写权限，rpm 会去锁系统 keyring。
+  forbidden=$(rpm --dbpath "$(mktemp -d)" -qlp "${rpms[0]}" | grep -Ex '/(|usr|usr/bin|usr/sbin|usr/lib|usr/lib64|usr/share|etc)' || true)
+  if [ -n "$forbidden" ]; then
+    echo "rpm declares shared system directories (breaks Fedora install):" >&2
+    printf '  %s\n' $forbidden >&2
+    exit 1
+  fi
+fi
 
 WORK=$(mktemp -d)
 trap 'rm -rf -- "$WORK"' EXIT
@@ -59,7 +72,8 @@ for size in 32x32 64x64 128x128 256x256 512x512; do
 done
 desktop-file-validate "$WORK/deb/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/deb/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
-check_elf "$WORK/deb/usr/bin/openless"
+check_elf "$WORK/deb/usr/lib/openless/openless-qt"
+check_elf "$WORK/deb/usr/lib/openless/openless-linux-web"
 check_elf "$WORK/deb/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
 # Catch stale build-script output: dpkg metadata may say -N while the UI
 # still displays an older revision embedded in the binary.
@@ -70,7 +84,10 @@ grep -Fq 'usr/bin/openless' <<< "$DEB_FILES"
 grep -Fq 'fcitx5/libopenless.so' <<< "$DEB_FILES"
 DEB_DEPENDS=$(dpkg-deb --field "${debs[0]}" Depends)
 grep -Fq 'fcitx5' <<< "$DEB_DEPENDS"
-grep -Fq 'libpipewire-0.3-0' <<< "$DEB_DEPENDS"
+grep -Fq 'libqt6webenginecore6' <<< "$DEB_DEPENDS"
+grep -Fq 'liblayershellqtinterface6' <<< "$DEB_DEPENDS"
+# 后端已经不含 GTK/WebKit：Qt 包里不该再出现这两类依赖。
+! grep -Fq 'libwebkit2gtk' <<< "$DEB_DEPENDS"
 
 mkdir -p "$WORK/rpm"
 (cd "$WORK/rpm" && rpm2cpio "${rpms[0]}" | cpio -idm --quiet)
@@ -84,7 +101,8 @@ grep -Eq "^openless [^ ]+ fcitx5-addon-sha256 $RPM_PLUGIN_SHA$" \
 test "$DEB_PLUGIN_SHA" = "$RPM_PLUGIN_SHA"
 desktop-file-validate "$WORK/rpm/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/rpm/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
-check_elf "$WORK/rpm/usr/bin/openless"
+check_elf "$WORK/rpm/usr/lib/openless/openless-qt"
+check_elf "$WORK/rpm/usr/lib/openless/openless-linux-web"
 check_elf "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
 test "$("$WORK/rpm/usr/bin/openless" --version)" = "OpenLess $DEB_VERSION"
 # Query our unsigned local artifact without touching the host's system RPM keyring.
@@ -92,8 +110,11 @@ mkdir -p "$WORK/rpmdb"
 RPM_FILES=$(rpm --dbpath "$WORK/rpmdb" -qlp "${rpms[0]}")
 grep -Fxq '/usr/bin/openless' <<< "$RPM_FILES"
 grep -Fxq '/usr/lib64/fcitx5/libopenless.so' <<< "$RPM_FILES"
+grep -Fxq '/usr/lib/openless/openless-qt' <<< "$RPM_FILES"
+grep -Fxq '/usr/lib/openless/web/dist/index.html' <<< "$RPM_FILES"
 grep -Fxq '/usr/share/openless/fcitx5-addon.sha256' <<< "$RPM_FILES"
 RPM_DEPENDS=$(rpm --dbpath "$WORK/rpmdb" -qp --requires "${rpms[0]}")
 grep -Fq 'fcitx5' <<< "$RPM_DEPENDS"
-grep -Fq 'pipewire-libs' <<< "$RPM_DEPENDS"
+grep -Fq 'qt6-qtwebengine' <<< "$RPM_DEPENDS"
+! grep -Fq 'webkit' <<< "$RPM_DEPENDS"
 printf 'PASS: deb/rpm contents, ELF dependencies, desktop metadata and SHA-256\n'

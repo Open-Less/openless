@@ -26,9 +26,7 @@ mod i18n;
 pub mod linux_access;
 pub mod local_hotkeys;
 mod logging;
-mod omni_settings;
 mod preference_patch;
-mod provider_protocol;
 mod qa;
 mod recordings;
 mod remote_input;
@@ -37,7 +35,6 @@ mod runtime;
 mod selection;
 mod settings;
 mod single_instance;
-mod style_icon;
 mod siwc;
 mod tray;
 pub mod update_check;
@@ -90,8 +87,6 @@ pub use logging::{
     export_error_log, export_error_logs, init_file_logger, level_name, log_path, read_log_level,
     write_log_level,
 };
-#[cfg(all(target_os = "linux", feature = "x11-overlay"))]
-
 pub use openless_core::contract::*;
 pub use preference_patch::patch_preferences;
 pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};

@@ -1,10 +1,4 @@
-//! 宿主职责：单实例、托盘、窗口显隐。窗口渲染在 `main.rs`（GTK + WebKit）。
-//!
-//! 托盘直接复用 `openless-linux-egui` 里已调好的 StatusNotifierItem 实现。
-//! 注意 `LinuxTray` 不是 `Send`（内部持有 mpsc Receiver），所以**整个托盘对象
-//! 留在自己的线程里**，只把 `TrayCommand` 转发给 GTK 主线程。
-use gtk::prelude::*;
-use openless_linux_host::{LinuxTray, TrayCommand};
+//! 宿主职责：进程级单实例。托盘与窗口显隐归渲染宿主（Qt / 浏览器）。
 
 /// 单实例：占用 `$XDG_RUNTIME_DIR` 下的一个 socket。
 ///
@@ -23,39 +17,4 @@ pub fn claim_single_instance() -> Option<std::os::unix::net::UnixListener> {
             None
         }
     }
-}
-
-/// 起一个托盘，并把它的命令接到窗口上（窗口关闭 = 隐藏，进程常驻）。
-pub fn start_tray(window: gtk::ApplicationWindow) {
-    let (command_tx, command_rx) = std::sync::mpsc::channel::<TrayCommand>();
-    std::thread::Builder::new()
-        .name("openless-tray".into())
-        .spawn(move || match LinuxTray::start() {
-            Ok(tray) => {
-                println!("[linux-web] 托盘已注册");
-                loop {
-                    tray.drain(|command| {
-                        let _ = command_tx.send(command);
-                    });
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                }
-            }
-            Err(error) => eprintln!("[linux-web] 托盘注册失败：{error:?}"),
-        })
-        .ok();
-
-    gtk::glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
-        while let Ok(command) = command_rx.try_recv() {
-            match command {
-                TrayCommand::ShowMain => window.present(),
-                TrayCommand::Quit => {
-                    if let Some(app) = window.application() {
-                        app.quit();
-                    }
-                }
-                TrayCommand::ActivatePreviousStyle | TrayCommand::SelectMicrophone(_) => {}
-            }
-        }
-        gtk::glib::ControlFlow::Continue
-    });
 }

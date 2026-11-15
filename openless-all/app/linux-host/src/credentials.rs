@@ -546,19 +546,17 @@ impl CredentialStore for LinuxCredentialStore {
                         Some(record.channel_id.clone()),
                         account.clone(),
                     )
-                    .map_err(|error| {
+                    .inspect_err(|error| {
                         eprintln!(
                             "[linux-creds] restore failed at key build: ns={:?} channel={} account={} err={:?}",
                             record.namespace, record.channel_id, account, error.code
                         );
-                        error
                     })?;
-                    write_secret(&key, &SecretValue::new(value.clone())).map_err(|error| {
+                    write_secret(&key, &SecretValue::new(value.clone())).inspect_err(|error| {
                         eprintln!(
                             "[linux-creds] restore failed writing secret: channel={} account={} err={:?} {}",
                             record.channel_id, account, error.code, error.message
                         );
-                        error
                     })?;
                     keys.push(key);
                 }
