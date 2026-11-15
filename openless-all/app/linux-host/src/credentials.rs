@@ -1854,10 +1854,25 @@ mod sync_credentials_roundtrip {
     use super::*;
     use openless_core::credentials::ExclusivePermit;
 
+    /// 没有 Secret Service 的环境（CI runner、纯 ssh 会话）跳过：
+    /// `LinuxCredentialStore` 默认 fail-closed，写凭据会返回 Persistence 错误。
+    fn require_secret_service() -> bool {
+        match crate::linux_access::probe_session().0 {
+            crate::linux_access::KeyringState::Ready => true,
+            other => {
+                eprintln!("skipping: secret service unavailable ({other:?})");
+                false
+            }
+        }
+    }
+
     /// 云同步恢复失败（`sync_restore_rolled_back`）时用它定位：先把 store 的
     /// 凭据导出，再用同一份快照做一次 replace，最后重新导出比对。
     #[test]
     fn export_replace_roundtrip_keeps_channels_and_secrets() {
+        if !require_secret_service() {
+            return;
+        }
         let root = std::env::temp_dir().join(format!(
             "openless-linux-sync-roundtrip-{}",
             uuid::Uuid::new_v4().simple()
@@ -1934,10 +1949,27 @@ mod sync_credentials_preserve {
     use super::*;
     use openless_core::credentials::ExclusivePermit;
 
+    /// 没有 Secret Service 的环境（CI runner、纯 ssh 会话）跳过。
+    fn require_secret_service() -> bool {
+        match crate::linux_access::probe_session().0 {
+            crate::linux_access::KeyringState::Ready => true,
+            other => {
+                eprintln!("skipping: secret service unavailable ({other:?})");
+                false
+            }
+        }
+    }
+
     /// 恢复（replace）不能把同步范围之外的 key 弄丢 —— Marketplace 的 GitHub
     /// token 就在那里。丢了之后的症状是「恢复完成却要求重新登录」。
     #[test]
     fn replace_keeps_marketplace_token_visible() {
+        if !require_secret_service() {
+            return;
+        }
+        if !require_secret_service() {
+            return;
+        }
         let root = std::env::temp_dir().join(format!(
             "openless-linux-sync-preserve-{}",
             uuid::Uuid::new_v4().simple()
