@@ -44,7 +44,6 @@ mod macos_dictation_key;
 mod macos_streaming_input;
 #[cfg(not(mobile))]
 mod native_audio_cue;
-#[cfg(not(mobile))]
 mod qa_adapter;
 mod recording_companion;
 mod tauri_coordinator_host;
