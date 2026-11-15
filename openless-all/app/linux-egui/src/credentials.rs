@@ -29,6 +29,11 @@ const KEYRING_SERVICE: &str = "top.openless.linux";
 #[serde(rename_all = "camelCase")]
 struct PersistedCredentialMetadata {
     version: u32,
+    /// 渠道的非敏感配置（云端文档 `ChannelRecord.configuration`）。
+    /// 恢复时会原样写回；导出时带上，保证 replace → capture 完全一致
+    /// —— `replace_and_verify` 是逐字段比对的，丢了它就会回滚。
+    #[serde(default)]
+    channel_configuration: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     metadata: CredentialMetadata,
     #[serde(default)]
@@ -312,6 +317,7 @@ impl CredentialStore for LinuxCredentialStore {
             use openless_core::credentials::{
                 SyncChannel, SyncCredentialRecord, SyncCredentials, SyncNamespace,
             };
+            eprintln!("[linux-creds] capture 开始：channels={}", state.metadata.list_channels(ChannelKind::Asr).len() + state.metadata.list_channels(ChannelKind::Llm).len());
             let mut snapshot = SyncCredentials {
                 channels: Vec::new(),
                 credentials: Vec::new(),
@@ -330,7 +336,11 @@ impl CredentialStore for LinuxCredentialStore {
                         enabled: channel.enabled,
                         order: channel.order,
                         active: channel.id == active,
-                        configuration: Default::default(),
+                        configuration: state
+                            .channel_configuration
+                            .get(&format!("{}:{}", namespace.as_str(), channel.id))
+                            .cloned()
+                            .unwrap_or_default(),
                     });
                     let mut accounts = std::collections::BTreeMap::new();
                     for key in state.keys.iter().filter(|key| {
@@ -348,6 +358,11 @@ impl CredentialStore for LinuxCredentialStore {
                     });
                 }
             }
+            eprintln!(
+                "[linux-creds] capture 完成：channels={} credentials={}",
+                snapshot.channels.len(),
+                snapshot.credentials.len()
+            );
             snapshot.validate()?;
             Ok(snapshot)
         })
@@ -371,6 +386,11 @@ impl CredentialStore for LinuxCredentialStore {
             use openless_core::credentials::{
                 ChannelSummary, CredentialKey, CredentialMetadata, SyncNamespace,
             };
+            eprintln!(
+                "[linux-creds] replace 开始：channels={} credentials={}",
+                snapshot.channels.len(),
+                snapshot.credentials.len()
+            );
             snapshot.validate()?;
             let mut asr = Vec::new();
             let mut llm = Vec::new();
@@ -391,6 +411,15 @@ impl CredentialStore for LinuxCredentialStore {
                 }
                 if channel.active {
                     active.insert(channel.namespace.as_str().to_string(), channel.id.clone());
+                }
+            }
+            let mut channel_configuration = std::collections::BTreeMap::new();
+            for channel in &snapshot.channels {
+                if !channel.configuration.is_empty() {
+                    channel_configuration.insert(
+                        format!("{}:{}", channel.namespace.as_str(), channel.id),
+                        channel.configuration.clone(),
+                    );
                 }
             }
             let mut keys = Vec::new();
@@ -430,8 +459,11 @@ impl CredentialStore for LinuxCredentialStore {
                 .lock()
                 .expect("credential metadata lock poisoned");
             state.metadata = metadata;
+            state.channel_configuration = channel_configuration;
             state.keys = keys;
-            persist_metadata(&metadata_path, &state)
+            let result = persist_metadata(&metadata_path, &state);
+            eprintln!("[linux-creds] replace 完成：keys={} result={:?}", state.keys.len(), result.is_ok());
+            result
         })
     }
 
@@ -1682,5 +1714,85 @@ mod tests {
             openless_core::shared_types::PipelineMode::Traditional
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod sync_credentials_roundtrip {
+    use super::*;
+    use openless_core::credentials::ExclusivePermit;
+
+    /// 云同步恢复失败（`sync_restore_rolled_back`）时用它定位：先把 store 的
+    /// 凭据导出，再用同一份快照做一次 replace，最后重新导出比对。
+    #[test]
+    fn export_replace_roundtrip_keeps_channels_and_secrets() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-linux-sync-roundtrip-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = LinuxCredentialStore::open(&root).unwrap();
+        let created = store
+            .mutate_channel_with(
+                ChannelMutation::Create {
+                    kind: ChannelKind::Llm,
+                    provider_type: "openai-compatible".into(),
+                    name: "test".into(),
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        let ChannelMutationResult::Created(channel_id) = created else {
+            panic!("expected create");
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(store.write(
+                CredentialKey::new(
+                    CredentialNamespace::Llm,
+                    Some(channel_id.clone()),
+                    "ark.api_key",
+                )
+                .unwrap(),
+                SecretValue::new("sk-test-roundtrip"),
+            ))
+            .unwrap();
+
+        let gate = openless_core::cloud_sync_e2ee_store::gate::SyncWriteGate::open(
+            root.join("generation.json"),
+        )
+        .unwrap();
+        let permit: ExclusivePermit = gate.try_exclusive().unwrap();
+        let snapshot = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(store.export_sync_credentials_readonly())
+            .expect("export must succeed");
+        assert!(!snapshot.channels.is_empty(), "export 应包含渠道");
+        assert!(!snapshot.credentials.is_empty(), "export 应包含凭据");
+
+        runtime
+            .block_on(store.replace_sync_credentials(snapshot.clone(), &permit))
+            .expect("replace must succeed");
+
+        let again = runtime
+            .block_on(store.export_sync_credentials_readonly())
+            .expect("re-export must succeed");
+        assert_eq!(
+            snapshot.channels.len(),
+            again.channels.len(),
+            "replace 后渠道数量应一致"
+        );
+        assert_eq!(
+            snapshot.credentials, again.credentials,
+            "replace 后凭据内容应完全一致（恢复校验就靠它）"
+        );
+        assert_eq!(
+            snapshot.channels, again.channels,
+            "replace 后渠道记录必须逐字段一致（含 configuration）"
+        );
     }
 }
