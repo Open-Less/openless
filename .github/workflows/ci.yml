@@ -56,7 +56,6 @@ jobs:
       harmony: ${{ steps.detect.outputs.harmony }}
       frontend: ${{ steps.detect.outputs.frontend }}
       android: ${{ steps.detect.outputs.android }}
-      capsule: ${{ steps.detect.outputs.capsule }}
       ios: ${{ steps.detect.outputs.ios-device }}
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +70,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          for area in tauri msrv linux harmony frontend android capsule ios-device; do
+          for area in tauri msrv linux harmony frontend android ios-device; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
             decision=$( [ "$verdict" = 'false' ] && echo false || echo true )
@@ -796,46 +795,6 @@ jobs:
         # `process.platform` branches and the `windows-*` contracts only mean
         # anything here; everything else runs on macOS (full suite) and Linux.
         run: node scripts/frontend-test-runner.mjs --platform-only windows
-
-  native-capsule:
-    # The capsule crates compile into the desktop shells. They get their own macOS + Windows
-    # runners only because their `ui,host` feature set is not built anywhere else, and that
-    # warm cache makes the job ~40 s. It is gated on
-    # its own area, so the common PR pays zero runners for it: measured on run 40510306688,
-    # moving these three commands into `cross-platform` cost 117 s on the critical-path Windows
-    # job, which is more than the two runners it saved.
-    needs: [changes]
-    if: needs.changes.outputs.capsule != 'false'
-    name: Native capsule (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-latest"]' || '["macos-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: openless-all/app
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Stable prefix per platform instead of the job name, so renaming or
-          # splitting the job keeps the tree.
-          shared-key: native-capsule
-          workspaces: openless-all/app -> target
-          # Pull requests restore the beta tree and never write their own copy:
-          # `refs/pull/<n>/merge` scopes are never restored again and only evict
-          # the branch caches (see docs/ci-trigger-and-cache-policy.md).
-          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
-      - run: cargo check --locked -p openless-native-capsule
-      - run: cargo test --locked -p openless-capsule --features ui,host
-      - run: cargo clippy --locked -p openless-native-capsule -p openless-capsule --features openless-capsule/ui,openless-capsule/host -- -D warnings
 
   cross-platform:
     needs: [changes]

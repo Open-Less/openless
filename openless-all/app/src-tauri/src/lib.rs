@@ -45,7 +45,6 @@ mod macos_streaming_input;
 #[cfg(not(mobile))]
 mod native_audio_cue;
 #[cfg(not(mobile))]
-mod native_capsule;
 mod qa_adapter;
 mod recording_companion;
 mod tauri_coordinator_host;
@@ -867,8 +866,7 @@ fn run_desktop() {
     let core_backend = coordinator.backend();
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
-    let mut context = tauri::generate_context!();
-    desktop_resources::configure(&mut context, false);
+    let context = tauri::generate_context!();
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
     // non-activating NSPanel (a plain NSWindow cannot do this even with collectionBehavior —
@@ -1001,7 +999,7 @@ fn run_desktop() {
                 }
             }
 
-            if desktop_resources::active() {
+            {
                 let force_show = std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
                 if force_show || coordinator.startup_error().is_some() || !coordinator.backend().get_preferences().start_minimized {
                     show_main_window(app.handle());
@@ -1109,7 +1107,6 @@ fn run_desktop() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
-            RunEvent::ExitRequested { code: None, api, .. } if desktop_resources::active() => api.prevent_exit(),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
                     if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
@@ -1138,7 +1135,6 @@ fn run_desktop() {
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
-                coordinator.tauri_host().stop_native_capsule();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
@@ -1843,13 +1839,9 @@ fn set_windows_caption_theme(app: AppHandle, dark: bool) {
 
 #[tauri::command]
 fn restart_app(app: AppHandle) {
-    // The main-thread restart path skips the RunEvent::Exit handlers; stop the
-    // disposable capsule explicitly. The child also self-closes when the
-    // inherited pipe hits EOF, so an exit here can never orphan it.
-    #[cfg(not(mobile))]
-    if let Some(coordinator) = app.try_state::<Arc<coordinator::Coordinator>>() {
-        coordinator.tauri_host().stop_native_capsule();
-    }
+    // 原生胶囊（旧的低内存渲染器）已删除：胶囊始终是 Tauri 的 webview 窗口，
+    // 重启时随主进程一起退出，这里不需要再单独回收。
+    let _ = &app;
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_for_beta_restart();

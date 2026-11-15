@@ -39,7 +39,7 @@ const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
 /** Everything runs. */
 const ALL = Symbol('all');
 
-const AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'capsule', 'ios-device'];
+const AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'ios-device'];
 
 /** Cargo workspaces that describe this repository's own packages. */
 const WORKSPACES = ['openless-all/app/Cargo.toml', 'openless-all/app/src-tauri/Cargo.toml'];
@@ -48,14 +48,12 @@ const WORKSPACES = ['openless-all/app/Cargo.toml', 'openless-all/app/src-tauri/C
  * Platform roots: the package each platform actually builds. The closure is
  * walked from here, so a crate only counts if the platform really links it.
  *
- * `openless-native-capsule` is not linked by the app binary — it is compiled
- * into the desktop shells — so it is listed explicitly, on desktop only.
  * iOS copies `openless-core` into its own tree (see ios/scripts/prepare-core.py)
  * and never sees the Tauri crate.
  */
 const PLATFORM_ROOTS = {
-  macos: ['openless', 'openless-native-capsule'],
-  windows: ['openless', 'openless-native-capsule'],
+  macos: ['openless'],
+  windows: ['openless'],
   android: ['openless'],
   // The Linux reusable workflow also owns Harmony Rust unit tests.
   linux: ['openless-linux-host', 'openless-harmony-host'],
@@ -63,11 +61,6 @@ const PLATFORM_ROOTS = {
   ios: ['openless-core'],
 };
 
-/**
- * Capsule crates: compiled into the desktop shells and covered by their own
- * macOS + Windows runners, which only earn their keep when these change.
- */
-const CAPSULE_PACKAGES = new Set(['openless-capsule', 'openless-native-capsule']);
 
 /** Rust target_os names used when evaluating `cfg(...)` guards. */
 const PLATFORM_TARGET_OS = {
@@ -270,7 +263,6 @@ function classify(file, context) {
 
   const owner = ownerPackage(file, context);
   if (owner) {
-    if (CAPSULE_PACKAGES.has(owner)) tags.add('capsule');
     for (const [platform, packages] of context.closures) {
       if (packages.has(owner)) {
         tags.add(platform);
@@ -322,8 +314,6 @@ function decide(area, context, files) {
       return reached.has('frontend');
     case 'android':
       return reached.has('android');
-    case 'capsule':
-      return reached.has('capsule');
     case 'ios-device':
       return reached.has('ios-device');
     default:

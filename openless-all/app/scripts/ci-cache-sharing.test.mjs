@@ -86,18 +86,12 @@ assert.ok(sharedKeys(androidApk).some((key) => key.startsWith('android-')));
 // gate and save only from beta, so a run costs ~40 s and the common PR pays no
 // runner for them at all.
 {
-  const capsuleJob = ci.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
-  assert.ok(capsuleJob, 'ci.yml must run the capsule crates as the native-capsule job');
-  assert.match(capsuleJob, /shared-key: native-capsule/);
-  assert.match(capsuleJob, /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/);
-  assert.match(
-    capsuleJob,
-    /if: needs\.changes\.outputs\.capsule != 'false'/,
-    'the capsule job must be gated on its own area, not run for every desktop change',
-  );
+  // 原生胶囊（egui）已删除，CI 里不再有它的作业；这里只锁住「没有回来」。
+  assert.doesNotMatch(ci, /\n  native-capsule:/, 'the native capsule job is gone');
+  assert.doesNotMatch(ci, /outputs\.capsule/, 'the capsule area gate is gone with the crate');
   assert.ok(
     !existsSync(join(root, '.github/workflows/native-capsule.yml')),
-    'native-capsule.yml must stay merged into ci.yml',
+    'native-capsule.yml must stay removed',
   );
 }
 

@@ -108,10 +108,10 @@ for (const command of [
 ]) {
   assert.ok(deviceCommands.includes(command), `retain device check: ${command}`);
 }
-// Linux 已恢复：egui 流水线退役，改为 Qt 宿主链路（linux-host-package →
+// Linux 已恢复：旧的自绘 UI 流水线退役，改为 Qt 宿主链路（linux-host-package →
 // check-linux.yml），发布走 release-linux.yml。
-assert.equal(ci.jobs['linux-egui-package'], undefined, 'the egui CI job is retired');
-for (const name of ['check-linux-egui.yml', 'release-linux-egui.yml']) {
+assert.equal(ci.jobs['linux-host-legacy-package'], undefined, 'the retired Linux CI job stays gone');
+for (const name of ['check-linux-host-legacy.yml', 'release-linux-host-legacy.yml']) {
   assert.equal(existsSync(path(name)), false, `${name} must stay removed`);
 }
 assert.ok(ci.jobs['linux-host-package'], 'Linux CI runs through check-linux.yml');

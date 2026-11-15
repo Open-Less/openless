@@ -381,7 +381,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
     reassert_spaces: bool,
 ) {
     #[cfg(target_os = "macos")]
-    if crate::desktop_resources::active() {
+    if true {
         if let Ok(raw) = window.ns_window() {
             unsafe {
                 use objc2::{msg_send, runtime::AnyObject};
@@ -1234,12 +1234,6 @@ impl TauriCapsuleWindow {
 
     #[cfg(not(mobile))]
     pub(crate) fn set_card_hit_test_mode(&self) -> tauri::Result<()> {
-        if crate::desktop_resources::active() {
-            if let Some(coordinator) = self.app.try_state::<Arc<crate::coordinator::Coordinator>>()
-            {
-                coordinator.tauri_host().stop_native_capsule();
-            }
-        }
         crate::desktop_resources::ensure_card_window(&self.app)?;
         self.state
             .hit_test_mode
@@ -1493,11 +1487,9 @@ impl TauriCapsuleWindow {
         if let Some(window) = self.window() {
             #[cfg(not(mobile))]
             {
-                if crate::desktop_resources::active() {
-                    self.state
-                        .hit_test_mode
-                        .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
-                }
+                self.state
+                    .hit_test_mode
+                    .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
                 crate::desktop_resources::hide_capsule_window(&window)?;
             }
             #[cfg(mobile)]
@@ -2032,8 +2024,6 @@ impl TauriCapsuleWindow {
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
     capsule: Arc<CapsuleWindowState>,
-    #[cfg(not(mobile))]
-    native: Arc<Mutex<Option<Arc<crate::native_capsule::NativeCapsule>>>>,
     qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
@@ -2045,8 +2035,6 @@ impl TauriCoordinatorHost {
         Self {
             app,
             capsule: Arc::new(CapsuleWindowState::default()),
-            #[cfg(not(mobile))]
-            native: Arc::new(Mutex::new(None)),
             qa_context,
         }
     }
@@ -2055,17 +2043,6 @@ impl TauriCoordinatorHost {
         // `bind` runs in Tauri's `setup`, on the event-loop thread.
         #[cfg(target_os = "windows")]
         let _ = MAIN_THREAD.set(std::thread::current().id());
-        #[cfg(not(mobile))]
-        if crate::desktop_resources::active() {
-            match crate::native_capsule::NativeCapsule::new(app.clone()) {
-                Ok(native) => {
-                    *self.native.lock() = Some(Arc::new(native));
-                }
-                Err(error) => {
-                    log::error!("[native-capsule] {error}; dictation remains available");
-                }
-            }
-        }
         *self.app.lock() = Some(app);
     }
 
@@ -2115,15 +2092,15 @@ impl TauriCoordinatorHost {
     }
 
     #[cfg(not(mobile))]
+    /// 原生胶囊渲染器已删除（原来只在低内存模式下启用，`configure` 始终传 false）。
+    /// 保留这个方法让调用方不必分支：音频提示音仍然在这里起停，胶囊本身由
+    /// Tauri 的 webview 窗口负责。
     pub(crate) fn present_native_capsule(
         &self,
         payload: &CapsulePayload,
-        epoch: u64,
+        _epoch: u64,
         previous: Option<CapsuleState>,
     ) -> bool {
-        if !crate::desktop_resources::active() {
-            return false;
-        }
         if let Some(app) = self.app() {
             let preferences = app
                 .state::<Arc<crate::coordinator::Coordinator>>()
@@ -2143,37 +2120,12 @@ impl TauriCoordinatorHost {
                 crate::native_audio_cue::stop();
             }
         }
-        if let Some(native) = self.native.lock().as_ref() {
-            if self.capsule.fallback_card_visible.load(Ordering::SeqCst)
-                || self.capsule.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD
-            {
-                native.stop();
-            } else {
-                native.present(payload, epoch, self.capsule.snapshot.lock().text.clone());
-            }
-        }
-        true
+        false
     }
 
     #[cfg(not(mobile))]
-    pub(crate) fn set_native_capsule_locale(&self, locale: String) {
-        if let Some(native) = self.native.lock().as_ref() {
-            native.set_locale(locale);
-        }
-    }
-
-    #[cfg(not(mobile))]
-    pub(crate) fn refresh_native_capsule_theme(&self) {
-        if let Some(native) = self.native.lock().as_ref() {
-            native.refresh_theme();
-        }
-    }
-
-    #[cfg(not(mobile))]
+    /// 原生胶囊删除后只保留音频提示音的收尾。
     pub(crate) fn stop_native_capsule(&self) {
-        if let Some(native) = self.native.lock().as_ref() {
-            native.stop();
-        }
         crate::native_audio_cue::stop();
     }
 
@@ -2250,12 +2202,10 @@ impl TauriCoordinatorHost {
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
         self.capsule.snapshot.lock().record_backend_event(event);
         #[cfg(not(mobile))]
-        if crate::desktop_resources::active()
-            && matches!(
-                event.kind,
-                openless_core::BackendEventKind::TranscriptDelta(_)
-            )
-        {
+        if matches!(
+            event.kind,
+            openless_core::BackendEventKind::TranscriptDelta(_)
+        ) {
             // Streaming text may arrive after capture stops, with no further level frames.
             let (session_id, text) = {
                 let snapshot = self.capsule.snapshot.lock();

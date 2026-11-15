@@ -85,7 +85,6 @@ tauri-plugin-fs = "2.7.1"
 
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-openless-capsule = { path = "../crates/openless-capsule", features = ["host"] }
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
 tauri = { version = "=2.12.4", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-updater = "=2.14.0"

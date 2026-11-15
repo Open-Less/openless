@@ -176,7 +176,7 @@ assert.match(
   /vars\.LINUX_ACCEPTED_RELEASE_TAG == github\.ref_name/,
   'Linux publication must be gated on the recorded device acceptance',
 );
-assert.doesNotMatch(tauriRelease, /release-linux-egui/, 'the egui pipeline is gone');
+assert.doesNotMatch(tauriRelease, /release-linux-host-legacy|release-linux-egui/);
 assert.match(
   tauriRelease,
   /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,

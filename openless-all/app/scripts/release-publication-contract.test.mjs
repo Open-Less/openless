@@ -134,8 +134,8 @@ const channelValidation = workflow('release-harmony.yml').jobs['build-harmony-ha
   (step) => step.name === 'Validate release channel',
 );
 assert.ok(channelValidation);
-// Linux 已恢复：只禁止旧的 egui 流水线，LINUX_ACCEPTED_RELEASE_TAG 是新的验收闸门。
-assert.doesNotMatch(JSON.stringify(unified), /release-linux-egui/);
+// Linux 已恢复：旧的 Linux 流水线文件必须消失，LINUX_ACCEPTED_RELEASE_TAG 是新的验收闸门。
+assert.doesNotMatch(JSON.stringify(unified), /release-linux-host-legacy/);
 assert.match(JSON.stringify(unified), /LINUX_ACCEPTED_RELEASE_TAG/);
 const tag = 'v2.0.2-Beta.7-tauri';
 const repository = 'Open-Less/openless';

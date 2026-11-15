@@ -13,7 +13,7 @@ Why bundle it instead of using the system copy:
   `ext_data_control_manager_v1`;
 - The glue is generated from the XML at build time by `wayland-scanner`. Depending on
   the system `/usr/share/wayland-protocols/` would mean **the build machine must have
-  wayland-protocols installed**, and the packaging path (`app/scripts/package-linux-egui.sh`
+  wayland-protocols installed**, and the packaging path (`app/scripts/package-linux-qt.sh`
   takes `build/libopenless.so` directly) does not guarantee that;
 - With it bundled, the build only needs `wayland-scanner` plus the `wayland-client`
   headers/library (CMake reports the missing pieces explicitly).

@@ -594,7 +594,6 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
     if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
         coordinator.sync_capsule_style_from_preferences();
         #[cfg(not(mobile))]
-        coordinator.tauri_host().refresh_native_capsule_theme();
     }
     let _ = app.emit("prefs:changed", &preferences);
 }
