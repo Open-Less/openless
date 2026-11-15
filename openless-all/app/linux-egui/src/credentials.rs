@@ -454,6 +454,23 @@ impl CredentialStore for LinuxCredentialStore {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let state_handle = Arc::clone(&self.state);
         let metadata_path = self.metadata_path.clone();
+        // 同步范围之外的 key（Marketplace / Application）必须保留：
+        // `read()` 用这份索引判断可见性，整份覆盖会让 GitHub token 立刻消失。
+        let preserved_keys: Vec<CredentialKey> = state_handle
+            .lock()
+            .expect("credential metadata lock poisoned")
+            .keys
+            .iter()
+            .filter(|key| {
+                !matches!(
+                    key.namespace,
+                    CredentialNamespace::Asr
+                        | CredentialNamespace::Llm
+                        | CredentialNamespace::Omni
+                )
+            })
+            .cloned()
+            .collect();
         Box::pin(async move {
             use openless_core::credentials::{
                 ChannelSummary, CredentialKey, CredentialMetadata, SyncNamespace,
@@ -501,7 +518,7 @@ impl CredentialStore for LinuxCredentialStore {
                     );
                 }
             }
-            let mut keys = Vec::new();
+            let mut keys: Vec<CredentialKey> = preserved_keys.clone();
             for record in &snapshot.credentials {
                 for (account, value) in &record.accounts {
                     let key = CredentialKey::new(
@@ -1874,5 +1891,54 @@ mod sync_credentials_roundtrip {
             snapshot.channels, again.channels,
             "replace 后渠道记录必须逐字段一致（含 configuration）"
         );
+    }
+}
+
+#[cfg(test)]
+mod sync_credentials_preserve {
+    use super::*;
+    use openless_core::credentials::ExclusivePermit;
+
+    /// 恢复（replace）不能把同步范围之外的 key 弄丢 —— Marketplace 的 GitHub
+    /// token 就在那里。丢了之后的症状是「恢复完成却要求重新登录」。
+    #[test]
+    fn replace_keeps_marketplace_token_visible() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-linux-sync-preserve-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = LinuxCredentialStore::open(&root).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let token_key = CredentialKey::new(
+            CredentialNamespace::Marketplace,
+            None,
+            "marketplace.github.token",
+        )
+        .unwrap();
+        runtime
+            .block_on(store.write(token_key.clone(), SecretValue::new("gho_test")))
+            .unwrap();
+
+        let gate = openless_core::cloud_sync_e2ee_store::gate::SyncWriteGate::open(
+            root.join("generation.json"),
+        )
+        .unwrap();
+        let permit: ExclusivePermit = gate.try_exclusive().unwrap();
+        let empty = openless_core::credentials::SyncCredentials {
+            channels: Vec::new(),
+            credentials: Vec::new(),
+        };
+        runtime
+            .block_on(store.replace_sync_credentials(empty, &permit))
+            .unwrap();
+
+        let value = runtime
+            .block_on(store.read(token_key))
+            .unwrap()
+            .expect("Marketplace token 必须仍然可见");
+        assert_eq!(value.expose_secret(), "gho_test");
     }
 }
