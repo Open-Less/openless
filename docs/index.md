@@ -10,13 +10,13 @@
 - [桌面验收清单](2.0-desktop-acceptance.md)：功能域 → 源码入口 → 必须的真实证据。
 - [发布规范](../RELEASING.md)：分支、渠道、版本同步和平台发布条件。
 
-## Linux 接入交接（host，目录内互链）
+## Linux 接入交接（egui，目录内互链）
 
-- [交接总览](linux-host-handoff/README.md)：阅读顺序、责任与复用起点。
-- [01 Core 合同](linux-host-handoff/01-core-contract.md)、[02 缺口登记](linux-host-handoff/02-gap-register.md)（L01–L12）、[03 热键与窗口](linux-host-handoff/03-hotkeys-and-windows.md)、[04 页面与领域](linux-host-handoff/04-ui-domains.md)、[05 原生宿主与数据](linux-host-handoff/05-native-host-and-data.md)、[06 事件与会话](linux-host-handoff/06-events-and-sessions.md)、[07 验收](linux-host-handoff/07-acceptance.md)。
+- [交接总览](linux-egui-handoff/README.md)：阅读顺序、责任与复用起点。
+- [01 Core 合同](linux-egui-handoff/01-core-contract.md)、[02 缺口登记](linux-egui-handoff/02-gap-register.md)（L01–L12）、[03 热键与窗口](linux-egui-handoff/03-hotkeys-and-windows.md)、[04 页面与领域](linux-egui-handoff/04-ui-domains.md)、[05 原生宿主与数据](linux-egui-handoff/05-native-host-and-data.md)、[06 事件与会话](linux-egui-handoff/06-events-and-sessions.md)、[07 验收](linux-egui-handoff/07-acceptance.md)。
 
-- [Linux host 日志约定](linux-host-logging.md)：级别语义、`OPENLESS_LOG` 开关、轮转策略与不记录的内容。
-- [Linux 已知缺口](linux-host-known-gaps.md)：当前仍未闭环的行为与复现路径（如 G01 纠错卡）。
+- [Linux egui 日志约定](linux-egui-logging.md)：级别语义、`OPENLESS_LOG` 开关、轮转策略与不记录的内容。
+- [Linux 已知缺口](linux-egui-known-gaps.md)：当前仍未闭环的行为与复现路径（如 G01 纠错卡）。
 
 ## 接口契约
 
@@ -24,7 +24,7 @@
 
 - [官方云同步](cloud-sync.md)：可同步字段、GitHub 身份边界、版本冲突、本地恢复与验证。
 - [云同步服务端交接](cloud-sync-server-handoff.md)：同步服务地址与端口（apic.openless.top:9443）、客户端请求行为、状态码映射与服务端验收清单。
-- [Linux host 后端契约](linux-host-backend-contract.md)：`contract/backend-2.0.json`、启动快照、事件面与公开签名。
+- [Linux egui 后端契约](linux-egui-backend-contract.md)：`contract/backend-2.0.json`、启动快照、事件面与公开签名。
 
 ## 平台与运营
 
@@ -54,6 +54,6 @@
 
 - `npm test`：构建 React + 全部前端/合同测试（含 Core 快捷键回归）。
 - `npm run build && npm run test:ui-motion`：生产前端的 Chromium/WebKit 动效交互回归；运行前使用 `npx playwright install --with-deps chromium webkit` 安装测试浏览器。
-- `cargo fmt --all --check`：根 workspace 的 openless-core、linux-host；Tauri 单独执行 `cargo fmt --manifest-path src-tauri/Cargo.toml --check`。
-- `cargo test -p openless-core --locked`、`cargo test -p openless-linux-host --locked`。
-- `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建。源码构建 Tauri 前初始化子模块：`git submodule update --init --recursive`；Core/Linux 独立检查不依赖 Tauri 子模块。
+- `cargo fmt --all --check`：根 workspace 的 openless-core、linux-egui；Tauri 单独执行 `cargo fmt --manifest-path src-tauri/Cargo.toml --check`。
+- `cargo test -p openless-core --locked`、`cargo test -p openless-linux-egui --locked`。
+- `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建；`src-tauri/vendor/` 的 `cpal`、`tauri-runtime-wry` 已随仓库签入，**无需初始化 Git 子模块**。Core/Linux 独立检查不依赖 Tauri 与 vendor 目录。

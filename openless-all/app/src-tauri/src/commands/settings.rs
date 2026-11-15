@@ -825,9 +825,22 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         (Ok(update), Err(_)) => update,
         (Err(mirror), Err(github)) => return Err(format!("Aliyun: {mirror}; GitHub: {github}")),
     };
-    let Some(update) = update else {
+    let Some(mut update) = update else {
         return Ok(None);
     };
+    // PR #1399's source policy, without giving up independent GitHub discovery.
+    // Preserve the same version/signature even if the rolling CDN manifest lags.
+    let chosen =
+        crate::update_source::resolve_artifact_download_url(update.download_url.as_str()).await;
+    update.download_url = url::Url::parse(&chosen).map_err(|e| e.to_string())?;
+    update.raw_json["url"] = serde_json::Value::String(chosen);
+    update.timeout = Some(std::time::Duration::from_secs(
+        if update.download_url.host_str() == Some("dl.aeoform.com") {
+            120
+        } else {
+            600
+        },
+    ));
     // Passing through the date field would require the time crate; the frontend
     // AutoUpdate.tsx never uses date, so set it to None here and avoid pulling a new dep
     // into src-tauri/Cargo.toml.
@@ -840,6 +853,41 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         rid: webview.resources_table().add(update),
     };
     Ok(Some(metadata))
+}
+
+/// Retry only the exact stored signed artifact, never re-discover a different version.
+#[tauri::command]
+#[cfg(not(mobile))]
+pub async fn app_update_github_fallback<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    rid: tauri::ResourceId,
+) -> Result<AppUpdateMetadata, String> {
+    let resource = webview
+        .resources_table()
+        .get::<tauri_plugin_updater::Update>(rid)
+        .map_err(|e| e.to_string())?;
+    let mut update = (*resource).clone();
+    let fallback =
+        crate::update_source::github_fallback_for_cdn_artifact(update.download_url.as_str())
+            .ok_or("No GitHub fallback for this update source")?;
+    update.download_url = url::Url::parse(&fallback).map_err(|e| e.to_string())?;
+    update.raw_json["url"] = serde_json::Value::String(fallback);
+    update.timeout = Some(std::time::Duration::from_secs(600));
+    Ok(AppUpdateMetadata {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date: None,
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    })
+}
+
+#[tauri::command]
+#[cfg(mobile)]
+pub async fn app_update_github_fallback(rid: u32) -> Result<AppUpdateMetadata, String> {
+    let _ = rid;
+    Err("Desktop-only update retry".into())
 }
 
 /// The Beta manifest endpoint, with `{{target}}` / `{{arch}}` left in place for

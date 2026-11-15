@@ -217,6 +217,7 @@ export {
   fetchLatestBetaRelease,
   appCheckUpdateWithChannel,
   appDownloadAndInstallAndroidUpdate,
+  appUpdateGithubFallback,
 } from './updater';
 
 // remote-server

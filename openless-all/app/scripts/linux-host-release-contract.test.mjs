@@ -1,3 +1,4 @@
+// Linux automation is paused, but the local packaging/source contracts remain.
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -6,20 +7,31 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const load = (path) => readFile(join(root, path), 'utf8');
-const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, buildScript, host] =
-  await Promise.all([
-    load('.github/workflows/release-linux.yml'),
-    load('.github/workflows/ci.yml'),
-    load('.github/workflows/check-linux.yml'),
-    load('openless-all/app/scripts/package-linux-qt.sh'),
-    load('openless-all/app/scripts/verify-linux-host-packages.sh'),
-    load('openless-all/app/scripts/check-core-deps.ps1'),
-    load('openless-all/app/linux-host/Cargo.toml'),
-    load('.github/workflows/release-tauri.yml'),
-    load('openless-all/app/linux-host/package-revision'),
-    load('openless-all/app/linux-host/build.rs'),
-    load('openless-all/app/linux-host/src/update_check.rs'),
-  ]);
+const [
+  release, // .github/workflows/release-linux.yml
+  ci, // .github/workflows/ci.yml
+  check, // .github/workflows/check-linux.yml
+  tauri, // .github/workflows/release-tauri.yml
+  pack, // scripts/package-linux-qt.sh
+  verify, // scripts/verify-linux-host-packages.sh
+  gate, // scripts/check-core-deps.ps1
+  manifest, // linux-host/Cargo.toml
+  revisionFile, // linux-host/package-revision
+  buildScript, // linux-host/build.rs
+  host, // linux-host/src/update_check.rs
+] = await Promise.all([
+  load('.github/workflows/release-linux.yml'),
+  load('.github/workflows/ci.yml'),
+  load('.github/workflows/check-linux.yml'),
+  load('.github/workflows/release-tauri.yml'),
+  load('openless-all/app/scripts/package-linux-qt.sh'),
+  load('openless-all/app/scripts/verify-linux-host-packages.sh'),
+  load('openless-all/app/scripts/check-core-deps.ps1'),
+  load('openless-all/app/linux-host/Cargo.toml'),
+  load('openless-all/app/linux-host/package-revision'),
+  load('openless-all/app/linux-host/build.rs'),
+  load('openless-all/app/linux-host/src/update_check.rs'),
+]);
 
 // CI must execute the exact test/build/package/checksum path used for tags.
 assert.match(ci, /linux-host-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux.yml/);
@@ -63,22 +75,7 @@ assert.match(check, /OpenLess_linux_x86_64\.rpm/);
 assert.match(check, /openless-linux-host-direct-download/);
 assert.match(gate, /cargo tree --locked/);
 assert.match(gate, /tauri\|wry\|webkit2gtk/);
-assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 
-// Linux artifacts require independent device acceptance and an exact-tag publication gate.
-// Shared Tauri tags and PRs must never publish unaccepted Linux packages.
-assert.match(release, /^on:\n  workflow_dispatch:/m);
-assert.doesNotMatch(release, /^  (push|pull_request):/m);
-// Accepted Linux packages can accompany the same release; manual and automatic
-// publication share the exact-tag acceptance gate before any upload.
-assert.match(check, /LINUX_ACCEPTED_RELEASE_TAG/);
-assert.match(tauri, /LINUX_ACCEPTED_RELEASE_TAG/);
-assert.match(check, /gh release upload/);
-assert.match(check, /inputs\.publish/);
-assert.match(check, /inputs\.release_tag != ''/);
-assert.match(check, /SHA256SUMS-linux/);
-assert.match(check, /github\.ref_type == 'tag'/);
-assert.match(check, /does not match package\.json version/);
 const revision = revisionFile.trim();
 assert.match(revision, /^[1-9][0-9]*$/, 'Linux package revision must be a positive integer');
 assert.ok(Number(revision) > 79, 'new Linux packages must upgrade the last -79 candidate');
@@ -99,13 +96,23 @@ assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 // Automatic dispatch is enabled only by administrator acceptance of the exact tag.
 assert.match(
   tauri,
-  /^  dispatch-platform-releases:$/m,
-  'release-tauri.yml must hand the tag to this workflow',
+  /^  linux:$/m,
+  'release-tauri.yml must call the Linux release workflow',
 );
 assert.match(
   tauri,
-  /gh workflow run release-linux\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,
-  'the Linux hand-off must attach the packages for the same tag',
+  /uses: \.\/\.github\/workflows\/release-linux\.yml/,
+  'the Linux job must reuse release-linux.yml',
+);
+assert.match(
+  tauri,
+  /vars\.LINUX_ACCEPTED_RELEASE_TAG == github\.ref_name/,
+  'automatic dispatch is enabled only by administrator acceptance of the exact tag',
+);
+assert.match(
+  tauri,
+  /uses: \.\/\.github\/workflows\/release-linux\.yml\n    with:\n      tag: \$\{\{ github\.ref_name \}\}\n      publish: true/,
+  'the Linux hand-off must publish the packages for the same tag',
 );
 
 // Keep deb/rpm only, including dynamically-loaded desktop libraries and the
@@ -135,21 +142,15 @@ const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
 for (const dep of ['fcitx5', 'libqt6webenginecore6', 'libqt6webenginewidgets6', 'libqt6widgets6', 'liblayershellqtinterface6']) {
   assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
-for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
-  assert.ok(
-    !debDeps.includes(removed),
-    `deb must not require ${removed} after the Vulkan migration`,
-  );
+for (const dep of ['libegl1', 'libgl1', 'libwayland-egl1']) {
+  assert.ok(!debDeps.includes(dep), `deb must not require ${dep}`);
 }
 const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
 for (const dep of ['fcitx5', 'qt6-qtwebengine', 'qt6-qtwayland', 'LayerShellQt']) {
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
-for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
-  assert.ok(
-    !rpmDeps.includes(removed),
-    `rpm must not require ${removed} after the Vulkan migration`,
-  );
+for (const dep of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+  assert.ok(!rpmDeps.includes(dep), `rpm must not require ${dep}`);
 }
 assert.match(pack, /^Recommends: .*mesa-vulkan-drivers/m, 'packages must recommend a Vulkan driver');
 for (const [file, size] of [

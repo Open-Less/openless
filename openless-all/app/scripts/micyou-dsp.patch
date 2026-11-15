@@ -66,19 +66,47 @@
              processing_chain: vec![
                  "AEC".to_string(),
                  "NoiseReduction".to_string(),
-@@ -117,11 +121,6 @@
+@@ -116,38 +120,7 @@
+         if !matches!(self.ns_type.as_str(), "PureVox" | "RNNoise" | "Speexdsp") {
              self.ns_type = Self::default().ns_type;
          }
-     }
+-        self.enforce_aec_availability();
+-    }
+-
+-    /// Clears `aec_enabled` when this platform cannot capture a far-end
+-    /// reference, so a configuration that was force-enabled by hand (or carried
+-    /// over from another machine) is downgraded instead of processing without
+-    /// echo cancellation while the UI claims it is running.
+-    ///
+-    /// Returns `true` when the stored value had to be changed.
+-    pub fn enforce_aec_availability(&mut self) -> bool {
+-        self.apply_aec_availability(crate::aec::aec_reference_availability())
+-    }
+-
+-    fn apply_aec_availability(&mut self, availability: crate::aec::AecAvailability) -> bool {
+-        if !self.aec_enabled || availability.available {
+-            return false;
+-        }
+-        log::warn!(
+-            "[AEC] Disabled: no far-end reference capture is available ({})",
+-            availability
+-                .reason
+-                .map(|reason| reason.as_str())
+-                .unwrap_or("unknown")
+-        );
+-        self.aec_enabled = false;
+-        true
+-    }
 -}
 -
 -/// Default output playback buffer headroom in milliseconds.
 -fn default_output_buffer_ms() -> u32 {
 -    300
++    }
  }
  
  // ─── Shared STFT window helpers ───────────────────────────────────────────
-@@ -874,76 +873,13 @@
+@@ -900,76 +873,13 @@
      }
  }
  
@@ -157,7 +185,7 @@
      // RNNoise states - separate per channel to avoid RNN state cross-contamination
      #[cfg(feature = "dsp")]
      denoiser_left: Box<DenoiseState<'static>>,
-@@ -983,9 +919,6 @@
+@@ -1009,9 +919,6 @@
      speex_ns: SpeexStyleNS,
      // Equalizer
      equalizer: EqualizerEffect,
@@ -167,7 +195,7 @@
      // Dereverb state
      dereverb_buffer_left: Vec<f32>,
      dereverb_buffer_right: Vec<f32>,
-@@ -996,6 +929,9 @@
+@@ -1022,6 +929,9 @@
      agc_smoothed_gain: f32,
      // VAD fade state (0.0 = muted, 1.0 = full)
      vad_fade: f32,
@@ -177,7 +205,7 @@
      // Spectrum snapshots
      raw_spectrum: Vec<f32>,
      processed_spectrum: Vec<f32>,
-@@ -1038,10 +974,59 @@
+@@ -1064,10 +974,59 @@
  
  const RNNOISE_FRAME_SIZE: usize = 480;
  
@@ -237,7 +265,7 @@
              #[cfg(feature = "dsp")]
              denoiser_left: DenoiseState::new(),
              #[cfg(feature = "dsp")]
-@@ -1069,13 +1054,15 @@
+@@ -1095,13 +1054,15 @@
              #[cfg(feature = "dsp")]
              speex_ns: SpeexStyleNS::new(),
              equalizer: EqualizerEffect::new(),
@@ -254,7 +282,7 @@
              raw_spectrum: vec![0.0; 64],
              processed_spectrum: vec![0.0; 64],
              accum_buffer: Vec::new(),
-@@ -1101,6 +1088,7 @@
+@@ -1127,6 +1088,7 @@
          }
  
          let raw_rms = compute_rms(data);
@@ -262,7 +290,7 @@
          self.compute_spectrum(data, true);
  
          // Frame accumulation: align to 480*channels samples before processing,
-@@ -1176,6 +1164,14 @@
+@@ -1202,6 +1164,14 @@
                              settings.agc_target,
                              attack_rate,
                              decay_rate,
@@ -277,7 +305,7 @@
                          );
                      }
                  }
-@@ -1186,7 +1182,12 @@
+@@ -1212,7 +1182,12 @@
                      // Legacy synthetic plugin stage (may be absent): runs
                      // every registered plugin at this chain position.
                      if let Some(hook) = &mut self.external_hook {
@@ -291,7 +319,7 @@
                      }
                  }
                  node if node.starts_with(PLUGIN_NODE_PREFIX) => {
-@@ -1200,8 +1201,8 @@
+@@ -1226,8 +1201,8 @@
              }
          }
  
@@ -302,7 +330,7 @@
  
          // Soft clip — avoids harsh hard-clipping artifacts (crackling/pops)
          for sample in self.output_buffer.iter_mut() {
-@@ -1368,14 +1369,45 @@
+@@ -1394,14 +1369,45 @@
          channels: usize,
          settings: &AudioDspSettings,
      ) {
@@ -352,7 +380,7 @@
          }
      }
  
-@@ -1397,18 +1429,19 @@
+@@ -1423,18 +1429,19 @@
              }
  
              // Process each channel with its own denoiser (no RNN state cross-contamination)
@@ -374,7 +402,7 @@
  
              data.clear();
              for i in 0..frames {
-@@ -1416,7 +1449,7 @@
+@@ -1442,7 +1449,7 @@
                  data.push(right[i]);
              }
          } else {
@@ -383,7 +411,7 @@
                  data,
                  &mut self.ns_buffer_left,
                  &mut self.denoiser_left,
-@@ -1431,12 +1464,13 @@
+@@ -1457,12 +1464,13 @@
          ns_buffer: &mut Vec<f32>,
          denoiser: &mut DenoiseState<'static>,
          intensity: f32,
@@ -398,7 +426,7 @@
  
          while ns_buffer.len() >= RNNOISE_FRAME_SIZE {
              let frame: Vec<f32> = ns_buffer.drain(..RNNOISE_FRAME_SIZE).collect();
-@@ -1444,7 +1478,8 @@
+@@ -1470,7 +1478,8 @@
              let input_frame: Vec<f32> = frame.iter().map(|s| s * 32767.0).collect();
              let mut output_frame = vec![0.0f32; RNNOISE_FRAME_SIZE];
  
@@ -408,7 +436,7 @@
  
              for i in 0..RNNOISE_FRAME_SIZE {
                  let clean = output_frame[i] / 32767.0;
-@@ -1463,6 +1498,7 @@
+@@ -1489,6 +1498,7 @@
          }
  
          data.copy_from_slice(&output);
@@ -416,7 +444,7 @@
      }
  
      #[cfg(feature = "noise-suppression")]
-@@ -1618,7 +1654,14 @@
+@@ -1644,7 +1654,14 @@
  
      // ── AGC ─────────────────────────────────────────────────────────────────
  
@@ -432,7 +460,7 @@
          let target_linear = target / 32767.0;
          // Noise gate threshold: below this level, don't apply AGC gain
          // (prevents amplifying hiss/noise floor during speech pauses)
-@@ -1633,7 +1676,7 @@
+@@ -1659,7 +1676,7 @@
              }
              if self.agc_envelope > gate_threshold {
                  let desired_gain = target_linear / self.agc_envelope;
@@ -441,7 +469,7 @@
                  // Smooth gain transition to avoid pops (exponential moving average)
                  let smooth_factor = 0.005_f32;
                  self.agc_smoothed_gain += smooth_factor * (clamped_gain - self.agc_smoothed_gain);
-@@ -1671,59 +1714,34 @@
+@@ -1697,59 +1714,34 @@
  
      // ── Spectrum ─────────────────────────────────────────────────────────────
  
@@ -524,7 +552,54 @@
      }
  }
  
-@@ -2096,11 +2114,13 @@
+@@ -2026,46 +2018,6 @@
+             "AGC should have amplified the signal"
+         );
+     }
+-
+-    #[test]
+-    fn aec_is_downgraded_when_no_reference_is_available() {
+-        let mut settings = AudioDspSettings {
+-            aec_enabled: true,
+-            ..Default::default()
+-        };
+-
+-        assert!(settings.apply_aec_availability(crate::aec::AecAvailability::unsupported()));
+-        assert!(!settings.aec_enabled);
+-        // Idempotent: a second pass has nothing left to downgrade.
+-        assert!(!settings.apply_aec_availability(crate::aec::AecAvailability::unsupported()));
+-    }
+-
+-    #[test]
+-    fn aec_is_kept_when_a_reference_is_available() {
+-        let mut settings = AudioDspSettings {
+-            aec_enabled: true,
+-            ..Default::default()
+-        };
+-
+-        assert!(!settings.apply_aec_availability(crate::aec::AecAvailability::ready()));
+-        assert!(settings.aec_enabled);
+-    }
+-
+-    #[test]
+-    fn downgrade_leaves_other_stages_untouched() {
+-        let mut settings = AudioDspSettings {
+-            aec_enabled: true,
+-            ns_enabled: true,
+-            gain: 6.0,
+-            ..Default::default()
+-        };
+-
+-        settings.apply_aec_availability(crate::aec::AecAvailability::unsupported());
+-
+-        assert!(!settings.aec_enabled);
+-        assert!(settings.ns_enabled);
+-        assert_eq!(settings.gain, 6.0);
+-    }
+ }
+ 
+ // ─── Native model property tests ──────────────────────────────────────────
+@@ -2162,11 +2114,13 @@
      #[test]
      fn dsp_processor_chain_smoke() {
          // Full chain: AEC → PureVox NS through the public DspProcessor API.
@@ -543,7 +618,7 @@
          let settings = Arc::new(RwLock::new(settings));
          let mut dsp = DspProcessor::new(settings, None);
  
-@@ -2127,3 +2147,42 @@
+@@ -2193,3 +2147,42 @@
          );
      }
  }

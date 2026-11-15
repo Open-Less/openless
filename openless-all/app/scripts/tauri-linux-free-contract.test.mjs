@@ -82,14 +82,31 @@ try {
   // absent, as expected
 }
 
-// ── 3. React: no Linux branch (i18n copy is excluded, see the header) ────────
+// ── 3. React: Linux branches must go through the capability layer ───────────
+// Linux 现在和 macOS/Windows 共用同一份 React 界面：允许的能力判断只有
+// `PlatformCapabilities`（`linuxHost` / `supports*`）与 `detectOS() === 'linux'`。
+// 不允许再出现旧的 Linux 专属实现（自定义标题栏常量、`ol-linux-*` 类名）。
+const ALLOWED_LINUX_FILES = new Set([
+  'lib/platform.ts', // 能力表本身就是 Linux 分支的家
+  'components/WindowChrome.tsx', // detectOS() 返回 'linux'
+  'pages/settings/navigation.ts', // 按平台决定哪些设置页可见
+  'pages/settings/tabs.tsx', // 同上（页面取舍）
+  'pages/settings/PermissionsSection.tsx', // fcitx5 输入法后端状态行
+  'pages/settings/RecordingInputSection.tsx',
+  'pages/settings/SelectionWorkspaceSection.tsx',
+  'pages/settings/ChannelList.test.ts',
+  'components/Capsule.tsx',
+]);
 const reactFiles = await collect(reactSrc, new Set(['.ts', '.tsx']), {
   skip: (path) => /[/\\]i18n[/\\]/.test(path),
 });
 for (const file of reactFiles) {
   if (file.endsWith('.test.ts') || file.endsWith('.test.tsx')) continue;
+  const relative = file.slice(reactSrc.length + 1).split(/[/\\]/).join('/');
   const source = await readFile(file, 'utf8');
-  for (const pattern of [/LINUX_TITLEBAR_HEIGHT/, /ol-linux-/, /['"]linux['"]/]) {
+  const patterns = [/LINUX_TITLEBAR_HEIGHT/, /ol-linux-/];
+  if (!ALLOWED_LINUX_FILES.has(relative)) patterns.push(/['"]linux['"]/);
+  for (const pattern of patterns) {
     const match = source.match(pattern);
     if (match) failures.push(`${file}: React still branches on Linux (${match[0]})`);
   }

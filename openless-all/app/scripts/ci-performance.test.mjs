@@ -137,8 +137,13 @@ ci-shared = { path = "../shared" }
     join(cargoScratch, 'backend/src/lib.rs'),
     '#[test] fn shared_contract() { assert_eq!(ci_shared::value(), 42); }',
   );
-  const cargoEnv = { ...process.env, CARGO_PROFILE_TEST_DEBUG: '0' };
-  delete cargoEnv.CARGO_TARGET_DIR;
+  // Removing the env variable is insufficient: ~/.cargo/config.toml may still
+  // redirect the first build elsewhere. Pin every fixture command explicitly.
+  const cargoEnv = {
+    ...process.env,
+    CARGO_PROFILE_TEST_DEBUG: '0',
+    CARGO_TARGET_DIR: join(cargoScratch, 'host/target'),
+  };
   const cargo = (args) =>
     spawnSync('cargo', [...args, '--offline'], {
       cwd: cargoScratch,
