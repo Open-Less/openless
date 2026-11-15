@@ -233,8 +233,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qt6-base-dev qt6-webengine-dev liblayershellqtinterface-dev \
-            qt6-wayland-dev libqt6webenginewidgets6 libqt6webenginecore6
+            qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
+            liblayershellqtinterface-dev qt6-wayland-dev \
+            libqt6webenginewidgets6 libqt6webenginecore6
 
       - name: Build Qt window host
         timeout-minutes: 25
