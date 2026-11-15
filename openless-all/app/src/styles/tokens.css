@@ -103,6 +103,11 @@
   --ol-font-body: var(--ol-font-sans);
   --ol-font-numeric: var(--ol-font-sans);
   --ol-reading-width: 72ch;
+  /* Content panes use a 12-column grid. Sidebars stay fixed chrome outside it. */
+  --ol-grid-columns: 12;
+  --ol-grid-gutter: 16px;
+  --ol-grid-margin: 24px;
+  --ol-grid-margin-compact: 16px;
   --ol-font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --ol-font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
 

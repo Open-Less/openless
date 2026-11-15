@@ -278,7 +278,9 @@ export const zhCN = {
     close: '关闭',
     show: '显示',
     hide: '隐藏',
+    apiKeySaved: 'API 密钥已保存',
     saved: '已保存',
+    deleted: '已删除',
     refreshed: '已刷新',
     saving: '保存中',
     experimental: '实验性',
@@ -348,6 +350,9 @@ export const zhCN = {
     title: '随便问',
     headerHint: '随时提问',
     thinking: '思考中…',
+    thoughtLive: '思考中（用时 {{seconds}} 秒）',
+    thoughtDone: '已思考（用时 {{seconds}} 秒）',
+    stop: '停止',
     error: '出错了，请稍后再试。',
     errorRetry: '重试',
     errorRetryHint: '请再试一次。',
@@ -500,6 +505,7 @@ export const zhCN = {
   shell: {
     shortcutLabel: '录音快捷键',
     shortcutHint: '开始 / 停止',
+    homeLabel: '返回概览',
     betaTag: 'BETA',
     betaNote: '本地存储，可选云端备份',
     navHint: {

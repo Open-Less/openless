@@ -1549,7 +1549,11 @@ function ProviderTools({
           options={models.map((model) => ({ value: model, label: model }))}
           placeholder={t('settings.providers.selectModel')}
           ariaLabel={t('settings.providers.selectModel')}
-          style={{ width: '100%', minWidth: 0, height: 36 }}
+          style={{ width: 'calc(100% - 38px)', minWidth: 0, height: 36 }}
+          popupStyle={{
+            minWidth: 'min(280px, calc(100vw - 24px))',
+            maxWidth: 'min(380px, calc(100vw - 24px))',
+          }}
         />
       )}
     </div>
@@ -1740,6 +1744,11 @@ function CredentialField({
   const debounceRef = useRef<number | null>(null);
   const statusRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  // Initial credential reads can be slow over IPC. Keep the field editable while the
+  // read is pending; never overwrite text the user already typed when it resolves.
+  const editedRef = useRef(false);
+  const loadedRef = useRef(false);
+  const valueRef = useRef('');
   const editRevision = useRef(0);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const lastWriteOk = useRef(true);
@@ -1751,6 +1760,7 @@ function CredentialField({
     [account],
   );
   const markMutation = () => {
+    editedRef.current = true;
     editRevision.current += 1;
     onUserMutation?.();
   };
@@ -1758,9 +1768,12 @@ function CredentialField({
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
+    loadedRef.current = false;
     setDirty(false);
     setStatus('idle');
     setValue('');
+    valueRef.current = '';
+    editedRef.current = false;
     onValueChange?.('');
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -1769,16 +1782,33 @@ function CredentialField({
     readCredential(account, provider)
       .then((v) => {
         if (cancelled) return;
-        setValue(v ?? '');
-        onValueChange?.(v ?? '');
         setLoaded(true);
+        loadedRef.current = true;
+        if (editedRef.current) {
+          // The user already started typing. Persist their value once writes are allowed.
+          setDirty(true);
+          window.setTimeout(() => {
+            if (!cancelled && mountedRef.current) void save(valueRef.current, true);
+          }, 0);
+          return;
+        }
+        setValue(v ?? '');
+        valueRef.current = v ?? '';
+        onValueChange?.(v ?? '');
       })
       .catch((error) => {
         if (cancelled) return;
         console.error('[settings] failed to read credential', account, error);
-        onValueChange?.('');
+        if (!editedRef.current) onValueChange?.('');
         setLoaded(true);
+        loadedRef.current = true;
         setStatus('readError');
+        if (editedRef.current) {
+          setDirty(true);
+          window.setTimeout(() => {
+            if (!cancelled && mountedRef.current) void save(valueRef.current, true);
+          }, 0);
+        }
       });
     return () => {
       cancelled = true;
@@ -1794,20 +1824,21 @@ function CredentialField({
     };
   }, []);
 
-  // Design: except readError (a persistent error that stays next to the input to mark the field
-  // unavailable), all saving / saved / saveError / copied / copyError states go to the top-right
-  // SavedToast. Inline text was too cramped and inconsistent with other pages' toast style.
   const showTemporaryStatus = (next: CredentialFieldStatus) => {
     if (next === 'saving') {
-      emitSaved('saving', t('common.saving'));
+      emitSaved('saving', t('common.saving'), `credential:${provider}:${account}`);
     } else if (next === 'saved') {
-      emitSaved('saved', t('common.saved'));
+      emitSaved(
+        'saved',
+        account.endsWith('api_key') ? t('common.apiKeySaved') : t('common.saved'),
+        `credential:${provider}:${account}`,
+      );
     } else if (next === 'saveError') {
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', t('common.operationFailed'), `credential:${provider}:${account}`);
     } else if (next === 'copied') {
       emitSaved('saved', t('common.copied'));
     } else if (next === 'copyError') {
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', t('common.operationFailed'), `credential:${provider}:${account}`);
     }
     setStatus(next);
     if (statusRef.current) clearTimeout(statusRef.current);
@@ -1815,11 +1846,11 @@ function CredentialField({
   };
 
   const save = async (v: string, force = false) => {
-    if (!loaded || (!dirty && !force)) return;
+    if (!loadedRef.current || (!dirty && !force)) return;
     if (!mountedRef.current) return;
     const revision = editRevision.current;
     setStatus('saving');
-    emitSaved('saving', t('common.saving'));
+    emitSaved('saving', t('common.saving'), `credential:${provider}:${account}`);
     try {
       // Write in edit order; an older request finishing must not mark the newer value as saved.
       const write = saveQueue.current
@@ -1843,7 +1874,7 @@ function CredentialField({
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    if (loaded && dirty) await save(value, true);
+    if (loadedRef.current && dirty) await save(value, true);
     await saveQueue.current.catch(() => undefined);
     return lastWriteOk.current;
   };
@@ -1852,15 +1883,17 @@ function CredentialField({
     markMutation();
     const v = e.target.value;
     setValue(v);
+    valueRef.current = v;
     onValueChange?.(v);
-    if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => save(v, true), 300);
+    debounceRef.current = window.setTimeout(() => {
+      if (loadedRef.current) void save(v, true);
+    }, 300);
   };
 
   const onBlur = () => {
-    if (!loaded || !dirty) return;
+    if (!loadedRef.current || !dirty) return;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -1869,9 +1902,10 @@ function CredentialField({
   };
 
   const fillDefault = async () => {
-    if (!loaded || !defaultValue) return;
+    if (!loadedRef.current || !defaultValue) return;
     markMutation();
     setValue(defaultValue);
+    valueRef.current = defaultValue;
     onValueChange?.(defaultValue);
     setDirty(true);
     await save(defaultValue, true);
@@ -1892,7 +1926,7 @@ function CredentialField({
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
-  const disabled = !loaded || form?.leaving;
+  const disabled = form?.leaving;
   const showInsecureEndpointWarning =
     (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint') &&
     value.trim().toLowerCase().startsWith('http://');
@@ -1910,7 +1944,7 @@ function CredentialField({
             value={presetValue}
             options={endpointPresets.options}
             placeholder={loaded ? t('settings.providers.presets.custom') : t('common.loading')}
-            disabled={disabled || status === 'readError'}
+            disabled={disabled}
             ariaLabel={endpointPresets.label}
             onChange={(next) => {
               if (debounceRef.current) {
@@ -1919,9 +1953,10 @@ function CredentialField({
               }
               markMutation();
               setValue(next);
+              valueRef.current = next;
               onValueChange?.(next);
               setDirty(true);
-              void save(next, true);
+              if (loaded) void save(next, true);
             }}
             style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
           />
@@ -1951,10 +1986,10 @@ function CredentialField({
                   }
                   markMutation();
                   setValue(v);
+                  valueRef.current = v;
                   onValueChange?.(v);
-                  if (!loaded) return;
                   setDirty(true);
-                  void save(v, true);
+                  if (loaded) void save(v, true);
                 }}
                 options={[
                   ...(value && !options.some((o) => o.value === value)
@@ -1986,7 +2021,6 @@ function CredentialField({
                 onChange={handleChange}
                 onBlur={onBlur}
                 disabled={disabled}
-                readOnly={!!endpointPresets && !!presetValue}
                 style={{
                   ...inputStyle,
                   flex: 1,
@@ -2147,7 +2181,7 @@ export function OmniChannelSection() {
   const onOmniProviderChange = async (id: string) => {
     setOmniProvider(id);
     const seq = ++omniSwitchSeqRef.current;
-    emitSaved('saving', t('common.saving'));
+    emitSaved('saving', t('common.saving'), 'omni-provider-switch');
     let backendSwitched = false;
     try {
       await setActiveOmniProvider(id);
@@ -2172,10 +2206,10 @@ export function OmniChannelSection() {
         }
       }
       setCommittedOmniProvider(id);
-      emitSaved('saved', t('common.saved'));
+      emitSaved('saved', t('common.saved'), 'omni-provider-switch');
     } catch (err) {
       if (seq === omniSwitchSeqRef.current) {
-        emitSaved('failed', t('common.operationFailed'));
+        emitSaved('failed', t('common.operationFailed'), 'omni-provider-switch');
         if (!backendSwitched) {
           setOmniProvider(committedOmniProvider);
         }

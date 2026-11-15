@@ -134,7 +134,7 @@ test('translation target popup stays interactive during a recording session', as
     .toBe(false);
 });
 
-test('QA records in a pill, reveals a wide result, retains content on exit and reopens', async ({
+test('QA opens the conversation while recording and starts fresh after close', async ({
   page,
 }, info) => {
   const errors: string[] = [];
@@ -143,13 +143,14 @@ test('QA records in a pill, reveals a wide result, retains content on exit and r
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
   await expect(page.locator('.qa-prompt')).toHaveCount(0);
   await emit(page, 'qa:state', { kind: 'recording', sessionId: 'a', messages: [] });
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  await expect(page.locator('.qa-prompt')).toBeHidden();
+  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  await expect(page.locator('.qa-prompt')).toBeVisible();
+  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'a', messages: [messages[0]] });
-  await expect(page.locator('.qa-answer-panel')).toHaveCount(0);
-  await expect(page.locator('.ol-default-capsule')).toHaveAttribute('data-processing', 'true');
+  await expect(page.locator('.qa-thought')).toBeVisible();
+  await expect(page.locator('.ol-default-capsule')).toHaveCount(0);
   await emit(page, 'qa:state', { kind: 'answer', sessionId: 'a', messages });
-  await expect(page.locator('#native-host')).toHaveCSS('width', '760px');
+  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('qa-result.png') });
@@ -168,8 +169,9 @@ test('QA records in a pill, reveals a wide result, retains content on exit and r
   await emit(page, 'chat-panel:shown', {});
   await emit(page, 'qa:state', { kind: 'recording', sessionId: 'b', messages: [] });
   await expect(page.locator('.qa-capsule-shell')).not.toHaveClass(/is-closing/);
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  await expect(page.locator('#native-host')).toHaveCSS('height', '80px');
+  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  await expect(page.locator('.qa-assistant-message')).toHaveCount(0);
+  await expect(page.locator('#native-host')).toHaveCSS('height', '380px');
   expect(errors).toEqual([]);
 });
 
@@ -179,11 +181,11 @@ test('immediate geometry acknowledgements keep each QA result visible', async ({
   for (let index = 0; index < 12; index++) {
     const sessionId = `instant-layout-${index}`;
     await emit(page, 'qa:state', { kind: 'recording', sessionId, messages: [] });
-    await expect(page.locator('.ol-default-capsule')).toBeVisible();
-    await expect(page.locator('#native-host')).toHaveCSS('width', '480px');
+    await expect(page.locator('.qa-answer-panel')).toBeVisible();
+    await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
     await emit(page, 'qa:state', { kind: 'answer', sessionId, messages });
     await expect(page.locator('.qa-answer-panel')).toBeVisible();
-    await expect(page.locator('#native-host')).toHaveCSS('width', '760px');
+    await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
   }
 });
 

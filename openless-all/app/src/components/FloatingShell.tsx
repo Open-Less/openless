@@ -338,13 +338,22 @@ function FloatingShellBody({
           >
             {/* Version row: replaces the old "OpenLess" brand spot, filling the gap
               above the nav; the BETA badge shares the version number's baseline. */}
-            <div
+            <button
+              type="button"
+              onClick={() => setCurrentTab('overview')}
+              className="ol-sidebar-brand"
+              aria-label={t('shell.homeLabel')}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
                 flexWrap: 'wrap',
+                width: '100%',
                 padding: '0 10px 12px',
+                border: 0,
+                background: 'transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
                 fontFamily: 'var(--ol-font-sans)',
                 fontSize: 12,
                 color: 'var(--ol-ink-4)',
@@ -373,7 +382,7 @@ function FloatingShellBody({
                   {t('shell.betaTag')}
                 </span>
               )}
-            </div>
+            </button>
 
             {/* nav — flat items + expandable groups. Flat: overview/history/vocab.
               Groups: Style (polish modes + marketplace) / Tools (selection ask + translation).
@@ -490,20 +499,21 @@ function FloatingShellBody({
                   className={settingsOpen ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                   style={{
                     display: 'flex',
-                    flex: 1,
-                    width: '100%',
+                    width: 'fit-content',
+                    justifySelf: 'start',
                     alignItems: 'center',
+                    justifyContent: 'center',
                     gap: 10,
-                    padding: '8px 10px',
+                    padding: '8px 12px',
                     borderRadius: 8,
                     border: 0,
                     fontFamily: 'inherit',
                     fontSize: 15,
-                    textAlign: 'left',
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   <Icon name="settings" size={16} />
-                  <span style={{ flex: 1 }}>{t('shell.footer.settings')}</span>
+                  <span>{t('shell.footer.settings')}</span>
                 </button>
               </Tooltip>
               <button
@@ -512,14 +522,17 @@ function FloatingShellBody({
                 onClick={() => setCurrentTab('usage')}
                 style={{
                   display: 'flex',
+                  width: 'fit-content',
+                  justifySelf: 'end',
                   alignItems: 'center',
-                  justifyContent: 'flex-end',
+                  justifyContent: 'center',
                   gap: 10,
-                  padding: '8px 10px',
+                  padding: '8px 12px',
                   border: 0,
                   borderRadius: 8,
                   fontFamily: 'inherit',
                   fontSize: 15,
+                  whiteSpace: 'nowrap',
                 }}
               >
                 <Icon name="overview" size={16} />
@@ -578,12 +591,12 @@ function FloatingShellBody({
                 // keep a positive inset and never subtract the native caption height,
                 // so a Windows overlay title bar cannot cover the title.
                 padding: mobile
-                  ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
+                  ? '16px var(--ol-grid-margin-compact) calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
                   : `${
                       os === 'mac'
                         ? `${MAC_TRAFFIC_LIGHT_CLEARANCE - 6}px`
                         : 'max(8px, calc(var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)))'
-                    } 18px ${displayTab === 'overview' ? 12 : 32}px`,
+                    } var(--ol-grid-margin) ${displayTab === 'overview' ? 16 : 32}px`,
                 // position:relative lets the page's "saved" toast anchor at absolute
                 // top:16 right:16 to this console card's corner instead of stretching
                 // across the page header as a full-width banner.
@@ -732,26 +745,29 @@ function FloatingShellBody({
         .ol-sidebar-surface .ol-nav-btn {
           color: var(--ol-choice-idle-ink);
           cursor: pointer;
-          transition:
-            color var(--ol-choice-motion),
-            background-color var(--ol-choice-motion);
         }
         .ol-sidebar-surface .ol-nav-btn-active {
           color: var(--ol-choice-active-ink);
           background: var(--ol-choice-active-bg);
         }
-        @media (hover: hover) and (pointer: fine) {
-          .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
-            color: var(--ol-choice-hover-ink);
-            background: var(--ol-choice-hover-bg);
-          }
+        /* No hover media query and no transition: packaged WKWebViews can report a
+           conservative pointer capability and can leave hover transitions frozen at
+           their starting frame, which made the sidebar look non-interactive. */
+        .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
+          color: var(--ol-choice-hover-ink);
+          background: var(--ol-choice-hover-bg);
         }
         .ol-sidebar-surface .ol-nav-btn:focus-visible {
           outline: 2px solid var(--ol-blue);
           outline-offset: -2px;
         }
-        @media (prefers-reduced-motion: reduce) {
-          .ol-sidebar-surface .ol-nav-btn { transition: none; }
+        .ol-sidebar-brand:hover strong {
+          color: var(--ol-blue);
+        }
+        .ol-sidebar-brand:focus-visible {
+          outline: 2px solid var(--ol-blue);
+          outline-offset: -2px;
+          border-radius: 8px;
         }
       `}</style>
     </div>

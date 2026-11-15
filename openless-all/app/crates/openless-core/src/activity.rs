@@ -101,6 +101,7 @@ struct ActivityState {
 pub struct ActivityStore {
     path: Option<PathBuf>,
     cache: Mutex<ActivityState>,
+    apps: Mutex<Option<BTreeMap<String, BTreeMap<String, u32>>>>,
 }
 impl ActivityStore {
     pub fn at_data_dir(data_dir: impl AsRef<Path>) -> Result<Self, BackendError> {
@@ -108,8 +109,15 @@ impl ActivityStore {
     }
     pub fn at_path(path: PathBuf) -> Result<Self, BackendError> {
         let days = read_days(&path)?;
+        let apps_path = path.with_file_name("activity-apps.json");
+        let apps = match std::fs::read(&apps_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(BTreeMap::new()),
+            Err(_) => None,
+        };
         Ok(Self {
             path: Some(path),
+            apps: Mutex::new(apps),
             cache: Mutex::new(ActivityState {
                 days,
                 local_source: None,
@@ -119,11 +127,68 @@ impl ActivityStore {
     pub fn in_memory() -> Self {
         Self {
             path: None,
+            apps: Mutex::new(Some(BTreeMap::new())),
             cache: Mutex::new(ActivityState {
                 days: BTreeMap::new(),
                 local_source: None,
             }),
         }
+    }
+
+    /// Application aggregates are local and independent of history retention and sync documents.
+    pub fn bump_app(&self, date: &str, name: Option<&str>) -> Result<(), BackendError> {
+        let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
+            return Ok(());
+        };
+        if !valid_date(date) {
+            return Err(persistence_error("invalid application activity date"));
+        }
+        let mut state = self
+            .apps
+            .lock()
+            .map_err(|_| persistence_error("application activity lock"))?;
+        let mut next = state
+            .as_ref()
+            .ok_or_else(|| persistence_error("application activity unavailable"))?
+            .clone();
+        let count = next
+            .entry(date.to_string())
+            .or_default()
+            .entry(name.to_string())
+            .or_default();
+        *count = count.saturating_add(1);
+        while next.len() > ACTIVITY_RETENTION_DAYS {
+            if let Some(oldest) = next.keys().next().cloned() {
+                next.remove(&oldest);
+            }
+        }
+        if let Some(path) = &self.path {
+            let bytes = serde_json::to_vec_pretty(&next)
+                .map_err(|_| persistence_error("encode application activity"))?;
+            atomic_write(&path.with_file_name("activity-apps.json"), &bytes)?;
+        }
+        *state = Some(next);
+        Ok(())
+    }
+
+    pub fn app_counts(&self, year: &str) -> Result<Vec<(String, u32)>, BackendError> {
+        let state = self
+            .apps
+            .lock()
+            .map_err(|_| persistence_error("application activity lock"))?;
+        let mut totals = BTreeMap::<String, u32>::new();
+        let days = state
+            .as_ref()
+            .ok_or_else(|| persistence_error("application activity unavailable"))?;
+        for (_, apps) in days.iter().filter(|(date, _)| date.starts_with(year)) {
+            for (name, count) in apps {
+                let total = totals.entry(name.clone()).or_default();
+                *total = total.saturating_add(*count);
+            }
+        }
+        let mut result: Vec<_> = totals.into_iter().collect();
+        result.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(result)
     }
 
     /// Memory-only Host identity attachment; it never attributes imported totals to this device.
@@ -317,6 +382,29 @@ fn valid_date(date: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_counts_persist_by_year_without_history_or_content() {
+        let dir = std::env::temp_dir().join(format!(
+            "openless-app-activity-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = ActivityStore::at_data_dir(&dir).unwrap();
+        store.bump_app("2026-01-01", Some("Editor")).unwrap();
+        store.bump_app("2026-12-31", Some("Editor")).unwrap();
+        store.bump_app("2026-06-01", Some("Browser")).unwrap();
+        store.bump_app("2025-12-31", Some("Browser")).unwrap();
+        store.bump_app("2026-06-01", None).unwrap();
+        drop(store);
+        let reopened = ActivityStore::at_data_dir(&dir).unwrap();
+        assert_eq!(
+            reopened.app_counts("2026-").unwrap(),
+            vec![("Editor".into(), 2), ("Browser".into(), 1)]
+        );
+        assert!(reopened.snapshot().unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn legacy_and_new_entries_round_trip_without_text() {

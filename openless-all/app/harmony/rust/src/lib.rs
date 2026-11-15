@@ -476,6 +476,10 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
         }
         "list_vocab" => json!(b.list_vocabulary().map_err(|e| e.to_string())?),
         "get_activity_stats" => json!(b.list_activity().map_err(|e| e.to_string())?),
+        "get_activity_apps" => {
+            let year = args["year"].as_u64().and_then(|value| u32::try_from(value).ok()).ok_or("invalid activity year")?;
+            json!(b.list_activity_apps(year).map_err(|e| e.to_string())?)
+        }
         "list_correction_rules" => json!(b.list_correction_rules().map_err(|e| e.to_string())?),
         "add_learned_vocab" => {
             b.add_learned_vocabulary(required(&args, "phrase")?.into())

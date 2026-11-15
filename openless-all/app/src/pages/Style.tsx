@@ -833,7 +833,7 @@ export function Style() {
           import ZIP buttons; the pale blue pill flashes for 0.8s only and never covers the
           buttons for long. */}
       <SavedToast
-        saveState={undoDelete ? 'saved' : saveState}
+        saveState={undoDelete ? 'deleted' : saveState}
         replayKey={saveReplay}
         message={
           undoDelete ? t('style.pack.deleteSuccess', { name: undoDelete.name }) : saveMessage
@@ -963,13 +963,9 @@ export function Style() {
           style={{ padding: 18, overflow: 'auto', flex: '1 1 0', minHeight: 0 }}
         >
           <div
-            className="ol-grid-auto-cards"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: stackLayout ? '1fr' : 'repeat(auto-fill, minmax(250px, 1fr))',
-              position: 'relative',
-              gap: 12,
-            }}
+            className="ol-grid-auto-cards ol-grid-12 ol-grid-cards"
+            data-columns={stackLayout ? '1' : undefined}
+            style={{ position: 'relative' }}
           >
             <AnimatePresence mode="popLayout" initial={false}>
               {bodyPacks.map((pack) => {
@@ -1440,13 +1436,8 @@ export function Style() {
                     </div>
 
                     <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: stackLayout
-                          ? '1fr'
-                          : 'repeat(auto-fit, minmax(180px, 1fr))',
-                        gap: 12,
-                      }}
+                      className="ol-grid-12 ol-grid-fields"
+                      data-columns={stackLayout ? '1' : undefined}
                     >
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <span
@@ -1541,13 +1532,8 @@ export function Style() {
                     </label>
 
                     <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: stackLayout
-                          ? '1fr'
-                          : 'repeat(auto-fit, minmax(180px, 1fr))',
-                        gap: 12,
-                      }}
+                      className="ol-grid-12 ol-grid-fields"
+                      data-columns={stackLayout ? '1' : undefined}
                     >
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <span
@@ -1757,13 +1743,8 @@ export function Style() {
                         </Pill>
                       </div>
                       <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: stackLayout
-                            ? '1fr'
-                            : 'repeat(auto-fit, minmax(160px, 1fr))',
-                          gap: 10,
-                        }}
+                        className="ol-grid-12 ol-grid-meta"
+                        data-columns={stackLayout ? '1' : undefined}
                       >
                         <MetaItem
                           label={t('style.pack.metaSource')}
@@ -1878,13 +1859,8 @@ export function Style() {
                           </div>
 
                           <div
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: stackLayout
-                                ? '1fr'
-                                : 'repeat(auto-fit, minmax(240px, 1fr))',
-                              gap: 12,
-                            }}
+                            className="ol-grid-12 ol-grid-fields"
+                            data-columns={stackLayout ? '1' : undefined}
                           >
                             <div
                               style={{

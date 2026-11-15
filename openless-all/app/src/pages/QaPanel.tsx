@@ -2,8 +2,9 @@ import { detectOS } from '../components/WindowChrome';
 import { QaAnswerFooter } from '../components/QaAnswerFooter';
 import { qaSources } from '../lib/qaSources';
 import { useQaPipeline } from '../lib/useQaPipeline';
-// Compact QA composer. Native desktop starts at 480×80 and expands downwards
-// after submission; embedded hosts retain their own frame and close callback.
+// Fn+Space opens this conversation immediately. Closing dismisses the native
+// session, so the next press starts a new one; an open panel keeps it and can
+// take the next voice turn or a typed message.
 import {
   useEffect,
   useRef,
@@ -18,7 +19,6 @@ import {
   CopyIcon,
   MicIcon,
   PencilLineIcon,
-  PlusIcon,
   QuoteIcon,
   SquareIcon,
   XIcon,
@@ -104,6 +104,13 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     enterEpoch: number;
   } | null>(null);
   const [activity, setActivity] = useState<QaStatePayload['activity']>();
+  const [thoughtSeconds, setThoughtSeconds] = useState(0);
+  const [thoughts, setThoughts] = useState<number[]>([]);
+  const thoughtSecondsRef = useRef(0);
+  const thinkingRef = useRef(false);
+  const assistantCountAtStart = useRef(0);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const activeSessionIdRef = useRef<string | null>(null);
   /** 供事件回调判断当前是否真的处于润色模式（长驻订阅闭包看不到最新 state）。 */
   const polishActiveRef = useRef(false);
@@ -192,7 +199,16 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             setModeBusy(false);
           }
           activeSessionIdRef.current = sessionEvent.sessionId;
-          if (payload.messages) setMessages(payload.messages);
+          if (payload.messages) {
+            setMessages(payload.messages);
+            // An empty transcript is a new conversation. Follow-up turns keep the
+            // history, so their thought durations stay aligned with each answer.
+            if (payload.messages.length === 0) {
+              setThoughts([]);
+              setThoughtSeconds(0);
+              thoughtSecondsRef.current = 0;
+            }
+          }
           if (typeof payload.editApplyAvailable === 'boolean')
             setEditApplyAvailable(payload.editApplyAvailable);
           if (typeof payload.editRevertAvailable === 'boolean')
@@ -383,13 +399,48 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setLevel(0);
     setSubmitted(false);
     setActivity(undefined);
+    setThoughts([]);
+    setThoughtSeconds(0);
+    thoughtSecondsRef.current = 0;
+    thinkingRef.current = false;
   }, [closing]);
+
+  useEffect(() => {
+    if (status === 'thinking') {
+      thinkingRef.current = true;
+      assistantCountAtStart.current = messagesRef.current.filter(
+        (message) => message.role === 'assistant',
+      ).length;
+      const started = performance.now();
+      const tick = () => {
+        const seconds = Math.max(1, Math.round((performance.now() - started) / 1000));
+        thoughtSecondsRef.current = seconds;
+        setThoughtSeconds(seconds);
+      };
+      tick();
+      const timer = window.setInterval(tick, 200);
+      return () => window.clearInterval(timer);
+    }
+    if (!thinkingRef.current) return;
+    thinkingRef.current = false;
+    const seconds = thoughtSecondsRef.current;
+    const count = messagesRef.current.filter((message) => message.role === 'assistant').length;
+    // A cancelled turn does not add an answer, so it must not rewrite an earlier duration.
+    if (count > assistantCountAtStart.current && seconds > 0) {
+      setThoughts((previous) => {
+        const next = previous.slice();
+        next[count - 1] = seconds;
+        return next;
+      });
+    }
+  }, [status]);
 
   const expanded =
     embedded ||
     polishResult !== null ||
-    status === 'error' ||
-    messages.some((message) => message.role === 'assistant') ||
+    status !== 'idle' ||
+    submitted ||
+    messages.length > 0 ||
     editApplyAvailable ||
     editRevertAvailable;
   const activityLabel =
@@ -686,7 +737,20 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
 
   const lastRole = messages[messages.length - 1]?.role;
   const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
-  const thinkingRow = status === 'thinking' && !streamingAnswer && lastRole === 'user';
+  const firstQuestion = messages.find((message) => message.role === 'user');
+  const heading = firstQuestion
+    ? truncate(splitQaUserMessage(firstQuestion).question, 42)
+    : t('qa.title');
+  const thoughtByIndex = new Map<number, number>();
+  let assistantCount = 0;
+  messages.forEach((message, index) => {
+    if (message.role !== 'assistant') return;
+    const seconds = thoughts[assistantCount];
+    if (seconds) thoughtByIndex.set(index, seconds);
+    assistantCount += 1;
+  });
+  const liveActivity =
+    status === 'thinking' && activity && !streamingAnswer ? activityLabel : undefined;
   const voiceActive =
     status === 'recording' ||
     (status === 'thinking' && !questionLanded && !submitBusy) ||
@@ -713,7 +777,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         className={`qa-capsule-shell is-expanded${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}`}
         key={enterEpoch}
       >
-        <section className="qa-answer-panel" aria-label={t('selectionPolishPreview.title')}>
+        <section
+          className="qa-answer-panel"
+          data-platform={detectOS()}
+          aria-label={t('selectionPolishPreview.title')}
+        >
           <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
             <span className="qa-symbol" aria-hidden="true">
               ✳
@@ -722,16 +790,18 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               {t('selectionPolishPreview.title')}
             </h1>
             <span>{t('selectionPolishPreview.subtitle')}</span>
-            <button
-              type="button"
-              className="qa-close"
-              disabled={polishBusy}
-              onClick={onPolishCancel}
-              title={t('selectionPolishPreview.cancel')}
-              aria-label={t('selectionPolishPreview.cancel')}
-            >
-              <XIcon />
-            </button>
+            <div className="qa-window-actions">
+              <button
+                type="button"
+                className="qa-close"
+                disabled={polishBusy}
+                onClick={onPolishCancel}
+                title={t('selectionPolishPreview.cancel')}
+                aria-label={t('selectionPolishPreview.cancel')}
+              >
+                <XIcon />
+              </button>
+            </div>
           </header>
           {polishError && (
             <p className="qa-error" role="alert">
@@ -788,50 +858,24 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       className={`qa-capsule-shell${expanded ? ' is-expanded' : ''}${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}${!expanded ? ' is-capsule' : ''}`}
       key={enterEpoch}
     >
-      <EmbeddedComposer
-        value={composerText}
-        status={status}
-        level={level}
-        voiceActive={voiceActive}
-        selectionPreview={selectionPreview}
-        busy={inputBusy}
-        micBusy={micBusy}
-        embedded={embedded}
-        editInstructionMode={editInstructionMode}
-        onEditInstructionModeChange={onEditInstructionModeChange}
-        onChange={setComposerText}
-        onSubmit={onSubmitText}
-        onToggleRecording={onToggleRecording}
-        onClose={onClose}
-        t={t}
-      />
       {!expanded && (
-        <>
-          {status === 'recording' && (
-            <div className="qa-voice-hint" title={selectionPreview || undefined}>
-              {selectionPreview ? t('selectionAsk.title') : t('capsule.asking')}
-              {selectionPreview ? ` · ${truncate(selectionPreview, 32)}` : ''}
-            </div>
-          )}
-          <OpenLessPill
-            state={status === 'thinking' || submitted ? 'polishing' : 'recording'}
-            warming={status === 'idle' && !submitted}
-            level={level}
-            message={status === 'thinking' ? activityLabel : undefined}
-            onCancel={() => void qaCancelTurn()}
-            onConfirm={onToggleRecording}
-            leaving={presentationClosing}
-          />
-        </>
+        <OpenLessPill
+          state="recording"
+          warming
+          level={level}
+          onCancel={() => void qaCancelTurn()}
+          onConfirm={onToggleRecording}
+          leaving={presentationClosing}
+        />
       )}
       {expanded && (
         <section
-          className="qa-answer-panel"
+          className="qa-answer-panel qa-conversation"
           data-platform={detectOS()}
           aria-label={t('capsule.asking')}
         >
           <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
-            <h1 data-tauri-drag-region={embedded ? undefined : true}>{t('capsule.asking')}</h1>
+            <h1 data-tauri-drag-region={embedded ? undefined : true}>{heading}</h1>
             <div className="qa-window-actions">
               <button
                 type="button"
@@ -866,23 +910,23 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                         key={index}
                         index={index}
                         message={message}
+                        thoughtSeconds={thoughtByIndex.get(index)}
                         t={t}
                         canReadAloud={pipelineMode === 'deepseek'}
                       />
                     ))}
-                    {streamingAnswer && (
+                    {status === 'thinking' && (
                       <MessageScrollerItem messageId="streaming">
                         <div className="qa-assistant-message">
-                          <AssistantLabel />
-                          <AssistantMarkdown markdown={streamingAnswer} streaming />
-                        </div>
-                      </MessageScrollerItem>
-                    )}
-                    {thinkingRow && (
-                      <MessageScrollerItem messageId="thinking">
-                        <div className="qa-thinking" role="status">
-                          <span className="qa-thinking-dot" />
-                          {t('qa.thinking')}
+                          <ThoughtStatus
+                            live
+                            seconds={thoughtSeconds}
+                            activityLabel={liveActivity}
+                            t={t}
+                          />
+                          {streamingAnswer && (
+                            <AssistantMarkdown markdown={streamingAnswer} streaming />
+                          )}
                         </div>
                       </MessageScrollerItem>
                     )}
@@ -891,15 +935,17 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                         <ErrorContent error={errorMsg} t={t} />
                       </MessageScrollerItem>
                     )}
-                    {messages.length === 0 && !streamingAnswer && status !== 'error' && (
-                      <div className="qa-empty-answer">
-                        {submitBusy
-                          ? t('qa.compact.sending')
-                          : status === 'thinking'
-                            ? t('overview.inAppDictation.processing')
-                            : t('qa.emptyDesc')}
-                      </div>
-                    )}
+                    {messages.length === 0 &&
+                      !streamingAnswer &&
+                      status !== 'error' &&
+                      status !== 'thinking' && (
+                        <div className="qa-empty-answer">
+                          <p>{t('qa.emptyTitle')}</p>
+                          {status === 'idle' && (
+                            <span>{submitBusy ? t('qa.compact.sending') : t('qa.emptyDesc')}</span>
+                          )}
+                        </div>
+                      )}
                   </MessageScrollerContent>
                 </MessageScrollerViewport>
                 <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')}>
@@ -930,18 +976,28 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               </button>
             </div>
           )}
+          <div className="qa-composer-dock">
+            <Composer
+              value={composerText}
+              status={status}
+              level={level}
+              voiceActive={voiceActive}
+              selectionPreview={selectionPreview}
+              busy={inputBusy}
+              micBusy={micBusy}
+              embedded={embedded}
+              editInstructionMode={editInstructionMode}
+              onEditInstructionModeChange={onEditInstructionModeChange}
+              onChange={setComposerText}
+              onSubmit={onSubmitText}
+              onToggleRecording={onToggleRecording}
+              t={t}
+            />
+          </div>
         </section>
       )}
     </QaSurface>
   );
-}
-
-function EmbeddedComposer(props: Parameters<typeof Composer>[0]) {
-  return props.embedded ? (
-    <div className="qa-composer-dock">
-      <Composer {...props} />
-    </div>
-  ) : null;
 }
 
 function Composer({
@@ -958,7 +1014,6 @@ function Composer({
   onChange,
   onSubmit,
   onToggleRecording,
-  onClose,
   t,
 }: {
   value: string;
@@ -974,11 +1029,11 @@ function Composer({
   onChange: (value: string) => void;
   onSubmit: () => void;
   onToggleRecording: () => void;
-  onClose: () => void;
   t: Translate;
 }) {
   const composingRef = useRef(false);
   const recording = status === 'recording';
+  const generating = status === 'thinking';
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
@@ -999,15 +1054,6 @@ function Composer({
         if (!composingRef.current && !busy && isTauri) onSubmit();
       }}
     >
-      <button
-        className="qa-add"
-        type="button"
-        disabled
-        aria-label={t('qa.compact.addUnavailable')}
-        title={t('qa.compact.addUnavailable')}
-      >
-        <PlusIcon />
-      </button>
       <div className="qa-input-stage">
         <input
           value={value}
@@ -1031,86 +1077,107 @@ function Composer({
         />
         {!isTauri && <span className="qa-browser-note">{t('qa.compact.browserUnavailable')}</span>}
       </div>
-      <button
-        className={`qa-mode${editInstructionMode ? ' is-on' : ''}`}
-        type="button"
-        aria-pressed={editInstructionMode}
-        disabled={!isTauri || busy}
-        onClick={() => onEditInstructionModeChange(!editInstructionMode)}
-        aria-label={t('qa.editInstructionMode')}
-        title={t('qa.editInstructionMode')}
-      >
-        <PencilLineIcon />
-      </button>
-      <div className="qa-voice-pod">
-        <div className="qa-voice-feedback" aria-hidden={!voiceActive}>
-          {voiceActive && (
-            <>
-              <VoiceWaveform level={recording ? level : 0} processing={!recording} label={label} />
-              {selectionPreview && (
-                <span className="qa-recording-selection" title={selectionPreview}>
-                  <QuoteIcon />
-                  {truncate(selectionPreview, 32)}
-                </span>
-              )}
-            </>
-          )}
+      <div className="qa-prompt-tools">
+        <div className="qa-voice-pod">
+          <div className="qa-voice-feedback" aria-hidden={!voiceActive}>
+            {voiceActive && (
+              <>
+                <VoiceWaveform
+                  level={recording ? level : 0}
+                  processing={!recording}
+                  label={label}
+                />
+                {selectionPreview && (
+                  <span className="qa-recording-selection" title={selectionPreview}>
+                    <QuoteIcon />
+                    {truncate(selectionPreview, 32)}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+          <button
+            className={`qa-mic${recording ? ' is-recording' : ''}`}
+            type="button"
+            disabled={!isTauri || generating || micBusy || (busy && !recording)}
+            onClick={onToggleRecording}
+            aria-pressed={recording}
+            aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
+            title={recording ? t('qa.micStop') : t('qa.micLabel')}
+          >
+            {recording ? <SquareIcon /> : <MicIcon />}
+          </button>
         </div>
         <button
-          className={`qa-mic${recording ? ' is-recording' : ''}`}
+          className={`qa-mode${editInstructionMode ? ' is-on' : ''}`}
           type="button"
-          disabled={!isTauri || status === 'thinking' || micBusy || (busy && !recording)}
-          onClick={onToggleRecording}
-          aria-pressed={recording}
-          aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
-          title={recording ? t('qa.micStop') : t('qa.micLabel')}
+          aria-pressed={editInstructionMode}
+          disabled={!isTauri || busy}
+          onClick={() => onEditInstructionModeChange(!editInstructionMode)}
+          aria-label={t('qa.editInstructionMode')}
+          title={t('qa.editInstructionMode')}
         >
-          {recording ? <SquareIcon /> : <MicIcon />}
+          <PencilLineIcon />
         </button>
+        {generating ? (
+          <button
+            className="qa-send is-stop"
+            type="button"
+            disabled={!isTauri}
+            aria-label={t('qa.stop')}
+            title={t('qa.stop')}
+            onClick={() => void qaCancelTurn()}
+          >
+            <SquareIcon />
+          </button>
+        ) : (
+          <button
+            className="qa-send"
+            type="submit"
+            disabled={!isTauri || busy || !value.trim()}
+            aria-label={t('qa.composerSend')}
+            title={t('qa.composerSend')}
+          >
+            <ArrowUpIcon />
+          </button>
+        )}
       </div>
-      <button
-        className="qa-send"
-        type="submit"
-        disabled={!isTauri || busy || !value.trim()}
-        aria-label={t('qa.composerSend')}
-        title={t('qa.composerSend')}
-      >
-        <ArrowUpIcon />
-      </button>
-      <button
-        className="qa-close"
-        type="button"
-        disabled={!isTauri && !embedded}
-        onClick={onClose}
-        aria-label={t('qa.closeTooltip')}
-        title={t('qa.closeTooltip')}
-      >
-        <XIcon />
-      </button>
     </form>
   );
 }
 
-function AssistantLabel() {
-  const { t } = useTranslation();
+function ThoughtStatus({
+  live,
+  seconds,
+  activityLabel,
+  t,
+}: {
+  live: boolean;
+  seconds: number;
+  activityLabel?: string;
+  t: Translate;
+}) {
+  const elapsed = live ? t('qa.thoughtLive', { seconds }) : t('qa.thoughtDone', { seconds });
+  const label = live && activityLabel ? `${elapsed} · ${activityLabel}` : elapsed;
   return (
-    <div className="qa-assistant-label">
-      <span className="qa-symbol" aria-hidden="true">
-        ✳
-      </span>
-      {t('qa.compact.answer')}
+    <div className={`qa-thought${live ? ' is-live' : ''}`} role="status">
+      {live && <span className="qa-thinking-dot" />}
+      {label}
     </div>
   );
 }
+
 function MessageRow({
   index,
   message,
+  thoughtSeconds,
   t,
   canReadAloud = false,
 }: {
   canReadAloud?: boolean;
   index: number;
   message: QaChatMessage;
+  thoughtSeconds?: number;
   t: Translate;
 }) {
   const answer = qaSources(message.content);
@@ -1118,14 +1185,9 @@ function MessageRow({
     const { selection, question } = splitQaUserMessage(message);
     return (
       <MessageScrollerItem messageId={`m${index}`} scrollAnchor>
-        <div className="qa-user-message">
-          <span className="qa-user-avatar">
-            <MicIcon size={13} />
-          </span>
-          <div>
-            {selection && <blockquote title={selection}>{truncate(selection, 120)}</blockquote>}
-            <p>{question}</p>
-          </div>
+        <div className="qa-user-turn">
+          {selection && <blockquote title={selection}>{truncate(selection, 120)}</blockquote>}
+          <p>{question}</p>
           <CopyMessage text={question} />
         </div>
       </MessageScrollerItem>
@@ -1134,9 +1196,7 @@ function MessageRow({
   return (
     <MessageScrollerItem messageId={`m${index}`}>
       <div className="qa-assistant-message" aria-label={t('qa.compact.answer')}>
-        <div className="qa-answer-label-row">
-          <AssistantLabel />
-        </div>
+        {thoughtSeconds ? <ThoughtStatus live={false} seconds={thoughtSeconds} t={t} /> : null}
         <AssistantMarkdown markdown={answer.body} />
         <QaAnswerFooter
           text={message.content}

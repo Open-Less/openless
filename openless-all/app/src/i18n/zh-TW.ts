@@ -278,7 +278,9 @@ export const zhTW: typeof zhCN = {
     close: '關閉',
     show: '顯示',
     hide: '隱藏',
+    apiKeySaved: 'API 金鑰已儲存',
     saved: '已儲存',
+    deleted: '已刪除',
     refreshed: '已重新整理',
     saving: '儲存中',
     experimental: '實驗性',
@@ -348,6 +350,9 @@ export const zhTW: typeof zhCN = {
     title: '隨便問',
     headerHint: '隨時提問',
     thinking: '思考中…',
+    thoughtLive: '思考中（用時 {{seconds}} 秒）',
+    thoughtDone: '已思考（用時 {{seconds}} 秒）',
+    stop: '停止',
     error: '出錯了，請稍後再試。',
     errorRetry: '重試',
     errorRetryHint: '請再試一次。',
@@ -500,6 +505,7 @@ export const zhTW: typeof zhCN = {
   shell: {
     shortcutLabel: '錄音快捷鍵',
     shortcutHint: '開始 / 停止',
+    homeLabel: '返回概覽',
     betaTag: 'BETA',
     betaNote: '所有資料都只儲存在本機。',
     navHint: {
@@ -1077,7 +1083,8 @@ export const zhTW: typeof zhCN = {
     description: '按組合鍵開始提問，再按一次送出。回答會顯示在螢幕下方。',
     auxiliaryKey: '提問附加鍵',
     auxiliaryHint: '與錄音鍵 {{key}} 一起按下；修改錄音鍵後會自動跟隨。',
-    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。關閉對話視窗後開始新對話。',
+    selectionHint:
+      '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。關閉對話視窗後開始新對話。',
   },
   selectionAsk: {
     title: '隨便問',

@@ -68,7 +68,7 @@ test('translation popup closes when the recording owner changes', async ({ page 
   expect(await page.evaluate(() => (window as any).fixture.targetChanges)).toEqual([]);
 });
 
-test('Ask has no desktop composer; provider tool status stays in the capsule until the final answer', async ({
+test('Ask opens a conversation on record, streams activity, and keeps a composer', async ({
   page,
 }, info) => {
   await page.goto(fixture + '?qa');
@@ -80,22 +80,24 @@ test('Ask has no desktop composer; provider tool status stays in the capsule unt
     messages: [],
     selectionPreview: 'selected source',
   });
-  await expect(page.locator('.qa-voice-hint')).toContainText('selected source');
+  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  await expect(page.locator('.qa-recording-selection')).toContainText('selected source');
+  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'ask-a', messages: [] });
   await emit(page, 'qa:state', {
     kind: 'activity',
     sessionId: 'ask-a',
     activity: { kind: 'searching_web', toolName: 'web_search' },
   });
-  await expect(page.locator('.ol-default-status')).toContainText('正在搜索网页');
+  await expect(page.locator('.qa-thought')).toContainText('正在搜索网页');
   await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'ask-a', chunk: 'partial' });
-  await expect(page.locator('.qa-answer-panel')).toHaveCount(0);
+  await expect(page.locator('.qa-assistant-message')).toContainText('partial');
   await emit(page, 'qa:state', {
     kind: 'activity',
     sessionId: 'old-ask',
     activity: { kind: 'using_tool', toolName: 'stale' },
   });
-  await expect(page.locator('.ol-default-status')).toContainText('正在搜索网页');
+  await expect(page.locator('.qa-thought')).not.toContainText('stale');
   await emit(page, 'qa:state', {
     kind: 'answer',
     sessionId: 'ask-a',
@@ -104,10 +106,13 @@ test('Ask has no desktop composer; provider tool status stays in the capsule unt
       { role: 'assistant', content: '最终回答' },
     ],
   });
-  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  await expect(page.locator('.qa-user-turn')).toContainText('问题');
+  await expect(page.locator('.qa-user-turn')).toContainText('selected source');
   await expect(page.locator('.qa-assistant-message')).toContainText('最终回答');
+  await expect(page.locator('.qa-thought')).toContainText('已思考');
   await expect(page.locator('.qa-follow-up')).toHaveCount(0);
-  await expect(page.locator('input')).toHaveCount(0);
+  await expect(page.locator('.qa-prompt input')).toBeVisible();
+  await expect(page.locator('.qa-prompt .qa-close')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('ask-result.png') });
 });
 

@@ -1,7 +1,6 @@
 // Display atoms (SettingRow / Toggle / inputStyle) and pure i18n label tables shared across settings sections.
 
 import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react';
-import { toggleGroupFeedback } from '../../lib/toggleFeedback';
 import { Switch } from '@base-ui/react/switch';
 const SettingLabel = createContext<string | undefined>(undefined);
 import { Hint } from '../../components/Tooltip';
@@ -101,14 +100,11 @@ export function SettingRow({ label, desc, children, controlWidth, className }: S
   };
   return (
     <div
-      className={['ol-setting-row', className].filter(Boolean).join(' ')}
+      className={['ol-setting-row', 'ol-form-12', className].filter(Boolean).join(' ')}
+      data-stacked={stackLayout || undefined}
       style={{
-        display: 'grid',
-        gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : 'minmax(0, 200px) minmax(0, 1fr)',
-        gap: stackLayout ? 8 : 16,
         padding: stackLayout ? '12px 0' : '14px 0',
         borderTop: '0.5px solid var(--ol-line-soft)',
-        alignItems: 'center',
       }}
     >
       <div style={{ minWidth: 0, alignSelf: 'center' }}>
@@ -161,10 +157,6 @@ export function Toggle({
       aria-label={label}
       aria-labelledby={label ? undefined : labelId}
       disabled={disabled}
-      onClick={(event) => {
-        if (disabled) return;
-        if (event.detail > 0) toggleGroupFeedback(event.currentTarget);
-      }}
     >
       {/* Geometry, colours and motion live in .ol-switch (refinements.css). Width and
           height are locked there, so a column-direction row can't stretch it into a ball. */}

@@ -56,6 +56,8 @@ import {
   type ServiceViewId,
   type AdvancedPage,
   type AdvancedPageId,
+  GENERAL_PAGES,
+  type GeneralPageId,
 } from './navigation';
 
 // Platform capability query shared by all tabs (drives desktop/mobile and hotkey / auto-update gating).
@@ -70,59 +72,32 @@ function usePlatformCaps(): PlatformCapabilities | null {
 }
 
 // General: microphone, capsule style, text insertion, and remote input.
-// Each category is one page. Pages do not collapse their own groups again.
+// Each category is one page. The settings shell owns the page id so its top bar can
+// render the subpage title and the shared back control.
 export function GeneralTab({
   os,
   onOpenLocalModels,
-}: { os?: OS; onOpenLocalModels?: () => void } = {}) {
+  page,
+  onPageChange,
+}: {
+  os?: OS;
+  onOpenLocalModels?: () => void;
+  page: GeneralPageId | 'root';
+  onPageChange: (page: GeneralPageId | 'root') => void;
+}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
   const showCapsule = platformCaps == null || platformCaps.platform === 'desktop';
-  const [page, setPage] = useState<'root' | 'recording' | 'capsule' | 'textInput' | 'phone'>(
-    'root',
-  );
   const activePage =
     (page === 'phone' && !showRemoteInput) || (page === 'capsule' && !showCapsule) ? 'root' : page;
   const contentRef = useRef<HTMLDivElement>(null);
   useContentMotion(contentRef, activePage);
-  const categories = [
-    {
-      id: 'recording' as const,
-      icon: 'mic',
-      title: 'settings.generalPages.recordingTitle',
-      description: 'settings.generalPages.recordingDesc',
-    },
-    {
-      id: 'capsule' as const,
-      icon: 'layout',
-      title: 'settings.generalPages.capsuleTitle',
-      description: 'settings.generalPages.capsuleDesc',
-    },
-    {
-      id: 'textInput' as const,
-      icon: 'pencil',
-      title: 'settings.generalPages.textInputTitle',
-      description: 'settings.generalPages.textInputDesc',
-    },
-    {
-      id: 'phone' as const,
-      icon: 'link',
-      title: 'settings.generalPages.phoneTitle',
-      description: 'settings.generalPages.phoneDesc',
-    },
-  ].filter(
+  const categories = GENERAL_PAGES.filter(
     (item) => (item.id !== 'phone' || showRemoteInput) && (item.id !== 'capsule' || showCapsule),
   );
-  const pageTitle = {
-    recording: 'settings.generalPages.recordingTitle',
-    capsule: 'settings.generalPages.capsuleTitle',
-    textInput: 'settings.generalPages.textInputTitle',
-    phone: 'settings.generalPages.phoneTitle',
-  } as const;
   if (activePage !== 'root') {
     return (
       <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <SettingsSubpageHeader onBack={() => setPage('root')} title={pageTitle[activePage]} />
         {activePage === 'recording' && (
           <RecordingInputSection
             forcedOs={os}
@@ -147,28 +122,11 @@ export function GeneralTab({
         <SettingsCategoryEntry
           key={item.id}
           icon={item.icon}
-          title={item.title}
-          description={item.description}
-          onClick={() => setPage(item.id)}
+          title={item.titleKey}
+          description={item.descriptionKey}
+          onClick={() => onPageChange(item.id)}
         />
       ))}
-    </div>
-  );
-}
-
-function SettingsSubpageHeader({ title, onBack }: { title: string; onBack?: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      {onBack && (
-        <button type="button" className="ol-settings-back-button" onClick={onBack}>
-          <Icon name="chevLeft" size={16} />
-          {t('modal.back')}
-        </button>
-      )}
-      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 'var(--ol-font-weight-semibold)' }}>
-        {t(title)}
-      </h2>
     </div>
   );
 }

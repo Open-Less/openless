@@ -296,7 +296,9 @@ export const ja: typeof zhCN = {
     close: '閉じる',
     show: '表示',
     hide: '非表示',
+    apiKeySaved: 'API キーを保存しました',
     saved: '保存しました',
+    deleted: '削除しました',
     refreshed: '更新しました',
     saving: '保存中',
     experimental: '実験的',
@@ -366,6 +368,9 @@ export const ja: typeof zhCN = {
     title: '質問',
     headerHint: 'いつでも質問',
     thinking: '思考中…',
+    thoughtLive: '思考中（{{seconds}}秒）',
+    thoughtDone: '思考しました（{{seconds}}秒）',
+    stop: '停止',
     error: 'エラーが発生しました。後でもう一度お試しください。',
     errorRetry: '再試行',
     errorRetryHint: 'もう一度お試しください。',
@@ -521,6 +526,7 @@ export const ja: typeof zhCN = {
   shell: {
     shortcutLabel: '録音ショートカット',
     shortcutHint: '開始 / 停止',
+    homeLabel: '概要に戻る',
     betaTag: 'BETA',
     betaNote: 'ローカル保存、任意でクラウドバックアップ',
     navHint: {

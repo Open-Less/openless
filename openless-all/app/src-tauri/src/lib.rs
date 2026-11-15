@@ -316,6 +316,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::delete_history_entry,
             commands::clear_history,
             commands::get_activity_stats,
+            commands::get_activity_apps,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -622,6 +623,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::delete_history_entry,
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
+            $crate::commands::get_activity_apps,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -2313,10 +2315,12 @@ fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 /// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 760.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 416.0;
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 720.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 380.0;
 /// Reserve room for the independent recording capsule and its context badge.
 const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
+/// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
+const QA_WINDOW_EXPANDED_BOTTOM_INSET: f64 = 132.0;
 const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
@@ -2938,9 +2942,14 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
             frame.x + 16.0,
             (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
         );
+        let bottom_inset = if expanded {
+            QA_WINDOW_EXPANDED_BOTTOM_INSET
+        } else {
+            QA_WINDOW_BOTTOM_INSET
+        };
         y = y.clamp(
             frame.y + 32.0,
-            (frame.y + frame.height - height - QA_WINDOW_BOTTOM_INSET).max(frame.y + 32.0),
+            (frame.y + frame.height - height - bottom_inset).max(frame.y + 32.0),
         );
     }
     window
@@ -4274,14 +4283,14 @@ mod tests {
     #[test]
     fn qa_resize_preserves_centre_baseline_and_user_position() {
         let expanded =
-            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
-        assert_eq!(expanded, (-840.0, 324.0));
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 720.0, 380.0, false, true);
+        assert_eq!(expanded, (-820.0, 360.0));
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true),
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 720.0, 380.0, true, true),
             expanded
         );
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false),
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 480.0, 80.0, true, false),
             (-700.0, 700.0)
         );
     }

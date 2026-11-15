@@ -1,6 +1,7 @@
 @import '../components/Tooltip.css';
 @import '../components/ui/Select.css';
 @import './continuous-corners.css';
+@import './grid.css';
 
 html,
 body,
@@ -607,13 +608,22 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
    与右栏卡片高度更接近；窄屏叠成单栏。 */
 .ol-translation-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
   align-items: stretch;
+}
+.ol-translation-grid > :first-child {
+  grid-column: span 7;
+}
+.ol-translation-grid > :last-child {
+  grid-column: span 5;
 }
 @media (max-width: 880px) {
   .ol-translation-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-translation-grid > * {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1301,13 +1311,21 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-omni-primary-fields,
 .ol-omni-advanced-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
+}
+.ol-omni-primary-fields > *,
+.ol-omni-advanced-fields > * {
+  grid-column: span 6;
 }
 .ol-omni-primary-fields .ol-channel-form-row,
 .ol-omni-advanced-fields .ol-channel-form-row {
   grid-template-columns: minmax(0, 1fr);
   gap: 4px;
+}
+.ol-omni-primary-fields .ol-channel-form-row > *,
+.ol-omni-advanced-fields .ol-channel-form-row > * {
+  grid-column: 1 / -1;
 }
 .ol-omni-primary-fields .ol-channel-form-row > label,
 .ol-omni-advanced-fields .ol-channel-form-row > label {
@@ -1383,6 +1401,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   .ol-omni-advanced-fields {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
+  }
+  .ol-omni-primary-fields > *,
+  .ol-omni-advanced-fields > * {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1631,10 +1653,16 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 }
 .ol-channel-form-row {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: start;
-  gap: 8px 20px;
+  gap: 8px var(--ol-grid-gutter);
   padding: 10px 0;
+}
+.ol-channel-form-row > label {
+  grid-column: span 3;
+}
+.ol-channel-form-row > :not(label) {
+  grid-column: span 9;
 }
 .ol-channel-form-row > label {
   padding-top: 9px;
@@ -1644,6 +1672,9 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 }
 .ol-channel-form-row[data-stacked='true'] {
   grid-template-columns: minmax(0, 1fr);
+}
+.ol-channel-form-row[data-stacked='true'] > * {
+  grid-column: 1 / -1;
 }
 .ol-channel-form-row[data-stacked='true'] > label {
   padding-top: 0;
@@ -1903,22 +1934,54 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   background: rgba(220, 38, 38, 0.11);
   border-color: var(--ol-err);
 }
+.ol-channel-delete-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 .ol-channel-delete-button svg {
   flex-shrink: 0;
 }
-.ol-channel-delete-confirm {
+.ol-channel-delete-dialog {
   display: flex;
-  flex: 1 1 250px;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
 }
-.ol-channel-delete-confirm p {
-  width: 100%;
-  margin: 0 0 3px;
+.ol-channel-delete-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 16px;
+  background: rgba(220, 38, 38, 0.1);
   color: var(--ol-err);
-  font-size: 12px;
-  line-height: 1.6;
+}
+.ol-channel-delete-dialog-title {
+  margin: 0;
+  color: var(--ol-ink);
+  font-size: 20px;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: -0.01em;
+}
+.ol-channel-delete-dialog-warning {
+  margin: 0;
+  color: var(--ol-err);
+  font-size: 14.5px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.65;
+}
+.ol-channel-delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.ol-channel-delete-dialog-actions .ol-channel-delete-button {
+  min-height: 40px;
+  padding: 0 18px;
+  font-size: 13.5px;
 }
 
 @media (max-width: 600px) {
@@ -2178,12 +2241,22 @@ html:lang(de) {
 /* Model retrieval and validation never insert new rows into a live form. */
 .ol-channel-model-tools {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(160px, 36%);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   align-items: center;
   min-width: 0;
   width: 100%;
   min-height: 36px;
+}
+/* The model picker belongs to the same field column as endpoint / API key /
+   temperature; stacking the fetch control above it lets the picker use the full
+   field width instead of an arbitrary fraction. */
+.ol-channel-model-tools > :first-child,
+.ol-channel-model-tools > :last-child {
+  grid-column: 1 / -1;
+}
+.ol-channel-model-tools > :only-child {
+  grid-column: 1 / -1;
 }
 .ol-channel-model-fetch,
 .ol-channel-validation-actions {
@@ -2250,6 +2323,9 @@ html:lang(de) {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
+  .ol-channel-model-tools > * {
+    grid-column: 1 / -1;
+  }
   .ol-channel-validation-heading {
     flex-wrap: wrap;
   }
@@ -2261,7 +2337,11 @@ html:lang(de) {
 .ol-omni-tools-actions > .ol-channel-model-tools {
   flex: 1;
   width: auto;
-  grid-template-columns: minmax(110px, 1fr) minmax(140px, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+.ol-omni-tools-actions > .ol-channel-model-tools > :first-child,
+.ol-omni-tools-actions > .ol-channel-model-tools > :last-child {
+  grid-column: span 6;
 }
 .ol-omni-tools-actions {
   flex-wrap: nowrap;
@@ -2275,6 +2355,10 @@ html:lang(de) {
   }
   .ol-omni-tools-actions > .ol-channel-model-tools {
     flex-basis: 100%;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-omni-tools-actions > .ol-channel-model-tools > * {
+    grid-column: 1 / -1;
   }
 }
 

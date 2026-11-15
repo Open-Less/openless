@@ -1,7 +1,6 @@
 // Host jobs outlive settings. Experimental downloads use the same authoritative
 // snapshot and cancellation route as their switches, not the retired Qwen API.
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from '../lib/ipc';
 import {
@@ -169,7 +168,7 @@ export function GlobalDownloadProgress() {
 
   if (visible.length) activated.current = true;
   if (!activated.current) return null;
-  return createPortal(
+  return (
     <Suspense
       fallback={
         visible.length ? (
@@ -185,7 +184,6 @@ export function GlobalDownloadProgress() {
         pending={[...pending, ...experimental.pending.map((model) => `experimental:${model}`)]}
         onCancel={handleCancel}
       />
-    </Suspense>,
-    document.body,
+    </Suspense>
   );
 }

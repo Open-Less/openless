@@ -30,10 +30,10 @@ assert.doesNotMatch(
   /const SettingsModal = lazy\(/,
   'settings must not be a first-open lazy chunk',
 );
-assert.match(
+assert.doesNotMatch(
   transitionViewport,
-  /className="ol-transition-mask"/,
-  'page transitions must render a pointer-transparent cover during handoff',
+  /PercentLoader|ol-transition-mask/,
+  'an already visible page must not be covered by a loading mask',
 );
 assert.match(
   capsuleStyles,

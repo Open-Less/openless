@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
+import { PercentLoader } from './ui/PercentLoader';
 
-/** Real startup gate: decorative motion ends in 2.4s, but never lies about readiness. */
+/** Startup gate. The percent mark loops until ready and is not a measured ratio. */
 export function CoreStartupScreen({
   error,
   compact = false,
@@ -12,13 +13,7 @@ export function CoreStartupScreen({
   return (
     <div className="ol-startup" data-compact={compact || undefined}>
       <div className="ol-startup-content" role={error ? 'alert' : 'status'} aria-busy={!error}>
-        {!compact && (
-          <div className="ol-startup-mark" data-error={!!error} aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-        )}
+        {!error && <PercentLoader size={compact ? 28 : 48} />}
         <strong>{error ? t('startup.failed') : 'OpenLess'}</strong>
         <p>{t(error ? 'startup.recovery' : 'startup.loading')}</p>
         {error && !compact && (

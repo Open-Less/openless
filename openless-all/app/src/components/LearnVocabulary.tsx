@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { notify } from '../lib/notifications';
 import { addLearnedVocab } from '../lib/ipc/vocab';
 import { Btn } from '../pages/_atoms';
 import { inputStyle } from '../pages/settings/shared';
@@ -19,7 +20,7 @@ export function LearnVocabulary() {
       await addLearnedVocab(phrase.trim());
       setPhrase('');
       setOpen(false);
-      setMessage(t('vocabLearning.saved', '已记住，可在词典中管理'));
+      notify({ state: 'saved', message: t('vocabLearning.saved', '已记住，可在词典中管理') });
     } catch (error) {
       setMessage(t('vocabLearning.failed', '保存失败：{{error}}', { error: String(error) }));
     } finally {

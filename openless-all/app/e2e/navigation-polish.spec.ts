@@ -131,8 +131,11 @@ test('fetching and selecting models keeps the form and verify button at the same
   expect(Math.abs(initial.y - loaded.y)).toBeLessThan(1);
   const fetchRect = (await fetch.boundingBox())!;
   const pickerRect = (await picker.boundingBox())!;
-  expect(pickerRect.x).toBeGreaterThan(fetchRect.x + fetchRect.width);
-  expect(Math.abs(pickerRect.y - fetchRect.y)).toBeLessThan(4);
+  // The picker owns the full field column below the fetch row, so its left edge
+  // matches endpoint / API key and its width is no longer a fraction of the row.
+  expect(Math.abs(pickerRect.x - fetchRect.x)).toBeLessThan(1);
+  expect(pickerRect.y).toBeGreaterThan(fetchRect.y + fetchRect.height - 2);
+  expect(pickerRect.width).toBeGreaterThan(fetchRect.width * 2);
   await expect(form.locator('.ol-channel-model-fetch [role="status"]')).toContainText('已拉取');
   await picker.click();
   await page.getByRole('option').last().click();
@@ -143,6 +146,8 @@ test('fetching and selecting models keeps the form and verify button at the same
 test('dictation shortcuts hug the key label and coarse wheel scrolling has intermediate positions', async ({
   page,
 }) => {
+  // Keep the form scrollable even when the page itself fits the default window.
+  await page.setViewportSize({ width: 1300, height: 600 });
   const dialog = await settings(page);
   await openMicrophoneSettings(dialog);
   const recorder = dialog.locator('.ol-shortcut-recorder').first();

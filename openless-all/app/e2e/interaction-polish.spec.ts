@@ -156,7 +156,7 @@ for (const platform of ['mac', 'win'] as const) {
     const panel = page.locator('.qa-answer-panel');
     const header = panel.locator('.qa-answer-header');
     await expect(panel).toHaveAttribute('data-platform', platform);
-    await expect(header.locator('h1')).toHaveText('随便问');
+    await expect(header.locator('h1')).toContainText('Message 0:');
     await expect(header).toHaveCSS('background-color', 'rgb(255, 255, 255)');
     await expect(header.locator('.qa-symbol')).toHaveCount(0);
     const headerBox = (await header.boundingBox())!;

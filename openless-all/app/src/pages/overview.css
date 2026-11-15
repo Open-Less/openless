@@ -1,0 +1,7 @@
+/* Overview cards share one deliberately larger radius. The global continuous-corner
+   helper defaults to 16px and clips the card, so both the radius and clip are
+   overridden here; nested controls keep their own radii. */
+.ol-overview-dashboard .ol-card {
+  border-radius: 28px !important;
+  clip-path: none !important;
+}

@@ -1,7 +1,7 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 190,
-  "wired": 103,
+  "total": 191,
+  "wired": 104,
   "missing": 87,
   "commands": [
     {
@@ -416,6 +416,13 @@
         "src/lib/ipc/voice-edit-session.ts"
       ],
       "implementation": "unimplemented"
+    },
+    {
+      "name": "get_activity_apps",
+      "calledFrom": [
+        "src/lib/ipc/history.ts"
+      ],
+      "implementation": "rust"
     },
     {
       "name": "get_activity_stats",

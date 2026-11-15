@@ -20,8 +20,11 @@
 }
 .ol-usage-history-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
+}
+.ol-usage-history-grid > * {
+  grid-column: span 6;
 }
 .ol-usage-record-card {
   display: flex;
@@ -44,6 +47,9 @@
 @media (max-width: 1000px) {
   .ol-usage-history-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-usage-history-grid > * {
+    grid-column: 1 / -1;
   }
   .ol-usage-record-card {
     height: clamp(240px, 55dvh, 480px);

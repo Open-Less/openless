@@ -208,7 +208,12 @@ test('Gemini Omni exposes the shared thinking setting and hides it for transcrip
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const { mockSettings } = await import('/src/lib/ipc/mock-data.ts');
+        // Import the module instance the app loaded (Vite appends an HMR query).
+        const url = performance
+          .getEntriesByType('resource')
+          .map((entry) => entry.name)
+          .find((name) => name.includes('/src/lib/ipc/mock-data.ts'));
+        const { mockSettings } = await import(url || '/src/lib/ipc/mock-data.ts');
         return mockSettings.llmThinkingEnabled;
       }),
     )

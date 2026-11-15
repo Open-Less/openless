@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../lib/ipc';
+import { emitSaved } from '../../lib/savedEvent';
 import { Btn, Card } from '../_atoms';
 import { inputStyle, SettingRow } from './shared';
 
@@ -28,16 +29,18 @@ export function saveSearchConfig(value: WebSearchConfig): Promise<void> {
   return setCredential('web_search.config', JSON.stringify(value));
 }
 export function WebSearchSection() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const text = (zh: string, en: string) => (i18n.language.startsWith('zh') ? zh : en);
   const [config, setConfig] = useState<WebSearchConfig | null>(null);
-  const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     void loadSearchConfig()
       .then(setConfig)
       .catch(() =>
-        setStatus(text('读取失败，请重新打开设置。', 'Could not load settings. Please reopen.')),
+        emitSaved(
+          'failed',
+          text('读取失败，请重新打开设置。', 'Could not load settings. Please reopen.'),
+        ),
       );
   }, []);
   return (
@@ -117,12 +120,11 @@ export function WebSearchSection() {
             }
             onClick={async () => {
               setBusy(true);
-              setStatus('');
               try {
                 await saveSearchConfig(config);
-                setStatus(text('已保存', 'Saved'));
+                emitSaved('saved', t('common.saved'));
               } catch {
-                setStatus(text('保存失败，请重试。', 'Could not save. Please retry.'));
+                emitSaved('failed', text('保存失败，请重试。', 'Could not save. Please retry.'));
               } finally {
                 setBusy(false);
               }
@@ -132,7 +134,6 @@ export function WebSearchSection() {
           </Btn>
         </>
       )}
-      {status && <p role="status">{status}</p>}
     </Card>
   );
 }

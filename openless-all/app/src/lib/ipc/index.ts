@@ -69,6 +69,7 @@ export {
   deleteHistoryEntry,
   clearHistory,
   getActivityStats,
+  getActivityApps,
   readAudioRecording,
   retranscribeRecording,
   applyQuickNoteRepolish,

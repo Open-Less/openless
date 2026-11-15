@@ -187,9 +187,15 @@ button:disabled {
 }
 .ol-shortcuts-layout {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
   align-items: start;
+}
+.ol-shortcuts-filters {
+  grid-column: span 3;
+}
+.ol-shortcut-results {
+  grid-column: span 9;
 }
 .ol-shortcuts-filters {
   position: sticky;
@@ -229,13 +235,21 @@ button:disabled {
 }
 .ol-shortcut-row {
   display: grid;
-  grid-template-columns: minmax(100px, 1fr) minmax(150px, 260px);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: center;
-  gap: 20px;
+  gap: var(--ol-grid-gutter);
   min-height: 64px;
   padding: 12px 0;
   border-bottom: 1px solid var(--ol-line-soft);
   font-size: 13.5px;
+}
+.ol-shortcut-row > :first-child {
+  grid-column: span 8;
+}
+.ol-shortcut-row > :nth-child(2) {
+  grid-column: span 4;
+  justify-self: end;
+  min-width: 0;
 }
 .ol-shortcut-row small {
   display: block;
@@ -246,9 +260,16 @@ button:disabled {
 .ol-shortcut-row > kbd {
   justify-self: end;
 }
-.ol-shortcut-pack {
-  grid-template-columns: minmax(100px, 1fr) minmax(140px, 240px) 24px;
-  gap: 12px;
+.ol-shortcut-pack > :first-child {
+  grid-column: span 7;
+}
+.ol-shortcut-pack > :nth-child(2) {
+  grid-column: span 4;
+  justify-self: stretch;
+}
+.ol-shortcut-pack > :nth-child(3) {
+  grid-column: span 1;
+  justify-self: end;
 }
 .ol-shortcut-recorder {
   min-width: 0;
@@ -272,6 +293,11 @@ button:disabled {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.ol-shortcut-popup {
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  min-width: 0;
+}
 .ol-shortcut-recording {
   background: var(--ol-blue-soft);
   border: 1px solid var(--ol-blue);
@@ -280,6 +306,7 @@ button:disabled {
   color: var(--ol-ink);
   font-size: 12px;
   line-height: 1.5;
+  text-align: center;
 }
 .ol-shortcut-recording small {
   display: block;
@@ -470,6 +497,19 @@ button:disabled {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
 }
+.ol-experimental-model-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.ol-experimental-model-action-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 72px;
+  min-width: 72px;
+}
 .ol-model-state {
   position: relative;
   flex: 1;
@@ -504,22 +544,132 @@ button:disabled {
   border-radius: var(--ol-r-sm);
   color: var(--ol-blue);
 }
-.ol-global-downloads {
+.ol-notification-center {
   position: fixed;
-  top: 14px;
-  right: 14px;
-  z-index: 900;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99999;
+  width: min(380px, calc(100vw - 28px));
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: min(320px, calc(100vw - 28px));
+  /* Start at the window's top edge: transient confirmations must drop in from above
+     the app, not from an arbitrary inset below the title bar or dialog header. */
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
+  pointer-events: none;
+}
+.ol-global-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ol-notification-card,
+.ol-download-card {
+  pointer-events: auto;
+}
+.ol-notification-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 20px;
+  /* Same raised surface as the overview / usage cards; only the shadow makes the
+     transient toast float above them. */
+  background: var(--ol-surface-raised);
+  color: var(--ol-ink);
+  box-shadow:
+    0 18px 48px -18px rgba(15, 23, 42, 0.32),
+    0 4px 14px -6px rgba(15, 23, 42, 0.16);
+}
+.ol-notification-card--progress {
+  align-items: flex-start;
+}
+.ol-notification-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.ol-notification-progress {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ol-line);
+}
+.ol-notification-progress-value {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ol-blue);
+  animation: ol-notification-indeterminate 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes ol-notification-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+.ol-notification-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border-radius: 11px;
+  color: white;
+  font-size: 19px;
+  font-weight: 700;
+}
+.ol-notification-icon--saved {
+  background: var(--ol-blue);
+}
+.ol-notification-icon--failed,
+.ol-notification-icon--deleted {
+  /* Pure red reads as a destructive result; the theme's soft error tint looked
+     pink/orange on the raised toast surface. */
+  background: #e00000;
+}
+.ol-notification-icon--saving {
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-3);
+}
+.ol-notification-icon--info {
+  background: var(--ol-blue-soft);
+  color: var(--ol-blue);
+}
+.ol-notification-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ol-notification-action {
+  color: var(--ol-blue);
+  font-weight: 600;
+}
+.ol-notification-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  color: var(--ol-ink-3);
 }
 .ol-download-card {
-  padding: 10px 12px;
-  border: 0.5px solid var(--ol-line-strong);
+  isolation: isolate;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--ol-line-strong);
   border-radius: var(--ol-r-md);
-  background: var(--ol-surface);
-  box-shadow: var(--ol-shadow-lg);
+  background: var(--ol-surface-raised);
+  box-shadow:
+    0 18px 48px -18px rgba(15, 23, 42, 0.32),
+    0 4px 14px -6px rgba(15, 23, 42, 0.16);
 }
 .ol-download-heading {
   display: flex;
@@ -569,15 +719,22 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-/* An honest first frame: finite, pure CSS mark. No video, sound, fixed delay or fake percentage. */
+/* Startup only. This covers the whole window until the first page can paint.
+   Page navigation keeps the previous surface and does not use this mask. */
 .ol-startup {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
   display: grid;
   place-items: center;
   width: 100%;
+  height: 100%;
   min-height: 100%;
   padding: 24px;
-  background: var(--ol-surface);
-  color: var(--ol-ink);
+  background: rgb(255 255 255 / 88%);
+  color: #18181b;
+  -webkit-backdrop-filter: blur(28px);
+  backdrop-filter: blur(28px);
 }
 .ol-startup-content {
   max-width: 420px;
@@ -591,7 +748,7 @@ button:disabled {
 }
 .ol-startup-content > p {
   margin: 8px 0;
-  color: var(--ol-ink-3);
+  color: #52525b;
   font-size: 12px;
 }
 .ol-startup-mark {
@@ -721,8 +878,12 @@ button:disabled {
 }
 @media (max-width: 840px) {
   .ol-shortcuts-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
+  }
+  .ol-shortcuts-filters,
+  .ol-shortcut-results {
+    grid-column: 1 / -1;
   }
   .ol-shortcuts-filters {
     position: static;
@@ -752,6 +913,10 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
+  .ol-shortcut-row > * {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
   .ol-shortcut-row > kbd {
     justify-self: start;
   }
@@ -760,6 +925,10 @@ button:disabled {
   }
   .ol-shortcut-pack > :first-child {
     grid-column: 1 / -1;
+  }
+  .ol-shortcut-pack > :nth-child(2),
+  .ol-shortcut-pack > :nth-child(3) {
+    grid-column: auto;
   }
   .ol-settings-placeholder {
     padding: 32px 16px;
@@ -787,9 +956,13 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .ol-dialog-overlay,
-  .ol-glass {
+  .ol-glass,
+  .ol-startup {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+  }
+  .ol-startup {
+    background: #fff;
   }
   .ol-dialog-card {
     background: var(--ol-surface) !important;
@@ -809,18 +982,6 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-.ol-transition-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  opacity: 0;
-  background: color-mix(in srgb, var(--ol-surface) 18%, transparent);
-  transition: opacity 120ms var(--ol-motion-quick);
-}
-.ol-transition-viewport[aria-busy='true'] .ol-transition-mask {
-  opacity: 1;
 }
 .ol-main-arrival {
   width: 100%;
@@ -851,9 +1012,6 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   opacity: 0.72;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ol-transition-mask {
-    transition: none;
-  }
   .ol-main-arrival {
     animation: none;
   }
@@ -878,4 +1036,21 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   display: none;
   width: 0;
   height: 0;
+}
+
+/* Password fields live inside rounded dialog inputs: draw an inset ring that follows
+   the control radius instead of an outer outline that can escape the window clip. */
+.ol-sync-password input[type='password']:focus-visible,
+.ol-sync-password input[type='password']:focus {
+  outline: none;
+  border-color: var(--ol-blue);
+  box-shadow: inset 0 0 0 1px var(--ol-blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ol-notification-progress-value {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
 }

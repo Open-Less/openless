@@ -9,8 +9,6 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
-import { SavedToast } from './SavedToast';
-import { useSavedToastListener } from '../lib/savedEvent';
 import { openExternal } from '../lib/ipc';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../lib/platform';
 import { useMobileLayout, useConservativeLayout } from '../lib/useMobileLayout';
@@ -32,6 +30,8 @@ import {
   visibleSettingsSections,
   visibleAdvancedPages,
   type AdvancedPageId,
+  GENERAL_PAGES,
+  type GeneralPageId,
   type ServiceViewId,
   type SettingsSectionId,
 } from '../pages/settings/navigation';
@@ -80,6 +80,7 @@ export function SettingsModal({
     initialSettingsSection ?? 'general',
   );
   const [requestedAdvancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
+  const [requestedGeneralPage, setGeneralPage] = useState<GeneralPageId | 'root'>('root');
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [requestedServiceView, setRequestedServiceView] = useState<ServiceViewId | undefined>(
     initialServiceView,
@@ -100,7 +101,6 @@ export function SettingsModal({
     });
     if (!navigated) throw new Error(t('common.operationFailed'));
   };
-  const savedToast = useSavedToastListener();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   // Animate the opaque workspace as one surface so its backdrop follows the
@@ -155,6 +155,16 @@ export function SettingsModal({
     section === 'advanced' && !searching
       ? advancedPages.find((page) => page.id === advancedPage)
       : undefined;
+  const generalPageVisible =
+    requestedGeneralPage === 'phone'
+      ? platformCaps?.platform === 'desktop'
+      : requestedGeneralPage === 'capsule'
+        ? platformCaps == null || platformCaps.platform === 'desktop'
+        : true;
+  const activeGeneralPage =
+    section === 'general' && !searching && requestedGeneralPage !== 'root' && generalPageVisible
+      ? GENERAL_PAGES.find((page) => page.id === requestedGeneralPage)
+      : undefined;
   const showingVoiceSettings = activeAdvancedPage?.id === 'voiceEnhancement' && voiceSettingsOpen;
   const contentTitle = searching
     ? t('modal.searchResults')
@@ -162,14 +172,18 @@ export function SettingsModal({
       ? t('settings.recording.dsp.title')
       : activeAdvancedPage
         ? t(activeAdvancedPage.titleKey)
-        : t(`modal.sections.${section}`);
+        : activeGeneralPage
+          ? t(activeGeneralPage.titleKey)
+          : t(`modal.sections.${section}`);
   const contentDescription = searching
     ? t('modal.searchCount', { count: results.length })
     : showingVoiceSettings
       ? t('settings.recording.dsp.description')
       : activeAdvancedPage
         ? t(`modal.advancedPages.${activeAdvancedPage.id}`)
-        : t(`modal.descriptions.${section}`);
+        : activeGeneralPage
+          ? t(activeGeneralPage.descriptionKey)
+          : t(`modal.descriptions.${section}`);
 
   useEffect(() => {
     let cancelled = false;
@@ -239,6 +253,17 @@ export function SettingsModal({
     });
   };
 
+  const backToGeneral = () => {
+    if (requestedGeneralPage === 'root') return;
+    const previousPage = requestedGeneralPage;
+    setGeneralPage('root');
+    window.requestAnimationFrame(() => {
+      surfaceRef.current
+        ?.querySelector<HTMLElement>(`[data-ol-advanced-entry="${previousPage}"]`)
+        ?.focus();
+    });
+  };
+
   const selectSection = (
     next: SettingsSectionId,
     fromSearch = false,
@@ -249,6 +274,7 @@ export function SettingsModal({
       setSection(next);
       setRequestedServiceView(next === 'services' ? serviceView : undefined);
       setAdvancedPage(null);
+      setGeneralPage('root');
       setQuery('');
       if (fromSearch) window.requestAnimationFrame(() => headingRef.current?.focus());
     });
@@ -529,36 +555,30 @@ export function SettingsModal({
                     ref={setChannelBackground}
                     style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
                   >
-                    <SavedToast
-                      saveState={savedToast.state}
-                      message={savedToast.message}
-                      slideFrom="top"
-                      offsetStyle={{ position: 'absolute', top: 12, right: 16 }}
-                    />
                     {/* Desktop: the category title + auto-save hint + close button form
                 the right column's own top bar (like System Settings: the toolbar
                 belongs to the content area, no longer spanning the sidebar). */}
-                    {(!mobile || activeAdvancedPage) && (
+                    {(!mobile || activeAdvancedPage || activeGeneralPage) && (
                       <div
                         style={{
                           display: 'flex',
                           alignItems: 'center',
                           gap: 12,
                           padding: mobile
-                            ? '18px 24px 0'
+                            ? '18px var(--ol-grid-margin) 0'
                             : os === 'mac'
-                              ? '48px 28px 0'
-                              : '24px 28px 0',
+                              ? '48px var(--ol-grid-margin) 0'
+                              : '24px var(--ol-grid-margin) 0',
                           flexShrink: 0,
                         }}
                       >
-                        {activeAdvancedPage && (
+                        {(activeAdvancedPage || activeGeneralPage) && (
                           <button
                             type="button"
                             className="ol-settings-back"
-                            onClick={backToAdvanced}
-                            aria-label={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
-                            title={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
+                            onClick={activeAdvancedPage ? backToAdvanced : backToGeneral}
+                            aria-label={t('modal.back')}
+                            title={t('modal.back')}
                           >
                             <Icon name="chevLeft" size={19} />
                           </button>
@@ -593,11 +613,13 @@ export function SettingsModal({
                     )}
                     <div
                       style={{
-                        padding: mobile ? '18px 16px 12px' : '8px 28px 12px',
+                        padding: mobile
+                          ? '18px var(--ol-grid-margin-compact) 12px'
+                          : '8px var(--ol-grid-margin) 12px',
                         flexShrink: 0,
                       }}
                     >
-                      {mobile && !activeAdvancedPage && (
+                      {mobile && !activeAdvancedPage && !activeGeneralPage && (
                         <h2
                           ref={headingRef}
                           tabIndex={-1}
@@ -638,10 +660,10 @@ export function SettingsModal({
                         minHeight: 0,
                         overflow: 'auto',
                         padding: mobile
-                          ? '0 16px calc(20px + env(safe-area-inset-bottom, 0px))'
+                          ? '0 var(--ol-grid-margin-compact) calc(20px + env(safe-area-inset-bottom, 0px))'
                           : section === 'services'
-                            ? '0 28px 6px'
-                            : '0 28px 28px',
+                            ? '0 var(--ol-grid-margin) 6px'
+                            : '0 var(--ol-grid-margin) var(--ol-grid-margin)',
                       }}
                     >
                       {searching && (
@@ -725,7 +747,15 @@ export function SettingsModal({
                         }}
                       >
                         {section === 'general' && (
-                          <GeneralTab os={os} onOpenLocalModels={openLocalModels} />
+                          <GeneralTab
+                            os={os}
+                            onOpenLocalModels={openLocalModels}
+                            page={requestedGeneralPage}
+                            onPageChange={(next) => {
+                              setGeneralPage(next);
+                              window.requestAnimationFrame(() => headingRef.current?.focus());
+                            }}
+                          />
                         )}
                         {section === 'inputMethod' && <InputMethodTab />}
                         {section === 'shortcuts' && <ShortcutsTab />}

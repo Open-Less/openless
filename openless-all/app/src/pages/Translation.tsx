@@ -467,13 +467,7 @@ export function Translation() {
           >
             {t('translation.howto.title')}
           </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-              gap: '12px 14px',
-            }}
-          >
+          <div className="ol-grid-12 ol-grid-steps">
             {[
               t('translation.howto.step1', { trigger: triggerLabel }),
               t('translation.howto.step2', { trigger: triggerLabel }),

@@ -307,7 +307,9 @@ export const de: typeof zhCN = {
     close: 'Schließen',
     show: 'Einblenden',
     hide: 'Ausblenden',
+    apiKeySaved: 'API-Schlüssel gespeichert',
     saved: 'Gespeichert',
+    deleted: 'Gelöscht',
     refreshed: 'Aktualisiert',
     saving: 'Wird gespeichert…',
     experimental: 'Experimentell',
@@ -378,6 +380,9 @@ export const de: typeof zhCN = {
     title: 'Nachfragen',
     headerHint: 'Jederzeit fragen',
     thinking: 'Denkt nach…',
+    thoughtLive: 'Denkt nach ({{seconds}} s)',
+    thoughtDone: 'Nachgedacht ({{seconds}} s)',
+    stop: 'Stopp',
     error: 'Ein Fehler ist aufgetreten. Versuche es erneut.',
     errorRetry: 'Erneut versuchen',
     errorRetryHint: 'Versuche es erneut.',
@@ -536,6 +541,7 @@ export const de: typeof zhCN = {
   shell: {
     shortcutLabel: 'Aufnahmekurzbefehl',
     shortcutHint: 'Starten / Beenden',
+    homeLabel: 'Zurück zur Übersicht',
     betaTag: 'BETA',
     betaNote: 'Lokale Speicherung, optionale Cloud-Sicherung',
     navHint: {

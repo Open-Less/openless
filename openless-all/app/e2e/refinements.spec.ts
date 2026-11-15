@@ -91,18 +91,21 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
 test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
   page,
 }) => {
+  // A shorter window keeps the settings form scrollable at every zoom; the wheel is
+  // about native scroll delivery, not about the form happening to overflow 835px.
+  await page.setViewportSize({ width: 1300, height: 600 });
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
   const content = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   await expect(content).toHaveCSS('scroll-behavior', 'auto');
   await expect(content).toHaveCSS('scrollbar-width', 'none');
-  await content.evaluate((el) => {
+  const prevented = await content.evaluate((el) => {
     const event = new WheelEvent('wheel', { deltaY: 13.25, bubbles: true, cancelable: true });
     el.dispatchEvent(event);
-    el.setAttribute('data-wheel-prevented', String(event.defaultPrevented));
+    return event.defaultPrevented;
   });
-  await expect(content).toHaveAttribute('data-wheel-prevented', 'false');
+  expect(prevented).toBe(false);
   await page
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '通用', exact: true })

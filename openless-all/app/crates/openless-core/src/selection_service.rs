@@ -509,6 +509,7 @@ impl SelectionServiceInner {
             asr_ms: None,
             polish_ms: completed.polish_ms,
         };
+        let activity_app = session.app_name.clone();
         let mut changed = false;
         match self.history.append_with_retention(
             session,
@@ -526,6 +527,9 @@ impl SelectionServiceInner {
             log::warn!("failed to persist completed selection activity: {error}");
         } else {
             changed = true;
+        }
+        if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
+            log::warn!("failed to persist application activity: {error}");
         }
         if changed {
             let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;

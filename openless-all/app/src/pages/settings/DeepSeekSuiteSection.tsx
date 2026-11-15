@@ -75,12 +75,16 @@ export function DeepSeekSuiteSection() {
             disabled={busy}
             onClick={async () => {
               setBusy(true);
-              emitSaved('saving', t('common.saving'));
+              emitSaved('saving', t('common.saving'), 'deepseek-suite-save');
               try {
                 await saveDeepSeekSuiteConfig({ ...config, apiKey: config.apiKey.trim() });
-                emitSaved('saved', t('common.saved'));
+                emitSaved(
+                  'saved',
+                  text('DeepSeek 配置已保存', 'DeepSeek configuration saved'),
+                  'deepseek-suite-save',
+                );
               } catch {
-                emitSaved('failed', t('common.operationFailed'));
+                emitSaved('failed', t('common.operationFailed'), 'deepseek-suite-save');
               } finally {
                 setBusy(false);
               }

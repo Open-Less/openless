@@ -290,7 +290,9 @@ export const ko: typeof zhCN = {
     close: '닫기',
     show: '표시',
     hide: '숨기기',
+    apiKeySaved: 'API 키가 저장되었습니다',
     saved: '저장됨',
+    deleted: '삭제됨',
     refreshed: '새로고침했습니다',
     saving: '저장 중',
     experimental: '실험적',
@@ -360,6 +362,9 @@ export const ko: typeof zhCN = {
     title: '질문',
     headerHint: '언제든 질문하세요',
     thinking: '생각 중…',
+    thoughtLive: '생각 중 ({{seconds}}초)',
+    thoughtDone: '생각함 ({{seconds}}초)',
+    stop: '중지',
     error: '오류가 발생했습니다. 잠시 후 다시 시도해 주세요.',
     errorRetry: '재시도',
     errorRetryHint: '다시 시도해 주세요.',
@@ -515,6 +520,7 @@ export const ko: typeof zhCN = {
   shell: {
     shortcutLabel: '녹음 단축키',
     shortcutHint: '시작 / 정지',
+    homeLabel: '개요로 돌아가기',
     betaTag: 'BETA',
     betaNote: '로컬 저장, 선택적 클라우드 백업',
     navHint: {

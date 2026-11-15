@@ -167,9 +167,12 @@
 }
 .ol-guide-choices {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
   margin-top: 24px;
+}
+.ol-guide-choices > * {
+  grid-column: span 6;
 }
 .ol-guide-choice {
   text-align: left;
@@ -305,7 +308,10 @@
     font-size: 21px;
   }
   .ol-guide-choices {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-guide-choices > * {
+    grid-column: 1 / -1;
   }
   .ol-guide-welcome-form {
     flex-wrap: wrap;

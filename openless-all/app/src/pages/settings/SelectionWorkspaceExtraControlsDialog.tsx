@@ -263,10 +263,9 @@ function ControlBlock({
   const mobile = useMobileLayout();
   return (
     <section
+      className="ol-form-12"
+      data-stacked={mobile || undefined}
       style={{
-        display: 'grid',
-        gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 210px) minmax(0, 1fr)',
-        gap: 18,
         alignItems: 'start',
         padding: '16px 0',
         borderBottom: '0.5px solid var(--ol-line-soft)',

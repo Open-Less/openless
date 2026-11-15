@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
 import { ExitPresence, Modal } from '../../components/ui/Modal';
-import { Collapse } from '../../components/ui/Disclosure';
 import { Btn, Card } from '../_atoms';
+import { dismissNotification, notify } from '../../lib/notifications';
 import { Toggle } from './shared';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { marketplaceAuthStatus, readCredential } from '../../lib/ipc';
@@ -158,7 +158,6 @@ export function CustomSyncServerSection() {
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice>(null);
   const [status, setStatus] = useState<EncryptedSyncStatus | null>(null);
   const alive = useRef(false);
   const saving = useRef(false);
@@ -175,7 +174,10 @@ export function CustomSyncServerSection() {
       })
       .catch((error) => {
         if (alive.current)
-          setNotice({ key: `errors.${encryptedSyncErrorKey(error)}`, error: true });
+          notify({
+            state: 'failed',
+            message: t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(error)}`),
+          });
       })
       .finally(() => {
         if (alive.current) setLoading(false);
@@ -196,7 +198,11 @@ export function CustomSyncServerSection() {
           if (!disposed) setStatus(next);
         })
         .catch((error) => {
-          if (!disposed) setNotice({ key: `errors.${encryptedSyncErrorKey(error)}`, error: true });
+          if (!disposed)
+            notify({
+              state: 'failed',
+              message: t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(error)}`),
+            });
         })
         .finally(() => {
           pending = false;
@@ -213,15 +219,16 @@ export function CustomSyncServerSection() {
     const normalized = normalizeCustomServerOrigin(origin);
     const trimmedToken = token.trim();
     if (normalized === undefined || Boolean(normalized) !== Boolean(trimmedToken)) {
-      setNotice({
-        key: `errors.${encryptedSyncErrorKey(localError('unsupported_protocol'))}`,
-        error: true,
+      notify({
+        state: 'failed',
+        message: t(
+          `cloudSyncE2ee.errors.${encryptedSyncErrorKey(localError('unsupported_protocol'))}`,
+        ),
       });
       return;
     }
     saving.current = true;
     setBusy(true);
-    setNotice(null);
     void (async () => {
       const configured = await cloudSyncE2eeConfigureServer({
         origin: normalized,
@@ -232,12 +239,15 @@ export function CustomSyncServerSection() {
       if (alive.current) {
         setStatus(next);
         setToken('');
-        setNotice({ key: 'done' });
+        notify({ state: 'saved', message: t('cloudSyncE2ee.done') });
       }
     })()
       .catch((error) => {
         if (alive.current)
-          setNotice({ key: `errors.${encryptedSyncErrorKey(error)}`, error: true });
+          notify({
+            state: 'failed',
+            message: t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(error)}`),
+          });
       })
       .finally(() => {
         saving.current = false;
@@ -286,9 +296,6 @@ export function CustomSyncServerSection() {
         <Btn size="sm" variant="blue" disabled={working || !prefs || !status} onClick={save}>
           {t('cloudSyncE2ee.customServerSave')}
         </Btn>
-        {notice && (
-          <p role={notice.error ? 'alert' : 'status'}>{t(`cloudSyncE2ee.${notice.key}`)}</p>
-        )}
       </div>
     </Card>
   );
@@ -302,6 +309,7 @@ export function CloudSyncSection() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cancelPending, setCancelPending] = useState(false);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [showLogin, setShowLogin] = useState(false);
@@ -316,8 +324,15 @@ export function CloudSyncSection() {
   const loginHint = prefs?.marketplaceDevLogin?.trim() ?? '';
   const customServerOrigin = prefs?.syncCustomServerOrigin ?? '';
 
+  const announce = (key: string, state: 'saved' | 'info' = 'saved') => {
+    notify({ state, message: t(`cloudSyncE2ee.${key}`) });
+  };
   const showError = (error: unknown) => {
-    if (alive.current) setNotice({ key: `errors.${encryptedSyncErrorKey(error)}`, error: true });
+    if (!alive.current) return;
+    const key = `errors.${encryptedSyncErrorKey(error)}`;
+    notify({ state: 'failed', message: t(`cloudSyncE2ee.${key}`) });
+    // Keep the contextual error inside an open dialog; the page body stays clean.
+    setNotice({ key, error: true });
   };
   const acceptStatus = (next: EncryptedSyncStatus): boolean => {
     if (!alive.current) return false;
@@ -387,7 +402,7 @@ export function CloudSyncSection() {
         return;
       watermark.current = event.sequence;
       setDialog({ kind: 'restore', preview: event.preview, enableAfter: false });
-      setNotice({ key: 'states.conflict' });
+      announce('states.conflict', 'info');
     },
     restored(event) {
       const snapshot = current.current;
@@ -399,7 +414,7 @@ export function CloudSyncSection() {
         return;
       watermark.current = event.sequence;
       setDialog(null);
-      setNotice({ key: 'restored' });
+      announce('restored');
       // UI-only preferences are applied by the central native restore bridge.
       void refresh().catch(showError);
       void loadRef.current();
@@ -530,7 +545,7 @@ export function CloudSyncSection() {
       }
       if (valid()) {
         setDialog(null);
-        setNotice({ key: 'done' });
+        announce('done');
       }
     }
   };
@@ -556,13 +571,13 @@ export function CloudSyncSection() {
         await refresh();
       }
       if (next.syncState === 'conflict') {
-        if (valid()) setNotice({ key: 'states.conflict' });
+        if (valid()) announce('states.conflict', 'info');
         await previewRestore(false, valid);
         return;
       }
       if (valid()) {
         setDialog(null);
-        setNotice({ key: 'done' });
+        announce('done');
       }
     });
   const submitPassword = (value: PasswordSubmission) => {
@@ -579,7 +594,7 @@ export function CloudSyncSection() {
         });
         if (valid() && acceptStatus(next)) {
           setDialog(null);
-          setNotice({ key: 'done' });
+          announce('done');
         }
       } else if (active.kind === 'unlock') {
         const next = await cloudSyncE2eeUnlock({
@@ -597,7 +612,7 @@ export function CloudSyncSection() {
         });
         if (valid() && acceptStatus(next)) {
           setDialog(null);
-          setNotice({ key: 'done' });
+          announce('done');
         }
       }
     });
@@ -627,7 +642,7 @@ export function CloudSyncSection() {
       await refresh();
       if (valid()) {
         setDialog(null);
-        setNotice({ key: 'restored' });
+        announce('restored');
       }
     });
   };
@@ -635,16 +650,17 @@ export function CloudSyncSection() {
     const task = current.current?.taskId;
     if (!task || cancelPending) return;
     setCancelPending(true);
+    setCancelRequested(true);
     try {
       const next = await cloudSyncE2eeCancel(task);
-      if (alive.current && acceptStatus(next)) setNotice({ key: 'cancelRequested' });
+      if (alive.current) acceptStatus(next);
     } catch (error) {
+      if (alive.current) setCancelRequested(false);
       showError(error);
     } finally {
       if (alive.current) setCancelPending(false);
     }
   };
-
   const customServerConfigured = Boolean(prefs?.syncCustomServerOrigin?.trim());
   const syncSignedIn =
     status?.authState === 'signed_in' && status?.syncState !== 'sign_in_required';
@@ -653,12 +669,38 @@ export function CloudSyncSection() {
     status?.syncState !== 'sign_in_required' &&
     (syncSignedIn || (Boolean(prefs) && !customServerConfigured && authSignedIn));
   const working = busy || status?.syncState === 'syncing';
+  const cancelTaskRef = useRef(cancelTask);
+  cancelTaskRef.current = cancelTask;
+  const workingKey = 'cloud-sync-working';
+  useEffect(() => {
+    if (!alive.current) return;
+    if (!working) {
+      dismissNotification(workingKey);
+      if (cancelRequested) setCancelRequested(false);
+      return;
+    }
+    notify({
+      id: workingKey,
+      state: 'saving',
+      message: t(cancelRequested ? 'cloudSyncE2ee.cancelRequested' : 'cloudSyncE2ee.working'),
+      progress: true,
+      durationMs: 0,
+      actionLabel: status?.taskId ? t('cloudSyncE2ee.cancelTask') : undefined,
+      onAction: status?.taskId
+        ? () => {
+            setCancelRequested(true);
+            void cancelTaskRef.current();
+          }
+        : undefined,
+    });
+  }, [working, status?.taskId, cancelRequested, t]);
+  useEffect(() => () => dismissNotification(workingKey), []);
+
   const unlocked = status?.keyState === 'unlocked';
   const available = status !== null;
   const lastSync = status?.lastSuccessfulSyncAt ? new Date(status.lastSuccessfulSyncAt) : null;
   const lastError = status?.lastError ? encryptedSyncErrorKey(status.lastError) : null;
-  const noticeError = notice?.error ? notice.key.replace(/^errors\./, '') : null;
-  const visibleError = noticeError ?? (!notice ? lastError : null);
+  const visibleError = notice?.error ? null : lastError;
   const focus = status
     ? setupFocus(status, identityAvailable, preparingStep, setupReached)
     : identityAvailable
@@ -691,12 +733,6 @@ export function CloudSyncSection() {
       setNotice(null);
     }
   };
-  const taskControls = status?.taskId ? (
-    <Btn disabled={cancelPending} onClick={() => void cancelTask()}>
-      {t('cloudSyncE2ee.cancelTask')}
-    </Btn>
-  ) : null;
-
   return (
     <Card>
       <section className="ol-cloud-sync" aria-labelledby="cloud-sync-e2ee-title">
@@ -869,16 +905,7 @@ export function CloudSyncSection() {
             </button>
           </div>
         )}
-        <Collapse open={working}>
-          <div className="ol-cloud-sync-actions">
-            <span role="status">{t('cloudSyncE2ee.working')}</span>
-            {taskControls}
-          </div>
-        </Collapse>
-        <Collapse open={!!notice && !notice.error}>
-          <p role="status">{notice ? t(`cloudSyncE2ee.${notice.key}`) : ''}</p>
-        </Collapse>
-        <Collapse open={!!visibleError}>
+        {visibleError && (
           <div className="ol-cloud-sync-status-line">
             <p role="alert" className="ol-cloud-sync-error">
               {t(`cloudSyncE2ee.errors.${visibleError}`)}
@@ -909,7 +936,7 @@ export function CloudSyncSection() {
                 </Btn>
               )}
           </div>
-        </Collapse>
+        )}
         {status?.lastError?.retryAfterSeconds != null &&
           Number.isSafeInteger(status.lastError.retryAfterSeconds) &&
           status.lastError.retryAfterSeconds > 0 &&
@@ -1027,12 +1054,6 @@ export function CloudSyncSection() {
                     )
                   }
                 />
-              )}
-              {working && status?.taskId && dialog.kind !== 'protocol' && (
-                <div className="ol-cloud-sync-actions">
-                  <span role="status">{t('cloudSyncE2ee.working')}</span>
-                  {taskControls}
-                </div>
               )}
             </SyncDialog>
           )
@@ -1166,6 +1187,7 @@ function PasswordForm({
   };
   return (
     <form
+      className="ol-sync-password"
       style={{ display: 'grid', gap: 14 }}
       onCompositionStart={() => {
         composing.current = true;
@@ -1498,10 +1520,9 @@ function SyncDialog({
     const previous = opener.current;
     const background =
       previous instanceof HTMLElement ? previous.closest<HTMLElement>('[role="dialog"]') : null;
-    const wasInert = background?.inert ?? false;
     if (background) background.inert = true;
     return () => {
-      if (background) background.inert = wasInert;
+      if (background) background.inert = false;
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, []);

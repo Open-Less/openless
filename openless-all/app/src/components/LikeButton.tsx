@@ -44,7 +44,7 @@ function HeartGlyph({ filled }: { filled: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M12 20.4s-6.8-4.15-8.7-8.15C1.7 9.2 2.8 6.2 5.8 5.45c1.9-.48 3.6.35 4.7 1.85 1.1-1.5 2.8-2.33 4.7-1.85 3 .75 4.1 3.75 2.5 6.8-1.9 4-8.7 8.15-8.7 8.15z"
+        d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
         fill={filled ? 'currentColor' : 'none'}
         stroke="currentColor"
         strokeWidth="1.7"

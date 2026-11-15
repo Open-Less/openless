@@ -305,7 +305,9 @@ export const es: typeof zhCN = {
     close: 'Cerrar',
     show: 'Mostrar',
     hide: 'Ocultar',
+    apiKeySaved: 'Clave API guardada',
     saved: 'Guardado',
+    deleted: 'Eliminado',
     refreshed: 'Actualizado',
     saving: 'Guardando…',
     experimental: 'Experimental',
@@ -376,6 +378,9 @@ export const es: typeof zhCN = {
     title: 'Preguntar',
     headerHint: 'Pregunta cuando quieras',
     thinking: 'Pensando…',
+    thoughtLive: 'Pensando ({{seconds}} s)',
+    thoughtDone: 'Pensado durante {{seconds}} s',
+    stop: 'Detener',
     error: 'Se ha producido un error. Inténtalo de nuevo.',
     errorRetry: 'Reintentar',
     errorRetryHint: 'Inténtalo de nuevo.',
@@ -533,6 +538,7 @@ export const es: typeof zhCN = {
   shell: {
     shortcutLabel: 'Atajo de grabación',
     shortcutHint: 'Iniciar / Detener',
+    homeLabel: 'Volver al resumen',
     betaTag: 'BETA',
     betaNote: 'Almacenamiento local y copia en la nube opcional',
     navHint: {

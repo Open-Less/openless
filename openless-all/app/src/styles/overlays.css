@@ -244,8 +244,19 @@
 }
 .ol-intent-options {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
+}
+.ol-intent-options > * {
+  grid-column: span 6;
+}
+@media (max-width: 640px) {
+  .ol-intent-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-intent-options > * {
+    grid-column: 1 / -1;
+  }
 }
 .ol-intent-options .ol-tool-button {
   min-height: 38px;

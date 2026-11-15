@@ -432,7 +432,7 @@ export function ChannelList({
 
   const onToggle = async (channel: Channel, control: HTMLElement) => {
     const enabled = !channel.enabled;
-    emitSaved('saving', t('common.saving'));
+    emitSaved('saving', t('common.saving'), `channel-toggle:${kind}:${channel.id}`);
     // Flip in place first. Core re-sorts the list (a disabled channel sinks to the end), and
     // moving a row re-inserts its node, which cancels a running transition: the re-sorted
     // list lands only once the knob has finished sliding.
@@ -443,12 +443,12 @@ export function ChannelList({
     try {
       await Promise.all([setChannelEnabled(kind, channel.id, enabled), slid]);
       await refresh();
-      emitSaved('saved', t('common.saved'));
+      emitSaved('saved', t('common.saved'), `channel-toggle:${kind}:${channel.id}`);
     } catch (error) {
       console.error('[channels] toggle failed', error);
       await slid;
       await refresh();
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', t('common.operationFailed'), `channel-toggle:${kind}:${channel.id}`);
     }
   };
 
@@ -944,8 +944,10 @@ function ChannelModal({
   const [providerType, setProviderType] = useState(channel.providerType);
   const [changingProvider, setChangingProvider] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameId = useId();
+  const deleteTitleId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
   const embedded = Boolean(
     editorHost?.presentation === 'inline' && editorHost.container && editorHost.background,
@@ -974,7 +976,6 @@ function ChannelModal({
       : parentDialog && !parentDialog.contains(dialog)
         ? parentDialog
         : null;
-    const wasInert = background?.inert ?? false;
     (
       dialog?.querySelector<HTMLElement>('[role="combobox"], input:not([disabled])') ?? dialog
     )?.focus({ preventScroll: true });
@@ -985,7 +986,9 @@ function ChannelModal({
     editorHost?.registerClose(requestClose);
     return () => {
       editorHost?.registerClose(null);
-      if (background) background.inert = wasInert;
+      // Always release the covered surface. Restoring a stale `true` captured while a
+      // page transition was still entering would leave the settings page uninteractive.
+      if (background) background.inert = false;
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
   }, []);
@@ -1087,13 +1090,16 @@ function ChannelModal({
   };
 
   const remove = async () => {
+    if (deleting) return;
+    setDeleting(true);
     try {
       await deleteChannel(kind, channel.id);
-      emitSaved('saved', t('common.saved'));
+      emitSaved('deleted', t('common.deleted'));
       requestClose();
     } catch (error) {
       console.error('[channels] delete failed', error);
       emitSaved('failed', t('common.operationFailed'));
+      setDeleting(false);
     }
   };
 
@@ -1198,36 +1204,14 @@ function ChannelModal({
         </div>
 
         <footer className="ol-channel-dialog-footer">
-          {confirmDelete ? (
-            <div
-              className="ol-channel-delete-confirm"
-              role="group"
-              aria-label={t('settings.channels.delete')}
-            >
-              <p>{t('settings.channels.deleteConfirm')}</p>
-              <button
-                type="button"
-                autoFocus
-                className="ol-channel-delete-button"
-                onClick={() => void remove()}
-              >
-                <Icon name="trash" size={15} />
-                {t('settings.channels.confirmDelete')}
-              </button>
-              <button type="button" onClick={() => setConfirmDelete(false)} style={ghostBtn}>
-                {t('common.cancel')}
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="ol-channel-delete-button"
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Icon name="trash" size={15} />
-              {t('settings.channels.delete')}
-            </button>
-          )}
+          <button
+            type="button"
+            className="ol-channel-delete-button"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Icon name="trash" size={15} />
+            {t('settings.channels.delete')}
+          </button>
           <div className="ol-channel-dialog-footer-end">
             <span className="ol-channel-autosave-hint">{t('modal.autoSaveHint')}</span>
             <Btn
@@ -1240,6 +1224,50 @@ function ChannelModal({
           </div>
         </footer>
       </div>
+      {confirmDelete && (
+        <Modal
+          onClose={() => {
+            if (!deleting) setConfirmDelete(false);
+          }}
+          zIndex={1100}
+          motionVariant="pop"
+          labelledBy={deleteTitleId}
+          width="min(480px, calc(100vw - 40px))"
+          style={{ padding: 30 }}
+        >
+          <div className="ol-channel-delete-dialog">
+            <span className="ol-channel-delete-dialog-icon" aria-hidden="true">
+              <Icon name="trash" size={24} />
+            </span>
+            <h2 id={deleteTitleId} className="ol-channel-delete-dialog-title">
+              {t('settings.channels.delete')}
+            </h2>
+            <p className="ol-channel-delete-dialog-warning">
+              {t('settings.channels.deleteConfirm')}
+            </p>
+            <div className="ol-channel-delete-dialog-actions">
+              <button
+                type="button"
+                className="ol-channel-delete-button"
+                disabled={deleting}
+                onClick={() => void remove()}
+              >
+                <Icon name="trash" size={15} />
+                {t('settings.channels.confirmDelete')}
+              </button>
+              <button
+                type="button"
+                autoFocus
+                disabled={deleting}
+                onClick={() => setConfirmDelete(false)}
+                style={ghostBtn}
+              >
+                {t('common.cancel')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </ProviderFormContext.Provider>
   );
   return embedded ? (

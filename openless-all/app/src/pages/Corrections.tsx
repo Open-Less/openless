@@ -162,14 +162,12 @@ export function Corrections() {
       <Card>
         <div style={{ display: 'grid', gap: 10 }}>
           <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1fr) auto minmax(0, 1fr) auto',
-              gap: 8,
-              alignItems: mobile ? 'stretch' : 'center',
-            }}
+            className="ol-grid-12"
+            data-columns={mobile ? '1' : undefined}
+            style={{ alignItems: mobile ? 'stretch' : 'center' }}
           >
             <input
+              className="ol-col-5"
               value={rulePatternDraft}
               onChange={(e) => setRulePatternDraft(e.target.value)}
               placeholder={t('vocab.corrections.patternPlaceholder')}
@@ -183,8 +181,16 @@ export function Corrections() {
                 fontSize: 13,
               }}
             />
-            {!mobile && <span style={{ color: 'var(--ol-ink-4)', fontSize: 12 }}>→</span>}
+            {!mobile && (
+              <span
+                className="ol-col-1"
+                style={{ color: 'var(--ol-ink-4)', fontSize: 12, textAlign: 'center' }}
+              >
+                →
+              </span>
+            )}
             <input
+              className="ol-col-4"
               value={ruleReplacementDraft}
               onChange={(e) => setRuleReplacementDraft(e.target.value)}
               placeholder={t('vocab.corrections.replacementPlaceholder')}
@@ -201,7 +207,7 @@ export function Corrections() {
             <Btn
               size="sm"
               variant="primary"
-              className="ol-correction-add"
+              className="ol-correction-add ol-col-2"
               onClick={() => void onAddCorrectionRule()}
               style={mobile ? { justifySelf: 'start' } : undefined}
             >

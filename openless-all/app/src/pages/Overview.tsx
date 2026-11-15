@@ -11,7 +11,6 @@ import {
   readCredential,
   type ProviderKind,
 } from '../lib/ipc';
-import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { countCodePoints } from '../lib/unicode';
 import {
@@ -35,6 +34,7 @@ import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ASR_LABELS } from './settings/shared';
 import { loadOverviewServiceDetails, type OverviewServiceDetails } from '../lib/overviewServices';
 import { isHarmonyHost } from '../lib/harmonyBridge';
+import './overview.css';
 import { HarmonyDictation } from '../components/HarmonyDictation';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
 
@@ -332,6 +332,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     // list is the scroller, and the year heatmap stays fully visible in the left column.
     // Mobile stacks the same blocks, so that surface still grows with the page.
     <div
+      className="ol-overview-dashboard"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -340,7 +341,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         minHeight: mobile ? undefined : 0,
         minWidth: 0,
         overflow: mobile ? 'visible' : 'hidden',
-        gap: 8,
+        gap: 'var(--ol-grid-gutter)',
       }}
     >
       <PageHeader
@@ -363,27 +364,34 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       {isHarmonyHost && <HarmonyDictation onComplete={refreshAll} />}
 
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns:
-            mobile || setup.providers.length < 2 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
-          gap: 10,
-          flexShrink: 0,
-        }}
+        className="ol-grid-12"
+        data-columns={mobile || setup.providers.length < 2 ? '1' : undefined}
       >
         {setup.providers.map((provider) => (
-          <ProviderCard
+          <div
             key={provider.kind}
-            kind={provider.kind}
-            name={providerName(provider)}
-            providerId={provider.id}
-            details={serviceDetails[provider.kind]}
-            status={provider.configured ? 'configured' : 'notConfigured'}
-            onConfigure={onOpenSettings ? () => openSettings('services', provider.kind) : undefined}
-          />
+            className={
+              setup.providers.length >= 3
+                ? 'ol-col-4'
+                : setup.providers.length === 2
+                  ? 'ol-col-6'
+                  : 'ol-col-12'
+            }
+          >
+            <ProviderCard
+              kind={provider.kind}
+              name={providerName(provider)}
+              providerId={provider.id}
+              details={serviceDetails[provider.kind]}
+              status={provider.configured ? 'configured' : 'notConfigured'}
+              onConfigure={
+                onOpenSettings ? () => openSettings('services', provider.kind) : undefined
+              }
+            />
+          </div>
         ))}
         {setup.providers.length === 0 && (
-          <Card padding={16}>
+          <Card className="ol-col-12" padding={16}>
             <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
               {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
             </div>
@@ -392,8 +400,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       </div>
 
       {/* Usage records: title + four metric cards as one group. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+      <div className="ol-grid-12">
         <h2
+          className="ol-col-12"
           style={{
             fontSize: 13,
             fontWeight: 'var(--ol-font-weight-semibold)',
@@ -403,13 +412,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         >
           {t('overview.statsTitle')}
         </h2>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: mobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
-            gap: 8,
-          }}
-        >
+        <div className="ol-grid-12 ol-grid-stats ol-col-12" data-columns={mobile ? '2' : undefined}>
           <Metric
             icon="hash"
             label={t('overview.metricChars')}
@@ -447,25 +450,20 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         </div>
       </div>
 
-      {/* Bottom row fills the dashboard. The chart shrinks; the year heatmap and recent list stay inside it. */}
+      {/* Bottom row fills the dashboard. Five and seven columns keep the old 1:1.4 split. */}
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
-          gridTemplateRows: 'minmax(0, 1fr)',
-          gap: 10,
-          flex: '1 1 auto',
-          minHeight: 0,
-          overflow: 'hidden',
-        }}
+        className={mobile ? 'ol-grid-12' : 'ol-grid-12 ol-grid-fill'}
+        data-columns={mobile ? '1' : undefined}
+        style={{ overflow: 'hidden' }}
       >
         <div
+          className="ol-col-5"
           style={{
             display: 'flex',
             flexDirection: 'column',
             minWidth: 0,
             minHeight: 0,
-            gap: 10,
+            gap: 'var(--ol-grid-gutter)',
             overflow: 'hidden',
           }}
         >
@@ -478,13 +476,10 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
             loadError={activityError}
             onRetry={refreshActivity}
           />
-          {!mobile &&
-            prefs?.showOverviewActivityHeatmap !== false &&
-            activity &&
-            activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
         </div>
 
         <Card
+          className="ol-col-7"
           padding={0}
           style={{
             display: 'flex',
@@ -497,7 +492,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         >
           <div
             style={{
-              padding: '12px 18px',
+              padding: '12px var(--ol-grid-gutter)',
               borderBottom: '0.5px solid var(--ol-line)',
               display: 'flex',
               alignItems: 'center',
@@ -654,71 +649,6 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
       <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
         {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
       </Btn>
-    </Card>
-  );
-}
-
-/** Yearly activity heatmap card: dictation count per day over the past 365 days. Month/weekday/date labels are generated via Intl in the current language. */
-function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
-  const { t, i18n } = useTranslation();
-  const { endDate, startDate, data, labels } = useMemo(() => {
-    // The year calendar spans the calendar year — from Jan 1 to Dec 31, filled left to right;
-    // the previous rolling 365-day window started month labels mid-year and left the right side empty, looking like missing data.
-    const now = new Date();
-    const year = now.getFullYear();
-    const start = new Date(year, 0, 1);
-    const end = new Date(year, 11, 31);
-    const lang = i18n.resolvedLanguage || i18n.language || 'en';
-    const monthFormat = new Intl.DateTimeFormat(lang, { month: 'short' });
-    const dayFormat = new Intl.DateTimeFormat(lang, { weekday: 'short' });
-    const dateFormat = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' });
-    const anchor = new Date(year, 0, 4); // Sunday
-    return {
-      endDate: end,
-      startDate: start,
-      data: activity.map((day) => ({ date: day.date, value: day.count })),
-      labels: {
-        months: Array.from({ length: 12 }, (_, m) => monthFormat.format(new Date(year, m, 1))),
-        days: Array.from({ length: 7 }, (_, d) => {
-          const date = new Date(anchor);
-          date.setDate(anchor.getDate() + d);
-          return dayFormat.format(date);
-        }),
-        date: (date: Date) => dateFormat.format(date),
-      },
-    };
-  }, [activity, i18n.resolvedLanguage, i18n.language]);
-  return (
-    <Card
-      padding={12}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        minWidth: 0,
-        flex: '0 0 auto',
-      }}
-    >
-      <span
-        style={{
-          fontSize: 13,
-          fontWeight: 'var(--ol-font-weight-semibold)',
-          color: 'var(--ol-ink-2)',
-          flexShrink: 0,
-        }}
-      >
-        {t('overview.activityTitle')}
-      </span>
-      {/* Cells fill the card width. The card stays at content height so the year grid is not clipped. */}
-      <Heatmap
-        data={data}
-        startDate={startDate}
-        endDate={endDate}
-        monthLabels={labels.months}
-        dayLabels={labels.days}
-        dateDisplay={labels.date}
-        valueDisplay={(count) => t('overview.activityCount', { count })}
-      />
     </Card>
   );
 }

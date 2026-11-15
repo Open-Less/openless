@@ -310,7 +310,9 @@ export const fr: typeof zhCN = {
     close: 'Fermer',
     show: 'Afficher',
     hide: 'Masquer',
+    apiKeySaved: 'Clé API enregistrée',
     saved: 'Enregistré',
+    deleted: 'Supprimé',
     refreshed: 'Actualisé',
     saving: 'Enregistrement…',
     experimental: 'Expérimental',
@@ -381,6 +383,9 @@ export const fr: typeof zhCN = {
     title: 'Questions',
     headerHint: 'Posez une question à tout moment',
     thinking: 'Réflexion…',
+    thoughtLive: 'Réflexion ({{seconds}} s)',
+    thoughtDone: 'Réflexion terminée ({{seconds}} s)',
+    stop: 'Arrêter',
     error: 'Une erreur s’est produite. Réessayez.',
     errorRetry: 'Réessayer',
     errorRetryHint: 'Veuillez réessayer.',
@@ -539,6 +544,7 @@ export const fr: typeof zhCN = {
   shell: {
     shortcutLabel: 'Raccourci d’enregistrement',
     shortcutHint: 'Démarrer / Arrêter',
+    homeLabel: 'Retour à l’aperçu',
     betaTag: 'BETA',
     betaNote: 'Stockage local, sauvegarde cloud facultative',
     navHint: {

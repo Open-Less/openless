@@ -485,19 +485,11 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
           refreshNotice.state === 'failed' ? t('common.operationFailed') : t('common.refreshed')
         }
       />
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: mobile ? '1fr' : '300px 1fr',
-          gap: 14,
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
+      <div className="ol-grid-12 ol-grid-fill" data-columns={mobile ? '1' : undefined}>
         {(!mobile || !mobileDetailOpen) && (
           <Card
             padding={0}
-            className="ol-history-list"
+            className="ol-history-list ol-col-4"
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
             {/* The left column is one scroll container; the search box sticks to the top with an
@@ -697,7 +689,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         )}
 
         {(!mobile || mobileDetailOpen) && (
-          <Card padding={20} className="ol-thinscroll" style={{ overflow: 'auto' }}>
+          <Card padding={20} className="ol-thinscroll ol-col-8" style={{ overflow: 'auto' }}>
             {item ? (
               <>
                 {mobile && (
@@ -802,13 +794,11 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                   Insertion is a foreground-delivery detail and is not shown in the note content
                   area. */}
                 <div
+                  className="ol-grid-12 ol-pipeline-grid"
                   style={{
                     marginBottom: 16,
                     paddingBottom: 14,
                     borderBottom: '0.5px solid var(--ol-line-soft)',
-                    display: 'grid',
-                    gridTemplateColumns: 'auto 1fr auto',
-                    columnGap: 14,
                     rowGap: 7,
                     fontSize: 11,
                     color: 'var(--ol-ink-4)',
@@ -1504,7 +1494,7 @@ function RepolishPanel({
       )}
 
       {results.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
+        <div className="ol-grid-12" data-columns={mobile ? '1' : undefined}>
           {results.map((result) => (
             <HistoryResultCard
               key={result.key}
@@ -1553,6 +1543,7 @@ function HistoryResultCard({
     // push the card outside the result grid (same class of problem as the detail page's two
     // column text cards).
     <div
+      className="ol-col-6"
       style={{
         minWidth: 0,
         padding: 14,

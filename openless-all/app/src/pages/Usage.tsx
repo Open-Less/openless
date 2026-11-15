@@ -277,7 +277,9 @@ export function Usage() {
             onClick={() => setView(id)}
             style={{
               border: 0,
-              borderBottom: view === id ? '2px solid var(--ol-blue)' : '2px solid transparent',
+              // Keep the row height but do not paint an active underline; the selected
+              // tab is already distinguished by weight and ink colour.
+              borderBottom: '2px solid transparent',
               background: 'transparent',
               color: view === id ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
               padding: '10px 12px',
@@ -331,13 +333,7 @@ export function Usage() {
         <>
           {view === 'overview' && (
             <>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                  gap: 12,
-                }}
-              >
+              <div className="ol-grid-12 ol-grid-stats">
                 {stats.map(([label, value, exact]) => (
                   <Card key={String(label)}>
                     <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>
@@ -544,10 +540,8 @@ export function Usage() {
                       .map((record) => (
                         <div
                           key={record.id}
+                          className="ol-grid-12 ol-grid-quarters"
                           style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                            gap: 8,
                             padding: '10px 0',
                             borderTop: '1px solid var(--ol-line)',
                           }}

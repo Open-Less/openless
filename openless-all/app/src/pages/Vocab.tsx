@@ -483,15 +483,9 @@ export function Vocab() {
       >
         {/* Word grid: hover dims cards and reveals edit/delete on the right. */}
         <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: mobile
-              ? 'minmax(0, 1fr)'
-              : 'repeat(auto-fill, minmax(230px, 1fr))',
-            gap: 10,
-            minHeight: 80,
-            alignContent: 'start',
-          }}
+          className="ol-grid-12 ol-grid-cards"
+          data-columns={mobile ? '1' : undefined}
+          style={{ minHeight: 80, alignContent: 'start' }}
         >
           {loading && (
             <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>

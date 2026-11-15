@@ -150,8 +150,8 @@ window.__TAURI_INTERNALS__ = {
       bridge.sizes.push(args.expanded);
       const host = document.querySelector<HTMLElement>('#native-host');
       if (host) {
-        host.style.width = args.expanded ? '760px' : '480px';
-        host.style.height = args.expanded ? '416px' : '80px';
+        host.style.width = args.expanded ? '720px' : '480px';
+        host.style.height = args.expanded ? '380px' : '80px';
         host.style.bottom = args.expanded ? '48px' : '8px';
       }
       return;

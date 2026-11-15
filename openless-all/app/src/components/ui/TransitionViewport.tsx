@@ -10,7 +10,6 @@ import {
 } from 'react';
 import { useReducedMotion } from '../../lib/motion';
 import { useSmoothWheelScroll } from '../../lib/useSmoothWheelScroll';
-import { PageSkeleton } from './PageSkeleton';
 
 const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const settled = { opacity: 1, transform: 'none', filter: 'none' };
@@ -82,10 +81,7 @@ export function TransitionViewport({
   const surfaces = switching && !reduced ? [retained.current, currentSurface] : [currentSurface];
 
   return (
-    <div
-      className="ol-transition-viewport"
-      aria-busy={(!reduced && (switching || restoring)) || undefined}
-    >
+    <div className="ol-transition-viewport">
       {surfaces.map((surface) => {
         const incoming = !reduced && switching && surface.key === contentKey;
         const leaving = !reduced && revealing && !incoming;
@@ -122,7 +118,6 @@ export function TransitionViewport({
           </TransitionSurface>
         );
       })}
-      <div className="ol-transition-mask" aria-hidden="true" />
     </div>
   );
 }
@@ -256,7 +251,7 @@ function TransitionSurface({
         pointerEvents: phase !== 'settled' ? 'none' : undefined,
       }}
     >
-      <Suspense fallback={phase === 'settled' ? <PageSkeleton /> : null}>
+      <Suspense fallback={null}>
         {children}
         {phase === 'waiting' && <ReadyFrame container={ref} onReady={onReady} />}
       </Suspense>

@@ -3,6 +3,7 @@ import { Capsule } from './components/Capsule';
 import { CapsuleTranscriptOverlay } from './components/LiveTranscriptPill';
 import { CoreStartupScreen } from './components/CoreStartupScreen';
 import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
+import { NotificationCenter } from './components/NotificationCenter';
 import { detectOS, type OS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
@@ -131,21 +132,30 @@ function ReadyApp({
   if (isQa) {
     return (
       <Suspense fallback={null}>
-        <QaPanel />
+        <>
+          <NotificationCenter />
+          <QaPanel />
+        </>
       </Suspense>
     );
   }
   if (isSelectionVoiceIntent) {
     return (
       <Suspense fallback={null}>
-        <SelectionVoiceIntentPicker />
+        <>
+          <NotificationCenter />
+          <SelectionVoiceIntentPicker />
+        </>
       </Suspense>
     );
   }
   if (isVoiceEdit) {
     return (
       <Suspense fallback={null}>
-        <VoiceEditPanel />
+        <>
+          <NotificationCenter />
+          <VoiceEditPanel />
+        </>
       </Suspense>
     );
   }
@@ -500,7 +510,9 @@ function ReadyApp({
       <HotkeySettingsProvider>
         {/* Global download progress overlay: always mounted across main-window pages
             (listens to events itself, decoupled from pages). */}
-        <GlobalDownloadProgress />
+        <NotificationCenter>
+          <GlobalDownloadProgress />
+        </NotificationCenter>
         {platformCaps?.platform === 'android' && (
           <div style={{ display: mobileQaOpen ? 'block' : 'none', height: '100%' }}>
             <QaPanel

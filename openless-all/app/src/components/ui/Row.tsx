@@ -15,13 +15,11 @@ export function Row({ label, desc, children }: RowProps) {
   const stackLayout = baseLayoutStack || conservative;
   return (
     <div
+      className="ol-form-12"
+      data-stacked={stackLayout || undefined}
       style={{
-        display: 'grid',
-        gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : '180px minmax(0, 1fr)',
-        gap: stackLayout ? 8 : 16,
         padding: '12px 0',
         borderTop: '0.5px solid var(--ol-line-soft)',
-        alignItems: 'center',
       }}
     >
       <div style={{ minWidth: 0 }}>

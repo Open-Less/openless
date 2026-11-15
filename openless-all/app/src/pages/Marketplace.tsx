@@ -771,12 +771,8 @@ export function Marketplace() {
           </Card>
         ) : (
           <div
-            className="ol-grid-auto-cards"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: stackLayout ? '1fr' : 'repeat(auto-fill, minmax(260px, 1fr))',
-              gap: 12,
-            }}
+            className="ol-grid-auto-cards ol-grid-12 ol-grid-cards"
+            data-columns={stackLayout ? '1' : undefined}
           >
             <AnimatePresence mode="sync">
               {visibleItems.map((p) => {

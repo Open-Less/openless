@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { btnGhostStyle } from './shared';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { notify } from '../../lib/notifications';
 import { UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
 import type { UpdateChannel } from '../../lib/ipc';
 
@@ -22,6 +23,13 @@ export function CheckUpdateButton({
 
   useEffect(() => {
     if (status === 'none' || status === 'error') {
+      notify({
+        state: status === 'error' ? 'failed' : 'saved',
+        message:
+          status === 'error'
+            ? (updater.errorMessage ?? t('settings.about.updateError'))
+            : t('settings.about.upToDate'),
+      });
       const id = window.setTimeout(() => {
         void updater.dismissDialog();
       }, 2500);

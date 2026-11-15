@@ -7176,6 +7176,10 @@ impl OpenLessBackend {
         self.activity.snapshot()
     }
 
+    pub fn list_activity_apps(&self, year: u32) -> Result<Vec<(String, u32)>, BackendError> {
+        self.activity.app_counts(&format!("{year:04}-"))
+    }
+
     pub fn record_activity(
         &self,
         date: &str,
@@ -8867,12 +8871,16 @@ impl OpenLessBackend {
             asr_ms: attribution.asr_ms,
             polish_ms: attribution.polish_ms,
         };
+        let activity_app = session.app_name.clone();
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
         ) {
             log::warn!("failed to persist completed dictation history: {error}");
+        }
+        if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
+            log::warn!("failed to persist application activity: {error}");
         }
         if let Err(error) = self.record_activity(
             &self.clock.today_local().format("%Y-%m-%d").to_string(),

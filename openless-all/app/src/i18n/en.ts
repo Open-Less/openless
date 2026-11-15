@@ -305,7 +305,9 @@ export const en: typeof zhCN = {
     close: 'Close',
     show: 'Show',
     hide: 'Hide',
+    apiKeySaved: 'API key saved',
     saved: 'Saved',
+    deleted: 'Deleted',
     refreshed: 'Refreshed',
     saving: 'Saving…',
     experimental: 'Experimental',
@@ -375,6 +377,9 @@ export const en: typeof zhCN = {
     title: 'Ask',
     headerHint: 'Ask anytime',
     thinking: 'Thinking…',
+    thoughtLive: 'Thinking for {{seconds}}s',
+    thoughtDone: 'Thought for {{seconds}}s',
+    stop: 'Stop',
     error: 'Something went wrong. Please try again.',
     errorRetry: 'Retry',
     errorRetryHint: 'Please try again.',
@@ -530,6 +535,7 @@ export const en: typeof zhCN = {
   shell: {
     shortcutLabel: 'Recording shortcut',
     shortcutHint: 'Start / Stop',
+    homeLabel: 'Back to overview',
     betaTag: 'BETA',
     betaNote: 'Local storage, optional cloud backup',
     navHint: {

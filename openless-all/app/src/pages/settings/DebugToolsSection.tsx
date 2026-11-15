@@ -1,3 +1,4 @@
+import { notify } from '../../lib/notifications';
 // Advanced → Debug tools: troubleshooting entries such as keeping raw recordings and exporting
 // the error log.
 // The recordAudioForDebug row was split out of RecordingSection in Settings.tsx;
@@ -77,6 +78,7 @@ export function DebugToolsSection() {
       }
       setExportStatus('ok');
       setExportMessage(target);
+      notify({ state: 'saved', message: `${t('modal.about.exportSuccess')}：${target}` });
       if (exportTimerRef.current) clearTimeout(exportTimerRef.current);
       exportTimerRef.current = window.setTimeout(() => setExportStatus('idle'), 4000);
     } catch (err) {
@@ -237,23 +239,6 @@ export function DebugToolsSection() {
               ? t('modal.about.exporting')
               : t('modal.about.exportErrorLogBtn')}
           </Btn>
-          {exportStatus === 'ok' && (
-            <span
-              style={{
-                fontSize: 11,
-                color: 'var(--ol-ok)',
-                whiteSpace: mobile ? 'normal' : 'nowrap',
-                overflow: mobile ? 'visible' : 'hidden',
-                textOverflow: mobile ? 'clip' : 'ellipsis',
-                wordBreak: 'break-word',
-                maxWidth: mobile ? '100%' : 220,
-              }}
-              title={exportMessage}
-            >
-              {t('modal.about.exportSuccess')}
-              {exportMessage ? `：${exportMessage}` : ''}
-            </span>
-          )}
           {exportStatus === 'err' && (
             <span
               style={{
