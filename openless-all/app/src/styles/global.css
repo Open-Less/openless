@@ -1150,7 +1150,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   .ol-chip,
   .ol-nav-btn,
   .ol-settings-rail-btn,
-  .ol-service-views button
+  .ol-settings-return,
+  .ol-service-views button,
+  .ol-model-filters button
 ) {
   --ol-corner-radius: var(--ol-button-radius);
 }
