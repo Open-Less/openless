@@ -90,6 +90,11 @@ fn user_plugin_available(plan: &FcitxPluginInstallPlan) -> bool {
     plan.target_library.is_file() && plan.target_config.is_file()
 }
 
+/// 公开给宿主：设置页要显示「插件装没装」，不需要触碰安装流程。
+pub fn plugin_available() -> bool {
+    system_plugin_available()
+}
+
 fn system_plugin_available() -> bool {
     let config_dirs = [
         std::env::var_os("FCITX5_ADDON_DIR").map(PathBuf::from),

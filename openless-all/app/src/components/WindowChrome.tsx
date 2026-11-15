@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode } from 'react';
-import { isGtkHost } from '../lib/gtkBridge';
+import { gtkBridgeAvailable as gtkBridgeActive } from '../lib/gtkBridge';
 import { isHttpBridge } from '../lib/httpBridge';
 
 export type OS = 'mac' | 'win' | 'linux' | 'android' | 'harmony';
@@ -9,7 +9,7 @@ export function detectOS(): OS {
   // 本机 Linux 宿主（Qt / GTK / 浏览器版）：窗口装饰由合成器提供，前端不画标题栏。
   // 这里必须返回 'linux' 而不是借 'win'：借 'win' 会把「Windows 输入法后端」「插入后
   // 恢复剪贴板」这些 win-only 设置一起放出来，Linux 上根本没有对应的实现。
-  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk' || isHttpBridge || isGtkHost) {
+  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk' || isHttpBridge || gtkBridgeActive()) {
     return 'linux';
   }
   if (typeof navigator === 'undefined') return 'mac';

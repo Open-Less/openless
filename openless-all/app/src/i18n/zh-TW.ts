@@ -266,6 +266,8 @@ export const zhTW: typeof zhCN = {
     tagline: '自然說話，完美書寫',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: '即將支援',
     loading: '載入中…',
     retry: '重試',
     settingsLoadFailed: '設定載入失敗',
@@ -1134,8 +1136,6 @@ export const zhTW: typeof zhCN = {
       capsuleDesc: '膠囊開關、多螢幕顯示、樣式，以及原文的串流顯示。',
       textInputTitle: '文字插入',
       textInputDesc: '選取助手、插入與剪貼簿、啟動。',
-      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
-      textInputDescNoClipboard: '選取助手與啟動。',
       phoneTitle: '手機與遠端輸入',
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
@@ -1859,6 +1859,12 @@ export const zhTW: typeof zhCN = {
       hotkeyStarting: '安裝中…',
       hotkeyFailed: '監聽失敗',
       windowsImeLabel: 'Windows 輸入法後端',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: '輸入法後端',
+      imeBackendChecking: '正在檢查…',
+      imeBackendReady: '已就緒（fcitx5 外掛已載入）',
+      imeBackendDaemonDown: 'fcitx5 未執行（登入後自動啟動）',
+      imeBackendPluginMissing: '外掛未安裝，請重新安裝 OpenLess',
       windowsImeDesc:
         '透過與輸入法並存的 OpenLess TSF 文字服務插入文字，不切換輸入法，避免剪貼簿插入限制。',
       windowsImeInstalled: '已安裝',
@@ -2048,12 +2054,16 @@ export const zhTW: typeof zhCN = {
       macosCompositionInputDesc:
         '錄音時在原輸入框顯示辨識文字，完成後整段取代為整理或翻譯結果。需要輔助使用授權及編輯器支援；移動游標或手動編輯會停止即時取代。',
       windowsCompositionInputLabel: '即時原文顯示在輸入框',
+      liveInputComingSoonDesc:
+        'Linux 版正在補即時上屏（邊聽邊把文字寫進輸入框）。接入後這裡會出現與 Windows 組合輸入等價的開關。',
       windowsCompositionInputDesc:
         '錄音時把辨識到的文字以帶底線的組合文字顯示在輸入框中，結束後替換為最終結果。需要啟用 OpenLess 的 TSF 輸入法元件，且目標應用支援文字服務框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪貼簿',
       streamingInsertSaveClipboardHint:
         '插入成功後把最終文字寫入剪貼簿，方便 Cmd+V 再次貼上；關閉後流式過程不動剪貼簿。',
       localAsrTitle: '本地 ASR 模型',
+      localAsrComingSoonDesc:
+        'Linux 版把本地語音辨識（sherpa-onnx / Whisper）排在後面：模型下載與推論執行時正在接入，接入後這裡可以直接選模型、離線辨識。',
       localAsrDesc: '把轉寫從雲端切到本機推理。僅推薦離線 / 隱私敏感場景。',
       localAsrWarningShort: '本地推理較慢，配置不足時可能吞字。',
       localAsrFallbackLabel: '雲端辨識失敗時改用本機模型',

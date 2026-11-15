@@ -284,6 +284,8 @@ export const ja: typeof zhCN = {
     tagline: '自然に話し、きれいに書く',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: '近日対応',
     loading: '読み込み中…',
     retry: '再試行',
     settingsLoadFailed: '設定の読み込みに失敗しました',
@@ -1171,8 +1173,6 @@ export const ja: typeof zhCN = {
       capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
       textInputTitle: '文字の挿入',
       textInputDesc: '選択アシスタント、挿入とクリップボード、起動。',
-      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
-      textInputDescNoClipboard: '選択アシスタントと起動。',
       phoneTitle: 'スマホとリモート入力',
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
@@ -1952,6 +1952,12 @@ export const ja: typeof zhCN = {
       hotkeyStarting: 'インストール中…',
       hotkeyFailed: '監視失敗',
       windowsImeLabel: 'Windows 入力メソッドバックエンド',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: '入力メソッドのバックエンド',
+      imeBackendChecking: '確認中…',
+      imeBackendReady: '準備完了（fcitx5 アドオン読み込み済み）',
+      imeBackendDaemonDown: 'fcitx5 が起動していません（ログイン時に自動起動）',
+      imeBackendPluginMissing: 'アドオン未インストール。OpenLess を再インストールしてください',
       windowsImeDesc:
         '入力方式と併存する OpenLess TSF テキストサービス経由で文字を挿入し、IME を切り替えずにクリップボード入力の制限を回避します。',
       windowsImeInstalled: 'インストール済み',
@@ -2142,12 +2148,16 @@ export const ja: typeof zhCN = {
       macosCompositionInputDesc:
         '録音中の認識結果を元の入力欄に表示し、終了後に整形または翻訳した文章へ置き換えます。アクセシビリティ権限と対応エディタが必要です。カーソル移動や手動編集で置き換えを停止します。',
       windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示',
+      liveInputComingSoonDesc:
+        'Linux 版はリアルタイム入力（話しながら入力欄へ文字を書き込む）を準備中です。対応後、ここに Windows のコンポジション入力に相当するスイッチが表示されます。',
       windowsCompositionInputDesc:
         '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',
       localAsrTitle: 'ローカル ASR モデル',
+      localAsrComingSoonDesc:
+        'Linux 版のローカル音声認識（sherpa-onnx / Whisper）は対応準備中です。モデルのダウンロードと推論ランタイムを接続しています。完了するとここでモデルを選び、オフラインで認識できます。',
       localAsrDesc: '転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。',
       localAsrWarningShort: 'ローカル推論は遅く、スペック不足では欠字の可能性があります。',
       localAsrFallbackLabel: 'クラウド認識に失敗したらローカルモデルを使う',

@@ -76,6 +76,12 @@ pub fn apply_selection_voice_target(
     fcitx5::apply_selection_target(session_id, source, replacement)
 }
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+
+/// fcitx5 插件是否已装进系统（设置页「输入法后端」要显示这个状态）。
+pub fn fcitx5_plugin_installed() -> bool {
+    fcitx5::plugin_available()
+}
+
 pub use i18n::{
     fmt_catalog as fmt_l10n, provider_error_text, tr_catalog as tr_l10n, Lang, LocalePref, LANGS,
 };

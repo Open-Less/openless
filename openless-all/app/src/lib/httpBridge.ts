@@ -3,9 +3,11 @@
 // 与 `gtkBridge.ts` 的区别只在传输层：那边走 WebKit 的 message handler，
 // 这边就是 `fetch` + SSE，后端是同一个 Rust 进程（`/api/invoke`、`/api/events`）。
 // 命令面、参数形状、返回值约定与 Tauri/GTK 完全一致，所以页面代码不用改。
-export const isHttpBridge =
-  typeof window !== 'undefined' &&
-  new URLSearchParams(window.location.search).get('bridge') === 'http';
+// 测试里会用假的 `window`（没有 location）导入这份模块，所以这里逐层兜底，
+// 不能假设 `window.location` 一定存在。
+const bridgeSearch =
+  typeof window !== 'undefined' && window.location ? window.location.search : '';
+export const isHttpBridge = new URLSearchParams(bridgeSearch).get('bridge') === 'http';
 
 import { emitHostEvent, markNativeHost } from './hostEventBus';
 

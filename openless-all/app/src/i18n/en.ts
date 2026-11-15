@@ -293,6 +293,8 @@ export const en: typeof zhCN = {
     tagline: 'Speak naturally, write perfectly',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Coming soon',
     loading: 'Loading…',
     retry: 'Retry',
     settingsLoadFailed: 'Settings load failed',
@@ -1240,8 +1242,6 @@ export const en: typeof zhCN = {
       capsuleDesc: 'Capsule switch, multi-screen display, style, and streaming original text.',
       textInputTitle: 'Text insertion',
       textInputDesc: 'Selection assistant, insertion and clipboard, and startup.',
-      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
-      textInputDescNoClipboard: 'Selection assistant and startup.',
       phoneTitle: 'Phone and remote input',
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
@@ -1970,6 +1970,12 @@ export const en: typeof zhCN = {
       hotkeyStarting: 'Installing…',
       hotkeyFailed: 'Listener failed',
       windowsImeLabel: 'Windows input method backend',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: 'Input method backend',
+      imeBackendChecking: 'Checking…',
+      imeBackendReady: 'Ready (fcitx5 addon loaded)',
+      imeBackendDaemonDown: 'fcitx5 not running (starts at login)',
+      imeBackendPluginMissing: 'Addon missing — reinstall OpenLess',
       windowsImeDesc:
         'Inserts dictated text through the OpenLess TSF text service, which stays active alongside your input method, to avoid clipboard insertion limits.',
       windowsImeInstalled: 'Installed',
@@ -2173,12 +2179,16 @@ export const en: typeof zhCN = {
       macosCompositionInputDesc:
         'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'Show live transcript in the input box',
+      liveInputComingSoonDesc:
+        'Live composition (text appearing in the field as you speak) is being implemented for Linux. Once ready, the equivalent of the Windows composition toggle will live here.',
       windowsCompositionInputDesc:
         'While you speak, the recognized text appears underlined in the input box and is replaced by the final result when you finish. Requires the OpenLess TSF input component and a target app that supports the Text Services Framework (TSF).',
       streamingInsertSaveClipboardLabel: 'Copy to clipboard',
       streamingInsertSaveClipboardHint:
         'After a successful insert, write the final text to the clipboard so Cmd+V can paste it again. Off = clipboard is never touched.',
       localAsrTitle: 'Local ASR models',
+      localAsrComingSoonDesc:
+        'Local speech recognition (sherpa-onnx / Whisper) is on the Linux roadmap: the model download and inference runtime are being wired up. Once ready you can pick a model and transcribe offline right here.',
       localAsrDesc:
         'Move transcription from cloud ASR to on-device inference. Offline / privacy-sensitive use only.',
       localAsrWarningShort: 'Local inference is slower; under-spec hardware may drop words.',

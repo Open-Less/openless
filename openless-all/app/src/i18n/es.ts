@@ -293,6 +293,8 @@ export const es: typeof zhCN = {
     tagline: 'Habla con naturalidad, escribe con precisión',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Próximamente',
     loading: 'Cargando…',
     retry: 'Reintentar',
     settingsLoadFailed: 'No se pudieron cargar los ajustes',
@@ -1200,8 +1202,6 @@ export const es: typeof zhCN = {
         'Interruptor de la cápsula, varias pantallas, estilo y texto original en streaming.',
       textInputTitle: 'Inserción de texto',
       textInputDesc: 'Asistente de selección, inserción y portapapeles, e inicio.',
-      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
-      textInputDescNoClipboard: 'Asistente de selección e inicio.',
       phoneTitle: 'Teléfono y entrada remota',
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
@@ -2003,6 +2003,12 @@ export const es: typeof zhCN = {
       hotkeyStarting: 'Instalando…',
       hotkeyFailed: 'El detector falló',
       windowsImeLabel: 'Motor del método de entrada de Windows',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: 'Backend del método de entrada',
+      imeBackendChecking: 'Comprobando…',
+      imeBackendReady: 'Listo (complemento fcitx5 cargado)',
+      imeBackendDaemonDown: 'fcitx5 no está en ejecución (arranca al iniciar sesión)',
+      imeBackendPluginMissing: 'Falta el complemento: reinstala OpenLess',
       windowsImeDesc:
         'Inserta el texto dictado mediante el servicio de texto TSF de OpenLess, que permanece activo junto a tu método de entrada, para evitar las limitaciones del portapapeles.',
       windowsImeInstalled: 'Instalado',
@@ -2213,12 +2219,16 @@ export const es: typeof zhCN = {
       macosCompositionInputDesc:
         'Muestra el reconocimiento en el campo original y después lo sustituye por el texto corregido o traducido. Requiere permiso de Accesibilidad y un editor compatible. Mover el cursor o editar el texto detiene la sustitución.',
       windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo',
+      liveInputComingSoonDesc:
+        'La composición en vivo (el texto aparece en el campo mientras hablas) se está implementando en Linux. Cuando esté listo, aquí aparecerá el equivalente al interruptor de composición de Windows.',
       windowsCompositionInputDesc:
         'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
       streamingInsertSaveClipboardHint:
         'Después de insertar correctamente, copia el texto final al portapapeles para poder pegarlo otra vez con Cmd+V. Desactivado: no se modifica el portapapeles.',
       localAsrTitle: 'Modelos ASR locales (experimental)',
+      localAsrComingSoonDesc:
+        'El reconocimiento de voz local (sherpa-onnx / Whisper) está en la hoja de ruta de Linux: se está integrando la descarga de modelos y el motor de inferencia. Cuando esté listo podrás elegir un modelo y transcribir sin conexión aquí mismo.',
       localAsrDesc:
         'Sustituye el ASR en la nube por inferencia en el dispositivo. Para uso sin conexión o con datos sensibles.',
       localAsrWarningShort:

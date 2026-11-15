@@ -7,7 +7,6 @@ import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsP
 import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../components/Tooltip';
 import { detectOS } from '../../components/WindowChrome';
-import { isLinuxHost } from '../../lib/platform';
 import { ExperimentalAsrSection, type ExperimentalAsrController } from './ExperimentalAsrSection';
 import { RecordingInputSection } from './RecordingInputSection';
 import { RemoteInputSection } from './RemoteInputSection';
@@ -99,11 +98,7 @@ export function GeneralTab({
       id: 'textInput' as const,
       icon: 'pencil',
       title: 'settings.generalPages.textInputTitle',
-      // Linux 没有「插入后恢复剪贴板 / 粘贴快捷键」，副标题也不该提剪贴板。
-      description:
-        (platformCaps?.supportsClipboardPasteInsertion ?? !isLinuxHost()) === false
-          ? 'settings.generalPages.textInputDescNoClipboard'
-          : 'settings.generalPages.textInputDesc',
+      description: 'settings.generalPages.textInputDesc',
     },
     {
       id: 'phone' as const,
@@ -260,7 +255,11 @@ export function ServicesTab({
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
-  const showLocalModel = detectOS() !== 'mac' && platformCaps?.supportsLocalAsr === true;
+  // Linux 上本地模型还没实现（sherpa 运行时还在 src-tauri 里），按约定先显示入口、
+  // 进去整块置灰标注「即将支持」，而不是把入口藏掉。
+  const localModelsReady = platformCaps?.supportsLocalAsr === true;
+  const showLocalModel =
+    detectOS() !== 'mac' && (localModelsReady || platformCaps?.linuxHost === true);
   const multimodal =
     prefs?.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
   const [view, setView] = useState<ServiceViewId>(initialView ?? (asrNavigation ? 'asr' : 'llm'));
@@ -472,7 +471,33 @@ export function ServicesTab({
                     {t('settings.recording.voiceActivationMultimodalModels')}
                   </p>
                 )}
-                <LocalModelsSection />
+                {localModelsReady ? (
+                  <LocalModelsSection />
+                ) : (
+                  <Card>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: 14, fontWeight: 'var(--ol-font-weight-medium)', color: 'var(--ol-ink-2)' }}>
+                        {t('settings.advanced.localAsrTitle')}
+                      </span>
+                      <span
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          background: 'var(--ol-surface-2)',
+                          border: '0.5px solid var(--ol-line-strong)',
+                          color: 'var(--ol-ink-3)',
+                          fontSize: 10.5,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {t('common.comingSoon')}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--ol-ink-4)' }}>
+                      {t('settings.advanced.localAsrComingSoonDesc')}
+                    </p>
+                  </Card>
+                )}
               </>
             )}
             {selectedView === 'connections' && <NetworkSection />}
@@ -626,7 +651,35 @@ function CursorContextSection() {
 function LiveInputSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
-  if (!prefs || detectOS() !== 'win') return null;
+  if (!prefs) return null;
+  // 组合输入依赖 Windows TSF；Linux 上先把入口放出来，整块置灰标注「即将支持」。
+  if (detectOS() !== 'win') {
+    return (
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 14, fontWeight: 'var(--ol-font-weight-medium)', color: 'var(--ol-ink-2)' }}>
+            {t('settings.advancedPages.liveInputTitle')}
+          </span>
+          <span
+            style={{
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: 'var(--ol-surface-2)',
+              border: '0.5px solid var(--ol-line-strong)',
+              color: 'var(--ol-ink-3)',
+              fontSize: 10.5,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {t('common.comingSoon')}
+          </span>
+        </div>
+        <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--ol-ink-4)' }}>
+          {t('settings.advanced.liveInputComingSoonDesc')}
+        </p>
+      </Card>
+    );
+  }
   return (
     <Card>
       <ExperimentalSectionTitle badge="Beta">

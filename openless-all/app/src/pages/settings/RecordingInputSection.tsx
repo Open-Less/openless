@@ -228,10 +228,11 @@ export function RecordingInputSection({
   }
 
   const isAndroid = platformCaps?.platform === 'android';
-  // 「插入与剪贴板」整组只对「写剪贴板 + 模拟粘贴」的插入后端有意义。
-  // Linux 走 fcitx5 插件 commitString，恢复剪贴板/粘贴快捷键都不适用，整组隐藏。
-  const showDesktopInsert =
-    showDesktopHotkey && platformCaps?.supportsClipboardPasteInsertion !== false;
+  // 「插入与剪贴板」整组在 Linux 上还没实现（要补「写剪贴板 → 模拟粘贴」通道），
+  // 按约定先显示、整块置灰并标注「即将支持」，而不是直接藏掉。
+  const clipboardInsertComingSoon =
+    platformCaps?.supportsClipboardPasteInsertion === false;
+  const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
   const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
   const effectiveCapsuleDisplayMode =
@@ -564,9 +565,11 @@ export function RecordingInputSection({
               onToggle={(next) => savePrefs({ ...prefs, stableTranscriptionEnabled: next })}
             />
           </SettingRow>
-          {showDesktopHotkey && os === 'win' && (
+          {showDesktopHotkey && (
             <>
+              {/* 低延迟听写与语音唤醒都依赖 Windows 侧实现：Linux 上先显示、整块置灰。 */}
               <SettingRow
+                comingSoon={os !== 'win'}
                 label={t('settings.recording.lowLatencyDictationLabel')}
                 desc={t('settings.recording.lowLatencyDictationDesc')}
               >
@@ -576,6 +579,7 @@ export function RecordingInputSection({
                 />
               </SettingRow>
               <SettingRow
+                comingSoon={os !== 'win'}
                 label={t('settings.recording.voiceActivationLabel')}
                 desc={t('settings.recording.voiceActivationDesc')}
               >
@@ -584,7 +588,7 @@ export function RecordingInputSection({
                   onToggle={(next) => savePrefs({ ...prefs, voiceActivationEnabled: next })}
                 />
               </SettingRow>
-              {prefs.voiceActivationEnabled && (
+              {os === 'win' && prefs.voiceActivationEnabled && (
                 <div
                   style={{
                     margin: '4px 0 10px',
@@ -739,6 +743,7 @@ export function RecordingInputSection({
           <SettingRow
             label={t('settings.recording.restoreClipboardLabel')}
             desc={t('settings.recording.restoreClipboardDesc')}
+            comingSoon={clipboardInsertComingSoon}
           >
             <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
           </SettingRow>
@@ -746,6 +751,7 @@ export function RecordingInputSection({
             <SettingRow
               label={t('settings.recording.pasteShortcutLabel')}
               desc={t('settings.recording.pasteShortcutDesc')}
+              comingSoon={clipboardInsertComingSoon}
             >
               <SelectLite
                 value={prefs.pasteShortcut}
@@ -777,6 +783,7 @@ export function RecordingInputSection({
             <SettingRow
               label={t('settings.recording.plainTextInsertionLabel')}
               desc={t('settings.recording.plainTextInsertionDesc')}
+              comingSoon={platformCaps?.supportsClipboardPasteInsertion === false}
             >
               <Toggle
                 on={plainTextInsertionOn}

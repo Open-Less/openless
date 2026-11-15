@@ -1,6 +1,7 @@
 // Display atoms (SettingRow / Toggle / inputStyle) and pure i18n label tables shared across settings sections.
 
 import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toggleGroupFeedback } from '../../lib/toggleFeedback';
 import { Switch } from '@base-ui/react/switch';
 const SettingLabel = createContext<string | undefined>(undefined);
@@ -84,10 +85,21 @@ interface SettingRowProps {
   children: ReactNode;
   controlWidth?: number | string;
   className?: string;
+  /** 该功能在本平台还没实现：整行降透明度、控件禁用，并挂一个「即将支持」标签。 */
+  comingSoon?: boolean;
 }
 
 // Explanations share the same dotted-label trigger, including keyboard and touch access.
-export function SettingRow({ label, desc, children, controlWidth, className }: SettingRowProps) {
+export function SettingRow({
+  label,
+  desc,
+  children,
+  controlWidth,
+  className,
+  comingSoon = false,
+  comingSoonLabel,
+}: SettingRowProps & { comingSoonLabel?: string }) {
+  const { t } = useTranslation();
   const labelId = useId();
   const mobile = useMobileLayout();
   const readable = useReadableLayout();
@@ -101,8 +113,13 @@ export function SettingRow({ label, desc, children, controlWidth, className }: S
   };
   return (
     <div
-      className={['ol-setting-row', className].filter(Boolean).join(' ')}
+      className={['ol-setting-row', comingSoon ? 'ol-setting-row--coming-soon' : '', className]
+        .filter(Boolean)
+        .join(' ')}
+      aria-disabled={comingSoon || undefined}
       style={{
+        opacity: comingSoon ? 0.55 : undefined,
+        pointerEvents: comingSoon ? 'none' : undefined,
         display: 'grid',
         gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : 'minmax(0, 200px) minmax(0, 1fr)',
         gap: stackLayout ? 8 : 16,
@@ -135,6 +152,24 @@ export function SettingRow({ label, desc, children, controlWidth, className }: S
           gap: stackLayout ? 6 : undefined,
         }}
       >
+        {comingSoon && (
+          <span
+            className="ol-coming-soon-pill"
+            style={{
+              flex: '0 0 auto',
+              padding: '2px 8px',
+              borderRadius: 'var(--ol-radius-pill, 999px)',
+              background: 'var(--ol-surface-2)',
+              border: '0.5px solid var(--ol-line-strong)',
+              color: 'var(--ol-ink-3)',
+              fontSize: 10.5,
+              fontWeight: 'var(--ol-font-weight-medium)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {comingSoonLabel ?? t('common.comingSoon')}
+          </span>
+        )}
         <SettingLabel.Provider value={labelId}>{children}</SettingLabel.Provider>
       </div>
     </div>

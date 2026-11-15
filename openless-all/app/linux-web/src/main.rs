@@ -135,14 +135,30 @@ fn resolve_dist() -> PathBuf {
         return PathBuf::from(dir);
     }
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe.parent().and_then(|bin| bin.parent()) {
-            let installed = root.join("lib/openless/web/dist");
-            if installed.join("index.html").is_file() {
-                return installed;
+        if let Some(dir) = exe.parent() {
+            // 包内布局：二进制在 `/usr/lib/openless/`，页面在 `web/dist`（或 `dist`）。
+            // 也兼容二进制被放在 `/usr/bin` 的老布局。
+            let candidates = [
+                dir.join("web/dist"),
+                dir.join("dist"),
+                dir.join("../lib/openless/web/dist"),
+                dir.join("../../lib/openless/web/dist"),
+                dir.join("../../share/openless/web/dist"),
+            ];
+            for candidate in candidates {
+                if candidate.join("index.html").is_file() {
+                    return candidate;
+                }
             }
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist")
+    // 开发期直接 `cargo run`：源码树里的 dist。
+    // 注意这个路径是**编译期**写死的，装到用户机器上并不存在，所以只在它真的有页面时用。
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist");
+    if dev.join("index.html").is_file() {
+        return dev;
+    }
+    dev
 }
 
 fn data_dir() -> PathBuf {
@@ -1948,6 +1964,19 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // 返回「已授权 / 非 Windows」而不是报错，否则设置页会显示成故障。
         "check_accessibility_permission" | "request_accessibility_permission" => {
             Ok(json!("granted"))
+        }
+        // 输入法后端状态（Linux 版）：前端用的还是 `WindowsImeStatus` 那个结构，
+        // 但 Linux 上「后端」指的是 fcitx5 插件，所以这里给的是真实的三项：
+        // 插件是否装了、守护进程在不在、D-Bus 服务是否有 owner。
+        "get_ime_backend_status" => {
+            let plugin_installed = openless_linux_host::fcitx5_plugin_installed();
+            let daemon_running = openless_linux_host::fcitx5_available();
+            Ok(json!({
+                "backend": "fcitx5",
+                "pluginInstalled": plugin_installed,
+                "daemonRunning": daemon_running,
+                "ready": plugin_installed && daemon_running,
+            }))
         }
         // Linux 没有 TSF：结构必须和前端的 `WindowsImeStatus` 完全一致，
         // 少了 `state` 会让设置页的 `state !== 'notWindows'` 恒真，白白显示一行

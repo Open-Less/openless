@@ -11,6 +11,8 @@ import {
   checkNetwork,
   getHotkeyStatus,
   getWindowsImeStatus,
+  getImeBackendStatus,
+  type ImeBackendStatus,
   openSystemSettings,
   requestAccessibilityPermission,
   requestMicrophonePermission,
@@ -44,6 +46,7 @@ export function PermissionsSection() {
   const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
   const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
   const [windowsIme, setWindowsIme] = useState<WindowsImeStatus | null>(null);
+  const [imeBackend, setImeBackend] = useState<ImeBackendStatus | null>(null);
   const [network, setNetwork] = useState<NetworkCheckResult | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const { capability } = useHotkeySettings();
@@ -82,6 +85,10 @@ export function PermissionsSection() {
 
   const refreshWindowsIme = async () => {
     setWindowsIme(await getWindowsImeStatus());
+    // Linux 上「输入法后端」是 fcitx5 插件，不是 Windows TSF：查真实状态。
+    if (platformCaps?.linuxHost) {
+      setImeBackend(await getImeBackendStatus());
+    }
   };
 
   const refreshNetwork = async () => {
@@ -97,6 +104,7 @@ export function PermissionsSection() {
     if (platformCaps?.supportsDesktopHotkey === true) {
       refreshHotkey();
     }
+    // Windows 查 TSF 状态，Linux 查 fcitx5 插件状态；两者都走同一个刷新入口。
     if (platformCaps?.platform !== 'android') {
       refreshWindowsIme();
     }
@@ -270,6 +278,46 @@ export function PermissionsSection() {
       )}
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
         <AndroidPermissionsPanel mode="permissionsOnly" />
+      )}
+      {/* Linux：输入法后端是 fcitx5 插件（真实状态：装没装 / 在不在跑）。 */}
+      {platformCaps?.linuxHost && (
+        <SettingRow label={t('settings.permissions.imeBackendLabel')}>
+          <div style={permissionActionsStyle}>
+            <span
+              style={{
+                fontSize: 11.5,
+                color: 'var(--ol-ink-4)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                minWidth: 0,
+                flex: '0 1 auto',
+              }}
+            >
+              {imeBackend === null
+                ? t('settings.permissions.imeBackendChecking')
+                : t(
+                    imeBackend.ready
+                      ? 'settings.permissions.imeBackendReady'
+                      : imeBackend.pluginInstalled
+                        ? 'settings.permissions.imeBackendDaemonDown'
+                        : 'settings.permissions.imeBackendPluginMissing',
+                  )}
+            </span>
+            <span
+              style={{
+                padding: '2px 8px',
+                borderRadius: 999,
+                fontSize: 10.5,
+                border: '0.5px solid var(--ol-line-strong)',
+                background: 'var(--ol-surface-2)',
+                color: imeBackend?.ready ? 'var(--ol-ink-2)' : 'var(--ol-ink-3)',
+              }}
+            >
+              fcitx5
+            </span>
+          </div>
+        </SettingRow>
       )}
       {windowsIme?.state !== 'notWindows' &&
         detectOS() === 'win' &&

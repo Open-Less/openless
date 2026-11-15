@@ -278,6 +278,8 @@ export const ko: typeof zhCN = {
     tagline: '자연스럽게 말하고, 정확하게 작성하세요',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: '곧 지원',
     loading: '로딩 중…',
     retry: '다시 시도',
     settingsLoadFailed: '설정 로드 실패',
@@ -1164,8 +1166,6 @@ export const ko: typeof zhCN = {
       capsuleDesc: '캡슐 스위치, 여러 화면 표시, 스타일, 원문 스트리밍 표시.',
       textInputTitle: '텍스트 삽입',
       textInputDesc: '선택 도우미, 삽입과 클립보드, 시작.',
-      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
-      textInputDescNoClipboard: '선택 도우미와 시작.',
       phoneTitle: '휴대폰과 원격 입력',
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
@@ -1941,6 +1941,12 @@ export const ko: typeof zhCN = {
       hotkeyStarting: '설치 중…',
       hotkeyFailed: '감지 실패',
       windowsImeLabel: 'Windows 입력기 백엔드',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: '입력기 백엔드',
+      imeBackendChecking: '확인 중…',
+      imeBackendReady: '준비됨(fcitx5 애드온 로드됨)',
+      imeBackendDaemonDown: 'fcitx5가 실행되지 않음(로그인 시 자동 시작)',
+      imeBackendPluginMissing: '애드온이 설치되지 않았습니다. OpenLess를 다시 설치하세요',
       windowsImeDesc:
         '입력기와 함께 동작하는 OpenLess TSF 텍스트 서비스로 텍스트를 삽입하여, 입력기를 전환하지 않고 클립보드 입력 제한을 회피합니다.',
       windowsImeInstalled: '설치됨',
@@ -2128,12 +2134,16 @@ export const ko: typeof zhCN = {
       macosCompositionInputDesc:
         '녹음 중 인식한 원문을 원래 입력란에 표시하고 완료 후 정리하거나 번역한 결과로 바꿉니다. 손쉬운 사용 권한과 지원되는 편집기가 필요합니다. 커서를 이동하거나 직접 편집하면 실시간 교체를 중지합니다.',
       windowsCompositionInputLabel: '실시간 원문을 입력창에 표시',
+      liveInputComingSoonDesc:
+        'Linux 버전은 실시간 입력(말하는 동안 입력란에 글자가 들어가는 기능)을 준비 중입니다. 완료되면 여기에 Windows 컴포지션 입력에 해당하는 스위치가 표시됩니다.',
       windowsCompositionInputDesc:
         '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
       streamingInsertSaveClipboardHint:
         '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',
       localAsrTitle: '로컬 ASR 모델 ',
+      localAsrComingSoonDesc:
+        'Linux 버전의 로컬 음성 인식(sherpa-onnx / Whisper)은 준비 중입니다. 모델 다운로드와 추론 런타임을 연결하고 있으며, 완료되면 여기서 모델을 선택해 오프라인으로 인식할 수 있습니다.',
       localAsrDesc:
         '전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.',
       localAsrWarningShort: '로컬 추론은 느리며, 사양 부족 시 글자 누락이 발생할 수 있습니다.',

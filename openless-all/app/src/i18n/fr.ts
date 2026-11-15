@@ -298,6 +298,8 @@ export const fr: typeof zhCN = {
     tagline: 'Parlez naturellement, écrivez avec précision',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Bientôt',
     loading: 'Chargement…',
     retry: 'Réessayer',
     settingsLoadFailed: 'Impossible de charger les réglages',
@@ -1217,8 +1219,6 @@ export const fr: typeof zhCN = {
         'Activation de la capsule, multi-écran, style et affichage du texte original en flux.',
       textInputTitle: 'Insertion de texte',
       textInputDesc: 'Assistant de sélection, insertion et presse-papiers, et démarrage.',
-      // Linux 不走「写剪贴板 + 模拟粘贴」，副标题里不提剪贴板。
-      textInputDescNoClipboard: 'Assistant de sélection et démarrage.',
       phoneTitle: 'Téléphone et saisie à distance',
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
@@ -2029,6 +2029,12 @@ export const fr: typeof zhCN = {
       hotkeyStarting: 'Installation…',
       hotkeyFailed: 'Échec du détecteur',
       windowsImeLabel: 'Moteur de saisie Windows',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: "Backend de méthode d'entrée",
+      imeBackendChecking: 'Vérification…',
+      imeBackendReady: 'Prêt (module fcitx5 chargé)',
+      imeBackendDaemonDown: 'fcitx5 ne tourne pas (démarre à la connexion)',
+      imeBackendPluginMissing: 'Module absent — réinstallez OpenLess',
       windowsImeDesc:
         'Insère le texte dicté via le service de texte TSF d’OpenLess, qui reste actif à côté de votre méthode de saisie, pour éviter les limites du presse-papiers.',
       windowsImeInstalled: 'Installé',
@@ -2240,12 +2246,16 @@ export const fr: typeof zhCN = {
       macosCompositionInputDesc:
         'Affiche la transcription dans le champ initial, puis la remplace par le résultat corrigé ou traduit. Nécessite les autorisations d’accessibilité et un éditeur compatible. Déplacer le curseur ou modifier le texte arrête le remplacement.',
       windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ',
+      liveInputComingSoonDesc:
+        "La composition en direct (le texte s'écrit dans le champ pendant que vous parlez) est en cours d'implémentation pour Linux. Une fois prêt, l'équivalent de l'option de composition Windows apparaîtra ici.",
       windowsCompositionInputDesc:
         "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
       streamingInsertSaveClipboardLabel: 'Copier dans le presse-papiers',
       streamingInsertSaveClipboardHint:
         'Après une insertion réussie, copie le texte final dans le presse-papiers pour pouvoir le recoller avec Cmd+V. Désactivé : le presse-papiers n’est jamais modifié.',
       localAsrTitle: 'Modèles ASR locaux (expérimentaux)',
+      localAsrComingSoonDesc:
+        "La reconnaissance vocale locale (sherpa-onnx / Whisper) est prévue pour Linux : le téléchargement des modèles et le moteur d'inférence sont en cours d'intégration. Une fois prêt, vous pourrez choisir un modèle et transcrire hors ligne ici.",
       localAsrDesc:
         'Remplace l’ASR dans le cloud par l’inférence sur l’appareil. Pour l’usage hors ligne ou les données sensibles.',
       localAsrWarningShort:

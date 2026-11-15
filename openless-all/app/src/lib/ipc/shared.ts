@@ -96,7 +96,7 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
  *  用途：在任意 webview（GTK/CEF/Qt）里都能看到完整界面，方便对比渲染差异，
  *  而不需要把后端也接上。**只影响查询路径，不改变正式运行时的行为。** */
 function previewMockMode(): boolean {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === 'undefined' || !window.location) return false;
   return new URLSearchParams(window.location.search).get('mock') === '1';
 }
 
