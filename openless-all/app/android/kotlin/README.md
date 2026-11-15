@@ -1,5 +1,7 @@
 # Android Kotlin scaffolding
 
+[English](README.md) | [简体中文](README.zh.md)
+
 Copy these files into `src-tauri/gen/android/` after running:
 
 ```bash
@@ -13,8 +15,8 @@ npm run tauri:android:init
 | --- | --- |
 | `OpenLessOverlayService.kt` | `gen/android/app/src/main/java/com/openless/app/OpenLessOverlayService.kt` |
 | `OverlayPermissionActivity.kt` | `gen/android/app/src/main/java/com/openless/app/OverlayPermissionActivity.kt` |
-| `AndroidManifest.v1.snippet.xml` | 在 `../manifests/`，merge 进 `gen/android/.../AndroidManifest.xml` |
-| `AndroidManifest.v3.snippet.xml` | 在 `../manifests/`，**future / not complete** — overlay v3 only |
+| `AndroidManifest.v1.snippet.xml` | Lives in `../manifests/`; merge into `gen/android/.../AndroidManifest.xml` |
+| `AndroidManifest.v3.snippet.xml` | Lives in `../manifests/`; **future / not complete** — overlay v3 only |
 
 Tauri `android init` generates the base manifest under `gen/android/app/src/main/AndroidManifest.xml`.
 Merge the v1 snippet permissions into that file before building APK v1.
