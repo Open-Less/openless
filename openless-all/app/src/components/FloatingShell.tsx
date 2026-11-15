@@ -37,7 +37,7 @@ const QuickNote = lazy(() => import('../pages/QuickNote').then((m) => ({ default
 const Corrections = lazy(() =>
   import('../pages/Corrections').then((m) => ({ default: m.Corrections })),
 );
-import { IS_BETA_BUILD } from '../lib/appVersion';
+import { IS_BETA_BUILD, IS_DEV_BUILD } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
@@ -362,7 +362,7 @@ function FloatingShellBody({
               <strong style={{ fontSize: 15, color: 'var(--ol-ink)', letterSpacing: '-0.02em' }}>
                 OpenLess
               </strong>
-              {IS_BETA_BUILD && (
+              {(IS_BETA_BUILD || IS_DEV_BUILD) && (
                 <span
                   style={{
                     display: 'inline-flex',
@@ -379,7 +379,7 @@ function FloatingShellBody({
                     borderRadius: 5,
                   }}
                 >
-                  {t('shell.betaTag')}
+                  {IS_DEV_BUILD ? 'DEV' : t('shell.betaTag')}
                 </span>
               )}
             </button>
