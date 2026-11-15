@@ -25,6 +25,17 @@ const METADATA_VERSION: u32 = 1;
 #[cfg(target_os = "linux")]
 const KEYRING_SERVICE: &str = "top.openless.linux";
 
+/// 一个 Omni 渠道的非敏感记录（与云端 `ChannelRecord` 的字段对齐）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredOmniChannel {
+    id: String,
+    provider_type: String,
+    name: String,
+    enabled: bool,
+    order: u32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedCredentialMetadata {
@@ -34,6 +45,11 @@ struct PersistedCredentialMetadata {
     /// —— `replace_and_verify` 是逐字段比对的，丢了它就会回滚。
     #[serde(default)]
     channel_configuration: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Omni（多模态）渠道。core 的 `CredentialMetadata` 只有 Asr/Llm 两类渠道，
+    /// 而云端文档里有 Omni；不单独存就会在「替换 → 重新捕获」时少一半渠道，
+    /// 恢复因此回滚。这里自己维护一份。
+    #[serde(default)]
+    omni_channels: Vec<StoredOmniChannel>,
     #[serde(default)]
     metadata: CredentialMetadata,
     #[serde(default)]
@@ -358,9 +374,65 @@ impl CredentialStore for LinuxCredentialStore {
                     });
                 }
             }
+            // Omni 渠道：优先用元数据里保存的记录；没有就从 key 里推导。
+            let active_omni = state.metadata.active_provider(ProviderSlot::Omni);
+            let mut omni_channels = state.omni_channels.clone();
+            if omni_channels.is_empty() {
+                let mut ids: Vec<String> = state
+                    .keys
+                    .iter()
+                    .filter(|key| key.namespace == CredentialNamespace::Omni)
+                    .filter_map(|key| key.provider_id.clone())
+                    .collect();
+                if !active_omni.is_empty() {
+                    ids.push(active_omni.clone());
+                }
+                ids.sort();
+                ids.dedup();
+                for (order, id) in ids.into_iter().enumerate() {
+                    omni_channels.push(StoredOmniChannel {
+                        provider_type: id.clone(),
+                        name: id.clone(),
+                        enabled: true,
+                        order: order as u32,
+                        id,
+                    });
+                }
+            }
+            for channel in &omni_channels {
+                snapshot.channels.push(SyncChannel {
+                    id: channel.id.clone(),
+                    namespace: SyncNamespace::Omni,
+                    provider_type: channel.provider_type.clone(),
+                    name: channel.name.clone(),
+                    enabled: channel.enabled,
+                    order: channel.order,
+                    active: channel.id == active_omni,
+                    configuration: state
+                        .channel_configuration
+                        .get(&format!("omni:{}", channel.id))
+                        .cloned()
+                        .unwrap_or_default(),
+                });
+                let mut accounts = std::collections::BTreeMap::new();
+                for key in state.keys.iter().filter(|key| {
+                    key.namespace == CredentialNamespace::Omni
+                        && key.provider_id.as_deref() == Some(channel.id.as_str())
+                }) {
+                    if let Some(secret) = read_secret(key)? {
+                        accounts.insert(key.account.clone(), secret.expose_secret().to_string());
+                    }
+                }
+                snapshot.credentials.push(SyncCredentialRecord {
+                    channel_id: channel.id.clone(),
+                    namespace: SyncNamespace::Omni,
+                    accounts,
+                });
+            }
             eprintln!(
-                "[linux-creds] capture 完成：channels={} credentials={}",
+                "[linux-creds] capture 完成：channels={} (asr/llm/omni={}) credentials={}",
                 snapshot.channels.len(),
+                snapshot.channels.len() - omni_channels.len(),
                 snapshot.credentials.len()
             );
             snapshot.validate()?;
@@ -394,6 +466,7 @@ impl CredentialStore for LinuxCredentialStore {
             snapshot.validate()?;
             let mut asr = Vec::new();
             let mut llm = Vec::new();
+            let mut omni_channels: Vec<StoredOmniChannel> = Vec::new();
             let mut active = std::collections::HashMap::new();
             for channel in &snapshot.channels {
                 let summary = ChannelSummary {
@@ -407,7 +480,13 @@ impl CredentialStore for LinuxCredentialStore {
                 match channel.namespace {
                     SyncNamespace::Asr => asr.push(summary),
                     SyncNamespace::Llm => llm.push(summary),
-                    SyncNamespace::Omni => {}
+                    SyncNamespace::Omni => omni_channels.push(StoredOmniChannel {
+                        id: channel.id.clone(),
+                        provider_type: channel.provider_type.clone(),
+                        name: channel.name.clone(),
+                        enabled: channel.enabled,
+                        order: channel.order,
+                    }),
                 }
                 if channel.active {
                     active.insert(channel.namespace.as_str().to_string(), channel.id.clone());
@@ -459,6 +538,7 @@ impl CredentialStore for LinuxCredentialStore {
                 .lock()
                 .expect("credential metadata lock poisoned");
             state.metadata = metadata;
+            state.omni_channels = omni_channels;
             state.channel_configuration = channel_configuration;
             state.keys = keys;
             let result = persist_metadata(&metadata_path, &state);
