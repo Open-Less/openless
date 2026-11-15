@@ -747,8 +747,8 @@ function FloatingShellBody({
           cursor: pointer;
         }
         .ol-sidebar-surface .ol-nav-btn-active {
-          color: var(--ol-choice-active-ink);
-          background: var(--ol-choice-active-bg);
+          color: var(--ol-ink);
+          background: var(--ol-surface-2);
         }
         /* No hover media query and no transition: packaged WKWebViews can report a
            conservative pointer capability and can leave hover transitions frozen at

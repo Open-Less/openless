@@ -587,13 +587,11 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: transparent;
   font-weight: var(--ol-font-weight-medium);
   cursor: pointer;
-  transition:
-    color var(--ol-choice-motion),
-    background-color var(--ol-choice-motion);
+  transition: none;
 }
 .ol-settings-rail-btn[aria-current='page'] {
-  color: var(--ol-choice-active-ink);
-  background: var(--ol-choice-active-bg);
+  color: var(--ol-ink);
+  background: var(--ol-surface-2);
   font-weight: var(--ol-font-weight-semibold);
 }
 @media (hover: hover) and (pointer: fine) {
@@ -1165,12 +1163,13 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   line-height: 1.5;
   white-space: nowrap;
   cursor: pointer;
-  transition:
-    color var(--ol-choice-motion),
-    background-color var(--ol-choice-motion);
+  transition: none;
 }
 .ol-segmented-option[aria-pressed='true'] {
-  color: var(--ol-choice-active-ink);
+  /* Use the page's normal ink and a solid surface chip. The old translucent
+     selection tokens could resolve to a near-invisible label/wash in WebKit. */
+  color: var(--ol-ink);
+  background: var(--ol-surface-2);
   font-weight: var(--ol-font-weight-semibold);
 }
 @media (hover: hover) and (pointer: fine) {

@@ -226,8 +226,8 @@ button:disabled {
     background-color var(--ol-choice-motion);
 }
 .ol-shortcuts-filters button[aria-pressed='true'] {
-  background: var(--ol-choice-active-bg);
-  color: var(--ol-choice-active-ink);
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
   font-weight: var(--ol-font-weight-semibold);
 }
 .ol-shortcut-results {

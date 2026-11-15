@@ -37,6 +37,7 @@ import { isHarmonyHost } from '../lib/harmonyBridge';
 import './overview.css';
 import { HarmonyDictation } from '../components/HarmonyDictation';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
+import { Heatmap } from '../components/Heatmap';
 
 type RefreshOutcome = 'ok' | 'stale' | 'error';
 
@@ -476,6 +477,10 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
             loadError={activityError}
             onRetry={refreshActivity}
           />
+          {!mobile &&
+            prefs?.showOverviewActivityHeatmap !== false &&
+            activity &&
+            activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
         </div>
 
         <Card
@@ -649,6 +654,70 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
       <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
         {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
       </Btn>
+    </Card>
+  );
+}
+
+/** Yearly activity heatmap card: dictation count per day over the past 365 days. Month/weekday/date labels are generated via Intl in the current language. */
+function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
+  const { t, i18n } = useTranslation();
+  const { endDate, startDate, data, labels } = useMemo(() => {
+    // The year calendar spans the calendar year — from Jan 1 to Dec 31, filled left to right;
+    // the previous rolling 365-day window started month labels mid-year and left the right side empty, looking like missing data.
+    const now = new Date();
+    const year = now.getFullYear();
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31);
+    const lang = i18n.resolvedLanguage || i18n.language || 'en';
+    const monthFormat = new Intl.DateTimeFormat(lang, { month: 'short' });
+    const dayFormat = new Intl.DateTimeFormat(lang, { weekday: 'short' });
+    const dateFormat = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' });
+    const anchor = new Date(year, 0, 4); // Sunday
+    return {
+      endDate: end,
+      startDate: start,
+      data: activity.map((day) => ({ date: day.date, value: day.count })),
+      labels: {
+        months: Array.from({ length: 12 }, (_, m) => monthFormat.format(new Date(year, m, 1))),
+        days: Array.from({ length: 7 }, (_, d) => {
+          const date = new Date(anchor);
+          date.setDate(anchor.getDate() + d);
+          return dayFormat.format(date);
+        }),
+        date: (date: Date) => dateFormat.format(date),
+      },
+    };
+  }, [activity, i18n.resolvedLanguage, i18n.language]);
+  return (
+    <Card
+      padding={12}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: 0,
+        flex: '0 0 auto',
+      }}
+    >
+      <span
+        style={{
+          fontSize: 13,
+          fontWeight: 'var(--ol-font-weight-semibold)',
+          color: 'var(--ol-ink-2)',
+          flexShrink: 0,
+        }}
+      >
+        {t('overview.activityTitle')}
+      </span>
+      <Heatmap
+        data={data}
+        startDate={startDate}
+        endDate={endDate}
+        monthLabels={labels.months}
+        dayLabels={labels.days}
+        dateDisplay={labels.date}
+        valueDisplay={(count) => t('overview.activityCount', { count })}
+      />
     </Card>
   );
 }

@@ -175,3 +175,37 @@ test('style pack deletion uses the red trash notification and keeps undo', async
   expect(green).toBeLessThan(160);
   await expect(toast.getByRole('button', { name: '撤销', exact: true })).toBeVisible();
 });
+
+test('selected segmented options and the overview heatmap stay visible', async ({ page }) => {
+  await page.goto('/?os=mac');
+  const sidebar = page.locator('.ol-sidebar-surface');
+  await sidebar.getByRole('button', { name: '用量', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
+  const usageSelected = page.locator('.ol-segmented-option[aria-pressed="true"]').first();
+  await expect(usageSelected).toBeVisible();
+  const usageStyle = await usageSelected.evaluate((node) => ({
+    color: getComputedStyle(node).color,
+    background: getComputedStyle(node).backgroundColor,
+  }));
+  expect(usageStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(usageStyle.color).not.toBe(usageStyle.background);
+
+  await sidebar.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  const pipelineSelected = page.locator(
+    '.ol-service-pipeline-track .ol-segmented-option[aria-pressed="true"]',
+  );
+  await expect(pipelineSelected).toBeVisible();
+  const pipelineStyle = await pipelineSelected.evaluate((node) => ({
+    color: getComputedStyle(node).color,
+    background: getComputedStyle(node).backgroundColor,
+  }));
+  expect(pipelineStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(pipelineStyle.color).not.toBe(pipelineStyle.background);
+
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  await page.waitForTimeout(400);
+  await sidebar.getByRole('button', { name: '概览', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
+  await expect(page.getByText('年度活动', { exact: true })).toBeVisible();
+});
