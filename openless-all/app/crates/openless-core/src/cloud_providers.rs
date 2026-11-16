@@ -2593,16 +2593,22 @@ impl DictationEngine for SharedOmniDictationEngine {
             let sink = Arc::clone(&progress);
             let stream_offset = Arc::clone(&offset);
             let stream_error = Arc::clone(&publish_error);
+            let delta_gate =
+                Mutex::new(crate::output_cleaning::DictationWrapperDeltaGate::default());
             let on_delta = move |delta: &str| {
                 if stream_error.lock().is_some() {
                     return;
                 }
-                let offset =
-                    stream_offset.fetch_add(delta.chars().count() as u64, Ordering::AcqRel);
+                // Never stream a JSON/markdown wrapper: the final publish below carries
+                // the cleaned text, and streaming insertion only reconciles prefixes.
+                let Some(text) = delta_gate.lock().push(delta) else {
+                    return;
+                };
+                let offset = stream_offset.fetch_add(text.chars().count() as u64, Ordering::AcqRel);
                 if let Err(error) = sink.publish(
                     session_id,
                     EngineProgress::PolishDelta(crate::PolishDelta {
-                        text: delta.to_string(),
+                        text,
                         offset,
                         is_final: false,
                     }),

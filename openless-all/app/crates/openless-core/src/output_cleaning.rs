@@ -240,10 +240,10 @@ const DICTATION_JSON_META_KEYS: &[&str] = &[
 /// Multimodal audio models sometimes wrap the dictation in JSON, e.g.
 /// `{"raw_transcript": "..."}` or `{"analysis": "...", "final_text": "..."}`.
 /// Unwrap only objects whose keys are all known text/meta fields, so dictated text
-/// that merely looks like JSON is left untouched.
+/// that merely looks like JSON is left untouched. Anything else is returned exactly
+/// as received, so streamed deltas stay a prefix of the final text.
 pub fn unwrap_dictation_json_wrapper(content: &str) -> String {
-    let trimmed = content.trim();
-    let candidate = strip_markdown_fence(trimmed).trim();
+    let candidate = strip_markdown_fence(content.trim()).trim();
     if candidate.starts_with('{') && candidate.ends_with('}') {
         if let Ok(serde_json::Value::Object(map)) =
             serde_json::from_str::<serde_json::Value>(candidate)
@@ -264,7 +264,46 @@ pub fn unwrap_dictation_json_wrapper(content: &str) -> String {
             }
         }
     }
-    trimmed.to_string()
+    content.to_string()
+}
+
+/// Streaming companion of [`unwrap_dictation_json_wrapper`]. Deltas are held back once
+/// the output starts like a JSON object or markdown fence, so a wrapper is never typed
+/// into the target app or shown in the capsule; the caller's final publish then
+/// delivers the cleaned text. Ordinary prose streams through unchanged.
+#[derive(Debug, Default)]
+pub struct DictationWrapperDeltaGate {
+    pending: String,
+    state: DeltaGateState,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum DeltaGateState {
+    #[default]
+    Undecided,
+    Pass,
+    Hold,
+}
+
+impl DictationWrapperDeltaGate {
+    /// Returns the text that may be streamed now, if any.
+    pub fn push(&mut self, delta: &str) -> Option<String> {
+        match self.state {
+            DeltaGateState::Pass => return (!delta.is_empty()).then(|| delta.to_string()),
+            DeltaGateState::Hold => return None,
+            DeltaGateState::Undecided => {}
+        }
+        self.pending.push_str(delta);
+        let first = self.pending.trim_start().chars().next()?;
+        if first == '{' || first == '`' {
+            self.state = DeltaGateState::Hold;
+            self.pending.clear();
+            None
+        } else {
+            self.state = DeltaGateState::Pass;
+            Some(std::mem::take(&mut self.pending))
+        }
+    }
 }
 
 /// Strip model reasoning blocks so only the final polished text is inserted.
@@ -562,6 +601,23 @@ mod tests {
             "普通文本 {不是 JSON}",
         ] {
             assert_eq!(unwrap_dictation_json_wrapper(kept), kept);
+        }
+        // Non-wrapper output keeps its exact whitespace so streamed text stays a prefix.
+        assert_eq!(unwrap_dictation_json_wrapper("你好。\n"), "你好。\n");
+    }
+
+    #[test]
+    fn delta_gate_holds_wrappers_and_streams_prose() {
+        let mut gate = DictationWrapperDeltaGate::default();
+        assert_eq!(gate.push("  "), None);
+        assert_eq!(gate.push("你好"), Some("  你好".to_string()));
+        assert_eq!(gate.push("，世界"), Some("，世界".to_string()));
+        assert_eq!(gate.push(""), None);
+
+        for opening in ["{\"raw", "\n```json"] {
+            let mut gate = DictationWrapperDeltaGate::default();
+            assert_eq!(gate.push(opening), None);
+            assert_eq!(gate.push("_transcript\": \"你好\"}"), None);
         }
     }
 }
