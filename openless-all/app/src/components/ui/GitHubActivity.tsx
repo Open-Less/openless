@@ -388,7 +388,7 @@ const GitHubActivity = ({
       className={['ol-gha', apps.length > 0 && 'ol-gha--with-panel', className]
         .filter(Boolean)
         .join(' ')}
-      style={{ width, ...style }}
+      style={{ width: '100%', minWidth: width, ...style }}
     >
       <p className="ol-gha-heading">{headingText}</p>
 

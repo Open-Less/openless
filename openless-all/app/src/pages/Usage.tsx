@@ -273,14 +273,14 @@ export function Usage() {
           <button
             key={id}
             type="button"
+            className={view === id ? 'ol-usage-tab is-active' : 'ol-usage-tab'}
             aria-current={view === id ? 'page' : undefined}
             onClick={() => setView(id)}
             style={{
               border: 0,
-              // Keep the row height but do not paint an active underline; the selected
-              // tab is already distinguished by weight and ink colour.
+              // Keep the row height but do not paint an active underline. Weight, ink
+              // and the selection wash mark the open tab.
               borderBottom: '2px solid transparent',
-              background: 'transparent',
               color: view === id ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
               padding: '10px 12px',
               font: 'inherit',

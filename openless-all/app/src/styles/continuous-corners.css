@@ -1,7 +1,7 @@
 /* One radius for interface surfaces; shader geometry and inline help text stay unclipped. */
 :where(
-  button,
-  input,
+  button:not(.ol-segmented-option),
+  input:not([type='range']),
   select,
   textarea,
   dialog,
@@ -78,10 +78,6 @@
   .ol-word-card,
   .ol-word-card-hits,
   .ol-word-card-action,
-  .ol-segmented,
-  .ol-segmented-indicator,
-  .ol-service-view-indicator,
-  .ol-segmented-option,
   .ol-service-inactive-tag,
   .ol-settings-surface[data-ol-mobile='true'],
   .ol-channel-edit-button,
@@ -145,8 +141,8 @@
 
 @supports (corner-shape: superellipse(1.5)) {
   :where(
-    button,
-    input,
+    button:not(.ol-segmented-option),
+    input:not([type='range']),
     select,
     textarea,
     dialog,
@@ -223,10 +219,6 @@
     .ol-word-card,
     .ol-word-card-hits,
     .ol-word-card-action,
-    .ol-segmented,
-    .ol-segmented-indicator,
-    .ol-service-view-indicator,
-    .ol-segmented-option,
     .ol-service-inactive-tag,
     .ol-settings-surface[data-ol-mobile='true'],
     .ol-channel-edit-button,
@@ -292,8 +284,10 @@
 @supports (not (corner-shape: superellipse(1.5))) and
   (clip-path: shape(from 0 0, line to 100% 0, close)) {
   :where(
-    button:not(.ol-hint-trigger),
-    input,
+    button:not(.ol-hint-trigger):not(.ol-segmented-option):not(.ol-nav-btn):not(
+        .ol-settings-rail-btn
+      ):not(.ol-usage-tab),
+    input:not([type='range']),
     select,
     textarea,
     dialog,
@@ -370,10 +364,6 @@
     .ol-word-card,
     .ol-word-card-hits,
     .ol-word-card-action,
-    .ol-segmented,
-    .ol-segmented-indicator,
-    .ol-service-view-indicator,
-    .ol-segmented-option,
     .ol-service-inactive-tag,
     .ol-settings-surface[data-ol-mobile='true'],
     .ol-channel-edit-button,
@@ -473,7 +463,7 @@
   --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-segmented > :is(.ol-segmented-indicator, .ol-service-view-indicator, .ol-segmented-option) {
-  --ol-corner-radius: calc(var(--ol-radius) - 2.5px);
+  --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-advanced-settings-list > .ol-advanced-settings-entry,
 .ol-advanced-settings-list > .ol-settings-category-entry,

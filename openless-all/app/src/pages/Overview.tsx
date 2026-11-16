@@ -336,10 +336,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     onOpenSettings?.(section, serviceView);
 
   return (
-    // Desktop is one dashboard; the recent-recognition list is the scroller. The yearly
-    // activity card needs its natural width (11px cells ≈ 771px), so it owns a full-width
-    // row and the dashboard scrolls on windows too short to show every block at once.
-    // Mobile stacks the same blocks, so that surface still grows with the page.
+    // Desktop is one dashboard the size of the expanded window. The page itself does not
+    // scroll; the recent-recognition list is the scroller. The yearly card keeps 11px cells
+    // and fills the row under the metrics instead of sitting in a narrow centered box.
     <div
       className="ol-overview-dashboard"
       style={{
@@ -350,7 +349,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         minHeight: mobile ? undefined : 0,
         minWidth: 0,
         overflowX: 'hidden',
-        overflowY: mobile ? 'visible' : 'auto',
+        overflowY: mobile ? 'visible' : 'hidden',
         gap: 'var(--ol-grid-gutter)',
       }}
     >
@@ -464,7 +463,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       <div
         className={mobile ? 'ol-grid-12' : 'ol-grid-12 ol-grid-fill'}
         data-columns={mobile ? '1' : undefined}
-        style={{ overflow: 'hidden', minHeight: 288 }}
+        style={{ overflow: 'hidden', minHeight: 0 }}
       >
         <div
           className="ol-col-5"
@@ -571,7 +570,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         prefs?.showOverviewActivityHeatmap !== false &&
         activity &&
         activity.length > 0 && (
-          <div className="ol-grid-12" style={{ flex: '0 0 auto' }}>
+          <div className="ol-grid-12 ol-overview-heatmap" style={{ flex: '0 0 auto' }}>
             <ActivityHeatmapCard className="ol-col-12" activity={activity} />
           </div>
         )}

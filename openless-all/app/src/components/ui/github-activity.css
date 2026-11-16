@@ -5,7 +5,7 @@
 .ol-gha {
   position: relative;
   box-sizing: border-box;
-  max-width: 100%;
+  max-width: none;
   overflow: hidden;
   border-radius: 28px;
   background: var(--ol-surface);
@@ -32,7 +32,7 @@
 
 .ol-gha-months {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: hidden;
 }
 .ol-gha-month {
@@ -52,7 +52,7 @@
 
 .ol-gha-weeks {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: hidden;
 }
 .ol-gha-week {
