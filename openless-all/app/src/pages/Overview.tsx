@@ -31,6 +31,7 @@ import {
 } from '../lib/activityMetrics';
 import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
+import { Segmented } from '../components/ui/Segmented';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ASR_LABELS } from './settings/shared';
 import { loadOverviewServiceDetails, type OverviewServiceDetails } from '../lib/overviewServices';
@@ -815,67 +816,6 @@ function Metric({ icon, label, value, trend }: MetricProps) {
   );
 }
 
-/** Segmented toggle (shared by period / metric). Narrow enough to fit both groups on one line. */
-function SegmentedToggle<T extends string | number>({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-}: {
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (next: T) => void;
-  ariaLabel: string;
-}) {
-  return (
-    <div
-      className="ol-overview-segment"
-      role="group"
-      aria-label={ariaLabel}
-      style={{
-        display: 'flex',
-        gap: 2,
-        padding: 2,
-        borderRadius: 'var(--ol-control-radius)',
-        background: 'var(--ol-surface-2)',
-        boxShadow: 'inset 0 0 0 0.5px var(--ol-line)',
-      }}
-    >
-      {options.map((option) => {
-        const selected = option.value === value;
-        return (
-          <button
-            key={String(option.value)}
-            type="button"
-            aria-pressed={selected}
-            onClick={() => onChange(option.value)}
-            style={{
-              padding: '3px 9px',
-              fontSize: 12.5,
-              fontWeight: selected
-                ? 'var(--ol-font-weight-semibold)'
-                : 'var(--ol-font-weight-medium)',
-              border: 0,
-              borderRadius: 'var(--ol-r-sm)',
-              background: selected ? 'var(--ol-accent-solid-bg)' : 'transparent',
-              color: selected ? 'var(--ol-accent-solid-ink)' : 'var(--ol-ink-3)',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-              whiteSpace: 'nowrap',
-              transition:
-                'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
-            }}
-          >
-            <span className="ol-segmented-label" data-label={option.label}>
-              {option.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 /**
  * Period metrics card: last 7 / 30 days × count / chars / duration.
  *
@@ -902,7 +842,7 @@ function PeriodMetricsCard({
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
   const periodOptions = ACTIVITY_PERIODS.map((days) => ({
-    value: days,
+    value: String(days),
     label: t(`overview.period.last${days}Days`),
   }));
   const metricOptions = ACTIVITY_METRICS.map((id) => ({
@@ -934,17 +874,20 @@ function PeriodMetricsCard({
           flexShrink: 0,
         }}
       >
-        <SegmentedToggle
-          value={period}
+        <Segmented
+          label={t('overview.period.ariaLabel')}
           options={periodOptions}
-          onChange={onPeriodChange}
-          ariaLabel={t('overview.period.ariaLabel')}
+          value={String(period)}
+          onChange={(next) => {
+            const days = ACTIVITY_PERIODS.find((period) => String(period) === next);
+            if (days !== undefined) onPeriodChange(days);
+          }}
         />
-        <SegmentedToggle
-          value={metric}
+        <Segmented
+          label={t('overview.metricName.ariaLabel')}
           options={metricOptions}
+          value={metric}
           onChange={onMetricChange}
-          ariaLabel={t('overview.metricName.ariaLabel')}
         />
       </div>
 

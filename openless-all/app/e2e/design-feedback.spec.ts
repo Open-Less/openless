@@ -183,6 +183,8 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
   const usageSelected = page.locator('.ol-segmented-option[aria-pressed="true"]').first();
   await expect(usageSelected).toBeVisible();
+  await expect(usageSelected).toHaveCSS('clip-path', 'none');
+  await expect(usageSelected).toHaveCSS('border-radius', '12px');
   const usageStyle = await usageSelected.evaluate((node) => ({
     color: getComputedStyle(node).color,
     background: getComputedStyle(node).backgroundColor,
@@ -196,6 +198,8 @@ test('selected segmented options and the overview heatmap stay visible', async (
     '.ol-service-pipeline-track .ol-segmented-option[aria-pressed="true"]',
   );
   await expect(pipelineSelected).toBeVisible();
+  await expect(pipelineSelected).toHaveCSS('clip-path', 'none');
+  await expect(pipelineSelected).toHaveCSS('border-radius', '12px');
   const pipelineStyle = await pipelineSelected.evaluate((node) => ({
     color: getComputedStyle(node).color,
     background: getComputedStyle(node).backgroundColor,
@@ -207,6 +211,18 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await page.waitForTimeout(400);
   await sidebar.getByRole('button', { name: '概览', exact: true }).click();
   await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
+  const overviewSelected = page
+    .getByRole('group', { name: '统计周期' })
+    .locator('.ol-segmented-option[aria-pressed="true"]');
+  await expect(overviewSelected).toBeVisible();
+  await expect(overviewSelected).toHaveCSS('clip-path', 'none');
+  await expect(overviewSelected).toHaveCSS('border-radius', '12px');
+  const overviewStyle = await overviewSelected.evaluate((node) => ({
+    color: getComputedStyle(node).color,
+    background: getComputedStyle(node).backgroundColor,
+  }));
+  expect(overviewStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(overviewStyle.color).not.toBe(overviewStyle.background);
   // The yearly card is the ported GitHub Activity component: its heading is the yearly
   // count line and its grid is made of real day cells.
   const activityCard = page.locator('.ol-gha');

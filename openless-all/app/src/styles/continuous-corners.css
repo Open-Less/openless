@@ -520,6 +520,17 @@ html
   border-radius: var(--ol-corner-radius, var(--ol-radius)) !important;
 }
 
+/* A selected segment paints a solid chip. The superellipse shape() still matches
+   these buttons and can clip that chip, label included, out of WKWebView.
+   Unselected options stay transparent, so only the selected slot looks empty.
+   Pin the option itself; do not change the track or non-button controls. */
+html .ol-segmented-option {
+  --ol-corner-radius: var(--ol-button-radius);
+  border-radius: var(--ol-button-radius) !important;
+  clip-path: none !important;
+  corner-shape: round !important;
+}
+
 html .ol-default-processing-cancel {
   border-radius: inherit !important;
   corner-shape: round !important;
