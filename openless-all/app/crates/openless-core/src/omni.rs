@@ -223,6 +223,9 @@ impl OpenAICompatibleOmni {
         let mut utf8_pending: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         let mut cancelled = false;
+        let mut finish_reason: Option<String> = None;
+        let mut refusal_chars = 0usize;
+        let mut event_count = 0usize;
         'stream: loop {
             if should_cancel() {
                 log::info!("[omni] stream cancelled by caller; breaking SSE loop");
@@ -276,6 +279,13 @@ impl OpenAICompatibleOmni {
                             continue;
                         }
                     };
+                    event_count += 1;
+                    if let Some(reason) = value["choices"][0]["finish_reason"].as_str() {
+                        finish_reason = Some(reason.to_string());
+                    }
+                    if let Some(text) = value["choices"][0]["delta"]["refusal"].as_str() {
+                        refusal_chars += text.chars().count();
+                    }
                     if let Some(delta) = value["choices"][0]["delta"]["content"].as_str() {
                         if !delta.is_empty() {
                             full_text.push_str(delta);
@@ -293,6 +303,12 @@ impl OpenAICompatibleOmni {
             full_text.chars().count()
         );
         if full_text.is_empty() {
+            log::warn!(
+                "[omni] empty stream: events={} finish_reason={:?} refusal_chars={}",
+                event_count,
+                finish_reason,
+                refusal_chars
+            );
             return Err(LLMError::InvalidResponse {
                 status: 200,
                 body: "empty omni stream".to_string(),

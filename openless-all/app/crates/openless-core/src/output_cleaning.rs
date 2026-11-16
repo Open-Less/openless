@@ -214,20 +214,33 @@ pub fn clean_json_llm_output(content: &str) -> String {
     strip_markdown_fence(trimmed).trim().to_string()
 }
 
-/// Field names audio models have been seen to invent when they wrap dictation output.
-const DICTATION_JSON_WRAPPER_KEYS: &[&str] = &[
-    "raw_transcript",
-    "transcript",
-    "transcription",
-    "text",
+/// Field names audio models have been seen to invent for the dictation itself, in
+/// priority order: a polished/final field wins over a raw transcript field.
+const DICTATION_JSON_TEXT_KEYS: &[&str] = &[
+    "final_text",
+    "polished_text",
     "output",
     "result",
-    "polished_text",
+    "text",
+    "transcription",
+    "transcript",
+    "raw_transcript",
 ];
 
-/// Multimodal audio models sometimes return the dictation as a one-field JSON object,
-/// e.g. `{"raw_transcript": "..."}`. Unwrap only that exact shape with a known key, so
-/// dictated text that merely looks like JSON is left untouched.
+/// Side fields (reasoning, detected language, ...) that may accompany the text field.
+const DICTATION_JSON_META_KEYS: &[&str] = &[
+    "analysis",
+    "reasoning",
+    "thoughts",
+    "thinking",
+    "notes",
+    "language",
+];
+
+/// Multimodal audio models sometimes wrap the dictation in JSON, e.g.
+/// `{"raw_transcript": "..."}` or `{"analysis": "...", "final_text": "..."}`.
+/// Unwrap only objects whose keys are all known text/meta fields, so dictated text
+/// that merely looks like JSON is left untouched.
 pub fn unwrap_dictation_json_wrapper(content: &str) -> String {
     let trimmed = content.trim();
     let candidate = strip_markdown_fence(trimmed).trim();
@@ -235,11 +248,18 @@ pub fn unwrap_dictation_json_wrapper(content: &str) -> String {
         if let Ok(serde_json::Value::Object(map)) =
             serde_json::from_str::<serde_json::Value>(candidate)
         {
-            if let [(key, serde_json::Value::String(text))] =
-                map.iter().collect::<Vec<_>>().as_slice()
-            {
-                if DICTATION_JSON_WRAPPER_KEYS.contains(&key.as_str()) && !text.trim().is_empty() {
-                    return text.trim().to_string();
+            let all_known = map.keys().all(|key| {
+                DICTATION_JSON_TEXT_KEYS.contains(&key.as_str())
+                    || DICTATION_JSON_META_KEYS.contains(&key.as_str())
+            });
+            if all_known {
+                let text = DICTATION_JSON_TEXT_KEYS
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(|value| value.as_str()))
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty());
+                if let Some(text) = text {
+                    return text.to_string();
                 }
             }
         }
@@ -517,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn dictation_json_wrapper_is_unwrapped_only_for_known_single_fields() {
+    fn dictation_json_wrapper_is_unwrapped_only_for_known_fields() {
         assert_eq!(
             unwrap_dictation_json_wrapper(r#"{"raw_transcript": "Hello，hello，能听到吗？"}"#),
             "Hello，hello，能听到吗？"
@@ -526,11 +546,19 @@ mod tests {
             unwrap_dictation_json_wrapper("```json\n{\"text\": \"你好\"}\n```"),
             "你好"
         );
-        // Dictated JSON-like text and multi-field objects stay as spoken.
+        // Seen from gpt-audio-1.5: reasoning plus the final field; the final field wins.
+        assert_eq!(
+            unwrap_dictation_json_wrapper(
+                r#"{"analysis": "The audio content is: '先获取 Token'", "raw_transcript": "先获取token", "final_text": "先获取 Token。"}"#
+            ),
+            "先获取 Token。"
+        );
+        // Dictated JSON-like text and objects with unknown fields stay as spoken.
         for kept in [
             r#"{"name": "OpenLess"}"#,
             r#"{"text": "a", "lang": "zh"}"#,
             r#"{"text": ""}"#,
+            r#"{"analysis": "only reasoning"}"#,
             "普通文本 {不是 JSON}",
         ] {
             assert_eq!(unwrap_dictation_json_wrapper(kept), kept);
