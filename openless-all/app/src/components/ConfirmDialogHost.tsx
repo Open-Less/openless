@@ -27,7 +27,7 @@ export function ConfirmDialogHost() {
     >
       <div className="ol-confirm-dialog" data-tone={danger ? 'danger' : 'default'}>
         <span className="ol-confirm-dialog-icon" aria-hidden="true">
-          <Icon name={options.icon ?? (danger ? 'trash' : 'info')} size={24} />
+          <Icon name={options.icon ?? (danger ? 'trash' : 'info')} size={18} />
         </span>
         <h2 id="ol-confirm-dialog-title" className="ol-confirm-dialog-title">
           {options.title}
@@ -36,12 +36,21 @@ export function ConfirmDialogHost() {
         <div className="ol-confirm-dialog-actions">
           <button
             type="button"
-            className={danger ? 'ol-channel-delete-button' : 'ol-confirm-primary'}
+            className={
+              danger
+                ? 'ol-pressable ol-action-button ol-confirm-danger'
+                : 'ol-pressable ol-action-button ol-confirm-primary'
+            }
             onClick={() => settleConfirm(true)}
           >
             {options.confirmLabel ?? t('common.confirmAction')}
           </button>
-          <button type="button" autoFocus className="ol-confirm-cancel" onClick={cancel}>
+          <button
+            type="button"
+            autoFocus
+            className="ol-pressable ol-action-button ol-confirm-cancel"
+            onClick={cancel}
+          >
             {options.cancelLabel ?? t('common.cancel')}
           </button>
         </div>

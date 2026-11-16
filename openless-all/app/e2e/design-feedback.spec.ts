@@ -38,6 +38,13 @@ test('sidebar items highlight on hover without a transition, and the brand retur
   expect(background).not.toBe('rgba(0, 0, 0, 0)');
 
   await history.click();
+  await expect(history).toHaveClass(/ol-nav-btn-active/);
+  const activeBackground = await history.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(activeBackground).not.toBe('rgba(0, 0, 0, 0)');
+  const badge = page.locator('.ol-version-badge');
+  await expect(badge).toBeVisible();
+  const badgeBackground = await badge.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(badgeBackground).not.toBe('rgba(0, 0, 0, 0)');
   await expect(page.getByRole('heading', { name: '历史记录', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '返回概览', exact: true }).click();
   await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
@@ -56,7 +63,13 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await page.waitForTimeout(900);
   await expect(confirm).toContainText('删除后该渠道保存的密钥也会一并清除。');
   await expect(page.locator('.ol-channel-delete-confirm')).toHaveCount(0);
-  await expectRed(confirm.locator('.ol-confirm-dialog-description'));
+  await expect(confirm.locator('.ol-channel-delete-button')).toHaveCount(0);
+  await expect(confirm.locator('.ol-confirm-dialog-title')).toHaveCSS('font-size', '15px');
+  const description = confirm.locator('.ol-confirm-dialog-description');
+  await expect(description).toHaveCSS('font-size', '13.5px');
+  const descriptionColor = await description.evaluate((node) => getComputedStyle(node).color);
+  const [descRed, descGreen] = descriptionColor.match(/\d+/g)!.map(Number);
+  expect(Math.abs(descRed - descGreen)).toBeLessThan(40);
 
   const box = (await confirm.boundingBox())!;
   const viewport = page.viewportSize()!;
@@ -65,6 +78,12 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
 
   const confirmDelete = confirm.getByRole('button', { name: '确认删除', exact: true });
   const cancel = confirm.getByRole('button', { name: '取消', exact: true });
+  const confirmFill = await confirmDelete.evaluate(
+    (node) => getComputedStyle(node).backgroundColor,
+  );
+  const [fillRed, fillGreen] = confirmFill.match(/\d+/g)!.map(Number);
+  expect(fillRed).toBeGreaterThan(180);
+  expect(fillGreen).toBeLessThan(120);
   expect((await confirmDelete.boundingBox())!.x).toBeLessThan((await cancel.boundingBox())!.x);
 
   await cancel.click();
@@ -82,6 +101,14 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   const [red, green] = iconColor.match(/\d+/g)!.map(Number);
   expect(red).toBeGreaterThan(200);
   expect(green).toBeLessThan(160);
+});
+
+test('noise reduction uses one slider track', async ({ page }) => {
+  await openVoiceEnhancement(page);
+  await page.getByRole('button').filter({ hasText: '语音增强设置' }).click();
+  const denoise = page.getByRole('slider', { name: '降噪强度' });
+  await expect(denoise).toBeVisible();
+  await expect(denoise).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 });
 
 test('toggling echo suppression does not nudge the voice enhancement switch', async ({ page }) => {
@@ -181,6 +208,10 @@ test('selected segmented options and the overview heatmap stay visible', async (
   const sidebar = page.locator('.ol-sidebar-surface');
   await sidebar.getByRole('button', { name: '用量', exact: true }).click();
   await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
+  const usageTab = page.locator('.ol-usage-tab.is-active');
+  await expect(usageTab).toBeVisible();
+  const tabBackground = await usageTab.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(tabBackground).not.toBe('rgba(0, 0, 0, 0)');
   const usageSelected = page.locator('.ol-segmented-option[aria-pressed="true"]').first();
   await expect(usageSelected).toBeVisible();
   await expect(usageSelected).toHaveCSS('clip-path', 'none');
@@ -194,6 +225,12 @@ test('selected segmented options and the overview heatmap stay visible', async (
 
   await sidebar.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  const pipelineOptions = page.locator('.ol-service-pipeline-track .ol-segmented-option');
+  await expect(pipelineOptions).toHaveCount(3);
+  for (const option of await pipelineOptions.all()) {
+    await expect(option).toBeVisible();
+    expect((await option.innerText()).trim().length).toBeGreaterThan(0);
+  }
   const pipelineSelected = page.locator(
     '.ol-service-pipeline-track .ol-segmented-option[aria-pressed="true"]',
   );
@@ -225,9 +262,45 @@ test('selected segmented options and the overview heatmap stay visible', async (
   expect(overviewStyle.color).not.toBe(overviewStyle.background);
   // The yearly card is the ported GitHub Activity component: its heading is the yearly
   // count line and its grid is made of real day cells.
+  const dashboard = page.locator('.ol-overview-dashboard');
+  await expect(dashboard).toHaveCSS('overflow-y', 'hidden');
   const activityCard = page.locator('.ol-gha');
   await expect(activityCard).toBeVisible();
   await expect(activityCard.locator('.ol-gha-heading')).toContainText('次听写');
   expect(await activityCard.locator('.ol-gha-cell').count()).toBeGreaterThan(300);
   await expect(activityCard.locator('.ol-gha-app-chips')).toBeVisible();
+  const cellSize = await activityCard
+    .locator('.ol-gha-cell')
+    .first()
+    .evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { width: parseFloat(style.width), height: parseFloat(style.height) };
+    });
+  expect(Math.abs(cellSize.width - 11)).toBeLessThan(0.2);
+  expect(Math.abs(cellSize.height - 11)).toBeLessThan(0.2);
+  const heatmapBox = (await activityCard.boundingBox())!;
+  const rowBox = (await activityCard.locator('xpath=..').boundingBox())!;
+  expect(heatmapBox.width).toBeGreaterThanOrEqual(760);
+  expect(rowBox.width - heatmapBox.width).toBeLessThan(8);
+});
+
+test('marketplace search expands inside the same plate', async ({ page }) => {
+  await page.goto('/?os=mac');
+  const sidebar = page.locator('.ol-sidebar-surface');
+  await sidebar.getByRole('button', { name: '风格', exact: true }).click();
+  await sidebar.getByRole('button', { name: '风格市场', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '风格包市场', exact: true })).toBeVisible();
+  const opener = page.getByRole('button', { name: '搜索名称 / 描述 / 标签…' });
+  await opener.click();
+  const plate = page.locator('.ol-search-open');
+  const field = plate.locator('.ol-search-field');
+  await expect(field).toBeVisible();
+  await expect(plate).toHaveCSS('width', '220px');
+  await expect(field).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(field).toHaveCSS('border-top-width', '0px');
+  const plateBackground = await plate.evaluate((node) => getComputedStyle(node).backgroundColor);
+  const iconBackground = await opener.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(iconBackground).toBe('rgba(0, 0, 0, 0)');
+  expect(plateBackground).not.toBe('rgba(0, 0, 0, 0)');
+  await expect(plate.locator('input')).toHaveCount(1);
 });

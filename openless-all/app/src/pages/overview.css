@@ -5,3 +5,8 @@
   border-radius: 28px !important;
   clip-path: none !important;
 }
+.ol-overview-heatmap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}

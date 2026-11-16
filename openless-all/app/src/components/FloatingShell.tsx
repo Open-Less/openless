@@ -363,22 +363,7 @@ function FloatingShellBody({
                 OpenLess
               </strong>
               {(IS_BETA_BUILD || IS_DEV_BUILD) && (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    padding: '1px 6px',
-                    fontSize: 10,
-                    lineHeight: '14px',
-                    fontWeight: 'var(--ol-font-weight-semibold)',
-                    letterSpacing: '0.05em',
-                    textTransform: 'uppercase',
-                    color: 'var(--ol-blue)',
-                    background: 'transparent',
-                    border: '0.5px solid var(--ol-pill-blue-border)',
-                    borderRadius: 5,
-                  }}
-                >
+                <span className="ol-version-badge">
                   {IS_DEV_BUILD ? 'DEV' : t('shell.betaTag')}
                 </span>
               )}
@@ -386,8 +371,8 @@ function FloatingShellBody({
 
             {/* nav — flat items + expandable groups. Flat: overview/history/vocab.
               Groups: Style (polish modes + marketplace) / Tools (selection ask + translation).
-              Active items get a static surface-2 rounded bg via the .ol-nav-btn-active
-              class; group titles expand/collapse on click. */}
+              Active items get ink plus the shared selection wash via .ol-nav-btn-active;
+              group titles expand/collapse on click. */}
             <nav style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {NAV_TREE.map((node) => {
                 if (node.kind === 'item') {
@@ -740,7 +725,7 @@ function FloatingShellBody({
         .ol-nav-btn.ol-nav-btn-active {
           color: var(--ol-ink);
           font-weight: var(--ol-font-weight-semibold);
-          background: var(--ol-surface-2);
+          background: var(--ol-choice-active-bg);
         }
         .ol-sidebar-surface .ol-nav-btn {
           color: var(--ol-choice-idle-ink);
@@ -748,7 +733,7 @@ function FloatingShellBody({
         }
         .ol-sidebar-surface .ol-nav-btn-active {
           color: var(--ol-ink);
-          background: var(--ol-surface-2);
+          background: var(--ol-choice-active-bg);
         }
         /* No hover media query and no transition: packaged WKWebViews can report a
            conservative pointer capability and can leave hover transitions frozen at

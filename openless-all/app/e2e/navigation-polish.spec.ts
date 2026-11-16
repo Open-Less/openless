@@ -9,7 +9,7 @@ async function settings(page: Page) {
   return dialog;
 }
 
-test('a pending lazy page keeps the old page visible and exits with blur, scale and overlap', async ({
+test('a pending lazy page keeps the old page visible and crossfades without blur or scale', async ({
   page,
 }) => {
   let release!: () => void;
@@ -94,15 +94,20 @@ test('a pending lazy page keeps the old page visible and exits with blur, scale 
           node.phase === 'exit' &&
           node.opacity > 0 &&
           node.opacity < 1 &&
-          node.scale < 1 &&
-          node.filter !== 'none',
+          Math.abs(node.scale - 1) < 0.02 &&
+          node.filter === 'none',
       ),
     ),
   ).toBe(true);
   expect(
     samples.some((frame) =>
       frame.some(
-        (node) => node.phase === 'enter' && node.opacity > 0 && node.opacity < 1 && node.scale < 1,
+        (node) =>
+          node.phase === 'enter' &&
+          node.opacity > 0 &&
+          node.opacity < 1 &&
+          Math.abs(node.scale - 1) < 0.02 &&
+          node.filter === 'none',
       ),
     ),
   ).toBe(true);

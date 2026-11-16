@@ -1541,7 +1541,7 @@ function ProviderTools({
         </button>
         <div className="ol-provider-status-slot">{operation === 'models' && resultMessage}</div>
       </div>
-      {!modelsUrl && (
+      {!compact && !modelsUrl && (
         <SelectLite
           value={selectedModel}
           onChange={applyModel}
@@ -1549,7 +1549,7 @@ function ProviderTools({
           options={models.map((model) => ({ value: model, label: model }))}
           placeholder={t('settings.providers.selectModel')}
           ariaLabel={t('settings.providers.selectModel')}
-          style={{ width: 'calc(100% - 38px)', minWidth: 0, height: 36 }}
+          style={{ width: '100%', minWidth: 0, height: 38 }}
           popupStyle={{
             minWidth: 'min(280px, calc(100vw - 24px))',
             maxWidth: 'min(380px, calc(100vw - 24px))',
@@ -1558,6 +1558,24 @@ function ProviderTools({
       )}
     </div>
   );
+  const modelPicker =
+    compact && showFetchModels && !modelsUrl ? (
+      <div className="ol-omni-model-picker">
+        <SelectLite
+          value={selectedModel}
+          onChange={applyModel}
+          disabled={disabled || status === 'loading' || models.length === 0}
+          options={models.map((model) => ({ value: model, label: model }))}
+          placeholder={t('settings.providers.selectModel')}
+          ariaLabel={t('settings.providers.selectModel')}
+          style={{ width: '100%', minWidth: 0, height: 38 }}
+          popupStyle={{
+            minWidth: 'min(280px, calc(100vw - 24px))',
+            maxWidth: 'min(380px, calc(100vw - 24px))',
+          }}
+        />
+      </div>
+    ) : null;
   const verifyButton = (
     <button
       className="ol-channel-verify"
@@ -1602,6 +1620,7 @@ function ProviderTools({
           {modelTools}
           {verifyButton}
         </div>
+        {modelPicker}
         <div className="ol-omni-tools-hint">
           {operation === 'validate' && message
             ? resultMessage

@@ -575,7 +575,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-settings-rail-btn[aria-current='page'] {
   color: var(--ol-ink);
-  background: var(--ol-surface-2);
+  background: var(--ol-choice-active-bg);
   font-weight: var(--ol-font-weight-semibold);
 }
 @media (hover: hover) and (pointer: fine) {
@@ -735,8 +735,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-search-open {
   width: 220px;
-  background: var(--ol-surface);
-  border-color: var(--ol-line-strong);
+  /* Same plate as the closed magnifier: one color, two widths. */
+  background: var(--ol-surface-2);
+  border-color: var(--ol-line);
 }
 .ol-search-field {
   flex: 1;
@@ -746,6 +747,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border: 0;
   outline: none;
   background: transparent;
+  background-color: transparent;
   font-family: inherit;
   font-size: 13px;
   color: var(--ol-ink);
@@ -894,7 +896,11 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   min-width: 72px;
   height: 22px;
   margin: 0;
+  padding: 0;
+  border: 0;
   background: transparent;
+  background-color: transparent;
+  box-shadow: none;
   cursor: pointer;
 }
 .ol-range:focus-visible {
@@ -1196,7 +1202,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   /* Use the page's normal ink and a solid surface chip. The old translucent
      selection tokens could resolve to a near-invisible label/wash in WebKit. */
   color: var(--ol-ink);
+  -webkit-text-fill-color: var(--ol-ink);
   background: var(--ol-surface-2);
+  background-color: var(--ol-surface-2);
+  opacity: 1;
   font-weight: var(--ol-font-weight-semibold);
 }
 @media (hover: hover) and (pointer: fine) {
@@ -1285,7 +1294,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 
 .ol-service-views button[aria-pressed='true'] {
-  color: var(--ol-choice-active-ink);
+  color: var(--ol-ink);
+  background: var(--ol-choice-active-bg);
+  border-radius: var(--ol-button-radius);
   font-weight: var(--ol-font-weight-semibold);
 }
 
@@ -1424,6 +1435,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
   .ol-omni-primary-fields > *,
   .ol-omni-advanced-fields > * {
+    grid-column: 1 / -1;
+  }
+  .ol-omni-model-picker > * {
     grid-column: 1 / -1;
   }
 }
@@ -1965,73 +1979,74 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 16px;
+  gap: 12px;
 }
 .ol-confirm-dialog-icon {
   display: grid;
   place-items: center;
-  width: 50px;
-  height: 50px;
-  border-radius: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ol-radius);
   background: rgba(220, 38, 38, 0.1);
   color: var(--ol-err);
 }
 .ol-confirm-dialog[data-tone='default'] .ol-confirm-dialog-icon {
   background: var(--ol-blue-soft);
-  color: var(--ol-blue);
+  color: var(--ol-accent-solid-bg);
 }
 .ol-confirm-dialog-title {
   margin: 0;
   color: var(--ol-ink);
-  font-size: 20px;
+  font-size: 15px;
   font-weight: var(--ol-font-weight-semibold);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
 }
 .ol-confirm-dialog-description {
   margin: 0;
-  color: var(--ol-ink-2);
-  font-size: 14.5px;
-  font-weight: var(--ol-font-weight-medium);
-  line-height: 1.65;
-}
-.ol-confirm-dialog[data-tone='danger'] .ol-confirm-dialog-description {
-  color: var(--ol-err);
+  color: var(--ol-ink-3);
+  font-size: 13.5px;
+  font-weight: var(--ol-font-weight-regular);
+  line-height: 1.6;
 }
 .ol-confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
   width: 100%;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 4px;
 }
-.ol-confirm-dialog-actions .ol-channel-delete-button,
 .ol-confirm-cancel,
-.ol-confirm-primary {
-  min-height: 40px;
-  padding: 0 18px;
-  font: 500 13.5px / 1.5 var(--ol-font-sans);
-}
-.ol-confirm-cancel {
+.ol-confirm-primary,
+.ol-confirm-danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 0.5px solid var(--ol-line-strong);
-  border-radius: var(--ol-control-radius);
-  background: var(--ol-control-solid);
-  color: var(--ol-ink-2);
+  min-height: 34px;
+  padding: 7px 14px;
+  border-radius: var(--ol-button-radius);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.5;
   cursor: pointer;
   --ol-corner-radius: var(--ol-button-radius);
 }
+.ol-confirm-cancel {
+  border: 0.5px solid var(--ol-line-strong);
+  background: var(--ol-control-solid);
+  color: var(--ol-ink-2);
+}
 .ol-confirm-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   border: 0;
   background: var(--ol-accent-solid-bg);
   color: var(--ol-accent-solid-ink);
-  cursor: pointer;
-  --ol-corner-radius: var(--ol-button-radius);
+}
+.ol-confirm-danger {
+  border: 0;
+  background: var(--ol-danger-solid-bg);
+  color: var(--ol-danger-solid-ink);
 }
 
 @media (max-width: 600px) {
@@ -2387,11 +2402,26 @@ html:lang(de) {
 .ol-omni-tools-actions > .ol-channel-model-tools {
   flex: 1;
   width: auto;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+  min-width: 0;
 }
-.ol-omni-tools-actions > .ol-channel-model-tools > :first-child,
-.ol-omni-tools-actions > .ol-channel-model-tools > :last-child {
-  grid-column: span 6;
+/* The fetched-model menu shares the API key / endpoint field's left edge and
+   the Temperature field's right edge (columns 4–6 of the same 12-column grid). */
+.ol-omni-model-picker {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: var(--ol-grid-gutter);
+  margin-top: 8px;
+  min-width: 0;
+}
+.ol-omni-model-picker > * {
+  grid-column: 4 / 7;
+  min-width: 0;
+  width: 100%;
+}
+.ol-omni-model-picker .ol-select-trigger {
+  width: 100%;
+  box-sizing: border-box;
+  height: 38px;
 }
 .ol-omni-tools-actions {
   flex-wrap: nowrap;
@@ -2405,10 +2435,6 @@ html:lang(de) {
   }
   .ol-omni-tools-actions > .ol-channel-model-tools {
     flex-basis: 100%;
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .ol-omni-tools-actions > .ol-channel-model-tools > * {
-    grid-column: 1 / -1;
   }
 }
 
@@ -2462,10 +2488,32 @@ body {
   line-height: 1.4;
   vertical-align: middle;
 }
+.ol-version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ol-blue);
+  background: var(--ol-blue-soft);
+  border: 0.5px solid var(--ol-pill-blue-border);
+  border-radius: 5px;
+  clip-path: none;
+  corner-shape: round;
+}
 
 input:not([type='checkbox']):not([type='radio']),
 textarea,
 select {
   border-color: transparent !important;
   background-color: var(--ol-control-muted);
+}
+.ol-range,
+.ol-search-field {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none;
 }

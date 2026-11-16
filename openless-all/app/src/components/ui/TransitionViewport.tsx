@@ -13,8 +13,8 @@ import { useSmoothWheelScroll } from '../../lib/useSmoothWheelScroll';
 
 const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const settled = { opacity: 1, transform: 'none', filter: 'none' };
-const waiting = { opacity: 0, transform: 'translateY(12px) scale(0.975)', filter: 'blur(8px)' };
-const departing = { opacity: 0, transform: 'translateY(-12px) scale(0.985)', filter: 'blur(6px)' };
+const waiting = { opacity: 0, transform: 'none', filter: 'none' };
+const departing = { opacity: 0, transform: 'none', filter: 'none' };
 
 type Surface = { key: string; children: ReactNode };
 interface Props {
@@ -46,13 +46,6 @@ export function TransitionViewport({
   const retained = useRef(committed);
   const latest = useRef({ key: contentKey, children });
   latest.current = { key: contentKey, children };
-  const pendingSince = useRef(performance.now());
-  const pendingKey = useRef(contentKey);
-  if (pendingKey.current !== contentKey) {
-    pendingKey.current = contentKey;
-    pendingSince.current = performance.now();
-  }
-  const [slowKey, setSlowKey] = useState<string | null>(null);
   const entered = useRef(onEntered);
   entered.current = onEntered;
   const [readyKey, setReadyKey] = useState<string | null>(null);
@@ -100,17 +93,13 @@ export function TransitionViewport({
             surfaceKey={surface.key}
             phase={phase}
             reduced={reduced}
-            slow={slowKey === contentKey}
             pace={pace}
             className={className}
             style={style}
             scrollRef={surface.key === contentKey ? scrollRef : undefined}
             page={surface.key === contentKey ? page : undefined}
             onReady={() => {
-              if (latest.current.key === surface.key) {
-                setSlowKey(performance.now() - pendingSince.current > 160 ? surface.key : null);
-                setReadyKey(surface.key);
-              }
+              if (latest.current.key === surface.key) setReadyKey(surface.key);
             }}
             onEntered={() => commit(surface.key)}
           >
@@ -126,7 +115,6 @@ function TransitionSurface({
   surfaceKey,
   phase,
   reduced,
-  slow,
   pace,
   children,
   className,
@@ -139,7 +127,6 @@ function TransitionSurface({
   surfaceKey: string;
   phase: 'settled' | 'waiting' | 'enter' | 'exit' | 'restore';
   reduced: boolean;
-  slow: boolean;
   pace: 'default' | 'gentle';
   children: ReactNode;
   className?: string;
@@ -176,13 +163,13 @@ function TransitionSurface({
     }
     const current = getComputedStyle(node);
     const from = { opacity: current.opacity, transform: current.transform, filter: current.filter };
-    node.style.willChange = 'transform, opacity, filter';
-    // One native timeline keeps opacity, scale and blur synchronized even when
-    // JavaScript frames are delayed. Cleanup freezes the painted pose for reversals.
-    const timingScale = pace === 'gentle' ? 1.2 : 1;
+    node.style.willChange = 'opacity';
+    // Opacity only. Blur and scale on a full page stall the system WebView and
+    // read as a cut. A short crossfade keeps the outgoing page until the next one
+    // is painted, which is how a web view swaps routes.
     const animation = node.animate([from, target], {
-      duration: (phase === 'exit' ? (slow ? 220 : 160) : slow ? 260 : 180) * timingScale,
-      delay: (phase === 'enter' ? (slow ? 120 : 70) : 0) * timingScale,
+      duration: pace === 'gentle' ? 160 : 120,
+      delay: 0,
       easing,
       fill: 'both',
     });
@@ -207,7 +194,7 @@ function TransitionSurface({
       animation.cancel();
       node.style.willChange = '';
     };
-  }, [phase, reduced, slow, pace]);
+  }, [phase, reduced, pace]);
   useSmoothWheelScroll(ref, surfaceKey);
   useEffect(() => {
     const node = ref.current;
