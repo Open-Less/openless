@@ -832,7 +832,12 @@ async fn build_cloud_transcription_session(
                 provider = provider.with_hotwords(context.polish.hotwords.clone());
             }
             if uses_keywords {
-                provider = provider.with_keywords(context.polish.hotwords.clone());
+                provider = provider
+                    .with_keywords(context.polish.hotwords.clone())
+                    .with_languages(crate::provider_rules::openai_transcribe_languages(
+                        context.asr.language.as_deref(),
+                        &context.polish.working_languages,
+                    ));
             }
             if provider_type == "zenmux" {
                 let language = context.asr.language.clone().or_else(|| {

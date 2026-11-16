@@ -66,6 +66,9 @@ pub struct WhisperBatchASR {
     hotwords: Vec<String>,
     /// OpenAI `gpt-transcribe` `keywords[]` hints (one form field per entry). Empty = omit.
     keywords: Vec<String>,
+    /// OpenAI `gpt-transcribe` `languages[]` hints (expected input languages). Empty = omit.
+    /// A request rejected because of these hints is retried once without them.
+    languages: Vec<String>,
     /// Custom endpoint path (default `/audio/transcriptions`; MiniMax etc. use `/speech_to_text`).
     endpoint_path: Option<String>,
     buffer: Mutex<Vec<u8>>,
@@ -92,6 +95,7 @@ impl WhisperBatchASR {
             enable_itn: true,
             hotwords: Vec::new(),
             keywords: Vec::new(),
+            languages: Vec::new(),
             endpoint_path: None,
             buffer: Mutex::new(Vec::new()),
         }
@@ -137,6 +141,13 @@ impl WhisperBatchASR {
             }
         }
         self.keywords = cleaned;
+        self
+    }
+
+    /// Sets OpenAI `gpt-transcribe` expected input languages (ISO 639-1 codes, already
+    /// validated by the caller). Empty = omit and let the model detect the language.
+    pub fn with_languages(mut self, languages: Vec<String>) -> Self {
+        self.languages = languages;
         self
     }
 
@@ -213,112 +224,142 @@ impl WhisperBatchASR {
         let url = transcription_url(&self.base_url, self.endpoint_path.as_deref())?;
         let client = crate::net::http();
 
-        let request = match self.request_format {
-            AsrRequestFormat::Multipart => {
-                let wav_part = reqwest::multipart::Part::bytes(wav)
-                    .file_name("audio.wav")
-                    .mime_str("audio/wav")
-                    .context("set MIME type")?;
-                let mut form = reqwest::multipart::Form::new()
-                    .part("file", wav_part)
-                    .text("model", self.model.clone());
+        let mut include_languages = !self.languages.is_empty();
+        let resp = loop {
+            let request = match self.request_format {
+                AsrRequestFormat::Multipart => {
+                    let wav_part = reqwest::multipart::Part::bytes(wav.clone())
+                        .file_name("audio.wav")
+                        .mime_str("audio/wav")
+                        .context("set MIME type")?;
+                    let mut form = reqwest::multipart::Form::new()
+                        .part("file", wav_part)
+                        .text("model", self.model.clone());
 
-                // Only verbose_json-capable providers (OpenAI / Groq) get a
-                // request for segment metadata, with temperature pinned to 0.
-                // Don't send it to providers without support (SiliconFlow
-                // SenseVoice / TeleSpeech etc.) to avoid 4xx on unknown params.
-                if self.verbose_json {
-                    form = form
-                        .text("response_format", "verbose_json")
-                        .text("temperature", "0");
-                }
-
-                // Never send an empty `prompt`: some OpenAI-compatible
-                // implementations error on it (Groq tolerates it, skip
-                // defensively). `trim()` also excludes whitespace-only values.
-                if let Some(prompt) = self.prompt.as_ref() {
-                    let trimmed = prompt.trim();
-                    if !trimmed.is_empty() {
-                        form = form.text("prompt", trimmed.to_string());
+                    // Only verbose_json-capable providers (OpenAI / Groq) get a
+                    // request for segment metadata, with temperature pinned to 0.
+                    // Don't send it to providers without support (SiliconFlow
+                    // SenseVoice / TeleSpeech etc.) to avoid 4xx on unknown params.
+                    if self.verbose_json {
+                        form = form
+                            .text("response_format", "verbose_json")
+                            .text("temperature", "0");
                     }
-                }
 
-                // First-class hotwords (StepFun shape: a parseable JSON array
-                // string like `["hotword1","hotword2"]`). Filter out blank
-                // entries before encoding; if all are blank, omit the field.
-                let hotwords: Vec<&str> = self
-                    .hotwords
-                    .iter()
-                    .map(|w| w.trim())
-                    .filter(|w| !w.is_empty())
-                    .collect();
-                if !hotwords.is_empty() {
-                    if let Ok(encoded) = serde_json::to_string(&hotwords) {
-                        form = form.text("hotwords", encoded);
+                    // Never send an empty `prompt`: some OpenAI-compatible
+                    // implementations error on it (Groq tolerates it, skip
+                    // defensively). `trim()` also excludes whitespace-only values.
+                    if let Some(prompt) = self.prompt.as_ref() {
+                        let trimmed = prompt.trim();
+                        if !trimmed.is_empty() {
+                            form = form.text("prompt", trimmed.to_string());
+                        }
                     }
-                }
 
-                for keyword in &self.keywords {
-                    form = form.text("keywords[]", keyword.clone());
-                }
-
-                // `openai-compatible` allows an empty API key (LAN endpoints
-                // without auth): omit the Authorization header so an empty
-                // Bearer doesn't get rejected with 401.
-                let mut request = client.post(&url);
-                if !self.api_key.trim().is_empty() {
-                    request = request.header("Authorization", format!("Bearer {}", self.api_key));
-                }
-                request.multipart(form)
-            }
-            AsrRequestFormat::OpenRouterJson => {
-                // OpenRouter /audio/transcriptions: application/json with
-                // standard base64 (padded) audio. Omit the multipart-only
-                // prompt/response_format fields to avoid 4xx on unknown
-                // fields; verbose_json stays off for this protocol.
-                let body = serde_json::json!({
-                    "model": self.model,
-                    "input_audio": {
-                        "data": base64::engine::general_purpose::STANDARD.encode(&wav),
-                        "format": "wav",
-                    },
-                });
-                let mut request = client.post(&url);
-                if !self.api_key.trim().is_empty() {
-                    request = request.header("Authorization", format!("Bearer {}", self.api_key));
-                }
-                request.json(&body)
-            }
-            AsrRequestFormat::ZenMuxJson => {
-                // ZenMux /audio/transcriptions (issue #837): application/json
-                // with standard base64 audio. Language follows the OpenLess
-                // working-language mapping; enable_itn comes from the settings
-                // toggle and is always sent explicitly. No multipart-only fields.
-                let mut body = serde_json::json!({
-                    "model": self.model,
-                    "input_audio": {
-                        "data": base64::engine::general_purpose::STANDARD.encode(&wav),
-                        "format": "wav",
-                    },
-                    "enable_itn": self.enable_itn,
-                });
-                if let Some(language) = self.language.as_ref() {
-                    if !language.trim().is_empty() {
-                        body["language"] = serde_json::Value::String(language.trim().to_string());
+                    // First-class hotwords (StepFun shape: a parseable JSON array
+                    // string like `["hotword1","hotword2"]`). Filter out blank
+                    // entries before encoding; if all are blank, omit the field.
+                    let hotwords: Vec<&str> = self
+                        .hotwords
+                        .iter()
+                        .map(|w| w.trim())
+                        .filter(|w| !w.is_empty())
+                        .collect();
+                    if !hotwords.is_empty() {
+                        if let Ok(encoded) = serde_json::to_string(&hotwords) {
+                            form = form.text("hotwords", encoded);
+                        }
                     }
+
+                    for keyword in &self.keywords {
+                        form = form.text("keywords[]", keyword.clone());
+                    }
+
+                    if include_languages {
+                        for language in &self.languages {
+                            form = form.text("languages[]", language.clone());
+                        }
+                    }
+
+                    // `openai-compatible` allows an empty API key (LAN endpoints
+                    // without auth): omit the Authorization header so an empty
+                    // Bearer doesn't get rejected with 401.
+                    let mut request = client.post(&url);
+                    if !self.api_key.trim().is_empty() {
+                        request =
+                            request.header("Authorization", format!("Bearer {}", self.api_key));
+                    }
+                    request.multipart(form)
                 }
-                let mut request = client.post(&url);
-                if !self.api_key.trim().is_empty() {
-                    request = request.header("Authorization", format!("Bearer {}", self.api_key));
+                AsrRequestFormat::OpenRouterJson => {
+                    // OpenRouter /audio/transcriptions: application/json with
+                    // standard base64 (padded) audio. Omit the multipart-only
+                    // prompt/response_format fields to avoid 4xx on unknown
+                    // fields; verbose_json stays off for this protocol.
+                    let body = serde_json::json!({
+                        "model": self.model,
+                        "input_audio": {
+                            "data": base64::engine::general_purpose::STANDARD.encode(&wav),
+                            "format": "wav",
+                        },
+                    });
+                    let mut request = client.post(&url);
+                    if !self.api_key.trim().is_empty() {
+                        request =
+                            request.header("Authorization", format!("Bearer {}", self.api_key));
+                    }
+                    request.json(&body)
                 }
-                request.json(&body)
+                AsrRequestFormat::ZenMuxJson => {
+                    // ZenMux /audio/transcriptions (issue #837): application/json
+                    // with standard base64 audio. Language follows the OpenLess
+                    // working-language mapping; enable_itn comes from the settings
+                    // toggle and is always sent explicitly. No multipart-only fields.
+                    let mut body = serde_json::json!({
+                        "model": self.model,
+                        "input_audio": {
+                            "data": base64::engine::general_purpose::STANDARD.encode(&wav),
+                            "format": "wav",
+                        },
+                        "enable_itn": self.enable_itn,
+                    });
+                    if let Some(language) = self.language.as_ref() {
+                        if !language.trim().is_empty() {
+                            body["language"] =
+                                serde_json::Value::String(language.trim().to_string());
+                        }
+                    }
+                    let mut request = client.post(&url);
+                    if !self.api_key.trim().is_empty() {
+                        request =
+                            request.header("Authorization", format!("Bearer {}", self.api_key));
+                    }
+                    request.json(&body)
+                }
+            };
+
+            let resp = request
+                .send()
+                .await
+                .context("Whisper HTTP request failed")?;
+
+            // The API rejects the whole request for an unsupported language code and
+            // publishes no complete list, so a rejected hint must not cost the dictation.
+            if include_languages && resp.status() == reqwest::StatusCode::BAD_REQUEST {
+                let body = resp.text().await.unwrap_or_default();
+                if body.to_ascii_lowercase().contains("language") {
+                    log::warn!("[asr] transcription languages hint rejected; retrying without it");
+                    include_languages = false;
+                    continue;
+                }
+                anyhow::bail!(
+                    "Whisper API error {}: {}",
+                    reqwest::StatusCode::BAD_REQUEST,
+                    body
+                );
             }
+            break resp;
         };
-
-        let resp = request
-            .send()
-            .await
-            .context("Whisper HTTP request failed")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -1546,6 +1587,70 @@ mod tests {
 
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "先获取 Access Token");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn gpt_transcribe_retries_without_rejected_languages_hint() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            for attempt in 0..2 {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "timed out waiting for ASR test request"
+                            );
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(err) => panic!("accept ASR test request failed: {err}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request = read_http_request(&mut stream);
+                let request_text = String::from_utf8_lossy(&request);
+                let language_fields = request_text.matches(r#"name="languages[]""#).count();
+                if attempt == 0 {
+                    assert_eq!(language_fields, 2);
+                    let body =
+                        r#"{"error":{"message":"Unsupported language code","param":"languages"}}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .unwrap();
+                } else {
+                    assert_eq!(language_fields, 0);
+                    write_json_response(&mut stream, r#"{"text":"retry ok"}"#);
+                }
+            }
+        });
+        let base_url = format!("http://{}", addr);
+
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "gpt-transcribe".to_string(),
+            None,
+            None,
+            false,
+        )
+        .with_languages(vec!["zh".to_string(), "en".to_string()]);
+        let pcm = vec![0u8; 32_000 * 2];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "retry ok");
         server.join().unwrap();
     }
 
