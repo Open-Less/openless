@@ -22,6 +22,10 @@ pub const PROMPT_CHAR_BUDGET: usize = 240;
 /// Separator (ASCII). Stable in Whisper's tokenizer for every language.
 const PROMPT_SEPARATOR: &str = ", ";
 
+/// Conservative cap on `gpt-transcribe` `keywords[]` entries (the API documents no
+/// count limit; keywords are hints, so a long dictionary adds little).
+const MAX_TRANSCRIBE_KEYWORDS: usize = 100;
+
 /// Default endpoint and model for the ZenMux aggregator (issue #837). Matches
 /// the frontend `ASR_PRESETS` `zenmux` entry; `read_whisper_credentials`
 /// falls back here when active is zenmux and the user left it empty.
@@ -60,6 +64,8 @@ pub struct WhisperBatchASR {
     /// hotwords field — the dictionary only takes effect through it.
     /// Empty = omit.
     hotwords: Vec<String>,
+    /// OpenAI `gpt-transcribe` `keywords[]` hints (one form field per entry). Empty = omit.
+    keywords: Vec<String>,
     /// Custom endpoint path (default `/audio/transcriptions`; MiniMax etc. use `/speech_to_text`).
     endpoint_path: Option<String>,
     buffer: Mutex<Vec<u8>>,
@@ -85,6 +91,7 @@ impl WhisperBatchASR {
             language: None,
             enable_itn: true,
             hotwords: Vec::new(),
+            keywords: Vec::new(),
             endpoint_path: None,
             buffer: Mutex::new(Vec::new()),
         }
@@ -108,6 +115,28 @@ impl WhisperBatchASR {
     /// (see coordinator's `whisper_uses_hotwords`).
     pub fn with_hotwords(mut self, hotwords: Vec<String>) -> Self {
         self.hotwords = hotwords;
+        self
+    }
+
+    /// Sets OpenAI `gpt-transcribe` keyword hints. Entries the API rejects (`<`, `>`,
+    /// CR, LF — any of them fails the whole request) are dropped, as are blanks and
+    /// duplicates; the list is capped to keep the request small.
+    pub fn with_keywords(mut self, keywords: Vec<String>) -> Self {
+        let mut cleaned: Vec<String> = Vec::new();
+        for keyword in keywords {
+            let keyword = keyword.trim();
+            if keyword.is_empty()
+                || keyword.contains(['<', '>', '\r', '\n'])
+                || cleaned.iter().any(|existing| existing == keyword)
+            {
+                continue;
+            }
+            cleaned.push(keyword.to_string());
+            if cleaned.len() == MAX_TRANSCRIBE_KEYWORDS {
+                break;
+            }
+        }
+        self.keywords = cleaned;
         self
     }
 
@@ -227,6 +256,10 @@ impl WhisperBatchASR {
                     if let Ok(encoded) = serde_json::to_string(&hotwords) {
                         form = form.text("hotwords", encoded);
                     }
+                }
+
+                for keyword in &self.keywords {
+                    form = form.text("keywords[]", keyword.clone());
                 }
 
                 // `openai-compatible` allows an empty API key (LAN endpoints
@@ -1450,6 +1483,69 @@ mod tests {
 
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "hotwords ok");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn gpt_transcribe_sends_keywords_as_repeated_fields_without_verbose_json() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for ASR test request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept ASR test request failed: {err}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let request = read_http_request(&mut stream);
+            let request_text = String::from_utf8_lossy(&request);
+            assert_eq!(request_text.matches(r#"name="keywords[]""#).count(), 2);
+            assert!(request_text.contains("OpenLess"));
+            assert!(request_text.contains("Access Token"));
+            assert!(!request_text.contains("<bad>"));
+            assert!(!request_text.contains("verbose_json"));
+            assert!(!request_text.contains(r#"name="hotwords""#));
+            assert!(!request_text.contains(r#"name="prompt""#));
+            write_json_response(
+                &mut stream,
+                r#"{"text":"先获取 Access Token","languages":[{"code":"zh"}]}"#,
+            );
+        });
+        let base_url = format!("http://{}", addr);
+
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "gpt-transcribe".to_string(),
+            None,
+            None,
+            false,
+        )
+        .with_keywords(vec![
+            "OpenLess".to_string(),
+            " ".to_string(),
+            "<bad>".to_string(),
+            "OpenLess".to_string(),
+            "Access Token".to_string(),
+        ]);
+        let pcm = vec![0u8; 32_000 * 2];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "先获取 Access Token");
         server.join().unwrap();
     }
 

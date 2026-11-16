@@ -799,17 +799,28 @@ async fn build_cloud_transcription_session(
             let default_model = default_asr_model(provider_type).unwrap_or("whisper-1");
             let effective_model =
                 non_blank_owned(model).unwrap_or_else(|| default_model.to_string());
+            let uses_keywords = crate::provider_rules::openai_transcribe_uses_keywords(
+                provider_type,
+                &effective_model,
+            );
             let mut provider = WhisperBatchASR::new(
                 api_key,
                 non_blank_owned(endpoint).unwrap_or_else(|| default_endpoint.to_string()),
                 effective_model.clone(),
-                context.asr.prompt.clone(),
+                // The dictionary goes through `keywords[]`; repeating it as a prompt
+                // only risks the prompt length limit that rejects the whole request.
+                if uses_keywords {
+                    None
+                } else {
+                    context.asr.prompt.clone()
+                },
                 crate::provider_rules::batch_asr_chunk_limit_ms(
                     provider_type,
                     preparation.advanced_config,
                 ),
                 crate::provider_rules::whisper_supports_verbose_json(
                     provider_type,
+                    &effective_model,
                     preparation.advanced_config,
                 ),
             )
@@ -819,6 +830,9 @@ async fn build_cloud_transcription_session(
             }
             if crate::provider_rules::whisper_uses_hotwords(provider_type) {
                 provider = provider.with_hotwords(context.polish.hotwords.clone());
+            }
+            if uses_keywords {
+                provider = provider.with_keywords(context.polish.hotwords.clone());
             }
             if provider_type == "zenmux" {
                 let language = context.asr.language.clone().or_else(|| {

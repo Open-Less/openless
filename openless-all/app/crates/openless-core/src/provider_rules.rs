@@ -1131,9 +1131,22 @@ pub fn whisper_uses_hotwords(provider_id: &str) -> bool {
     provider_id == "stepfun"
 }
 
-pub fn whisper_supports_verbose_json(provider_id: &str, advanced: AdvancedAsrConfig) -> bool {
+/// OpenAI's current transcription model (`gpt-transcribe`) takes the dictionary as
+/// first-class `keywords[]` instead of a free-form prompt.
+pub fn openai_transcribe_uses_keywords(provider_id: &str, model: &str) -> bool {
+    provider_id == "whisper" && model.trim().starts_with("gpt-transcribe")
+}
+
+pub fn whisper_supports_verbose_json(
+    provider_id: &str,
+    model: &str,
+    advanced: AdvancedAsrConfig,
+) -> bool {
     match provider_id {
-        "whisper" | "groq" => true,
+        // On OpenAI only `whisper-1` returns `verbose_json`; the gpt-*-transcribe models
+        // answer plain `json`, so asking for segment metadata would be rejected.
+        "whisper" => model.trim().starts_with("whisper"),
+        "groq" => true,
         "zenmux" => false,
         _ => advanced.verbose_json,
     }
@@ -1309,6 +1322,39 @@ mod tests {
             advanced_asr_config_for("whisper", Some(r#"{"verboseJson":true}"#)),
             AdvancedAsrConfig::default()
         );
+    }
+
+    #[test]
+    fn openai_verbose_json_and_keywords_follow_the_transcription_model() {
+        let advanced = AdvancedAsrConfig::default();
+        assert!(whisper_supports_verbose_json(
+            "whisper",
+            "whisper-1",
+            advanced
+        ));
+        for model in [
+            "gpt-transcribe",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+        ] {
+            assert!(!whisper_supports_verbose_json("whisper", model, advanced));
+        }
+        assert!(whisper_supports_verbose_json(
+            "groq",
+            "whisper-large-v3-turbo",
+            advanced
+        ));
+
+        assert!(openai_transcribe_uses_keywords("whisper", "gpt-transcribe"));
+        assert!(!openai_transcribe_uses_keywords("whisper", "whisper-1"));
+        assert!(!openai_transcribe_uses_keywords(
+            "whisper",
+            "gpt-4o-transcribe"
+        ));
+        assert!(!openai_transcribe_uses_keywords(
+            "openai-compatible",
+            "gpt-transcribe"
+        ));
     }
 
     #[test]
