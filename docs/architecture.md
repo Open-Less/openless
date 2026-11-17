@@ -14,7 +14,7 @@
 | Linux Host | `linux-host/`（crate `openless-linux-host`）+ `linux-web` + `linux-qt` | `backend.rs` 组装 `OpenLessBackend`；`linux-web` 暴露 `/api/invoke` + `/api/events`；`linux-qt` 用 Qt6 WebEngine 画窗口 |
 | HarmonyOS Host + UI | `harmony/`（ArkTS + ArkWeb）与 `harmony/rust`（crate `openless-harmony-host`） | ArkTS 提供输入法/窗口/剪贴板能力，Web 界面复用 `src/` 的 harmony 构建，Rust 侧经 napi 暴露同一套 IPC |
 
-Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Android 与 HarmonyOS 共用的输入法 native 后端在 `mobile-ime/`；HarmonyOS 的构建与分发见 [发布规范](../RELEASING.md)。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-host-handoff/README.md)。
+Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Android 与 HarmonyOS 共用的输入法 native 后端在 `mobile-ime/`；HarmonyOS 的构建与分发见 [发布规范](../RELEASING.md)。Linux 由 `linux-qt`（Qt6 WebEngine 窗口层）+ `linux-web`（后端与 HTTP 命令桥）+ `linux-host`（平台适配）组成。
 
 ## 2. 数据流
 
@@ -144,4 +144,4 @@ macOS 凭据通过 `persistence/credentials/macos_vault.rs` 共用 `credentials.
 
 Tauri manifest 的本地 path 依赖位于 `src-tauri/vendor/`（`cpal`、`tauri-runtime-wry`），这些 crate 已随仓库签入，**无需 `git submodule update` 初始化**，克隆后即可构建；部分 CI 作业通过专用脚本去除非目标依赖。Core/Linux workspace 排除 Tauri，其独立检查不解析 Tauri manifest，也不依赖 vendor 目录。
 
-仅 Markdown 变动检查相对链接、源码路径与描述一致性。平台交付按 [桌面验收](2.0-desktop-acceptance.md)、[Linux 验收](linux-host-handoff/07-acceptance.md)和 [发布规范](../RELEASING.md)完成。
+仅 Markdown 变动检查相对链接、源码路径与描述一致性。平台交付按 [桌面验收](2.0-desktop-acceptance.md) 和 [发布规范](../RELEASING.md)完成。

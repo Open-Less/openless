@@ -442,7 +442,7 @@ SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── open
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-host-backend-contract.md`](docs/linux-host-backend-contract.md).
+`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process.
 
 The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux packaging runs in the `ci.yml` / `release-tauri.yml` Linux jobs; publishing to the shared Release requires recorded device acceptance for that tag. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 

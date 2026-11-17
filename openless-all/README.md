@@ -30,7 +30,7 @@ npm run tauri dev
 
 ## Shared backend and Linux host
 
-This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-web` exposes them over `/api/invoke` + `/api/events`, and `linux-qt` renders the official React UI in Qt6 WebEngine. Host status and product acceptance are tracked in the [Linux handoff](../docs/linux-host-handoff/README.md).
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-web` exposes them over `/api/invoke` + `/api/events`, and `linux-qt` renders the official React UI in Qt6 WebEngine.
 
 ```bash
 cd app

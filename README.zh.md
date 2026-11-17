@@ -442,7 +442,7 @@ SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── open
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。见 [`docs/linux-Qt6-backend-contract.md`](docs/linux-Qt6-backend-contract.md)。
+`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。
 
 `v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流在一次 Actions run 中构建 macOS、Windows、Android 与 HarmonyOS 宿主；HarmonyOS 附上未签名 HAP，Android 不再有独立的 tag 触发。Linux Qt6 打包是独立的手动工作流，在真机验收前保持暂停；验收通过后由管理员把验证过的 deb/rpm 包附到共享 Release。Beta 产物保持 draft 直到管理员发布。Linux 没有 AppImage，也没有应用内更新清单。
 

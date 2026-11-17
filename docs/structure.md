@@ -47,7 +47,7 @@ openless-src/                     Git 仓库、分支与发布边界
 | 加密云同步 | Core `cloud_sync_e2ee/`、`cloud_sync_e2ee_protocol/`、`cloud_sync_e2ee_documents/`、`cloud_sync_e2ee_store/` | Tauri `commands/cloud_sync_e2ee.rs`、系统凭据适配及 `src/lib/encryptedSyncUiBridge.ts`；见 [客户端边界](encrypted-cloud-sync.md) |
 | 旧手动同步 | Core `cloud_sync.rs`、`cloud_sync_types.rs`、`cloud_sync_validation.rs`、`cloud_sync_transaction.rs` | Tauri `commands/cloud_sync.rs`；仅保留旧有限字段协议，见 [旧同步合同](cloud-sync.md) |
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
-| Linux 原生接入 | `linux-host/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-host-handoff/README.md) |
+| Linux 原生接入 | `linux-host/src/lib.rs`、`backend.rs`，`linux-web/src/main.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等适配模块 + HTTP 命令桥 |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
 | iOS 应用与输入法 | `../ios/App/`、`../ios/Keyboard/`、`../ios/RecordingWidget/` | SwiftUI/UIKit 界面、独立 Rust Host、共享版本配置；见 [iOS 工程](../openless-all/ios/README.md) |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |

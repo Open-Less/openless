@@ -30,7 +30,7 @@ npm run tauri dev
 
 ## 共享后端与 Linux 宿主
 
-本仓库提供共享的类型化 Rust 接口、语义事件、fixtures 以及 Linux 适配器。`linux-web` 把这些能力暴露成 `/api/invoke` 与 `/api/events`，`linux-qt` 用 Qt6 WebEngine 渲染与桌面端同一套 React 界面。宿主状态与产品验收记录在 [Linux 交接文档](../docs/linux-host-handoff/README.md) 中。
+本仓库提供共享的类型化 Rust 接口、语义事件、fixtures 以及 Linux 适配器。`linux-web` 把这些能力暴露成 `/api/invoke` 与 `/api/events`，`linux-qt` 用 Qt6 WebEngine 渲染与桌面端同一套 React 界面。
 
 ```bash
 cd app

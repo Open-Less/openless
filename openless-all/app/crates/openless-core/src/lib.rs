@@ -96,7 +96,7 @@ mod shortcut_types;
 ///
 /// This is independent from the application release version.  Increment the
 /// major component for a breaking host contract change and document the
-/// migration in `docs/linux-host-backend-contract.md`.
+/// migration in the shared `contract/backend-2.0.json` surface.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{

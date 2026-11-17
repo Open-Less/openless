@@ -10,13 +10,9 @@
 - [桌面验收清单](2.0-desktop-acceptance.md)：功能域 → 源码入口 → 必须的真实证据。
 - [发布规范](../RELEASING.md)：分支、渠道、版本同步和平台发布条件。
 
-## Linux 接入交接（Qt 宿主 + linux-web，目录内互链）
+## Linux 接入
 
-- [交接总览](linux-host-handoff/README.md)：阅读顺序、责任与复用起点。
-- [01 Core 合同](linux-host-handoff/01-core-contract.md)、[02 缺口登记](linux-host-handoff/02-gap-register.md)、[03 热键与窗口](linux-host-handoff/03-hotkeys-and-windows.md)、[04 页面与领域](linux-host-handoff/04-ui-domains.md)、[05 原生宿主与数据](linux-host-handoff/05-native-host-and-data.md)、[06 事件与会话](linux-host-handoff/06-events-and-sessions.md)、[07 验收](linux-host-handoff/07-acceptance.md)。
 
-- [Linux 宿主日志约定](linux-host-logging.md)：级别语义、`OPENLESS_LOG` 开关、轮转策略与不记录的内容。
-- [Linux 已知缺口](linux-host-known-gaps.md)：当前仍未闭环的行为与复现路径（如 G01 纠错卡）。
 
 ## 接口契约
 
@@ -24,7 +20,6 @@
 
 - [官方云同步](cloud-sync.md)：可同步字段、GitHub 身份边界、版本冲突、本地恢复与验证。
 - [云同步服务端交接](cloud-sync-server-handoff.md)：同步服务地址与端口（apic.openless.top:9443）、客户端请求行为、状态码映射与服务端验收清单。
-- [Linux 后端契约](linux-host-backend-contract.md)：`contract/backend-2.0.json`、启动快照、事件面与公开签名。
 
 ## 平台与运营
 

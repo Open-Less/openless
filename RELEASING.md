@@ -61,7 +61,7 @@ release entry point have been removed, and desktop releases no longer dispatch L
 Linux source, local build/package/verification scripts, and device acceptance
 requirements remain available. No Linux artifacts or aliases are automatically
 built or attached. Before manually distributing packages, complete the L01-L12
-acceptance in [docs/linux-host-handoff/07-acceptance.md](docs/linux-host-handoff/07-acceptance.md)
+acceptance on real Ubuntu hardware
 for that exact candidate. Compilation alone is not device acceptance. Desktop and
 Android delivery remain independent; Linux has no in-app updater or AppImage.
 
@@ -203,7 +203,7 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 
 Linux workflow dispatch is paused. Before manually distributing Linux packages (or restoring automation), require all of the following:
 
-1. The [Linux host gaps and acceptance](docs/linux-host-handoff/07-acceptance.md) are complete. A green package build alone does not establish product completeness.
+1. Linux device acceptance (audio, input, install, upgrade, rollback) is complete. A green package build alone does not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
 3. Run the local package verifier for ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
 4. Check out the reviewed immutable tag and verify the package version matches `package.json`, so the packages provably come from the reviewed commit.

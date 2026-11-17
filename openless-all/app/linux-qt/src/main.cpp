@@ -9,6 +9,8 @@
 // 同时 Qt 走**原生 Wayland**，能用 LayerShellQt 做贴底/不给键盘/透明的浮层
 // （Tauri v3 的 CEF 在 Linux 上强制 X11，这两件事都做不到）。
 #include <QApplication>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QCommandLineParser>
@@ -16,6 +18,7 @@
 #include <QVBoxLayout>
 #include <QCloseEvent>
 #include <cstdlib>
+#include <unistd.h>
 #include <QDesktopServices>
 #include <QWebEngineUrlScheme>
 #include <QWebEngineUrlSchemeHandler>
@@ -232,6 +235,8 @@ public:
     QWebEngineView *view() const { return view_; }
     void load();
     void setVisible(bool visible);
+    /// 抬到前台并请求激活（后续实例点图标、托盘「打开」都走这里）。
+    void raise();
     void setExpanded(bool expanded);
     bool isVisible() const { return visible_; }
     Surface kind() const { return kind_; }
@@ -399,6 +404,13 @@ void SurfaceWindow::applyLayerShell() {
     qInfo("surface=%d layer-shell 已安装", static_cast<int>(kind_));
 }
 
+void SurfaceWindow::raise() {
+    QWidget *window = topLevel();
+    window->setVisible(true);
+    window->raise();
+    window->activateWindow();
+}
+
 void SurfaceWindow::setVisible(bool visible) {
     visible_ = visible;
     // 不能拿缓存标志当「已可见」：主窗口关闭时走的是 closeEvent→hide()，
@@ -457,6 +469,32 @@ int main(int argc, char **argv) {
     app.setApplicationDisplayName("OpenLess");
     app.setQuitOnLastWindowClosed(false);
 
+    // ── 0. 单实例 ───────────────────────────────────────────────────────────
+    // 托盘 / 桌面图标每点一次都会执行一次 `/usr/bin/openless`。没有这道锁时
+    // 每点一次就多出一个宿主进程（各带一套窗口、托盘图标，第二个后端还会因为
+    // 抢不到 socket 直接退出，最后报「后端 20 秒内没有报告端口」）。
+    // 这里用 QLocalServer 做「首实例监听、后续实例转交并退出」。
+    const QString instanceKey =
+        QStringLiteral("openless-qt-%1").arg(static_cast<qulonglong>(::geteuid()));
+    {
+        QLocalSocket probe;
+        probe.connectToServer(instanceKey);
+        if (probe.waitForConnected(300)) {
+            // 已有实例：让它把窗口抬起来，然后本进程立刻退出。
+            probe.write("show\n");
+            probe.flush();
+            probe.waitForBytesWritten(300);
+            fprintf(stderr, "openless-qt: another instance is running; handing over and exiting\n");
+            return 0;
+        }
+    }
+    // 上一次崩溃留下的 socket 文件会让 listen 失败：先清掉（此时已确认无活实例）。
+    QLocalServer::removeServer(instanceKey);
+    auto *instanceServer = new QLocalServer(&app);
+    if (!instanceServer->listen(instanceKey)) {
+        qWarning("单实例监听失败（%s）：继续启动，可能出现多开",
+                 qPrintable(instanceServer->errorString()));
+    }
     // ── 1. 拉起 Rust 后端（无头），从 stdout 里读端口 ────────────────────────
     QString baseUrl = qEnvironmentVariable("OPENLESS_HOST_URL");
     QProcess *backend = nullptr;
@@ -521,6 +559,26 @@ int main(int argc, char **argv) {
     if (qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_CAPSULE")) capsule.setVisible(true);
     if (qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_QA")) qa.setVisible(true);
 
+    // 后续实例点图标 → 这里抬起已有窗口。事件循环在窗口建好之后才跑，
+    // 所以启动期间到达的连接也会在 exec() 之后由这个 handler 收下。
+    QObject::connect(instanceServer, &QLocalServer::newConnection, &app,
+                     [instanceServer, &mainWindow]() {
+        while (QLocalSocket *connection = instanceServer->nextPendingConnection()) {
+            QObject::connect(connection, &QLocalSocket::readyRead, connection,
+                             [connection, &mainWindow]() {
+                                 const QByteArray request = connection->readAll();
+                                 if (request.contains("show")) {
+                                     fprintf(stderr,
+                                             "openless-qt: show request from second instance\n");
+                                     mainWindow.raise();
+                                 }
+                                 connection->disconnectFromServer();
+                             });
+            QObject::connect(connection, &QLocalSocket::disconnected, connection,
+                             &QLocalSocket::deleteLater);
+        }
+    });
+
     // ── 3. 托盘 ─────────────────────────────────────────────────────────────
     auto *tray = new QSystemTrayIcon(&app);
     QIcon trayIcon = QIcon::fromTheme("openless");
@@ -537,7 +595,7 @@ int main(int argc, char **argv) {
     qInfo("tray available=%d iconNull=%d", tray->isSystemTrayAvailable(),
           trayIcon.isNull() ? 1 : 0);
     auto *menu = new QMenu();
-    menu->addAction("打开 OpenLess", [&mainWindow]() { mainWindow.setVisible(true); });
+    menu->addAction("打开 OpenLess", [&mainWindow]() { mainWindow.raise(); });
     menu->addAction("隐藏窗口", [&mainWindow]() { mainWindow.setVisible(false); });
     menu->addSeparator();
     menu->addAction("退出", []() { QCoreApplication::quit(); });
