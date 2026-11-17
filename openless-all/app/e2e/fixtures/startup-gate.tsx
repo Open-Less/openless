@@ -1,11 +1,26 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import type { CredentialsStatus } from '../../src/lib/types';
+import type { CredentialsStatus } from '../../src/api/contracts';
+import type { VoiceEditSnapshot } from '../../src/api/voice-edit';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
 
 const params = new URLSearchParams(location.search);
 const mode = params.get('credentials');
+const android = params.get('os') === 'android';
+if (android) localStorage.setItem('openless.androidSetupWizardComplete', '1');
+let voice: VoiceEditSnapshot | null = null;
+const cancelRequests: Array<{ id?: string; resolve: () => void; reject: (reason: Error) => void }> =
+  [];
+const callbacks = new Map<number, (value: unknown) => void>();
+const subscriptions = new Map<number, { event: string; callbackId: number }>();
+let callbackId = 0;
+let listenerId = 0;
+const emit = (event: string, payload: unknown) => {
+  for (const [id, listener] of subscriptions) {
+    if (listener.event === event) callbacks.get(listener.callbackId)?.({ id, event, payload });
+  }
+};
 const calls: string[] = [];
 const pending: { resolve: (value: CredentialsStatus) => void; reject: (error: Error) => void }[] =
   [];
@@ -18,17 +33,51 @@ const status = (configured: boolean) => ({
 });
 
 Object.assign(window, {
-  __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
+  __TAURI_EVENT_PLUGIN_INTERNALS__: {
+    unregisterListener: (_event: string, id: number) => subscriptions.delete(id),
+  },
   startupFixture: {
     calls,
+    emit,
+    listening: (event: string) =>
+      [...subscriptions.values()].some((listener) => listener.event === event),
+    showVoice: (sessionId: string) => {
+      voice = {
+        sessionId,
+        phase: 'preview',
+        target: { kind: 'full_field' },
+        context: {
+          fieldText: '',
+          dictatedSegment: '',
+          draft: sessionId,
+          preview: sessionId,
+          turns: [],
+        },
+      };
+      emit('voice-edit:show', {});
+    },
+    pendingCancels: () => cancelRequests.map((request) => request.id),
+    finishCancel: (succeed: boolean) => {
+      const request = cancelRequests.shift();
+      if (!request) throw new Error('No pending voice dismissal');
+      if (succeed) request.resolve();
+      else request.reject(new Error('Microphone is still busy'));
+    },
     resolve: () => pending.splice(0).forEach(({ resolve }) => resolve(status(false))),
     reject: () =>
       pending.splice(0).forEach(({ reject }) => reject(new Error('Late store failure'))),
   },
   __TAURI_INTERNALS__: {
     metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
-    transformCallback: () => 1,
-    invoke: async (command: string) => {
+    transformCallback: (callback: (value: unknown) => void) => {
+      const id = ++callbackId;
+      callbacks.set(id, callback);
+      return id;
+    },
+    invoke: async (
+      command: string,
+      args?: { event?: string; handler?: number; sessionId?: string },
+    ) => {
       calls.push(command);
       if (command === 'get_startup_snapshot')
         return {
@@ -36,7 +85,24 @@ Object.assign(window, {
           backend: { running: true },
         };
       if (command === 'get_platform_capabilities')
-        return { platform: 'desktop', supportsDesktopHotkey: true };
+        return { platform: android ? 'android' : 'desktop', supportsDesktopHotkey: !android };
+      if (command === 'plugin:event|listen') {
+        const id = ++listenerId;
+        subscriptions.set(id, { event: args!.event!, callbackId: args!.handler! });
+        return id;
+      }
+      if (command === 'get_voice_edit_state') return voice;
+      if (command === 'qa_get_snapshot') return { kind: 'idle', messages: [] };
+      if (command === 'qa_window_dismiss') {
+        emit('qa:dismiss', {});
+        return;
+      }
+      if (command === 'cancel_voice_edit_session') {
+        const id = args?.sessionId;
+        await new Promise<void>((resolve, reject) => cancelRequests.push({ id, resolve, reject }));
+        if (voice && voice.sessionId === id) voice = null;
+        return null;
+      }
       if (command === 'get_settings') return mocks.mockSettings;
       if (command === 'get_settings_snapshot')
         return { preferences: mocks.mockSettings, revision: 0 };
@@ -65,6 +131,6 @@ const [{ App }, { i18nReady }] = await Promise.all([
 await i18nReady;
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App kind="main" os={params.get('os') === 'win' ? 'win' : 'mac'} />
+    <App kind="main" os={android ? 'android' : params.get('os') === 'win' ? 'win' : 'mac'} />
   </React.StrictMode>,
 );
