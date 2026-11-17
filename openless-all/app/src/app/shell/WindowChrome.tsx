@@ -9,18 +9,21 @@ const WIN_CONSOLE_RADIUS = 10;
 
 interface WindowChromeProps {
   os?: OS;
+  mobile: boolean;
   title?: string;
   children: ReactNode;
   height?: number | string;
 }
 
-export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChromeProps) {
+export function WindowChrome({ os = 'mac', mobile, children, height = 800 }: WindowChromeProps) {
   // Windows: with decorations:true the shell draws no radius/border/shadow/titlebar,
   // avoiding overlap with the native window.
   const shellRadius =
     os === 'mac' ? 0 : os === 'win' || os === 'android' || os === 'harmony' ? 0 : 14;
   const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 0;
-  const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : 0;
+  // The compact shell puts live controls in the strip reserved for desktop window drag.
+  const hasMacDragStrip = os === 'mac' && !mobile;
+  const titlebarHeight = hasMacDragStrip ? MAC_TITLEBAR_HEIGHT : 0;
 
   const useSolidSurface = os === 'android' || os === 'harmony';
 
@@ -56,7 +59,7 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
         } as CSSProperties
       }
     >
-      {os === 'mac' && (
+      {hasMacDragStrip && (
         <ViewportPortal>
           <div
             data-tauri-drag-region
@@ -65,7 +68,7 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
               top: 0,
               left: MAC_SYSTEM_CONTROLS_RESERVED_WIDTH,
               right: 0,
-              height: MAC_TITLEBAR_HEIGHT,
+              height: titlebarHeight,
               pointerEvents: 'auto',
               // Dragging uses unscaled native coordinates above the settings workspace.
               zIndex: 100,

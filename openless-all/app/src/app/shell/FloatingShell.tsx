@@ -58,25 +58,32 @@ export function FloatingShell({
   initialSettings = false,
 }: FloatingShellProps) {
   const os = osProp ?? getRuntimeOS();
+  const mobile = useMobileLayout();
   return (
-    <WindowChrome os={os} title="OpenLess" height="100%">
-      <FloatingShellBody os={os} initialTab={initialTab} initialSettings={initialSettings} />
+    <WindowChrome os={os} mobile={mobile} title="OpenLess" height="100%">
+      <FloatingShellBody
+        os={os}
+        mobile={mobile}
+        initialTab={initialTab}
+        initialSettings={initialSettings}
+      />
     </WindowChrome>
   );
 }
 
 function FloatingShellBody({
   os,
+  mobile,
   initialTab,
   initialSettings,
 }: {
   os: OS;
+  mobile: boolean;
   initialTab: AppTab;
   initialSettings: boolean;
 }) {
   const { t } = useTranslation();
   const { isMac } = getShortcutPlatform();
-  const mobile = useMobileLayout();
   const conservative = useConservativeLayout();
   const { prefs } = useHotkeySettings();
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen, openGroups, toggleGroup } =

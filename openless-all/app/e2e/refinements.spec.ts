@@ -295,6 +295,8 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const scroll = settings.locator('.ol-settings-scroll[data-transition-phase="settled"]');
       expect(await scroll.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
       await page.screenshot({ path: info.outputPath('refinements-mobile.png') });
+      await settings.getByRole('button', { name: '关闭', exact: true }).click();
+      await expect(settings).toHaveCount(0);
     }
     expect(errors).toEqual([]);
   });
