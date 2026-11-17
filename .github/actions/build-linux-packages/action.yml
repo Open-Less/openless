@@ -5,10 +5,6 @@ description: >
   the two cannot drift: exactly one definition of "how a Linux package is built".
 
 inputs:
-  checkout-ref:
-    description: Git ref to check out (the release tag for tag builds).
-    required: false
-    default: ''
   revision-file:
     description: File holding the release revision used in the package version.
     required: false
@@ -25,11 +21,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v6
-      with:
-        submodules: false
-        ref: ${{ inputs.checkout-ref || github.ref }}
-
     - name: Install native build and packaging dependencies
       timeout-minutes: 10
       uses: ./.github/actions/setup-linux-dependencies

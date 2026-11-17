@@ -939,10 +939,12 @@ jobs:
             echo "::error::Linux device acceptance must be recorded for this exact release tag before publication."
             exit 1
           fi
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+          ref: ${{ github.ref_name }}
       - name: Build verified deb/rpm
         uses: ./.github/actions/build-linux-packages
-        with:
-          checkout-ref: ${{ github.ref_name }}
       - name: Attach Linux packages to the GitHub Release
         run: |
           set -euo pipefail

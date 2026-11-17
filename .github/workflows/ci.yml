@@ -821,6 +821,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
       - name: Build verified deb/rpm
         uses: ./.github/actions/build-linux-packages
 
