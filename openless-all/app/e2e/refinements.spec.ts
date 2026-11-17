@@ -14,7 +14,9 @@ test('style and dictionary action buttons retain compact corners', async ({ page
     '8px',
   );
   await page.getByRole('button', { name: '词典', exact: true }).click();
-  await expect(page.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
+  const dictionary = page.locator('[data-ol-page="vocab"]');
+  await expect(dictionary).toHaveAttribute('data-transition-phase', 'settled');
+  await expect(dictionary.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
 });
 
 async function openShortcuts(page: Page) {

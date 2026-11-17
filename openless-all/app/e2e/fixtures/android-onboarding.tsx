@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
 import '../../src/styles/refinements.css';
-import '../../src/styles/desktop-onboarding.css';
+import '../../src/features/onboarding/desktop-onboarding.css';
 
 let mocks: typeof import('../../src/lib/ipc/mock-data');
 const calls: string[] = [];
@@ -35,14 +35,16 @@ Object.assign(window, {
       if (command === 'get_hotkey_capability') return mocks.mockHotkeyCapability;
       // Keep the real provider step populated so advancing does not open an editor.
       if (command === 'list_channels')
-        return [{
-          id: 'groq',
-          name: 'Groq',
-          providerType: 'groq',
-          enabled: true,
-          order: 0,
-          lastTest: null,
-        }];
+        return [
+          {
+            id: 'groq',
+            name: 'Groq',
+            providerType: 'groq',
+            enabled: true,
+            order: 0,
+            lastTest: null,
+          },
+        ];
       if (command === 'list_provider_descriptors') return [];
       if (command === 'read_credential') return '';
       return null;
