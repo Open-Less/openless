@@ -17,15 +17,22 @@ const packaging = readFileSync(join(appRoot, 'scripts/package-harmony-hap.sh'), 
 const signing = readFileSync(join(appRoot, 'scripts/sign-harmony-hap.py'), 'utf8');
 const upload = readFileSync(join(appRoot, 'scripts/upload-appgallery.mjs'), 'utf8');
 const releasing = readFileSync(join(appRoot, '../../RELEASING.md'), 'utf8');
+const tauriRelease = readFileSync(
+  join(appRoot, '../../.github/workflows/release-tauri.yml'),
+  'utf8',
+);
 
-// Dispatch-only, with the tag as a required input: the HAP can never come from a
-// branch or ride along with an unrelated push.
-assert.match(workflow, /^on:\n  workflow_dispatch:/m);
+// Reusable and manual entry points require a tag; no independent push trigger
+// may create a second HAP build outside the unified release.
+assert.match(workflow, /^  workflow_dispatch:/m);
 assert.doesNotMatch(workflow, /^  (push|pull_request):/m);
 assert.match(workflow, /inputs:[\s\S]*?tag:[\s\S]*?required: true/);
 
-// The tag is what gets built.
-assert.match(workflow, /ref: \$\{\{ inputs\.tag \}\}/);
+// Automatic calls pin the triggering commit; manual repairs choose the input tag.
+assert.match(
+  workflow,
+  /ref: \$\{\{ github\.event_name == 'push' && github\.sha \|\| inputs\.tag \}\}/,
+);
 assert.match(workflow, /TAG_VERSION=\$\{TAG_VERSION%-tauri\}/);
 assert.match(workflow, /does not match package\.json version/);
 
@@ -33,6 +40,26 @@ assert.match(workflow, /does not match package\.json version/);
 // that `prepare-harmony-sdk.sh` pins by checksum - no secrets, no self-hosted box.
 assert.match(workflow, /default: '\["ubuntu-latest"\]'/);
 assert.match(workflow, /prepare-harmony-sdk\.sh/);
+
+// A hosted runner ships neither the app's `node_modules` (`build-harmony-frontend.sh`
+// runs `npm run build`) nor the Tier-2 OHOS target std (`build-harmony-backend.sh`
+// runs `cargo build --target aarch64-unknown-linux-ohos`). CI installs both; the
+// first real dispatch of this workflow did not and died with `can't find crate for
+// `core`` (error[E0463]) after the Rime/NDK compile.
+assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
+assert.match(workflow, /targets: aarch64-unknown-linux-ohos/);
+assert.match(workflow, /run: npm ci/);
+{
+  // Keep the target list in step with the CI job that really builds the HAP: a
+  // target added to one workflow only breaks the tag build.
+  const ciWorkflow = readFileSync(join(appRoot, '../../.github/workflows/ci.yml'), 'utf8');
+  const ohosTargets = (source) =>
+    [...source.matchAll(/targets:\s*([^\n]+)/g)]
+      .map((match) => match[1].trim())
+      .filter((targets) => targets.includes('ohos'));
+  assert.ok(ohosTargets(workflow).length > 0, 'release-harmony.yml must install the OHOS target');
+  assert.deepEqual(ohosTargets(workflow), ohosTargets(ciWorkflow));
+}
 const prepare = readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8');
 assert.match(prepare, /DEFAULT_URL=https:\/\//);
 assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);
@@ -94,9 +121,14 @@ assert.doesNotMatch(
 assert.ok(existsSync(join(appRoot, 'scripts/package-harmony-hap.sh')));
 assert.match(packaging, /sign-harmony-hap\.py/);
 assert.match(packaging, /--prefix "\$SIGN_PREFIX"/);
-assert.match(packaging, /sha256sum \.\/\*\.hap > SHA256SUMS/);
+assert.match(
+  packaging,
+  /sha256sum \.\/OpenLess_harmony_arm64\.hap > SHA256SUMS/,
+  'Release checksums must cover the single unsigned HAP uploaded to GitHub',
+);
 assert.match(packaging, /OpenLess_harmony_arm64\.hap/);
-assert.match(packaging, /OpenLess_harmony\.hap/);
+assert.doesNotMatch(packaging, /OpenLess_harmony\.hap/);
+assert.doesNotMatch(workflow, /OpenLess_harmony\.hap/);
 assert.match(signing, /HARMONY_KEYSTORE_PASSWORD/);
 assert.match(signing, /\[redacted\]/);
 
@@ -107,10 +139,49 @@ assert.match(upload, /api\/publish\/v3\/app-package-info/);
 assert.match(upload, /--dry-run/);
 assert.match(upload, /--skip-if-unconfigured/);
 assert.match(workflow, /upload-appgallery\.mjs/);
+// The upload step must stay a literal `run: |` block. As a folded `>-` scalar its
+// leading explanatory comment joined the command line, so bash saw
+// `# ... node scripts/upload-appgallery.mjs \` and then `--channel` on its own
+// line: `command not found` (127) - the first time the step ever executed.
+assert.doesNotMatch(
+  workflow,
+  /run:\s*>-[ ]*\n\s*#/,
+  'a folded run scalar must not start with a comment; it comments out the command',
+);
+assert.match(workflow, /node scripts\/upload-appgallery\.mjs \\/);
 
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);
 assert.match(workflow, /OpenLess_harmony_arm64\.hap/);
+
+// Reusable workflows stay in the same run and resolve at the caller's immutable
+// commit; Harmony must not wait for desktop build/publication before starting.
+assert.match(workflow, /^  workflow_call:$/m);
+const harmonyCall = tauriRelease.slice(tauriRelease.indexOf('\n  harmony:'));
+assert.match(harmonyCall, /uses: \.\/\.github\/workflows\/release-harmony\.yml/);
+assert.match(harmonyCall, /needs: prepare-release/);
+assert.doesNotMatch(harmonyCall, /needs:.*(?:build|publish|android)/);
+assert.match(harmonyCall, /tag: \$\{\{ github\.ref_name \}\}/);
+assert.match(harmonyCall, /publish: true/);
+assert.match(harmonyCall, /secrets: inherit/);
+assert.doesNotMatch(tauriRelease, /gh workflow run|dispatch-platform-releases/);
+assert.doesNotMatch(
+  tauriRelease,
+  /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/,
+  'Linux automation is paused',
+);
+assert.match(
+  tauriRelease,
+  /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,
+  'the hand-off must be tag-push only, so a branch or schedule run dispatches nothing',
+);
+assert.doesNotMatch(tauriRelease, /actions: write/, 'same-run calls need no dispatch write token');
+assert.match(
+  harmonyCall,
+  /channel: \$\{\{ vars\.HARMONY_AUTO_CHANNEL \|\| 'none' \}\}/,
+  'the automatic call must default to the unsigned repository path',
+);
+assert.match(releasing, /HARMONY_AUTO_CHANNEL/);
 
 // `env:` at job level outranks `$GITHUB_ENV`, so a placeholder key here would
 // shadow the value the signing step exports and the build would look for

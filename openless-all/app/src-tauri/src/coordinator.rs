@@ -93,17 +93,22 @@ const VOCAB_CARD_EDGE_MARGIN: f64 = 24.0;
 /// So the window shrinks to the card's actual size while shown, and is
 /// restored when hidden.
 fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
-    let pending = inner.backend.pending_corrections();
-    if pending.is_empty() {
-        return;
-    }
+    let epoch = inner.vocab_card_epoch.next();
     let Some(capsule) = inner.host.capsule_window() else {
         return;
     };
-    let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
     let inner_for_main = Arc::clone(inner);
     let _ = capsule.run_on_main_thread(move |capsule| {
         let inner = inner_for_main;
+        if !inner.vocab_card_epoch.is_current(epoch) {
+            return;
+        }
+        let pending = inner.backend.pending_corrections();
+        if pending.is_empty() {
+            return;
+        }
+        let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
+        let observation_ids: Vec<_> = pending.iter().map(|item| item.observation_id).collect();
         // Last gate: never show the card while dictation is not Idle.
         //
         // Upstream checks (observer generation, non-empty `pending_corrections`)
@@ -128,17 +133,34 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
         #[cfg(not(mobile))]
         if let Err(e) = capsule.set_card_hit_test_mode() {
             log::warn!("[vocab-card] enabling card hit testing failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
+        #[cfg(not(target_os = "windows"))]
         if let Err(e) = capsule.set_size(VOCAB_CARD_WIDTH, height) {
             log::warn!("[vocab-card] resize failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
-        if let Err(e) =
-            capsule.position_vocab_card(VOCAB_CARD_WIDTH, height, VOCAB_CARD_EDGE_MARGIN)
-        {
+        if let Err(e) = capsule.position_vocab_card(
+            VOCAB_CARD_WIDTH,
+            height,
+            VOCAB_CARD_EDGE_MARGIN,
+            &observation_ids,
+            inner
+                .backend
+                .get_preferences()
+                .vocabulary_learning_settings
+                .suggestion_position,
+        ) {
             log::warn!("[vocab-card] position failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
         if let Err(e) = capsule.refresh_card_hit_test() {
             log::warn!("[vocab-card] refreshing card hit testing failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
         // Positioning ditto: the dedup cache in `maybe_position_capsule_bottom_center`
         // only tracks "monitor + translation state" and knows nothing about
@@ -147,7 +169,14 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
         // and leave the capsule in the bottom-right corner the card moved it
         // to.
         capsule.invalidate_layout();
-        capsule.show_for_recording(true);
+        if !capsule.show_vocab_card() {
+            log::warn!("[vocab-card] no-activate show failed; suppressing this presentation");
+            let _ = capsule.hide();
+            #[cfg(not(mobile))]
+            let _ = capsule.restore_capsule_hit_test_mode();
+            inner.vocab_card_visible.store(false, Ordering::SeqCst);
+            inner.backend.dismiss_pending_corrections();
+        }
         #[cfg(target_os = "macos")]
         capsule.restore_main_window_key_if_active();
     });
@@ -163,14 +192,21 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
 /// the same window — the capsule flickers and the user thinks the hotkey is
 /// broken.
 fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
+    let epoch = inner
+        .vocab_card_epoch
+        .request_hide(&inner.vocab_card_visible);
     inner.backend.dismiss_pending_corrections();
-    if !inner.vocab_card_visible.swap(false, Ordering::SeqCst) {
+    let Some(epoch) = epoch else {
         return;
-    }
+    };
     let Some(capsule) = inner.host.capsule_window() else {
         return;
     };
+    let inner = Arc::clone(inner);
     let _ = capsule.run_on_main_thread(move |capsule| {
+        if !inner.vocab_card_epoch.is_current(epoch) {
+            return;
+        }
         // Hide before changing geometry: restoring size and position while the
         // window is visible can composite a frame with the card stretched wide
         // and flying across half the screen.
@@ -187,6 +223,7 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         if let Err(e) = capsule.restore_capsule_geometry() {
             log::warn!("[vocab-card] restoring capsule geometry failed: {e}");
         }
+        inner.vocab_card_visible.store(false, Ordering::SeqCst);
     });
 }
 
@@ -446,16 +483,29 @@ fn shared_backend_from_stores(
         preferences: prefs.core(),
         history: history.core(),
         activity: activity.core(),
+        expression_profile: openless_core::expression_observation::open_shared_expression_profile(
+            config.data_dir.join("expression-profile.json"),
+        ),
         vocabulary: vocab.core(),
         correction_rules: correction_rules.core(),
         style_packs: style_packs.core(),
     };
+    #[cfg(not(mobile))]
+    let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(config.data_dir.join("service-usage.json"))
+        .and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start(Arc::new(ledger)))
+    {
+        Ok(recorder) => Some(Arc::new(recorder)),
+        Err(error) => { log::warn!("service usage unavailable: {error}"); None }
+    };
+    #[cfg(mobile)]
+    let usage_recorder = None;
     let backend_slot = crate::core_adapters::backend_slot();
     let mut dependencies = crate::core_adapters::backend_dependencies(
         app,
         Arc::clone(&backend_slot),
         native_asr,
         Arc::clone(&repositories.preferences),
+        usage_recorder,
         hotkey_status,
         qa_context,
     );
@@ -536,6 +586,7 @@ struct Inner {
     /// every dictation start would hide the capsule window and race
     /// `emit_capsule`'s show for the same window.
     vocab_card_visible: AtomicBool,
+    vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Arc<Mutex<HotkeyStatus>>,
     /// Webview fallback only: pairs one raw keydown/up edge with the same Core press id.
@@ -732,6 +783,7 @@ impl Coordinator {
                 overlay_qa_handoff: tokio::sync::Mutex::new(()),
                 inserter: TextInserter::new(),
                 vocab_card_visible: AtomicBool::new(false),
+            vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
                 hotkey: Mutex::new(None),
                 hotkey_status,
                 window_hotkey_press_id: AtomicU64::new(0),
@@ -873,6 +925,7 @@ impl Coordinator {
             overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
+            vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
             hotkey: Mutex::new(None),
             hotkey_status,
             window_hotkey_press_id: AtomicU64::new(0),
@@ -1228,7 +1281,6 @@ impl Coordinator {
                     coord.start_qa_hotkey_listener();
                     #[cfg(not(mobile))]
                     coord.start_selection_polish_hotkey_listener();
-                    coord.start_coding_agent_hotkey_listener();
                     coord.start_combo_hotkey_listener();
                     coord.start_translation_hotkey_listener();
                     coord.start_switch_style_hotkey_listener();
@@ -1273,17 +1325,6 @@ impl Coordinator {
     /// on failure (the user may have changed the combo).
     pub fn start_qa_hotkey_listener(&self) {
         qa::install_recording_companion(&self.inner);
-    }
-
-    /// Starts the "quick Agent" dual-hotkey supervisor, parallel to the QA
-    /// hotkey; the feature is off by default and registered only when
-    /// `coding_agent_enabled`.
-    pub fn start_coding_agent_hotkey_listener(&self) {
-        let inner = Arc::clone(&self.inner);
-        std::thread::Builder::new()
-            .name("openless-coding-agent-hotkey-supervisor".into())
-            .spawn(move || coding_agent_hotkey_supervisor_loop(inner))
-            .ok();
     }
 
     pub fn stop_coding_agent_hotkey_listener(&self) {
@@ -1760,8 +1801,8 @@ impl Coordinator {
         Ok(())
     }
 
-    pub(crate) fn lock_settings_host(&self) -> parking_lot::MutexGuard<'_, ()> {
-        self.inner.settings_host_gate.lock()
+    pub(crate) fn lock_settings_host(&self) -> crate::issue1266_debug::HostGuard<'_> {
+        crate::issue1266_debug::lock_host(&self.inner.settings_host_gate, crate::issue1266_debug::Kind::Settings)
     }
 
     pub(crate) async fn dismiss_less_computer(&self) -> Result<(), String> {

@@ -108,8 +108,12 @@ struct SettingsView: View {
         DisclosureGroup { SystemRecordingInstructions() } label: { SettingsLabel("在其他 App 中录音", symbol: "mic.badge.plus") }
       }
       }
-      if matches("语音识别 准备 识别方式 speech recognition") {
+      if matches("语音识别 准备 识别方式 语音增强 降噪 增益 均衡器 speech recognition audio enhancement noise gain equalizer") {
       Section("语音识别") {
+        NavigationLink {
+          NativeAudioSettingsView(core: controller.styleLibraryCore, blocked: controller.styleLibraryActivityBusy)
+        } label: { SettingsLabel("语音增强", symbol: "waveform.path") }
+          .accessibilityIdentifier("audioEnhancementSettings")
         AdaptiveRow(title: controller.speechPrepared ? "识别已就绪" : "准备语音识别", icon: "waveform") {
           Button(controller.preparing ? "准备中…" : "准备") {
             Task { await controller.prepareSpeech(allowDownload: false) }
@@ -179,6 +183,154 @@ struct SettingsView: View {
   }
   private var translationTargets: [KeyboardVoiceOption] {
     controller.snapshot.configuredVoiceCapabilities?.translationTargets ?? []
+  }
+}
+
+private struct NativeAudioDsp: Codable {
+  // Keep shared fields round-trippable even though iOS does not expose every host-specific control.
+  var aecMode = "off"
+  var androidAecEnabled = false
+  var androidNoiseSuppressionEnabled = false
+  var androidAgcEnabled = false
+  var noiseReduction = "rnnoise"
+  var noiseStrength = 80
+  var gainDb = 0
+  var agcEnabled = true
+  var agcTarget = 35
+  var agcAttack = 50
+  var agcDecay = 50
+  var vadEnabled = false
+  var vadThresholdDb = -50
+  var dereverbLevel = 0
+  var equalizerEnabled = false
+  var equalizerPreampDb = 0
+  var equalizerBandsDb = Array(repeating: 0, count: 10)
+  var processingOrder = ["noiseReduction", "dereverb", "equalizer", "amplifier", "agc", "vad"]
+}
+
+private struct NativeAudioSettings: Codable {
+  var enabled = false
+  var dsp = NativeAudioDsp()
+}
+
+private struct NativeAudioSettingsView: View {
+  @EnvironmentObject private var interfacePreferences: InterfacePreferences
+  let core: CoreBridge?
+  let blocked: Bool
+  @State private var value = NativeAudioSettings()
+  @State private var loaded = false
+  @State private var saving = false
+  @State private var message: String?
+  private let presets: [(String, [Int])] = [
+    ("平直", Array(repeating: 0, count: 10)),
+    ("明亮人声", [-2,-1,0,1,2,3,4,4,3,2]),
+    ("低沉人声", [3,4,4,3,1,0,-1,-2,-2,-1]),
+    ("播客", [2,3,2,0,-1,-1,1,2,3,2]),
+    ("清晰人声", [-1,-1,0,1,2,3,4,3,2,1]),
+    ("温暖人声", [1,2,3,2,1,0,-1,-1,0,1])
+  ]
+  var body: some View {
+    Form {
+      if let message {
+        Section { Text(t(message)); Button("重新加载") { Task { await load() } }.disabled(saving || blocked) }
+      }
+      Group {
+        Section {
+          Toggle("语音增强", isOn: $value.enabled)
+            .accessibilityIdentifier("nativeAudioEnhancementToggle")
+        } footer: {
+          Text("设置保存后在下一次录音生效。RNNoise 较轻量，PureVox 使用更多计算资源。默认保持原有音频效果。")
+        }
+        if value.enabled {
+          Section("降噪与增益") {
+            Picker("降噪算法", selection: $value.dsp.noiseReduction) {
+              Text("关闭").tag("off"); Text("RNNoise").tag("rnnoise")
+              Text("PureVox 6").tag("purevox"); Text("频谱减法").tag("spectral")
+            }.accessibilityIdentifier("nativeAudioAlgorithmPicker")
+            control("降噪强度", \.noiseStrength, 0...100)
+            control("输入增益 dB", \.gainDb, -50...50)
+            Toggle("自动增益", isOn: $value.dsp.agcEnabled)
+            if value.dsp.agcEnabled {
+              control("目标电平 %", \.agcTarget, 0...100)
+              control("起音速度", \.agcAttack, 1...100)
+              control("释放速度", \.agcDecay, 1...100)
+            }
+            Toggle("语音门限", isOn: $value.dsp.vadEnabled)
+            if value.dsp.vadEnabled { control("门限 dB", \.vadThresholdDb, -100...0) }
+          }
+          Section {
+            control("梳状滤波 %", \.dereverbLevel, 0...100)
+            Toggle("十段均衡器", isOn: $value.dsp.equalizerEnabled)
+            if value.dsp.equalizerEnabled {
+              Menu("均衡器预设") {
+                ForEach(presets.indices, id: \.self) { i in
+                  Button(t(presets[i].0)) { value.dsp.equalizerBandsDb = presets[i].1 }
+                }
+              }
+              control("前级增益 dB", \.equalizerPreampDb, -20...20)
+              ForEach(value.dsp.equalizerBandsDb.indices, id: \.self) { i in
+                VStack(alignment: .leading) {
+                  Text("\(["31 Hz","63 Hz","125 Hz","250 Hz","500 Hz","1 kHz","2 kHz","4 kHz","8 kHz","16 kHz"][i]): \(value.dsp.equalizerBandsDb[i]) dB")
+                  Slider(value: Binding(get: { Double(value.dsp.equalizerBandsDb[i]) }, set: { value.dsp.equalizerBandsDb[i] = Int($0.rounded()) }), in: -15...15, step: 1)
+                }
+              }
+            }
+          } header: { Text("音色与房间调整") } footer: {
+            Text("梳状滤波可能改变音色，建议从 0 开始。语音门限不会自动停止录音，过高会丢失轻声。")
+          }
+          Section("处理顺序") {
+            ForEach(value.dsp.processingOrder, id: \.self) { stage in
+              HStack {
+                Text(stageName(stage))
+                Spacer()
+                Button { move(stage, -1) } label: { Image(systemName: "arrow.up") }.buttonStyle(.borderless)
+                  .accessibilityLabel("上移 \(stageName(stage))")
+                Button { move(stage, 1) } label: { Image(systemName: "arrow.down") }.buttonStyle(.borderless)
+                  .accessibilityLabel("下移 \(stageName(stage))")
+              }
+            }
+          }
+          Section { Button("恢复默认增强设置") { value.dsp = NativeAudioDsp() } }
+        }
+      }.disabled(!loaded || blocked || saving)
+    }
+    .navigationTitle("语音增强")
+    .toolbar { Button(t(saving ? "保存中…" : "保存")) { Task { await save() } }.disabled(!loaded || blocked || saving || core == nil).accessibilityIdentifier("nativeAudioSave") }
+    .task { await load() }
+  }
+  private func control(_ title: String, _ key: WritableKeyPath<NativeAudioDsp, Int>, _ range: ClosedRange<Int>) -> some View {
+    VStack(alignment: .leading) {
+      Text("\(t(title)): \(value.dsp[keyPath: key])")
+      Slider(value: Binding(get: { Double(value.dsp[keyPath: key]) }, set: { value.dsp[keyPath: key] = Int($0.rounded()) }), in: Double(range.lowerBound)...Double(range.upperBound), step: 1)
+    }
+  }
+  private func stageName(_ key: String) -> String {
+    t(["noiseReduction":"降噪", "dereverb":"梳状滤波", "equalizer":"均衡器", "amplifier":"输入增益", "agc":"自动增益", "vad":"语音门限"][key] ?? key)
+  }
+  private func t(_ key: String) -> String { interfacePreferences.localizer.text(key) }
+  private func move(_ stage: String, _ delta: Int) {
+    guard let i = value.dsp.processingOrder.firstIndex(of: stage), value.dsp.processingOrder.indices.contains(i + delta) else { return }
+    value.dsp.processingOrder.swapAt(i, i + delta)
+  }
+  private func load() async {
+    guard let core else { message = "音频设置暂不可用，请稍后重试。"; return }
+    saving = true
+    defer { saving = false }
+    do {
+      value = try JSONDecoder().decode(NativeAudioSettings.self, from: await core.control(["action":"audioSettings"]))
+      loaded = true; message = nil
+    } catch { message = "无法读取音频设置，请重试。" }
+  }
+  private func save() async {
+    guard let core, !blocked else { return }
+    saving = true
+    defer { saving = false }
+    do {
+      let dsp = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value.dsp))
+      let data = try await core.control(["action":"updateAudioSettings", "enabled":value.enabled, "dsp":dsp])
+      value = try JSONDecoder().decode(NativeAudioSettings.self, from: data)
+      message = "已保存，下次录音生效。"
+    } catch { message = "保存失败，当前修改尚未应用。" }
   }
 }
 

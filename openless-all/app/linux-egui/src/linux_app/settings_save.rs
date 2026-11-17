@@ -187,9 +187,6 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::Multimodal => {
                 preferences.multimodal_pipeline_enabled = !preferences.multimodal_pipeline_enabled;
             }
-            frontend::view_model::SettingsField::LessComputer => {
-                preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
-            }
             frontend::view_model::SettingsField::SelectionVoiceEnabled => {
                 preferences.selection_voice_enabled = !preferences.selection_voice_enabled;
             }
@@ -203,9 +200,6 @@ impl OpenLessEguiApp {
                 } else {
                     openless_core::shared_types::SelectionVoiceIntentMode::Auto
                 };
-            }
-            frontend::view_model::SettingsField::TestingFeatures => {
-                preferences.testing_features_enabled = !preferences.testing_features_enabled;
             }
             frontend::view_model::SettingsField::SilenceAutoStop => {
                 preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
@@ -233,8 +227,25 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AudioEnhancement => {
                 preferences.audio_enhancement_enabled = !preferences.audio_enhancement_enabled;
             }
+            frontend::view_model::SettingsField::EchoCancellation => {
+                preferences.echo_cancellation_enabled = !preferences.echo_cancellation_enabled;
+            }
             frontend::view_model::SettingsField::RecordAudioForDebug => {
                 preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
+                // 打开主开关时默认选「处理后」，否则主开关打开了却什么都不落盘、
+                // 用户以为坏了；「处理前」保持用户上一次的选择。
+                if preferences.record_audio_for_debug
+                    && !preferences.debug_archive_processed
+                    && !preferences.debug_archive_raw
+                {
+                    preferences.debug_archive_processed = true;
+                }
+            }
+            frontend::view_model::SettingsField::DebugArchiveProcessed => {
+                preferences.debug_archive_processed = !preferences.debug_archive_processed;
+            }
+            frontend::view_model::SettingsField::DebugArchiveRaw => {
+                preferences.debug_archive_raw = !preferences.debug_archive_raw;
             }
             frontend::view_model::SettingsField::StreamingSaveClipboard => {
                 preferences.streaming_insert_save_clipboard =
@@ -253,6 +264,28 @@ impl OpenLessEguiApp {
         field: frontend::view_model::SettingsComboField,
         index: usize,
     ) {
+        // AEC 参考源是 Core 偏好里的字符串（空 = 自动，"off" = 不采集），
+        // 界面用下标表达，这里换算回去。
+        if matches!(field, frontend::view_model::SettingsComboField::AecReference) {
+            let value = match index {
+                0 => String::new(),
+                1 => "off".to_string(),
+                other => self
+                    .frontend_vm
+                    .settings
+                    .aec_reference_devices
+                    .get(other - 2)
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            self.frontend_vm.settings.aec_reference_index = index;
+            if let Some(preferences) = self.preferences.as_mut() {
+                preferences.aec_reference_device_name = value;
+                self.save_settings_if_dirty();
+            }
+            return;
+        }
+
         // 日志级别是宿主本地设置（`<data_dir>/logs/level`），不经过 Core 偏好，
         // 因此要放在下面 `self.preferences` 的守卫之前 —— 否则偏好还没加载时
         // 连日志级别都改不了。
@@ -287,6 +320,8 @@ impl OpenLessEguiApp {
         match field {
             // 已在函数开头处理（不走 Core 偏好）。
             frontend::view_model::SettingsComboField::LogLevel => {}
+            // 已在函数开头处理（换算成偏好里的设备名字符串）。
+            frontend::view_model::SettingsComboField::AecReference => {}
             frontend::view_model::SettingsComboField::Theme => {
                 preferences.theme_mode = match index {
                     0 => openless_core::shared_types::ThemeMode::System,
@@ -317,24 +352,6 @@ impl OpenLessEguiApp {
                     2 => openless_core::shared_types::HotkeyMode::Auto,
                     _ => openless_core::shared_types::HotkeyMode::Toggle,
                 };
-            }
-            frontend::view_model::SettingsComboField::CodingAgentProvider => {
-                preferences.coding_agent_provider = match index {
-                    1 => "opencode-cli",
-                    2 => "codex-cli",
-                    3 => "dsh-cli",
-                    _ => "claude-code-cli",
-                }
-                .to_string();
-            }
-            frontend::view_model::SettingsComboField::CodingAgentPermission => {
-                preferences.coding_agent_permission_mode = match index {
-                    1 => "plan",
-                    2 => "default",
-                    3 => "bypassPermissions",
-                    _ => "acceptEdits",
-                }
-                .to_string();
             }
             frontend::view_model::SettingsComboField::SelectionPolishDelivery => {
                 preferences.selection_polish_output_mode = match index {
@@ -432,11 +449,6 @@ impl OpenLessEguiApp {
             ShortcutField::QuickNote => preferences.quick_note_hotkey = Some(binding),
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = Some(binding),
             ShortcutField::OpenApp => preferences.open_app_hotkey = Some(binding),
-            ShortcutField::CodingAgentVoice => {
-                preferences.coding_agent_voice_hotkey = Some(binding);
-                // 「按住说话」有了触发键，Agent 也就该启用（Tauri 同样顺带打开）。
-                preferences.coding_agent_enabled = true;
-            }
             ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = Some(binding),
             ShortcutField::StylePack(index) => {
                 if let Some(row) = preferences.style_pack_hotkeys.get_mut(index) {
@@ -479,7 +491,6 @@ impl OpenLessEguiApp {
             ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
             ShortcutField::OpenApp => preferences.open_app_hotkey = None,
-            ShortcutField::CodingAgentVoice => preferences.coding_agent_voice_hotkey = None,
             ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = None,
             ShortcutField::StylePack(index) => {
                 if let Some(row) = preferences.style_pack_hotkeys.get(index) {
@@ -517,9 +528,6 @@ impl OpenLessEguiApp {
                 preferences.switch_style_hotkey = defaults.switch_style_hotkey
             }
             ShortcutField::OpenApp => preferences.open_app_hotkey = defaults.open_app_hotkey,
-            ShortcutField::CodingAgentVoice => {
-                preferences.coding_agent_voice_hotkey = defaults.coding_agent_voice_hotkey
-            }
             ShortcutField::SelectionPolish => {
                 preferences.selection_polish_hotkey = defaults.selection_polish_hotkey
             }
@@ -634,33 +642,6 @@ impl OpenLessEguiApp {
                     .map(|value| value.clamp(1, 200));
 
                 self.frontend_vm.settings.audio_recording_max_entries = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentModel => {
-                preferences.coding_agent_model = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_model = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentWorkdir => {
-                preferences.coding_agent_workdir = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_workdir = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentExe => {
-                preferences.coding_agent_exe = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_exe = text;
             }
             frontend::view_model::SettingsTextField::SelectionVoiceKeywords => {
                 // Tauri：一行一条，空行丢弃。

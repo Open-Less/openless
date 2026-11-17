@@ -61,8 +61,6 @@ button:disabled {
   padding: 8px 0;
 }
 
-/* Do not composite a masked copy of every scrolling page. Native wheel momentum
-   stays under OS control; no preventDefault, debounce or second inertia engine. */
 .ol-scroll-fade {
   mask-image: none !important;
   -webkit-mask-image: none !important;
@@ -93,6 +91,16 @@ button:disabled {
 .ol-settings-content-pane {
   background: var(--ol-surface) !important;
 }
+.ol-capsule-style-segmented {
+  width: min(220px, 100%);
+  min-width: 0;
+}
+.ol-capsule-style-segmented .ol-segmented-option {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+}
 /* Colours and hover come from .ol-settings-rail-link (global.css). */
 .ol-settings-return {
   display: flex;
@@ -103,7 +111,7 @@ button:disabled {
   font-size: 13px;
   padding: 4px 8px;
   margin-bottom: 6px;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
 }
 .ol-settings-sections {
   width: 100%;
@@ -113,7 +121,7 @@ button:disabled {
 }
 .ol-settings-sections > .ol-card {
   border: 0 !important;
-  border-radius: 0 !important;
+  border-radius: var(--ol-radius);
   box-shadow: none !important;
   background: transparent !important;
   padding: 0 0 20px !important;
@@ -138,21 +146,27 @@ button:disabled {
 
 /* Search and the command list share the right-hand settings pane. */
 .ol-settings-search-field {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   min-width: 0;
   height: 36px;
   padding: 0 11px;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--ol-control-radius);
   color: var(--ol-ink);
-  background: var(--ol-surface);
+  background: var(--ol-surface-2);
+  box-shadow: inset 0 0 0 1px var(--ol-line-strong);
   font: inherit;
   font-size: 13px;
 }
 .ol-settings-search-field:focus-visible {
   outline: 2px solid var(--ol-blue-ring);
   outline-offset: 1px;
-  border-color: var(--ol-blue);
+  box-shadow: inset 0 0 0 1px var(--ol-blue);
+}
+.ol-expression-clear {
+  --ol-corner-radius: 8px;
 }
 .ol-shortcuts-toolbar {
   display: flex;
@@ -162,6 +176,9 @@ button:disabled {
 }
 .ol-shortcuts-toolbar input {
   max-width: 520px;
+}
+.ol-shortcuts .ol-settings-search-field[type='search'] {
+  background-color: var(--ol-surface-2);
 }
 .ol-shortcuts-count {
   white-space: nowrap;
@@ -181,7 +198,7 @@ button:disabled {
 .ol-shortcuts-filters h3 {
   font-size: 11px;
   color: var(--ol-ink-3);
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   margin: 0 10px 8px;
 }
 .ol-shortcuts-filters nav + nav {
@@ -192,7 +209,7 @@ button:disabled {
   width: 100%;
   padding: 8px 10px;
   margin: 2px 0;
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   font-size: 13px;
   font-weight: var(--ol-font-weight-medium);
   text-align: left;
@@ -237,16 +254,19 @@ button:disabled {
   min-width: 0;
 }
 .ol-shortcut-recorder > div {
-  width: 100%;
+  max-width: 100%;
 }
 .ol-shortcut-binding {
-  display: flex;
-  justify-content: flex-end;
+  display: inline-flex;
+  justify-content: center;
   align-items: center;
-  flex: 1;
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 100%;
   min-height: 32px;
-  padding: 4px;
-  text-align: right;
+  padding: 4px 8px;
+  border-radius: var(--ol-control-radius);
+  text-align: center;
 }
 .ol-shortcut-binding > span {
   flex-wrap: wrap;
@@ -255,7 +275,7 @@ button:disabled {
 .ol-shortcut-recording {
   background: var(--ol-blue-soft);
   border: 1px solid var(--ol-blue);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   padding: 10px 12px;
   color: var(--ol-ink);
   font-size: 12px;
@@ -415,7 +435,7 @@ button:disabled {
   padding: 7px 12px;
   font-size: 12.5px;
   white-space: nowrap;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   border: 1px solid var(--ol-line);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
@@ -432,10 +452,11 @@ button:disabled {
 
 .ol-typography .ol-select-trigger {
   width: 280px;
+  background: var(--ol-surface-2);
 }
 .ol-advanced-settings-detail > .ol-experimental-models {
   border: 0 !important;
-  border-radius: 0 !important;
+  border-radius: var(--ol-radius);
   box-shadow: none !important;
   background: transparent !important;
   padding: 0 !important;
@@ -480,7 +501,7 @@ button:disabled {
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   color: var(--ol-blue);
 }
 .ol-global-downloads {
@@ -496,7 +517,7 @@ button:disabled {
 .ol-download-card {
   padding: 10px 12px;
   border: 0.5px solid var(--ol-line-strong);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface);
   box-shadow: var(--ol-shadow-lg);
 }
@@ -523,7 +544,7 @@ button:disabled {
   width: 24px;
   height: 24px;
   flex-shrink: 0;
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
 }
 .ol-download-card progress {
   display: block;
@@ -584,7 +605,7 @@ button:disabled {
 .ol-startup-mark span {
   width: 4px;
   height: 18px;
-  border-radius: 3px;
+  border-radius: var(--ol-radius);
   background: currentColor;
   animation: ol-startup-wave 800ms var(--ol-motion-soft) 3;
 }
@@ -604,7 +625,7 @@ button:disabled {
   padding: 8px 14px;
   background: var(--ol-primary-solid-bg);
   color: var(--ol-primary-solid-ink);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   margin: 10px;
 }
 .ol-startup details {
@@ -621,6 +642,19 @@ button:disabled {
   font-size: 12px;
   color: var(--ol-ink-3);
   padding: 12px 0;
+}
+/* The advanced list insets its rows by 18px. Inline diagnostics used to start
+   on the border, so the report looked like it had slipped out of the card. */
+.ol-advanced-settings-inline .ol-startup-diagnostics {
+  padding: 2px 18px 16px;
+}
+.ol-advanced-settings-inline .ol-startup-diagnostics pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
 }
 .ol-startup[data-compact] {
   padding: 6px;
@@ -648,7 +682,7 @@ button:disabled {
 .ol-skeleton {
   position: relative;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface-2);
 }
 .ol-skeleton-heading {
@@ -682,7 +716,7 @@ button:disabled {
   }
   .ol-shortcut-binding:hover {
     background: var(--ol-surface-2);
-    border-radius: 6px;
+    border-radius: var(--ol-r-sm);
   }
 }
 @media (max-width: 840px) {
@@ -767,4 +801,81 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   .ol-select-trigger {
     border-color: var(--ol-ink-2);
   }
+}
+
+.ol-transition-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.ol-transition-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  background: color-mix(in srgb, var(--ol-surface) 18%, transparent);
+  transition: opacity 120ms var(--ol-motion-quick);
+}
+.ol-transition-viewport[aria-busy='true'] .ol-transition-mask {
+  opacity: 1;
+}
+.ol-main-arrival {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 40%;
+  animation: ol-main-arrive 280ms var(--ol-motion-soft);
+}
+@keyframes ol-main-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0px);
+  }
+}
+.ol-shell-depth {
+  transition:
+    transform 280ms var(--ol-motion-soft),
+    opacity 280ms var(--ol-motion-soft);
+  transform-origin: 50% 40%;
+}
+.ol-app-shell-bg[data-ol-settings-open='true'] {
+  transform: scale(0.985);
+  opacity: 0.72;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-transition-mask {
+    transition: none;
+  }
+  .ol-main-arrival {
+    animation: none;
+  }
+  .ol-shell-depth {
+    transition: none;
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* Scrolling remains available by wheel, touch and keyboard without visual rails. */
+.ol-thinscroll,
+.ol-dialog-card,
+.ol-channel-dialog-body,
+.ol-guide-reading {
+  scrollbar-width: none;
+}
+.ol-thinscroll::-webkit-scrollbar,
+.ol-dialog-card::-webkit-scrollbar,
+.ol-channel-dialog-body::-webkit-scrollbar,
+.ol-guide-reading::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }

@@ -1,12 +1,18 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SelectLite } from '../../components/ui/SelectLite';
+import { detectOS } from '../../components/WindowChrome';
 import type { UserPreferences } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
 import { btnGhostStyle, ExperimentalSectionTitle, SettingRow, Toggle } from './shared';
 
-const defaults = { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 };
+const defaults: UserPreferences['vocabularyLearningSettings'] = {
+  observationSeconds: 60,
+  suggestionSeconds: 10,
+  maxPhraseChars: 12,
+  suggestionPosition: 'nearInput',
+};
 const parameters = [
   { key: 'observationSeconds', min: 10, max: 60, unit: 'seconds' },
   { key: 'suggestionSeconds', min: 5, max: 60, unit: 'seconds' },
@@ -37,7 +43,7 @@ export function VocabularyLearningSection() {
   const settings = prefs.vocabularyLearningSettings ?? defaults;
   return (
     <Card>
-      <ExperimentalSectionTitle badge={t('common.experimental')}>
+      <ExperimentalSectionTitle badge="Beta">
         {t('settings.vocabularyLearning.title')}
       </ExperimentalSectionTitle>
       <p style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
@@ -53,6 +59,33 @@ export function VocabularyLearningSection() {
           }
         />
       </SettingRow>
+      {detectOS() === 'win' && (
+        <SettingRow
+          label={t('settings.vocabularyLearning.suggestionPosition')}
+          desc={t('settings.vocabularyLearning.suggestionPositionHint')}
+        >
+          <SelectLite
+            ariaLabel={t('settings.vocabularyLearning.suggestionPosition')}
+            disabled={busy}
+            value={settings.suggestionPosition ?? defaults.suggestionPosition}
+            style={{ minWidth: 0, width: 200, maxWidth: '100%' }}
+            options={[
+              { value: 'nearInput', label: t('settings.vocabularyLearning.positionNearInput') },
+              { value: 'bottomRight', label: t('settings.vocabularyLearning.positionBottomRight') },
+            ]}
+            onChange={(value) => {
+              if (value !== 'nearInput' && value !== 'bottomRight') return;
+              void save((current) => ({
+                ...current,
+                vocabularyLearningSettings: {
+                  ...(current.vocabularyLearningSettings ?? defaults),
+                  suggestionPosition: value,
+                },
+              }));
+            }}
+          />
+        </SettingRow>
+      )}
       {parameters.map(({ key, min, max, unit }) => (
         <SettingRow
           key={key}

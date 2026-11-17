@@ -28,7 +28,7 @@
   gap: 6px;
   padding: 12px 14px;
   border: 1px solid var(--ol-border, #e5e7eb);
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   white-space: pre-wrap;
   line-height: 1.55;
 }

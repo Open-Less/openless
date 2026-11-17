@@ -1,7 +1,4 @@
-//! Pure Android updater helpers (manifest URLs, version compare). Testable on all targets.
-
-pub const MIRROR_BASE: &str = "https://fastgit.cc/https://github.com/Open-Less/openless";
-pub const DIRECT_BASE: &str = "https://github.com/Open-Less/openless";
+//! Pure Android updater helpers (version compare, minisign verify). Testable on all targets.
 
 /// Must match `plugins.updater.pubkey` in `tauri.conf.json` (TAURI_SIGNING_PRIVATE_KEY pair).
 pub const UPDATER_PUBKEY_B64: &str =
@@ -28,21 +25,7 @@ pub fn version_is_newer(remote: &str, current: &str) -> bool {
     ) else {
         return false;
     };
-    remote > current
-}
-
-pub fn stable_manifest_urls(arch: &str) -> Vec<String> {
-    vec![
-        format!("{MIRROR_BASE}/releases/latest/download/latest-android-{arch}-mirror.json"),
-        format!("{DIRECT_BASE}/releases/latest/download/latest-android-{arch}.json"),
-    ]
-}
-
-pub fn beta_manifest_urls(arch: &str, tag: &str) -> Vec<String> {
-    vec![
-        format!("{MIRROR_BASE}/releases/download/{tag}/latest-android-{arch}-beta-mirror.json"),
-        format!("{DIRECT_BASE}/releases/download/{tag}/latest-android-{arch}-beta.json"),
-    ]
+    remote.cmp_precedence(&current).is_gt()
 }
 
 /// Human-readable manifest fetch failure for UI tooltips.
@@ -100,6 +83,93 @@ pub fn verify_updater_signature(
     Ok(())
 }
 
+/// Every fallback retains the matching URL, version and detached signature as one unit.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct UpdateCandidate {
+    pub version: String,
+    pub url: String,
+    pub signature: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub pub_date: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+}
+
+fn freshest_full_version<'a>(
+    candidates: impl Iterator<Item = &'a UpdateCandidate>,
+) -> Option<String> {
+    let mut selected: Option<(&UpdateCandidate, semver::Version)> = None;
+    let github = |candidate: &UpdateCandidate| {
+        url::Url::parse(&candidate.url)
+            .ok()
+            .is_some_and(|url| url.host_str() == Some("github.com"))
+    };
+    for candidate in candidates {
+        let Ok(version) = semver::Version::parse(&candidate.version) else {
+            continue;
+        };
+        let replace = selected.as_ref().is_none_or(|(current, current_version)| {
+            version.cmp_precedence(current_version).is_gt()
+                || version.cmp_precedence(current_version).is_eq()
+                    && github(candidate)
+                    && !github(current)
+        });
+        if replace {
+            selected = Some((candidate, version));
+        }
+    }
+    selected.map(|(candidate, _)| candidate.version.clone())
+}
+
+/// Compare release precedence first. Equal-precedence conflicting build metadata uses
+/// GitHub's canonical version; candidates with another exact full version never mix.
+pub fn newest_candidates(candidates: Vec<UpdateCandidate>) -> Vec<UpdateCandidate> {
+    let Some(newest) = freshest_full_version(candidates.iter()) else {
+        return Vec::new();
+    };
+    candidates
+        .into_iter()
+        .filter(|v| v.version == newest)
+        .collect()
+}
+
+/// Estimated completion = first-byte latency + artifact bytes / sampled throughput.
+/// Unknown sizes use the same conservative 100 MiB reference on every source.
+/// Invalid/failed samples sort last but remain usable as same-version fallbacks.
+pub fn rank_download_candidates(
+    candidates: Vec<(UpdateCandidate, Option<(f64, f64)>)>,
+) -> Vec<UpdateCandidate> {
+    let Some(newest) = freshest_full_version(candidates.iter().map(|(v, _)| v)) else {
+        return Vec::new();
+    };
+    let reference_size = candidates
+        .iter()
+        .filter(|(v, _)| v.version == newest)
+        .filter_map(|(v, _)| v.size)
+        .max()
+        .unwrap_or(100 * 1024 * 1024)
+        .max(1);
+    let mut candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|(v, _)| v.version == newest)
+        .collect();
+    let estimate = |sample: Option<(f64, f64)>| match sample {
+        Some((latency, throughput))
+            if latency.is_finite()
+                && latency >= 0.
+                && throughput.is_finite()
+                && throughput > 0. =>
+        {
+            latency + reference_size as f64 / throughput
+        }
+        _ => f64::INFINITY,
+    };
+    candidates.sort_by(|a, b| estimate(a.1).total_cmp(&estimate(b.1)));
+    candidates.into_iter().map(|(v, _)| v).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,60 +191,19 @@ mod tests {
     }
 
     #[test]
-    fn stable_manifest_urls_use_latest_download_path() {
-        let urls = stable_manifest_urls("aarch64");
-        assert_eq!(urls.len(), 2);
-        assert!(urls[0].contains("latest-android-aarch64-mirror.json"));
-        assert!(urls[1].ends_with("latest-android-aarch64.json"));
-        assert!(!urls[1].contains("-beta"));
-    }
-
-    #[test]
-    fn beta_manifest_urls_include_tag_and_beta_suffix() {
-        let urls = beta_manifest_urls("aarch64", "v1.3.8-1-beta-tauri");
-        assert!(urls[0].contains("/releases/download/v1.3.8-1-beta-tauri/"));
-        assert!(urls[1].ends_with("latest-android-aarch64-beta.json"));
-    }
-
-    #[test]
-    fn beta_manifest_urls_use_newest_modern_beta_tag_from_atom() {
-        let body = r#"<feed>
-  <entry>
-    <updated>2026-07-15T07:00:00Z</updated>
-    <link rel="alternate" type="text/html" href="https://github.com/Open-Less/openless/releases/tag/v1.3.15-Beta.1-tauri"/>
-  </entry>
-  <entry>
-    <updated>2026-06-17T15:41:46Z</updated>
-    <link rel="alternate" type="text/html" href="https://github.com/Open-Less/openless/releases/tag/v1.3.10-4-beta-tauri"/>
-  </entry>
-</feed>"#;
-        let latest = crate::commands::parse_latest_beta_from_atom(body)
-            .expect("Android updater must discover the modern Beta tag");
-
-        let urls = beta_manifest_urls("aarch64", &latest.tag_name);
-
-        assert_eq!(latest.tag_name, "v1.3.15-Beta.1-tauri");
-        assert!(urls
-            .iter()
-            .all(|url| url.contains("/releases/download/v1.3.15-Beta.1-tauri/")));
-    }
-
-    #[test]
-    fn beta_manifest_urls_skip_malformed_modern_tags_from_atom() {
-        let body = r#"<feed>
-  <entry><link href="https://github.com/Open-Less/openless/releases/tag/v-Beta.1-tauri"/></entry>
-  <entry><link href="https://github.com/Open-Less/openless/releases/tag/garbage-Beta.1-tauri"/></entry>
-  <entry><link href="https://github.com/Open-Less/openless/releases/tag/v1.3.15-Beta.1-tauri"/></entry>
-</feed>"#;
-        let latest = crate::commands::parse_latest_beta_from_atom(body)
-            .expect("Android updater must skip malformed Beta tags");
-
-        let urls = beta_manifest_urls("aarch64", &latest.tag_name);
-
-        assert_eq!(latest.tag_name, "v1.3.15-Beta.1-tauri");
-        assert!(urls
-            .iter()
-            .all(|url| url.contains("/releases/download/v1.3.15-Beta.1-tauri/")));
+    fn build_metadata_alone_does_not_offer_an_upgrade() {
+        assert!(!version_is_newer(
+            "2.0.2-Beta.6+build.20261110-new",
+            "2.0.2-Beta.6+build.20261109-old",
+        ));
+        assert!(!version_is_newer(
+            "2.0.2-Beta.6+build.20261109-old",
+            "2.0.2-Beta.6+build.20261110-new",
+        ));
+        assert!(version_is_newer(
+            "2.0.2-Beta.7+build.20261109-new",
+            "2.0.2-Beta.6+build.20261110-old",
+        ));
     }
 
     #[test]
@@ -244,5 +273,79 @@ mod tests {
         assert!(decode_tauri_minisign_text("%%%not-base64%%%").is_err());
         assert!(decode_tauri_minisign_text("").is_err());
         assert!(decode_tauri_minisign_text("   ").is_err());
+    }
+}
+
+#[cfg(test)]
+mod source_selection_tests {
+    use super::*;
+    fn candidate(version: &str, source: &str) -> UpdateCandidate {
+        UpdateCandidate {
+            version: version.into(),
+            url: format!("https://{source}"),
+            signature: format!("signature-{source}"),
+            notes: None,
+            pub_date: None,
+            size: Some(50_000_000),
+        }
+    }
+    #[test]
+    fn a_stale_fast_cdn_cannot_beat_the_new_github_release() {
+        let result = rank_download_candidates(vec![
+            (candidate("2.0.2-Beta.5", "cdn"), Some((0.01, 1e10))),
+            (candidate("2.0.2-Beta.6", "github"), Some((0.5, 1e5))),
+        ]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "https://github");
+        assert_eq!(result[0].signature, "signature-github");
+    }
+    #[test]
+    fn either_source_can_stand_alone_and_full_versions_stay_separate() {
+        for source in ["cdn", "github"] {
+            let result = newest_candidates(vec![candidate("2.0.2-Beta.6", source)]);
+            assert_eq!(result[0].url, format!("https://{source}"));
+        }
+        assert_eq!(
+            newest_candidates(vec![
+                candidate("2.0.2-Beta.6+build.20261109-a", "old"),
+                candidate("2.0.2-Beta.6+build.20261110-a", "new")
+            ])
+            .len(),
+            1
+        );
+        assert!(newest_candidates(vec![candidate("not-semver", "bad")]).is_empty());
+    }
+    #[test]
+    fn equal_precedence_prefers_github_metadata_without_mixing_builds() {
+        let mut github = candidate("2.0.2-Beta.6+build.20261109-canonical", "github");
+        github.url =
+            "https://github.com/Open-Less/openless/releases/download/v2.0.2-Beta.6-tauri/app.apk"
+                .into();
+        let cdn = candidate("2.0.2-Beta.6+build.99999999-stale", "cdn");
+        let result = newest_candidates(vec![cdn.clone(), github.clone()]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].version, github.version);
+        let result =
+            rank_download_candidates(vec![(github.clone(), None), (cdn, Some((0.001, 1e10)))]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].version, github.version);
+        let mirror = candidate(&github.version, "cdn");
+        assert_eq!(newest_candidates(vec![mirror, github]).len(), 2);
+    }
+
+    #[test]
+    fn conflicting_latency_and_throughput_use_completion_estimate() {
+        let version = "2.0.2-Beta.6";
+        let result = rank_download_candidates(vec![
+            (candidate(version, "low-latency"), Some((0.01, 1e6))),
+            (candidate(version, "fast-transfer"), Some((0.5, 10e6))),
+        ]);
+        assert_eq!(result[0].url, "https://fast-transfer");
+        let result = rank_download_candidates(vec![
+            (candidate(version, "failed"), None),
+            (candidate(version, "works"), Some((0.5, 1e6))),
+        ]);
+        assert_eq!(result[0].url, "https://works");
+        assert_eq!(result.len(), 2);
     }
 }

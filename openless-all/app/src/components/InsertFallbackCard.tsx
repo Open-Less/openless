@@ -122,7 +122,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
     >
       <div
         style={{
-          borderRadius: 16,
+          borderRadius: 'var(--ol-r-xl)',
           padding: 12,
           background: 'var(--ol-capsule-pill-bg)',
           backdropFilter: 'blur(20px)',
@@ -199,7 +199,7 @@ function TextButton({
         flex: primary ? 1 : undefined,
         height: 28,
         padding: '0 14px',
-        borderRadius: 999,
+        borderRadius: 'var(--ol-radius)',
         fontSize: 12,
         fontFamily: 'var(--ol-font-sans)',
         background: primary ? 'var(--ol-capsule-btn-bg-confirm)' : 'var(--ol-capsule-btn-bg)',

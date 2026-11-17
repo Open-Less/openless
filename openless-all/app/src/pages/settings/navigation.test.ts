@@ -1,5 +1,8 @@
 import {
+  ADVANCED_PAGES,
+  SETTINGS_SECTIONS,
   searchSettingsSections,
+  showsCursorContextControl,
   visibleSettingsSections,
   availableServiceViews,
   isServiceViewInactive,
@@ -80,37 +83,99 @@ assert.equal(
   'desktop hides Android input method settings',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'win', true).some((item) => item.id === 'lessComputer'),
-  true,
-  'Windows retains Less Computer configuration',
+  visibleAdvancedPages('desktop', 'win').some((item) => String(item.id) === 'lessComputer'),
+  false,
+  'Less Computer is retired even for opted-in devices',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'win').some((item) => item.id === 'claudeConsole'),
+  visibleAdvancedPages('desktop', 'win').some((item) => String(item.id) === 'claudeConsole'),
   false,
   'the macOS Claude console is not exposed on Windows',
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
+  ['voiceEnhancement', 'cursorContext', 'startupDiagnostics', 'customSyncServer', 'debug'],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
 
 assert.equal(
-  visibleAdvancedPages('mobile', 'mac').some((item) => item.id === 'vocabularyLearning'),
-  false,
-  'generic mobile hosts without a native observer do not expose learning configuration',
+  visibleAdvancedPages('mobile', 'mac').some((item) => item.id === 'cursorContext'),
+  true,
+  'short-input settings stay on the text experiments page without a native cursor reader',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'vocabularyLearning'),
+  showsCursorContextControl('mobile', 'mac'),
+  false,
+  'generic mobile hosts without a native cursor reader do not expose cursor context',
+);
+assert.equal(showsCursorContextControl('desktop', 'mac'), true, 'macOS keeps cursor context');
+assert.equal(showsCursorContextControl('desktop', 'win'), true, 'Windows keeps cursor context');
+assert.equal(showsCursorContextControl('android', 'android'), true, 'Android keeps cursor context');
+assert.equal(
+  showsCursorContextControl('harmony', 'harmony'),
+  false,
+  'Harmony has no cursor-context reader',
+);
+const advancedIds: readonly string[] = ADVANCED_PAGES.map((item) => item.id);
+assert.equal(
+  advancedIds.includes('vocabularyLearning'),
+  false,
+  'correction learning shares the awareness page rather than a duplicate menu entry',
+);
+
+assert.equal(
+  advancedIds.includes('cursorContext'),
   true,
-  'macOS retains its native correction observer settings',
+  'awareness remains reachable from advanced features',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'liveInput'),
+  false,
+  'retired macOS in-field streaming is not offered',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'win').some((item) => item.id === 'liveInput'),
+  true,
+  'Windows retains its advanced text insertion page',
+);
+assert.equal(
+  visibleAdvancedPages('android', 'android').some((item) => item.id === 'liveInput'),
+  false,
+  'Windows text insertion is not offered to Android',
+);
+
+const sectionIds = SETTINGS_SECTIONS.map((item) => item.id);
+assert.equal(
+  sectionIds.indexOf('cloudServices'),
+  sectionIds.indexOf('services') + 1,
+  'cloud services follows AI',
+);
+assert.equal(
+  sectionIds[sectionIds.indexOf('cloudServices') + 1],
+  'appearance',
+  'cloud services precedes appearance',
+);
+assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'services')?.icon,
+  'sparkle',
+  'AI does not use the cloud icon',
+);
+assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'advanced')?.icon,
+  'flask',
+  'experiments do not reuse the AI sparkle icon',
+);
+assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'cloudServices')?.icon,
+  'cloud',
+  'the cloud icon belongs to cloud services',
 );
 
 assert.equal(
   visibleAdvancedPages('desktop', 'mac')[0].id,
   'localModels',
-  'macOS experiments entry is first',
+  'advanced features opens its peer pages directly',
 );
 assert.equal(
   visibleAdvancedPages('desktop', 'win').some((page) => page.id === 'localModels'),
@@ -214,7 +279,7 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
-  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
+  ['voiceEnhancement', 'cursorContext', 'startupDiagnostics', 'customSyncServer', 'debug'],
   'Harmony retains shared utility settings without desktop coding-agent controls',
 );
 for (const os of ['mac', 'win', 'android'] as const) {
@@ -226,17 +291,17 @@ for (const os of ['mac', 'win', 'android'] as const) {
     `${os}: unfinished features are hidden without a device opt-in`,
   );
   assert.equal(
-    visibleAdvancedPages('desktop', os).some((item) => item.id === 'testingFeatures'),
-    true,
-    `${os}: the Beta opt-in page remains reachable`,
+    visibleAdvancedPages('desktop', os).some((item) => String(item.id) === 'testingFeatures'),
+    false,
+    `${os}: the retired Beta feature switch is removed`,
   );
 }
 assert.deepEqual(
-  visibleAdvancedPages('desktop', 'mac', true)
+  visibleAdvancedPages('desktop', 'mac')
     .filter((item) => ['lessComputer', 'claudeConsole'].includes(item.id))
     .map((item) => item.id),
-  ['lessComputer', 'claudeConsole'],
-  'macOS exposes both testing features after opt-in',
+  [],
+  'retired testing features cannot be restored by saved opt-in',
 );
 
 assert.equal(

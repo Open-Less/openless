@@ -9,6 +9,7 @@ pub const LINEAR: Ease = Ease(0.0, 0.0, 1.0, 1.0);
 /// CSS `ease`.
 pub const EASE: Ease = Ease(0.25, 0.1, 0.25, 1.0);
 /// Symmetric acceleration and deceleration for property transitions.
+#[cfg(test)]
 pub const EASE_IN_OUT: Ease = Ease(0.42, 0.0, 0.58, 1.0);
 /// `MORPH` in OpenLessCapsule.tsx.
 pub const MORPH: Ease = Ease(0.22, 1.0, 0.36, 1.0);

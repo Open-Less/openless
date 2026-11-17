@@ -10,7 +10,7 @@
 | Dictation | 普通听写（复用 Core `dictation_engine`）、ticket 化落字 | — |
 | Qa | QA 文本/语音（`qa.rs`）、全局待办、审批、取消 | 编辑模式/应用/撤回 UI（L04） |
 | Selection | 划词润色预览/撤回（`selection.rs`） | Selection Voice 生产触发/捕获/意图路由（L04） |
-| Agent | Less Computer 工具调用、审批固定在页面外、后台事件保留 | Agent 检测/模型/路径/权限配置（L09） |
+| Agent | —（Linux 端已整体删除 Less Computer：设置页、快捷键、独立面板、fcitx5 转发与 CLI 进程适配器全部移除） | — |
 | Services | AI 服务配置、渠道管理（`settings.rs` + Core provider 面） | Omni 有效模式配置入口完整性（L09） |
 | 本地 ASR | 明确不支持；Linux 不包含 Qwen 推理运行时 | 保持能力声明与 UI 一致，不作为待设备验证功能 |
 | Remote | 手机输入独立页、连接状态、陈旧地址处理 | — |

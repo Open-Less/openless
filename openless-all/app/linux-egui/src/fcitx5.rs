@@ -973,21 +973,6 @@ pub fn set_hotkeys(keys: Vec<String>) -> Result<(), BackendError> {
     send_message("SetHotkey", |message| message.append1(keys))
 }
 
-#[cfg(target_os = "linux")]
-pub fn set_less_computer_hotkey_raw(symbol: u32, states: u32) -> Result<(), BackendError> {
-    send_message("SetLessComputerHotkeyRaw", |message| {
-        message.append2(symbol, states)
-    })
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn set_less_computer_hotkey_raw(_: u32, _: u32) -> Result<(), BackendError> {
-    Err(BackendError::new(
-        BackendErrorCode::Unsupported,
-        "fcitx5 is only available on Linux",
-    ))
-}
-
 #[cfg(not(target_os = "linux"))]
 pub fn set_hotkeys(_: Vec<String>) -> Result<(), BackendError> {
     Err(BackendError::new(

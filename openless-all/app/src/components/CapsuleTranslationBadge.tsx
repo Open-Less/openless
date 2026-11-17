@@ -25,6 +25,7 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuEpoch = useRef(0);
   const menuOwner = useRef<string | null>(null);
+  const opening = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>();
   const shown = useRef(visible);
   shown.current = visible;
@@ -96,12 +97,19 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
     [i18n.language, target],
   );
   const selected = languages.find((language) => language.nativeName === target);
-  const options = languages.filter(
-    (language) =>
-      language.nativeName === target ||
-      !isTranslationTargetRedundant(language.nativeName, snapshot?.workingLanguages ?? []),
+  const options = useMemo(
+    () =>
+      languages
+        .filter(
+          (language) =>
+            language.nativeName === target ||
+            !isTranslationTargetRedundant(language.nativeName, snapshot?.workingLanguages ?? []),
+        )
+        .map((language) => ({ value: language.nativeName, label: language.displayName })),
+    [languages, target, snapshot?.workingLanguages],
   );
   const openMenu = async (next: boolean) => {
+    if (next && opening.current) return;
     const epoch = ++menuEpoch.current;
     if (closeTimer.current) clearTimeout(closeTimer.current);
     if (!next) {
@@ -122,6 +130,7 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
     if (!shown.current || !active?.mutable) return;
     pickerSession.current = active.sessionId;
     menuOwner.current = active.sessionId;
+    opening.current = true;
     try {
       await setCapsuleLanguageMenu(true, active.sessionId);
       await new Promise<void>((resolve) =>
@@ -139,6 +148,8 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
       }
     } catch {
       if (epoch === menuEpoch.current) setError(true);
+    } finally {
+      opening.current = false;
     }
   };
   useEffect(() => {
@@ -207,10 +218,7 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
       <div className="ol-translation-language" data-busy={busy}>
         <SelectLite
           value={target}
-          options={options.map((language) => ({
-            value: language.nativeName,
-            label: language.displayName,
-          }))}
+          options={options}
           placeholder={selected?.displayName || target || '…'}
           ariaLabel={t('translation.target.title')}
           disabled={!visible || busy || !snapshot?.mutable}
@@ -219,6 +227,7 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
           onChange={(value) => void change(value)}
           side="top"
           popupStyle={{ width: 240 }}
+          popupClassName="ol-capsule-language-popup"
         />
       </div>
       {error && (

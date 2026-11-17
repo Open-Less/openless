@@ -1,20 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AudioDspConfig, AudioDspStage } from '../../lib/types';
-import { defaultAudioDsp, equalizerFrequencies } from '../../lib/audioDsp';
+import { audioEqualizerPresets, defaultAudioDsp, equalizerFrequencies } from '../../lib/audioDsp';
+import { isAndroid } from '../../lib/platform';
+import { AndroidAudioEffects } from './AndroidAudioEffects';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { SettingRow, Toggle } from './shared';
 
 export function AudioDspSettings({
   value,
   onChange,
+  page = false,
 }: {
   value?: AudioDspConfig;
   onChange: (value: AudioDspConfig) => void;
+  /** The third settings screen already titles this panel, so skip the outer disclosure. */
+  page?: boolean;
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(page);
   const [draft, setDraft] = useState<AudioDspConfig>({ ...defaultAudioDsp, ...value });
-  useEffect(() => setDraft({ ...defaultAudioDsp, ...value }), [value]);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => {
+    const next = { ...defaultAudioDsp, ...value };
+    draftRef.current = next;
+    setDraft(next);
+  }, [value]);
   const label = (key: string, fallback: string) =>
     t(`settings.recording.dsp.${key}`, { defaultValue: fallback });
   const save = (patch: Partial<AudioDspConfig>) => {
@@ -32,18 +44,20 @@ export function AudioDspSettings({
     <SettingRow key={field} label={title}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: 'min(280px, 100%)' }}>
         <input
+          className="ol-range"
           aria-label={title}
           type="range"
           min={min}
           max={max}
           step={1}
-          style={{ flex: 1, minWidth: 60 }}
           value={draft[field] as number}
-          onChange={(event) =>
-            setDraft((previous) => ({ ...previous, [field]: Number(event.target.value) }))
-          }
-          onPointerUp={() => onChange(draft)}
-          onKeyUp={() => onChange(draft)}
+          onChange={(event) => {
+            const next = { ...draftRef.current, [field]: Number(event.target.value) };
+            draftRef.current = next;
+            setDraft(next);
+          }}
+          onPointerUp={() => onChange(draftRef.current)}
+          onKeyUp={() => onChange(draftRef.current)}
         />
         <output style={{ minWidth: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {draft[field] as number}
@@ -53,6 +67,7 @@ export function AudioDspSettings({
     </SettingRow>
   );
   const stageLabels: Record<AudioDspStage, string> = {
+    acousticEchoCancellation: label('aec', 'Echo cancellation'),
     noiseReduction: label('noise', 'Noise reduction'),
     dereverb: label('dereverb', 'Comb filter'),
     equalizer: label('equalizer', 'Equalizer'),
@@ -67,17 +82,38 @@ export function AudioDspSettings({
     [order[index], order[target]] = [order[target], order[index]];
     save({ processingOrder: order });
   };
-  return (
-    <details style={{ margin: '8px 0 16px' }}>
-      <summary style={{ cursor: 'pointer', fontSize: 13 }}>
-        {label('title', 'Speech enhancement settings')}
-      </summary>
+  const body = (
+    <>
       <p style={{ fontSize: 12, color: 'var(--ol-muted)', lineHeight: 1.6 }}>
         {label(
           'description',
           'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
         )}
       </p>
+      <SettingRow
+        label={stageLabels.acousticEchoCancellation}
+        desc={label(
+          'aecHint',
+          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+        )}
+      >
+        <SelectLite
+          ariaLabel={stageLabels.acousticEchoCancellation}
+          value={draft.aecMode}
+          onChange={(v) => save({ aecMode: v as AudioDspConfig['aecMode'] })}
+          options={[
+            { value: 'off', label: label('aecOff', 'Off') },
+            { value: 'light', label: label('aecLight', 'Light (low CPU)') },
+            { value: 'model', label: label('aecModel', 'Model (stronger)') },
+          ]}
+        />
+      </SettingRow>
+      {draft.aecMode === 'model' &&
+        label(
+          'aecModelHint',
+          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
+        )}
+      {isAndroid() && expanded && <AndroidAudioEffects value={draft} onChange={save} />}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite
           ariaLabel={stageLabels.noiseReduction}
@@ -93,13 +129,13 @@ export function AudioDspSettings({
       </SettingRow>
       {draft.noiseReduction !== 'off' &&
         slider('noiseStrength', label('strength', 'Noise reduction strength'), 0, 100, '%')}
-      {slider('gainDb', stageLabels.amplifier, -30, 30, ' dB')}
+      {slider('gainDb', stageLabels.amplifier, -50, 50, ' dB')}
       <SettingRow label={stageLabels.agc}>
         <Toggle on={draft.agcEnabled} onToggle={() => save({ agcEnabled: !draft.agcEnabled })} />
       </SettingRow>
       {draft.agcEnabled && (
         <>
-          {slider('agcTarget', label('target', 'Target level'), 5, 90, '%')}
+          {slider('agcTarget', label('target', 'Target level'), 0, 100, '%')}
           {slider('agcAttack', label('attack', 'Attack speed'), 1, 100)}
           {slider('agcDecay', label('decay', 'Release speed'), 1, 100)}
         </>
@@ -114,7 +150,7 @@ export function AudioDspSettings({
         <Toggle on={draft.vadEnabled} onToggle={() => save({ vadEnabled: !draft.vadEnabled })} />
       </SettingRow>
       {draft.vadEnabled &&
-        slider('vadThresholdDb', label('threshold', 'Speech gate threshold'), -80, -10, ' dB')}
+        slider('vadThresholdDb', label('threshold', 'Speech gate threshold'), -100, 0, ' dB')}
       <details style={{ marginTop: 10 }}>
         <summary style={{ cursor: 'pointer', fontSize: 12 }}>
           {label('tone', 'Tone and room adjustments')}
@@ -134,6 +170,23 @@ export function AudioDspSettings({
         </SettingRow>
         {draft.equalizerEnabled && (
           <>
+            <SettingRow label={label('presets', 'Equalizer presets')}>
+              <SelectLite
+                value=""
+                ariaLabel={label('presets', 'Equalizer presets')}
+                options={[
+                  { value: '', label: label('choosePreset', 'Choose a preset') },
+                  ...Object.keys(audioEqualizerPresets).map((key) => ({
+                    value: key,
+                    label: label(`preset_${key}`, key),
+                  })),
+                ]}
+                onChange={(key) => {
+                  const bands = audioEqualizerPresets[key as keyof typeof audioEqualizerPresets];
+                  if (bands) save({ equalizerBandsDb: [...bands] });
+                }}
+              />
+            </SettingRow>
             {slider('equalizerPreampDb', label('preamp', 'Equalizer preamp'), -20, 20, ' dB')}
             <div
               style={{
@@ -147,20 +200,23 @@ export function AudioDspSettings({
                 <label key={frequency} style={{ fontSize: 12 }}>
                   {frequency} · {draft.equalizerBandsDb[index]} dB
                   <input
+                    className="ol-range"
                     aria-label={`${stageLabels.equalizer} ${frequency}`}
                     type="range"
-                    min={-12}
-                    max={12}
+                    min={-15}
+                    max={15}
                     step={1}
                     style={{ width: '100%' }}
                     value={draft.equalizerBandsDb[index]}
                     onChange={(event) => {
-                      const bands = [...draft.equalizerBandsDb];
+                      const bands = [...draftRef.current.equalizerBandsDb];
                       bands[index] = Number(event.target.value);
-                      setDraft((previous) => ({ ...previous, equalizerBandsDb: bands }));
+                      const next = { ...draftRef.current, equalizerBandsDb: bands };
+                      draftRef.current = next;
+                      setDraft(next);
                     }}
-                    onPointerUp={() => onChange(draft)}
-                    onKeyUp={() => onChange(draft)}
+                    onPointerUp={() => onChange(draftRef.current)}
+                    onKeyUp={() => onChange(draftRef.current)}
                   />
                 </label>
               ))}
@@ -196,9 +252,26 @@ export function AudioDspSettings({
           ))}
         </ol>
       </details>
-      <button type="button" style={{ marginTop: 14 }} onClick={() => save(defaultAudioDsp)}>
+      <button
+        type="button"
+        className="ol-pressable"
+        style={{ marginTop: 14 }}
+        onClick={() => save(defaultAudioDsp)}
+      >
         {label('reset', 'Reset enhancement settings')}
       </button>
+    </>
+  );
+  if (page) return body;
+  return (
+    <details
+      style={{ margin: '8px 0 16px' }}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+        {label('title', 'Speech enhancement settings')}
+      </summary>
+      {body}
     </details>
   );
 }

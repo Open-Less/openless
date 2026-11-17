@@ -124,7 +124,9 @@ fn preferences_json_preserving_unknown(
 fn strip_local_only_preferences(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(object) = value {
         object.remove("lowLatencyDictationEnabled");
+        object.remove("echoCancellationEnabled");
         object.remove("audioDsp");
+        // Retire the removed low-memory mode from legacy sync payloads.
         object.remove("lowMemoryBackgroundEnabled");
     }
 }
@@ -312,6 +314,10 @@ impl PreferencesStore {
                 "lowLatencyDictationEnabled".to_string(),
                 serde_json::Value::Bool(state.low_latency_dictation_enabled),
             );
+            object.insert(
+                "echoCancellationEnabled".to_string(),
+                serde_json::Value::Bool(state.echo_cancellation_enabled),
+            );
         }
         let parsed: UserPreferences = serde_json::from_value(value.clone())
             .map_err(|_| persistence_error("validate restored preferences"))?;
@@ -480,11 +486,13 @@ mod tests {
     fn cloud_snapshot_omits_local_microphone_warm_capture_preference() {
         let mut value = serde_json::json!({
             "lowLatencyDictationEnabled": true,
+            "echoCancellationEnabled": true,
             "audioDsp": {"noiseReduction": "purevox"},
             "microphoneDeviceName": "Built-in Mic",
         });
         strip_local_only_preferences(&mut value);
         assert!(value.get("lowLatencyDictationEnabled").is_none());
+        assert!(value.get("echoCancellationEnabled").is_none());
         assert!(value.get("audioDsp").is_none());
         assert_eq!(value["microphoneDeviceName"], "Built-in Mic");
     }

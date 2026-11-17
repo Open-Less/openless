@@ -12,7 +12,7 @@ use openless_core::testing::{
 use openless_core::{
     BackendErrorCode, LocalAsrRuntime, PolishMode, RepolishRequest, SelectionCapture,
     SelectionPolishOutputMode, SelectionPolishRequest, SelectionVoiceApplyOutcome,
-    SelectionVoicePhase, SelectionVoicePreviewUpdate, SessionId,
+    SelectionVoicePhase, SelectionVoicePreviewUpdate,
 };
 use openless_linux_egui::{
     drain_events, BackendConfig, BackendDependencies, BackendError, BackendServices,
@@ -149,33 +149,6 @@ async fn main() -> Result<(), BackendError> {
         retranscription_error.error.code,
         BackendErrorCode::Unsupported
     );
-
-    // Less Computer voice hosts reserve a Core capture lease before touching
-    // recorder/native ASR resources and release it explicitly on cancellation
-    // or startup failure. The headless example exercises that seam without
-    // requiring a coding-agent process.
-    let mut less_computer_preferences = backend.get_preferences();
-    less_computer_preferences.coding_agent_enabled = true;
-    less_computer_preferences.testing_features_enabled = true;
-    linux_host.update_settings_strict(
-        less_computer_preferences,
-        linux_host.snapshot().preferences_revision,
-    )?;
-    let less_computer_session = SessionId::new();
-    backend.begin_less_computer_capture(less_computer_session)?;
-    assert_eq!(
-        backend.less_computer_active_session(),
-        Some(less_computer_session)
-    );
-    backend
-        .cancel_less_computer(Some(less_computer_session))
-        .await?;
-    // Core 2.0 cancellation is terminal and releases the capture lease. A host
-    // that observes the cancellation after the await must not expect the old
-    // lease's flag to remain queryable.
-    assert_eq!(backend.less_computer_active_session(), None);
-    backend.abort_less_computer_capture(less_computer_session)?;
-    assert_eq!(backend.less_computer_active_session(), None);
 
     // The deterministic Linux selection fixture supports direct replacement,
     // but retained preview targets and platform revert are intentionally

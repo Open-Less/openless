@@ -50,7 +50,7 @@ export const DismissibleCard = forwardRef<
             (Math.abs(info.offset.x) > 40 && Math.abs(info.velocity.x) > 650))
         )
           onDismiss();
-        else animate(x, 0, { type: 'spring', stiffness: 480, damping: 38 });
+        else animate(x, 0, { type: 'spring', stiffness: 480, damping: 46 });
       }}
     />
   );

@@ -28,6 +28,7 @@ const mainActivityPath = join(kotlinDest, 'MainActivity.kt');
 const kotlinTestDest = join(androidAppRoot, 'src/test/java/com/openless/app');
 const kotlinAndroidTestDest = join(androidAppRoot, 'src/androidTest/java/com/openless/app');
 const androidAppGradle = join(androidAppRoot, 'build.gradle.kts');
+const androidDebugManifest = join(androidAppRoot, 'src/debug/AndroidManifest.xml');
 const resDest = join(genRoot, 'res');
 const resXmlDest = join(genRoot, 'res/xml');
 const aidlDest = join(genRoot, 'aidl');
@@ -70,13 +71,18 @@ const KOTLIN_FILES = [
   'StrokeInputController.kt',
   'StrokeInput.kt',
   'OpenLessRime.kt',
+  'RimeTaskQueue.kt',
   'RimePinyinController.kt',
-  'LegacyPinyinBackup.kt',
+  'RimeFuzzyPinyin.kt',
+  'RimeUserDictionaryFile.kt',
+  'KeyboardDataFile.kt',
   'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
+  'FrequencyStampCache.kt',
   'EnglishCandidateProvider.kt',
   'EnglishUserFrequency.kt',
+  'EnglishAutoText.kt',
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
@@ -93,6 +99,11 @@ const KOTLIN_TEST_FILES = [
   'DictationSpanTest.kt',
   'ImePrivacyPolicyTest.kt',
   'ImeDraftReplacementTest.kt',
+  'StrokePhraseSuffixTest.kt',
+  'EnglishAutoTextTest.kt',
+  'InputLearningRulesTest.kt',
+  'FrequencyStampCacheTest.kt',
+  'RimePinyinDataTest.kt',
   'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
   'OpenLessMigrationBundleContractTest.kt',
@@ -111,6 +122,7 @@ const KOTLIN_ANDROID_TEST_FILES = [
   'ImeLearningMigrationTest.kt',
   'OpenLessMigrationBundleInstrumentedTest.kt',
   'RimeEngineIntegrationTest.kt',
+  'ImeAutoTextIntegrationTest.kt',
 ];
 
 const XML_FILES = [
@@ -372,6 +384,54 @@ function ensureInstrumentationRunner(dryRun) {
   console.log(`Added Android instrumentation runner to ${androidAppGradle}`);
 }
 
+/** CI copies Kotlin without enabling the backend application/services manifest. */
+export function mergeKeyboardSettingsDebugActivity(manifestXml) {
+  if (
+    /android:name=["'](?:com\.openless\.app\.|\.)OpenLessKeyboardSettingsActivity["']/.test(
+      manifestXml,
+    )
+  ) {
+    return { content: manifestXml, changed: false };
+  }
+  const activity = `        <activity
+            android:name="com.openless.app.OpenLessKeyboardSettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.openless" />`;
+  let content;
+  if (/<application\b[^>]*\/>/.test(manifestXml)) {
+    content = manifestXml.replace(
+      /<application\b([^>]*)\/>/,
+      `<application$1>\n${activity}\n    </application>`,
+    );
+  } else if (manifestXml.includes('</application>')) {
+    content = manifestXml.replace('</application>', `${activity}\n    </application>`);
+  } else if (manifestXml.includes('</manifest>')) {
+    content = manifestXml.replace(
+      '</manifest>',
+      `    <application>\n${activity}\n    </application>\n</manifest>`,
+    );
+  } else {
+    throw new Error('Debug manifest is missing </manifest>');
+  }
+  return { content, changed: true };
+}
+
+function ensureKeyboardSettingsDebugActivity(dryRun) {
+  const existing = existsSync(androidDebugManifest)
+    ? readFileSync(androidDebugManifest, 'utf8')
+    : '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n</manifest>\n';
+  const result = mergeKeyboardSettingsDebugActivity(existing);
+  if (!result.changed) return;
+  if (dryRun) {
+    console.log(`[dry-run] Would register keyboard settings in ${androidDebugManifest}`);
+    return;
+  }
+  ensureDir(dirname(androidDebugManifest), false);
+  writeFileSync(androidDebugManifest, result.content, 'utf8');
+  console.log(`Registered keyboard settings in ${androidDebugManifest}`);
+}
+
 function ensureMainActivityOpen(dryRun) {
   if (!existsSync(mainActivityPath)) return;
   const existing = readFileSync(mainActivityPath, 'utf8');
@@ -415,6 +475,7 @@ function main() {
     'LitePinyinRepository.kt',
     'LitePinyinUserFrequency.kt',
     'LitePinyinLearnedPhrases.kt',
+    'LegacyPinyinBackup.kt',
   ]) {
     const path = join(kotlinDest, name);
     if (dryRun) console.log(`[dry-run] Would remove retired source ${path}`);
@@ -436,6 +497,7 @@ function main() {
   copyNamedFiles(KOTLIN_TEST_FILES, kotlinTestRoot, kotlinTestDest, dryRun);
   copyNamedFiles(KOTLIN_ANDROID_TEST_FILES, kotlinAndroidTestRoot, kotlinAndroidTestDest, dryRun);
   ensureInstrumentationRunner(dryRun);
+  ensureKeyboardSettingsDebugActivity(dryRun);
 
   for (const [relSrc, destName] of XML_FILES) {
     const src = join(manifestsRoot, relSrc);

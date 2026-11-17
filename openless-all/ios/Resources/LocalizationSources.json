@@ -6737,6 +6737,232 @@
         "Keyboard/KeyboardViewController.swift"
       ],
       "translationSource": "Native iOS translation"
+    },
+    "语音识别 准备 识别方式 语音增强 降噪 增益 均衡器 speech recognition audio enhancement noise gain equalizer": {
+      "callsites": [
+        "App/SettingsView.swift:111"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "语音增强": {
+      "callsites": [
+        "App/SettingsView.swift:115",
+        "App/SettingsView.swift:234",
+        "App/SettingsView.swift:292"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "平直": {
+      "callsites": [
+        "App/SettingsView.swift:220"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "明亮人声": {
+      "callsites": [
+        "App/SettingsView.swift:221"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "低沉人声": {
+      "callsites": [
+        "App/SettingsView.swift:222"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "播客": {
+      "callsites": [
+        "App/SettingsView.swift:223"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "清晰人声": {
+      "callsites": [
+        "App/SettingsView.swift:224"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "温暖人声": {
+      "callsites": [
+        "App/SettingsView.swift:225"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "设置保存后在下一次录音生效。RNNoise 较轻量，PureVox 使用更多计算资源。默认保持原有音频效果。": {
+      "callsites": [
+        "App/SettingsView.swift:237"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "降噪与增益": {
+      "callsites": [
+        "App/SettingsView.swift:240"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "降噪算法": {
+      "callsites": [
+        "App/SettingsView.swift:241"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "频谱减法": {
+      "callsites": [
+        "App/SettingsView.swift:243"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "降噪强度": {
+      "callsites": [
+        "App/SettingsView.swift:245"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "输入增益 dB": {
+      "callsites": [
+        "App/SettingsView.swift:246"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "自动增益": {
+      "callsites": [
+        "App/SettingsView.swift:247",
+        "App/SettingsView.swift:303"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "目标电平 %": {
+      "callsites": [
+        "App/SettingsView.swift:249"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "起音速度": {
+      "callsites": [
+        "App/SettingsView.swift:250"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "释放速度": {
+      "callsites": [
+        "App/SettingsView.swift:251"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "语音门限": {
+      "callsites": [
+        "App/SettingsView.swift:253",
+        "App/SettingsView.swift:303"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "门限 dB": {
+      "callsites": [
+        "App/SettingsView.swift:254"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "梳状滤波 %": {
+      "callsites": [
+        "App/SettingsView.swift:257"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "十段均衡器": {
+      "callsites": [
+        "App/SettingsView.swift:258"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "均衡器预设": {
+      "callsites": [
+        "App/SettingsView.swift:260"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "前级增益 dB": {
+      "callsites": [
+        "App/SettingsView.swift:265"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "音色与房间调整": {
+      "callsites": [
+        "App/SettingsView.swift:273"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "梳状滤波可能改变音色，建议从 0 开始。语音门限不会自动停止录音，过高会丢失轻声。": {
+      "callsites": [
+        "App/SettingsView.swift:274"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "处理顺序": {
+      "callsites": [
+        "App/SettingsView.swift:276"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "恢复默认增强设置": {
+      "callsites": [
+        "App/SettingsView.swift:288"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "保存中…": {
+      "callsites": [
+        "App/SettingsView.swift:293"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "降噪": {
+      "callsites": [
+        "App/SettingsView.swift:303"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "梳状滤波": {
+      "callsites": [
+        "App/SettingsView.swift:303"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "均衡器": {
+      "callsites": [
+        "App/SettingsView.swift:303"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "输入增益": {
+      "callsites": [
+        "App/SettingsView.swift:303"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "音频设置暂不可用，请稍后重试。": {
+      "callsites": [
+        "App/SettingsView.swift:311"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "无法读取音频设置，请重试。": {
+      "callsites": [
+        "App/SettingsView.swift:317"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "已保存，下次录音生效。": {
+      "callsites": [
+        "App/SettingsView.swift:327"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
+    },
+    "保存失败，当前修改尚未应用。": {
+      "callsites": [
+        "App/SettingsView.swift:328"
+      ],
+      "translationSource": "Native iOS audio settings (2026-10-24)"
     }
   },
   "infoPlistEntries": {

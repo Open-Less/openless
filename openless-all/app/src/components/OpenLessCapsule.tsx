@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { VoiceOrbStage } from './VoiceOrbStage';
@@ -13,6 +13,58 @@ import './OpenLessCapsule.css';
 const ENVELOPE = [0.22, 0.34, 0.48, 0.65, 0.82, 1, 0.82, 0.65, 0.48, 0.34, 0.22];
 const MORPH = { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const };
 export const DEFAULT_CAPSULE_EXIT_MS = 180;
+
+function useCapsulePresence(ref: RefObject<HTMLDivElement>, leaving: boolean, preview: boolean) {
+  const reduced = useReducedMotion();
+  const interrupted = useRef<Keyframe | null>(null);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const visible = { opacity: 1, transform: 'none', filter: 'none' };
+    const hidden = {
+      opacity: 0,
+      transform: `translateY(${leaving ? 5 : 6}px)`,
+      filter: `blur(${leaving ? 3 : 4}px)`,
+    };
+    const target = leaving ? hidden : visible;
+    const apply = () => {
+      Object.assign(node.style, target, { willChange: '' });
+    };
+    if (preview || reduced || typeof node.animate !== 'function') {
+      interrupted.current = null;
+      apply();
+      return;
+    }
+    const from = interrupted.current ?? (leaving ? visible : hidden);
+    interrupted.current = null;
+    node.style.willChange = 'opacity, transform, filter';
+    const animation = node.animate([from, target], {
+      duration: leaving ? DEFAULT_CAPSULE_EXIT_MS : 240,
+      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      fill: 'both',
+    });
+    animation.id = 'ol-capsule-presence';
+    let cancelled = false;
+    void animation.finished
+      .then(() => {
+        if (cancelled) return;
+        apply();
+        animation.cancel();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      const painted = getComputedStyle(node);
+      interrupted.current = {
+        opacity: painted.opacity,
+        transform: painted.transform,
+        filter: painted.filter,
+      };
+      Object.assign(node.style, interrupted.current, { willChange: '' });
+      animation.cancel();
+    };
+  }, [ref, leaving, preview, reduced]);
+}
 
 export function CapsuleWaveform({ level, active = true }: { level: number; active?: boolean }) {
   const root = useRef<HTMLSpanElement>(null);
@@ -81,6 +133,8 @@ export function OpenLessPill({
 }: OpenLessPillProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
+  const root = useRef<HTMLDivElement>(null);
+  useCapsulePresence(root, leaving, preview);
   const recording = state === 'recording';
   const processing = state === 'transcribing' || state === 'polishing';
   const label = processing
@@ -103,6 +157,7 @@ export function OpenLessPill({
   }, [label]);
   return (
     <motion.div
+      ref={root}
       className="ol-capsule-pill ol-default-capsule"
       data-recording={recording}
       data-warming={warming}
@@ -110,21 +165,11 @@ export function OpenLessPill({
       data-translation={translation && (recording || warming)}
       data-error={state === 'error'}
       data-leaving={leaving}
-      initial={preview || reduced ? false : { width: 68, opacity: 0, y: 8 }}
+      initial={preview || reduced ? false : { width: 68 }}
       animate={{
         width: leaving || warming ? 68 : recording ? 116 : statusWidth,
-        opacity: leaving ? 0 : 1,
-        y: leaving ? 7 : 0,
       }}
-      transition={
-        reduced
-          ? { duration: 0 }
-          : {
-              ...MORPH,
-              opacity: { duration: leaving ? 0.16 : 0.1 },
-              y: { duration: leaving ? 0.18 : 0.22 },
-            }
-      }
+      transition={reduced ? { duration: 0 } : MORPH}
     >
       <div className="ol-default-recording" aria-hidden={!recording && !warming}>
         <button

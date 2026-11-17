@@ -16,16 +16,16 @@ export const INSERT_TEXT_MOTION = {
   glyphGapPx: 1.4,
   groupDelayMs: 26,
   groupRippleMs: 2,
-  bornFadeMs: 180,
-  bornY: 9,
-  bornBlurPx: 1.8,
+  bornFadeMs: 220,
+  bornY: 7,
+  bornBlurPx: 4.5,
   bornStaggerMs: 8,
   widthDelayMinMs: 12,
   recenterExtraMs: 140,
   maxDelayMs: 96,
-  charSpring: { stiffness: 460, damping: 23, mass: 0.8 },
-  shiftSpring: { stiffness: 260, damping: 30, mass: 1 },
-  widthSpring: { stiffness: 330, damping: 32, mass: 0.9 },
+  charSpring: { stiffness: 460, damping: 44, mass: 0.8 },
+  shiftSpring: { stiffness: 260, damping: 36, mass: 1 },
+  widthSpring: { stiffness: 330, damping: 40, mass: 0.9 },
   recenterSpring: { stiffness: 180, damping: 27, mass: 1 },
   padX: 18,
   minWidth: 72,
@@ -118,9 +118,10 @@ export interface InsertTextWindowOptions {
   overflowBufferUnits?: number;
 }
 
-function normalizedInsertTextWindowLimit(
-  options: InsertTextWindowOptions = {},
-): { maxUnits: number; targetUnits: number } {
+function normalizedInsertTextWindowLimit(options: InsertTextWindowOptions = {}): {
+  maxUnits: number;
+  targetUnits: number;
+} {
   const maxUnits = Math.max(1, Math.floor(options.maxUnits ?? INSERT_TEXT_RENDER_WINDOW.maxUnits));
   const overflowBufferUnits = Math.max(
     0,
@@ -169,7 +170,7 @@ function selectInsertTextWindowSlice(
     const safeSegments = start === 0 ? segmented : segmented.slice(1);
     if (safeSegments.length >= targetUnits || start === 0) {
       const windowSegments = safeSegments.slice(-targetUnits);
-      const safeStartOffset = start + (start === 0 ? 0 : segmented[0]?.length ?? 0);
+      const safeStartOffset = start + (start === 0 ? 0 : (segmented[0]?.length ?? 0));
       const discardedUnits = safeSegments.length - windowSegments.length;
       let windowStartOffset = safeStartOffset;
       for (let i = 0; i < discardedUnits; i += 1) {
@@ -186,7 +187,7 @@ function selectInsertTextWindowSlice(
     const nextProbeLength = Math.min(text.length, Math.max(probeLength + 32, probeLength * 2));
     if (nextProbeLength === probeLength) {
       const windowSegments = safeSegments.slice(-targetUnits);
-      const safeStartOffset = start + (start === 0 ? 0 : segmented[0]?.length ?? 0);
+      const safeStartOffset = start + (start === 0 ? 0 : (segmented[0]?.length ?? 0));
       const discardedUnits = safeSegments.length - windowSegments.length;
       let windowStartOffset = safeStartOffset;
       for (let i = 0; i < discardedUnits; i += 1) {

@@ -1,6 +1,4 @@
-// Check-update button — the About page checks the stable channel (channel='stable') and the
-// Advanced page's Beta section checks the test channel (channel='beta'); both share this
-// component. channel is passed explicitly and is not affected by prefs.updateChannel.
+// Callers select a release channel explicitly; transport selection stays within that channel.
 
 import { useEffect } from 'react';
 import { btnGhostStyle } from './shared';

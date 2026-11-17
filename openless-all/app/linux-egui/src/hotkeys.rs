@@ -14,7 +14,6 @@ static NEXT_PRESS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 #[derive(Default)]
 struct HotkeyPressIds {
     dictation: std::sync::atomic::AtomicU64,
-    less_computer: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -38,24 +37,6 @@ pub enum LinuxHotkeyEvent {
         at: std::time::Instant,
     },
     DictationCombined {
-        symbol: u32,
-        states: u32,
-        press_id: u64,
-        at: std::time::Instant,
-    },
-    LessComputerPressed {
-        symbol: u32,
-        states: u32,
-        press_id: u64,
-        at: std::time::Instant,
-    },
-    LessComputerReleased {
-        symbol: u32,
-        states: u32,
-        press_id: u64,
-        at: std::time::Instant,
-    },
-    LessComputerCombined {
         symbol: u32,
         states: u32,
         press_id: u64,
@@ -313,43 +294,6 @@ fn event_from_signal(
                 .load(std::sync::atomic::Ordering::Acquire),
             at,
         }),
-        ("LessComputerKeyEvent", true) => {
-            let press_id = match press_ids
-                .less_computer
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                0 => {
-                    let press_id = next_press_id();
-                    press_ids
-                        .less_computer
-                        .store(press_id, std::sync::atomic::Ordering::Release);
-                    press_id
-                }
-                press_id => press_id,
-            };
-            Some(LinuxHotkeyEvent::LessComputerPressed {
-                symbol,
-                states,
-                press_id,
-                at,
-            })
-        }
-        ("LessComputerKeyEvent", false) => Some(LinuxHotkeyEvent::LessComputerReleased {
-            symbol,
-            states,
-            press_id: press_ids
-                .less_computer
-                .swap(0, std::sync::atomic::Ordering::AcqRel),
-            at,
-        }),
-        ("LessComputerKeyCombined", true) => Some(LinuxHotkeyEvent::LessComputerCombined {
-            symbol,
-            states,
-            press_id: press_ids
-                .less_computer
-                .load(std::sync::atomic::Ordering::Acquire),
-            at,
-        }),
         // Like the Tauri Linux bridge, action shortcuts are press notifications,
         // not held-key generations. Focus changes and modifier-first release can
         // omit key-up; latching here would disable the shortcut indefinitely.
@@ -429,25 +373,6 @@ mod tests {
                 states: 16,
             })
         );
-        let less_pressed = event_from_signal("LessComputerKeyEvent", 3, 4, true, at, &press_ids)
-            .expect("Less Computer press");
-        let LinuxHotkeyEvent::LessComputerPressed {
-            press_id: less_press_id,
-            ..
-        } = less_pressed
-        else {
-            panic!("expected Less Computer press")
-        };
-        assert!(matches!(
-            event_from_signal("LessComputerKeyCombined", 3, 4, true, at, &press_ids),
-            Some(LinuxHotkeyEvent::LessComputerCombined { press_id, .. })
-                if press_id == less_press_id
-        ));
-        assert!(matches!(
-            event_from_signal("LessComputerKeyEvent", 3, 4, false, at, &press_ids),
-            Some(LinuxHotkeyEvent::LessComputerReleased { press_id, .. })
-                if press_id == less_press_id
-        ));
         assert_eq!(
             event_from_signal("Unknown", 0, 0, true, at, &press_ids),
             None

@@ -140,10 +140,11 @@ pub enum MacosNewlineMode {
 }
 
 /// Auto-update channel. Picks which manifest the background AutoUpdateGate
-/// fetches. `Stable` = `latest-android-{arch}.json` (or the desktop
-/// plugin-updater stable endpoints). `Beta` = `latest-android-{arch}-beta.json`
-/// (or the desktop beta endpoints). The Settings manual "check stable / check
-/// beta" buttons pass the channel explicitly and ignore this pref.
+/// fetches. `Stable` = `/updates/stable/latest-{target}-{arch}.json` on the CDN
+/// (`latest-android-{arch}.json` for the Android client). `Beta` = the
+/// `/updates/beta/` counterpart with a `-beta` filename suffix. The Settings
+/// manual "check stable / check beta" buttons pass the channel explicitly and
+/// ignore this pref.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
@@ -265,6 +266,9 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Host presentation correlation only; absent for manually queued suggestions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<u64>,
     /// Absolute deadline shared by native and web confirmation surfaces.
     pub expires_at_ms: i64,
     /// The (wrong) pre-correction spelling. Only shown on the card so the
@@ -319,6 +323,15 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
+/// Windows suggestion-card placement; other platforms retain their native presentation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VocabularySuggestionPosition {
+    #[default]
+    NearInput,
+    BottomRight,
+}
+
 /// Local-only tuning. Consent and sensitive-field protections remain separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -326,6 +339,7 @@ pub struct VocabularyLearningSettings {
     pub observation_seconds: u32,
     pub suggestion_seconds: u32,
     pub max_phrase_chars: u32,
+    pub suggestion_position: VocabularySuggestionPosition,
 }
 
 impl Default for VocabularyLearningSettings {
@@ -334,6 +348,7 @@ impl Default for VocabularyLearningSettings {
             observation_seconds: 60,
             suggestion_seconds: 10,
             max_phrase_chars: 12,
+            suggestion_position: VocabularySuggestionPosition::default(),
         }
     }
 }
@@ -344,6 +359,7 @@ impl VocabularyLearningSettings {
             observation_seconds: self.observation_seconds.clamp(10, 60),
             suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
             max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+            suggestion_position: self.suggestion_position,
         }
     }
 }
@@ -427,6 +443,9 @@ pub struct UserPreferences {
     /// Disabled by default until an audio-quality baseline supports changing it.
     #[serde(default)]
     pub audio_enhancement_enabled: bool,
+    /// Optional local playback-reference cancellation; independent of enhancement.
+    #[serde(default)]
+    pub echo_cancellation_enabled: bool,
     #[serde(default)]
     pub audio_dsp: crate::audio_dsp::AudioDspConfig,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
@@ -436,9 +455,6 @@ pub struct UserPreferences {
     /// This is opt-in because the OS microphone indicator remains active while enabled.
     #[serde(default)]
     pub low_latency_dictation_enabled: bool,
-    /// Desktop-only UI resource policy. Applied on the next application launch.
-    #[serde(default)]
-    pub low_memory_background_enabled: bool,
     /// Play an instantly synthesized cue when the recording hotkey enters the
     /// recording state ("recording started"). Default on; can be disabled in
     /// the "Recording & Input" settings. The cue is synthesized by the capsule
@@ -541,11 +557,8 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows: whether the OpenLess TSF IME shows in the system keyboard
-    /// list (Win+Space) under non-TSF insertion (SendInput / clipboard
-    /// paste). Default true keeps current behavior; when off, the language
-    /// profile is disabled per-user without admin rights. TSF mode still
-    /// force-enables the profile but never rewrites this pref.
+    /// Legacy wire compatibility only. The Windows speech TIP does not appear
+    /// in the keyboard list and stays enabled regardless of this preference.
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// User's working languages (multi-select, native names). Injected as
@@ -824,6 +837,9 @@ pub struct UserPreferences {
     /// Off by default; with it off, the target only receives the final text.
     #[serde(default)]
     pub windows_composition_input: bool,
+    /// macOS AX live transcript replacement in the captured editor; opt-in.
+    #[serde(default)]
+    pub macos_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -841,6 +857,9 @@ pub struct UserPreferences {
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
     pub vocabulary_learning_enabled: bool,
+    /// Local consent for observing formatting edits as abstract expression evidence.
+    #[serde(default)]
+    pub expression_learning_enabled: bool,
     #[serde(default)]
     pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// Whether the Overview shows the "yearly activity" heatmap card.
@@ -872,6 +891,20 @@ pub struct UserPreferences {
     /// policy as `history_retention_days`.
     #[serde(default)]
     pub record_audio_for_debug: bool,
+    /// 调试录音里保留「处理后」的音频（降噪/增益/AGC 之后）。占用现有档案名
+    /// `<session>.wav`，quick note 播放与本地 ASR 回退都用它。默认 false：
+    /// 只有显式选择才会落盘。
+    #[serde(default)]
+    pub debug_archive_processed: bool,
+    /// 调试录音里额外保留「处理前」的原始音频，写成同目录的
+    /// `<session>.raw.wav`，用于和 `debug_archive_processed` 的那份做 A/B 对照。
+    /// 只选它、不选处理后时，主档案直接存原始 PCM（功能不受影响）。
+    #[serde(default)]
+    pub debug_archive_raw: bool,
+    /// AEC 的扬声器参考源（回环/监听设备名）。空字符串 = 自动选默认扬声器的
+    /// 监听源；`"off"` = 不采集参考（AEC 退化为无参考）。
+    #[serde(default)]
+    pub aec_reference_device_name: String,
     /// How many recent wav files `recordings/` keeps (newest first by mtime).
     /// `None` = follow `HISTORY_CAP` (200); `Some(n)` clamps to 1..=200.
     /// Trimmed before each new session. Lets users tune combinations like
@@ -1030,13 +1063,13 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_enhancement_enabled: bool,
     #[serde(default)]
+    echo_cancellation_enabled: bool,
+    #[serde(default)]
     audio_dsp: crate::audio_dsp::AudioDspConfig,
     #[serde(default)]
     stable_transcription_enabled: bool,
     #[serde(default)]
     low_latency_dictation_enabled: bool,
-    #[serde(default)]
-    low_memory_background_enabled: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
     #[serde(default)]
@@ -1211,10 +1244,14 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
+    #[serde(default)]
+    macos_composition_input: bool,
     #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    expression_learning_enabled: bool,
     vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
@@ -1228,6 +1265,12 @@ struct UserPreferencesWire {
     history_max_entries: Option<u32>,
     #[serde(default)]
     record_audio_for_debug: bool,
+    #[serde(default)]
+    debug_archive_processed: bool,
+    #[serde(default)]
+    debug_archive_raw: bool,
+    #[serde(default)]
+    aec_reference_device_name: String,
     #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
@@ -1318,10 +1361,10 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
+            echo_cancellation_enabled: prefs.echo_cancellation_enabled,
             audio_dsp: prefs.audio_dsp.normalized(),
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
-            low_memory_background_enabled: prefs.low_memory_background_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
@@ -1413,8 +1456,10 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             windows_composition_input: prefs.windows_composition_input,
+            macos_composition_input: prefs.macos_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            expression_learning_enabled: prefs.expression_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
@@ -1422,6 +1467,9 @@ impl Default for UserPreferencesWire {
             auto_update_check: prefs.auto_update_check,
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
+            debug_archive_processed: prefs.debug_archive_processed,
+            debug_archive_raw: prefs.debug_archive_raw,
+            aec_reference_device_name: prefs.aec_reference_device_name.clone(),
             audio_recording_max_entries: prefs.audio_recording_max_entries,
             quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
@@ -1540,10 +1588,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
+            echo_cancellation_enabled: wire.echo_cancellation_enabled,
             audio_dsp: wire.audio_dsp.normalized(),
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
-            low_memory_background_enabled: wire.low_memory_background_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
@@ -1651,8 +1699,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             windows_composition_input: wire.windows_composition_input,
+            macos_composition_input: wire.macos_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            expression_learning_enabled: wire.expression_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
@@ -1660,6 +1710,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             auto_update_check: wire.auto_update_check,
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
+            debug_archive_processed: wire.debug_archive_processed,
+            debug_archive_raw: wire.debug_archive_raw,
+            aec_reference_device_name: wire.aec_reference_device_name,
             audio_recording_max_entries: wire.audio_recording_max_entries,
             quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
@@ -1940,10 +1993,10 @@ impl Default for UserPreferences {
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             audio_enhancement_enabled: false,
+            echo_cancellation_enabled: false,
             audio_dsp: Default::default(),
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
-            low_memory_background_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
@@ -2032,8 +2085,10 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
+            macos_composition_input: false,
             cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
+            expression_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
@@ -2041,6 +2096,9 @@ impl Default for UserPreferences {
             auto_update_check: true,
             history_max_entries: None,
             record_audio_for_debug: false,
+            debug_archive_processed: false,
+            debug_archive_raw: false,
+            aec_reference_device_name: String::new(),
             audio_recording_max_entries: None,
             quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),
@@ -4024,24 +4082,5 @@ mod capsule_transcript_preferences_tests {
                 .capsule_transcript_font_size,
             12
         );
-    }
-}
-
-#[cfg(test)]
-mod low_memory_background_preferences_tests {
-    use super::UserPreferences;
-
-    #[test]
-    fn low_memory_background_is_opt_in_and_keeps_low_latency_preference() {
-        let old: UserPreferences = serde_json::from_str("{}").unwrap();
-        assert!(!old.low_memory_background_enabled);
-        let preferences: UserPreferences = serde_json::from_str(
-            r#"{"lowMemoryBackgroundEnabled":true,"lowLatencyDictationEnabled":true}"#,
-        )
-        .unwrap();
-        let restored: UserPreferences =
-            serde_json::from_value(serde_json::to_value(preferences).unwrap()).unwrap();
-        assert!(restored.low_memory_background_enabled);
-        assert!(restored.low_latency_dictation_enabled);
     }
 }

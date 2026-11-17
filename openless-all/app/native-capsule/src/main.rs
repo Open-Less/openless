@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 mod platform;
+mod frost;
 
 struct CapsuleApp {
     incoming: mpsc::Receiver<Option<HostMessage>>,
@@ -21,6 +22,7 @@ struct CapsuleApp {
     window: Arc<winit::window::Window>,
     capsule: DefaultCapsule,
     reduce_motion: bool,
+    frost: frost::Backdrop,
 }
 
 impl eframe::App for CapsuleApp {
@@ -70,6 +72,7 @@ impl eframe::App for CapsuleApp {
             return;
         };
         let action = if frame.state.style == "siri" && !frame.state.selection_polish {
+            self.frost.update(&self.window, None, false, ui.ctx().pixels_per_point());
             siri_transcript(ui, frame);
             openless_capsule::renderer::dictation_capsule(ui, &frame.state, &frame.labels)
         } else {
@@ -78,8 +81,19 @@ impl eframe::App for CapsuleApp {
                 ThemeMode::Dark => true,
                 ThemeMode::System => ui.ctx().system_theme() == Some(egui::Theme::Dark),
             };
-            self.capsule.show(ui, frame, dark, self.reduce_motion)
+            let action = self.capsule.show(ui, frame, dark, self.reduce_motion);
+            self.frost.update(
+                &self.window,
+                self.capsule.glass_surface(),
+                dark,
+                ui.ctx().pixels_per_point(),
+            );
+            action
         };
+        platform::update_input_regions(&self.window, &self.capsule.input_regions(frame), ui.ctx().pixels_per_point());
+        // The process exits at idle; while visible this also detects entry from a click-through area.
+        #[cfg(target_os = "macos")]
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         let action = match action {
             CapsuleAction::None => None,
             CapsuleAction::Cancel => Some(Action::Cancel),
@@ -324,6 +338,7 @@ fn main() -> eframe::Result<()> {
                 outgoing: std::io::stdout(),
                 frame: None,
                 shown: false,
+                frost: frost::Backdrop::new(&window),
                 window,
                 capsule: DefaultCapsule::default(),
                 reduce_motion: platform::reduce_motion(),

@@ -102,11 +102,7 @@ export function SelectionVoiceIntentPicker() {
             {t('selectionVoiceIntent.question')}
           </button>
           {sourceText.trim() ? (
-            <button
-              className="ol-tool-button"
-              disabled={busy}
-              onClick={() => void choose('edit')}
-            >
+            <button className="ol-tool-button" disabled={busy} onClick={() => void choose('edit')}>
               <PencilLine size={20} />
               {t('selectionVoiceIntent.edit')}
             </button>

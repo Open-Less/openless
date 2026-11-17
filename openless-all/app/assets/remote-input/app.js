@@ -287,7 +287,8 @@
         'El navegador o el sistema no permitió mantener la pantalla encendida; el audio recibido se procesará igualmente.',
       recovering: 'El ordenador está procesando tu última grabación…',
       interrupted: 'Grabación interrumpida. El ordenador procesa el audio ya recibido…',
-      offlineRecording: 'Conexión perdida; el ordenador seguirá procesando la grabación recibida. Reconecta para ver el resultado.',
+      offlineRecording:
+        'Conexión perdida; el ordenador seguirá procesando la grabación recibida. Reconecta para ver el resultado.',
       recovered: 'Última transcripción recuperada',
       recoveryRetry:
         'La transcripción falló. La grabación está guardada en el historial del ordenador y puede reintentarse.',
@@ -366,7 +367,8 @@
         'Le navigateur ou le système n’a pas permis de garder l’écran allumé ; l’audio déjà reçu sera quand même traité.',
       recovering: 'L’ordinateur traite votre dernier enregistrement…',
       interrupted: 'Enregistrement interrompu. L’ordinateur traite l’audio déjà reçu…',
-      offlineRecording: 'Connexion perdue ; l’ordinateur continuera de traiter l’enregistrement reçu. Reconnectez-vous pour voir le résultat.',
+      offlineRecording:
+        'Connexion perdue ; l’ordinateur continuera de traiter l’enregistrement reçu. Reconnectez-vous pour voir le résultat.',
       recovered: 'Dernière transcription récupérée',
       recoveryRetry:
         'La transcription a échoué. L’enregistrement est conservé dans l’historique de l’ordinateur et peut être relancé.',
@@ -443,7 +445,8 @@
         'Browser oder System erlaubten das Wachhalten nicht; die empfangenen Audiodaten werden dennoch verarbeitet.',
       recovering: 'Der Computer verarbeitet deine letzte Aufnahme…',
       interrupted: 'Aufnahme unterbrochen. Der Computer verarbeitet die bereits empfangenen Daten…',
-      offlineRecording: 'Verbindung getrennt; der Computer verarbeitet die empfangene Aufnahme weiter. Zum Ansehen des Ergebnisses neu verbinden.',
+      offlineRecording:
+        'Verbindung getrennt; der Computer verarbeitet die empfangene Aufnahme weiter. Zum Ansehen des Ergebnisses neu verbinden.',
       recovered: 'Letzte Transkription wiederhergestellt',
       recoveryRetry:
         'Die Transkription ist fehlgeschlagen. Die Aufnahme liegt im Verlauf des Computers und kann erneut versucht werden.',

@@ -60,6 +60,23 @@ nonisolated struct AudioPacket: Sendable {
 /// Owns the resampler off the UI and real-time audio callback.
 actor PCMWorker {
   private var converter: AVAudioConverter?
+  private var scratch: [AVAudioPCMBuffer] = []
+
+  private func outputBuffer(format: AVAudioFormat, capacity: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
+    // Converter output capacity affects its pull requests at fractional
+    // ratios (e.g. 44.1 -> 16 kHz). Preserve the original capacity
+    // exactly, including flush; do not substitute a larger cached buffer.
+    if let output = scratch.first(where: { $0.format == format && $0.frameCapacity == capacity }) {
+      output.frameLength = 0
+      return output
+    }
+    guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { throw VoiceFailure.format }
+    // Two entries cover alternating packet sizes without retaining an
+    // unbounded set of device callback capacities.
+    if scratch.count == 2 { scratch.removeFirst() }
+    scratch.append(output)
+    return output
+  }
   func convert(_ packet: AudioPacket) throws -> Data {
     let input = try packet.makeBuffer()
     let inputFormat = input.format
@@ -75,31 +92,69 @@ actor PCMWorker {
     guard let converter else { throw VoiceFailure.format }
     let capacity = AVAudioFrameCount(
       ceil(Double(input.frameLength) * 16_000 / inputFormat.sampleRate) + 32)
-    guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
-      throw VoiceFailure.format
-    }
-    var supplied = false
-    var error: NSError?
-    let status = converter.convert(to: output, error: &error) { _, flag in
-      if supplied {
-        flag.pointee = .noDataNow
-        return nil
+    var cursor: AVAudioFrameCount = 0
+    var invalidInput = false
+    var retainedInput: AVAudioPCMBuffer?
+    var pcm = Data()
+    // A filled output buffer does not imply that the converter has consumed
+    // the entire input packet. Drain .haveData before accepting the next
+    // packet, otherwise alternating packet sizes can silently lose frames.
+    for _ in 0..<8 {
+      let output = try outputBuffer(format: outputFormat, capacity: capacity)
+      var error: NSError?
+      let status = converter.convert(to: output, error: &error) { requested, flag in
+        if cursor == input.frameLength {
+          flag.pointee = .noDataNow
+          return nil
+        }
+        let frames = min(AVAudioFrameCount(requested), input.frameLength - cursor)
+        guard frames > 0 else { invalidInput = true; flag.pointee = .noDataNow; return nil }
+        flag.pointee = .haveData
+        if cursor == 0 && frames == input.frameLength {
+          cursor = input.frameLength
+          return input
+        }
+        // Respect the converter's requested frame count. Returning a whole
+        // large packet and marking it supplied loses its unconsumed suffix.
+        guard let slice = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: frames) else {
+          invalidInput = true; flag.pointee = .noDataNow; return nil
+        }
+        slice.frameLength = frames
+        let source = UnsafeMutableAudioBufferListPointer(input.mutableAudioBufferList)
+        let target = UnsafeMutableAudioBufferListPointer(slice.mutableAudioBufferList)
+        let stride = Int(inputFormat.streamDescription.pointee.mBytesPerFrame)
+        let offset = Int(cursor) * stride
+        let count = Int(frames) * stride
+        guard stride > 0, source.count == target.count else { invalidInput = true; flag.pointee = .noDataNow; return nil }
+        for index in source.indices {
+          guard let from = source[index].mData, let to = target[index].mData,
+            offset + count <= Int(source[index].mDataByteSize), count <= Int(target[index].mDataByteSize)
+          else { invalidInput = true; flag.pointee = .noDataNow; return nil }
+          to.copyMemory(from: from.advanced(by: offset), byteCount: count)
+        }
+        cursor += frames
+        retainedInput = slice
+        return slice
       }
-      supplied = true
-      flag.pointee = .haveData
-      return input
+      withExtendedLifetime(retainedInput) {}
+      guard !invalidInput else { throw VoiceFailure.format }
+      if let error { throw error }
+      guard status != .error else { throw VoiceFailure.format }
+      if output.frameLength > 0, let bytes = output.int16ChannelData?[0] {
+        pcm.append(Data(bytes: bytes, count: Int(output.frameLength) * 2))
+      }
+      if status == .inputRanDry || status == .endOfStream || output.frameLength == 0 {
+        guard cursor == input.frameLength else { throw VoiceFailure.format }
+        return pcm
+      }
     }
-    if let error { throw error }
-    guard status != .error else { throw VoiceFailure.format }
-    guard output.frameLength > 0, let bytes = output.int16ChannelData?[0] else { return Data() }
-    return Data(bytes: bytes, count: Int(output.frameLength) * 2)
+    throw VoiceFailure.format
   }
   func finish() throws -> [Data] {
     guard let converter else { return [] }
     var tail: [Data] = []
     for _ in 0..<8 {
-      guard let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: 2048)
-      else { throw VoiceFailure.format }
+      let output = try outputBuffer(format: converter.outputFormat, capacity: 2048)
       var error: NSError?
       let status = converter.convert(to: output, error: &error) { _, flag in
         flag.pointee = .endOfStream

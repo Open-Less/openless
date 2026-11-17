@@ -701,8 +701,10 @@ fn sanitize_validation_error(error: BackendError) -> BackendError {
         "llmTokenLimitInvalid",
         "llmThinkingBudgetInvalid",
         "llmProtocolHeaderConflict",
+        "llmThinkingRequired",
     ] {
-        if message == code || message == format!("parse error: {code}") {
+        // Polish failures arrive as "LLM provider failed: parse error: {code}".
+        if message == code || message.ends_with(&format!("parse error: {code}")) {
             return provider_error(code);
         }
     }
@@ -2409,5 +2411,20 @@ mod tests {
             let unique = actual.iter().collect::<std::collections::HashSet<_>>();
             assert_eq!(unique.len(), actual.len());
         }
+    }
+
+    #[test]
+    fn validation_keeps_llm_codes_from_polish_failures() {
+        for message in [
+            "llmThinkingRequired",
+            "LLM provider failed: parse error: llmThinkingRequired",
+        ] {
+            let error = sanitize_validation_error(provider_error(message));
+            assert_eq!(error.message, "llmThinkingRequired");
+        }
+        let error = sanitize_validation_error(provider_error(
+            "LLM provider failed: invalid response: status 400, body: secret",
+        ));
+        assert_eq!(error.message, "providerHttpStatus:400");
     }
 }

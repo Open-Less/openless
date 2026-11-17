@@ -29,7 +29,10 @@ pub struct ExternalAudioRecorder {
 
 struct ExternalRecordingSession {
     state: Mutex<ExternalRecordingState>,
+    /// Primary archive: processed PCM when requested, otherwise raw PCM.
     archive: Option<Arc<ExternalRecordingArchive>>,
+    /// Optional sidecar raw archive when both forms are requested.
+    raw_archive: Option<Arc<ExternalRecordingArchive>>,
 }
 
 struct ExternalRecordingState {
@@ -38,6 +41,9 @@ struct ExternalRecordingState {
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
     processor: Option<crate::AudioProcessor>,
+    samples: Vec<f32>,
+    archive_processed: bool,
+    archive_raw: bool,
 }
 
 struct ExternalActiveRecording {
@@ -83,13 +89,18 @@ impl ExternalAudioRecorder {
             .and_then(crate::AudioProcessor::finish)
         {
             state.consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-            if let Some(archive) = &expected.archive {
-                archive.append(&chunk.pcm_i16_le);
+            if state.archive_processed {
+                if let Some(archive) = &expected.archive {
+                    archive.append(&chunk.pcm_i16_le);
+                }
             }
         }
         state.active = false;
         drop(state);
         if let Some(archive) = &expected.archive {
+            archive.finish();
+        }
+        if let Some(archive) = &expected.raw_archive {
             archive.finish();
         }
         sessions.remove(&session_id);
@@ -127,18 +138,40 @@ impl AudioRecorder for ExternalAudioRecorder {
                 ))
             });
         }
-        let archive = self
+        let archive_processed = context.recording.archive_processed || !context.recording.archive_raw;
+        let archive_raw = context.recording.archive_raw;
+        let wants_archive = context.recording.archive_enabled;
+        let (archive, raw_archive) = self
             .recordings_dir
             .as_ref()
-            .filter(|_| context.recording.archive_enabled)
-            .and_then(|directory| {
-                ExternalRecordingArchive::create(directory, session_id, &context.recording)
+            .filter(|_| wants_archive)
+            .map(|directory| {
+                let primary = if archive_processed {
+                    ExternalRecordingArchive::create(directory, session_id, &context.recording)
+                } else {
+                    ExternalRecordingArchive::create_raw(directory, session_id, &context.recording)
+                };
+                let archive = primary
                     .map(Arc::new)
                     .map_err(|error| log::warn!("[remote-input] 录音归档不可用：{error}"))
-                    .ok()
-            });
+                    .ok();
+                let raw_archive = (archive_processed && archive_raw)
+                    .then(|| ExternalRecordingArchive::create_raw(directory, session_id, &context.recording))
+                    .and_then(|result| {
+                        result
+                            .map(Arc::new)
+                            .map_err(|error| log::warn!("[remote-input] 原始录音归档不可用：{error}"))
+                            .ok()
+                    });
+                (archive, raw_archive)
+            })
+            .unwrap_or((None, None));
+        if let (Some(archive), Some(raw_archive)) = (&archive, &raw_archive) {
+            archive.add_cleanup_path(raw_archive.path());
+        }
         let session = Arc::new(ExternalRecordingSession {
             state: Mutex::new(ExternalRecordingState {
+                samples: Vec::new(),
                 active: true,
                 bytes_received: 0,
                 consumer,
@@ -148,8 +181,11 @@ impl AudioRecorder for ExternalAudioRecorder {
                     .audio_processing
                     .enhancement_enabled
                     .then(|| crate::AudioProcessor::new(context.recording.audio_processing)),
+                archive_processed,
+                archive_raw,
             }),
             archive,
+            raw_archive,
         });
         sessions.insert(session_id, Arc::clone(&session));
         drop(sessions);
@@ -192,18 +228,38 @@ impl AudioRecorder for ExternalAudioRecorder {
         }
         state.bytes_received = state.bytes_received.saturating_add(pcm.len() as u64);
         let elapsed_ms = state.bytes_received.saturating_mul(1_000) / 32_000;
-        if let Some(processor) = &mut state.processor {
-            let samples: Vec<f32> = pcm
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0)
-                .collect();
-            if let Some(chunk) = processor.process(&samples, 1, crate::audio::DICTATION_SAMPLE_RATE)
+        let archive_processed = state.archive_processed;
+        let archive_raw = state.archive_raw;
+        if archive_raw && archive_processed {
+            if let Some(raw_archive) = &session.raw_archive {
+                raw_archive.append(pcm);
+            }
+        }
+        if let ExternalRecordingState {
+            processor: Some(processor),
+            samples,
+            ..
+        } = &mut *state
+        {
+            samples.clear();
+            samples.extend(
+                pcm.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0),
+            );
+            if archive_raw && !archive_processed {
+                if let Some(archive) = &session.archive {
+                    archive.append(pcm);
+                }
+            }
+            if let Some(chunk) = processor.process(samples, 1, crate::audio::DICTATION_SAMPLE_RATE)
             {
                 state.consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                if let Some(archive) = &session.archive {
-                    archive.append(&chunk.pcm_i16_le);
+                if archive_processed {
+                    if let Some(archive) = &session.archive {
+                        archive.append(&chunk.pcm_i16_le);
+                    }
                 }
                 return state.progress.publish_level(elapsed_ms, chunk.level);
             }
@@ -300,6 +356,40 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[tokio::test]
+    async fn external_archive_flags_create_processed_and_raw_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "openless-external-archive-flags-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
+        let id = SessionId::new();
+        let mut context = DictationContext {
+            audio_source: DictationAudioSource::External,
+            ..DictationContext::default()
+        };
+        context.recording.archive_enabled = true;
+        context.recording.archive_processed = true;
+        context.recording.archive_raw = true;
+        let recording = recorder
+            .start(
+                id,
+                Arc::new(context),
+                Arc::new(RecordingConsumer::default()),
+                Arc::new(RecordingProgress::default()),
+            )
+            .await
+            .unwrap();
+        let archive = recording.archive().unwrap();
+        recorder.feed_pcm(id, &[1, 0, 2, 0]).unwrap();
+        recording.stop().await.unwrap();
+        assert!(directory.join(format!("{id}.wav")).is_file());
+        assert!(directory.join(format!("{id}.raw.wav")).is_file());
+        archive.discard().await.unwrap();
+        assert!(!directory.join(format!("{id}.raw.wav")).exists());
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     #[tokio::test]
     async fn enhanced_external_input_flushes_the_same_complete_pcm_to_asr_and_archive() {

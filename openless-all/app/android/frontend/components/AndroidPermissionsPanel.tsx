@@ -67,11 +67,7 @@ function persistAndroidOverlayPrefs(patch: Partial<UserPreferences>): Promise<An
 }
 
 type AndroidPermissionsPanelMode =
-  | 'all'
-  | 'permissionsOnly'
-  | 'accessibility'
-  | 'overlayPermission'
-  | 'overlayConfig';
+  'all' | 'permissionsOnly' | 'accessibility' | 'overlayPermission' | 'overlayConfig';
 
 interface AndroidPermissionsPanelProps {
   mode?: AndroidPermissionsPanelMode;
@@ -675,13 +671,18 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                     style={selectStyle}
                   >
                     {(
-                      ['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'qa', 'voice_edit'] as const
+                      [
+                        'none',
+                        'quick_note',
+                        'translation',
+                        'style_pack',
+                        'cancel',
+                        'qa',
+                        'voice_edit',
+                      ] as const
                     ).map((action) => (
                       <option key={action} value={action}>
-                        {t(
-                          `settings.permissions.androidOverlayGestureAction.${action}`,
-                          action,
-                        )}
+                        {t(`settings.permissions.androidOverlayGestureAction.${action}`, action)}
                       </option>
                     ))}
                   </select>
