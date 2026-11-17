@@ -36,7 +36,7 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
         {panel.kind === 'qa' ? (
           <div key={panel.epoch} className="ol-embedded-panel">
             <QaPanel
-              {...{ onRequestDismiss: () => close(panel) }}
+              onRequestDismiss={() => close(panel)}
               embedded
               onRequestClose={() => didClose(panel)}
             />
@@ -52,7 +52,7 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
               embedded
               closeError={panel.error}
               onRequestClose={() => didClose(panel)}
-              {...{ onRequestDismiss: () => close(panel) }}
+              onRequestDismiss={() => close(panel)}
             />
           </div>
         ) : (
