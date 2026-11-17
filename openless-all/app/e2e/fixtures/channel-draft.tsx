@@ -84,7 +84,13 @@ const channel: Channel = {
   lastTest: null,
 };
 const presets: PresetOption[] = [
-  { id: 'custom', nameKey: 'custom', authRequirement: 'api_key' },
+  {
+    id: 'custom',
+    nameKey: 'custom',
+    authRequirement: 'api_key',
+    defaultRequestFormat: 'messages',
+    supportedRequestFormats: ['messages'],
+  },
   { id: 'deepseek', nameKey: 'deepseek', authRequirement: 'api_key' },
 ];
 function Fixture() {

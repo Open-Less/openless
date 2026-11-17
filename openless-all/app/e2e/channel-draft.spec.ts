@@ -47,6 +47,21 @@ test('provider changes only after the old credential is saved; a failed write ke
   expect(saved.indexOf('credential-committed')).toBeLessThan(saved.indexOf('provider:deepseek'));
 });
 
+test('invalid protocol settings block a provider switch without discarding the draft', async ({
+  page,
+}) => {
+  const { editor, provider } = await openEditor(page);
+  const limit = editor.getByRole('spinbutton', { name: '最大输出 tokens' });
+  await expect(limit).toBeEnabled();
+  await limit.fill('0');
+  await provider.click();
+  await page.getByRole('option', { name: 'DeepSeek', exact: true }).click();
+  await expect(editor.getByRole('alert').filter({ hasText: '操作失败' })).toBeVisible();
+  await expect(limit).toHaveValue('0');
+  await expect(provider).not.toContainText('DeepSeek');
+  expect(await page.evaluate(() => window.channelFixture.calls)).not.toContain('provider:deepseek');
+});
+
 for (const exit of ['close', 'unmount'] as const) {
   test(`a queued provider switch cannot commit after editor ${exit}`, async ({ page }) => {
     const { editor, credential, provider } = await openEditor(page);
@@ -55,8 +70,12 @@ for (const exit of ['close', 'unmount'] as const) {
     await provider.click();
     await page.getByRole('option', { name: 'DeepSeek', exact: true }).click();
     await expect(provider).toBeDisabled();
-    if (exit === 'close') await editor.getByRole('button', { name: '关闭' }).first().click();
-    else await page.evaluate(() => window.channelFixture.forceClose());
+    if (exit === 'close') {
+      await editor.getByRole('button', { name: '关闭' }).first().click();
+    } else {
+      await page.evaluate(() => window.channelFixture.forceClose());
+      await expect(page.getByText('Editor closed')).toBeVisible();
+    }
     await page.evaluate(() => window.channelFixture.release());
     await expect(page.getByText('Editor closed')).toBeVisible();
     await expect
