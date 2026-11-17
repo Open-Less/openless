@@ -5,10 +5,10 @@
 #   /usr/lib/openless/openless-qt           窗口层（Qt，Chromium 渲染）
 #   /usr/lib/openless/openless-linux-web    后端 + HTTP 命令桥（Rust，无头运行）
 #   /usr/lib/openless/web/dist              官方 React 前端产物
-#   /usr/bin/openless                       启动器（exec openless-qt，后端由它拉起）
+#   /usr/bin/openless                       启动器（exec 窗口层，后端由它拉起）
 #
-# 依赖说明：Qt WebEngine 必须**动态链接系统 Qt**（LGPLv3 要求可替换），
-# 所以这里不捆绑 qt6 库，只在 Depends 里声明。
+# 依赖说明：WebEngine 必须动态链接系统库（LGPLv3 要求可替换），
+# 所以这里不捆绑相关库，只在 Depends 里声明。
 set -euo pipefail
 
 APP_ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,8 +38,42 @@ require_file() {
   [ -s "$1" ] || { echo "missing or empty $1" >&2; exit 1; }
 }
 
+# 窗口层是构建产物：源码比二进制新就重新编译，绝不把旧二进制打进包
+# （踩过：改了 main.cpp 但 package 脚本直接用仓库里的旧 openless-qt）。
+QT_HOST_SRC="$APP_ROOT/linux-qt/src/main.cpp"
+QT_HOST_BIN="$APP_ROOT/linux-qt/openless-qt"
+if [ "${OPENLESS_SKIP_QT_BUILD:-0}" != "1" ]; then
+  if [ ! -f "$QT_HOST_BIN" ] || [ "$QT_HOST_SRC" -nt "$QT_HOST_BIN" ]; then
+    echo "编译窗口层：$QT_HOST_SRC"
+    if pkg-config --exists Qt6Core 2>/dev/null; then
+      # 发行版把 Qt 头文件放在 /usr/include/<triplet>/qt6，交给 pkg-config 拼。
+      QT_CFLAGS=$(pkg-config --cflags Qt6Quick Qt6WebEngineWidgets Qt6Widgets Qt6Gui Qt6Core Qt6Network)
+      QT_LIBS=$(pkg-config --libs Qt6Quick Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network)
+      LS_CFLAGS=$(pkg-config --cflags LayerShellQtInterface 2>/dev/null || echo "-I/usr/include")
+      LS_LIBS=$(pkg-config --libs LayerShellQtInterface 2>/dev/null || echo "-lLayerShellQtInterface")
+    else
+      # 没有 dev 包的环境（本机只装了运行时库）：允许用 OPENLESS_QT_PREFIX 指向
+      # 一份解包出来的 Qt 头文件树，链接仍走系统运行库。
+      prefix=${OPENLESS_QT_PREFIX:?未找到 Qt6 开发包：请安装 qt6-base-dev / qt6-webengine-dev，或设置 OPENLESS_QT_PREFIX 指向含 Qt 头文件的目录}
+      QT_INC="$prefix/include/x86_64-linux-gnu/qt6"
+      QT_CFLAGS="-I$QT_INC -I$QT_INC/QtCore -I$QT_INC/QtGui -I$QT_INC/QtWidgets -I$QT_INC/QtNetwork \
+        -I$QT_INC/QtWebEngineCore -I$QT_INC/QtWebEngineWidgets -I$QT_INC/QtQuick \
+        -I$prefix/include"
+      QT_LIBS="/usr/lib/x86_64-linux-gnu/libQt6WebEngineWidgets.so.6 \
+        /usr/lib/x86_64-linux-gnu/libQt6WebEngineCore.so.6 \
+        /usr/lib/x86_64-linux-gnu/libQt6Widgets.so.6 /usr/lib/x86_64-linux-gnu/libQt6Gui.so.6 \
+        /usr/lib/x86_64-linux-gnu/libQt6Core.so.6 /usr/lib/x86_64-linux-gnu/libQt6Network.so.6 \
+        /usr/lib/x86_64-linux-gnu/libQt6Quick.so.6"
+      LS_CFLAGS=""
+      LS_LIBS="/usr/lib/x86_64-linux-gnu/libLayerShellQtInterface.so.6"
+    fi
+    g++ -std=c++17 -O2 -s -fPIC "$QT_HOST_SRC" -o "$QT_HOST_BIN" \
+      $QT_CFLAGS $LS_CFLAGS $QT_LIBS $LS_LIBS
+  fi
+fi
 require_file "$QT_BIN"
 require_file "$HOST_BIN"
+require_file "$QT_HOST_BIN"
 require_file "$DIST_DIR/index.html"
 
 # 前端包必须比源码新：之前打过一版包，Rust 改了、dist 还是 11 号的旧构建，
@@ -156,7 +190,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: OpenLess Contributors
-Description: OpenLess Linux host (Qt6 WebEngine / Chromium, native Wayland)
+Description: OpenLess for Linux - voice dictation and writing assistant
 Depends: fcitx5, fcitx5-module-dbus, fcitx5-frontend-qt6, libc6, libgcc-s1, libstdc++6, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6, libqt6webenginecore6, libqt6webenginewidgets6, liblayershellqtinterface6, qt6-wayland, libfcitx5core7, libfcitx5config6, libfcitx5utils2
 Recommends: pavucontrol, mesa-vulkan-drivers
 Homepage: https://github.com/Open-Less/openless
@@ -164,7 +198,7 @@ EOF
 install -m755 "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postinst"
 cp "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postrm"
 dpkg-deb --build --root-owner-group "$DEB_ROOT" \
-  "$OUTPUT/OpenLess-Linux-qt-${VERSION}-x86_64.deb"
+  "$OUTPUT/OpenLess-Linux-${VERSION}-x86_64.deb"
 
 # ── rpm ─────────────────────────────────────────────────────────────────────
 if command -v rpmbuild >/dev/null; then
@@ -180,7 +214,7 @@ if command -v rpmbuild >/dev/null; then
 Name: $PKG_NAME
 Version: ${VERSION%%-*}
 Release: ${VERSION##*-}
-Summary: OpenLess Linux host (Qt6 WebEngine / Chromium, native Wayland)
+Summary: OpenLess for Linux
 License: AGPL-3.0-only
 BuildArch: x86_64
 # 不要在打包期 strip / 拆 debuginfo：包内字节必须和 deb 里的一致，
@@ -211,7 +245,7 @@ cp -a $RPM_ROOT/. %{buildroot}/
 EOF
   if rpmbuild --define "_topdir $WORK/rpmtop" --define "_rpmdir $WORK/rpmout" -bb \
       "$WORK/openless.spec" >"$WORK/rpmbuild.log" 2>&1; then
-    dest="$OUTPUT/OpenLess-Linux-qt-$VERSION-x86_64.rpm"
+    dest="$OUTPUT/OpenLess-Linux-$VERSION-x86_64.rpm"
     while IFS= read -r built; do
       [ "$built" = "$dest" ] || mv -f "$built" "$dest"
     done < <(find "$WORK/rpmout" -name '*.rpm')

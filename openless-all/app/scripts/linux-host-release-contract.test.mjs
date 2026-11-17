@@ -79,7 +79,7 @@ assert.match(ci, /openless-linux-host-direct-download/, 'CI publishes the direct
 assert.match(tauri, /^  linux:$/m, 'release-tauri.yml must contain the Linux job');
 assert.match(tauri, /vars\.LINUX_ACCEPTED_RELEASE_TAG == github\.ref_name/);
 assert.match(tauri, /gh release upload "\$RELEASE_TAG"/);
-assert.match(tauri, /OpenLess-Linux-qt-\*\.deb/);
+assert.match(tauri, /OpenLess-Linux-\*\.deb/);
 assert.ok(!tauri.includes('build-linux-host:'), 'Linux does not build Tauri');
 
 // ── 5. 版本与依赖边界 ──────────────────────────────────────────────────────

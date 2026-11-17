@@ -87,21 +87,9 @@ runs:
           liblayershellqtinterface-dev qt6-wayland-dev \
           libqt6webenginewidgets6 libqt6webenginecore6
 
-    - name: Build the Qt window host
-      timeout-minutes: 25
-      working-directory: openless-all/app
-      shell: bash
-      run: |
-        set -euo pipefail
-        # 用 pkg-config 的 cflags，而不是自己拼 -I：发行版把 Qt 头文件放在
-        # /usr/include/<triplet>/qt6，手写的 -I$INC/QtQuick 在 Ubuntu 上根本不存在。
-        # LayerShellQt 的 .pc 名字各发行版不同（有的没有），单独兜底。
-        QT_CFLAGS=$(pkg-config --cflags Qt6Quick Qt6WebEngineWidgets Qt6Widgets Qt6Gui Qt6Core Qt6Network)
-        QT_LIBS=$(pkg-config --libs Qt6Quick Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network)
-        LS_CFLAGS=$(pkg-config --cflags LayerShellQtInterface 2>/dev/null || echo "-I/usr/include")
-        LS_LIBS=$(pkg-config --libs LayerShellQtInterface 2>/dev/null || echo "-lLayerShellQtInterface")
-        g++ -std=c++17 -O2 -s -fPIC linux-qt/src/main.cpp -o linux-qt/openless-qt \
-          $QT_CFLAGS $LS_CFLAGS $QT_LIBS $LS_LIBS
+    # 窗口层的编译放在 `scripts/package-linux-qt.sh` 里：打包脚本自己检查
+    # `main.cpp` 是否比 `linux-qt/openless-qt` 新，旧了就重编。这样 CI 与本地
+    # 只有一条编译路径，也不会再把旧二进制打进包（图标那次就是这么丢的）。
 
     - name: Build the React frontend bundle
       timeout-minutes: 20
@@ -147,8 +135,8 @@ runs:
         alias_dir="$RUNNER_TEMP/openless-linux-host-direct-download"
         rm -rf "$alias_dir"
         mkdir -p "$alias_dir"
-        debs=("$output"/OpenLess-Linux-qt-*.deb)
-        rpms=("$output"/OpenLess-Linux-qt-*.rpm)
+        debs=("$output"/OpenLess-Linux-*.deb)
+        rpms=("$output"/OpenLess-Linux-*.rpm)
         test "${#debs[@]}" -eq 1
         test "${#rpms[@]}" -eq 1
         cp "${debs[0]}" "$alias_dir/OpenLess_linux_x86_64.deb"
