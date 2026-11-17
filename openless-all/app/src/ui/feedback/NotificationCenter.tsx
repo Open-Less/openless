@@ -30,7 +30,10 @@ function NotificationCard({
       exit={{ opacity: 0, y: reduced ? 0 : '-110%' }}
       transition={reduced ? { duration: 0 } : { type: 'spring', stiffness: 320, damping: 30 }}
     >
-      <span className={`ol-notification-icon ol-notification-icon--${iconState}`} aria-hidden="true">
+      <span
+        className={`ol-notification-icon ol-notification-icon--${iconState}`}
+        aria-hidden="true"
+      >
         {state === 'saving' ? (
           <span className="ol-loading-spinner">
             <Icon name="refresh" size={10} />
