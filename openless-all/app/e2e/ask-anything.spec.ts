@@ -83,7 +83,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
   });
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-recording-selection')).toContainText('selected source');
-  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
+  await expect(page.locator('#native-host')).toHaveCSS('width', '760px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'ask-a', messages: [] });
   await emit(page, 'qa:state', {
     kind: 'activity',
@@ -115,6 +115,41 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
   await expect(page.locator('.qa-prompt input')).toBeVisible();
   await expect(page.locator('.qa-prompt .qa-close')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('ask-result.png') });
+});
+
+test('Stop cancels the current turn and retains the open conversation for a follow-up', async ({
+  page,
+}) => {
+  await page.goto(fixture + '?qa');
+  await page.locator('.ol-default-capsule').waitFor();
+  const firstTurn = [
+    { role: 'user', content: 'first question' },
+    { role: 'assistant', content: 'first answer' },
+  ];
+  await emit(page, 'qa:state', { kind: 'answer', sessionId: 'ask-a', messages: firstTurn });
+  await expect(page.locator('.qa-assistant-message')).toContainText('first answer');
+  await emit(page, 'qa:state', {
+    kind: 'thinking',
+    sessionId: 'ask-b',
+    messages: [...firstTurn, { role: 'user', content: 'follow-up' }],
+  });
+  await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'ask-b', chunk: 'draft answer' });
+  const stop = page.locator('.qa-send.is-stop');
+  await expect(stop).toBeVisible();
+  await stop.click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).fixture.qaActions.map((action: { command: string }) => action.command),
+      ),
+    )
+    .toContain('qa_cancel_turn');
+  await emit(page, 'qa:state', { kind: 'cancelled', sessionId: 'ask-b', messages: firstTurn });
+  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  await expect(page.locator('.qa-assistant-message')).toContainText('first answer');
+  await expect(page.getByText('draft answer')).toHaveCount(0);
+  await expect(page.locator('.qa-prompt input')).toBeEnabled();
+  await expect(stop).toHaveCount(0);
 });
 
 test('overview is restored and the Ask page remains without the added three-row guide', async ({

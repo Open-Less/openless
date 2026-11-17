@@ -4,7 +4,7 @@ import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
-import '../../src/pages/qa-panel.css';
+import '../../src/features/qa/qa-panel.css';
 const tauriConfig = await import('../../src-tauri/tauri.conf.json');
 const policy = document.createElement('meta');
 policy.httpEquiv = 'Content-Security-Policy';
@@ -15,8 +15,48 @@ await i18n.init({
   lng: 'zh-CN',
   resources: { 'zh-CN': { translation: { common: { copy: '复制' }, qa: { sources: '来源' } } } },
 });
-(window as any).__TAURI_INTERNALS__ = { invoke: async () => undefined };
-const { QaAnswerFooter } = await import('../../src/components/QaAnswerFooter');
+const playback: Array<{ command: string; requestId: string }> = [];
+let resumeAudio: (() => void) | undefined;
+let finishAudio: (() => void) | undefined;
+let holdResume = false;
+Object.assign(window, {
+  qaFooterFixture: {
+    playback,
+    holdResume: () => {
+      holdResume = true;
+    },
+    releaseResume: () => resumeAudio?.(),
+    finish: () => finishAudio?.(),
+  },
+  AudioContext: class {
+    currentTime = 0;
+    resume() {
+      if (!holdResume) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        resumeAudio = resolve;
+      });
+    }
+    close() {
+      return Promise.resolve();
+    }
+  },
+  __TAURI_INTERNALS__: {
+    transformCallback: () => 1,
+    unregisterCallback: () => undefined,
+    async invoke(command: string, args?: { requestId: string }) {
+      if (command === 'get_startup_snapshot')
+        return { contractVersion: '2.0.0', backend: { running: true } };
+      if (command === 'deepseek_tts_start' || command === 'deepseek_tts_stop') {
+        playback.push({ command, requestId: args!.requestId });
+        if (command === 'deepseek_tts_start')
+          await new Promise<void>((resolve) => {
+            finishAudio = resolve;
+          });
+      }
+    },
+  },
+});
+const { QaAnswerFooter } = await import('../../src/features/qa/QaAnswerFooter');
 function Fixture() {
   const [mode, setMode] = useState('traditional');
   return (

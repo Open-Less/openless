@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckIcon, CopyIcon, GlobeIcon } from 'lucide-react';
 import { DeepSeekReadAloud } from './DeepSeekReadAloud';
-import { openExternal } from '../lib/ipc';
-import { isTauri } from '../lib/ipc/shared';
-import type { QaSource } from '../lib/qaSources';
+import { copyTextToClipboard, openExternal } from '../../api/files';
+import { isTauriHost } from '../../runtime/environment';
+import type { QaSource } from './qaSources';
 
 function SourceLink({ source, index }: { source: QaSource; index: number }) {
   const [failed, setFailed] = useState(false);
@@ -17,10 +17,10 @@ function SourceLink({ source, index }: { source: QaSource; index: number }) {
       style={{ animationDelay: `${index * 35}ms` }}
       onClick={(event) => {
         event.preventDefault();
-        void openExternal(source.url);
+        void openExternal(source.url).catch(() => undefined);
       }}
     >
-      {isTauri && !failed ? (
+      {isTauriHost() && !failed ? (
         <img
           src={`https://icons.duckduckgo.com/ip3/${encodeURIComponent(source.host)}.ico`}
           referrerPolicy="no-referrer"
@@ -71,8 +71,7 @@ export function QaAnswerFooter({
           data-copied={copied}
           aria-label={t('common.copy')}
           onClick={() => {
-            void navigator.clipboard
-              .writeText(text)
+            void copyTextToClipboard(text)
               .then(() => setCopied(true))
               .catch(() => setCopied(false));
           }}

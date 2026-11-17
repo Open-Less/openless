@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+import { fixtureOrigin } from './support/server';
+test.use({ baseURL: fixtureOrigin });
 test('sources sit left, actions sit below the article on the right, and only suite mode offers read aloud', async ({
   page,
 }) => {
@@ -46,4 +47,38 @@ test('sources sit left, actions sit below the article on the right, and only sui
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(footer).toHaveCSS('animation-name', 'none');
   await page.screenshot({ path: test.info().outputPath('qa-footer.png') });
+});
+
+test('stop and pipeline changes cancel the native speech request by ID', async ({ page }) => {
+  await page.goto('/e2e/fixtures/qa-footer.html');
+  await page.getByRole('button', { name: 'deepseek', exact: true }).click();
+  const read = page.getByRole('button', { name: 'DeepSeek 朗读', exact: true });
+  const stop = page.getByRole('button', { name: '停止朗读', exact: true });
+  const actions = () => page.evaluate(() => (window as any).qaFooterFixture.playback);
+  await read.click();
+  await expect(stop).toBeVisible();
+  await expect
+    .poll(async () => (await actions()).map(({ command }) => command))
+    .toEqual(['deepseek_tts_start']);
+  await page.getByRole('button', { name: 'traditional', exact: true }).click();
+  await expect(stop).toHaveCount(0);
+  await expect
+    .poll(async () => (await actions()).map(({ command }) => command))
+    .toEqual(['deepseek_tts_start', 'deepseek_tts_stop']);
+  const first = await actions();
+  expect(first[1].requestId).toBe(first[0].requestId);
+  await page.evaluate(() => {
+    (window as any).qaFooterFixture.finish();
+    (window as any).qaFooterFixture.holdResume();
+  });
+  await page.getByRole('button', { name: 'deepseek', exact: true }).click();
+  await read.click();
+  await stop.click();
+  await page.evaluate(() => (window as any).qaFooterFixture.releaseResume());
+  await expect(read).toBeVisible();
+  await expect
+    .poll(async () => (await actions()).map(({ command }) => command))
+    .toEqual(['deepseek_tts_start', 'deepseek_tts_stop', 'deepseek_tts_stop']);
+  const all = await actions();
+  expect(all[2].requestId).not.toBe(all[0].requestId);
 });

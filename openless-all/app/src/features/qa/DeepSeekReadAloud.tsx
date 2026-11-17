@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Channel, invoke } from '@tauri-apps/api/core';
+import { startQaReadAloud, stopQaReadAloud } from '../../api/qa';
 import { useTranslation } from 'react-i18next';
-import { isTauri } from '../lib/ipc/shared';
+import { isTauriHost } from '../../runtime/environment';
 
 let stopActiveReading: (() => void) | null = null;
 
@@ -28,7 +28,7 @@ export function DeepSeekReadAloud({ text }: { text: string }) {
     void context.current?.close().catch(() => {});
     context.current = null;
     setPlaying(false);
-    void invoke('deepseek_tts_stop', { requestId: requestId.current }).catch(() => {});
+    void stopQaReadAloud(requestId.current).catch(() => {});
   };
   useEffect(
     () => () => {
@@ -36,7 +36,7 @@ export function DeepSeekReadAloud({ text }: { text: string }) {
     },
     [text],
   );
-  if (!isTauri) return null;
+  if (!isTauriHost()) return null;
   return (
     <>
       <button
@@ -64,8 +64,7 @@ export function DeepSeekReadAloud({ text }: { text: string }) {
             setError('');
             let cursor = 0;
             let pending: number | null = null;
-            const channel = new Channel<number[]>();
-            channel.onmessage = (data) => {
+            const onAudio = (data: number[]) => {
               if (generation.current !== epoch) return;
               const bytes = pending === null ? data : [pending, ...data];
               pending = bytes.length % 2 ? bytes[bytes.length - 1] : null;
@@ -88,11 +87,7 @@ export function DeepSeekReadAloud({ text }: { text: string }) {
             await ctx.resume();
             // Device activation can finish after Stop, dismissal, or a newer playback.
             if (generation.current !== epoch) return;
-            await invoke('deepseek_tts_start', {
-              text,
-              requestId: id,
-              audio: channel,
-            });
+            await startQaReadAloud(text, id, onAudio);
             if (generation.current !== epoch) return;
             if (pending !== null) throw new Error('Incomplete PCM frame');
             finishTimer.current = setTimeout(

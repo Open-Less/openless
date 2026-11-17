@@ -173,6 +173,8 @@ export {
   qaToggleRecording,
   qaSubmitText,
   qaSetEditInstructionMode,
+  qaCancelTurn,
+  qaStopRecording,
 } from './qa';
 
 export {
