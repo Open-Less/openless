@@ -1,15 +1,6 @@
-// Display atoms (SettingRow / Toggle / inputStyle) and pure i18n label tables shared across settings sections.
-
-import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react';
-import { toggleGroupFeedback } from '../../lib/toggleFeedback';
-import { Switch } from '@base-ui/react/switch';
-const SettingLabel = createContext<string | undefined>(undefined);
-import { Hint } from '../../components/Tooltip';
-import {
-  useMobileLayout,
-  useReadableLayout,
-  useConservativeLayout,
-} from '../../lib/useMobileLayout';
+// Setting headings, legacy input styles and display-only provider labels.
+import type { CSSProperties, ReactNode } from 'react';
+import { Hint } from '../../ui/overlays/Tooltip';
 
 export function SectionTitle({
   children,
@@ -78,100 +69,7 @@ export function SectionDesc(_props: { children: ReactNode; style?: CSSProperties
   return null;
 }
 
-interface SettingRowProps {
-  label: string;
-  desc?: ReactNode;
-  children: ReactNode;
-  controlWidth?: number | string;
-  className?: string;
-}
-
-// Explanations share the same dotted-label trigger, including keyboard and touch access.
-export function SettingRow({ label, desc, children, controlWidth, className }: SettingRowProps) {
-  const labelId = useId();
-  const mobile = useMobileLayout();
-  const readable = useReadableLayout();
-  const conservative = useConservativeLayout();
-  const stackLayout = mobile || readable || conservative;
-  const labelStyle: CSSProperties = {
-    fontSize: 14,
-    fontWeight: 'var(--ol-font-weight-medium)',
-    color: 'var(--ol-ink)',
-    minWidth: 0,
-  };
-  return (
-    <div
-      className={['ol-setting-row', className].filter(Boolean).join(' ')}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : 'minmax(0, 200px) minmax(0, 1fr)',
-        gap: stackLayout ? 8 : 16,
-        padding: stackLayout ? '12px 0' : '14px 0',
-        borderTop: '0.5px solid var(--ol-line-soft)',
-        alignItems: 'center',
-      }}
-    >
-      <div style={{ minWidth: 0, alignSelf: 'center' }}>
-        <div style={labelStyle}>
-          {desc ? (
-            <Hint id={labelId} content={desc}>
-              {label}
-            </Hint>
-          ) : (
-            <span id={labelId}>{label}</span>
-          )}
-        </div>
-      </div>
-      <div
-        className="ol-flex-row"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-          minWidth: 0,
-          width: stackLayout ? '100%' : (controlWidth ?? 'auto'),
-          maxWidth: '100%',
-          flexWrap: stackLayout ? 'wrap' : 'nowrap',
-          gap: stackLayout ? 6 : undefined,
-        }}
-      >
-        <SettingLabel.Provider value={labelId}>{children}</SettingLabel.Provider>
-      </div>
-    </div>
-  );
-}
-
-export function Toggle({
-  on,
-  onToggle,
-  disabled = false,
-  label,
-}: {
-  on: boolean;
-  onToggle?: (next: boolean) => void;
-  disabled?: boolean;
-  label?: string;
-}) {
-  const labelId = useContext(SettingLabel);
-  return (
-    <Switch.Root
-      className="ol-switch"
-      checked={on}
-      onCheckedChange={(next) => onToggle?.(next)}
-      aria-label={label}
-      aria-labelledby={label ? undefined : labelId}
-      disabled={disabled}
-      onClick={(event) => {
-        if (disabled) return;
-        if (event.detail > 0) toggleGroupFeedback(event.currentTarget);
-      }}
-    >
-      {/* Geometry, colours and motion live in .ol-switch (refinements.css). Width and
-          height are locked there, so a column-direction row can't stretch it into a ball. */}
-      <Switch.Thumb className="ol-switch-thumb" />
-    </Switch.Root>
-  );
-}
+export { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 
 export const btnGhostStyle: CSSProperties = {
   padding: '5px 10px',
