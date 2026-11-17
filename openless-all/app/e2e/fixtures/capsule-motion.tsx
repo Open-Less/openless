@@ -89,7 +89,11 @@ window.__TAURI_INTERNALS__ = {
       bridge.regionWrites.push(args.rects);
       return;
     }
-    if (command === 'stop_dictation' || command === 'cancel_dictation') {
+    if (
+      ['stop_dictation', 'cancel_dictation', 'qa_stop_recording', 'qa_cancel_turn'].includes(
+        command,
+      )
+    ) {
       bridge.dictationActions.push(command);
       return;
     }
@@ -180,11 +184,11 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener()
 const { i18nReady } = await import('../../src/i18n');
 await i18nReady;
 const { InsertFallbackCard } = await import('../../src/features/capsule/InsertFallbackCard');
-const { OpenLessPill } = await import('../../src/components/OpenLessCapsule');
+const { OpenLessPill } = await import('../../src/features/capsule/OpenLessCapsule');
 const { CapsuleTranslationBadge, CapsuleTranscriptOverlay } =
-  await import('../../src/components/LiveTranscriptPill');
-const { QaPanel } = await import('../../src/pages/QaPanel');
-const { Capsule } = await import('../../src/components/Capsule');
+  await import('../../src/features/capsule/LiveTranscriptPill');
+const { QaPanel } = await import('../../src/features/qa/QaPanel');
+const { Capsule } = await import('../../src/features/capsule/Capsule');
 if (themeSync) {
   localStorage.setItem('ol.theme', 'light');
   const { initThemeMode } = await import('../../src/lib/themeMode');

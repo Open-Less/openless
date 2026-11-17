@@ -10,6 +10,7 @@ import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getSettings } from '../../api/preferences';
+import { qaCancelTurn, qaStopRecording } from '../../api/qa';
 import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../../api/dictation';
 import {
   getCapsuleHostMetrics,
@@ -194,6 +195,7 @@ interface ClassicCapsuleProps {
   transcriptInSameWindow?: boolean;
   operating: boolean;
   translation: boolean;
+  qa: boolean;
   leaving: boolean;
   warming: boolean;
 }
@@ -215,21 +217,24 @@ function ClassicCapsule({
   transcriptInSameWindow = true,
   operating,
   translation,
+  qa,
   leaving,
   warming,
 }: ClassicCapsuleProps) {
-  const hostMetrics = getCapsuleHostMetrics(os, false, 'classic');
+  const { t } = useTranslation();
+  const hostMetrics = getCapsuleHostMetrics(os, translation || qa, 'classic');
   const onCancel = useCallback(() => {
-    void cancelDictation();
-  }, []);
+    void (qa ? qaCancelTurn() : cancelDictation());
+  }, [qa]);
   const onConfirm = useCallback(() => {
-    void stopDictation();
-  }, []);
+    void (qa ? qaStopRecording() : stopDictation());
+  }, [qa]);
+  const asking = qa && isActiveCapsuleState(state) && !leaving;
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
     transcriptVisible || Boolean(liveText),
-    translation,
+    translation || qa,
     transcriptInSameWindow,
   );
 
@@ -251,7 +256,13 @@ function ClassicCapsule({
           pointerEvents: 'none',
         }}
       >
-        <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+        {qa ? (
+          <div className="ol-qa-capsule-badge" data-visible={asking} aria-hidden={!asking}>
+            {t('capsule.asking')}
+          </div>
+        ) : (
+          <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+        )}
       </div>
       <div className="ol-classic-capsule-stack">
         {liveText && (
@@ -280,6 +291,10 @@ function ClassicCapsule({
       </div>
     </>
   );
+}
+
+function isActiveCapsuleState(state: CapsuleState) {
+  return state === 'recording' || state === 'transcribing' || state === 'polishing';
 }
 
 // Must stay in sync with the @keyframes capsule-out duration — otherwise the timer
@@ -329,6 +344,7 @@ function getPreviewCapsulePayload() {
       level: 0,
       message: undefined,
       translation: false,
+      qa: false,
       warming: false,
       selectionPolish: false,
       style: 'classic' as CapsuleStyle,
@@ -348,6 +364,7 @@ function getPreviewCapsulePayload() {
     level: Number.isFinite(previewLevel) ? Math.min(1, Math.max(0, previewLevel)) : 0.6,
     message: params.get('message') ?? undefined,
     translation: params.get('translation') === '1',
+    qa: params.get('qa') === '1',
     warming: params.get('warming') === '1',
     selectionPolish: params.get('selectionPolish') === '1',
     style: parseCapsuleStyle(params.get('style')) ?? 'classic',
@@ -384,6 +401,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const transcriptViewRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
+  const [qa, setQa] = useState(preview.qa);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
@@ -417,6 +435,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [lastVisibleSelectionPolish, setLastVisibleSelectionPolish] = useState<boolean>(
     preview.selectionPolish,
   );
+  const [lastVisibleQa, setLastVisibleQa] = useState(preview.qa);
   const [lastVisibleMessage, setLastVisibleMessage] = useState<string | undefined>(preview.message);
   // Exit duration follows the style; the leaving effect deliberately depends only on
   // state, so read the latest value through the ref.
@@ -430,7 +449,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Insert-failure fallback card. Same pattern as the vocab card: own event channel,
   // not part of the session state machine.
   const [insertFallback, setInsertFallback] = useState<InsertFallbackCardPayload | null>(null);
-  const hostMetrics = getCapsuleHostMetrics(os, translation, capsuleStyle);
+  const hostMetrics = getCapsuleHostMetrics(os, translation || qa, capsuleStyle);
   const badgeBottom = Math.round(metrics.height * 0.73);
 
   // Only the selected Siri style needs a GPU warmup; classic/typeless never allocate it.
@@ -507,6 +526,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         transcriptViewRef.current = nextTranscript;
         if (nextTranscript !== previousTranscript) setLocalAsrText(nextTranscript.text);
         setTranslation(p.translation === true);
+        setQa(p.qa === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
         const style = parseCapsuleStyle(p.capsuleStyle);
@@ -661,8 +681,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   useEffect(() => {
     if (state === 'idle') return;
     setLastVisibleSelectionPolish(selectionPolish);
+    setLastVisibleQa(qa);
     setLastVisibleMessage(message);
-  }, [state, selectionPolish, message]);
+  }, [state, qa, selectionPolish, message]);
 
   // Learn how long the warm phase lasts (= mic-ready time); EMA-update warmupMs, the
   // baseline for the predicted expand duration.
@@ -712,6 +733,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // suggestion card, and the hidden idle branch.
   const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
   const renderedSelectionPolish = state === 'idle' ? lastVisibleSelectionPolish : selectionPolish;
+  const renderedQa = state === 'idle' ? lastVisibleQa : qa;
+  const showSiriBadge =
+    !leaving && (renderedQa ? isActiveCapsuleState(renderedState) : translation);
   const renderedMessage =
     state === 'idle'
       ? lastVisibleMessage
@@ -878,6 +902,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             transcriptInSameWindow={!splitTranscriptRail}
             operating={operatingRef.current}
             translation={translation}
+            qa={renderedQa}
             leaving={leaving}
             warming={warming}
           />
@@ -898,6 +923,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
               }}
             >
               <div
+                aria-hidden={!showSiriBadge}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -912,8 +938,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   letterSpacing: '0.02em',
                   whiteSpace: 'nowrap',
                   // Hidden: starts just below the orb; shown: settles above the orb.
-                  opacity: translation ? 1 : 0,
-                  transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
+                  opacity: showSiriBadge ? 1 : 0,
+                  transform: showSiriBadge
+                    ? 'translateY(0) scale(1)'
+                    : 'translateY(40px) scale(.88)',
                   transformOrigin: 'center bottom',
                   transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
                   willChange: 'opacity, transform',
@@ -928,7 +956,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                     boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
                   }}
                 />
-                {t('capsule.translating')}
+                {t(renderedQa ? 'capsule.asking' : 'capsule.translating')}
               </div>
             </div>
             <div className="ol-siri-capsule-stack">
