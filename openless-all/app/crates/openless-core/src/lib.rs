@@ -67,6 +67,7 @@ mod provider_service;
 pub mod provider_transport;
 pub mod providers;
 mod qa_service;
+pub mod recording_limit;
 mod remote_input_service;
 mod selection_service;
 pub mod selection_voice_intent;

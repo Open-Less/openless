@@ -9,6 +9,8 @@ export interface VoiceOrbStageProps {
   os: OS;
   state: CapsuleState;
   level: number;
+  /** Sensitivity multiplier for voice animation dynamic range (0.5..2.5, default 1.0). */
+  sensitivity?: number;
   /** Warming: the wave renders as a standby breathing form, ignoring the real level. See CapsulePayload.warming. */
   warming?: boolean;
   /** Average warm→ready duration (ms), driving the predicted expand pace. See SiriGL warmupMs. */
@@ -32,6 +34,7 @@ export function VoiceOrbStage({
   os,
   state,
   level,
+  sensitivity,
   warming,
   warmupMs,
   message,
@@ -76,6 +79,7 @@ export function VoiceOrbStage({
         <SiriGL
           mode="wave"
           level={level}
+          sensitivity={sensitivity}
           resolved={!isOrb}
           warming={warming}
           warmupMs={warmupMs}

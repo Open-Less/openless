@@ -43,6 +43,7 @@ export let mockSettings: UserPreferences = {
   launchAtLogin: false,
   showCapsule: true,
   capsuleStyle: 'classic',
+  capsuleSensitivity: 1.0,
   capsuleDisplayMode: 'cursorScreen',
   capsuleTranscriptEnabled: true,
   capsuleTranscriptFontSize: 14,

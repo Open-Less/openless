@@ -242,6 +242,7 @@ async fn forward_legacy_event(
                     warming: false,
                     capsule_style: backend.get_preferences().capsule_style,
                     selection_polish: false,
+                    countdown_seconds: None,
                 });
             }
         }
@@ -323,6 +324,7 @@ async fn forward_legacy_event(
                             warming: *phase == LessComputerVoicePhase::Starting,
                             capsule_style: backend.get_preferences().capsule_style,
                             selection_polish: false,
+                            countdown_seconds: None,
                         });
                     }
                 }
@@ -392,6 +394,7 @@ async fn forward_legacy_event(
                         warming: false,
                         capsule_style: backend.get_preferences().capsule_style,
                         selection_polish: false,
+                        countdown_seconds: None,
                     });
                 }
             }
@@ -572,6 +575,14 @@ fn map_dictation_state(
         ) && !snapshot.recording_ready,
         capsule_style,
         selection_polish: false,
+        countdown_seconds: matches!(
+            snapshot.phase,
+            DictationPhase::Starting | DictationPhase::Recording
+        )
+        .then(|| {
+            openless_core::recording_limit::recording_limit_remaining_seconds(snapshot.elapsed_ms)
+        })
+        .flatten(),
     }
 }
 
@@ -652,6 +663,7 @@ fn transcription_notice_payload(
         warming: false,
         capsule_style: style,
         selection_polish: false,
+        countdown_seconds: None,
     })
 }
 
@@ -770,6 +782,7 @@ fn mobile_qa_capsule_payload(
         warming: state == CapsuleState::Recording && !matches!(event, BackendEventKind::QaLevel(_)),
         capsule_style: style,
         selection_polish: false,
+        countdown_seconds: None,
     })
 }
 

@@ -206,6 +206,7 @@ function mount({
     'setTranslation',
     'setWarming',
     'setSelectionPolish',
+    'setCountdownSeconds',
     'setCapsuleStyle',
     'setSuggestions',
     'setInsertFallback',
@@ -281,6 +282,22 @@ function transcript(view, sequence, text, sessionId = 'session') {
   release(view);
   lateEvent({ payload: fallback });
   assert.equal(view.values.setInsertFallback, null);
+}
+
+// The recording-cap countdown must follow the payload, including its disappearance:
+// a stale badge frozen at 0:01 after the cap fired would misreport the session.
+{
+  const view = mount({ snapshot: () => frame() });
+  await until(() => view.values.setState === 'recording');
+  view.emit('capsule:state', { state: 'recording', sessionId: 'session', countdownSeconds: 42 });
+  assert.equal(view.values.setCountdownSeconds, 42);
+  view.emit('capsule:state', { state: 'recording', sessionId: 'session', countdownSeconds: 7 });
+  assert.equal(view.values.setCountdownSeconds, 7);
+  view.emit('capsule:state', { state: 'recording', sessionId: 'session' });
+  assert.equal(view.values.setCountdownSeconds, null);
+  view.emit('capsule:state', { state: 'recording', sessionId: 'session', countdownSeconds: null });
+  assert.equal(view.values.setCountdownSeconds, null);
+  release(view);
 }
 
 // Real state and transcript events must survive an older in-flight snapshot.

@@ -31,6 +31,44 @@ test('default capsule follows both themes with eleven bars, including legacy sty
   }
 });
 
+test('the recording cap countdown shares the badge lane without displacing either chip', async ({
+  page,
+}, info) => {
+  // Only the final minute carries a countdown, so a missing value must render no chip at all.
+  await page.goto('/?window=capsule&style=classic&state=recording&level=0.2');
+  await expect(page.locator('.ol-recording-countdown')).toHaveCount(0);
+
+  await page.goto('/?window=capsule&style=classic&state=recording&level=0.2&countdown=42');
+  const badge = page.locator('.ol-recording-countdown');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute('data-urgent', 'false');
+  await expect(badge).toHaveText('0:42');
+  // The hidden language picker must not be left in the flex row: an invisible 28px chip
+  // would push the countdown off centre.
+  await expect(page.locator('.ol-classic-translation')).toHaveCount(0);
+  const pillBox = await page.locator('.ol-default-capsule').boundingBox();
+  const badgeBox = await badge.boundingBox();
+  expect(badgeBox!.x + badgeBox!.width / 2).toBeCloseTo(pillBox!.x + pillBox!.width / 2, 0);
+
+  await page.goto('/?window=capsule&style=classic&state=recording&level=0.2&countdown=7');
+  await expect(badge).toHaveAttribute('data-urgent', 'true');
+  await expect(badge).toHaveText('0:07');
+  await page.screenshot({ path: info.outputPath('capsule-countdown.png'), animations: 'disabled' });
+
+  // With translation on, both chips are live and sit side by side in one row.
+  await page.goto(
+    '/?window=capsule&style=classic&state=recording&level=0.2&countdown=42&translation=1',
+  );
+  const picker = page.locator('.ol-classic-translation');
+  await expect(picker).toHaveAttribute('data-visible', 'true');
+  await expect(badge).toBeVisible();
+  const pickerBox = await picker.boundingBox();
+  const besideBox = await badge.boundingBox();
+  expect(besideBox!.x).toBeGreaterThan(pickerBox!.x + pickerBox!.width);
+  expect(Math.abs(besideBox!.y - pickerBox!.y)).toBeLessThan(8);
+  expect(besideBox!.y + besideBox!.height).toBeLessThanOrEqual(pillBox!.y + 1);
+});
+
 test('processing stays cancellable, hides confirm and shows a compact status', async ({
   page,
 }, info) => {

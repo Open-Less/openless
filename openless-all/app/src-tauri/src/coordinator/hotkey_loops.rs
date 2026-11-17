@@ -2819,6 +2819,7 @@ pub(crate) mod windows_less_computer_tests {
             translation: true,
             operating: true,
             selection_polish: false,
+            countdown_seconds: None,
             capsule_style: CapsuleStyle::Classic,
         };
         coordinator.present_core_capsule(expected.clone());

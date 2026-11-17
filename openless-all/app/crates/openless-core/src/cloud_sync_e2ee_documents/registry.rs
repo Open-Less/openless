@@ -131,6 +131,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "capsule_sensitivity",
+        key: "capsuleSensitivity",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Number,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "mute_during_recording",
         key: "muteDuringRecording",
         class: PreferenceClass::Portable,

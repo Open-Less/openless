@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { useReducedMotion } from '../lib/motion';
+import { mapVoiceLevel } from '../lib/capsuleSensitivity';
 import type { OS } from './WindowChrome';
 import type { CapsuleState, CapsuleStyle } from '../lib/types';
 import './CapsuleStyles.css';
@@ -66,10 +67,20 @@ function useCapsulePresence(ref: RefObject<HTMLDivElement>, leaving: boolean, pr
   }, [ref, leaving, preview, reduced]);
 }
 
-export function CapsuleWaveform({ level, active = true }: { level: number; active?: boolean }) {
+export function CapsuleWaveform({
+  level,
+  sensitivity,
+  active = true,
+}: {
+  level: number;
+  sensitivity?: number;
+  active?: boolean;
+}) {
   const root = useRef<HTMLSpanElement>(null);
   const input = useRef(level);
   input.current = level;
+  const sensitivityRef = useRef(sensitivity);
+  sensitivityRef.current = sensitivity;
   const reduced = useReducedMotion();
   useEffect(() => {
     const bars = root.current?.children;
@@ -80,7 +91,7 @@ export function CapsuleWaveform({ level, active = true }: { level: number; activ
     const draw = (now: number) => {
       const dt = previous ? Math.min(now - previous, 50) : 16;
       previous = now;
-      const voice = active ? Math.min(1, Math.max(0, (input.current - 0.008) / 0.32)) : 0;
+      const voice = active ? mapVoiceLevel(input.current, sensitivityRef.current) : 0;
       smoothed += (voice - smoothed) * (1 - Math.exp(-dt / (voice > smoothed ? 35 : 90)));
       ENVELOPE.forEach((envelope, index) => {
         // The centre stays strongest; neighbouring bars do not move as one rigid icon.
@@ -106,6 +117,7 @@ interface OpenLessPillProps {
   os?: OS;
   state: CapsuleState;
   level: number;
+  sensitivity?: number;
   insertedChars?: number;
   message?: string;
   operating?: boolean;
@@ -121,6 +133,7 @@ interface OpenLessPillProps {
 export function OpenLessPill({
   state,
   level,
+  sensitivity,
   insertedChars = 0,
   message,
   operating = false,
@@ -182,7 +195,7 @@ export function OpenLessPill({
         >
           <Icon name="close" size={15} strokeWidth={1.8} />
         </button>
-        <CapsuleWaveform level={level} active={recording && !leaving} />
+        <CapsuleWaveform level={level} sensitivity={sensitivity} active={recording && !leaving} />
         <button
           className="ol-default-action ol-default-confirm"
           aria-label={t('settings.shortcuts.confirm')}
@@ -212,15 +225,21 @@ export function OpenLessPill({
   );
 }
 
-export function CapsuleStylePreview({ style }: { style: CapsuleStyle }) {
+export function CapsuleStylePreview({
+  style,
+  sensitivity,
+}: {
+  style: CapsuleStyle;
+  sensitivity?: number;
+}) {
   return (
     <div className="ol-capsule-style-preview" data-style={style} aria-hidden="true">
       {style === 'siri' ? (
         <div className="ol-siri-capsule-preview">
-          <VoiceOrbStage os="mac" state="recording" level={0.2} />
+          <VoiceOrbStage os="mac" state="recording" level={0.2} sensitivity={sensitivity} />
         </div>
       ) : (
-        <OpenLessPill state="recording" level={0.2} preview />
+        <OpenLessPill state="recording" level={0.2} sensitivity={sensitivity} preview />
       )}
     </div>
   );
