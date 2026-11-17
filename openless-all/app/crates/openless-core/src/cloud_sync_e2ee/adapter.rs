@@ -180,8 +180,13 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                     super::error("local_storage_unavailable")
                 })?;
                 let path = entry.path();
-                if path.is_dir()
-                    && std::fs::read_dir(&path)
+                let owned = entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(crate::cloud_sync_e2ee_store::gate::is_owned_sync_entry);
+                if owned
+                    && path.is_dir()
+                    && crate::cloud_sync_e2ee_store::gate::contains_owned_sync_entry(&path)
                         .map_err(|error| {
                             log::error!(
                                 "[e2ee-adapter] inspect protected dir failed path={} err={error}",
@@ -189,8 +194,6 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                             );
                             super::error("local_storage_unavailable")
                         })?
-                        .next()
-                        .is_some()
                 {
                     log::error!(
                         "[e2ee-adapter] device-id missing but ciphertext present under {}; recovery required",

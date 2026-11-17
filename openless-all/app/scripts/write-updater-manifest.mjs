@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 const target = process.env.OPENLESS_UPDATE_TARGET;
 const arch = process.env.OPENLESS_UPDATE_ARCH;
-const repo = process.env.OPENLESS_UPDATE_REPO || 'Open-Less/openless';
-const mirrorBaseUrl =
-  process.env.OPENLESS_UPDATE_MIRROR_BASE_URL || 'https://fastgit.cc/https://github.com';
+const cdnBaseUrl = (process.env.OPENLESS_UPDATE_CDN_BASE_URL || 'https://dl.aeoform.com').replace(
+  /\/$/,
+  '',
+);
 const rawChannel = (process.env.OPENLESS_RELEASE_CHANNEL || 'stable').toLowerCase();
 if (rawChannel !== 'stable' && rawChannel !== 'beta') {
   throw new Error(
@@ -111,21 +112,17 @@ if (!existsSync(signaturePath)) {
 const assetName = basename(artifact);
 const manifestName = `latest-${target}-${arch}${channelSuffix}.json`;
 const mirrorManifestName = `latest-${target}-${arch}${channelSuffix}-mirror.json`;
-const downloadPath =
-  rawChannel === 'beta'
-    ? `releases/download/${releaseTag}/${assetName}`
-    : `releases/latest/download/${assetName}`;
-const githubAssetUrl = `https://github.com/${repo}/${downloadPath}`;
-const mirrorAssetUrl = `${mirrorBaseUrl.replace(/\/$/, '')}/${repo}/${downloadPath}`;
+const releasePath =
+  rawChannel === 'beta' ? releaseTag : /^v.+-tauri$/.test(releaseTag) ? releaseTag : 'latest';
+const cdnAssetUrl = `${cdnBaseUrl}/releases/${encodeURIComponent(releasePath)}/${encodeURIComponent(assetName)}`;
 const manifest = {
   version: packageJson.version,
   pub_date: new Date().toISOString(),
-  url: githubAssetUrl,
+  url: cdnAssetUrl,
   signature: readFileSync(signaturePath, 'utf8').trim(),
 };
 const mirrorManifest = {
   ...manifest,
-  url: mirrorAssetUrl,
 };
 
 const outDir = target === 'android' ? bundleDir : bundleDir;

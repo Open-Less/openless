@@ -473,29 +473,155 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     assert_eq!(unsupported.code, BackendErrorCode::Unsupported);
     assert_eq!(backend.snapshot().preferences_revision, revision + 2);
     assert_eq!(events.try_recv(), Err(EventRecvError::Empty));
+    // Less Computer 在 Linux 端已删除：即使 Core 偏好里打开它，宿主也不再注册
+    // 任何触发键、不再拉起面板。这里只确认设置仍能被接受（字段属于 Core）。
     for enabled in [true, false] {
         let mut preferences = backend.get_preferences();
         preferences.coding_agent_enabled = enabled;
         preferences.testing_features_enabled = true;
-        preferences.coding_agent_voice_hotkey = Some(ShortcutBinding {
-            primary: "F10".into(),
-            modifiers: vec!["ctrl".into()],
-        });
         host.update_settings_strict(preferences, backend.snapshot().preferences_revision)
-            .expect("Linux must allow enabling and disabling its wired Less Computer action");
-        assert_eq!(backend.get_preferences().coding_agent_enabled, enabled);
-        assert_eq!(
-            effects
-                .hotkeys
-                .lock()
-                .unwrap()
-                .last()
-                .unwrap()
-                .coding_agent_enabled,
-            enabled
-        );
+            .expect("Core preferences stay writable even when Linux does not surface the feature");
     }
     let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[test]
+fn retired_binding_migration_preserves_native_registration_semantics() {
+    use openless_core::{
+        SettingsEffectKind, SettingsEffectPlan, SettingsEffectReceipt, SettingsRuntime,
+        SettingsValueChange, UserPreferences,
+    };
+    let effects = Arc::new(RecordingSettingsEffects::default());
+    let runtime = LinuxSettingsRuntime::with_effects(effects.clone());
+    let previous = HotkeyRuntimeTarget::from(&UserPreferences::default());
+    let mut migrated = previous.clone();
+    migrated.coding_agent_voice = None;
+    let mut changed = migrated.clone();
+    changed.dictation = ShortcutBinding {
+        primary: "F12".into(),
+        modifiers: Vec::new(),
+    };
+    let mut registrations = 0;
+    for (case, previous, next, applies) in [
+        ("retired-only", previous, migrated.clone(), false),
+        (
+            "startup hydration",
+            migrated.clone(),
+            migrated.clone(),
+            true,
+        ),
+        ("active binding edit", migrated, changed, true),
+    ] {
+        let mut receipt = SettingsEffectReceipt::default();
+        runtime
+            .commit(
+                &SettingsEffectPlan {
+                    hotkeys: Some(SettingsValueChange { previous, next }),
+                    ..Default::default()
+                },
+                &mut receipt,
+            )
+            .unwrap();
+        registrations += usize::from(applies);
+        assert_eq!(
+            effects.hotkeys.lock().unwrap().len(),
+            registrations,
+            "{case}"
+        );
+        assert_eq!(
+            receipt.applied.contains(&SettingsEffectKind::Hotkeys),
+            applies,
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn linux_settings_saves_release_removed_agent_bindings() {
+    for document_save in [false, true] {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-retired-agent-hotkey-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let config = BackendConfig {
+            data_dir: data_dir.clone(),
+            ..Default::default()
+        };
+        let backend = Arc::new(
+            OpenLessBackend::new(config.clone(), BackendDependencies::unsupported()).unwrap(),
+        );
+        let host = LinuxHost::with_settings_runtime(
+            Arc::clone(&backend),
+            Arc::new(openless_core::NoopSettingsRuntime),
+        );
+        let style_pack = backend
+            .create_style_pack(StylePack {
+                name: "Retired Agent shortcut".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut legacy = backend.get_preferences();
+        let binding = if document_save {
+            ShortcutBinding {
+                primary: "K".into(),
+                modifiers: vec!["ctrl".into(), "alt".into()],
+            }
+        } else {
+            legacy.coding_agent_voice_hotkey.clone().unwrap()
+        };
+        legacy.coding_agent_voice_hotkey = Some(binding.clone());
+        legacy.coding_agent_enabled = document_save;
+        legacy.testing_features_enabled = document_save;
+        legacy.coding_agent_model = Some("retained-model".into());
+        // Seed the old on-disk configuration without the Linux save boundary.
+        backend
+            .repositories()
+            .preferences
+            .set(legacy.clone())
+            .unwrap();
+
+        let outcome = if document_save {
+            let mut next = legacy.clone();
+            next.style_pack_hotkeys = vec![openless_core::shared_types::StylePackHotkey {
+                pack_id: style_pack.id,
+                binding: binding.clone(),
+            }];
+            let outcome = host
+                .save_settings(next, host.snapshot().preferences_revision)
+                .unwrap();
+            assert_eq!(outcome.preferences.style_pack_hotkeys.len(), 1);
+            assert_eq!(outcome.preferences.style_pack_hotkeys[0].binding, binding);
+            outcome
+        } else {
+            host.update_preference_fields(&std::collections::BTreeMap::from([(
+                "/dictationHotkey".into(),
+                serde_json::to_value(&binding).unwrap(),
+            )]))
+            .expect("the default retired Agent key must be available for dictation")
+        };
+        assert_eq!(outcome.reconciled_hotkey_count, 0);
+        assert!(outcome.preferences.coding_agent_voice_hotkey.is_none());
+        assert_eq!(
+            outcome.preferences.coding_agent_enabled,
+            legacy.coding_agent_enabled
+        );
+        assert_eq!(
+            outcome.preferences.coding_agent_model,
+            legacy.coding_agent_model
+        );
+        if !document_save {
+            assert_eq!(outcome.preferences.dictation_hotkey, binding);
+        }
+        drop(host);
+        drop(backend);
+        let reopened = OpenLessBackend::new(config, BackendDependencies::unsupported()).unwrap();
+        assert!(reopened
+            .get_preferences()
+            .coding_agent_voice_hotkey
+            .is_none());
+        drop(reopened);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
 }
 
 #[tokio::test]

@@ -22,6 +22,14 @@ static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 #[cfg(target_os = "android")]
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+#[cfg(target_os = "android")]
+pub(crate) fn emit_audio_spectrum(raw: Vec<f32>, processed: Vec<f32>) {
+    use tauri::Emitter;
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit("android-audio-spectrum", serde_json::json!({"raw": raw, "processed": processed}));
+    }
+}
+
 // A panic from a synchronously polled future must not cross an extern JNI
 // boundary. Return an ordinary error so each caller keeps its wire envelope.
 fn catch_jni_panic<T>(

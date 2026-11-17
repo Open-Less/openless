@@ -124,6 +124,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  observationId?: number;
   expiresAtMs: number;
   id: string;
   pattern: string;
@@ -341,8 +342,19 @@ export interface StylePackRuntimeDiagnostics {
 }
 
 export type AudioDspStage =
-  'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
+  | 'acousticEchoCancellation'
+  | 'noiseReduction'
+  | 'dereverb'
+  | 'equalizer'
+  | 'amplifier'
+  | 'agc'
+  | 'vad';
 export interface AudioDspConfig {
+  /** 回声消除算法：轻量 NLMS 省 CPU，aec7 模型抑制更强但约 3 倍开销。 */
+  aecMode: 'off' | 'light' | 'model';
+  androidAecEnabled?: boolean;
+  androidNoiseSuppressionEnabled?: boolean;
+  androidAgcEnabled?: boolean;
   noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
   noiseStrength: number;
   gainDb: number;
@@ -357,15 +369,6 @@ export interface AudioDspConfig {
   equalizerPreampDb: number;
   equalizerBandsDb: number[];
   processingOrder: AudioDspStage[];
-}
-
-/** Runtime health of the disposable native capsule sidecar (desktop only). */
-export interface NativeCapsuleStatus {
-  /** Whether the launch-time low-memory background switch is active. */
-  active: boolean;
-  /** False when the sidecar helper is missing or failed to initialize. */
-  available: boolean;
-  error: string | null;
 }
 
 export interface UserPreferences {
@@ -392,9 +395,10 @@ export interface UserPreferences {
   lowLatencyDictationEnabled: boolean;
   /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Use a local playback reference for optional echo cancellation. Off by default. */
+  echoCancellationEnabled: boolean;
   audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
-  lowMemoryBackgroundEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
   voiceActivationWakeEnabled: boolean;
@@ -440,7 +444,7 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** Legacy compat: `true` is equivalent to `windowsInsertionMode === 'sendInput'`. */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows: whether to show OpenLess in the system keyboard list (Win+Space) for non-TSF insertion. */
+  /** Legacy wire compatibility only; the Windows speech TIP never appears in Win+Space. */
   windowsShowOpenlessInKeyboardList: boolean;
   /** User's working languages (multi-select, native names); injected as a premise at the head of LLM polish/translate prompts. */
   workingLanguages: string[];
@@ -564,6 +568,7 @@ export interface UserPreferences {
   streamingInsertSaveClipboard: boolean;
   /** Windows TSF: show the live transcript as an underlined composition in the target. */
   windowsCompositionInput: boolean;
+  macosCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
@@ -571,10 +576,12 @@ export interface UserPreferences {
    *  managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
+  expressionLearningEnabled: boolean;
   vocabularyLearningSettings: {
     observationSeconds: number;
     suggestionSeconds: number;
     maxPhraseChars: number;
+    suggestionPosition: 'nearInput' | 'bottomRight';
   };
   /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;
@@ -592,6 +599,10 @@ export interface UserPreferences {
   /** Whether to keep the raw microphone audio file (wav) per session, for debugging ASR misrecognition / mic sensitivity.
    *  Default false. When on, it uses disk space and follows the same cleanup policy as historyRetentionDays. */
   recordAudioForDebug: boolean;
+  /** 调试录音：追加保存「处理后」的音频（主档案 `<session>.wav`）。 */
+  debugArchiveProcessed: boolean;
+  /** 调试录音：额外保存「处理前」的 `<session>.raw.wav`，用于 A/B 对照。 */
+  debugArchiveRaw: boolean;
   /** Number of recent wav files kept in recordings/. null = follows the 200 hard cap; 1..=200 for user-defined values.
    *  Decoupled from historyMaxEntries — many text entries with only the 5 most recent wavs is a valid combination. */
   audioRecordingMaxEntries: number | null;

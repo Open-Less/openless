@@ -6,7 +6,10 @@ VERSION=${OPENLESS_LINUX_VERSION:?OPENLESS_LINUX_VERSION is required}
 # Never silently publish an unnumbered or stale package that apt treats as a
 # downgrade. Each candidate explicitly advances linux-egui/package-revision.
 REVISION=$(< "$APP_ROOT/linux-egui/package-revision")
-[[ "$REVISION" =~ ^[1-9][0-9]*$ ]] || { echo 'invalid Linux package revision' >&2; exit 1; }
+[[ "$REVISION" =~ ^[1-9][0-9]*$ ]] || {
+  echo 'invalid Linux package revision' >&2
+  exit 1
+}
 APP_VERSION=$(node -p "require('$APP_ROOT/package.json').version")
 EXPECTED_VERSION="${APP_VERSION%%+*}-$REVISION"
 if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
@@ -71,7 +74,7 @@ require_command rpmbuild
 mkdir -p "$OUTPUT"
 
 POST_INSTALL="$TARGET_DIR/openless-fcitx5-postinst"
-cat > "$POST_INSTALL" <<'EOF'
+cat > "$POST_INSTALL" << 'EOF'
 #!/usr/bin/env bash
 set +e
 # Package installation runs as root, while fcitx5 belongs to the logged-in
@@ -104,7 +107,7 @@ chmod 0755 "$POST_REMOVE"
 # 插件指纹清单：装完包后一条命令就能核对「系统里的插件 == 包里的插件」。
 PLUGIN_SHA=$(sha256sum "$PLUGIN_ROOT/libopenless.so" | awk '{print $1}')
 PLUGIN_MANIFEST="$TARGET_DIR/openless-fcitx5-manifest"
-cat > "$PLUGIN_MANIFEST" <<EOF
+cat > "$PLUGIN_MANIFEST" << EOF
 openless $VERSION fcitx5-addon-sha256 $PLUGIN_SHA
 EOF
 
@@ -135,7 +138,7 @@ install -Dm755 "$PLUGIN_ROOT/libopenless.so" \
 install -Dm644 "$PLUGIN_ROOT/openless.conf" \
   "$DEB_ROOT/usr/share/fcitx5/addon/openless.conf"
 install -d "$DEB_ROOT/DEBIAN"
-cat > "$DEB_ROOT/DEBIAN/control" <<EOF
+cat > "$DEB_ROOT/DEBIAN/control" << EOF
 Package: openless
 Version: $VERSION
 Section: utils
@@ -170,7 +173,7 @@ rm -rf "$RPM_TOP"
 mkdir -p "$RPM_TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,rpmdb,tmp}
 tar -C "$RPM_ROOT" --transform="s,^\./,openless-$RPM_VERSION/," \
   -czf "$RPM_TOP/SOURCES/openless-$RPM_VERSION.tar.gz" .
-cat > "$RPM_TOP/SPECS/openless.spec" <<EOF
+cat > "$RPM_TOP/SPECS/openless.spec" << EOF
 # Preserve the ELF bytes used by the fcitx5 addon SHA-256 manifest. Fedora's
 # default brp-strip and debuginfo passes otherwise change it after staging.
 %global __os_install_post %{nil}
@@ -223,6 +226,6 @@ mv "$RPM_TOP/RPMS/x86_64/openless-$RPM_VERSION-1.x86_64.rpm" \
 # The checksums are part of the delivery, not a step for the caller to remember:
 # a stale file here makes `verify-linux-egui-packages.sh` fail on freshly built
 # packages.
-( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+(cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS)
 
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort

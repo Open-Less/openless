@@ -1746,6 +1746,7 @@ pub struct BackendRepositories {
     pub preferences: Arc<PreferencesStore>,
     pub history: Arc<HistoryStore>,
     pub activity: Arc<ActivityStore>,
+    pub expression_profile: crate::expression_observation::SharedExpressionProfile,
     pub vocabulary: Arc<DictionaryStore>,
     pub correction_rules: Arc<CorrectionRuleStore>,
     pub style_packs: Arc<StylePackStore>,
@@ -1770,6 +1771,9 @@ impl BackendRepositories {
             history: Arc::new(HistoryStore::at_data_dir(data_dir)),
             activity: Arc::new(
                 ActivityStore::at_data_dir(data_dir).unwrap_or_else(|_| ActivityStore::in_memory()),
+            ),
+            expression_profile: crate::expression_observation::open_shared_expression_profile(
+                data_dir.join("expression-profile.json"),
             ),
             vocabulary: Arc::new(DictionaryStore::at_data_dir(data_dir)),
             correction_rules: Arc::new(CorrectionRuleStore::at_data_dir(data_dir)),
@@ -2614,6 +2618,7 @@ pub struct OpenLessBackend {
     history: Arc<HistoryStore>,
     history_revision: Arc<AtomicU64>,
     activity: Arc<ActivityStore>,
+    expression_profile: crate::expression_observation::SharedExpressionProfile,
     style_packs: Arc<StylePackStore>,
     style_pack_revision: Arc<AtomicU64>,
     preferences: Arc<PreferencesStore>,
@@ -2667,6 +2672,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    session_id: SessionId,
     settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
@@ -2675,7 +2681,74 @@ struct CoreEditObservationSink {
     events: Arc<EventBus>,
 }
 
+struct CombinedEditObservationSink {
+    vocabulary: Option<CoreEditObservationSink>,
+    expression_profile: Option<Arc<crate::expression_observation::ExpressionProfileStore>>,
+    expression_generation: Option<u64>,
+    typed_text: String,
+    session_id: SessionId,
+    clock: Arc<dyn Clock>,
+    generation: Arc<AtomicU64>,
+    expected_generation: u64,
+    settings_gate: Arc<Mutex<()>>,
+    duration: std::time::Duration,
+}
+
+impl EditObservationSink for CombinedEditObservationSink {
+    fn observation_id(&self) -> Option<u64> {
+        Some(self.expected_generation)
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        Some(self.session_id)
+    }
+
+    fn observation_duration(&self) -> std::time::Duration {
+        self.duration
+    }
+
+    fn publish(&self, edit: crate::host_document::EditPair) -> bool {
+        use chrono::Datelike;
+        if self.generation.load(Ordering::Acquire) != self.expected_generation {
+            return false;
+        }
+        let signal = self.expression_profile.as_ref().and_then(|_| {
+            crate::expression_observation::signal_from_observed_edit(&self.typed_text, &edit).ok()
+        });
+        let mut recorded = false;
+        if let (Some(profile), Some(profile_generation), Some(signal)) =
+            (&self.expression_profile, self.expression_generation, signal)
+        {
+            if let Ok(_guard) = self.settings_gate.try_lock() {
+                if self.generation.load(Ordering::Acquire) == self.expected_generation {
+                    match profile.record_if_generation(
+                        self.session_id.as_uuid(),
+                        self.clock.today_local().num_days_from_ce(),
+                        signal,
+                        profile_generation,
+                    ) {
+                        Ok(saved) => recorded = saved,
+                        Err(error) => log::warn!("failed to save expression evidence: {error}"),
+                    }
+                }
+            }
+        }
+        self.vocabulary
+            .as_ref()
+            .is_some_and(|sink| sink.publish(edit))
+            || recorded
+    }
+}
+
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_id(&self) -> Option<u64> {
+        Some(self.expected_generation)
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        Some(self.session_id)
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.settings.observation_seconds as u64)
     }
@@ -2685,6 +2758,9 @@ impl EditObservationSink for CoreEditObservationSink {
         // callback may still arrive after the next session starts. The Core
         // generation is therefore the authoritative stale-report barrier.
         if self.generation.load(Ordering::Acquire) != self.expected_generation {
+            return false;
+        }
+        if !crate::correction_observation::permits_vocabulary_suggestion(&self.typed_text, &edit) {
             return false;
         }
         let rules = crate::host_document::learned_rules_with_max_chars(
@@ -2751,6 +2827,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
+            observation_id: generation.map(|(_, expected)| expected),
             expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
@@ -2923,6 +3000,7 @@ impl OpenLessBackend {
             preferences: Arc::new(PreferencesStore::in_memory()),
             history: Arc::new(HistoryStore::at_path(std::path::PathBuf::new())),
             activity: Arc::new(ActivityStore::in_memory()),
+            expression_profile: Arc::new(Mutex::new(None)),
             vocabulary: Arc::new(DictionaryStore::at_path(std::path::PathBuf::new())),
             correction_rules: Arc::new(CorrectionRuleStore::at_path(std::path::PathBuf::new())),
             style_packs: Arc::new(StylePackStore::in_memory()),
@@ -3365,6 +3443,7 @@ impl OpenLessBackend {
             history: repositories.history,
             history_revision,
             activity: repositories.activity,
+            expression_profile: repositories.expression_profile,
             style_packs: repositories.style_packs,
             style_pack_revision,
             preferences: repositories.preferences,
@@ -4061,6 +4140,7 @@ impl OpenLessBackend {
             preferences: Arc::clone(&self.preferences),
             history: Arc::clone(&self.history),
             activity: Arc::clone(&self.activity),
+            expression_profile: Arc::clone(&self.expression_profile),
             vocabulary: Arc::clone(&self.vocabulary),
             correction_rules: Arc::clone(&self.correction_rules),
             style_packs: Arc::clone(&self.style_packs),
@@ -5321,6 +5401,7 @@ impl OpenLessBackend {
             pre_roll_ms: 500,
             audio_processing: crate::audio::AudioProcessingConfig {
                 enhancement_enabled: preferences.audio_enhancement_enabled,
+                echo_cancellation_enabled: preferences.echo_cancellation_enabled,
                 dsp: preferences.audio_dsp,
             },
         };
@@ -6814,6 +6895,16 @@ impl OpenLessBackend {
                 .reset();
         }
 
+        if previous.expression_learning_enabled && !preferences.expression_learning_enabled {
+            if let Ok(profile) = self.expression_profile.lock() {
+                if let Some(profile) = profile.as_ref() {
+                    if let Err(error) = profile.invalidate_observers() {
+                        log::warn!("failed to invalidate expression observers: {error}");
+                    }
+                }
+            }
+            self.disarm_edit_observation();
+        }
         if (previous.vocabulary_learning_enabled && !preferences.vocabulary_learning_enabled)
             || previous.vocabulary_learning_settings != preferences.vocabulary_learning_settings
         {
@@ -7282,6 +7373,38 @@ impl OpenLessBackend {
         pending.clone()
     }
 
+    pub fn expression_profile_directions(
+        &self,
+    ) -> Result<Vec<crate::expression_observation::StableExpressionDirection>, BackendError> {
+        let profile = self.expression_profile.lock().map_err(|_| {
+            BackendError::new(BackendErrorCode::Internal, "expression profile lock unavailable")
+        })?.clone();
+        profile
+            .ok_or_else(|| BackendError::new(BackendErrorCode::Persistence, "expression profile is unavailable"))?
+            .stable_directions()
+    }
+
+    pub fn clear_expression_profile(&self) -> Result<(), BackendError> {
+        self.ensure_runtime_ready()?;
+        let _guard = self.settings_write_gate.lock().map_err(|_| {
+            BackendError::new(BackendErrorCode::Internal, "settings lock unavailable")
+        })?;
+        self.disarm_edit_observation();
+        let mut profile = self.expression_profile.lock().map_err(|_| {
+            BackendError::new(BackendErrorCode::Internal, "expression profile lock unavailable")
+        })?;
+        if let Some(existing) = profile.as_ref() {
+            if existing.clear().is_ok() {
+                return Ok(());
+            }
+        }
+        let store = crate::expression_observation::ExpressionProfileStore::reset(
+            self.config.data_dir.join("expression-profile.json"),
+        )?;
+        *profile = Some(Arc::new(store));
+        Ok(())
+    }
+
     /// Queue one observed manual correction. Duplicate pairs are ignored and
     /// the oldest item is dropped when the bounded card capacity is reached.
     pub fn queue_pending_correction(
@@ -7333,24 +7456,49 @@ impl OpenLessBackend {
             }
         }
         self.disarm_edit_observation();
+        let preferences = self.get_preferences();
         if !enabled
-            || !self.get_preferences().vocabulary_learning_enabled
+            || (!preferences.vocabulary_learning_enabled && !preferences.expression_learning_enabled)
             || !matches!(insert_outcome, Some(InsertOutcome::Inserted))
             || typed_text.trim().is_empty()
         {
             return;
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
-        let sink = Arc::new(CoreEditObservationSink {
-            settings: self
-                .get_preferences()
-                .vocabulary_learning_settings
-                .normalized(),
-            expected_generation,
-            generation: Arc::clone(&self.edit_observation_generation),
+        let settings = preferences.vocabulary_learning_settings.normalized();
+        let vocabulary = preferences
+            .vocabulary_learning_enabled
+            .then(|| CoreEditObservationSink {
+                session_id,
+                settings,
+                expected_generation,
+                generation: Arc::clone(&self.edit_observation_generation),
+                typed_text: typed_text.to_string(),
+                pending: Arc::clone(&self.pending_corrections),
+                events: Arc::clone(&self.events),
+            });
+        let expression_profile = if preferences.expression_learning_enabled {
+            self.expression_profile
+                .lock()
+                .ok()
+                .and_then(|profile| profile.clone())
+        } else {
+            None
+        };
+        if vocabulary.is_none() && expression_profile.is_none() {
+            return;
+        }
+        let sink = Arc::new(CombinedEditObservationSink {
+            vocabulary,
+            expression_generation: expression_profile.as_ref().map(|profile| profile.generation()),
+            expression_profile,
             typed_text: typed_text.to_string(),
-            pending: Arc::clone(&self.pending_corrections),
-            events: Arc::clone(&self.events),
+            session_id,
+            clock: Arc::clone(&self.clock),
+            generation: Arc::clone(&self.edit_observation_generation),
+            expected_generation,
+            settings_gate: Arc::clone(&self.settings_write_gate),
+            duration: std::time::Duration::from_secs(settings.observation_seconds as u64),
         });
         if let Err(error) = self
             .deps
@@ -9319,6 +9467,32 @@ impl OpenLessBackend {
             options,
         );
         context.pipeline_mode = pipeline_mode;
+        if purpose == DictationContextPurpose::Dictation
+            && !context.polish.translation_active
+            && preferences.expression_learning_enabled
+        {
+            if let Ok(_guard) = self.settings_write_gate.try_lock() {
+                if self.get_preferences().expression_learning_enabled {
+                    if let Some(profile) = self
+                        .expression_profile
+                        .lock()
+                        .ok()
+                        .and_then(|profile| profile.clone())
+                    {
+                        match profile.stable_directions() {
+                            Ok(directions) => {
+                                if let Some(instructions) =
+                                    crate::expression_observation::prompt_instructions(&directions)
+                                {
+                                    context.polish.style_system_prompt.push_str(&instructions);
+                                }
+                            }
+                            Err(error) => log::warn!("expression profile unavailable: {error}"),
+                        }
+                    }
+                }
+            }
+        }
         // Issue #1032: when the LLM channel is not configured, mark the
         // session as eligible for the Raw fallback instead of dispatching a
         // polish request that cannot succeed. The context keeps its original
@@ -9507,6 +9681,7 @@ mod tests {
     fn vocabulary_learning_settings_migrate_normalize_and_roundtrip() {
         let old: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(!old.vocabulary_learning_enabled);
+        assert!(!old.expression_learning_enabled);
         assert_eq!(old.vocabulary_learning_settings, Default::default());
         let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
             "vocabularyLearningSettings": {
@@ -9517,12 +9692,256 @@ mod tests {
         assert_eq!(prefs.vocabulary_learning_settings.observation_seconds, 10);
         assert_eq!(prefs.vocabulary_learning_settings.suggestion_seconds, 60);
         assert_eq!(prefs.vocabulary_learning_settings.max_phrase_chars, 32);
+        assert_eq!(
+            prefs.vocabulary_learning_settings.suggestion_position,
+            crate::shared_types::VocabularySuggestionPosition::NearInput
+        );
         let restored: UserPreferences =
             serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
         assert_eq!(
             restored.vocabulary_learning_settings,
             prefs.vocabulary_learning_settings
         );
+    }
+
+    #[test]
+    fn vocabulary_suggestion_position_roundtrips_and_defaults_for_old_settings() {
+        use crate::shared_types::{VocabularyLearningSettings, VocabularySuggestionPosition};
+        let old: VocabularyLearningSettings = serde_json::from_value(serde_json::json!({
+            "observationSeconds": 20, "suggestionSeconds": 30, "maxPhraseChars": 16
+        }))
+        .unwrap();
+        assert_eq!(
+            old.suggestion_position,
+            VocabularySuggestionPosition::NearInput
+        );
+        for (value, expected) in [
+            ("nearInput", VocabularySuggestionPosition::NearInput),
+            ("bottomRight", VocabularySuggestionPosition::BottomRight),
+        ] {
+            let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
+                "vocabularyLearningSettings": { "suggestionPosition": value }
+            }))
+            .unwrap();
+            assert_eq!(
+                prefs.vocabulary_learning_settings.suggestion_position,
+                expected
+            );
+            let encoded = serde_json::to_value(&prefs).unwrap();
+            assert_eq!(
+                encoded["vocabularyLearningSettings"]["suggestionPosition"],
+                value
+            );
+            let restored: UserPreferences = serde_json::from_value(encoded).unwrap();
+            assert_eq!(
+                restored.vocabulary_learning_settings.suggestion_position,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn changing_only_vocabulary_card_position_invalidates_pending_and_stale_sink() {
+        use crate::shared_types::VocabularySuggestionPosition;
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let before = backend.get_preferences();
+        let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
+            settings: before.vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "ZIP".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        let edit = crate::host_document::minimal_edit("ZIP", "VIP").unwrap();
+        assert!(sink.publish(edit.clone()));
+        assert!(!backend.pending_corrections().is_empty());
+        let mut prefs = before.clone();
+        prefs.vocabulary_learning_settings.suggestion_position =
+            VocabularySuggestionPosition::BottomRight;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        assert!(backend.pending_corrections().is_empty());
+        assert!(!sink.publish(edit));
+        let saved = backend.get_preferences();
+        assert!(saved.vocabulary_learning_enabled);
+        assert_eq!(
+            saved.vocabulary_learning_settings.suggestion_position,
+            VocabularySuggestionPosition::BottomRight
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.observation_seconds,
+            before.vocabulary_learning_settings.observation_seconds
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.suggestion_seconds,
+            before.vocabulary_learning_settings.suggestion_seconds
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.max_phrase_chars,
+            before.vocabulary_learning_settings.max_phrase_chars
+        );
+    }
+
+    #[test]
+    fn expression_observation_obeys_generation_and_never_persists_text() {
+        let directory = TestDataDir::new("expression-observation");
+        let path = directory.path().join("profile.json");
+        let profile = Arc::new(crate::expression_observation::ExpressionProfileStore::open(path.clone()).unwrap());
+        let generation = Arc::new(AtomicU64::new(4));
+        let gate = Arc::new(Mutex::new(()));
+        let sink = CombinedEditObservationSink {
+            vocabulary: None,
+            expression_generation: Some(profile.generation()),
+            expression_profile: Some(profile),
+            typed_text: "今天我们先完成这个工作然后再讨论".into(),
+            session_id: SessionId::new(),
+            clock: Arc::new(SystemClock),
+            generation: Arc::clone(&generation),
+            expected_generation: 4,
+            settings_gate: Arc::clone(&gate),
+            duration: std::time::Duration::from_secs(60),
+        };
+        let edit = crate::host_document::EditPair {
+            source: String::new(),
+            target: "\n".into(),
+            before: "今天我们先完成这个工作".into(),
+            after: "然后再讨论".into(),
+        };
+        {
+            let _guard = gate.lock().unwrap();
+            assert!(!sink.publish(edit.clone()));
+            assert!(!path.exists());
+        }
+        assert!(sink.publish(edit.clone()));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("今天"));
+        generation.fetch_add(1, Ordering::AcqRel);
+        assert!(!sink.publish(edit));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    }
+
+    #[tokio::test]
+    async fn expression_prompt_requires_consent_and_clear_removes_stable_directions() {
+        let (backend, _) = backend();
+        assert!(Arc::ptr_eq(&backend.expression_profile, &backend.repositories().expression_profile));
+        backend.set_credential(
+            crate::CredentialKey::new(crate::CredentialNamespace::Llm, Some("ark".into()), crate::credentials::LLM_API_KEY_ACCOUNT).unwrap(),
+            crate::SecretValue::new("fixture-key"),
+        ).await.unwrap();
+        let profile = backend.expression_profile.lock().unwrap().as_ref().unwrap().clone();
+        let signal = crate::expression_observation::ExpressionSignal {
+            line_breaks: 1,
+            exclamations: 0,
+            terminal_punctuation: 0,
+        };
+        for index in 0..10 {
+            profile.record(uuid::Uuid::new_v4(), 100 + index % 4, signal).unwrap();
+        }
+        assert_eq!(profile.stable_directions().unwrap().len(), 1);
+        let options = DictationStartOptions::default();
+        let capture = || backend.capture_dictation_context(&options, DictationContextPurpose::Dictation);
+        assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        assert!(backend.get_preferences().expression_learning_enabled);
+        let context = capture().await.unwrap();
+        assert!(context.polish.style_system_prompt.contains("用户经多次编辑"), "translation={} prompt={:?}", context.polish.translation_active, context.polish.style_system_prompt);
+        backend.clear_expression_profile().unwrap();
+        assert!(backend.expression_profile_directions().unwrap().is_empty());
+        assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
+    }
+
+    #[tokio::test]
+    async fn expression_capture_does_not_wait_for_busy_settings_gate() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        let gate = Arc::clone(&backend.settings_write_gate);
+        let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = gate.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        let options = DictationStartOptions::default();
+        let context = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            backend.capture_dictation_context(&options, DictationContextPurpose::Dictation),
+        ).await.expect("busy settings must not block capture").unwrap();
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(!context.polish.style_system_prompt.contains("用户经多次编辑"));
+    }
+
+    #[test]
+    fn expression_profile_corruption_requires_explicit_clear() {
+        let directory = TestDataDir::new("expression-corruption");
+        let path = directory.path().join("expression-profile.json");
+        std::fs::create_dir_all(directory.path()).unwrap();
+        std::fs::write(&path, b"unknown profile").unwrap();
+        let backend = OpenLessBackend::new(
+            BackendConfig { data_dir: directory.path().to_path_buf(), ..BackendConfig::default() },
+            BackendDependencies::unsupported(),
+        ).unwrap();
+        assert!(backend.expression_profile_directions().is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"unknown profile");
+        backend.clear_expression_profile().unwrap();
+        assert!(backend.expression_profile_directions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn expression_opt_out_preserves_pending_vocabulary_suggestions() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        prefs.vocabulary_learning_enabled = true;
+        backend.set_preferences(prefs.clone()).unwrap();
+        backend.queue_pending_correction("原词".into(), "新词".into()).unwrap();
+        prefs.expression_learning_enabled = false;
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
+        assert_eq!(backend.pending_corrections().len(), 1);
+    }
+
+    #[test]
+    fn vocabulary_observer_does_not_offer_fact_changes_as_words() {
+        let (backend, _) = backend();
+        let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
+            settings: crate::shared_types::VocabularyLearningSettings::default(),
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "今天买了十个苹果".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        let edit = crate::host_document::EditPair {
+            before: "今天买了".into(),
+            source: "十".into(),
+            target: "九".into(),
+            after: "个苹果".into(),
+        };
+        assert!(!sink.publish(edit));
+        assert!(backend.pending_corrections().is_empty());
     }
 
     #[test]
@@ -9541,6 +9960,7 @@ mod tests {
             )
             .unwrap();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9589,6 +10009,7 @@ mod tests {
     fn observed_spelling_correction_saves_only_the_complete_confirmed_word() {
         let (backend, _) = backend();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9601,6 +10022,8 @@ mod tests {
         ));
         let suggestions = backend.pending_corrections();
         assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].observation_id, sink.observation_id());
+        assert_eq!(suggestions[1].observation_id, sink.observation_id());
         assert_eq!(suggestions[0].pattern, "ZIP");
         assert_eq!(suggestions[0].replacement, "VIP");
         assert_eq!(suggestions[1].pattern, "codx");
@@ -12063,6 +12486,8 @@ mod tests {
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()
             .unwrap();
+        assert_eq!(first.observation_id, None);
+        assert!(serde_json::to_value(&first).unwrap().get("observationId").is_none());
         assert!(backend
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()
@@ -13378,6 +13803,9 @@ mod tests {
         )
         .unwrap();
 
+        let mut preferences = backend.get_preferences();
+        preferences.cursor_context_enabled = false;
+        backend.set_preferences(preferences).unwrap();
         let context = backend
             .capture_host_dictation_context(DictationStartOptions::default())
             .await
@@ -13574,15 +14002,23 @@ mod tests {
         .unwrap();
         let mut preferences = backend.get_preferences();
         preferences.vocabulary_learning_enabled = true;
+        preferences.cursor_context_enabled = false;
         assert!(
             !preferences.cursor_context_enabled,
             "learning must not require uploading cursor context"
         );
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
-        backend.start_dictation().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
         backend.stop_dictation().await.unwrap();
 
+        let observation_id = {
+            let sinks = observation.sinks.lock().unwrap();
+            assert_eq!(sinks[0].session_id(), Some(session_id));
+            sinks[0]
+                .observation_id()
+                .expect("host needs observation identity")
+        };
         assert_eq!(
             observation.typed_texts.lock().unwrap().as_slice(),
             ["polished"]
@@ -13595,6 +14031,10 @@ mod tests {
         };
         observation.publish(0, edit.clone());
         assert_eq!(backend.pending_corrections().len(), 1);
+        assert_eq!(
+            backend.pending_corrections()[0].observation_id,
+            Some(observation_id)
+        );
 
         backend.dismiss_pending_corrections();
         let mut preferences = backend.get_preferences();
@@ -13608,6 +14048,86 @@ mod tests {
             .unwrap();
         observation.publish(0, edit);
         assert!(backend.pending_corrections().is_empty());
+    }
+
+    #[tokio::test]
+    async fn expression_learning_can_observe_without_vocabulary_and_stops_on_opt_out() {
+        let data_dir = TestDataDir::new("expression-consent");
+        let observation = Arc::new(FakeEditObservation::default());
+        let mut services = crate::domains::BackendServices::unsupported();
+        services.edit_observation = observation.clone();
+        let text = "今天我们先完成这个工作然后再讨论";
+        let backend = OpenLessBackend::new(
+            BackendConfig { data_dir: data_dir.path().to_path_buf(), ..BackendConfig::default() },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(crate::testing::FixtureDictationEngine::successful(text, text)),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services,
+                ..BackendDependencies::unsupported()
+            },
+        ).unwrap();
+        let mut prefs = backend.get_preferences();
+        assert!(!prefs.expression_learning_enabled);
+        prefs.expression_learning_enabled = true;
+        prefs.vocabulary_learning_enabled = false;
+        backend.set_preferences(prefs).unwrap();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+        backend.stop_dictation().await.unwrap();
+        {
+            let sinks = observation.sinks.lock().unwrap();
+            assert_eq!(sinks[0].session_id(), Some(session_id));
+            assert!(sinks[0].observation_id().is_some());
+        }
+        assert_eq!(observation.typed_texts.lock().unwrap().as_slice(), [text]);
+        let edit = crate::host_document::EditPair {
+            source: String::new(), target: "\n".into(),
+            before: "今天我们先完成这个工作".into(), after: "然后再讨论".into(),
+        };
+        observation.publish(0, edit.clone());
+        let path = data_dir.path().join("expression-profile.json");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains(text));
+        assert!(backend.pending_corrections().is_empty());
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = false;
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
+        observation.publish(0, edit);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn expression_opt_out_during_dictation_does_not_arm_an_observer() {
+        let data_dir = TestDataDir::new("expression-opt-out-during-dictation");
+        let observation = Arc::new(FakeEditObservation::default());
+        let mut services = crate::domains::BackendServices::unsupported();
+        services.edit_observation = observation.clone();
+        let backend = OpenLessBackend::new(
+            BackendConfig { data_dir: data_dir.path().to_path_buf(), ..BackendConfig::default() },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(FakeEngine),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services,
+                ..BackendDependencies::unsupported()
+            },
+        ).unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        backend.start().await.unwrap();
+        backend.start_dictation().await.unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = false;
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
+        backend.stop_dictation().await.unwrap();
+        assert!(observation.typed_texts.lock().unwrap().is_empty());
+        assert!(!data_dir.path().join("expression-profile.json").exists());
+        backend.shutdown().await.unwrap();
     }
 
     #[tokio::test]

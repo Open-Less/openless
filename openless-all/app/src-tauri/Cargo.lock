@@ -1154,8 +1154,6 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "873dab07c8f743075e57f524c583985fbaf745602acbe916a01539364369a779"
 dependencies = [
  "alsa",
  "core-foundation-sys",
@@ -4374,7 +4372,7 @@ dependencies = [
 
 [[package]]
 name = "openless"
-version = "2.0.2-Beta.2+build.20261023-dictation-71a18a77"
+version = "2.0.2-Beta.7+build.20261113-6a7b5bb"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4458,7 +4456,7 @@ dependencies = [
  "winreg 0.52.0",
  "x509-parser",
  "zeroize",
- "zip 2.6.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -6799,8 +6797,6 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-wry"
 version = "2.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d61892587aea2a85245bcaec98c6fe46268874c0a0deae5535fb71ca7b93eae"
 dependencies = [
  "gtk",
  "http",

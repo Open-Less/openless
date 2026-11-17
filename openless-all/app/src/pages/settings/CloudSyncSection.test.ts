@@ -113,6 +113,7 @@ const initial: EncryptedSyncStatus = {
   syncState: 'disabled',
   account: { githubId: 'owner', login: 'fixture' },
   vaultId: 'vault',
+  serviceOrigin: 'https://sync.example',
   keyId: 'key',
   localGeneration: '1',
   lastSyncedLocalGeneration: null,
@@ -438,6 +439,7 @@ try {
     payload: {
       sequence: newer.sequence,
       accountId: 'owner',
+      serviceOrigin: 'https://sync.example',
       vaultId: 'vault',
       taskId: null,
       status: newer,
@@ -452,6 +454,7 @@ try {
     payload: {
       sequence: (BigInt(newer.sequence) + 1n).toString(),
       accountId: 'owner',
+      serviceOrigin: 'https://sync.example',
       vaultId: 'vault',
       taskId: 'old-task',
       preview,
@@ -469,6 +472,7 @@ try {
     payload: {
       sequence: pending.sequence,
       accountId: 'owner',
+      serviceOrigin: 'https://sync.example',
       vaultId: 'vault',
       taskId: null,
       status: pending,

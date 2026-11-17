@@ -1,19 +1,22 @@
-# 内置的 Wayland 协议 XML
+# Bundled Wayland Protocol XML
 
-`ext-data-control-v1.xml` 是从 wayland-protocols **1.49** 的
-`staging/ext-data-control/ext-data-control-v1.xml` **逐字节复制**过来的（MIT，
-版权头保留在文件里）。md5 `dbce6a71086f0a2eb675db5b84d9fd43`。
+[English](README.md) | [简体中文](README.zh.md)
 
-为什么内置而不是用系统那份：
+`ext-data-control-v1.xml` is **copied byte for byte** from
+`staging/ext-data-control/ext-data-control-v1.xml` in wayland-protocols **1.49**
+(MIT; the copyright header is kept in the file). md5 `dbce6a71086f0a2eb675db5b84d9fd43`.
 
-- 插件要自己看合成器上的 PRIMARY 选区（原因见 `../primary_selection.h`），
-  这需要 `ext_data_control_manager_v1` 的客户端胶水代码；
-- 胶水由 `wayland-scanner` 在构建时从 XML 生成。若依赖系统
-  `/usr/share/wayland-protocols/`，则**构建机必须装 wayland-protocols**，
-  而打包路径（`app/scripts/package-linux-egui.sh` 直接取 `build/libopenless.so`）
-  并不保证这一点；
-- 内置后构建只需要 `wayland-scanner` + `wayland-client` 头/库（CMake 会给出
-  明确的缺失报错）。
+Why bundle it instead of using the system copy:
 
-升级方式：用新版 wayland-protocols 的同名文件替换，并在上面更新版本号与 md5，
-然后跑 `../build.sh` 与两个契约用例。
+- The plugin has to inspect the PRIMARY selection on the compositor itself (see
+  `../primary_selection.h` for why), which requires the client glue code for
+  `ext_data_control_manager_v1`;
+- The glue is generated from the XML at build time by `wayland-scanner`. Depending on
+  the system `/usr/share/wayland-protocols/` would mean **the build machine must have
+  wayland-protocols installed**, and the packaging path (`app/scripts/package-linux-egui.sh`
+  takes `build/libopenless.so` directly) does not guarantee that;
+- With it bundled, the build only needs `wayland-scanner` plus the `wayland-client`
+  headers/library (CMake reports the missing pieces explicitly).
+
+Upgrading: replace it with the same-named file from a newer wayland-protocols, update the
+version number and md5 above, then run `../build.sh` and the two contract test cases.

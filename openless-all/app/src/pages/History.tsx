@@ -31,6 +31,7 @@ import type { DictationSession, PolishMode, StylePack } from '../lib/types';
 import { formatHistoryTime, formatLocaleDecimal, formatLocaleNumber } from '../lib/localeFormat';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import { SavedToast, type SaveToastState } from '../components/SavedToast';
 import { SelectLite } from '../components/ui/SelectLite';
 
 function useModeLabel(): Record<PolishMode, string> {
@@ -130,24 +131,43 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   const [allPacks, setAllPacks] = useState<StylePack[] | null>(null);
   const [packsError, setPacksError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const data = await listHistory();
-      const visible = quickNotesOnly ? data.filter((entry) => entry.source === 'quick_note') : data;
-      setItems(visible);
-      setActionError(null);
-      setSelectedId((prev) =>
-        prev && visible.some((s) => s.id === prev) ? prev : (visible[0]?.id ?? null),
-      );
-    } catch (error) {
-      console.error('[history] failed to load history', error);
-      setLoadError(errorMessage(error));
-    } finally {
-      setLoading(false);
-    }
-  }, [quickNotesOnly]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const refreshSeq = useRef(0);
+  const [refreshNotice, setRefreshNotice] = useState<{ id: number; state: SaveToastState }>({
+    id: 0,
+    state: 'idle',
+  });
+
+  const refresh = useCallback(
+    async (notify = false) => {
+      const seq = ++refreshSeq.current;
+      // A later refresh keeps the list and detail. The loading placeholder is only the empty first paint.
+      if (itemsRef.current.length === 0) setLoading(true);
+      setLoadError(null);
+      try {
+        const data = await listHistory();
+        if (seq !== refreshSeq.current) return;
+        const visible = quickNotesOnly
+          ? data.filter((entry) => entry.source === 'quick_note')
+          : data;
+        setItems(visible);
+        setActionError(null);
+        setSelectedId((prev) =>
+          prev && visible.some((s) => s.id === prev) ? prev : (visible[0]?.id ?? null),
+        );
+        if (notify) setRefreshNotice((current) => ({ id: current.id + 1, state: 'saved' }));
+      } catch (error) {
+        if (seq !== refreshSeq.current) return;
+        console.error('[history] failed to load history', error);
+        setLoadError(errorMessage(error));
+        if (notify) setRefreshNotice((current) => ({ id: current.id + 1, state: 'failed' }));
+      } finally {
+        if (seq === refreshSeq.current) setLoading(false);
+      }
+    },
+    [quickNotesOnly],
+  );
 
   useEffect(() => {
     void refresh();
@@ -197,7 +217,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
-        void refresh();
+        void refresh(true);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -447,7 +467,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         desc={quickNotesOnly ? t('quickNote.desc', 'Permanent audio notes.') : t('history.desc')}
         right={
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh()}>
+            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
               {t('common.refresh')}
             </Btn>
             {!quickNotesOnly && (
@@ -456,6 +476,13 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
               </Btn>
             )}
           </div>
+        }
+      />
+      <SavedToast
+        saveState={refreshNotice.state}
+        replayKey={refreshNotice.id}
+        message={
+          refreshNotice.state === 'failed' ? t('common.operationFailed') : t('common.refreshed')
         }
       />
       <div
@@ -470,6 +497,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         {(!mobile || !mobileDetailOpen) && (
           <Card
             padding={0}
+            className="ol-history-list"
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
             {/* The left column is one scroll container; the search box sticks to the top with an
@@ -481,7 +509,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                   position: 'sticky',
                   top: 0,
                   zIndex: 2,
-                  background: 'var(--ol-surface)',
+                  background: 'var(--ol-surface-raised)',
                   padding: '12px 14px',
                 }}
               >
@@ -493,7 +521,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     padding: '6px 10px',
                     fontSize: 12,
                     border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 8,
+                    borderRadius: 'var(--ol-control-radius)',
                     background: 'var(--ol-surface-2)',
                     color: 'var(--ol-ink-3)',
                   }}
@@ -525,7 +553,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     style={{
                       margin: 8,
                       padding: '9px 10px',
-                      borderRadius: 8,
+                      borderRadius: 'var(--ol-control-radius)',
                       background: 'rgba(239,68,68,0.08)',
                       color: 'var(--ol-red, #ef4444)',
                       fontSize: 12,
@@ -553,7 +581,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     }}
                   >
                     <span>{t('history.loadFailed', { err: loadError })}</span>
-                    <Btn size="sm" variant="ghost" onClick={() => void refresh()}>
+                    <Btn size="sm" variant="ghost" onClick={() => void refresh(true)}>
                       {t('history.retry')}
                     </Btn>
                   </div>
@@ -596,7 +624,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                         gap: 4,
                         border: '0.5px solid',
                         borderColor: selectedId === s.id ? 'var(--ol-line)' : 'transparent',
-                        borderRadius: 10,
+                        borderRadius: 'var(--ol-r-md)',
                         background: selectedId === s.id ? 'var(--ol-surface-2)' : 'transparent',
                         cursor: 'default',
                         fontFamily: 'inherit',
@@ -846,7 +874,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                       minWidth: 0,
                       padding: 14,
                       border: '0.5px solid var(--ol-line)',
-                      borderRadius: 10,
+                      borderRadius: 'var(--ol-r-md)',
                       background: 'var(--ol-surface-2)',
                     }}
                   >
@@ -904,7 +932,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                         minWidth: 0,
                         padding: 14,
                         border: '0.5px solid var(--ol-line)',
-                        borderRadius: 10,
+                        borderRadius: 'var(--ol-r-md)',
                         background: 'var(--ol-surface-2)',
                       }}
                     >
@@ -1076,7 +1104,7 @@ function HistoryActionMenu({
             overflowY: 'auto',
             padding: 6,
             border: '0.5px solid var(--ol-line-strong)',
-            borderRadius: 10,
+            borderRadius: 'var(--ol-r-md)',
             background: 'var(--ol-surface)',
             boxShadow: 'var(--ol-shadow-md, 0 12px 30px rgba(0,0,0,.18))',
           }}
@@ -1180,7 +1208,7 @@ function HistoryActionMenuItem({
         gap: 9,
         padding: '8px 9px',
         border: 0,
-        borderRadius: 7,
+        borderRadius: 'var(--ol-control-radius)',
         background: 'transparent',
         color: danger ? 'var(--ol-red, #ef4444)' : 'var(--ol-ink-2)',
         fontFamily: 'inherit',
@@ -1464,7 +1492,7 @@ function RepolishPanel({
           style={{
             marginTop: 10,
             padding: '8px 10px',
-            borderRadius: 8,
+            borderRadius: 'var(--ol-control-radius)',
             background: 'rgba(239,68,68,0.08)',
             color: 'var(--ol-red, #ef4444)',
             fontSize: 11.5,
@@ -1529,7 +1557,7 @@ function HistoryResultCard({
         minWidth: 0,
         padding: 14,
         border: '0.5px dashed var(--ol-line-strong)',
-        borderRadius: 10,
+        borderRadius: 'var(--ol-r-md)',
         background: 'var(--ol-surface-2)',
       }}
     >

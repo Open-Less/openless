@@ -319,11 +319,37 @@ async fn submit_text_to_platform(
 ) -> WindowsImeIpcResult<ImeSubmitStatus> {
     // Sending and polling block on the host's message loop; keep that off the
     // async runtime workers.
-    tokio::task::spawn_blocking(move || windows_message::submit_text_to_window(request))
+    use crate::issue1266_debug::{Event, Facts, Operation, Outcome, Probe};
+    let operation = Operation::new(Probe::P4);
+    let _scope = operation.scope();
+    operation.mark(Event::Requested);
+    let result = tokio::task::spawn_blocking(move || {
+        let _worker_scope = operation.scope();
+        operation.mark(Event::Entered);
+        let result = windows_message::submit_text_to_window(request, operation);
+        operation.record(Event::Returned, match &result {
+            Ok(_) => Outcome::Returned,
+            Err(error) if error.is_outcome_unknown() => Outcome::Unknown,
+            Err(_) => Outcome::Error,
+        }, Facts { value: match &result {
+            Ok(ImeSubmitStatus::Committed) => 1,
+            Ok(ImeSubmitStatus::NotDispatched) => 2,
+            Ok(ImeSubmitStatus::CompositionConflict) => 3,
+            Ok(ImeSubmitStatus::CompositionRecoveryRequired) => 4,
+            Ok(ImeSubmitStatus::Rejected) => 5,
+            Ok(ImeSubmitStatus::Failed) => 6,
+            Err(_) => 0,
+        }, ..Facts::default() });
+        result
+    })
         .await
         .map_err(|error| {
             WindowsImeIpcError::OutcomeUnknown(format!("IME submit task failed: {error}"))
-        })?
+        });
+    if result.is_err() {
+        operation.record(Event::Returned, Outcome::Unknown, Facts::default());
+    }
+    result?
 }
 
 #[cfg(target_os = "windows")]
@@ -449,6 +475,7 @@ mod windows_message {
 
     pub fn submit_text_to_window(
         request: ImeSubmitRequest,
+        operation: crate::issue1266_debug::Operation,
     ) -> WindowsImeIpcResult<ImeSubmitStatus> {
         let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
         let token = next_submit_token();
@@ -476,6 +503,7 @@ mod windows_message {
         }
 
         let window = find_ime_window_with_retry(target, request.allow_same_process_fallback)?;
+        operation.mark(crate::issue1266_debug::Event::WindowFound);
         log::info!(
             "[windows-ime] submit begin op={} target_pid={} target_tid={} target_hwnd=0x{:X} ime_pid={} ime_tid={} owner={} process={} payload_bytes={} same_process_fallback={}",
             request.op.label(),
@@ -508,6 +536,9 @@ mod windows_message {
                 WindowsImeIpcError::Io(format!("sending to the IME window failed: OS error {code}"))
             }
         })?;
+        operation.record(crate::issue1266_debug::Event::SubmitAck,
+            if reply == IME_STATUS_ACCEPTED { crate::issue1266_debug::Outcome::Accepted }
+            else { crate::issue1266_debug::Outcome::Rejected }, crate::issue1266_debug::Facts::default());
         log::info!(
             "[windows-ime] submit ack op={} raw_status=0x{:08X}",
             request.op.label(),
@@ -532,8 +563,18 @@ mod windows_message {
 
         let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
         let query = encode_query_payload(token);
+        struct QueryCount(crate::issue1266_debug::Operation, u64);
+        impl Drop for QueryCount {
+            fn drop(&mut self) {
+                self.0.record(crate::issue1266_debug::Event::QueryCount,
+                    crate::issue1266_debug::Outcome::Observed,
+                    crate::issue1266_debug::Facts { value: self.1, ..Default::default() });
+            }
+        }
+        let mut query_count = QueryCount(operation, 0);
         loop {
             std::thread::sleep(IME_QUERY_INTERVAL);
+            query_count.1 += 1;
             match send_copy_data(
                 window.hwnd,
                 IME_COPYDATA_QUERY,

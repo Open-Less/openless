@@ -1,5 +1,5 @@
 import { isDesktop } from './platform-exports';
-import { invokeOrMock, platformCapabilities } from './shared';
+import { invokeOrMock, isTauriNow, platformCapabilities } from './shared';
 import type { CapsuleSnapshot } from '../types';
 
 export function startDictation(): Promise<void> {
@@ -14,8 +14,14 @@ export function cancelDictation(): Promise<void> {
   return invokeOrMock('cancel_dictation', undefined, () => undefined);
 }
 
-export function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
-  if (!isDesktop()) return Promise.resolve();
+export async function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
+  if (!isDesktop()) return;
+  if (isTauriNow()) {
+    const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+    // Mirrors render the shared transcript but never own the primary rail's native layout.
+    // This also prevents a retained/closing mirror's cleanup from hiding the active rail.
+    if (getCurrentWebviewWindow().label !== 'capsule') return;
+  }
   return invokeOrMock('set_capsule_transcript_visible', { visible }, () => undefined);
 }
 

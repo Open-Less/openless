@@ -1,3 +1,4 @@
+import { collectCapsuleInputRegions } from '../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
@@ -154,7 +155,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
             flex: '0 0 auto',
             color,
             fontSize: completed ? 15 : 16,
-            fontWeight: 800,
+            fontWeight: 'calc(800 + var(--ol-font-weight-offset))',
             lineHeight: 1,
           }}
         >
@@ -427,18 +428,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const hostMetrics = getCapsuleHostMetrics(os, translation, capsuleStyle);
   const badgeBottom = Math.round(metrics.height * 0.73);
 
-  // Warm up the shader compile cache while idle so the first hotkey press doesn't
-  // compile on the spot (perceived response latency).
+  // Only the selected Siri style needs a GPU warmup; classic/typeless never allocate it.
   useEffect(() => {
-    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => number })
-      .requestIdleCallback;
-    if (idle) {
-      idle(() => warmUpSiriShaders());
-      return;
-    }
+    if (capsuleStyle !== 'siri') return;
     const timer = setTimeout(() => warmUpSiriShaders(), 1200);
     return () => clearTimeout(timer);
-  }, []);
+  }, [capsuleStyle]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -452,17 +447,38 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
       if (cancelled) return;
       const subscribe = async <T,>(name: string, apply: (payload: T) => void) => {
-        const unlisten = await listen<T>(name, (event) => {
-          if (!cancelled) apply(event.payload);
-        });
+        // Tauri's default Any listener also receives emit_to(otherWindow). In particular,
+        // hiding a mirror sends it idle; that must never exit the primary capsule.
+        const unlisten = await listen<T>(
+          name,
+          (event) => {
+            if (!cancelled) apply(event.payload);
+          },
+          name === 'backend:event' ? undefined : { target },
+        );
         if (cancelled) {
           unlisten();
           return false;
         }
         unlisteners.push(unlisten);
         return true;
+      };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot().catch((error) => {
+          if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
+          return undefined;
+        });
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptViewRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptViewRef.current = next;
+        setLocalAsrText(next.text);
       };
       const applyPayload = (p: CapsulePayload) => {
         if (!capsuleStateFirstLogged) {
@@ -483,7 +499,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         // Any new recording session must drop prior ASR text — including when
         // the previous capsule was still transcribing/polishing/done from
         // dictation (selection-voice Start used to keep the stale stream).
-        if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
+        const sessionId = p.sessionId;
+        const reactivatedSession =
+          p.state === 'recording' &&
+          previous !== 'recording' &&
+          !sessionChanged &&
+          !previousTranscript.sessionStartObserved &&
+          sessionId != null &&
+          nextTranscript.sessionId === sessionId;
+        if (reactivatedSession) {
+          void replayActiveSessionTranscript(sessionId);
+        } else if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
           nextTranscript = beginTranscriptGeneration(nextTranscript);
         }
         if (
@@ -734,6 +760,66 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       console.warn('[capsule] transcript visibility sync failed', error),
     );
   }, [transcriptVisible]);
+
+  useEffect(() => {
+    if (!isTauri || os !== 'mac') return;
+    let stopped = false;
+    let frame = 0;
+    let last = '';
+    const sync = async () => {
+      if (stopped) return;
+      const interactive =
+        !!insertFallback || suggestions.length > 0 || (state !== 'idle' && !leaving);
+      const rects = interactive ? collectCapsuleInputRegions(document) : [];
+      const serialized = JSON.stringify(rects);
+      if (serialized !== last) {
+        last = serialized;
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (!stopped)
+          await invoke('set_capsule_interactive_regions', { rects }).catch((error) =>
+            console.warn('[capsule] input region sync failed', error),
+          );
+      }
+    };
+    const schedule = () => {
+      // Animation mutations may arrive before this frame's queued callback.
+      // Keep the first callback so continuous waveform updates cannot starve hit regions.
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        void sync();
+      });
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        'style',
+        'class',
+        'hidden',
+        'disabled',
+        'aria-hidden',
+        'aria-disabled',
+        'aria-expanded',
+        'inert',
+        'data-state',
+        'data-open',
+        'data-closed',
+        'data-starting-style',
+        'data-ending-style',
+      ],
+    });
+    window.addEventListener('resize', schedule);
+    schedule();
+    return () => {
+      stopped = true;
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [os, state, leaving, insertFallback, suggestions.length]);
 
   // Always release the native hit-test region when the capsule webview is torn down.
   useEffect(() => {

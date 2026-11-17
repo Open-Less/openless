@@ -3,11 +3,15 @@
 //! These types deliberately do not embed the app's complete preferences or style-pack structs:
 //! credentials, provider connections, device permissions and local paths stay on the device.
 
+use crate::edit_plan::EditPlanFormat;
 use crate::shared_types::{
     CapsuleDisplayMode as SyncCapsuleDisplayMode,
     ChineseScriptPreference as SyncChineseScriptPreference,
-    OutputLanguagePreference as SyncOutputLanguagePreference, ThemeMode as SyncThemeMode,
+    OutputLanguagePreference as SyncOutputLanguagePreference, PipelineMode,
+    SelectionPolishOutputMode, ThemeMode as SyncThemeMode, UpdateChannel,
 };
+use crate::style_packs::{CustomStylePrompts, StyleSystemPrompts};
+use crate::types::{SelectionVoiceIntentMode, SelectionVoiceManualIntent};
 use crate::PolishMode;
 use crate::{
     CapsuleStyle as SyncCapsuleStyle, RuleSource as SyncRuleSource,
@@ -116,9 +120,17 @@ pub struct SyncStylePackExample {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SyncPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_system_prompts: Option<StyleSystemPrompts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_style_prompts: Option<CustomStylePrompts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_mode: Option<SyncThemeMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_style: Option<SyncCapsuleStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capsule_transcript_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capsule_transcript_font_size: Option<u8>,
     // Old plaintext readers reject unknown keys. Display targeting syncs through E2EE only.
     #[serde(skip_serializing)]
     pub capsule_display_mode: Option<SyncCapsuleDisplayMode>,
@@ -132,6 +144,8 @@ pub struct SyncPreferences {
     pub active_style_pack_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_polish_style_pack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_polish_output_mode: Option<SelectionPolishOutputMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_languages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,6 +172,56 @@ pub struct SyncPreferences {
     pub show_overview_activity_heatmap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_thinking_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_mode: Option<PipelineMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multimodal_pipeline_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_voice_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_edit_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_voice_intent_mode: Option<SelectionVoiceIntentMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_voice_manual_intent: Option<SelectionVoiceManualIntent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_voice_edit_keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_voice_edit_plan_format: Option<EditPlanFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_voice_edit_system_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_channel: Option<UpdateChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_channel_explicit: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_retention_days: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polish_context_window_minutes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polish_skip_max_chars: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_minimized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming_insert: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming_insert_save_clipboard: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_composition_input: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_context_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stacked_row_layout: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conservative_layout: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_update_check: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_max_entries: Option<Option<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_audio_for_debug: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_recording_max_entries: Option<Option<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<SyncLocale>,
     #[serde(skip_serializing_if = "Option::is_none")]

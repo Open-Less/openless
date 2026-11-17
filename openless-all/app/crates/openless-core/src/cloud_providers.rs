@@ -995,6 +995,7 @@ fn map_tencent_asr_error(error: TencentCloudASRError) -> BackendError {
 pub struct SharedCloudTextPolisher {
     credentials: Arc<dyn CredentialStore>,
     active: Arc<Mutex<HashMap<SessionId, Arc<ProviderCancellation>>>>,
+    usage_recorder: Option<Arc<crate::usage_ledger::UsageRecorder>>,
 }
 
 impl SharedCloudTextPolisher {
@@ -1002,7 +1003,13 @@ impl SharedCloudTextPolisher {
         Self {
             credentials,
             active: Arc::new(Mutex::new(HashMap::new())),
+            usage_recorder: None,
         }
+    }
+
+    pub fn with_usage_recorder(mut self, recorder: Arc<crate::usage_ledger::UsageRecorder>) -> Self {
+        self.usage_recorder = Some(recorder);
+        self
     }
 }
 
@@ -1056,6 +1063,24 @@ enum CloudPolisherProvider {
     Gemini(crate::llm_gemini::GeminiProvider),
 }
 
+fn usage_purpose(context: &DictationContext) -> crate::usage_ledger::ServicePurpose {
+    use crate::dictation_context::DictationOutputTarget;
+    use crate::usage_ledger::ServicePurpose;
+    if context.polish.selection_input {
+        ServicePurpose::Selection
+    } else if context.polish.translation_active {
+        ServicePurpose::Translation
+    } else {
+        match context.output_target {
+            DictationOutputTarget::Qa => ServicePurpose::Question,
+            DictationOutputTarget::QuickNote => ServicePurpose::QuickNote,
+            DictationOutputTarget::VoiceEdit => ServicePurpose::VoiceEdit,
+            DictationOutputTarget::CloudNote => ServicePurpose::CloudNote,
+            _ => ServicePurpose::DictationPostprocess,
+        }
+    }
+}
+
 impl TextPolisher for SharedCloudTextPolisher {
     fn polish(
         &self,
@@ -1087,6 +1112,8 @@ impl TextPolisher for SharedCloudTextPolisher {
             active: Arc::clone(&self.active),
         };
         let credentials = Arc::clone(&self.credentials);
+        let usage_recorder = self.usage_recorder.clone();
+        let usage_generation = usage_recorder.as_ref().map(|recorder| recorder.generation());
         Box::pin(async move {
             let _registration = registration;
             if raw_text.trim().is_empty() {
@@ -1097,11 +1124,45 @@ impl TextPolisher for SharedCloudTextPolisher {
             }
             let mut provider =
                 build_cloud_polisher_provider(credentials.as_ref(), context.as_ref()).await?;
+            let usage_label = match &provider {
+                CloudPolisherProvider::OpenAi(provider) => Some(provider.call_label()),
+                CloudPolisherProvider::Gemini(_) => None,
+            };
             if let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
                 provider,
             )) = &mut provider
             {
                 provider.set_dictation_session(session_id);
+                if let (Some(recorder), Some(generation), Some(label)) =
+                    (usage_recorder, usage_generation, usage_label)
+                {
+                    let purpose = usage_purpose(&context);
+                    let (service, protocol) = provider.usage_metadata();
+                    let channel = crate::usage_ledger::sanitized_identifier(&context.llm.provider_id);
+                    provider.set_usage_observer(Arc::new(move |id, usage| {
+                        let record = crate::usage_ledger::UsageRecord {
+                            id,
+                            occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                            kind: crate::usage_ledger::ServiceKind::Llm,
+                            purpose,
+                            outcome: crate::usage_ledger::ServiceOutcome::Unknown,
+                            provider: crate::usage_ledger::sanitized_identifier(&label.provider),
+                            service: crate::usage_ledger::sanitized_identifier(&service),
+                            protocol: crate::usage_ledger::sanitized_identifier(&protocol),
+                            input_accounting: usage.input_accounting,
+                            channel: channel.clone(),
+                            model: crate::usage_ledger::sanitized_identifier(&label.model),
+                            audio_ms: None,
+                            input_tokens: usage.input,
+                            output_tokens: usage.output,
+                            cached_input_tokens: usage.cached_input,
+                            cache_write_input_tokens: usage.cache_write_input,
+                            reasoning_tokens: usage.reasoning,
+                            synthesized_characters: None,
+                        };
+                        let _ = recorder.submit(generation, record);
+                    }));
+                }
             }
             tokio::select! {
                 _ = cancellation.cancelled() => Err(cancelled_provider_error()),
@@ -1950,6 +2011,42 @@ fn validate_omni_context(
     Ok(())
 }
 
+/// Plain-text completion on the Omni channel. Selection helpers use this when
+/// the active pipeline is multimodal, so a traditional LLM is not required.
+pub(crate) async fn polish_with_omni_text(
+    credentials: &dyn CredentialStore,
+    context: &DictationContext,
+    raw_text: &str,
+) -> Result<PolishOutput, BackendError> {
+    if raw_text.trim().is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidArgument,
+            "polish input must not be empty",
+        ));
+    }
+    let (system_prompt, user_prompt) = context.effective_polish_prompts(raw_text);
+    let provider = build_omni_provider(credentials, context).await?;
+    let polished = provider
+        .complete(&system_prompt, &user_prompt, None)
+        .await
+        .map_err(map_omni_error)?;
+    let cleaned = crate::output_cleaning::clean_polish_output(&polished);
+    let text = if context.polish.translation_active {
+        crate::split_polish_translate_output(&cleaned)
+            .map(|(_, translation)| translation)
+            .unwrap_or(cleaned)
+    } else {
+        cleaned
+    };
+    if text.trim().is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::Provider,
+            "Omni provider returned empty polish output",
+        ));
+    }
+    Ok(PolishOutput::text(text))
+}
+
 /// Validate an Omni provider using the same construction and request path as
 /// dictation. Dedicated transcription uses synthetic silence; general-purpose
 /// models use a text probe, which does not prove audio support (issue #1118).
@@ -1985,9 +2082,9 @@ pub async fn validate_shared_omni_provider(
     Ok(())
 }
 
-/// First-stage Omni for Selection Voice / Less Computer (#1119 product B):
-/// audio + prompt → instruction/command text. Downstream intent / EditPlan /
-/// Agent submit still use their existing LLM (or Agent) paths.
+/// First-stage Omni audio for Selection Voice / Less Computer (#1119):
+/// audio + prompt → instruction text. Later selection text tasks follow the
+/// active pipeline; Agent submit keeps its own path.
 ///
 /// Empty Omni output is returned as `Ok("")` so callers can apply product
 /// policy (e.g. Less Computer Dictate → `Empty` outcome without a chat error;
@@ -3622,6 +3719,78 @@ mod tests {
 
         assert_eq!(error.code, BackendErrorCode::Provider);
         assert_eq!(error.message, "LLM API key is not configured");
+    }
+
+    #[tokio::test]
+    async fn cloud_polisher_records_only_provider_reported_tokens() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let header_end = header_end + 4;
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                    let length = headers.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").and_then(|value| value.trim().parse::<usize>().ok())).unwrap_or(0);
+                    if bytes.len() >= header_end + length { break; }
+                }
+            }
+            let events = b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n";
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", events.len()).unwrap();
+            socket.write_all(events).unwrap();
+        });
+        let directory = std::env::temp_dir().join(format!("openless-polish-usage-{}", uuid::Uuid::new_v4()));
+        let ledger = Arc::new(crate::usage_ledger::UsageLedger::open(directory.join("usage.json")).unwrap());
+        let recorder = Arc::new(crate::usage_ledger::UsageRecorder::start(ledger).unwrap());
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        write_channel_secret(&credentials, CredentialNamespace::Llm, "llm-channel", LLM_API_KEY_ACCOUNT, "fixture-key").await;
+        write_channel_secret(&credentials, CredentialNamespace::Llm, "llm-channel", LLM_ENDPOINT_ACCOUNT, &format!("http://{address}")).await;
+        let mut llm = ProviderInvocation::new("llm-channel", "deepseek");
+        llm.model = Some("fixture-model".into());
+        let context = Arc::new(DictationContext { llm, ..DictationContext::default() });
+        let polisher = SharedCloudTextPolisher::new(credentials).with_usage_recorder(recorder.clone());
+        let result = polisher.polish(SessionId::new(), context, "private text".into(), Arc::new(IgnoreTextStreamSink)).await.unwrap();
+        assert_eq!(result.text, "hello");
+        let (records, failures) = recorder.snapshot().unwrap();
+        assert_eq!(failures, 0);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].input_tokens, Some(30));
+        assert_eq!(records[0].output_tokens, Some(4));
+        assert_eq!(records[0].channel.as_deref(), Some("llm-channel"));
+        assert_eq!(records[0].protocol.as_deref(), Some("chat_completions"));
+        assert_eq!(records[0].input_accounting, Some(crate::usage_ledger::CacheInputAccounting::Inclusive));
+        assert!(records[0].service.is_some());
+        assert!(!records[0].service.as_deref().unwrap().contains(&address.to_string()));
+        assert_eq!(records[0].purpose, crate::usage_ledger::ServicePurpose::DictationPostprocess);
+        let stored = std::fs::read_to_string(directory.join("usage.json")).unwrap();
+        assert!(!stored.contains("private text"));
+        assert!(!stored.contains("fixture-key"));
+        server.join().unwrap();
+        drop(polisher);
+        drop(recorder);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn usage_purpose_distinguishes_selection_translation_and_tools() {
+        use crate::dictation_context::DictationOutputTarget;
+        use crate::usage_ledger::ServicePurpose;
+        let mut context = DictationContext::default();
+        assert_eq!(usage_purpose(&context), ServicePurpose::DictationPostprocess);
+        context.polish.translation_active = true;
+        assert_eq!(usage_purpose(&context), ServicePurpose::Translation);
+        context.polish.selection_input = true;
+        assert_eq!(usage_purpose(&context), ServicePurpose::Selection);
+        context.polish.selection_input = false;
+        context.polish.translation_active = false;
+        context.output_target = DictationOutputTarget::QuickNote;
+        assert_eq!(usage_purpose(&context), ServicePurpose::QuickNote);
     }
 
     #[tokio::test]

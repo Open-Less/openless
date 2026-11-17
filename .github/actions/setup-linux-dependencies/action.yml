@@ -1,0 +1,20 @@
+name: Linux build dependencies
+description: Bounded, noninteractive Ubuntu dependency setup shared by tests and packaging
+runs:
+  using: composite
+  steps:
+    - name: Install Ubuntu build dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Hosted Ubuntu 24.04 already enables universe. Adding it again also
+        # refreshes every configured package feed before our own update.
+        apt_network=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        sudo timeout --kill-after=10s 180s apt-get "${apt_network[@]}" update
+        sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=10s 300s \
+          apt-get "${apt_network[@]}" install -y --no-install-recommends \
+          appstream build-essential cmake cpio desktop-file-utils \
+          fcitx5-modules-dev file libasound2-dev libdbus-1-dev \
+          libfcitx5config-dev libfcitx5core-dev libfcitx5utils-dev \
+          liblzma-dev libpipewire-0.3-dev libpulse-dev libssl-dev \
+          libwayland-dev libx11-dev libxkbcommon-dev pkg-config ripgrep rpm

@@ -606,7 +606,10 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
         let mut extracted = 0usize;
         for index in 0..archive.len() {
             let mut file = archive.by_index(index).context("read zip entry")?;
-            let name = file.name().to_string();
+            let name = file
+                .name()
+                .map_err(|error| anyhow::anyhow!("read zip entry name: {error}"))?
+                .into_owned();
             if !name.starts_with(TARGET_RID_NATIVE_PREFIX) || !name.ends_with(".dll") {
                 continue;
             }

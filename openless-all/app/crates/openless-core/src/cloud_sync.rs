@@ -544,14 +544,19 @@ fn capture_preferences(
     ui: CloudSyncUiPreferences,
 ) -> SyncPreferences {
     SyncPreferences {
+        style_system_prompts: Some(preferences.style_system_prompts.clone()),
+        custom_style_prompts: Some(preferences.custom_style_prompts.clone()),
         theme_mode: Some(preferences.theme_mode),
         capsule_style: Some(preferences.capsule_style),
+        capsule_transcript_enabled: Some(preferences.capsule_transcript_enabled),
+        capsule_transcript_font_size: Some(preferences.capsule_transcript_font_size),
         capsule_display_mode: None,
         capsule_display_mode_v2: None,
         default_mode: Some(preferences.default_mode),
         enabled_modes: Some(preferences.enabled_modes.clone()),
         active_style_pack_id: Some(preferences.active_style_pack_id.clone()),
         selection_polish_style_pack_id: Some(preferences.selection_polish_style_pack_id.clone()),
+        selection_polish_output_mode: Some(preferences.selection_polish_output_mode),
         working_languages: Some(preferences.working_languages.clone()),
         translation_target_language: Some(preferences.translation_target_language.clone()),
         chinese_script_preference: Some(preferences.chinese_script_preference),
@@ -565,6 +570,33 @@ fn capture_preferences(
         silence_auto_stop_seconds: Some(preferences.silence_auto_stop_seconds),
         show_overview_activity_heatmap: Some(preferences.show_overview_activity_heatmap),
         llm_thinking_enabled: Some(preferences.llm_thinking_enabled),
+        pipeline_mode: Some(preferences.pipeline_mode),
+        multimodal_pipeline_enabled: Some(preferences.multimodal_pipeline_enabled),
+        selection_voice_enabled: Some(preferences.selection_voice_enabled),
+        voice_edit_enabled: Some(preferences.voice_edit_enabled),
+        selection_voice_intent_mode: Some(preferences.selection_voice_intent_mode),
+        selection_voice_manual_intent: Some(preferences.selection_voice_manual_intent),
+        selection_voice_edit_keywords: Some(preferences.selection_voice_edit_keywords.clone()),
+        selection_voice_edit_plan_format: Some(preferences.selection_voice_edit_plan_format),
+        selection_voice_edit_system_prompt: Some(
+            preferences.selection_voice_edit_system_prompt.clone(),
+        ),
+        update_channel: Some(preferences.update_channel),
+        update_channel_explicit: Some(preferences.update_channel_explicit),
+        history_retention_days: Some(preferences.history_retention_days),
+        polish_context_window_minutes: Some(preferences.polish_context_window_minutes),
+        polish_skip_max_chars: Some(preferences.polish_skip_max_chars),
+        start_minimized: Some(preferences.start_minimized),
+        streaming_insert: Some(preferences.streaming_insert),
+        streaming_insert_save_clipboard: Some(preferences.streaming_insert_save_clipboard),
+        windows_composition_input: Some(preferences.windows_composition_input),
+        cursor_context_enabled: Some(preferences.cursor_context_enabled),
+        stacked_row_layout: Some(preferences.stacked_row_layout),
+        conservative_layout: Some(preferences.conservative_layout),
+        auto_update_check: Some(preferences.auto_update_check),
+        history_max_entries: Some(preferences.history_max_entries),
+        record_audio_for_debug: Some(preferences.record_audio_for_debug),
+        audio_recording_max_entries: Some(preferences.audio_recording_max_entries),
         locale: ui.locale,
         font_scale: ui.font_scale,
     }
@@ -585,12 +617,17 @@ fn apply_preferences(preferences: &mut UserPreferences, incoming: &SyncPreferenc
     }
     macro_rules! apply { ($($field:ident),+ $(,)?) => { $(if let Some(value) = &incoming.$field { preferences.$field = value.clone(); })+ }; }
     apply!(
+        style_system_prompts,
+        custom_style_prompts,
         theme_mode,
         capsule_style,
+        capsule_transcript_enabled,
+        capsule_transcript_font_size,
         default_mode,
         enabled_modes,
         active_style_pack_id,
         selection_polish_style_pack_id,
+        selection_polish_output_mode,
         working_languages,
         translation_target_language,
         chinese_script_preference,
@@ -603,8 +640,37 @@ fn apply_preferences(preferences: &mut UserPreferences, incoming: &SyncPreferenc
         silence_auto_stop_enabled,
         silence_auto_stop_seconds,
         show_overview_activity_heatmap,
-        llm_thinking_enabled
+        llm_thinking_enabled,
+        pipeline_mode,
+        multimodal_pipeline_enabled,
+        selection_voice_enabled,
+        voice_edit_enabled,
+        selection_voice_intent_mode,
+        selection_voice_manual_intent,
+        selection_voice_edit_keywords,
+        selection_voice_edit_plan_format,
+        selection_voice_edit_system_prompt,
+        update_channel,
+        update_channel_explicit,
+        history_retention_days,
+        polish_context_window_minutes,
+        polish_skip_max_chars,
+        start_minimized,
+        streaming_insert,
+        streaming_insert_save_clipboard,
+        windows_composition_input,
+        cursor_context_enabled,
+        stacked_row_layout,
+        conservative_layout,
+        auto_update_check,
+        record_audio_for_debug
     );
+    if let Some(value) = incoming.history_max_entries {
+        preferences.history_max_entries = value;
+    }
+    if let Some(value) = incoming.audio_recording_max_entries {
+        preferences.audio_recording_max_entries = value;
+    }
 }
 
 fn owned_icon_target(assets: &Path, id: &str) -> Result<PathBuf, BackendError> {

@@ -9,6 +9,18 @@ import { fr } from '../../i18n/fr';
 import { es } from '../../i18n/es';
 import { ADVANCED_PAGES, SETTINGS_SECTIONS, searchSettingsSections } from './navigation';
 
+const retiredServiceNames = [
+  'AI 服务与模型',
+  'AI 服務與模型',
+  'AI services & models',
+  'AI サービスとモデル',
+  'AI 서비스 및 모델',
+  'KI-Dienste und Modelle',
+  'Services et modèles d’IA',
+  'Servicios y modelos de IA',
+  'AI 模型、AI 与模型',
+];
+
 // Resources must resolve where the dialog actually reads them, not in a nested
 // feature's unrelated "modal" object. Type-shape parity alone cannot detect this.
 for (const [locale, translation] of Object.entries({
@@ -25,10 +37,6 @@ for (const [locale, translation] of Object.entries({
   await i18n.init({ lng: locale, fallbackLng: false, resources: { [locale]: { translation } } });
   for (const key of [
     'modal.backToAdvanced',
-    'modal.backToTestingFeatures',
-    ...['title', 'enable', 'description', 'unavailable'].map(
-      (key) => `settings.testingFeatures.${key}`,
-    ),
     ...ADVANCED_PAGES.flatMap((page) => [page.titleKey, `modal.advancedPages.${page.id}`]),
   ]) {
     if (!i18n.exists(key)) throw new Error(`${locale}: missing advanced navigation label ${key}`);
@@ -58,6 +66,31 @@ for (const [locale, translation] of Object.entries({
       keywords: i18n.t(`modal.searchKeywords.${item.id}`),
     };
   });
+  const ordered = sections.map((item) => item.id);
+  if (ordered.indexOf('cloudServices') !== ordered.indexOf('services') + 1)
+    throw new Error(`${locale}: cloud services is not directly after AI`);
+  if (ordered[ordered.indexOf('cloudServices') + 1] !== 'appearance')
+    throw new Error(`${locale}: cloud services is not directly before appearance`);
+  const serviceTitle = i18n.t('modal.sections.services');
+  if (
+    retiredServiceNames.includes(serviceTitle) ||
+    retiredServiceNames.includes(i18n.t('overview.actions.services'))
+  )
+    throw new Error(`${locale}: old AI services name remains`);
+  if (!serviceTitle.trim() || serviceTitle === i18n.t('modal.sections.cloudServices'))
+    throw new Error(`${locale}: AI and cloud service names are missing or identical`);
+  for (const group of ['recording', 'text', 'diagnostics']) {
+    if (!i18n.exists(`settings.advancedGroups.${group}`))
+      throw new Error(`${locale}: missing experiments group ${group}`);
+  }
+  for (const key of [
+    'settings.recording.captureGroupTitle',
+    'settings.recording.capsuleGroupTitle',
+    'settings.recording.recognitionGroupTitle',
+    'settings.recording.feedbackGroupTitle',
+  ]) {
+    if (!i18n.exists(key)) throw new Error(`${locale}: missing ${key}`);
+  }
   if (searchSettingsSections(sections, 'API')[0]?.id !== 'services')
     throw new Error(`${locale}: API search cannot reach service configuration`);
   if (!i18n.t('modal.searchCount', { count: 2 }).includes('2'))

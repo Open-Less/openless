@@ -34,6 +34,11 @@ export function Translation() {
   const statusTimer = useRef<number | null>(null);
   const [languageQuery, setLanguageQuery] = useState('');
   const locale = i18n.resolvedLanguage ?? i18n.language;
+  // The translation trigger key is user-configurable; UI text must not hardcode
+  // "Shift" (issue #1358).
+  const translationShortcutLabel = formatComboLabel(
+    prefs?.translationHotkey ?? { primary: 'Shift', modifiers: [] },
+  );
   const languages = useMemo(
     () =>
       localizedLanguages(locale, [
@@ -58,8 +63,14 @@ export function Translation() {
       );
       options.unshift({ value: selected, label: language?.label ?? selected });
     }
-    return [{ value: '', label: t('translation.target.disabled') }, ...options];
-  }, [filteredLanguages, languages, prefs?.translationTargetLanguage, t]);
+    return [
+      {
+        value: '',
+        label: t('translation.target.disabled', { shortcut: translationShortcutLabel }),
+      },
+      ...options,
+    ];
+  }, [filteredLanguages, languages, prefs?.translationTargetLanguage, t, translationShortcutLabel]);
 
   useEffect(
     () => () => {
@@ -161,7 +172,7 @@ export function Translation() {
                 style={{
                   alignSelf: 'flex-start',
                   padding: '6px 12px',
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   border: 0,
                   background: 'var(--ol-blue)',
                   color: '#fff',
@@ -201,7 +212,7 @@ export function Translation() {
   };
 
   const triggerLabel = formatComboLabel(prefs.dictationHotkey);
-  const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
+  const translationHotkeyLabel = translationShortcutLabel;
   // "Enabled" = a target language is chosen **and** that target really triggers translation.
   // When the target equals the only working language the backend does plain polishing, so the
   // status light must not claim enabled (otherwise pressing Shift does nothing and gives the
@@ -226,7 +237,7 @@ export function Translation() {
               justifyContent: 'space-between',
               gap: 10,
               padding: '8px 12px',
-              borderRadius: 10,
+              borderRadius: 'var(--ol-r-md)',
               border: '0.5px solid rgba(239,68,68,0.22)',
               background: 'rgba(239,68,68,0.07)',
               color: 'var(--ol-red, #ef4444)',
@@ -246,7 +257,7 @@ export function Translation() {
               style={{
                 flex: '0 0 auto',
                 border: 0,
-                borderRadius: 999,
+                borderRadius: 'var(--ol-radius)',
                 background: 'rgba(239,68,68,0.12)',
                 color: 'inherit',
                 padding: '4px 10px',
@@ -357,7 +368,7 @@ export function Translation() {
                   fontSize: 10.5,
                   fontWeight: 'var(--ol-font-weight-semibold)',
                   letterSpacing: '0.04em',
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: enabled ? 'var(--ol-blue-soft)' : 'var(--ol-control-muted)',
                   color: enabled ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
                   textTransform: 'uppercase',
@@ -370,7 +381,9 @@ export function Translation() {
               value={prefs.translationTargetLanguage}
               onChange={onTargetChange}
               options={targetOptions}
-              placeholder={t('translation.target.disabled')}
+              placeholder={t('translation.target.disabled', {
+                shortcut: translationShortcutLabel,
+              })}
               ariaLabel={t('translation.target.title')}
               style={{ width: '100%', fontSize: 13 }}
             />
@@ -411,7 +424,7 @@ export function Translation() {
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   padding: '3px 9px',
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'var(--ol-blue-soft)',
                   color: 'var(--ol-blue)',
                   fontSize: 11.5,
@@ -429,7 +442,7 @@ export function Translation() {
                 style={{
                   marginTop: 10,
                   padding: '8px 12px',
-                  borderRadius: 10,
+                  borderRadius: 'var(--ol-r-md)',
                   border: '0.5px solid rgba(217,119,6,0.24)',
                   background: 'rgba(217,119,6,0.08)',
                   color: 'var(--ol-warn, #b45309)',
@@ -437,7 +450,7 @@ export function Translation() {
                   lineHeight: 1.55,
                 }}
               >
-                {t('translation.target.sameAsWorking')}
+                {t('translation.target.sameAsWorking', { shortcut: translationShortcutLabel })}
               </div>
             )}
           </Card>
@@ -478,11 +491,11 @@ export function Translation() {
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    borderRadius: '50%',
+                    borderRadius: 'var(--ol-radius)',
                     background: 'var(--ol-blue-soft)',
                     color: 'var(--ol-blue)',
                     fontSize: 11,
-                    fontWeight: 650,
+                    fontWeight: 'var(--ol-font-weight-demibold)',
                     fontVariantNumeric: 'tabular-nums',
                   }}
                 >

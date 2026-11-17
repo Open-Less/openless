@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import {
   appCheckUpdateWithChannel,
   appDownloadAndInstallAndroidUpdate,
+  appUpdateGithubFallback,
   isAndroid,
   isTauri,
   logClientError,
@@ -26,6 +27,7 @@ import {
   type UpdateChannel,
 } from '../lib/ipc';
 import { isStableChannelSwitch } from '../lib/appVersion';
+import { downloadWithGithubFallback } from '../lib/updateDownload';
 import { Btn } from '../pages/_atoms';
 
 const UPDATE_CHECK_TIMEOUT_MS = 15_000;
@@ -240,13 +242,13 @@ export function useAutoUpdate(): UseAutoUpdate {
       return;
     }
 
-    const update = updateRef.current;
+    let update = updateRef.current;
     if (!update) return;
     resetProgress();
     setStatus('downloading');
     try {
       await persistStableChannelSwitch();
-      await update.download((event: DownloadEvent) => {
+      const onDownloadEvent = (event: DownloadEvent) => {
         if (event.event === 'Started') {
           resetProgress();
           setContentLength(event.data.contentLength ?? null);
@@ -255,7 +257,27 @@ export function useAutoUpdate(): UseAutoUpdate {
         } else if (event.event === 'Finished') {
           setStatus('installing');
         }
-      });
+      };
+      update = await downloadWithGithubFallback(
+        update,
+        (candidate) => candidate.download(onDownloadEvent),
+        (candidate) =>
+          String(candidate.rawJson?.url ?? '').startsWith('https://dl.aeoform.com/releases/'),
+        async (previous) => {
+          // The backend clones the stored signed version; it does not discover a new release.
+          const metadata = await appUpdateGithubFallback(previous.rid);
+          const retry = new Update({
+            ...metadata,
+            date: metadata.date ?? undefined,
+            body: metadata.body ?? undefined,
+          });
+          updateRef.current = retry;
+          await previous.close().catch(() => undefined);
+          resetProgress();
+          setStatus('downloading');
+          return retry;
+        },
+      );
       setStatus('installing');
       await update.install();
       await closeUpdate();
@@ -346,7 +368,10 @@ export function UpdateDialog({
       labelledBy={titleId}
       render={() => (
         <>
-          <div id={titleId} style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>
+          <div
+            id={titleId}
+            style={{ fontSize: 15, fontWeight: 'var(--ol-font-weight-demibold)', marginBottom: 8 }}
+          >
             {t(
               `settings.about.updateDialog.${switchingToStable ? 'stableChannelSwitch' : status}.title`,
             )}
@@ -383,7 +408,7 @@ export function UpdateDialog({
               <div
                 style={{
                   height: 8,
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'var(--ol-surface-2)',
                   overflow: 'hidden',
                   border: '0.5px solid var(--ol-line)',

@@ -396,9 +396,7 @@ pub(crate) unsafe fn matmul_impl(
             for kk in 0..k {
                 let av = arow[kk];
                 let brow = &bbase[kk * n..(kk + 1) * n];
-                for j in 0..n {
-                    orow[j] += av * brow[j];
-                }
+                axpy(orow, brow, av);
             }
         }
         if nb > 0 {
@@ -501,9 +499,7 @@ pub(crate) unsafe fn conv_impl(
                         for ci in 0..cpg {
                             let wv = wg[mi * cpg + ci];
                             let xrow = &xg[ci * hw_in..(ci + 1) * hw_in];
-                            for p in 0..hw_out {
-                                orow[p] += wv * xrow[p];
-                            }
+                            axpy(orow, &xrow[..hw_out], wv);
                         }
                     }
                 }
@@ -753,9 +749,7 @@ pub(crate) unsafe fn gru_impl(
                 for i in 0..batch {
                     let xv = xb[i * in_dim + kk];
                     let prow = &mut pb[i * h3..(i + 1) * h3];
-                    for j in 0..h3 {
-                        prow[j] += xv * wrow[j];
-                    }
+                    axpy(prow, wrow, xv);
                 }
             }
         }
@@ -784,9 +778,7 @@ pub(crate) unsafe fn gru_impl(
                 for i in 0..batch {
                     let sv = state_s[i * h + kk];
                     let orow = &mut rproj_s[i * h3..(i + 1) * h3];
-                    for j in 0..h3 {
-                        orow[j] += sv * wrow[j];
-                    }
+                    axpy(orow, wrow, sv);
                 }
             }
             // gates (elementwise passes — vectorize; rounding order matches
@@ -1508,6 +1500,50 @@ fn resize_pass(
 
 // ─── AVX2+FMA runtime dispatch ─────────────────────────────────────────────
 //
+// Use baseline SIMD on x86-64 and NEON-enabled ARM64 targets. Vectorize rows
+// without changing reduction order or using fused multiply-add: recurrent
+// models retain the scalar rounding contract. No extra model/runtime/thread
+// pool is loaded alongside local ASR.
+#[inline(always)]
+fn axpy(output: &mut [f32], input: &[f32], scale: f32) {
+    assert_eq!(output.len(), input.len());
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    let offset = unsafe {
+        let mut offset = 0;
+        use std::arch::aarch64::{vaddq_f32, vld1q_f32, vmulq_n_f32, vst1q_f32};
+        while offset + 4 <= output.len() {
+            let value = vmulq_n_f32(vld1q_f32(input.as_ptr().add(offset)), scale);
+            let sum = vaddq_f32(vld1q_f32(output.as_ptr().add(offset)), value);
+            vst1q_f32(output.as_mut_ptr().add(offset), sum);
+            offset += 4;
+        }
+        offset
+    };
+    #[cfg(target_arch = "x86_64")]
+    let offset = unsafe {
+        // SSE2 is part of the x86-64 baseline. Unaligned loads/stores support
+        // every tensor row; no AVX CPU requirement or FMA rounding changes.
+        use std::arch::x86_64::{_mm_add_ps, _mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps};
+        let factor = _mm_set1_ps(scale);
+        let mut offset = 0;
+        while offset + 4 <= output.len() {
+            let value = _mm_mul_ps(_mm_loadu_ps(input.as_ptr().add(offset)), factor);
+            let sum = _mm_add_ps(_mm_loadu_ps(output.as_ptr().add(offset)), value);
+            _mm_storeu_ps(output.as_mut_ptr().add(offset), sum);
+            offset += 4;
+        }
+        offset
+    };
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
+    let offset = 0;
+    for (dst, src) in output[offset..].iter_mut().zip(&input[offset..]) {
+        *dst += scale * src;
+    }
+}
+
 // The workspace builds for baseline x86-64 (SSE2) so the shipped binaries
 // run everywhere; ONNX Runtime's MLAS gets its speed from runtime CPUID
 // dispatch to AVX kernels. We mirror that: each hot kernel body is compiled
@@ -1754,4 +1790,23 @@ unsafe fn layer_norm_avx2(
     eps: f32,
 ) {
     layer_norm_impl(xp, xsh, scale, bias, op_, axis, eps)
+}
+
+#[cfg(test)]
+mod projection_tests {
+    #[test]
+    fn projections_keep_scalar_rounding_and_handle_vector_tails() {
+        for size in [0, 1, 3, 4, 5, 17, 192, 257] {
+            let input: Vec<f32> = (0..size).map(|i| (i as f32 * 0.7).sin()).collect();
+            let mut actual = vec![0.17; size];
+            let mut expected = actual.clone();
+            for scale in [0.0, -0.37, 0.81, 1e-12] {
+                for (dst, src) in expected.iter_mut().zip(&input) {
+                    *dst += scale * src;
+                }
+                super::axpy(&mut actual, &input, scale);
+            }
+            assert_eq!(actual, expected, "projection width {size}");
+        }
+    }
 }
