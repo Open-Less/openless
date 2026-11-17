@@ -37,10 +37,11 @@ openless-src/                     Git 仓库、分支与发布边界
 
 | 任务 | 入口 | 相关边界 |
 | --- | --- | --- |
-| 启动与窗口分支 | `src/main.tsx`、`src/App.tsx` | typed IPC 启动快照；Tauri 配置与运行时窗口 |
-| 主界面、页面与设置 | `src/components/FloatingShell.tsx`、`src/pages/`、`src/pages/settings/` | `src/state/` 组织界面状态；业务规则归 Core |
-| 多语言、主题、组件 | `src/i18n/`、`src/styles/`、`src/components/` | 八种界面语言；tokens/global 样式 |
-| 新增或调整 IPC | `src/lib/ipc/`、`src-tauri/src/commands/`、`src-tauri/src/lib.rs` | Rust/TypeScript 类型、注册、事件与 `contract/` 同步 |
+| 启动与窗口分支 | `src/app/bootstrap.tsx`、`src/app/windowRoutes.tsx`、`src/app/startup.ts` | `src/runtime/` 识别宿主并完成启动握手，Android 嵌入面板由 `src/app/useAndroidPanels.ts` 管理 |
+| 主界面、页面与设置 | `src/app/shell/`、`src/features/` | 导航和窗口布局在 app，业务界面按领域组织；兼容入口位于 `src/pages/` 和 `src/components/` |
+| 多语言、主题、组件 | `src/i18n/`、`src/ui/`、`src/styles/` | 每窗一个 AppViewport；内容与浮层共享可见边界 |
+| 共享快照、偏好和预览 | `src/data/`、`src/preview/` | data 管理读写次序；preview 提供浏览器的设备预设、模拟数据和事件 |
+| 新增或调整 IPC | `src/api/`、`src/runtime/`、`src-tauri/src/commands/` | React 通过分域 API 读写；Rust/TypeScript 类型、注册、事件与 `contract/` 同步 |
 | 共享业务入口 | `crates/openless-core/src/api.rs` | `events.rs`、`ports.rs`、`domains.rs`、`config.rs` |
 | 听写和服务 | Core `dictation_engine.rs`、`provider_*`、`asr/`、`polish.rs` | Host 的录音、插入和本地模型适配 |
 | 历史、词库、纠错、风格包 | Core `history.rs`、`vocabulary.rs`、`correction.rs`、`style_pack_store.rs` | Tauri `persistence/` 与对应 command |

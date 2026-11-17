@@ -59,21 +59,12 @@ Object.assign(window, {
 });
 mocks = await import('../../src/lib/ipc/mock-data');
 const [{ App }, { i18nReady }] = await Promise.all([
-  import('../../src/App'),
+  import('../../src/app/App'),
   import('../../src/i18n'),
 ]);
 await i18nReady;
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App
-      isCapsule={false}
-      isCapsuleRail={false}
-      isQa={false}
-      isSelectionVoiceIntent={false}
-      isVoiceEdit={false}
-      isLessComputer={false}
-      isLessComputerGlow={false}
-      forcedOs={params.get('os') === 'win' ? 'win' : 'mac'}
-    />
+    <App kind="main" os={params.get('os') === 'win' ? 'win' : 'mac'} />
   </React.StrictMode>,
 );

@@ -72,7 +72,7 @@ const [
   read('src-tauri/src/android/native_bridge.rs'),
   read('android/kotlin/OpenLessNative.kt'),
   read('android/kotlin/OpenLessOverlayService.kt'),
-  read('src/App.tsx'),
+  read('src/app/App.tsx'),
   read('src/pages/settings/ProvidersSection.tsx'),
   read('src/pages/settings/ChannelList.tsx'),
   read('src/pages/settings/shared.tsx'),
@@ -605,8 +605,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appShell,
-  /export function App\([^]*?getStartupSnapshot\(\)[^]*?return <ReadyApp \{\.\.\.props\} \/>/,
-  'every Tauri webview route must mount behind the shared readiness handshake',
+  /export function App\([^]*?requireBackendReady\(\)[^]*?renderStartup \? \([^]*?<CoreStartupScreen[^]*?: \([^]*?<WindowRoutes/,
+  'every native webview route must mount behind the shared readiness handshake',
 );
 assert.doesNotMatch(
   localAsrPage,

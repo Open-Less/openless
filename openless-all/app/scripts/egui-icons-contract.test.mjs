@@ -11,7 +11,7 @@ const tauri = readFileSync(resolve(app, 'src/components/Icon.tsx'), 'utf8');
 const nav = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/layout.rs'), 'utf8');
 const settings = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/settings.rs'), 'utf8');
 const tauriSettings = readFileSync(resolve(app, 'src/pages/settings/navigation.ts'), 'utf8');
-const tauriNav = readFileSync(resolve(app, 'src/components/FloatingShell.tsx'), 'utf8');
+const tauriNav = readFileSync(resolve(app, 'src/app/shell/navigation.ts'), 'utf8');
 execFileSync(process.execPath, [resolve(app, 'scripts/sync-egui-lucide-icons.mjs'), '--check']);
 for (const [name, glyph] of Object.entries(icons)) {
   const start = linux.indexOf(`IconName::${name} =>`);

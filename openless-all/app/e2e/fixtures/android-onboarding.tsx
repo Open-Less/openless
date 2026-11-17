@@ -61,7 +61,7 @@ function Fixture() {
   const [completed, setCompleted] = useState(false);
   return (
     <HotkeySettingsProvider>
-      {/* Match App.tsx's containing block and layer. Import the production layer CSS
+      {/* Match MainWindow's containing block and layer. Import the production layer CSS
           above; a flex test wrapper would hide the broken flex: 1 sizing contract. */}
       <div style={{ width: '100%', height: '100%', minWidth: 0, position: 'relative' }}>
         {completed ? (

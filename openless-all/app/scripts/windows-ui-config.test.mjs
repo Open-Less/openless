@@ -95,14 +95,13 @@ const backendEventTs = await readFile(
   new URL('../src/lib/backendEvent.ts', import.meta.url),
   'utf-8',
 );
-const appTsx = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf-8');
-const mainTsx = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf-8');
+const routes = await readFile(new URL('../src/app/windowRoutes.tsx', import.meta.url), 'utf-8');
 const windowChromeTsx = await readFile(
-  new URL('../src/components/WindowChrome.tsx', import.meta.url),
+  new URL('../src/app/shell/WindowChrome.tsx', import.meta.url),
   'utf-8',
 );
 const floatingShellTsx = await readFile(
-  new URL('../src/components/FloatingShell.tsx', import.meta.url),
+  new URL('../src/app/shell/FloatingShell.tsx', import.meta.url),
   'utf-8',
 );
 const themeModeTs = await readFile(new URL('../src/lib/themeMode.ts', import.meta.url), 'utf-8');
@@ -481,14 +480,9 @@ assertMatch(
   'direct dictation state events should reach the dedicated transcript rail',
 );
 assertMatch(
-  mainTsx,
-  /const isCapsuleRail = windowKind === 'capsule-rail'/,
-  'rail route should be selected',
-);
-assertMatch(
-  appTsx,
-  /isCapsuleRail[\s\S]*?CapsuleTranscriptOverlay/,
-  'rail route should render the overlay',
+  routes,
+  /case 'capsule-rail':\s*return <CapsuleTranscriptOverlay \/>/,
+  'rail URL must render the dedicated overlay',
 );
 assertMatch(
   liveTranscriptTsx,
