@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const source = ts.createSourceFile(
   'DeepSeekReadAloud.tsx',
-  readFileSync(new URL('../src/components/DeepSeekReadAloud.tsx', import.meta.url), 'utf8'),
+  readFileSync(new URL('../src/features/qa/DeepSeekReadAloud.tsx', import.meta.url), 'utf8'),
   ts.ScriptTarget.ES2020,
   true,
   ts.ScriptKind.TSX,
@@ -26,9 +26,9 @@ const factory = new Function(
   'useRef',
   'useState',
   'useTranslation',
-  'Channel',
-  'invoke',
-  'isTauri',
+  'startQaReadAloud',
+  'stopQaReadAloud',
+  'isTauriHost',
   'AudioContext',
   'crypto',
   'setTimeout',
@@ -97,17 +97,16 @@ function harness({ failAudio = false } = {}) {
     (value) => state({ current: value })[0],
     state,
     () => ({ i18n: { language: 'en' } }),
-    class {},
-    (name, args) => {
-      if (name === 'deepseek_tts_stop') {
-        stops.push(args.requestId);
-        return Promise.resolve();
-      }
+    (text, requestId, onAudio) => {
       const completion = deferred();
-      starts.push({ ...args, completion });
+      starts.push({ text, requestId, onAudio, completion });
       return completion.promise;
     },
-    true,
+    (requestId) => {
+      stops.push(requestId);
+      return Promise.resolve();
+    },
+    () => true,
     Audio,
     { randomUUID: () => `request-${++serial}` },
     (callback) => {
