@@ -7,7 +7,7 @@
 // the selected model source via `fetchLocalAsrRemoteInfo()`.
 
 import { invokeOrMock } from './ipc';
-import type { OS } from '../components/WindowChrome';
+import type { OS } from '../runtime/environment';
 
 export function isLocalAsrModelSupportedOnOs(
   model: Pick<LocalAsrModelStatus, 'runtime' | 'family'>,
