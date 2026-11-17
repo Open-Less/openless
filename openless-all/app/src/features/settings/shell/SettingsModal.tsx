@@ -78,6 +78,9 @@ export function SettingsModal({
     advancedPage,
     advancedPages,
     activeAdvancedPage,
+    activeGeneralPage,
+    onGeneralPageChange,
+    focusReturnedEntry,
     asrNavigation,
     backToAdvanced,
     closeSettings,
@@ -364,27 +367,31 @@ export function SettingsModal({
                         {/* Desktop: the category title + auto-save hint + close button form
                 the right column's own top bar (like System Settings: the toolbar
                 belongs to the content area, no longer spanning the sidebar). */}
-                        {(!mobile || activeAdvancedPage) && (
+                        {(!mobile || activeAdvancedPage || activeGeneralPage) && (
                           <div
                             style={{
                               display: 'flex',
                               alignItems: 'center',
                               gap: 12,
                               padding: mobile
-                                ? '18px 24px 0'
+                                ? '18px var(--ol-grid-margin, 24px) 0'
                                 : os === 'mac'
-                                  ? '48px 28px 0'
-                                  : '24px 28px 0',
+                                  ? '48px var(--ol-grid-margin, 28px) 0'
+                                  : '24px var(--ol-grid-margin, 28px) 0',
                               flexShrink: 0,
                             }}
                           >
-                            {activeAdvancedPage && (
+                            {(activeAdvancedPage || activeGeneralPage) && (
                               <button
                                 type="button"
                                 className="ol-settings-back"
-                                onClick={backToAdvanced}
-                                aria-label={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
-                                title={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
+                                onClick={
+                                  activeAdvancedPage
+                                    ? backToAdvanced
+                                    : () => onGeneralPageChange('root')
+                                }
+                                aria-label={t('modal.back')}
+                                title={t('modal.back')}
                               >
                                 <Icon name="chevLeft" size={19} />
                               </button>
@@ -427,7 +434,7 @@ export function SettingsModal({
                             flexShrink: 0,
                           }}
                         >
-                          {mobile && !activeAdvancedPage && (
+                          {mobile && !activeAdvancedPage && !activeGeneralPage && (
                             <h2
                               ref={headingRef}
                               tabIndex={-1}
@@ -445,7 +452,10 @@ export function SettingsModal({
                           {activeAdvancedPage?.id !== 'localModels' && (
                             <p
                               style={{
-                                margin: mobile && !activeAdvancedPage ? '7px 0 0' : 0,
+                                margin:
+                                  mobile && !activeAdvancedPage && !activeGeneralPage
+                                    ? '7px 0 0'
+                                    : 0,
                                 fontSize: 13,
                                 lineHeight: 1.6,
                                 color: 'var(--ol-ink-3)',
@@ -458,6 +468,7 @@ export function SettingsModal({
                         </div>
                         <TransitionViewport
                           scrollRef={scrollRef}
+                          onEntered={focusReturnedEntry}
                           contentKey={`${destination}:${showingVoiceSettings ? 'dsp' : 'page'}:${searching ? 'search' : 'content'}`}
                           className={[
                             'ol-thinscroll ol-settings-scroll',
@@ -555,7 +566,13 @@ export function SettingsModal({
                             }}
                           >
                             {section === 'general' && (
-                              <GeneralTab os={os} onOpenLocalModels={openLocalModels} />
+                              <GeneralTab
+                                os={os}
+                                platform={platformCaps?.platform}
+                                onOpenLocalModels={openLocalModels}
+                                page={activeGeneralPage?.id ?? 'root'}
+                                onPageChange={onGeneralPageChange}
+                              />
                             )}
                             {section === 'inputMethod' && <InputMethodTab />}
                             {section === 'shortcuts' && <ShortcutsTab />}

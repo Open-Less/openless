@@ -5,8 +5,10 @@ import { getCachedPlatformCapabilities, getPlatformCapabilities } from '../../..
 import {
   searchSettingsSections,
   visibleAdvancedPages,
+  visibleGeneralPages,
   visibleSettingsSections,
   type AdvancedPageId,
+  type GeneralPageId,
   type ServiceViewId,
   type SettingsSectionId,
 } from './navigation';
@@ -28,6 +30,7 @@ export function useSettingsNavigation({
 }) {
   const { t } = useTranslation();
   const [section, setSection] = useState(initialSettingsSection ?? 'general');
+  const [generalPage, setGeneralPage] = useState<GeneralPageId | 'root'>('root');
   const [advancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [requestedServiceView, setRequestedServiceView] = useState(initialServiceView);
@@ -40,6 +43,7 @@ export function useSettingsNavigation({
   const surfaceRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingQuery = useRef('');
+  const returnEntry = useRef<GeneralPageId | AdvancedPageId | null>(null);
   const supportsShortcuts = platformCaps?.supportsDesktopHotkey ?? (os === 'mac' || os === 'win');
   const sections = visibleSettingsSections(supportsShortcuts, platformCaps?.platform).map(
     (item) => ({
@@ -56,6 +60,10 @@ export function useSettingsNavigation({
     section === 'advanced' && !searching
       ? advancedPages.find((page) => page.id === advancedPage)
       : undefined;
+  const activeGeneralPage =
+    section === 'general' && !searching
+      ? visibleGeneralPages(platformCaps?.platform).find((page) => page.id === generalPage)
+      : undefined;
   const showingVoiceSettings = activeAdvancedPage?.id === 'voiceEnhancement' && voiceSettingsOpen;
   const contentTitle = searching
     ? t('modal.searchResults')
@@ -63,14 +71,18 @@ export function useSettingsNavigation({
       ? t('settings.recording.dsp.title')
       : activeAdvancedPage
         ? t(activeAdvancedPage.titleKey)
-        : t(`modal.sections.${section}`);
+        : activeGeneralPage
+          ? t(activeGeneralPage.titleKey)
+          : t(`modal.sections.${section}`);
   const contentDescription = searching
     ? t('modal.searchCount', { count: results.length })
     : showingVoiceSettings
       ? t('settings.recording.dsp.description')
       : activeAdvancedPage
         ? t(`modal.advancedPages.${activeAdvancedPage.id}`)
-        : t(`modal.descriptions.${section}`);
+        : activeGeneralPage
+          ? t(activeGeneralPage.descriptionKey)
+          : t(`modal.descriptions.${section}`);
 
   useEffect(() => {
     let active = true;
@@ -94,7 +106,7 @@ export function useSettingsNavigation({
 
   useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [section, searching, advancedPage, voiceSettingsOpen]);
+  }, [section, searching, advancedPage, generalPage, voiceSettingsOpen]);
 
   useEffect(() => {
     if (advancedPage !== 'voiceEnhancement' && voiceSettingsOpen) setVoiceSettingsOpen(false);
@@ -112,7 +124,7 @@ export function useSettingsNavigation({
     });
   };
   const changeQuery = (next: string) => {
-    if (!channelCloseRef.current) {
+    if (!channelCloseRef.current && (section !== 'services' || searching)) {
       setQuery(next);
       return;
     }
@@ -124,6 +136,7 @@ export function useSettingsNavigation({
     });
   };
   const openAdvancedPage = (page: AdvancedPageId) => {
+    returnEntry.current = null;
     setAdvancedPage(page);
     window.requestAnimationFrame(() => headingRef.current?.focus());
   };
@@ -132,13 +145,29 @@ export function useSettingsNavigation({
       setVoiceSettingsOpen(false);
       return;
     }
-    const previousPage = advancedPage;
-    setAdvancedPage(null);
-    window.requestAnimationFrame(() => {
-      surfaceRef.current
-        ?.querySelector<HTMLElement>(`[data-ol-advanced-entry="${previousPage}"]`)
-        ?.focus();
+    void beforeLeave(() => {
+      returnEntry.current = advancedPage;
+      setAdvancedPage(null);
     });
+  };
+  const onGeneralPageChange = (page: GeneralPageId | 'root') => {
+    if (page === 'root') {
+      returnEntry.current = activeGeneralPage?.id ?? null;
+    } else {
+      returnEntry.current = null;
+      window.requestAnimationFrame(() => headingRef.current?.focus());
+    }
+    setGeneralPage(page);
+  };
+  const focusReturnedEntry = () => {
+    const id = returnEntry.current;
+    if (!id) return;
+    const attribute = section === 'general' ? 'data-ol-general-entry' : 'data-ol-advanced-entry';
+    const entry = scrollRef.current?.querySelector<HTMLElement>(`[${attribute}="${id}"]`);
+    if (entry && !entry.closest('[inert]')) {
+      returnEntry.current = null;
+      entry.focus({ preventScroll: true });
+    }
   };
   const selectSection = (
     next: SettingsSectionId,
@@ -150,6 +179,8 @@ export function useSettingsNavigation({
       setSection(next);
       setRequestedServiceView(next === 'services' ? serviceView : undefined);
       setAdvancedPage(null);
+      setGeneralPage('root');
+      returnEntry.current = null;
       setQuery('');
       if (fromSearch) window.requestAnimationFrame(() => headingRef.current?.focus());
     });
@@ -158,6 +189,8 @@ export function useSettingsNavigation({
     setAsrNavigation((value) => value + 1);
     setQuery('');
     setAdvancedPage(null);
+    setGeneralPage('root');
+    returnEntry.current = null;
     setSection('services');
   };
   const onEscape = () => {
@@ -165,6 +198,7 @@ export function useSettingsNavigation({
       setQuery('');
       searchRef.current?.focus();
     } else if (activeAdvancedPage) backToAdvanced();
+    else if (activeGeneralPage) onGeneralPageChange('root');
     else closeSettings();
   };
 
@@ -172,13 +206,16 @@ export function useSettingsNavigation({
     advancedPage,
     advancedPages,
     activeAdvancedPage,
+    activeGeneralPage,
+    onGeneralPageChange,
+    focusReturnedEntry,
     asrNavigation,
     backToAdvanced,
     closeSettings,
     closeRef,
     contentDescription,
     contentTitle,
-    destination: `${section}:${advancedPage ?? ''}`,
+    destination: `${section}:${activeAdvancedPage?.id ?? activeGeneralPage?.id ?? ''}`,
     headingRef,
     jumpToAsr,
     onEscape,

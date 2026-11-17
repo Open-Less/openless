@@ -45,6 +45,44 @@ export const ADVANCED_PAGES = [
 export type AdvancedPage = (typeof ADVANCED_PAGES)[number];
 export type AdvancedPageId = AdvancedPage['id'];
 
+export const GENERAL_PAGES = [
+  {
+    id: 'recording',
+    icon: 'mic',
+    titleKey: 'settings.generalPages.recordingTitle',
+    descriptionKey: 'settings.generalPages.recordingDesc',
+  },
+  {
+    id: 'capsule',
+    icon: 'layout',
+    titleKey: 'settings.generalPages.capsuleTitle',
+    descriptionKey: 'settings.generalPages.capsuleDesc',
+  },
+  {
+    id: 'textInput',
+    icon: 'pencil',
+    titleKey: 'settings.generalPages.textInputTitle',
+    descriptionKey: 'settings.generalPages.textInputDesc',
+  },
+  {
+    id: 'phone',
+    icon: 'link',
+    titleKey: 'settings.generalPages.phoneTitle',
+    descriptionKey: 'settings.generalPages.phoneDesc',
+  },
+] as const;
+
+export type GeneralPage = (typeof GENERAL_PAGES)[number];
+export type GeneralPageId = GeneralPage['id'];
+
+export function visibleGeneralPages(platform: PlatformKind | undefined): GeneralPage[] {
+  return GENERAL_PAGES.filter((page) => {
+    if (page.id === 'phone') return platform === 'desktop';
+    if (page.id === 'capsule') return platform == null || platform === 'desktop';
+    return true;
+  });
+}
+
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
     if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
