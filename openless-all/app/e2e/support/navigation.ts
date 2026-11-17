@@ -3,8 +3,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 /** Geometry and control tests start after the explicit two-surface handoff;
  * transition tests sample that handoff separately. */
 export async function settleNavigation(scope: Page | Locator) {
-  // Both surfaces stay mounted (aria-hidden, pointer-events none) until the incoming
-  // surface finishes its enter animation, so wait for the phase attribute instead.
+  // The destination can already look ready while a stale outgoing surface still paints over it.
   await expect(
     scope.locator(
       '.ol-transition-viewport [data-transition-phase]:not([data-transition-phase="settled"])',
@@ -38,9 +37,7 @@ async function openGeneralSubpage(scope: Page | Locator, name: string) {
   // An in-flight section handoff keeps the incoming page inert until it settles.
   await settleNavigation(scope);
   if ((await entry.count()) > 0) {
-    await expect(entry).toBeVisible();
-    // locator.click() retries the entry after this click unmounts it.
-    await entry.dispatchEvent('click');
+    await entry.click();
   }
   await expect(heading).toBeVisible();
 }

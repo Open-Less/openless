@@ -88,6 +88,47 @@ test('returning to recording at 100% has stable control geometry and one shortcu
   expect(errors).toEqual([]);
 });
 
+test('returning to General retires Appearance when its animation finishes during the click', async ({
+  page,
+}) => {
+  const dialog = await openSettings(page);
+  const viewport = dialog.locator('.ol-settings-content-pane .ol-transition-viewport');
+  const surfaces = viewport.locator(':scope > [data-transition-phase]');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (
+        this.matches('.ol-settings-scroll[data-transition-phase="enter"]') &&
+        this.querySelector('[data-section="appearance"]')
+      ) {
+        Element.prototype.animate = animate;
+        // Finish the painted crossfade while the real return click is being handled.
+        animation.pause();
+        const duration = animation.effect?.getComputedTiming().activeDuration ?? 0;
+        animation.currentTime = duration / 2;
+        document.addEventListener('click', () => animation.finish(), { capture: true, once: true });
+      }
+      return animation;
+    };
+  });
+
+  const rail = dialog.getByRole('navigation', { name: '设置分类' });
+  const appearance = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
+  await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await expect(appearance).toHaveAttribute('data-transition-phase', 'enter');
+  await rail.getByRole('button', { name: '通用', exact: true }).click();
+  await settleNavigation(dialog);
+  await expect(surfaces).toHaveCount(1);
+  await expect(surfaces.locator('[data-section="appearance"]')).toHaveCount(0);
+  const recording = dialog.getByRole('button', { name: /^麦克风与录音/ });
+  await recording.click();
+  await expect(dialog.getByRole('heading', { name: '麦克风与录音', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(recording).toBeFocused();
+  await expect(surfaces).toHaveCount(1);
+});
+
 for (const scale of [1, 1.1]) {
   test(`long official menus keep user scroll through live option updates at ${Math.round(scale * 100)}%`, async ({
     page,

@@ -45,8 +45,7 @@ export function TransitionViewport({
   const reduced = useReducedMotion();
   const [committed, setCommitted] = useState<Surface>({ key: contentKey, children });
   const retained = useRef(committed);
-  const latest = useRef({ key: contentKey, children });
-  latest.current = { key: contentKey, children };
+  const latest = useRef(committed);
   const entered = useRef(onEntered);
   entered.current = onEntered;
   const lastRequested = useRef(contentKey);
@@ -57,8 +56,10 @@ export function TransitionViewport({
   const restoring = readyKey !== null && readyKey !== contentKey;
 
   useLayoutEffect(() => {
-    if (!switching || reduced) retained.current = { key: contentKey, children };
-    if (reduced && switching) setCommitted({ key: contentKey, children });
+    const request = { key: contentKey, children };
+    latest.current = request;
+    if (!switching) retained.current = request;
+    if (reduced && switching) setCommitted(request);
     if (reduced && readyKey !== null) setReadyKey(null);
   }, [switching, contentKey, children, reduced, readyKey]);
   useLayoutEffect(() => {
@@ -74,12 +75,14 @@ export function TransitionViewport({
   }, [contentKey, switching, restoring]);
   const commit = (key: string) => {
     if (latest.current.key !== key) return;
-    retained.current = latest.current;
     setCommitted(latest.current);
     setReadyKey(null);
   };
+  // An animation can queue a commit just as navigation returns to the retained page.
+  // Only reuse the cached children when their key still belongs to the outgoing state.
+  const outgoing = retained.current.key === committed.key ? retained.current : committed;
   const currentSurface: Surface = { key: contentKey, children };
-  const surfaces = switching && !reduced ? [retained.current, currentSurface] : [currentSurface];
+  const surfaces = switching && !reduced ? [outgoing, currentSurface] : [currentSurface];
 
   return (
     <div
@@ -169,7 +172,15 @@ function TransitionSurface({
       typeof node.animate !== 'function'
     ) {
       apply();
-      if (phase === 'enter' || phase === 'restore') completed.current();
+      if (phase === 'enter' || phase === 'restore') {
+        // The parent records the accepted request in its own layout effect.
+        queueMicrotask(() => {
+          if (!cancelled) completed.current();
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
       return;
     }
     const current = getComputedStyle(node);
