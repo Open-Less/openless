@@ -6,7 +6,9 @@ export function isOfficialDeepSeekEndpoint(endpoint: string): boolean {
       url.origin === 'https://api.deepseek.com' &&
       ['', '/v1'].includes(url.pathname.replace(/\/$/, '')) &&
       !url.username &&
-      !url.password
+      !url.password &&
+      !url.search &&
+      !url.hash
     );
   } catch {
     return false;

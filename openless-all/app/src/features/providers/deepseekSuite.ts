@@ -28,6 +28,17 @@ export async function ensureDeepSeekSuiteConfig(
     if (!isOfficialDeepSeekEndpoint(endpoint)) continue;
     const key = (await api.readCredential('ark.api_key', channel.id))?.trim();
     if (!key) continue;
+    // The channel can be edited while the asynchronous credential reads settle.
+    // Check the identity and endpoint again before copying into the suite.
+    const current = (await api.listChannels('llm')).find((item) => item.id === channel.id);
+    if (
+      !current?.enabled ||
+      current.providerType !== 'deepseek' ||
+      ((await api.readCredential('ark.endpoint', channel.id)) ?? '') !== endpoint
+    )
+      continue;
+    const existing = await api.readCredential(DEEPSEEK_SUITE_ACCOUNT);
+    if (existing !== null) return { ...defaultDeepSeekSuiteConfig, ...JSON.parse(existing) };
     const config = { ...defaultDeepSeekSuiteConfig, apiKey: key };
     await api.setCredential(DEEPSEEK_SUITE_ACCOUNT, JSON.stringify(config));
     return config;

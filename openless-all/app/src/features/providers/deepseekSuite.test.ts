@@ -60,3 +60,18 @@ assert(
   'an explicitly cleared suite key must not be silently recopied',
 );
 console.log('DeepSeek suite credential isolation passed');
+
+const original = values.get(`:${DEEPSEEK_SUITE_ACCOUNT}`);
+values.delete(`:${DEEPSEEK_SUITE_ACCOUNT}`);
+const raced = await ensureDeepSeekSuiteConfig({
+  ...api,
+  readCredential: async (account, provider) => {
+    if (account === 'ark.api_key' && provider === 'default') {
+      values.set('default:ark.endpoint', 'https://gateway.example/v1');
+      return 'other-vendor-secret';
+    }
+    return api.readCredential(account, provider);
+  },
+});
+assert(raced.apiKey === 'backup-secret', 'skip a channel moved away from the official endpoint');
+if (original) values.set(`:${DEEPSEEK_SUITE_ACCOUNT}`, original);
