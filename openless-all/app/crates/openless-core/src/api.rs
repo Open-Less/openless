@@ -12311,16 +12311,17 @@ mod tests {
         let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(FakeEngine));
         assert_eq!(backend.asr_usage().unwrap(), AsrUsage::default());
 
+        let start = backend.clock.now_utc() - chrono::Duration::days(1);
         let entries = [
-            ("a", "2026-10-18T10:00:00+00:00", Some("volcengine")),
-            ("b", "2026-10-18T10:01:00+00:00", Some("sherpa-onnx-local")),
-            ("c", "2026-10-18T10:02:00+00:00", None),
-            ("d", "2026-10-18T10:03:00+00:00", Some("volcengine")),
-            ("e", "2026-10-18T10:04:00+00:00", Some("sherpa-onnx-local")),
+            ("a", 0, Some("volcengine")),
+            ("b", 1, Some("sherpa-onnx-local")),
+            ("c", 2, None),
+            ("d", 3, Some("volcengine")),
+            ("e", 4, Some("sherpa-onnx-local")),
         ];
-        for (id, created_at, provider) in entries {
+        for (id, offset_minutes, provider) in entries {
             let mut entry = history_session(id);
-            entry.created_at = created_at.into();
+            entry.created_at = (start + chrono::Duration::minutes(offset_minutes)).to_rfc3339();
             entry.asr_provider = provider.map(Into::into);
             backend.append_history(entry, 30, None).unwrap();
         }
@@ -12344,59 +12345,60 @@ mod tests {
         ));
         let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(FakeEngine));
 
+        let start = backend.clock.now_utc() - chrono::Duration::days(1);
         let entries = [
             (
                 "completed-local",
-                "2026-10-18T10:00:00+00:00",
+                0,
                 "sherpa-onnx-local",
                 None,
             ),
             (
                 "recording-draft",
-                "2026-10-18T10:01:00+00:00",
+                1,
                 "volcengine",
                 Some("recording"),
             ),
             (
                 "cancelled",
-                "2026-10-18T10:02:00+00:00",
+                2,
                 "sherpa-onnx-local",
                 Some("cancelled"),
             ),
             (
                 "recording-failed",
-                "2026-10-18T10:03:00+00:00",
+                3,
                 "volcengine",
                 Some("recordingFailed"),
             ),
             (
                 "transcribe-failed",
-                "2026-10-18T10:04:00+00:00",
+                4,
                 "sherpa-onnx-local",
                 Some("transcribeFailed"),
             ),
             (
                 "empty-transcript",
-                "2026-10-18T10:05:00+00:00",
+                5,
                 "volcengine",
                 Some("emptyTranscript"),
             ),
             (
                 "insert-failed-after-asr",
-                "2026-10-18T10:06:00+00:00",
+                6,
                 "volcengine",
                 Some("insertFailed"),
             ),
             (
                 "polish-failed-after-asr",
-                "2026-10-18T10:07:00+00:00",
+                7,
                 "sherpa-onnx-local",
                 Some("polishFailed"),
             ),
         ];
-        for (id, created_at, provider, error_code) in entries {
+        for (id, offset_minutes, provider, error_code) in entries {
             let mut entry = history_session(id);
-            entry.created_at = created_at.into();
+            entry.created_at = (start + chrono::Duration::minutes(offset_minutes)).to_rfc3339();
             entry.asr_provider = Some(provider.into());
             entry.error_code = error_code.map(Into::into);
             backend.append_history(entry, 30, None).unwrap();
