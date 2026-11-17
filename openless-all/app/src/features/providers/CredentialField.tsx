@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MutableRefObject,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +14,7 @@ import { copyTextToClipboard } from '../../api/files';
 import { readCredential, setCredential } from '../../api/providers';
 import { Icon } from '../../components/Icon';
 import { emitSaved } from '../../lib/savedEvent';
+import { dismissNotification } from '../../lib/notifications';
 import { inputStyle } from '../../pages/settings/shared';
 import { SelectLite, type SelectOption } from '../../ui/controls/SelectLite';
 import {
@@ -30,6 +32,7 @@ interface CredentialFieldProps {
   account: string;
   provider?: string;
   placeholder?: string;
+  pickerSaveRef?: MutableRefObject<((value: string) => Promise<boolean>) | null>;
   mono?: boolean;
   mask?: boolean;
   defaultValue?: string;
@@ -48,6 +51,7 @@ export function CredentialField({
   account,
   provider,
   placeholder,
+  pickerSaveRef,
   mono,
   mask,
   defaultValue,
@@ -84,6 +88,21 @@ export function CredentialField({
     return () => draft.dispose();
   }, [draft]);
   useEffect(() => onValueChangeRef.current?.(draft.snapshot().value), [draft, loaded]);
+  useEffect(() => {
+    if (!pickerSaveRef) return;
+    // A fetched model uses the same draft and queue as a manually typed model.
+    const save = (next: string) => {
+      const { loaded, dirty } = draft.snapshot();
+      if (!loaded || dirty) return Promise.resolve(false);
+      draft.edit(next);
+      onValueChangeRef.current?.(next);
+      return draft.flush();
+    };
+    pickerSaveRef.current = save;
+    return () => {
+      if (pickerSaveRef.current === save) pickerSaveRef.current = null;
+    };
+  }, [draft, pickerSaveRef]);
   useEffect(() => register?.(account, draft.flush), [draft, account, register]);
   useEffect(() => {
     const blocked = !loaded || dirty;
@@ -91,10 +110,19 @@ export function CredentialField({
     onBlockedChange?.(account, blocked);
   }, [track, onBlockedChange, account, loaded, dirty]);
   useEffect(() => {
-    if (status === 'saving') emitSaved('saving', t('common.saving'));
-    if (status === 'saved') emitSaved('saved', t('common.saved'));
-    if (status === 'saveError') emitSaved('failed', t('common.operationFailed'));
-  }, [status, t]);
+    const notice = `credential:${fieldId}`;
+    if (status === 'saving') {
+      emitSaved('saving', t('common.saving'), notice);
+      return () => dismissNotification(notice);
+    }
+    if (status === 'saved')
+      emitSaved(
+        'saved',
+        t(account.endsWith('api_key') ? 'common.apiKeySaved' : 'common.saved'),
+        notice,
+      );
+    if (status === 'saveError') emitSaved('failed', t('common.operationFailed'), notice);
+  }, [account, fieldId, status, t]);
 
   const edit = (next: string, immediate = false) => {
     if (!loaded || form?.leaving) return;
@@ -245,7 +273,7 @@ export function CredentialField({
             </button>
             {/* readError is a persistent "field unreadable" error and stays in place to tell the
               user the field is unavailable; other transient states (saving / saved / saveError /
-              copied / copyError) go through emitSaved to the unified top-right toast instead of
+              copied / copyError) go through emitSaved to the window notification host instead of
               inline placeholders. */}
             {status === 'readError' && (
               <span

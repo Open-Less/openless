@@ -59,21 +59,30 @@ Object.assign(window, {
   __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
 });
 
-const [channelModule, preferenceModule, viewportModule, translationModule, profiles, mocks] =
-  await Promise.all([
-    import('../../src/features/providers/ChannelEditor'),
-    import('../../src/data/preferences'),
-    import('../../src/ui/layout/AppViewport'),
-    import('../../src/i18n'),
-    import('../../src/preview/profiles'),
-    import('../../src/lib/ipc/mock-data'),
-  ]);
+const [
+  channelModule,
+  preferenceModule,
+  viewportModule,
+  translationModule,
+  profiles,
+  mocks,
+  interactionModule,
+] = await Promise.all([
+  import('../../src/features/providers/ChannelEditor'),
+  import('../../src/data/preferences'),
+  import('../../src/ui/layout/AppViewport'),
+  import('../../src/i18n'),
+  import('../../src/preview/profiles'),
+  import('../../src/lib/ipc/mock-data'),
+  import('../../src/ui/overlays/InteractionProvider'),
+]);
 getPreviewProfile = profiles.getPreviewProfile;
 mockSettings = structuredClone(mocks.mockSettings);
 await translationModule.i18nReady;
 const { ChannelEditor } = channelModule;
 const { HotkeySettingsProvider } = preferenceModule;
 const { AppViewport } = viewportModule;
+const { InteractionProvider } = interactionModule;
 
 const channel: Channel = {
   id: 'fixture-channel',
@@ -99,22 +108,24 @@ function Fixture() {
   return (
     <HotkeySettingsProvider>
       <AppViewport>
-        {open ? (
-          <ChannelEditor
-            kind="llm"
-            channel={channel}
-            presets={presets}
-            isDraft={false}
-            mobile={false}
-            onClose={() => setOpen(false)}
-            onChanged={() => {
-              calls.push('refreshed');
-            }}
-            onUserMutation={() => {}}
-          />
-        ) : (
-          <p>Editor closed</p>
-        )}
+        <InteractionProvider>
+          {open ? (
+            <ChannelEditor
+              kind="llm"
+              channel={channel}
+              presets={presets}
+              isDraft={false}
+              mobile={false}
+              onClose={() => setOpen(false)}
+              onChanged={() => {
+                calls.push('refreshed');
+              }}
+              onUserMutation={() => {}}
+            />
+          ) : (
+            <p>Editor closed</p>
+          )}
+        </InteractionProvider>
       </AppViewport>
     </HotkeySettingsProvider>
   );

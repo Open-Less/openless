@@ -217,7 +217,8 @@ export function ChannelList({
 
   const onToggle = async (channel: Channel, control: HTMLElement) => {
     const enabled = !channel.enabled;
-    emitSaved('saving', t('common.saving'));
+    const notice = `channel-toggle:${kind}:${channel.id}`;
+    emitSaved('saving', t('common.saving'), notice);
     // Flip in place first. Core re-sorts the list (a disabled channel sinks to the end), and
     // moving a row re-inserts its node, which cancels a running transition: the re-sorted
     // list lands only once the knob has finished sliding.
@@ -228,12 +229,12 @@ export function ChannelList({
     try {
       await Promise.all([setChannelEnabled(kind, channel.id, enabled), slid]);
       await refresh();
-      emitSaved('saved', t('common.saved'));
+      emitSaved('saved', t('common.saved'), notice);
     } catch (error) {
       console.error('[channels] toggle failed', error);
       await slid;
       await refresh();
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', t('common.operationFailed'), notice);
     }
   };
 

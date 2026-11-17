@@ -1,12 +1,4 @@
-import {
-  useContext,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -19,6 +11,7 @@ import {
 } from '../../api/providers';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../ui/overlays/Modal';
+import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { SelectLite } from '../../ui/controls/SelectLite';
 import { useOverlayMotion } from '../../lib/motion';
 import { emitSaved } from '../../lib/savedEvent';
@@ -68,7 +61,9 @@ export function ChannelEditor({
   const [name, setName] = useState(channel.name);
   const [providerType, setProviderType] = useState(channel.providerType);
   const [providerChangeError, setProviderChangeError] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deleteRequest = useRef(false);
+  const interaction = useInteraction(`${channel.id}:${closing}`);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
@@ -114,7 +109,6 @@ export function ChannelEditor({
   useEffect(() => {
     const opener = openerRef.current;
     const background = embedded ? editorHost?.background : null;
-    const wasInert = background?.inert ?? false;
     if (embedded) {
       (initialFocus.current ?? dialogRef.current)?.focus({ preventScroll: true });
       if (background) background.inert = true;
@@ -122,7 +116,7 @@ export function ChannelEditor({
     editorHost?.registerClose(requestClose);
     return () => {
       editorHost?.registerClose(null);
-      if (background) background.inert = wasInert;
+      if (background) background.inert = false;
       if (embedded && opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
   }, []);
@@ -250,13 +244,33 @@ export function ChannelEditor({
   };
 
   const remove = async () => {
+    if (deleteRequest.current || closing || form.leaving || !lifetime.current) return;
+    const owner = lifetime.current;
+    deleteRequest.current = true;
+    setDeleting(true);
     try {
-      await deleteChannel(kind, channel.id);
-      emitSaved('saved', t('common.saved'));
-      requestClose();
-    } catch (error) {
-      console.error('[channels] delete failed', error);
-      emitSaved('failed', t('common.operationFailed'));
+      const confirmed = await interaction.confirm({
+        title: t('settings.channels.delete'),
+        description: t('settings.channels.deleteConfirm'),
+        confirmLabel: t('settings.channels.confirmDelete'),
+        cancelLabel: t('common.cancel'),
+        tone: 'danger',
+        icon: 'trash',
+      });
+      if (!confirmed || lifetime.current !== owner) return;
+      await form.finish(async () => {
+        if (lifetime.current !== owner) return;
+        await deleteChannel(kind, channel.id);
+        if (lifetime.current === owner) {
+          emitSaved('deleted', t('common.deleted'));
+          closeEditor();
+        }
+      });
+    } catch {
+      if (lifetime.current === owner) emitSaved('failed', t('common.operationFailed'));
+    } finally {
+      deleteRequest.current = false;
+      if (lifetime.current === owner) setDeleting(false);
     }
   };
 
@@ -364,36 +378,15 @@ export function ChannelEditor({
         </div>
 
         <footer className="ol-channel-dialog-footer">
-          {confirmDelete ? (
-            <div
-              className="ol-channel-delete-confirm"
-              role="group"
-              aria-label={t('settings.channels.delete')}
-            >
-              <p>{t('settings.channels.deleteConfirm')}</p>
-              <button
-                type="button"
-                autoFocus
-                className="ol-channel-delete-button"
-                onClick={() => void remove()}
-              >
-                <Icon name="trash" size={15} />
-                {t('settings.channels.confirmDelete')}
-              </button>
-              <button type="button" onClick={() => setConfirmDelete(false)} style={ghostBtn}>
-                {t('common.cancel')}
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="ol-channel-delete-button"
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Icon name="trash" size={15} />
-              {t('settings.channels.delete')}
-            </button>
-          )}
+          <button
+            type="button"
+            className="ol-channel-delete-button"
+            aria-disabled={deleting || form.leaving}
+            onClick={() => void remove()}
+          >
+            <Icon name="trash" size={15} />
+            {t('settings.channels.delete')}
+          </button>
           <div className="ol-channel-dialog-footer-end">
             <span className="ol-channel-autosave-hint">{t('modal.autoSaveHint')}</span>
             <Btn
@@ -424,15 +417,3 @@ export function ChannelEditor({
     </Modal>
   );
 }
-
-const ghostBtn: CSSProperties = {
-  height: 32,
-  padding: '0 14px',
-  border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 'var(--ol-control-radius)',
-  background: 'var(--ol-control-solid)',
-  color: 'var(--ol-ink-2)',
-  cursor: 'pointer',
-  fontSize: 12.5,
-  fontWeight: 'var(--ol-font-weight-medium)',
-};

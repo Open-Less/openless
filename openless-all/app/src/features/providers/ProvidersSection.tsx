@@ -35,6 +35,7 @@ import {
 } from '../../lib/advancedAsrConfig';
 import type { BailianProtocol } from '../../lib/bailianProtocol';
 import { useContentMotion } from '../../lib/motion';
+import { dismissNotification } from '../../lib/notifications';
 import { emitSaved } from '../../lib/savedEvent';
 import { useConservativeLayout, useLayoutStack } from '../../lib/useMobileLayout';
 import { Card } from '../../pages/_atoms';
@@ -43,7 +44,7 @@ import { LocalModelPicker } from '../local-asr/settings/LocalModelPicker';
 import { BailianProtocolField } from './BailianProtocolField';
 import { CredentialField } from './CredentialField';
 import { LlmProtocolFields } from './LlmProtocolFields';
-import { ProviderFormContext } from './ProviderForm';
+import { ProviderFormContext, useProviderForm } from './ProviderForm';
 import { SiwcChannelFields } from './SiwcChannelFields';
 import {
   ChannelFormRow,
@@ -1280,6 +1281,7 @@ function ProviderTools({
   modelAccount,
   provider,
   onModelSelected,
+  savePickedModel,
   onTested,
   onUserMutation,
   modelsUrl,
@@ -1291,7 +1293,8 @@ function ProviderTools({
   kind: 'llm' | 'asr' | 'omni';
   modelAccount: string;
   provider?: string;
-  onModelSelected: () => void;
+  onModelSelected?: () => void;
+  savePickedModel?: (model: string) => Promise<boolean>;
   onTested?: () => void;
   onUserMutation?: () => void;
   modelsUrl?: string;
@@ -1301,6 +1304,10 @@ function ProviderTools({
   audioValidation?: boolean;
 }) {
   const { t } = useTranslation();
+  const form = useContext(ProviderFormContext);
+  const modelWrite = useRef<Promise<boolean> | null>(null);
+  // Omni credentials are provider-scoped, but Core resolves its tools from the active slot.
+  const channelId = kind === 'omni' ? undefined : provider;
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -1341,7 +1348,7 @@ function ProviderTools({
     setResult('loading', t('settings.providers.validating'));
     const started = performance.now();
     try {
-      const result = await validateProviderCredentials(kind, provider);
+      const result = await validateProviderCredentials(kind, channelId);
       const latency = Math.round(performance.now() - started);
       setResult(
         result.ok ? 'success' : 'error',
@@ -1382,7 +1389,11 @@ function ProviderTools({
     setOperation('models');
     setResult('loading', t('settings.providers.loadingModels'));
     try {
-      const result = await listProviderModels(kind, provider);
+      const result = await listProviderModels(
+        kind,
+        channelId,
+        kind === 'omni' ? provider : undefined,
+      );
       setModels(result.models);
       if (result.models.length === 0) {
         setResult('empty', t('settings.providers.modelsEmpty'));
@@ -1396,19 +1407,36 @@ function ProviderTools({
     }
   };
 
-  const applyModel = async (model: string) => {
-    if (disabled) return;
+  const applyModel = (model: string) => {
+    if (disabled || form?.leaving || modelWrite.current) return;
     onUserMutation?.();
     setOperation('models');
     setResult('loading', t('common.saving'));
-    try {
-      await setCredential(modelAccount, model, provider);
-      setSelectedModel(model);
-      onModelSelected();
-      setResult('success', t('settings.providers.modelSaved', { model }));
-    } catch (error) {
-      setResult('error', providerErrorMessage(error, t));
-    }
+    const save = savePickedModel
+      ? savePickedModel(model)
+      : setCredential(modelAccount, model, provider).then(() => true);
+    const write = save.then(
+      (saved) => {
+        if (mounted.current) {
+          if (saved) {
+            setSelectedModel(model);
+            onModelSelected?.();
+            setResult('success', t('settings.providers.modelSaved', { model }));
+          } else {
+            setResult('error', t('common.operationFailed'));
+          }
+        }
+        return saved;
+      },
+      (error: unknown) => {
+        setResult('error', providerErrorMessage(error, t));
+        return false;
+      },
+    );
+    modelWrite.current = write;
+    void write.finally(() => {
+      if (modelWrite.current === write) modelWrite.current = null;
+    });
   };
 
   const resultMessage = message && (
@@ -1425,6 +1453,21 @@ function ProviderTools({
       />
       <span>{message}</span>
     </span>
+  );
+  const modelSelect = (
+    <SelectLite
+      value={selectedModel}
+      onChange={applyModel}
+      disabled={disabled || status === 'loading' || models.length === 0}
+      options={models.map((model) => ({ value: model, label: model }))}
+      placeholder={t('settings.providers.selectModel')}
+      ariaLabel={t('settings.providers.selectModel')}
+      style={{ width: '100%', minWidth: 0, height: 38 }}
+      popupStyle={{
+        minWidth: 'min(280px, calc(100vw - 24px))',
+        maxWidth: 'min(380px, calc(100vw - 24px))',
+      }}
+    />
   );
   const modelTools = showFetchModels && (
     <div className="ol-channel-model-tools">
@@ -1447,17 +1490,7 @@ function ProviderTools({
         </button>
         <div className="ol-provider-status-slot">{operation === 'models' && resultMessage}</div>
       </div>
-      {!modelsUrl && (
-        <SelectLite
-          value={selectedModel}
-          onChange={applyModel}
-          disabled={disabled || status === 'loading' || models.length === 0}
-          options={models.map((model) => ({ value: model, label: model }))}
-          placeholder={t('settings.providers.selectModel')}
-          ariaLabel={t('settings.providers.selectModel')}
-          style={{ width: '100%', minWidth: 0, height: 36 }}
-        />
-      )}
+      {!compact && !modelsUrl && modelSelect}
     </div>
   );
   const verifyButton = (
@@ -1504,6 +1537,7 @@ function ProviderTools({
           {modelTools}
           {verifyButton}
         </div>
+        {showFetchModels && !modelsUrl && <div className="ol-omni-model-picker">{modelSelect}</div>}
         <div className="ol-omni-tools-hint">
           {operation === 'validate' && message
             ? resultMessage
@@ -1602,12 +1636,12 @@ const miniBtnStyle: CSSProperties = {
 /** Compact configuration for the active multimodal pipeline. */
 export function OmniChannelSection() {
   const { t } = useTranslation();
+  const form = useProviderForm();
   const { prefs, updatePrefs } = useHotkeySettings();
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
-  const [omniProvider, setOmniProvider] = useState('custom');
   const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
-  const omniSwitchSeqRef = useRef(0);
-  const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const switching = useRef(false);
+  const pickerSave = useRef<((model: string) => Promise<boolean>) | null>(null);
   const [omniModel, setOmniModel] = useState('');
   const formRef = useRef<HTMLDivElement>(null);
   useContentMotion(formRef, committedOmniProvider);
@@ -1632,54 +1666,50 @@ export function OmniChannelSection() {
   );
 
   useEffect(() => {
-    if (!prefs) return;
+    if (!prefs || switching.current) return;
     const knownOmni = omniPresets.find((x) => x.id === prefs.activeOmniProvider);
     const omniId = knownOmni ? knownOmni.id : 'custom';
-    setOmniProvider(omniId);
     setCommittedOmniProvider(omniId);
   }, [prefs, omniPresets]);
 
-  // Same semantics as the LLM card: controlled dropdown gives immediate feedback + committed
-  // controls CredentialField remount + a seq guard prevents stale overwrites; only credentials
-  // land in omni.* slots.
-  const onOmniProviderChange = async (id: string) => {
-    setOmniProvider(id);
-    const seq = ++omniSwitchSeqRef.current;
-    emitSaved('saving', t('common.saving'));
-    let backendSwitched = false;
-    try {
-      await setActiveOmniProvider(id);
-      backendSwitched = true;
-      if (seq !== omniSwitchSeqRef.current) return;
-      if (prefs) {
-        const next = { ...prefs, activeOmniProvider: id };
-        await updatePrefs(next);
-        if (seq !== omniSwitchSeqRef.current) return;
-      }
-      const preset = omniPresets.find((p) => p.id === id);
-      // Switching to a non-custom preset force-overwrites endpoint/model defaults (same as the
-      // LLM card), so the switch truly takes effect and no old vendor slot values linger.
-      if (preset && preset.id !== 'custom') {
-        if (preset.baseUrl) {
-          await setCredential('omni.endpoint', preset.baseUrl);
-          if (seq !== omniSwitchSeqRef.current) return;
+  const onOmniProviderChange = (id: string) => {
+    if (!prefs || id === committedOmniProvider || switching.current) return;
+    switching.current = true;
+    const notice = 'omni-provider-switch';
+    void form
+      .finish(async () => {
+        emitSaved('saving', t('common.saving'), notice);
+        let backendSwitched = false;
+        try {
+          const preset = omniPresets.find((p) => p.id === id);
+          if (preset && preset.id !== 'custom') {
+            if (preset.baseUrl && !(await readCredential('omni.endpoint', id))?.trim())
+              await setCredential('omni.endpoint', preset.baseUrl, id);
+            if (preset.modelPlaceholder && !(await readCredential('omni.model', id))?.trim())
+              await setCredential('omni.model', preset.modelPlaceholder, id);
+          }
+          await setActiveOmniProvider(id);
+          backendSwitched = true;
+          await updatePrefs((current) => ({ ...current, activeOmniProvider: id }));
+          setCommittedOmniProvider(id);
+          emitSaved('saved', t('common.saved'), notice);
+        } catch {
+          if (backendSwitched) {
+            try {
+              await setActiveOmniProvider(committedOmniProvider);
+            } catch {
+              setCommittedOmniProvider(id);
+            }
+            // The preferences owner already reported its failed write.
+            dismissNotification(notice);
+          } else {
+            emitSaved('failed', t('common.operationFailed'), notice);
+          }
         }
-        if (preset.modelPlaceholder) {
-          await setCredential('omni.model', preset.modelPlaceholder);
-          if (seq !== omniSwitchSeqRef.current) return;
-        }
-      }
-      setCommittedOmniProvider(id);
-      emitSaved('saved', t('common.saved'));
-    } catch (err) {
-      if (seq === omniSwitchSeqRef.current) {
-        emitSaved('failed', t('common.operationFailed'));
-        if (!backendSwitched) {
-          setOmniProvider(committedOmniProvider);
-        }
-      }
-      console.error('[settings] switch omni provider failed', err);
-    }
+      })
+      .finally(() => {
+        switching.current = false;
+      });
   };
 
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
@@ -1688,97 +1718,108 @@ export function OmniChannelSection() {
     ['gemini-3.5-transcribe', 'gemini-3.5-transcribe-live'].includes(omniModel.trim());
 
   return (
-    <Card className="ol-omni-settings" padding={16}>
-      <div ref={formRef}>
-        <div style={{ marginBottom: 4 }}>
-          <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
-        </div>
-        <div className="ol-omni-primary-fields">
-          <ChannelFormRow label={t('settings.providers.providerLabel')}>
-            <SelectLite
-              value={omniProvider}
-              onChange={(next) => onOmniProviderChange(next)}
-              options={omniPresets.map((p) => ({
-                value: p.id,
-                label: t(`settings.providers.presets.${p.nameKey}`),
-              }))}
-              ariaLabel={t('settings.providers.providerLabel')}
-              style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+    <ProviderFormContext.Provider value={form}>
+      <Card className="ol-omni-settings" padding={16}>
+        <div ref={formRef}>
+          <div style={{ marginBottom: 4 }}>
+            <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
+          </div>
+          <div className="ol-omni-primary-fields">
+            <ChannelFormRow label={t('settings.providers.providerLabel')}>
+              <SelectLite
+                value={committedOmniProvider}
+                onChange={onOmniProviderChange}
+                disabled={!prefs || form.leaving}
+                options={omniPresets.map((p) => ({
+                  value: p.id,
+                  label: t(`settings.providers.presets.${p.nameKey}`),
+                }))}
+                ariaLabel={t('settings.providers.providerLabel')}
+                style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+              />
+            </ChannelFormRow>
+            <CredentialField
+              key={`${committedOmniProvider}:model`}
+              label={t('settings.providers.modelLabel')}
+              account="omni.model"
+              provider={committedOmniProvider}
+              pickerSaveRef={pickerSave}
+              placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+              onValueChange={setOmniModel}
+              mono
+              trailing={
+                committedOmniProvider === 'gemini' && !geminiTranscribe ? (
+                  <LlmThinkingToggle
+                    enabled={prefs?.llmThinkingEnabled ?? false}
+                    onToggle={(enabled) => {
+                      void updatePrefs((current) => ({
+                        ...current,
+                        llmThinkingEnabled: enabled,
+                      })).catch((error) =>
+                        console.error('[settings] failed to update Omni thinking mode', error),
+                      );
+                    }}
+                  />
+                ) : undefined
+              }
             />
-          </ChannelFormRow>
+          </div>
+          {committedOmniProvider === 'gemini' && (
+            <div
+              role="note"
+              style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65, marginBottom: 12 }}
+            >
+              {t('settings.providers.geminiTranscribeOmniNotice')}
+            </div>
+          )}
           <CredentialField
-            key={`${committedOmniProvider}:model:${omniModelRevision}`}
-            label={t('settings.providers.modelLabel')}
-            account="omni.model"
-            placeholder={omniPreset?.modelPlaceholder || 'model-name'}
-            onValueChange={setOmniModel}
+            key={`${committedOmniProvider}:api_key`}
+            label={t('settings.providers.apiKeyLabel')}
+            account="omni.api_key"
+            provider={committedOmniProvider}
             mono
-            trailing={
-              committedOmniProvider === 'gemini' && !geminiTranscribe ? (
-                <LlmThinkingToggle
-                  enabled={prefs?.llmThinkingEnabled ?? false}
-                  onToggle={(enabled) => {
-                    void updatePrefs((current) => ({
-                      ...current,
-                      llmThinkingEnabled: enabled,
-                    })).catch((error) =>
-                      console.error('[settings] failed to update Omni thinking mode', error),
-                    );
-                  }}
-                />
-              ) : undefined
-            }
+            mask
+          />
+          <CredentialField
+            key={`${committedOmniProvider}:endpoint`}
+            label={t('settings.providers.baseUrlLabel')}
+            account="omni.endpoint"
+            provider={committedOmniProvider}
+            placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
+          />
+          {committedOmniProvider === 'custom' && (
+            <div className="ol-omni-advanced-fields">
+              <CredentialField
+                key="omni:temperature"
+                label={t('settings.providers.temperatureLabel')}
+                account="omni.temperature"
+                provider={committedOmniProvider}
+                placeholder={t('settings.providers.temperaturePlaceholder')}
+                mono
+              />
+              <CredentialField
+                key="omni:extra_headers"
+                label={t('settings.providers.extraHeadersLabel')}
+                account="omni.extra_headers"
+                provider={committedOmniProvider}
+                placeholder={t('settings.providers.extraHeadersPlaceholder')}
+                mono
+                mask
+              />
+            </div>
+          )}
+          <ProviderTools
+            key={`omni:${committedOmniProvider}`}
+            kind="omni"
+            modelAccount="omni.model"
+            provider={committedOmniProvider}
+            disabled={form.leaving || Object.values(form.blocked).some(Boolean)}
+            savePickedModel={(model) => pickerSave.current?.(model) ?? Promise.resolve(false)}
+            compact
+            audioValidation={geminiTranscribe}
           />
         </div>
-        {committedOmniProvider === 'gemini' && (
-          <div
-            role="note"
-            style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65, marginBottom: 12 }}
-          >
-            {t('settings.providers.geminiTranscribeOmniNotice')}
-          </div>
-        )}
-        <CredentialField
-          key={`${committedOmniProvider}:api_key`}
-          label={t('settings.providers.apiKeyLabel')}
-          account="omni.api_key"
-          mono
-          mask
-        />
-        <CredentialField
-          key={`${committedOmniProvider}:endpoint`}
-          label={t('settings.providers.baseUrlLabel')}
-          account="omni.endpoint"
-          placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
-        />
-        {committedOmniProvider === 'custom' && (
-          <div className="ol-omni-advanced-fields">
-            <CredentialField
-              key="omni:temperature"
-              label={t('settings.providers.temperatureLabel')}
-              account="omni.temperature"
-              placeholder={t('settings.providers.temperaturePlaceholder')}
-              mono
-            />
-            <CredentialField
-              key="omni:extra_headers"
-              label={t('settings.providers.extraHeadersLabel')}
-              account="omni.extra_headers"
-              placeholder={t('settings.providers.extraHeadersPlaceholder')}
-              mono
-              mask
-            />
-          </div>
-        )}
-        <ProviderTools
-          key={`omni:${committedOmniProvider}:${geminiTranscribe ? omniModel.trim() : ''}`}
-          kind="omni"
-          modelAccount="omni.model"
-          onModelSelected={() => setOmniModelRevision((v) => v + 1)}
-          compact
-          audioValidation={geminiTranscribe}
-        />
-      </div>
-    </Card>
+      </Card>
+    </ProviderFormContext.Provider>
   );
 }
