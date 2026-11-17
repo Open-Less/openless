@@ -1,4 +1,5 @@
 import { isTauri, invokeOrMock } from './shared';
+import { isNativeHostNow } from '../hostEventBus';
 import { isHarmonyHost, invokeHarmony } from '../harmonyBridge';
 
 export { isTauri };
@@ -41,6 +42,16 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
     return invokeHarmony<string | null>('export_harmony_error_log', {
       fileName: suggestedFileName,
     });
+  // 我们自己的 Linux 宿主：没有原生保存对话框，后端直接写到 ~/Downloads。
+  if (isNativeHostNow() && !isTauri) {
+    const downloads = `~/Downloads/${suggestedFileName}`;
+    await invokeOrMock<void>(
+      'export_error_log',
+      { fileName: suggestedFileName },
+      () => undefined,
+    );
+    return downloads;
+  }
   if (!isTauri) {
     return `~/Downloads/${suggestedFileName}`;
   }

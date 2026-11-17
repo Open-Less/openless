@@ -1356,6 +1356,57 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.message)?;
             Ok(json_value(ips))
         }
+        // 诊断页的两个按钮：导出日志 + 探测光标上下文。
+        "export_error_log" => {
+            // 宿主没有原生保存对话框：文件名给后端，直接落到 ~/Downloads。
+            let mut file_name = required_str(_args, "fileName")?.to_string();
+            file_name.retain(|c| c != '/' && c != '\\');
+            if file_name.trim().is_empty() {
+                file_name = String::from("openless.log");
+            }
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            let downloads = PathBuf::from(home).join("Downloads");
+            std::fs::create_dir_all(&downloads)
+                .map_err(|error| format!("创建 Downloads 目录失败：{error}"))?;
+            let destination = downloads.join(file_name);
+            let dir = data_dir();
+            openless_linux_host::export_error_logs(&dir, &destination)
+                .map_err(|error| format!("{error}"))?;
+            Ok(json!({ "written": destination.display().to_string() }))
+        }
+        "debug_read_cursor_context" => {
+            // 用 fcitx5 的 surrounding text 探一下焦点应用能不能读到文本。
+            let started = std::time::Instant::now();
+            match openless_linux_host::fcitx5_surrounding_text() {
+                Ok(Some(surrounding)) => Ok(json!({
+                    "status": "ok",
+                    "reason": null,
+                    "window": {
+                        "text": surrounding.text,
+                        "cursor": surrounding.cursor,
+                    },
+                    "appName": surrounding.program,
+                    "bundleId": null,
+                    "elapsedMs": started.elapsed().as_millis() as u64,
+                })),
+                Ok(None) => Ok(json!({
+                    "status": "unsupported",
+                    "reason": "应用没有提供光标上下文（fcitx5 surrounding text 不可用）",
+                    "window": null,
+                    "appName": null,
+                    "bundleId": null,
+                    "elapsedMs": started.elapsed().as_millis() as u64,
+                })),
+                Err(error) => Ok(json!({
+                    "status": "unavailable",
+                    "reason": error.to_string(),
+                    "window": null,
+                    "appName": null,
+                    "bundleId": null,
+                    "elapsedMs": started.elapsed().as_millis() as u64,
+                })),
+            }
+        }
         "log_client_error" => {
             // 页面报错只进日志，不回传任何用户内容。
             let message = _args
