@@ -1,6 +1,7 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
-const origin = 'http://127.0.0.1:5326';
+const origin = fixtureOrigin;
 const fixture = `${origin}/e2e/fixtures/startup-gate.html`;
 
 test.beforeEach(async ({ page }) => {

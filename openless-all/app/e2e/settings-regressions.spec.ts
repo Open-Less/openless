@@ -1,9 +1,10 @@
+import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 async function openSettings(page: Page) {
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -254,7 +255,7 @@ test('voice activation opens model setup without leaving the multimodal pipeline
       get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     });
   });
-  await page.goto('http://127.0.0.1:5326/?os=win');
+  await page.goto(`${fixtureOrigin}/?os=win`);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   const categories = dialog.getByRole('navigation', { name: '设置分类' });

@@ -1,7 +1,8 @@
+import { fixtureOrigin } from './support/server';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
 test('style and dictionary action buttons retain compact corners', async ({ page }) => {
   await page.goto('/');

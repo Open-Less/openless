@@ -1,6 +1,7 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/capsule-motion.html`;
 
 test.use({ reducedMotion: 'reduce' });
 

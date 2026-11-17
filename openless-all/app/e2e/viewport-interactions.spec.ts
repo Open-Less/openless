@@ -1,6 +1,7 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Locator } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/viewport-interactions.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/viewport-interactions.html`;
 
 async function bounds(locator: Locator) {
   const box = await locator.boundingBox();

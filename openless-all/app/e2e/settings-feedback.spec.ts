@@ -1,9 +1,10 @@
+import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
 import { settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 // Development React is intentional: production builds hide special-prop/ref warnings.
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+test.use({ baseURL: fixtureOrigin });
 const messages = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
