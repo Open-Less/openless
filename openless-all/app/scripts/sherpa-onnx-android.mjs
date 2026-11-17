@@ -70,19 +70,27 @@ export async function ensureSherpaOnnxAndroidLibs({ root = appRoot, log = consol
     renameSync(partial, archive);
     if (!(await valid())) {
       rmSync(archive, { force: true });
-      throw new Error(`sherpa-onnx archive failed size/SHA-256 verification: ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`);
+      throw new Error(
+        `sherpa-onnx archive failed size/SHA-256 verification: ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`,
+      );
     }
   }
 
-  const members = SHERPA_ONNX_ANDROID_LIBS.map((lib) => `./jniLibs/${SHERPA_ONNX_ANDROID_ABI}/${lib}`);
+  const members = SHERPA_ONNX_ANDROID_LIBS.map(
+    (lib) => `./jniLibs/${SHERPA_ONNX_ANDROID_ABI}/${lib}`,
+  );
   const result = spawnSync('tar', ['-xjf', SHERPA_ONNX_ANDROID_ARCHIVE.name, ...members], {
     cwd: cacheDir,
     stdio: 'inherit',
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`extracting ${SHERPA_ONNX_ANDROID_ARCHIVE.name} failed (tar exit ${result.status})`);
+  if (result.status !== 0)
+    throw new Error(
+      `extracting ${SHERPA_ONNX_ANDROID_ARCHIVE.name} failed (tar exit ${result.status})`,
+    );
   for (const lib of SHERPA_ONNX_ANDROID_LIBS) {
-    if (!existsSync(join(libDir, lib))) throw new Error(`${lib} missing from ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`);
+    if (!existsSync(join(libDir, lib)))
+      throw new Error(`${lib} missing from ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`);
   }
   log(`[sherpa-onnx] libraries ready in ${libDir}`);
   return libDir;

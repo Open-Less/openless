@@ -88,7 +88,11 @@ assert.ok(
 );
 
 // 6. Nothing that looks like a secret may be formatted into a log line.
-const logCalls = [...`${main}\n${window}\n${adapter}`.matchAll(/log::(?:error|warn|info|debug|trace)!\(([\s\S]{0,400}?)\);/g)];
+const logCalls = [
+  ...`${main}\n${window}\n${adapter}`.matchAll(
+    /log::(?:error|warn|info|debug|trace)!\(([\s\S]{0,400}?)\);/g,
+  ),
+];
 for (const [, body] of logCalls) {
   assert.ok(
     !/\b(?:api_key|apikey|access_token|refresh_token|client_secret|password|private_key)\s*=/i.test(
@@ -97,7 +101,6 @@ for (const [, body] of logCalls) {
     `a log line formats what looks like a secret: ${body.trim().slice(0, 120)}`,
   );
 }
-
 
 // 7. The level chosen in the UI has to outlive the process, and the export has to
 //    carry the rotated history - otherwise the file the user sends us is exactly
@@ -113,21 +116,13 @@ assert.match(
   /pub fn read_log_level/,
   'logging.rs must read the persisted level at startup',
 );
-assert.match(
-  settingsSave,
-  /write_log_level\(/,
-  'the settings handler must persist the log level',
-);
+assert.match(settingsSave, /write_log_level\(/, 'the settings handler must persist the log level');
 assert.match(
   settingsSave,
   /export_error_logs\(/,
   'the export action must include the rotated logs, not only the current file',
 );
-assert.match(
-  logging,
-  /pub fn export_error_logs/,
-  'logging.rs must provide the multi-file export',
-);
+assert.match(logging, /pub fn export_error_logs/, 'logging.rs must provide the multi-file export');
 
 // 8. The gaps that used to make a report unusable: no capture line on success, no
 //    dictation start, no single-instance outcome.
@@ -143,7 +138,10 @@ assert.match(
 );
 const brokerStart = main.indexOf('    fn acquire_broker(');
 const brokerEnd = main.indexOf('    impl Drop for OpenLessEguiApp', brokerStart);
-assert.ok(brokerStart >= 0 && brokerEnd > brokerStart, 'find the single-instance acquisition function');
+assert.ok(
+  brokerStart >= 0 && brokerEnd > brokerStart,
+  'find the single-instance acquisition function',
+);
 assert.doesNotMatch(
   main.slice(brokerStart, brokerEnd),
   /log::(?:info|warn|error)!/,
@@ -168,7 +166,10 @@ assert.match(
 );
 const intentLoopStart = main.indexOf('                for intent in launch_intents {');
 const intentLoopEnd = main.indexOf('                // 本地边沿先于插件信号处理', intentLoopStart);
-assert.ok(intentLoopStart >= 0 && intentLoopEnd > intentLoopStart, 'find the primary intent-consumption loop');
+assert.ok(
+  intentLoopStart >= 0 && intentLoopEnd > intentLoopStart,
+  'find the primary intent-consumption loop',
+);
 const intentLoop = main.slice(intentLoopStart, intentLoopEnd);
 const receivedLog = intentLoop.indexOf('[ui-host] launch intent from the user:');
 assert.ok(

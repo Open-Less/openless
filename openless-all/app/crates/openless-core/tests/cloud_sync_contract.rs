@@ -248,6 +248,12 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     preferences.theme_mode = openless_core::shared_types::ThemeMode::Dark;
     preferences.capsule_display_mode = CapsuleDisplayMode::ForegroundWindowScreen;
     preferences.stable_transcription_enabled = true;
+    preferences.cursor_context_enabled = true;
+    preferences.polish_context_window_minutes = 17;
+    preferences.polish_skip_max_chars = 23;
+    preferences.streaming_insert = false;
+    preferences.windows_composition_input = true;
+    preferences.history_max_entries = Some(42);
     source
         .backend
         .repositories()
@@ -273,6 +279,12 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     let uploaded = server.state.lock().unwrap().payload.clone().unwrap();
     let serialized = uploaded.to_string();
     assert_eq!(uploaded["preferences"]["stableTranscriptionEnabled"], true);
+    assert_eq!(uploaded["preferences"]["cursorContextEnabled"], true);
+    assert_eq!(uploaded["preferences"]["polishContextWindowMinutes"], 17);
+    assert_eq!(uploaded["preferences"]["polishSkipMaxChars"], 23);
+    assert_eq!(uploaded["preferences"]["streamingInsert"], false);
+    assert_eq!(uploaded["preferences"]["windowsCompositionInput"], true);
+    assert_eq!(uploaded["preferences"]["historyMaxEntries"], 42);
     assert!(uploaded["preferences"].get("capsuleDisplayMode").is_none());
     assert!(uploaded["preferences"]
         .get("capsuleDisplayModeV2")
@@ -344,6 +356,12 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     );
     assert_eq!(preferences.remote_input_pin, "target-pin");
     assert!(preferences.stable_transcription_enabled);
+    assert!(preferences.cursor_context_enabled);
+    assert_eq!(preferences.polish_context_window_minutes, 17);
+    assert_eq!(preferences.polish_skip_max_chars, 23);
+    assert!(!preferences.streaming_insert);
+    assert!(preferences.windows_composition_input);
+    assert_eq!(preferences.history_max_entries, Some(42));
     let secret = target
         .credentials
         .read(

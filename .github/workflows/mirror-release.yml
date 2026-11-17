@@ -1,0 +1,44 @@
+name: Mirror release assets to OSS
+
+on:
+  release:
+    types: [published, edited]
+  schedule:
+    # Repair missed events without the website's old 15-minute full downloads.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [mirror-release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openless-oss-release-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'Open-Less/openless'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # Published tags are data, never executable code in this credentialed job.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Install distribution tools
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rclone minisign
+      - name: Mirror verified packages then update channels
+        timeout-minutes: 45
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_AK: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_SK: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT || 'oss-cn-zhangjiakou.aliyuncs.com' }}
+        run: python3 openless-all/app/scripts/mirror-release.py

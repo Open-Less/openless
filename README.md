@@ -5,7 +5,7 @@
 <h1 align="center">OpenLess</h1>
 
 <p align="center">
-  <strong>Open-source voice input for macOS, Windows &amp; Linux</strong>
+  <strong>Open-source voice input for macOS, Windows, Linux, Android, iOS &amp; HarmonyOS</strong>
 </p>
 
 <p align="center">
@@ -27,19 +27,21 @@
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
   <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
   <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
-  <a href="https://discord.gg/vTZHTFGFm"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
-  <img alt="macOS" src="https://img.shields.io/badge/macOS-12%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-14%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square&logo=windows&logoColor=white" />
   <img alt="Linux" src="https://img.shields.io/badge/Linux-egui-fcc624?style=flat-square&logo=linux&logoColor=black" />
+  <img alt="Android" src="https://img.shields.io/badge/Android-8%2B-3ddc84?style=flat-square&logo=android&logoColor=white" />
+  <img alt="iOS" src="https://img.shields.io/badge/iOS-16%2B-000000?style=flat-square&logo=apple&logoColor=white" />
+  <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-adapting-0a59f7?style=flat-square" />
   <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-2021-ce422b?style=flat-square&logo=rust&logoColor=white" />
 </p>
 
 <p align="center">
-  💬 &nbsp;<a href="https://discord.gg/vTZHTFGFm"><strong>Join our Discord</strong></a> &nbsp;·&nbsp; QQ Group&nbsp; <strong>1078960553</strong>
+  QQ Group 1&nbsp; <strong>1078960553</strong> (full) &nbsp;·&nbsp; QQ Group 2&nbsp; <strong>1095794054</strong>
 </p>
 
 <br/>
@@ -51,11 +53,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.knin.net" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 · Youwu Cloud Data (knin.net)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
+</p>
+
+<p align="center">
+  Mivra provides cloud servers and bare-metal servers, with nodes in Hong Kong and the United States, gaming cloud services, and on-demand configurations, delivering stable, reliable computing power for small and medium-sized businesses.
 </p>
 
 <h2 align="center">Developers</h2>
@@ -104,13 +110,26 @@
   </tr>
 </table>
 
-OpenLess is a cross-platform (macOS and Windows) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
+OpenLess is a cross-platform (macOS, Windows, Linux, Android, iOS, and HarmonyOS) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
 
-The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing.
+The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing. The HarmonyOS host lives in `openless-all/app/harmony/` and is still being adapted: the HAP builds and the input method extension is wired to the shared ASR/polish pipeline, while real-network recognition and store distribution still need device acceptance.
 
 Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press a single global hotkey, and speak. OpenLess records the audio, transcribes it, polishes the text in the mode you selected, and inserts the result at the cursor. If insertion is blocked, the text is copied to the clipboard instead, so nothing you said is lost.
 
 Unlike dictation tools that simply emit a word-for-word transcript, OpenLess's headline capability is its **AI-prompt mode**: you speak freely, and it adds structure, captures your constraints, and produces a context-rich prompt that you can paste directly into ChatGPT, Claude, or Cursor.
+
+## Platform support
+
+Six hosts share one framework-independent backend (`openless-core`); they differ in how much of the Core is wired and in how the package ships.
+
+| Platform | Host | State | Distribution |
+| --- | --- | --- | --- |
+| macOS 14 Sonoma+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app: hotkey, insertion, history, style packs, cursor context, Apple Speech, experimental local ASR | DMG (Apple Silicon / Intel), Homebrew cask |
+| Windows 10+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app, plus a native TSF input method (`windows-ime/`) and Foundry/sherpa local ASR | NSIS installer |
+| Linux | Native egui/eframe host (`linux-egui/`, no Tauri or WebKitGTK) | Core 2.0 services wired to a native UI; the L01–L12 device acceptance is still open | Source build; deb/rpm only after acceptance |
+| Android 8.0+ | Tauri mobile host + React, OpenLess keyboard (`android/`, `mobile-ime/`) | App, floating capsule, IME, cursor context, in-app updates | APKs per ABI |
+| iOS 16+ | Native SwiftUI/UIKit app, keyboard extension, recording widget (`openless-all/ios/`) | Chinese/English typing, voice-focused and hold-space modes, speech translation | Unsigned IPA from source, personal signing |
+| HarmonyOS (API 12+) | ArkTS + ArkWeb host and input method extension (`harmony/`, `harmony/rust`) | Host, IME and voice pipeline wired; network recognition, update flow and store listing still in progress | Unsigned HAP on Releases |
 
 ## From tool to infrastructure
 
@@ -160,7 +179,7 @@ The closest alternatives are subscription SaaS products: a monthly fee, no optio
 OpenLess targets the same end-user experience, but:
 
 - **Fully open source, local-first.** The code lives in this repository, and all of your data stays on your machine.
-- **Bring your own cloud credentials.** A dozen-plus ASR and polish providers — Volcengine, iFlytek, Alibaba Cloud Bailian, StepFun, OpenAI-compatible endpoints, and more — or any endpoint you bring. No vendor lock-in.
+- **Bring your own cloud credentials.** Nearly thirty ASR providers and more than twenty polish providers — Volcengine, iFlytek, Alibaba Cloud Bailian, StepFun, OpenAI-compatible endpoints, and more — or any endpoint you bring. No vendor lock-in.
 - **Tuned for AI prompts.** The structured mode reshapes loose speech into a prompt complete with context, constraints, and requests — ready to paste into ChatGPT, Claude, or Cursor.
 - **It will not answer for you.** The model only cleans up your text. If you say "what features does this app still need?", it returns that as a clean question — it does not hand you a feature list. For that, ask the AI itself.
 
@@ -190,6 +209,10 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 - The pipeline is: speech → transcript → cleanup → insertion at the cursor, with a clipboard fallback on failure.
 - Everything else (modes, dictionary, history, menu bar, home report) exists to support that single path.
 
+## Stability freeze
+
+OpenLess is currently in a stability phase. The project is not accepting pull requests that add new product features or expand the existing feature set. Work should focus on making the current release reliable: bug fixes, regressions, security fixes, documentation, tests, compatibility, and release maintenance are welcome. New-feature proposals and implementation PRs will be held or closed until the stability phase ends.
+
 ## Comparison
 
 | Tool | Form | How OpenLess differs |
@@ -197,27 +220,27 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 | [Typeless](https://www.typeless.com/) | Closed-source macOS / Windows / iOS, subscription | Open source; explicit AI-prompt mode; bring-your-own ASR + LLM; data and dictionary stay on your machine — including what the dictionary learns from your corrections, which is never uploaded and never added without your confirmation |
 | [Wispr Flow](https://wisprflow.ai) | Closed-source macOS / Windows, subscription | Open source; bring-your-own ASR + LLM; transparent prompt-handling rules |
 | [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
-| [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR today, local ASR on the roadmap |
+| [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR by default, with experimental on-device ASR on macOS and Windows |
 
 ## Status
 
 Every item below is one more layer sedimented into a default — a capability you authorize once and then never manage again. This is the infrastructure you stand on after launch:
 
-- The shared Rust backend lives in `openless-core`. macOS and Windows use a thin Tauri 2 host with the React/TypeScript frontend; Android keeps the Tauri mobile host. Linux uses a separate native host and will not compile Tauri or WebKitGTK.
+- The shared Rust backend lives in `openless-core`. macOS, Windows and Android use a thin Tauri 2 host with the React/TypeScript frontend; Android also ships a native keyboard, and Windows ships a TSF input method. Linux uses a separate native egui host and never compiles Tauri or WebKitGTK. iOS runs a native SwiftUI/UIKit app with a keyboard extension, and HarmonyOS runs an ArkTS/ArkWeb host over the same napi-exposed Core.
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
 - ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
 - **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
 - **Cloud ASR**: Volcengine streaming ASR (bigasr), Tencent Cloud Hunyuan realtime ASR (Hy-ASR), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, OrcaRouter audio-input Gemini, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
-- **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `Open-Less/qwen-asr` (macOS); Windows Foundry Local Whisper and sherpa-onnx (experimental) variants.
+- **Local ASR**: Windows Foundry Local Whisper and sherpa-onnx (experimental). On macOS, the old local model management was retired in favor of three opt-in experiments under Settings → Experiments & extensions — TextStream (Qwen3-ASR on MLX, ~1.9 GB, Apple Silicon, macOS 14+), SenseVoice Small (~240 MB), and Embedding Gemma (~715 MB, Apple Silicon, macOS 15+). Models are downloaded on demand, not bundled in the installer.
 - **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, Tencent Cloud TokenHub, CometAPI, OpenRouter, Requesty, API Route, OrcaRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, StepFun, and OpenCode Zen — plus any OpenAI-compatible endpoint you bring.
 - **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](https://github.com/Open-Less/openless/issues/43)).
 - **Selection-ask QA panel** — a separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](https://github.com/Open-Less/openless/issues/118)).
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
 - **Local model management** — manage on-disk local-ASR model storage from Settings.
-- **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 (auto-detected on first launch).
-- **In-app auto-update on the Tauri hosts** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest.
+- **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Español / Français / Deutsch (auto-detected on first launch).
+- **In-app auto-update on the Tauri hosts** — Settings → About & updates → Check for updates; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest, and the HarmonyOS build has no update flow yet.
 - **Beta channel (opt-in)** — Settings → About & updates → Join Beta channel selects the Beta updater feed; packages are also available from Releases. Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
-- **Distribution channels** — direct DMG/EXE from [Releases](https://github.com/Open-Less/openless/releases), Homebrew Cask (add the project tap first; see installation below), and a Windows installer. Linux deb/rpm packages require independent device acceptance and an explicit administrator upload to an existing Release.
+- **Distribution channels** — direct DMG/EXE from [Releases](https://github.com/Open-Less/openless/releases), Homebrew Cask (add the project tap first; see installation below), per-ABI Android APKs, and the unsigned HarmonyOS HAP. Linux deb/rpm packages require independent device acceptance and an explicit administrator upload to an existing Release; iOS is built from source and signed with a personal team.
 - **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
 - Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
 - Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
@@ -226,7 +249,7 @@ Every item below is one more layer sedimented into a default — a capability yo
 
 Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
 
-- **macOS**: `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel). Open it, drag the app to `/Applications`, **then run the following once in Terminal to bypass the Gatekeeper "damaged" warning** (the build is ad-hoc signed, not Apple-notarized):
+- **macOS** (macOS 14 Sonoma or later): `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel). Open it, drag the app to `/Applications`, **then run the following once in Terminal to bypass the Gatekeeper "damaged" warning** (the build is ad-hoc signed, not Apple-notarized):
   ```bash
   xattr -cr /Applications/OpenLess.app
   ```
@@ -236,10 +259,12 @@ Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
   - **Older 32-bit ARM**: `OpenLess_<version>_armeabi-v7a.apk`
   - **64-bit emulator**: `OpenLess_<version>_x86_64.apk`
   - **32-bit emulator**: `OpenLess_<version>_x86.apk`
-  - In-app updates (Settings → About) use `latest-android-{arch}.json` manifests; Beta users join Beta in Advanced settings.
+  - In-app updates (Settings → About & updates) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
 - **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
+- **HarmonyOS** (adapting): download `OpenLess_harmony_arm64.hap` from the same Release. It is unsigned and intended for developer/test installation through DevEco Studio or `hdc`; AppGallery distribution is prepared by the workflow but submitted manually, and no update flow exists yet. Local build and signing steps are in `openless-all/app/harmony/README.md`.
+- **iOS**: there is no downloadable IPA. Build the native app from source and sign it with your own team — see [openless-all/ios/README.md](openless-all/ios/README.md) for bootstrap, build, and keyboard-enable steps.
 - **macOS (Homebrew)**:
   ```bash
   brew tap Open-Less/openless https://github.com/Open-Less/openless
@@ -260,31 +285,34 @@ On first launch, grant the permissions the app requests.
 
 **Windows:**
 1. Grant Microphone access when prompted.
-2. Open Settings → Permissions to verify the global hotkey listener is active.
+2. Open Settings → Permissions & data to verify the global hotkey listener is active.
 3. Fill in your Volcengine ASR + Ark credentials in Settings.
 
 For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. Initialize submodules before a Tauri source build: its manifest resolves local path dependencies even when their target-specific code is not compiled. These include macOS ASR engines such as [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr) under `src-tauri/vendor/`. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest or require those submodules. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
+The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend; `src-tauri` hosts macOS/Windows/Android, `linux-egui` contains the native Linux UI and its platform adapters, `harmony/` holds the ArkTS/ArkWeb host plus the `harmony/rust` napi crate, and `openless-all/ios/` is the independent native iOS project. Vendored crates (`cpal`, `tauri-runtime-wry`) are checked in under `src-tauri/vendor/`, so **no Git submodule initialization is required**. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
 
-Rust 1.99 is the minimum supported toolchain for every source tree (`openless-core`, `src-tauri`, `linux-egui`); the latest stable Rust is recommended. CI verifies both Rust 1.99 and stable on macOS and Windows, and stable for the Linux egui host.
-
-On Apple Silicon, compiling the optional Qwen3-ASR MLX backend requires Xcode's MetalToolchain component. Install it with `xcodebuild -downloadComponent MetalToolchain` and verify it with `xcrun --find metal`. This is a source-build dependency; packaged OpenLess applications do not require it at runtime.
+Rust 1.99 is the minimum supported toolchain for every source tree (`openless-core`, `src-tauri`, `linux-egui`); the latest stable Rust is recommended. CI verifies both Rust 1.99 and stable on macOS and Windows, stable for the Linux egui host, and also builds the Android, iOS and HarmonyOS hosts.
 
 ```bash
 cd "openless-all/app"
 npm ci
 
 # macOS/Windows/Android: Vite at :1420 + Tauri host
-# Initialize submodules before resolving the Tauri manifest.
-git submodule update --init --recursive
 npm run tauri dev
+
+# Android release APK — run the init/scaffolding/manifest chain first
+# (src-tauri/gen/android is generated); see openless-all/README.md, "Android Build"
+npm run tauri:android:build:release
 
 # macOS release build (signs, installs, resets TCC)
 ./scripts/build-mac.sh
 INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
+
+# HarmonyOS HAP (needs the HarmonyOS Command Line Tools; see harmony/README.md)
+bash scripts/build-harmony-frontend.sh
 
 # Shared backend and Linux Host/UI (no Tauri/WebKitGTK)
 cargo check -p openless-core
@@ -330,7 +358,16 @@ Rules of thumb:
 - **Beta work must not leak to Stable.** `main` receives merges only from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
 - **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
 
-Beta release distribution (manual-download opt-in): the in-app updater always reads the Stable manifest, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release; manifest written as `latest-{tgt}-{arch}-beta.json`), while `v<version>-tauri` produces the Stable release. The two manifest files never overlap, so Stable users' updater feed cannot pick up Beta releases.
+Beta release distribution (manual-download opt-in): the in-app updater's Stable channel only ever reads the Stable manifest path, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About & updates**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release), while `v<version>-tauri` produces the Stable release.
+
+Updater manifests are served from the project CDN, one rolling file per platform and channel:
+
+```text
+https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+```
+
+The channel split is the URL path (`/updates/stable/` vs `/updates/beta/`), so a Stable client cannot reach a Beta manifest even if it asked for the wrong URL. Artifact URLs inside the manifest point at the same CDN (`https://dl.aeoform.com/releases/{tag}/{asset}`), which is what mainland-China users download from. The manifests are generated by the release workflows as run artifacts and are **not** attached to the GitHub Release, so maintainers must upload them to the CDN after a build — see `RELEASING.md`. Clients built before this switch read the old `releases/latest/download/latest-*.json` assets and therefore cannot auto-update past the last release that still carries them; they need one manual download.
 
 ## Credentials
 
@@ -392,23 +429,48 @@ On Android, the OpenLess keyboard reads the text before and after the caret stra
 
 Cursor context excludes password fields, macOS Secure Input, Windows UIA password controls, Android editors that are password-typed or ask for no personalized learning, known password managers and terminals. Turning it off stops reading cursor context for polishing; other authorized accessibility features, including local vocabulary learning and insertion, work independently. Turning vocabulary learning off stops observation and clears pending suggestions.
 
-The main window is organized as Home / History / Dictionary / Settings. The Dictionary tab opens a separate editor window when you click "New". The Home tab shows total dictation time, total characters, average characters per minute, estimated time saved, and dictionary participation statistics.
+The main window is organized as Overview / History / Dictionary / Style / Marketplace / Settings, with additional Translation, Corrections, Usage, and Quick Note views. The Dictionary tab opens a separate editor window when you click "New". The Overview tab shows total dictation time, total characters, average characters per minute, estimated time saved, and dictionary participation statistics.
 
 ## Architecture
 
 The application has one shared backend Interface and platform hosts:
 
 ```
-React UI ── Tauri Adapter (macOS/Windows/Android) ──┐
-                                                   ├── openless-core
-egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
+React UI  ── Tauri Adapter (macOS/Windows/Android) ──┐
+egui UI   ── Linux Adapter (no Tauri/WebKitGTK) ────┤
+SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── openless-core
+ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
 `openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
 
-The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows and Android hosts alongside the independent Linux egui deb/rpm workflow. After Linux device acceptance and an admin's tag, verified Linux packages attach to the shared Release; Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
+The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux egui packaging is a separate, manual workflow that stays paused until device acceptance; after acceptance an admin attaches the verified deb/rpm packages to the shared Release. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
+
+### Client architecture and flows
+
+The diagrams below are generated from the current `beta` client boundaries. Each rendered PNG is accompanied by an editable Mermaid source and an SVG version.
+
+#### Architecture
+
+![OpenLess client architecture](docs/images/client-diagrams/openless-client-architecture.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-architecture.mmd) · [SVG](docs/images/client-diagrams/openless-client-architecture.svg) · [中文图](docs/images/client-diagrams/openless-client-architecture.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-architecture.zh-CN.svg)
+
+#### Data flow
+
+![OpenLess client data flow](docs/images/client-diagrams/openless-client-data-flow.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-data-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-data-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-data-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-data-flow.zh-CN.svg)
+
+#### Startup, permissions, and recording
+
+![OpenLess startup, permissions, and recording flow](docs/images/client-diagrams/openless-client-startup-recording-flow.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg)
+
+The dependency and module review that accompanies these diagrams is in [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md).
 
 See [Contributing workflow](#contributing-workflow) and [Releasing](RELEASING.md) for contribution and release rules, and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 
@@ -418,8 +480,9 @@ Planned but not yet shipped:
 
 - Cross-session style memory: polish learns the user's tone over time ([#46](https://github.com/Open-Less/openless/issues/46)).
 - Snippets (no UI or trigger logic yet).
-- History enhancements: copy button, search, re-polish, re-insert.
 - A "Paste last result" hotkey.
+- HarmonyOS: real-network ASR/polish acceptance, update checks, and store distribution.
+- Linux: finish the L01–L12 device acceptance and restore deb/rpm release automation.
 
 ## Maintainer release checklist
 
@@ -437,5 +500,5 @@ This acknowledgement does not imply official endorsement or affiliation.
 
 ## License
 
-OpenLess 2.0.0-Beta.1 is released under the [AGPL-3.0-only license](LICENSE).
+OpenLess 2.0 is released under the [AGPL-3.0-only license](LICENSE).
 Published 1.x releases remain available under their original MIT license.

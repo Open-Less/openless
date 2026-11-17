@@ -60,8 +60,14 @@ pub async fn cancel_dictation(
 #[tauri::command]
 pub async fn set_capsule_transcript_visible(
     coord: CoordinatorState<'_>,
+    window: tauri::WebviewWindow,
     visible: bool,
 ) -> Result<(), String> {
+    // The caller is injected by Tauri, not supplied in the IPC payload. Retained mirror
+    // webviews must not change the primary capsule's shared native layout state.
+    if window.label() != "capsule" {
+        return Ok(());
+    }
     let host = coord.tauri_host();
     let Some(capsule) = host.capsule_window() else {
         return Ok(());

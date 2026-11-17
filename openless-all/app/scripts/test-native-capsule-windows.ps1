@@ -49,6 +49,7 @@ $bounds = @([int]($area.Left + ($area.Width - $width) / 2), [int]($area.Bottom -
 $results = @()
 foreach ($style in @('classic', 'typeless', 'siri')) {
   foreach ($ending in @('shutdown', 'eof', 'idle')) {
+    $theme = @{ shutdown = 'light'; eof = 'dark'; idle = 'system' }[$ending]
     $process = New-Object System.Diagnostics.Process
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = $HelperPath
@@ -68,12 +69,12 @@ foreach ($style in @('classic', 'typeless', 'siri')) {
       $ready = $process.StandardOutput.ReadLineAsync()
       if (-not $ready.Wait(5000)) { throw "Ready timeout: $style/$ending" }
       $message = $ready.Result | ConvertFrom-Json
-      if ($message.type -ne 'ready' -or $message.version -ne 1) { throw "Invalid handshake: $($ready.Result)" }
+      if ($message.type -ne 'ready' -or $message.version -ne 2) { throw "Invalid handshake: $($ready.Result)" }
       $readyMs = $timer.ElapsedMilliseconds
       $frame = @{
-        type = 'frame'; version = 1
+        type = 'frame'; version = 2
         frame = @{
-          session_id = "windows-smoke-$style-$ending"; sequence = 1; interactive = $true
+          session_id = "windows-smoke-$style-$ending"; sequence = 1; interactive = $true; theme = $theme
           state = @{ phase = 'recording'; text = ''; audio_level = 0.45; translation_active = $false; style = $style }
           transcript = '实时转写 smoke test'; transcript_font_size = 14; bounds = $bounds
         }
@@ -96,14 +97,14 @@ foreach ($style in @('classic', 'typeless', 'siri')) {
       $extended = [CapsuleWindowProbe]::Style($window, -20).ToInt64()
       if (($extended -band 0x08000000) -eq 0 -or ($extended -band 0x80) -eq 0) { throw ('Missing no-activate/tool-window style: 0x{0:X}' -f $extended) }
       Start-Sleep -Milliseconds 250
-      if ($ending -eq 'shutdown') {
+      if ($window -ne [IntPtr]::Zero) {
         $rect = New-Object CapsuleWindowProbe+Rect
         if (-not [CapsuleWindowProbe]::GetWindowRect($window, [ref]$rect)) { throw 'Cannot inspect capsule rectangle' }
         $bitmap = New-Object System.Drawing.Bitmap(($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top))
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         try {
           $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
-          $bitmap.Save((Join-Path $OutputDirectory "$style.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+          $bitmap.Save((Join-Path $OutputDirectory "$style-$theme.png"), [System.Drawing.Imaging.ImageFormat]::Png)
         } finally { $graphics.Dispose(); $bitmap.Dispose() }
       }
       $process.Refresh()
@@ -111,13 +112,13 @@ foreach ($style in @('classic', 'typeless', 'siri')) {
       $workingMiB = [Math]::Round($process.WorkingSet64 / 1MB, 2)
       $exitTimer = [System.Diagnostics.Stopwatch]::StartNew()
       switch ($ending) {
-        'shutdown' { $process.StandardInput.WriteLine('{"type":"shutdown","version":1}'); $process.StandardInput.Flush() }
+        'shutdown' { $process.StandardInput.WriteLine('{"type":"shutdown","version":2}'); $process.StandardInput.Flush() }
         'eof' { $process.StandardInput.Close() }
         'idle' { $frame.frame.state.phase = 'idle'; $frame.frame.sequence = 2; $process.StandardInput.WriteLine(($frame | ConvertTo-Json -Depth 6 -Compress)); $process.StandardInput.Flush() }
       }
       if (-not $process.WaitForExit(3000)) { throw "Helper remained after $ending" }
       if ($process.ExitCode -ne 0) { throw "Helper exit $($process.ExitCode): $($stderr.Result)" }
-      $results += [pscustomobject]@{ style = $style; ending = $ending; readyMs = $readyMs; visibleAfterFrameMs = $visibleMs; exitMs = $exitTimer.ElapsedMilliseconds; privateMiB = $privateMiB; workingSetMiB = $workingMiB }
+      $results += [pscustomobject]@{ style = $style; theme = $theme; ending = $ending; readyMs = $readyMs; visibleAfterFrameMs = $visibleMs; exitMs = $exitTimer.ElapsedMilliseconds; privateMiB = $privateMiB; workingSetMiB = $workingMiB }
     } finally {
       # Only reap the helper started by this iteration; never stop a user's OpenLess instance.
       if ($started -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }

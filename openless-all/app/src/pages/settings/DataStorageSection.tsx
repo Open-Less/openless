@@ -1,10 +1,9 @@
 // Retention, cleanup, and storage settings for history and context data.
 
 import { useTranslation } from 'react-i18next';
-import { detectOS } from '../../components/WindowChrome';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, Toggle, inputStyle } from './shared';
+import { SettingRow, SectionTitle, inputStyle } from './shared';
 
 // Range limits: retention 0-365 days, context window 0-60 minutes (larger values are meaningless
 // for real conversation scenarios and just burn tokens).
@@ -32,13 +31,6 @@ export function DataStorageSection() {
     const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
     if (Number.isNaN(parsed)) return;
     void savePrefs({ ...prefs, polishContextWindowMinutes: clamp(parsed, 0, 60) });
-  };
-  // Issue #1032: 0 = off. Empty string rolls back to off. Upper bound 50 characters keeps the
-  // skip limited to short fragments; longer dictations still get polished.
-  const onPolishSkipMaxCharsChange = (raw: string) => {
-    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
-    if (Number.isNaN(parsed)) return;
-    void savePrefs({ ...prefs, polishSkipMaxChars: clamp(parsed, 0, 50) });
   };
   // History cap 200 is the current HISTORY_CAP (persistence.rs:32); the lower bound of 5 keeps a
   // user-entered 0 from wiping everything as soon as one entry is written; empty string means
@@ -88,33 +80,6 @@ export function DataStorageSection() {
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
-      <SettingRow
-        label={t('settings.recording.polishSkipMaxCharsLabel')}
-        desc={t('settings.recording.polishSkipMaxCharsDesc')}
-      >
-        <input
-          type="number"
-          min={0}
-          max={50}
-          value={prefs.polishSkipMaxChars}
-          onChange={(e) => onPolishSkipMaxCharsChange(e.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
-        />
-      </SettingRow>
-      {/* Cursor context. Placing it under "Privacy" rather than "Polish" is deliberate: this
-          toggle's real cost is not tokens but "sending text from other apps to the LLM provider".
-          Shown on macOS, Windows and Android — Linux has no implementation. */}
-      {(detectOS() === 'mac' || detectOS() === 'win' || detectOS() === 'android') && (
-        <SettingRow
-          label={t('settings.dataStorage.cursorContextLabel')}
-          desc={t('settings.dataStorage.cursorContextDesc')}
-        >
-          <Toggle
-            on={prefs.cursorContextEnabled}
-            onToggle={(next) => void savePrefs({ ...prefs, cursorContextEnabled: next })}
-          />
-        </SettingRow>
-      )}
     </Card>
   );
 }

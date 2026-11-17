@@ -79,10 +79,6 @@ pub struct AudioDspSettings {
     pub vad_threshold: f32, // dB, -100..0
     pub aec_enabled: bool,
 
-    /// Output playback ring buffer headroom in milliseconds (100..1200).
-    #[serde(default = "default_output_buffer_ms")]
-    pub output_buffer_ms: u32,
-
     #[serde(default)]
     pub processing_chain: Vec<String>,
     #[serde(default)]
@@ -105,7 +101,6 @@ impl Default for AudioDspSettings {
             vad_enabled: false,
             vad_threshold: -40.0,
             aec_enabled: false,
-            output_buffer_ms: 300,
             processing_chain: vec![
                 "AEC".to_string(),
                 "NoiseReduction".to_string(),
@@ -126,11 +121,6 @@ impl AudioDspSettings {
             self.ns_type = Self::default().ns_type;
         }
     }
-}
-
-/// Default output playback buffer headroom in milliseconds.
-fn default_output_buffer_ms() -> u32 {
-    300
 }
 
 // ─── Shared STFT window helpers ───────────────────────────────────────────
@@ -939,6 +929,9 @@ pub struct DspProcessor {
     agc_smoothed_gain: f32,
     // VAD fade state (0.0 = muted, 1.0 = full)
     vad_fade: f32,
+    #[cfg(feature = "noise-suppression")]
+    spectrum_analyzer: Option<SpectrumAnalyzer>,
+    spectrum_tick: usize,
     // Spectrum snapshots
     raw_spectrum: Vec<f32>,
     processed_spectrum: Vec<f32>,
@@ -981,6 +974,53 @@ pub fn parse_plugin_chain_node(node: &str) -> Option<&str> {
 
 const RNNOISE_FRAME_SIZE: usize = 480;
 
+#[cfg(feature = "noise-suppression")]
+struct SpectrumAnalyzer {
+    fft: Arc<dyn rustfft::Fft<f32>>,
+    buffer: Vec<Complex<f32>>,
+    scratch: Vec<Complex<f32>>,
+    window: Vec<f32>,
+}
+
+#[cfg(feature = "noise-suppression")]
+impl SpectrumAnalyzer {
+    fn new() -> Self {
+        let fft = rustfft::FftPlanner::new().plan_fft_forward(512);
+        let scratch = vec![Complex::default(); fft.get_inplace_scratch_len()];
+        Self {
+            fft,
+            scratch,
+            buffer: vec![Complex::default(); 512],
+            window: (0..512)
+                .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / 511.0).cos())
+                .collect(),
+        }
+    }
+
+    fn analyze(&mut self, data: &[f32], target: &mut [f32]) {
+        self.buffer.fill(Complex::default());
+        let count = data.len().min(512);
+        for (i, sample) in data[data.len() - count..].iter().enumerate() {
+            self.buffer[i].re = sample * self.window[i];
+        }
+        self.fft
+            .process_with_scratch(&mut self.buffer, &mut self.scratch);
+        for (band, value) in target.iter_mut().enumerate() {
+            let low = 20.0 * 1200.0_f32.powf(band as f32 / 64.0);
+            let high = 20.0 * 1200.0_f32.powf((band + 1) as f32 / 64.0);
+            let start = ((low * 512.0 / 48_000.0) as usize).min(256);
+            let end = ((high * 512.0 / 48_000.0).ceil() as usize).clamp(start + 1, 257);
+            let magnitude = self.buffer[start..end]
+                .iter()
+                .map(|bin| bin.norm())
+                .fold(0.0_f32, f32::max)
+                / 128.0;
+            let normalized = ((20.0 * magnitude.max(1e-8).log10() + 60.0) / 60.0).clamp(0.0, 1.0);
+            *value = normalized.max(*value * 0.8);
+        }
+    }
+}
+
 impl DspProcessor {
     pub fn new(settings: Arc<RwLock<AudioDspSettings>>, _model_dir: Option<PathBuf>) -> Self {
         Self {
@@ -1020,6 +1060,9 @@ impl DspProcessor {
             agc_envelope: 0.0,
             agc_smoothed_gain: 1.0,
             vad_fade: 1.0,
+            #[cfg(feature = "noise-suppression")]
+            spectrum_analyzer: None,
+            spectrum_tick: 0,
             raw_spectrum: vec![0.0; 64],
             processed_spectrum: vec![0.0; 64],
             accum_buffer: Vec::new(),
@@ -1045,6 +1088,7 @@ impl DspProcessor {
         }
 
         let raw_rms = compute_rms(data);
+        self.spectrum_tick = (self.spectrum_tick + 1) % 10;
         self.compute_spectrum(data, true);
 
         // Frame accumulation: align to 480*channels samples before processing,
@@ -1670,59 +1714,34 @@ impl DspProcessor {
 
     // ── Spectrum ─────────────────────────────────────────────────────────────
 
-    fn compute_spectrum(&mut self, data: &[f32], is_raw: bool) {
-        let bands = 64;
-        let target = if is_raw {
-            &mut self.raw_spectrum
-        } else {
-            &mut self.processed_spectrum
-        };
-        if target.len() != bands {
-            target.resize(bands, 0.0);
+    pub fn set_spectrum_enabled(&mut self, enabled: bool) {
+        #[cfg(feature = "noise-suppression")]
+        if enabled && self.spectrum_analyzer.is_none() {
+            self.spectrum_analyzer = Some(SpectrumAnalyzer::new());
+        } else if !enabled {
+            self.spectrum_analyzer = None;
+            self.raw_spectrum.fill(0.0);
+            self.processed_spectrum.fill(0.0);
         }
-        if data.is_empty() {
-            for v in target.iter_mut() {
-                *v = 0.0;
-            }
+        #[cfg(not(feature = "noise-suppression"))]
+        let _ = enabled;
+    }
+
+    fn compute_spectrum(&mut self, data: &[f32], is_raw: bool) {
+        if self.spectrum_tick != 1 {
             return;
         }
-
-        const BANDS: usize = 64;
-        static BAND_LIMITS: std::sync::OnceLock<[f32; BANDS + 1]> = std::sync::OnceLock::new();
-        let limits = BAND_LIMITS.get_or_init(|| {
-            let mut array = [0.0; BANDS + 1];
-            for (i, limit) in array.iter_mut().enumerate() {
-                *limit = (i as f32 / BANDS as f32).powf(1.5);
-            }
-            array
-        });
-
-        for (band_idx, band_val) in target.iter_mut().enumerate() {
-            let start = limits[band_idx] * data.len() as f32;
-            let end = limits[band_idx + 1] * data.len() as f32;
-            let start = start as usize;
-            let end = (end as usize).min(data.len());
-            if start >= end {
-                *band_val *= 0.85;
-                continue;
-            }
-            let mut sum = 0.0_f32;
-            for sample in &data[start..end] {
-                sum += sample * sample;
-            }
-            let rms = (sum / (end - start) as f32).sqrt();
-            let db = if rms > 1e-10 {
-                20.0 * rms.log10()
+        #[cfg(feature = "noise-suppression")]
+        if let Some(analyzer) = &mut self.spectrum_analyzer {
+            let target = if is_raw {
+                &mut self.raw_spectrum
             } else {
-                -100.0
+                &mut self.processed_spectrum
             };
-            let normalized = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
-            if normalized > *band_val {
-                *band_val = normalized;
-            } else {
-                *band_val = *band_val * 0.85 + normalized * 0.15;
-            }
+            analyzer.analyze(data, target);
         }
+        #[cfg(not(feature = "noise-suppression"))]
+        let _ = (data, is_raw);
     }
 }
 
@@ -2095,11 +2114,13 @@ mod native_tests {
     #[test]
     fn dsp_processor_chain_smoke() {
         // Full chain: AEC → PureVox NS through the public DspProcessor API.
-        let mut settings = AudioDspSettings::default();
-        settings.ns_enabled = true;
-        settings.ns_type = "PureVox".to_string();
-        settings.ns_intensity = 100.0;
-        settings.aec_enabled = true;
+        let settings = AudioDspSettings {
+            ns_enabled: true,
+            ns_type: "PureVox".to_string(),
+            ns_intensity: 100.0,
+            aec_enabled: true,
+            ..Default::default()
+        };
         let settings = Arc::new(RwLock::new(settings));
         let mut dsp = DspProcessor::new(settings, None);
 
@@ -2124,5 +2145,44 @@ mod native_tests {
             dsp.take_aec_failure().is_none(),
             "AEC must not fail with embedded model"
         );
+    }
+}
+
+#[cfg(all(test, feature = "noise-suppression"))]
+mod spectrum_tests {
+    use super::*;
+
+    #[test]
+    fn spectrum_is_opt_in_and_tracks_frequency_without_changing_audio() {
+        let settings = Arc::new(RwLock::new(AudioDspSettings {
+            gain: 6.0,
+            ..Default::default()
+        }));
+        let mut plain = DspProcessor::new(Arc::clone(&settings), None);
+        let mut monitored = DspProcessor::new(settings, None);
+        assert!(plain.spectrum_analyzer.is_none());
+        monitored.set_spectrum_enabled(true);
+        let tone: Vec<f32> = (0..480)
+            .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin() * 0.05)
+            .collect();
+        for _ in 0..12 {
+            let mut a = tone.clone();
+            let mut b = tone.clone();
+            plain.process(&mut a, 1, 0.0);
+            monitored.process(&mut b, 1, 0.0);
+            assert_eq!(a, b);
+        }
+        let (raw, processed) = monitored.get_spectrums();
+        let peak = raw
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
+        assert!((30..=40).contains(&peak), "1 kHz peak at {peak}");
+        assert!(processed[peak] > raw[peak]);
+        monitored.set_spectrum_enabled(false);
+        assert!(monitored.spectrum_analyzer.is_none());
+        assert!(monitored.get_spectrums().0.iter().all(|v| *v == 0.0));
     }
 }

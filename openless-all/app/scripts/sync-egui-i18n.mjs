@@ -45,8 +45,8 @@ const KEEP_EGUI = new Set([
   'nav.corrections',
   // Screenshot labels the detail action "重新转写"; Tauri uses "重新转录".
   'history.retranscribe',
-  // The egui status line prefixes the product name.
-  'less_computer.done',
+  // Linux 已删除 Less Computer，代理说明里不能再提它（Tauri 仍保留该功能）。
+  'settings.network.use_system_proxy_desc',
 ]);
 
 function placeholderCount(text) {
@@ -99,14 +99,20 @@ async function loadTauriCatalog() {
 
 /** Convert a Tauri string into the Rust catalog form. */
 function toRustText(text) {
-  return text
-    // React markup used only for emphasis in the Tauri UI has no egui meaning.
-    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
-    .replace(/\{\{\s*[^}]+?\s*\}\}/g, '{}');
+  return (
+    text
+      // React markup used only for emphasis in the Tauri UI has no egui meaning.
+      .replace(/<\/?[a-zA-Z][^>]*>/g, '')
+      .replace(/\{\{\s*[^}]+?\s*\}\}/g, '{}')
+  );
 }
 
 function rustEscape(text) {
-  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
 }
 
 function quote(text) {
@@ -265,9 +271,7 @@ async function main() {
     // Never take a translation whose placeholders no longer line up with the
     // arguments the egui pages pass; that would render a literal `{}`.
     const expected = message.values.map(placeholderCount);
-    const mismatch = values.some(
-      (value, index) => placeholderCount(value) !== expected[index],
-    );
+    const mismatch = values.some((value, index) => placeholderCount(value) !== expected[index]);
     if (mismatch) {
       guarded += 1;
       if (check) console.log(`skipped (placeholder mismatch): ${message.key}`);
@@ -308,7 +312,12 @@ async function main() {
     if (known.has(key)) continue;
     const tauri = shared.get(normalizeKey(key));
     if (!tauri) continue;
-    additions.push(renderBlock(key, RUST_LOCALE_ORDER.map((tag) => toRustText(tauri[tag]))));
+    additions.push(
+      renderBlock(
+        key,
+        RUST_LOCALE_ORDER.map((tag) => toRustText(tauri[tag])),
+      ),
+    );
   }
   if (additions.length > 0) {
     const at = catalogInsertIndex(output);

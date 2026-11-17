@@ -33,7 +33,6 @@ pub enum LocalHotkey {
     SwitchStyle,
     SelectionPolish,
     OpenApp,
-    LessComputer,
     /// 风格包热键带 **pack id**（不是下标）：窗口进程与宿主各自持有的
     /// `HotkeyRuntimeTarget` 可能来自不同时刻，用下标会指错包。
     StylePack(String),
@@ -98,7 +97,7 @@ pub fn match_hotkey(
         // 不支持的主键（egui 词表里有、X11 keysym 表里没有）：交给插件那条路。
         return None;
     }
-    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 8] = [
+    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 7] = [
         (Some(&target.dictation), LocalHotkey::Dictation),
         (target.qa.as_ref(), LocalHotkey::Qa),
         (target.quick_note.as_ref(), LocalHotkey::QuickNote),
@@ -109,13 +108,6 @@ pub fn match_hotkey(
         (Some(&target.translation), LocalHotkey::Translation),
         (target.switch_style.as_ref(), LocalHotkey::SwitchStyle),
         (target.open_app.as_ref(), LocalHotkey::OpenApp),
-        (
-            target
-                .coding_agent_voice
-                .as_ref()
-                .filter(|_| target.coding_agent_enabled),
-            LocalHotkey::LessComputer,
-        ),
     ];
     for (binding, hotkey) in candidates {
         let Some(binding) = binding else { continue };
@@ -201,9 +193,6 @@ pub fn plugin_event_hotkey(
         }
         LinuxHotkeyEvent::SwitchStylePressed => LocalHotkey::SwitchStyle,
         LinuxHotkeyEvent::OpenAppPressed => LocalHotkey::OpenApp,
-        LinuxHotkeyEvent::LessComputerPressed { .. }
-        | LinuxHotkeyEvent::LessComputerReleased { .. }
-        | LinuxHotkeyEvent::LessComputerCombined { .. } => LocalHotkey::LessComputer,
         LinuxHotkeyEvent::StylePackPressed { symbol, states } => {
             let raw = (*symbol, *states);
             target
@@ -364,10 +353,6 @@ mod tests {
             match_hotkey(&target, &binding(";", &["ctrl", "shift"])),
             Some(LocalHotkey::Qa)
         );
-        assert_eq!(
-            match_hotkey(&target, &binding("V", &["alt"])),
-            Some(LocalHotkey::LessComputer)
-        );
         // 没绑的组合不命中。
         assert_eq!(match_hotkey(&target, &binding("B", &["alt"])), None);
         // 修饰键不同也不命中（Alt+Z 是翻译，不是听写）。
@@ -419,13 +404,6 @@ mod tests {
             match_hotkey(&target, &binding("1", &["ctrl", "alt"])),
             Some(LocalHotkey::StylePack("pack-1".to_string()))
         );
-    }
-
-    #[test]
-    fn a_disabled_less_computer_hotkey_is_not_matched() {
-        let mut target = target();
-        target.coding_agent_enabled = false;
-        assert_eq!(match_hotkey(&target, &binding("V", &["alt"])), None);
     }
 
     #[test]

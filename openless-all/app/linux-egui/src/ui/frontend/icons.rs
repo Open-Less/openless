@@ -13,6 +13,7 @@ pub enum IconName {
     Settings,
     Mic,
     Sparkle,
+    Flask,
     Hash,
     Clock,
     Bolt,
@@ -47,6 +48,10 @@ pub enum IconName {
     Info,
     Help,
     External,
+    /// Tauri 侧 `Icon name="mac"` 的对位图标。Linux 上原本只给 Less Computer
+    /// 设置页用；该功能整体移除后没有调用点，但 Lucide 同步脚本要求每个图标
+    /// 都有 Rust 分支（`scripts/egui-icons-contract.test.mjs`），所以保留映射。
+    #[allow(dead_code)]
     Monitor,
 }
 
@@ -78,6 +83,7 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
             "Sparkle",
             include_str!("../../../assets/lucide/Sparkle.svg"),
         ),
+        IconName::Flask => ("Flask", include_str!("../../../assets/lucide/Flask.svg")),
         IconName::Hash => ("Hash", include_str!("../../../assets/lucide/Hash.svg")),
         IconName::Clock => ("Clock", include_str!("../../../assets/lucide/Clock.svg")),
         IconName::Bolt => ("Bolt", include_str!("../../../assets/lucide/Bolt.svg")),
@@ -223,6 +229,7 @@ mod tests {
             IconName::Settings,
             IconName::Mic,
             IconName::Sparkle,
+            IconName::Flask,
             IconName::Hash,
             IconName::Clock,
             IconName::Bolt,

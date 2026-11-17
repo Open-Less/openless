@@ -1,24 +1,34 @@
 import { expect, test } from '@playwright/test';
 
-test('default capsule is white and blue with eleven bars, including legacy style links', async ({
+test('default capsule follows both themes with eleven bars, including legacy style links', async ({
   page,
 }, info) => {
-  for (const style of ['classic', 'typeless']) {
-    await page.goto(`/?window=capsule&style=${style}&state=recording&level=0.2`);
-    const pill = page.locator('.ol-default-capsule');
-    await expect(pill).toBeVisible();
-    await expect(pill).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(pill.locator('.ol-default-waveform > span')).toHaveCount(11);
-    expect(await pill.evaluate((el) => getComputedStyle(el, '::before').backgroundColor)).toBe(
-      'rgb(255, 255, 255)',
-    );
-    await expect(pill.locator('.ol-default-waveform > span').first()).toHaveCSS(
-      'background-color',
-      'rgb(37, 99, 235)',
-    );
-    await expect(page.locator('.ol-typeless-capsule')).toHaveCount(0);
+  for (const theme of [
+    { scheme: 'light' as const, fill: 'rgba(255, 255, 255, 0.86)', ink: 'rgb(29, 78, 216)' },
+    { scheme: 'dark' as const, fill: 'rgba(28, 34, 45, 0.88)', ink: 'rgb(167, 199, 255)' },
+  ]) {
+    await page.emulateMedia({ colorScheme: theme.scheme });
+    for (const style of ['classic', 'typeless']) {
+      await page.goto(`/?window=capsule&style=${style}&state=recording&level=0.2`);
+      const pill = page.locator('.ol-default-capsule');
+      await expect(pill).toBeVisible();
+      await expect(pill).toHaveCSS('color-scheme', theme.scheme);
+      await expect(pill).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      await expect(pill.locator('.ol-default-waveform > span')).toHaveCount(11);
+      await expect
+        .poll(() => pill.evaluate((el) => getComputedStyle(el, '::before').backgroundColor))
+        .toBe(theme.fill);
+      await expect(pill.locator('.ol-default-waveform > span').first()).toHaveCSS(
+        'background-color',
+        theme.ink,
+      );
+      await expect(page.locator('.ol-typeless-capsule')).toHaveCount(0);
+    }
+    await page.screenshot({
+      path: info.outputPath(`capsule-recording-${theme.scheme}.png`),
+      animations: 'disabled',
+    });
   }
-  await page.screenshot({ path: info.outputPath('capsule-recording.png'), animations: 'disabled' });
 });
 
 test('processing stays cancellable, hides confirm and shows a compact status', async ({
@@ -32,7 +42,7 @@ test('processing stays cancellable, hides confirm and shows a compact status', a
   await expect(pill.locator('.ol-default-confirm')).toBeDisabled();
   await expect(page.locator('.ol-classic-translation')).toHaveCSS(
     'background-color',
-    'rgb(255, 255, 255)',
+    'rgba(28, 34, 45, 0.88)',
   );
   await expect(pill).toHaveCSS('width', '80px');
   await expect(page.locator('.ol-classic-translation')).toHaveCSS('opacity', '0');

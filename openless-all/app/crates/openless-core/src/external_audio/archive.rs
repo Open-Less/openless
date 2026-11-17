@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::SystemTime;
 
 use futures_util::future::BoxFuture;
 
@@ -10,6 +12,7 @@ use crate::{BackendError, BackendErrorCode, RecordingArchive, RecordingPlan, Ses
 pub(super) struct ExternalRecordingArchive {
     path: PathBuf,
     writer: Mutex<(Option<std::fs::File>, u32)>,
+    cleanup_paths: Mutex<Vec<PathBuf>>,
     available: AtomicBool,
 }
 
@@ -19,47 +22,78 @@ impl ExternalRecordingArchive {
         session_id: SessionId,
         plan: &RecordingPlan,
     ) -> std::io::Result<Self> {
+        Self::create_named(directory, format!("{session_id}.wav"), plan)
+    }
+
+    pub(super) fn create_raw(
+        directory: &Path,
+        session_id: SessionId,
+        plan: &RecordingPlan,
+    ) -> std::io::Result<Self> {
+        Self::create_named(directory, format!("{session_id}.raw.wav"), plan)
+    }
+
+    fn create_named(
+        directory: &Path,
+        file_name: String,
+        plan: &RecordingPlan,
+    ) -> std::io::Result<Self> {
         std::fs::create_dir_all(directory)?;
-        // Only clean up UUID.wav files this app generated, and reserve one slot for
-        // the recording about to start.
-        let mut entries = Vec::new();
+        let mut groups: HashMap<uuid::Uuid, (SystemTime, Vec<PathBuf>)> = HashMap::new();
         for entry in std::fs::read_dir(directory)?.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("wav")
-                || path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .and_then(|stem| uuid::Uuid::parse_str(stem).ok())
-                    .is_none()
-            {
+            if path.extension().and_then(|ext| ext.to_str()) != Some("wav") {
                 continue;
             }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let session_stem = stem.strip_suffix(".raw").unwrap_or(stem);
+            let Ok(session_id) = uuid::Uuid::parse_str(session_stem) else {
+                continue;
+            };
             let Ok(metadata) = entry.metadata() else {
                 continue;
             };
             if !metadata.is_file() {
                 continue;
             }
-            let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
-            if plan.retention_days > 0
-                && modified
-                    .elapsed()
-                    .is_ok_and(|age| age.as_secs() > u64::from(plan.retention_days) * 86_400)
-            {
-                let _ = std::fs::remove_file(path);
-            } else {
-                entries.push((path, modified));
-            }
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            groups
+                .entry(session_id)
+                .and_modify(|group| {
+                    group.0 = group.0.max(modified);
+                    group.1.push(path.clone());
+                })
+                .or_insert_with(|| (modified, vec![path]));
         }
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        let now = SystemTime::now();
+        let retention = plan.retention_days;
+        groups.retain(|_, (modified, paths)| {
+            let expired = retention > 0
+                && now
+                    .duration_since(*modified)
+                    .is_ok_and(|age| age.as_secs() > u64::from(retention) * 86_400);
+            if expired {
+                for path in paths {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            !expired
+        });
         let cap = plan
             .max_entries
             .map(|count| (count as usize).clamp(1, crate::history::HISTORY_CAP))
             .unwrap_or(crate::history::HISTORY_CAP);
-        for (path, _) in entries.into_iter().skip(cap - 1) {
-            let _ = std::fs::remove_file(path);
+        let mut ordered: Vec<_> = groups.into_iter().collect();
+        ordered.sort_by_key(|(_, (modified, _))| std::cmp::Reverse(*modified));
+        for (_, (_, paths)) in ordered.into_iter().skip(cap.saturating_sub(1)) {
+            for path in paths {
+                let _ = std::fs::remove_file(path);
+            }
         }
-        let path = directory.join(format!("{session_id}.wav"));
+
+        let path = directory.join(file_name);
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -72,8 +106,20 @@ impl ExternalRecordingArchive {
         Ok(Self {
             path,
             writer: Mutex::new((Some(file), 0)),
+            cleanup_paths: Mutex::new(Vec::new()),
             available: AtomicBool::new(false),
         })
+    }
+
+    pub(super) fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    pub(super) fn add_cleanup_path(&self, path: PathBuf) {
+        self.cleanup_paths
+            .lock()
+            .expect("external archive cleanup lock poisoned")
+            .push(path);
     }
 
     pub(super) fn append(&self, pcm: &[u8]) {
@@ -89,8 +135,6 @@ impl ExternalRecordingArchive {
                 .ok_or_else(|| std::io::Error::other("remote recording exceeds WAV size limit"))?;
             let file = writer.0.as_mut().unwrap();
             file.write_all(pcm)?;
-            // Fix the standard header every frame; the audio received so far is
-            // readable on disk without waiting for the phone's stop.
             file.seek(SeekFrom::Start(4))?;
             file.write_all(&(36 + size).to_le_bytes())?;
             file.seek(SeekFrom::Start(40))?;
@@ -162,6 +206,14 @@ impl RecordingArchive for ExternalRecordingArchive {
         };
         if result.is_ok() {
             self.available.store(false, Ordering::Release);
+            for path in self
+                .cleanup_paths
+                .lock()
+                .expect("external archive cleanup lock poisoned")
+                .drain(..)
+            {
+                let _ = std::fs::remove_file(path);
+            }
         }
         Box::pin(async move { result })
     }

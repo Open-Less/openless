@@ -33,6 +33,7 @@ jobs:
         id: sync
         env:
           REVISION: ${{ inputs.revision }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 openless-all/app/scripts/test_sync_micyou.py
           args=()

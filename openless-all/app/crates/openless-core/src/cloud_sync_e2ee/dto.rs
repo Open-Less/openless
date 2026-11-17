@@ -187,6 +187,7 @@ pub struct RestorePreview {
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedSyncEvent {
     pub sequence: String,
+    pub service_origin: String,
     pub account_id: Option<String>,
     pub vault_id: Option<String>,
     pub task_id: Option<String>,
@@ -197,6 +198,7 @@ pub struct EncryptedSyncEvent {
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedSyncConflictEvent {
     pub sequence: String,
+    pub service_origin: String,
     pub account_id: String,
     pub vault_id: String,
     pub task_id: Option<String>,
@@ -207,6 +209,7 @@ pub struct EncryptedSyncConflictEvent {
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedSyncRestoreEvent {
     pub sequence: String,
+    pub service_origin: String,
     pub account_id: String,
     pub vault_id: String,
     pub task_id: Option<String>,

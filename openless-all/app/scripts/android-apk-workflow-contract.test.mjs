@@ -117,12 +117,12 @@ try {
 // --- workflow contract (#1103) ---
 const workflow = readFileSync(workflowPath, 'utf8');
 const parsed = load(workflow);
-// Tags build the release APK; a weekly schedule keeps the Gradle/Rust cache
-// warm now that a per-branch push would cost 13-18 minutes and duplicate what
-// `android-check` already covers.
-assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'schedule', 'workflow_dispatch']);
-assert.equal(parsed.on.push.branches, undefined);
-assert.deepEqual(parsed.on.push.tags, ['v*-tauri']);
+// The unified tag workflow calls Android exactly once; the independent weekly
+// smoke build and manual/debug entry points remain available.
+assert.deepEqual(Object.keys(parsed.on).sort(), ['schedule', 'workflow_call', 'workflow_dispatch']);
+assert.equal(parsed.on.push, undefined, 'do not build every ABI twice for a tag');
+assert.equal(parsed.on.workflow_call.inputs.abis.default, 'aarch64');
+assert.equal(parsed.on.workflow_call.inputs.fast_profile.type, 'boolean');
 assert.equal(parsed.on.schedule.length, 1);
 assert.match(parsed.on.schedule[0].cron, /^\d+ \d+ \* \* [0-6]$/);
 assert.equal(typeof parsed.concurrency.group, 'string');
@@ -155,8 +155,8 @@ assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO/);
 assert.match(workflow, /first ABI may compile twice|android-studio-script/);
 assert.match(workflow, /publish-android-release/);
 assert.match(workflow, /download-artifact/);
-assert.match(workflow, /stage-release-download-aliases\.mjs/);
-assert.match(workflow, /OpenLess_android_\*\.apk/);
+assert.doesNotMatch(workflow, /stage-release-download-aliases\.mjs/);
+assert.doesNotMatch(workflow, /OpenLess_android_\*\.apk/);
 assert.match(workflow, /Rust cache/);
 
 // Exercise the upload list so overlapping globs cannot upload the same asset twice.
@@ -169,16 +169,15 @@ try {
     const apk = `OpenLess_${version}_${gradleAbi}.apk`;
     const alias = `OpenLess_android_${gradleAbi}.apk`;
     originals.push(`${directory}/${apk}`);
-    return [
-      apk,
-      `${apk}.sig`,
-      alias,
-      `${alias}.sig`,
-      `latest-android-${abi}.json`,
-      `latest-android-${abi}-mirror.json`,
-    ];
+    return [apk, `${apk}.sig`, alias, `${alias}.sig`];
   });
-  for (const name of names) writeFileSync(join(releaseTmp, name), 'fixture');
+  // The manifests are still written (they feed the CDN sync through a workflow artifact) but
+  // must never be re-attached to the release: the in-app updater reads them from the CDN.
+  const manifests = ANDROID_ABI_MATRIX.flatMap(({ abi }) => [
+    `latest-android-${abi}.json`,
+    `latest-android-${abi}-mirror.json`,
+  ]);
+  for (const name of [...names, ...manifests]) writeFileSync(join(releaseTmp, name), 'fixture');
   const step = parsed.jobs['publish-android-release'].steps.find(
     (step) => step.id === 'release_assets',
   );
@@ -198,7 +197,16 @@ try {
   const assets = readFileSync(join(releaseTmp, 'android-release-files.txt'), 'utf8')
     .trim()
     .split(/\r?\n/);
-  assert.deepEqual(assets.sort(), names.map((name) => `${directory}/${name}`).sort());
+  assert.deepEqual(assets.sort(), originals.flatMap((path) => [path, `${path}.sig`]).sort());
+  assert.ok(assets.every((path) => !path.includes('/OpenLess_android_')));
+  const manifestUpload = parsed.jobs['publish-android-release'].steps.find((step) =>
+    step.uses?.startsWith('actions/upload-artifact@'),
+  );
+  assert.match(
+    manifestUpload?.with.path,
+    /latest-android-\*\.json/,
+    'manifests must leave the run as an artifact so the CDN sync can publish them',
+  );
 } finally {
   rmSync(releaseTmp, { recursive: true, force: true });
 }

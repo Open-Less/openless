@@ -3,6 +3,73 @@ use super::*;
 use credentials::{IosCredentialStore, MemoryVault};
 use openless_core::credentials::{CredentialKey, CredentialNamespace, SecretValue};
 
+#[test]
+fn audio_settings_are_available_without_developer_mode_and_persist() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(MemoryVault::default());
+    let (handle, context) = open_at(directory.path(), false, storage.clone());
+    let initial = result(control(handle, context, json!({"action":"audioSettings"})));
+    assert_eq!(initial["enabled"], false);
+    let saved = result(control(handle, context, json!({"action":"updateAudioSettings","enabled":true,"dsp":{"noiseReduction":"off","gainDb":100,"androidAecEnabled":true}})));
+    assert_eq!(saved["enabled"], true);
+    assert_eq!(saved["dsp"]["gainDb"], 50);
+    assert_eq!(saved["dsp"]["androidAecEnabled"], false);
+    ol_ios_destroy(handle);
+    let (handle, context) = open_at(directory.path(), false, storage);
+    assert_eq!(result(control(handle, context, json!({"action":"audioSettings"}))), saved);
+    ol_ios_destroy(handle);
+}
+
+#[test]
+fn native_capture_enhancement_and_stop_flush_match_shared_processor() {
+    #[derive(Default)]
+    struct Sink(Mutex<Vec<u8>>);
+    impl AudioConsumer for Sink {
+        fn consume_pcm_chunk(&self, pcm: &[u8]) { self.0.lock().unwrap().extend_from_slice(pcm); }
+    }
+    impl RecordingProgressSink for Sink {
+        fn publish_level(&self, _: u64, _: f32) -> Result<(), BackendError> { Ok(()) }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let (handle, context) = open_at(directory.path(), false, Arc::new(MemoryVault::default()));
+    let owner = host(handle).unwrap();
+    let id = SessionId::new();
+    let config = openless_core::AudioProcessingConfig {
+        enhancement_enabled: true,
+        echo_cancellation_enabled: false,
+        dsp: openless_core::AudioDspConfig { noise_reduction: openless_core::NoiseReduction::Off, gain_db: 6, agc_enabled: false, ..Default::default() },
+    };
+    let sink = Arc::new(Sink::default());
+    owner.broker.captures.lock().unwrap().insert(id, Arc::new(Capture {
+        processing: Some(Mutex::new((openless_core::AudioProcessor::new(config), Vec::new()))),
+        consumer: sink.clone(), progress: sink.clone(), bytes: AtomicU64::new(0), archive: None,
+    }));
+    let mut reference = openless_core::AudioProcessor::new(config);
+    let mut expected = Vec::new();
+    let pcm: Vec<u8> = (0..1001).flat_map(|i| (((i as f32 * 0.07).sin() * 3000.0) as i16).to_le_bytes()).collect();
+    let session = CString::new(id.to_string()).unwrap();
+    for bytes in pcm.chunks(640) {
+        assert_eq!(unsafe { ol_ios_feed_pcm(handle, session.as_ptr(), bytes.as_ptr(), bytes.len()) }, 0);
+        let samples: Vec<f32> = bytes.chunks_exact(2).map(|p| i16::from_le_bytes([p[0],p[1]]) as f32 / 32768.0).collect();
+        if let Some(chunk) = reference.process(&samples, 1, 16_000) { expected.extend(chunk.pcm_i16_le); }
+    }
+    if let Some(chunk) = reference.finish() { expected.extend(chunk.pcm_i16_le); }
+    let task = owner.executor.spawn(Box::new(Recording { broker: owner.broker.clone(), id, archive: None }).stop());
+    loop {
+        let request = next(context);
+        if request["kind"] == "nativeRequest" {
+            assert_eq!(request["operation"], "captureStop");
+            reply(handle, &request, Value::Null);
+            break;
+        }
+    }
+    owner.executor.block_on(task).unwrap().unwrap();
+    assert_eq!(*sink.0.lock().unwrap(), expected);
+    assert_eq!(expected.len(), pcm.len());
+    assert_ne!(expected, pcm);
+    ol_ios_destroy(handle);
+}
+
 pub(super) fn open_at(directory: &std::path::Path, developer: bool, storage: Arc<MemoryVault>) -> (u64, u64) {
     static CONTEXT: AtomicU64 = AtomicU64::new(10_000);
     let context = CONTEXT.fetch_add(1, Ordering::Relaxed);
@@ -250,6 +317,10 @@ fn management_is_rejected_during_start_admission_and_rewrite_requires_llm() {
     );
     assert_eq!(busy["ok"], false);
     assert_eq!(busy["message"], "recording or processing is active");
+    let audio = result(control(handle, context, json!({"action":"audioSettings"})));
+    let busy_audio = control(handle, context, json!({"action":"updateAudioSettings","enabled":true,"dsp":audio["dsp"]}));
+    assert_eq!(busy_audio["ok"], false);
+    assert_eq!(busy_audio["message"], "recording or processing is active");
     // Snapshot is allowed during capture and doesn't mutate settings.
     result(control(handle, context, json!({"action":"snapshot"})));
     assert_eq!(

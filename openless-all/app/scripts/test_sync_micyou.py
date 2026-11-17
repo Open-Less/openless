@@ -88,6 +88,28 @@ class SyncTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "integrity mismatch"):
                 sync.sync(self.root, self.manifest, "a"*40, True)
 
+    def test_api_authentication_never_leaks_to_download_hosts(self):
+        for url, authenticated in [
+            ("https://api.github.com/repos/MicYou-Dev/MicYou/commits/master", True),
+            ("https://raw.githubusercontent.com/MicYou-Dev/MicYou/sha/LICENSE", False),
+            ("https://api.github.com.evil.example/file", False),
+        ]:
+            with self.subTest(url=url), mock.patch.dict(os.environ, {"GH_TOKEN": "test-token"}):
+                with mock.patch.object(sync.urllib.request, "urlopen") as request:
+                    request.return_value.__enter__.return_value.read.return_value = b"source"
+                    self.assertEqual(sync.download(url), b"source")
+                    headers = dict(request.call_args.args[0].header_items())
+                    self.assertEqual(headers.get("Authorization"), "Bearer test-token" if authenticated else None)
+
+    def test_reviewed_adapter_stays_dsp_only(self):
+        # Upstream AEC availability depends on MicYou's device host. OpenLess
+        # supplies its own far-end capture; importing that host would not build.
+        source = (sync.APP_ROOT / self.path).read_text()
+        self.assertNotIn("crate::aec::", source)
+        patch = (sync.APP_ROOT / sync.PATCH).read_text()
+        self.assertIn("-        self.enforce_aec_availability();", patch)
+        sync.verify_local(sync.APP_ROOT, sync.load_manifest(sync.APP_ROOT))
+
     def test_patch_cannot_escape_source_allowlist(self):
         with self.assertRaisesRegex(ValueError, "only the three"):
             sync.apply_patch(self.sources, b"--- a/../../escape\n+++ b/../../escape\n@@ -1 +1 @@\n-old\n+new\n")

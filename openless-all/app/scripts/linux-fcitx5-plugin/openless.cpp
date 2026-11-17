@@ -16,7 +16,6 @@
  *    SetCustomDictationTrigger(s: keyString) — 设置自定义组合键 (Key::parse 格式)
  *    SetQaHotkeyRaw(uu: sym, states)     — 直接设 QA 面板触发 sym+states
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
- *    SetLessComputerHotkeyRaw(uu: sym, states) — 直接设 Less Computer 触发 sym+states
  *    GetSelectionText() -> s             — 读取**当前** PRIMARY 选区文本：探针可用时以合成器为准，
  *                                          当前选区没有 text mime 时返回空，而不是 clipboard
  *                                          addon 里那份可能过期的缓存（见 primary_selection.h）
@@ -28,8 +27,6 @@
  *    CancelSelectionTarget(s: ticket) -> b — 释放未使用的目标
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
- *    LessComputerKeyEvent(uub: sym, states, isPress) — Less Computer 热键按下/抬起
- *    LessComputerKeyCombined(uub: sym, states, isPress) — Less Computer 组合键撤销
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
  *    SelectionPolishEvent(uub: sym, states, isPress) — 选区润色快捷键按下/抬起
  *    TranslationModifierEvent(uub: sym, states, isPress) — 翻译修饰键按下/抬起
@@ -97,8 +94,6 @@ public:
           selectionPolishRawStates_(0),
           translationRawSym_(0),
           translationRawStates_(0),
-          lessComputerRawSym_(0),
-          lessComputerRawStates_(0),
           switchStyleRawSym_(0),
           switchStyleRawStates_(0),
           openAppRawSym_(0),
@@ -106,8 +101,6 @@ public:
           hasCustomDictationKey_(false),
           dictationTriggerHeld_(false),
           dictationTriggerCombined_(false),
-          lessComputerTriggerHeld_(false),
-          lessComputerTriggerCombined_(false),
           savedIc_(nullptr),
           selectionIc_(nullptr),
           primarySelectionReader_(openless_selection::readPrimarySelection),
@@ -180,21 +173,6 @@ public:
                         logHotkeyNearMiss(sym, states);
                     }
 
-                    if (lessComputerRawSym_ != 0 &&
-                        hit(lessComputerRawSym_, lessComputerRawStates_)) {
-                        lessComputerTriggerHeld_ = isPress;
-                        if (isPress) {
-                            lessComputerTriggerCombined_ = false;
-                        }
-                        lessComputerKeyEvent(sym, states, isPress);
-                        consume(lessComputerRawSym_);
-                        return;
-                    }
-                    if (isPress && lessComputerTriggerHeld_ && !isModifierKeySym(sym) &&
-                        !lessComputerTriggerCombined_) {
-                        lessComputerTriggerCombined_ = true;
-                        lessComputerKeyCombined(sym, states, true);
-                    }
 
                     // 自定义组合键：Alt 状态下字母 sym 可能大写（A vs a），归一化比较
                     if (hasCustomDictationKey_ &&
@@ -668,18 +646,6 @@ public:
             << "SetTranslationHotkeyRaw: sym=" << sym << " states=" << states;
     }
 
-    void setLessComputerHotkeyRaw(uint32_t sym, uint32_t states) {
-        lessComputerRawSym_ = sym;
-        lessComputerRawStates_ = states;
-        lessComputerTriggerHeld_ = false;
-        lessComputerTriggerCombined_ = false;
-        RawConfig raw;
-        readAsIni(raw, configFile());
-        raw.setValueByPath("LessComputerRawSym", std::to_string(sym));
-        raw.setValueByPath("LessComputerRawStates", std::to_string(states));
-        safeSaveAsIni(raw, configFile());
-    }
-
     void setSwitchStyleHotkeyRaw(uint32_t sym, uint32_t states) {
         switchStyleRawSym_ = sym;
         switchStyleRawStates_ = states;
@@ -767,7 +733,6 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setQuickNoteHotkeyRaw, "SetQuickNoteHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
-    FCITX_OBJECT_VTABLE_METHOD(setLessComputerHotkeyRaw, "SetLessComputerHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSwitchStyleHotkeyRaw, "SetSwitchStyleHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
@@ -775,8 +740,6 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
-    FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyEvent, "LessComputerKeyEvent", "uub");
-    FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyCombined, "LessComputerKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(quickNoteEvent, "QuickNoteEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
@@ -833,14 +796,6 @@ public:
             auto *v = raw.valueByPath("TranslationRawStates");
             translationRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
         }
-        {
-            auto *v = raw.valueByPath("LessComputerRawSym");
-            lessComputerRawSym_ = v ? std::stoul(*v, nullptr, 0) : 0;
-        }
-        {
-            auto *v = raw.valueByPath("LessComputerRawStates");
-            lessComputerRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
-        }
         loadRawHotkey(raw, "SwitchStyle", switchStyleRawSym_, switchStyleRawStates_);
         loadRawHotkey(raw, "OpenApp", openAppRawSym_, openAppRawStates_);
         stylePackHotkeys_.clear();
@@ -859,8 +814,6 @@ public:
                 }
             }
         }
-        lessComputerTriggerHeld_ = false;
-        lessComputerTriggerCombined_ = false;
         rebuildTriggerKeys();
         hasCustomDictationKey_ = false;
         if (auto *value = raw.valueByPath("CustomDictationKey"); value && !value->empty()) {
@@ -986,7 +939,6 @@ private:
             {"translation", translationRawSym_, translationRawStates_},
             {"switch_style", switchStyleRawSym_, switchStyleRawStates_},
             {"open_app", openAppRawSym_, openAppRawStates_},
-            {"less_computer", lessComputerRawSym_, lessComputerRawStates_},
         };
         if (hasCustomDictationKey_) {
             entries.push_back({"dictation_custom",
@@ -1106,8 +1058,6 @@ private:
     uint32_t selectionPolishRawStates_;
     uint32_t translationRawSym_;
     uint32_t translationRawStates_;
-    uint32_t lessComputerRawSym_;
-    uint32_t lessComputerRawStates_;
     uint32_t switchStyleRawSym_;
     uint32_t switchStyleRawStates_;
     uint32_t openAppRawSym_;
@@ -1117,8 +1067,6 @@ private:
     bool hasCustomDictationKey_;
     bool dictationTriggerHeld_;
     bool dictationTriggerCombined_;
-    bool lessComputerTriggerHeld_;
-    bool lessComputerTriggerCombined_;
     /// 近似未命中诊断日志的限速时间戳（见 logHotkeyNearMiss）。
     std::chrono::steady_clock::time_point lastNearMissLog_{};
     /// 快捷键按下时保存的输入上下文指针，用于 commitText 在失焦后仍能提交文字。

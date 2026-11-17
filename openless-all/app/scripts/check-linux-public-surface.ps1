@@ -70,14 +70,11 @@ foreach ($action in @('ShowQa', 'HideQa', 'ShowSelectionPreview', 'HideSelection
     }
 }
 
+# Less Computer 在 Linux 端已整体删除：Core 仍会发 `LessComputerEvent`，Linux
+# 宿主刻意不消费它，所以这里不再要求 reducer 出现 LessComputer 相关分支。
 foreach ($replayToken in @(
     'replay_events_after',
-    'replay.truncated',
-    'LessComputerEventKind::User',
-    'LessComputerEventKind::Started',
-    'LessComputerEventKind::Tool',
-    'LessComputerEventKind::Compaction',
-    'LessComputerEventKind::Approval'
+    'replay.truncated'
 )) {
     if ($mainSource -notmatch [regex]::Escape($replayToken)) {
         Write-Error "Linux event reducer/replay is missing '$replayToken'"

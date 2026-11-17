@@ -130,7 +130,7 @@ const errorGlowTextStyle: CSSProperties = {
   padding: '6px 12px',
   background: 'var(--ol-capsule-pill-bg)',
   border: '1px solid var(--ol-capsule-pill-border)',
-  borderRadius: 12,
+  borderRadius: 'var(--ol-r-lg)',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
