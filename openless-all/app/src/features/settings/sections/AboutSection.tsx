@@ -3,17 +3,19 @@
 // "Join the Beta channel" moved to the bottom of the Advanced page (see BetaChannelSection); here the
 // icon area keeps only the stable-channel "check updates" button.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { Row } from '../../../components/ui/Row';
 import { getPlatformCapabilities } from '../../../runtime/platform';
-import { openExternal } from '../../../api/files';
+import { copyTextToClipboard, openExternal } from '../../../api/files';
 import type { PlatformCapabilities } from '../../../api/contracts';
 import { APP_VERSION_LABEL } from '../../../lib/appVersion';
 import { Card } from '../../../pages/_atoms';
 import { useConservativeLayout, useLayoutStack } from '../../../lib/useMobileLayout';
 import { btnGhostStyle, SectionTitle } from '../../../pages/settings/shared';
+import { useCopyFeedback } from '../../../ui/feedback/useCopyFeedback';
+import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
 const HELP_URL = 'https://github.com/Open-Less/openless#readme';
@@ -25,27 +27,23 @@ export function AboutSection() {
   const conservativeLayout = useConservativeLayout();
   const compactLayout = baseLayoutStack || conservativeLayout;
   const appIconSize = compactLayout ? 36 : 56;
-  const [qqCopied, setQqCopied] = useState(false);
+  const { notify } = useInteraction();
+  const { copied, copy } = useCopyFeedback(copyTextToClipboard, () =>
+    notify({ message: t('common.operationFailed'), state: 'failed' }),
+  );
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
-  const qqCopiedRef = useRef<number | null>(null);
 
   useEffect(() => {
-    void getPlatformCapabilities().then(setPlatformCaps);
+    let active = true;
+    void getPlatformCapabilities()
+      .then((capabilities) => {
+        if (active) setPlatformCaps(capabilities);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
-
-  useEffect(
-    () => () => {
-      if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
-    },
-    [],
-  );
-
-  const copyQq = () => {
-    navigator.clipboard?.writeText('1078960553');
-    setQqCopied(true);
-    if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
-    qqCopiedRef.current = window.setTimeout(() => setQqCopied(false), 1500);
-  };
 
   return (
     <>
@@ -156,10 +154,14 @@ export function AboutSection() {
             >
               1078960553
             </kbd>
-            <button onClick={copyQq} title={t('modal.about.copyQq')} style={btnGhostStyle}>
+            <button
+              onClick={() => void copy('qq', '1078960553')}
+              title={t('modal.about.copyQq')}
+              style={btnGhostStyle}
+            >
               <Icon name="copy" size={14} />
             </button>
-            {qqCopied && (
+            {copied === 'qq' && (
               <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>
                 {t('common.copied')}
               </span>

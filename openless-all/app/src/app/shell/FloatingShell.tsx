@@ -92,13 +92,6 @@ function FloatingShellBody({
   const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
-  const shellRef = useRef<HTMLDivElement>(null);
-
-  // The dialog records and moves focus before its background becomes inert.
-  useEffect(() => {
-    if (shellRef.current) shellRef.current.inert = settingsMount.mounted;
-  }, [settingsMount.mounted]);
-
   const pageRef = useRef<HTMLDivElement>(null);
   const displayTab = currentTab;
 
@@ -207,12 +200,7 @@ function FloatingShellBody({
       }}
     >
       {mobile && (
-        <div
-          ref={(element) => {
-            if (element) element.inert = settingsOpen;
-          }}
-          style={{ display: 'contents' }}
-        >
+        <div style={{ display: 'contents' }}>
           <MobileTopBar
             title={mobileTitle}
             onOpenSettings={() => openSettings()}
@@ -223,7 +211,6 @@ function FloatingShellBody({
 
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
-        ref={shellRef}
         data-ol-settings-open={settingsOpen ? 'true' : undefined}
         className="ol-app-shell-bg ol-shell-depth"
         style={{

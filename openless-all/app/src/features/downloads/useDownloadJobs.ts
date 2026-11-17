@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { listenModelProgress } from '../../data/model-progress';
 import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
 import {
   cancelFoundryLocalAsrPrepare,
   cancelLocalAsrDownload,
   cancelSherpaOnnxAsrDownload,
-  type FoundryPrepareProgress,
   type LocalAsrDownloadProgress,
 } from '../../api/local-asr';
 import {
@@ -60,11 +60,8 @@ export function useDownloadJobs() {
       });
     };
     void (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const subscribe = async <T>(event: string, handler: (payload: T) => void) => {
-        const off = await listen<T>(event, ({ payload }) => {
-          if (!cancelled) handler(payload);
-        });
+      const keep = async (registration: Promise<() => void>) => {
+        const off = await registration;
         if (cancelled) off();
         else unlistens.push(off);
       };
@@ -84,23 +81,22 @@ export function useDownloadJobs() {
         );
       };
       const results = await Promise.allSettled([
-        subscribe<LocalAsrDownloadProgress>('local-asr-download-progress', download('qwen3')),
-        subscribe<LocalAsrDownloadProgress>(
-          'sherpa-onnx-asr-download-progress',
-          download('sherpa'),
+        keep(listenModelProgress('local-asr-download-progress', download('qwen3'))),
+        keep(listenModelProgress('sherpa-onnx-asr-download-progress', download('sherpa'))),
+        keep(
+          listenModelProgress('foundry-local-asr-prepare-progress', (p) => {
+            update(
+              {
+                key: `foundry:${p.modelAlias}`,
+                id: p.modelAlias,
+                name: p.label || p.modelAlias,
+                percent: p.percent ?? null,
+                engine: 'foundry',
+              },
+              p.phase,
+            );
+          }),
         ),
-        subscribe<FoundryPrepareProgress>('foundry-local-asr-prepare-progress', (p) => {
-          update(
-            {
-              key: `foundry:${p.modelAlias}`,
-              id: p.modelAlias,
-              name: p.label || p.modelAlias,
-              percent: p.percent ?? null,
-              engine: 'foundry',
-            },
-            p.phase,
-          );
-        }),
       ]);
       for (const result of results)
         if (result.status === 'rejected')

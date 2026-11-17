@@ -10,7 +10,7 @@ const css = read('src/styles/global.css');
 const stackedLayout = read('src/lib/stackedLayout.ts');
 const toggle = read('src/ui/controls/SettingRow.tsx');
 const refinements = read('src/styles/refinements.css');
-const pageAtoms = read('src/pages/_atoms.tsx');
+const pageHeader = read('src/ui/layout/PageHeader.tsx');
 const rowCss = read('src/ui/controls/setting-row.css');
 const channelList = read('src/features/providers/ChannelList.tsx');
 const permissions = read('src/features/input/PermissionsSection.tsx');
@@ -37,7 +37,8 @@ assert.match(switchRule, /flex:\s*0 0 auto/);
 assert.match(switchRule, /\swidth:\s*var\(--ol-switch-width\)/);
 assert.match(switchRule, /min-width:\s*var\(--ol-switch-width\)/);
 assert.match(switchRule, /max-width:\s*var\(--ol-switch-width\)/);
-assert.match(pageAtoms, /preferenceStack\s*\?/);
+assert.match(pageHeader, /useMobileLayout\(\)/);
+assert.doesNotMatch(pageHeader, /useReadableLayout|useConservativeLayout/);
 assert.match(rowCss, /@media \(max-width: 719px\)[^]*?grid-template-columns: minmax\(0, 1fr\)/);
 
 assert.match(channelList, /ol-conservative-stack/);

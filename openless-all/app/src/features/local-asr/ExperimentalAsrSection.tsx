@@ -5,7 +5,8 @@ import { PresenceModal } from '../../components/ui/Modal';
 import { Collapse } from '../../components/ui/Disclosure';
 import { Icon } from '../../components/Icon';
 import { Btn, Card } from '../../pages/_atoms';
-import { ExperimentalSectionTitle, SettingRow, Toggle } from '../../pages/settings/shared';
+import { SettingRow, Toggle } from '../../pages/settings/shared';
+import { ExperimentalSectionTitle } from './ExperimentalSectionTitle';
 import {
   downloadPercent,
   EXPERIMENTAL_ASR_MODELS,

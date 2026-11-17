@@ -2,9 +2,9 @@
 // subscription independent of the card rendering and exit lifecycle.
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { useReducedMotion } from '../lib/motion';
-import { Icon } from './Icon';
-import type { ProgressItem } from './GlobalDownloadProgress';
+import { useReducedMotion } from '../../lib/motion';
+import { Icon } from '../../components/Icon';
+import type { ProgressItem } from './useDownloadJobs';
 
 export default function DownloadProgressCards({
   visible,

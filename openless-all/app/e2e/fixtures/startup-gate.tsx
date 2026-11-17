@@ -4,10 +4,14 @@ import type { CredentialsStatus } from '../../src/api/contracts';
 import type { VoiceEditSnapshot } from '../../src/api/voice-edit';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
+import '../../src/styles/overlays.css';
+import '../../src/styles/refinements.css';
 
 const params = new URLSearchParams(location.search);
 const mode = params.get('credentials');
 const android = params.get('os') === 'android';
+const exerciseClipboard = params.has('clipboard');
+let clipboardAllowed = false;
 if (android) localStorage.setItem('openless.androidSetupWizardComplete', '1');
 let voice: VoiceEditSnapshot | null = null;
 const cancelRequests: Array<{ id?: string; resolve: () => void; reject: (reason: Error) => void }> =
@@ -38,6 +42,9 @@ Object.assign(window, {
   },
   startupFixture: {
     calls,
+    allowClipboard: (allowed: boolean) => {
+      clipboardAllowed = allowed;
+    },
     emit,
     listening: (event: string) =>
       [...subscriptions.values()].some((listener) => listener.event === event),
@@ -103,9 +110,27 @@ Object.assign(window, {
         if (voice && voice.sessionId === id) voice = null;
         return null;
       }
-      if (command === 'get_settings') return mocks.mockSettings;
+      if (command === 'get_settings')
+        return { ...mocks.mockSettings, remoteInputEnabled: exerciseClipboard };
       if (command === 'get_settings_snapshot')
-        return { preferences: mocks.mockSettings, revision: 0 };
+        return {
+          preferences: { ...mocks.mockSettings, remoteInputEnabled: exerciseClipboard },
+          revision: 0,
+        };
+      if (exerciseClipboard && command === 'get_remote_input_status')
+        return {
+          running: true,
+          starting: false,
+          port: 8443,
+          urlsStale: false,
+          urls: ['https://192.0.2.10:8443'],
+          pin: '000001',
+          caFingerprintSha256: 'a'.repeat(64),
+        };
+      if (exerciseClipboard && command === 'copy_text_to_clipboard') {
+        if (!clipboardAllowed) throw new Error('Clipboard write rejected');
+        return;
+      }
       if (command === 'get_hotkey_capability') return mocks.mockHotkeyCapability;
       if (command === 'get_hotkey_status') return { state: 'ready' };
       if (command === 'check_microphone_permission' || command === 'check_accessibility_permission')

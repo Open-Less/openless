@@ -143,3 +143,28 @@ test.describe('Android native touch scrolling', () => {
     }
   });
 });
+
+test('Android overlay changes use shared field writes and roll back on failure', async ({
+  page,
+}) => {
+  await reachOverlayConfig(page);
+  const activation = page
+    .locator('select')
+    .filter({ has: page.locator('option[value="long_press"]') });
+  await expect(activation).toHaveValue('tap');
+  await page.evaluate(() => (window as any).androidGuideFixture.rejectNextWrite());
+  await activation.selectOption('long_press');
+  await expect(page.getByRole('alert')).toContainText('操作失败');
+  await expect(activation).toHaveValue('tap');
+  await activation.selectOption('long_press');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).androidGuideFixture.writes))
+    .toEqual([
+      { '/androidOverlayActivationMode': 'long_press' },
+      { '/androidOverlayActivationMode': 'long_press' },
+    ]);
+  await expect(activation).toHaveValue('long_press');
+  expect(await page.evaluate(() => (window as any).androidGuideFixture.calls)).not.toContain(
+    'set_settings',
+  );
+});

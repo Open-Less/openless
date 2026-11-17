@@ -17,12 +17,17 @@ import {
   pasteShortcutForPlainTextToggle,
 } from '../../lib/plainTextInsertion';
 import { isTauriHost } from '../../runtime/environment';
-import { listMicrophoneDevices } from '../../api/input';
+import {
+  getAutostartEnabled,
+  listMicrophoneDevices,
+  listenMicrophoneDeviceChanges,
+  listenVoiceActivationChanges,
+  setAutostartEnabled,
+} from '../../api/input';
 import { setDictationHotkey } from '../../api/hotkeys';
 import {
   isVoiceActivationModelMissing,
   VOICE_ACTIVATION_MODEL_ALIAS,
-  type VoiceActivationStateSnapshot,
 } from '../../lib/voiceActivation';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../runtime/platform';
 import type {
@@ -48,21 +53,6 @@ import { getRuntimeOS, type OS } from '../../runtime/environment';
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
 
-async function autostartIsEnabled(): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<boolean>('plugin:autostart|is_enabled');
-}
-
-async function autostartEnable(): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('plugin:autostart|enable');
-}
-
-async function autostartDisable(): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('plugin:autostart|disable');
-}
-
 export type RecordingSurface = 'microphone' | 'capsule' | 'text';
 
 export function RecordingInputSection({
@@ -85,25 +75,35 @@ export function RecordingInputSection({
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
   const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
   const voiceActivationStateObservedRef = useRef(false);
+  const deviceReadRevision = useRef(0);
 
   useEffect(() => {
-    void getPlatformCapabilities().then(setPlatformCaps);
+    let current = true;
+    void getPlatformCapabilities()
+      .then((caps) => {
+        if (current) setPlatformCaps(caps);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
   }, []);
 
   const loadMicrophoneDevices = useCallback(
     async (signal?: { cancelled: boolean }, options: { showLoading?: boolean } = {}) => {
+      const request = ++deviceReadRevision.current;
       if (options.showLoading ?? true) {
         setMicrophoneDevicesLoaded(false);
       }
       setMicrophoneDevicesError(null);
       try {
         const devices = await listMicrophoneDevices();
-        if (signal?.cancelled) return;
+        if (signal?.cancelled || deviceReadRevision.current !== request) return;
         setMicrophoneDevices(devices);
         setMicrophoneDevicesLoaded(true);
       } catch (err) {
         console.error('[settings] list microphone devices failed', err);
-        if (signal?.cancelled) return;
+        if (signal?.cancelled || deviceReadRevision.current !== request) return;
         setMicrophoneDevices([]);
         setMicrophoneDevicesError(err instanceof Error ? err.message : String(err));
         setMicrophoneDevicesLoaded(true);
@@ -115,31 +115,21 @@ export function RecordingInputSection({
   useEffect(() => {
     if (surface !== 'microphone') return;
     const signal = { cancelled: false };
-    void loadMicrophoneDevices(signal);
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const stop = await listenMicrophoneDeviceChanges(() => {
+          if (!signal.cancelled) void loadMicrophoneDevices(signal, { showLoading: false });
+        });
+        if (signal.cancelled) stop();
+        else unlisten = stop;
+      } catch (error) {
+        console.warn('[settings] microphone device subscription failed', error);
+      }
+      if (!signal.cancelled) await loadMicrophoneDevices(signal);
+    })();
     return () => {
       signal.cancelled = true;
-    };
-  }, [loadMicrophoneDevices, surface]);
-
-  useEffect(() => {
-    if (surface !== 'microphone' || !isTauriHost()) return;
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    async function listenForDeviceChanges() {
-      const { listen } = await import('@tauri-apps/api/event');
-      if (cancelled) return;
-      const stopListening = await listen('microphone:devices-changed', () => {
-        void loadMicrophoneDevices(undefined, { showLoading: false });
-      });
-      if (cancelled) {
-        stopListening();
-        return;
-      }
-      unlisten = stopListening;
-    }
-    void listenForDeviceChanges();
-    return () => {
-      cancelled = true;
       unlisten?.();
     };
   }, [loadMicrophoneDevices, surface]);
@@ -151,23 +141,16 @@ export function RecordingInputSection({
     }
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    async function listenForVoiceActivationChanges() {
-      const { listen } = await import('@tauri-apps/api/event');
+    void listenVoiceActivationChanges((state) => {
       if (cancelled) return;
-      const stopListening = await listen<VoiceActivationStateSnapshot>(
-        'voice-activation:state-changed',
-        (event) => {
-          voiceActivationStateObservedRef.current = true;
-          setVoiceActivationModelMissing(isVoiceActivationModelMissing(event.payload));
-        },
-      );
-      if (cancelled) {
-        stopListening();
-        return;
-      }
-      unlisten = stopListening;
-    }
-    void listenForVoiceActivationChanges();
+      voiceActivationStateObservedRef.current = true;
+      setVoiceActivationModelMissing(isVoiceActivationModelMissing(state));
+    })
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch((error) => console.warn('[settings] voice activation subscription failed', error));
     return () => {
       cancelled = true;
       unlisten?.();
@@ -916,7 +899,7 @@ function AutostartRow() {
       return;
     }
     let cancelled = false;
-    autostartIsEnabled()
+    getAutostartEnabled()
       .then((v: boolean) => {
         if (!cancelled) {
           setEnabled(v);
@@ -936,9 +919,7 @@ function AutostartRow() {
     setEnabled(next);
     setError(null);
     try {
-      if (!isTauriHost()) return;
-      if (next) await autostartEnable();
-      else await autostartDisable();
+      await setAutostartEnabled(next);
     } catch (err) {
       console.error('[autostart] toggle failed', err);
       setEnabled(!next);

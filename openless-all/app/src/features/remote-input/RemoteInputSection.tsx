@@ -10,36 +10,21 @@ import { useHotkeySettings } from '../../data/preferences';
 import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../../pages/_atoms';
 import { SectionTitle, SettingRow, Toggle, inputStyle } from '../../pages/settings/shared';
+import { copyTextToClipboard } from '../../api/files';
+import { useCopyFeedback } from '../../ui/feedback/useCopyFeedback';
+import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { regenerateRemotePin } from '../../api/input';
 import { useRemoteInputStatus } from './useRemoteInputStatus';
 import { getRemoteInputViewState } from './remoteInputViewState';
 
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch {
-    // Fallback: hidden textarea + execCommand, for environments without async clipboard support.
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-    } catch {
-      /* ignore */
-    }
-    document.body.removeChild(ta);
-  }
-}
-
 export function RemoteInputSection() {
   const { t, i18n } = useTranslation();
+  const { notify } = useInteraction();
   const { prefs, updatePrefs } = useHotkeySettings();
   const { status, startError, acceptStatus } = useRemoteInputStatus(i18n.language);
-  const [copied, setCopied] = useState<string | null>(null);
+  const { copied, copy } = useCopyFeedback(copyTextToClipboard, () =>
+    notify({ message: t('common.operationFailed'), state: 'failed' }),
+  );
   // Port edit draft: parsed and committed on blur/Enter only, so per-keystroke persistence does
   // not restart the backend service repeatedly on intermediate port values.
   const [portDraft, setPortDraft] = useState<string | null>(null);
@@ -68,14 +53,8 @@ export function RemoteInputSection() {
     const port = Math.max(1024, Math.min(65535, n));
     setPortDraft(null);
     if (port !== prefs.remoteInputPort) {
-      updatePrefs({ ...prefs, remoteInputPort: port });
+      void updatePrefs((current) => ({ ...current, remoteInputPort: port })).catch(() => {});
     }
-  };
-
-  const doCopy = async (url: string, pin: string) => {
-    await copyText(`${url}\n${t('settings.remoteInput.pinLabel')}：${pin}`);
-    setCopied(url);
-    window.setTimeout(() => setCopied((c) => (c === url ? null : c)), 1500);
   };
 
   const smallBtn: CSSProperties = {
@@ -96,7 +75,12 @@ export function RemoteInputSection() {
         label={t('settings.remoteInput.enableLabel')}
         desc={t('settings.remoteInput.enableDesc')}
       >
-        <Toggle on={enabled} onToggle={(v) => updatePrefs({ ...prefs, remoteInputEnabled: v })} />
+        <Toggle
+          on={enabled}
+          onToggle={(v) =>
+            void updatePrefs((current) => ({ ...current, remoteInputEnabled: v })).catch(() => {})
+          }
+        />
       </SettingRow>
 
       <SettingRow label={t('settings.remoteInput.portLabel')}>
@@ -118,7 +102,11 @@ export function RemoteInputSection() {
         <Segmented
           label={t('settings.remoteInput.defaultModeLabel')}
           value={mode}
-          onChange={(m) => updatePrefs({ ...prefs, remoteInputDefaultMode: m })}
+          onChange={(m) =>
+            void updatePrefs((current) => ({ ...current, remoteInputDefaultMode: m })).catch(
+              () => {},
+            )
+          }
           options={(['toggle', 'hold'] as const).map((m) => ({
             value: m,
             label: t(
@@ -148,14 +136,7 @@ export function RemoteInputSection() {
                   </code>
                   <button
                     type="button"
-                    onClick={async () => {
-                      await copyText(formattedFingerprint);
-                      setCopied('ca-fingerprint');
-                      window.setTimeout(
-                        () => setCopied((c) => (c === 'ca-fingerprint' ? null : c)),
-                        1500,
-                      );
-                    }}
+                    onClick={() => void copy('ca-fingerprint', formattedFingerprint)}
                     style={{ ...smallBtn, marginTop: 6 }}
                   >
                     {copied === 'ca-fingerprint'
@@ -202,7 +183,9 @@ export function RemoteInputSection() {
                       {u}
                     </span>
                     <button
-                      onClick={() => doCopy(u, status.pin)}
+                      onClick={() =>
+                        void copy(u, `${u}\n${t('settings.remoteInput.pinLabel')}：${status.pin}`)
+                      }
                       title={t('settings.remoteInput.urlLabel')}
                       style={smallBtn}
                     >
@@ -210,11 +193,9 @@ export function RemoteInputSection() {
                     </button>
                     <button
                       disabled={!canVerifyCertificate}
-                      onClick={async () => {
+                      onClick={() => {
                         const link = `${u}/cert.mobileconfig`;
-                        await copyText(link);
-                        setCopied(link);
-                        window.setTimeout(() => setCopied((c) => (c === link ? null : c)), 1500);
+                        void copy(link, link);
                       }}
                       style={smallBtn}
                     >

@@ -7,7 +7,7 @@ import { ViewportPortal } from '../../ui/layout/AppViewport';
 import { useTranslation } from 'react-i18next';
 import { useDownloadJobs } from './useDownloadJobs';
 export type { ProgressItem } from './useDownloadJobs';
-const DownloadProgressCards = lazy(() => import('../../components/DownloadProgressCards'));
+const DownloadProgressCards = lazy(() => import('./DownloadProgressCards'));
 
 export function GlobalDownloadProgress() {
   const { t } = useTranslation();

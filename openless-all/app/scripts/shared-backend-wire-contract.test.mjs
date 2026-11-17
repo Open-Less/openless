@@ -75,7 +75,7 @@ const [
   read('src/app/App.tsx'),
   read('src/features/providers/ProvidersSection.tsx'),
   read('src/features/providers/ChannelList.tsx'),
-  read('src/pages/settings/shared.tsx'),
+  read('src/features/providers/labels.ts'),
   read('src-tauri/src/commands/history.rs'),
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),

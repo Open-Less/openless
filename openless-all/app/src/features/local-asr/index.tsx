@@ -75,6 +75,7 @@ import { restartApp } from '../../api/permissions';
 import { getCredentials } from '../../api/providers';
 import { Icon } from '../../components/Icon';
 import { SelectLite } from '../../components/ui/SelectLite';
+import { listenModelProgress } from '../../data/model-progress';
 import { useHotkeySettings } from '../../data/preferences';
 import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack } from '../../lib/useMobileLayout';
@@ -610,9 +611,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const off = await listen<LocalAsrDownloadProgress>('local-asr-download-progress', (e) => {
-        const payload = e.payload;
+      const off = await listenModelProgress('local-asr-download-progress', (payload) => {
+        if (cancelled) return;
         if (payload.phase === 'cancelled') {
           // On cancel, drop the entry; whether the bar still shows is decided by hasPartial
           setProgress((prev) => {
@@ -656,21 +656,17 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const off = await listen<FoundryPrepareProgress>(
-        'foundry-local-asr-prepare-progress',
-        (e) => {
-          const payload = e.payload;
-          setFoundryProgress(payload);
-          if (payload.phase === 'finished' || payload.phase === 'failed') {
-            if (foundryRefreshTimer.current) window.clearTimeout(foundryRefreshTimer.current);
-            foundryRefreshTimer.current = window.setTimeout(() => {
-              void refreshFoundryStatus();
-              void refreshFoundryCatalog();
-            }, 200);
-          }
-        },
-      );
+      const off = await listenModelProgress('foundry-local-asr-prepare-progress', (payload) => {
+        if (cancelled) return;
+        setFoundryProgress(payload);
+        if (payload.phase === 'finished' || payload.phase === 'failed') {
+          if (foundryRefreshTimer.current) window.clearTimeout(foundryRefreshTimer.current);
+          foundryRefreshTimer.current = window.setTimeout(() => {
+            void refreshFoundryStatus();
+            void refreshFoundryCatalog();
+          }, 200);
+        }
+      });
       if (cancelled) {
         off();
       } else {
@@ -690,9 +686,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const off = await listen<SherpaPrepareProgress>('sherpa-onnx-asr-prepare-progress', (e) => {
-        const payload = e.payload;
+      const off = await listenModelProgress('sherpa-onnx-asr-prepare-progress', (payload) => {
+        if (cancelled) return;
         setSherpaProgress(payload);
         if (payload.phase === 'finished' || payload.phase === 'failed') {
           if (sherpaRefreshTimer.current) window.clearTimeout(sherpaRefreshTimer.current);
@@ -721,33 +716,29 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const off = await listen<LocalAsrDownloadProgress>(
-        'sherpa-onnx-asr-download-progress',
-        (e) => {
-          const payload = e.payload;
-          setSherpaDownloadProgress((prev) => ({
-            ...prev,
-            [payload.modelId]: payload,
-          }));
-          if (
-            payload.phase === 'finished' ||
-            payload.phase === 'cancelled' ||
-            payload.phase === 'failed'
-          ) {
-            setSherpaBusy((current) => (current === 'download' ? null : current));
-            setSherpaDownloadCancelRequested(false);
-            if (sherpaDownloadRefreshTimer.current) {
-              window.clearTimeout(sherpaDownloadRefreshTimer.current);
-            }
-            sherpaDownloadRefreshTimer.current = window.setTimeout(() => {
-              void refreshSherpaStatus();
-              void refreshSherpaCatalog();
-              void refreshSherpaModelDir(payload.modelId);
-            }, 200);
+      const off = await listenModelProgress('sherpa-onnx-asr-download-progress', (payload) => {
+        if (cancelled) return;
+        setSherpaDownloadProgress((prev) => ({
+          ...prev,
+          [payload.modelId]: payload,
+        }));
+        if (
+          payload.phase === 'finished' ||
+          payload.phase === 'cancelled' ||
+          payload.phase === 'failed'
+        ) {
+          setSherpaBusy((current) => (current === 'download' ? null : current));
+          setSherpaDownloadCancelRequested(false);
+          if (sherpaDownloadRefreshTimer.current) {
+            window.clearTimeout(sherpaDownloadRefreshTimer.current);
           }
-        },
-      );
+          sherpaDownloadRefreshTimer.current = window.setTimeout(() => {
+            void refreshSherpaStatus();
+            void refreshSherpaCatalog();
+            void refreshSherpaModelDir(payload.modelId);
+          }, 200);
+        }
+      });
       if (cancelled) {
         off();
       } else {
