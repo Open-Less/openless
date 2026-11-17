@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
-import { Tooltip } from '../../components/Tooltip';
 import { detectOS } from '../../components/WindowChrome';
 import { ExperimentalAsrSection, type ExperimentalAsrController } from './ExperimentalAsrSection';
 import { RecordingInputSection } from './RecordingInputSection';
@@ -46,7 +45,7 @@ import { emitSaved } from '../../lib/savedEvent';
 import { SettingRow, Toggle, ExperimentalSectionTitle, inputStyle } from './shared';
 import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
-import { useContentMotion, useSelectionMotion } from '../../lib/motion';
+import { useContentMotion } from '../../lib/motion';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import {
   availableServiceViews,
@@ -209,6 +208,34 @@ export function AppearanceTab() {
   );
 }
 
+function UnavailableServiceView({
+  label,
+  hint,
+  retired = false,
+}: {
+  label: string;
+  hint: string;
+  retired?: boolean;
+}) {
+  return (
+    <span className="ol-service-view-slot">
+      <button
+        type="button"
+        disabled
+        data-retired-local-models={retired || undefined}
+        aria-label={`${label}。${hint}`}
+      >
+        <span className="ol-service-view-label">
+          <span>{label}</span>
+        </span>
+      </button>
+      <span className="ol-service-unavailable" aria-hidden>
+        {hint}
+      </span>
+    </span>
+  );
+}
+
 // AI services & models: organizes channels, local models, and network settings by current pipeline and platform capabilities.
 export function ServicesTab({
   asrNavigation = 0,
@@ -243,14 +270,6 @@ export function ServicesTab({
     : multimodal
       ? 'multimodal'
       : 'traditional';
-  const navigationRef = useRef<HTMLDivElement>(null);
-  const navigationIndicatorRef = useRef<HTMLSpanElement>(null);
-  useSelectionMotion(
-    navigationRef,
-    navigationIndicatorRef,
-    `${requestedView}:${views.length}`,
-    true,
-  );
   const pipelineChangeEpoch = useRef(0);
   const setPipelineMode = (mode: PipelineMode) => {
     const epoch = ++pipelineChangeEpoch.current;
@@ -329,37 +348,20 @@ export function ServicesTab({
         </div>
         {!suiteMode && (
           <div
-            ref={navigationRef}
             role="group"
             aria-label={t('modal.serviceViews.label')}
             className="ol-service-views"
             style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
           >
-            <span ref={navigationIndicatorRef} aria-hidden className="ol-service-view-indicator" />
             {views.map((id) => {
               if (id === 'models' && detectOS() === 'mac') {
                 return (
-                  <Tooltip
+                  <UnavailableServiceView
                     key={id}
-                    content={t('experimentalAsr.retiredHint')}
-                    placement="bottom"
-                    wrap
-                    focusable
-                    trigger={<span />}
-                  >
-                    <button
-                      type="button"
-                      disabled
-                      data-retired-local-models
-                      aria-label={t('modal.serviceViews.models')}
-                      style={{ pointerEvents: 'none' }}
-                    >
-                      <span>{t('modal.serviceViews.models')}</span>
-                      <span className="ol-service-inactive-tag">
-                        {t('experimentalAsr.retiredLabel')}
-                      </span>
-                    </button>
-                  </Tooltip>
+                    label={t('modal.serviceViews.models')}
+                    hint={t('modal.serviceViews.unavailable')}
+                    retired
+                  />
                 );
               }
               const inactive = isServiceViewInactive(
@@ -376,48 +378,36 @@ export function ServicesTab({
                     ? requiredConfigured.asr
                     : false;
               const label = t(`modal.serviceViews.${id}`);
-              const inactiveLabel = t('modal.serviceViews.inactive');
+              if (inactive) {
+                return (
+                  <UnavailableServiceView
+                    key={id}
+                    label={label}
+                    hint={t('modal.serviceViews.unavailable')}
+                  />
+                );
+              }
               return (
                 <button
                   key={id}
                   type="button"
-                  disabled={inactive}
                   aria-pressed={requestedView === id}
                   onClick={() => setView(id)}
                   aria-label={
-                    inactive
-                      ? `${label}。${inactiveLabel}`
-                      : required
-                        ? `${label}。${t(
-                            configured
-                              ? 'modal.serviceViews.statusConfigured'
-                              : 'modal.serviceViews.statusMissing',
-                          )}`
-                        : label
+                    required && !configured
+                      ? `${label}。${t('modal.serviceViews.statusMissing')}`
+                      : label
                   }
                   title={
-                    inactive
-                      ? inactiveLabel
-                      : required
-                        ? t(
-                            configured
-                              ? 'modal.serviceViews.statusConfigured'
-                              : 'modal.serviceViews.statusMissing',
-                          )
-                        : undefined
+                    required && !configured ? t('modal.serviceViews.statusMissing') : undefined
                   }
                 >
                   <span className="ol-service-view-label">
-                    {required && (
-                      <span
-                        aria-hidden
-                        className="ol-service-status-dot"
-                        data-state={configured ? 'ok' : 'missing'}
-                      />
-                    )}
                     <span>{label}</span>
                   </span>
-                  {inactive && <span className="ol-service-inactive-tag">{inactiveLabel}</span>}
+                  {required && !configured && (
+                    <span aria-hidden className="ol-service-status-dot" data-state="missing" />
+                  )}
                 </button>
               );
             })}

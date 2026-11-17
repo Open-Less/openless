@@ -25,7 +25,11 @@ export function readFontScale(): FontScaleId {
 }
 
 export function applyFontScale(id: FontScaleId): void {
-  const scale = FONT_SCALE_VALUES[id];
+  // The browser preview must stay at zoom 1. Cursor's element overlay uses layout
+  // coordinates, and CSS zoom paints the page somewhere else, so the highlight
+  // misses the control. The native window still uses the saved scale.
+  const scale =
+    document.documentElement.dataset.olBrowserFrame === 'main' ? 1 : FONT_SCALE_VALUES[id];
   // CSS zoom isn't in the W3C standard but WebKit/Blink both support it; Tauri desktop runs
   // Wry/WebKit, so it's fine.
   (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(scale);

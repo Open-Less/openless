@@ -144,13 +144,6 @@ export function Corrections() {
       <PageHeader
         title={t('vocab.corrections.title')}
         desc={t('vocab.corrections.tip')}
-        right={
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
-              {t('common.refresh')}
-            </Btn>
-          </div>
-        }
       />
       <SavedToast
         saveState={refreshNotice.state}

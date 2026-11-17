@@ -44,9 +44,6 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? React.useLayoutEffect
 
 const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 const SPRING = { type: 'spring', bounce: 0.2, duration: 0.62 } as const;
-const HEADER_SPRING = { ...SPRING, bounce: 0.45 } as const;
-const ROW_SPRING = { ...SPRING, bounce: 0.26, delay: 0.08 } as const;
-const ROW_OFFSET = 16;
 const CELL_FADE = { duration: 0.2, ease: EASE_OUT } as const;
 const TOOLTIP_FADE = { duration: 0.14, ease: EASE_OUT } as const;
 const TOOLTIP_EDGE = 8;
@@ -355,20 +352,50 @@ const GitHubActivity = ({
     if (openProp === undefined) setOpenState(!open);
     onOpenChange?.(!open);
   };
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const headerRef = React.useRef<HTMLDivElement>(null);
+  const panelMotion = React.useRef<Animation | null>(null);
+  const panelReady = React.useRef(false);
+
+  // Height only, in pixels, anchored to the bottom. Framer layout animation
+  // measures this panel every frame; in the system WebView that stalls for
+  // seconds and then snaps. The list stays mounted so closing clips it
+  // instead of deleting it and jumping.
+  React.useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const header = headerRef.current;
+    const card = panel?.parentElement;
+    if (!panel || !header || !card) return;
+    const closed = header.offsetHeight;
+    const opened = Math.max(closed, card.clientHeight - 24);
+    const target = open ? opened : closed;
+    const from = panel.getBoundingClientRect().height || closed;
+    for (const existing of panel.getAnimations()) existing.cancel();
+    panelMotion.current = null;
+    panel.style.height = `${from}px`;
+    if (!panelReady.current || reduceMotion === true || Math.abs(from - target) < 0.5) {
+      panelReady.current = true;
+      panel.style.height = `${target}px`;
+      return;
+    }
+    const animation = panel.animate([{ height: `${from}px` }, { height: `${target}px` }], {
+      duration: 280,
+      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      fill: 'forwards',
+    });
+    panelMotion.current = animation;
+    animation.onfinish = () => {
+      if (panelMotion.current !== animation) return;
+      panel.style.height = `${target}px`;
+      animation.cancel();
+      panelMotion.current = null;
+    };
+  }, [open, reduceMotion, appsProp.length]);
 
   const contributions = contributionsProp;
   const apps = appsProp;
   const scale = React.useMemo(() => toScale(accent), [accent]);
   const transition = reduceMotion ? { duration: 0 } : SPRING;
-  const headerTransition = reduceMotion ? { duration: 0 } : HEADER_SPRING;
-  const rowTransition = reduceMotion ? { duration: 0 } : ROW_SPRING;
-
-  const kick = reduceMotion ? {} : { x: ROW_OFFSET, y: ROW_OFFSET };
-  const listMotion = {
-    initial: { opacity: 0, ...kick },
-    animate: { opacity: 1, x: 0, y: 0 },
-    exit: { opacity: 0, ...kick },
-  };
 
   const total = React.useMemo(
     () => contributions.reduce((sum, day) => sum + day.count, 0),
@@ -388,7 +415,7 @@ const GitHubActivity = ({
       className={['ol-gha', apps.length > 0 && 'ol-gha--with-panel', className]
         .filter(Boolean)
         .join(' ')}
-      style={{ width: '100%', minWidth: width, ...style }}
+      style={{ width, flexShrink: 0, ...style }}
     >
       <p className="ol-gha-heading">{headingText}</p>
 
@@ -405,19 +432,14 @@ const GitHubActivity = ({
       />
 
       {apps.length > 0 && (
-        <motion.div
-          layout
+        <div
+          ref={panelRef}
           id={`${uid}-panel`}
           data-slot="github-activity-panel"
           data-state={open ? 'open' : 'closed'}
           className="ol-gha-panel"
-          transition={transition}
         >
-          <motion.div
-            layout="position"
-            transition={headerTransition}
-            className="ol-gha-panel-header"
-          >
+          <div ref={headerRef} className="ol-gha-panel-header">
             <span className="ol-gha-panel-label">{label}</span>
 
             <div className="ol-gha-panel-actions">
@@ -440,26 +462,16 @@ const GitHubActivity = ({
                 <Chevron open={open} transition={transition} />
               </button>
             </div>
-          </motion.div>
+          </div>
 
-          <AnimatePresence initial={false} mode="popLayout">
-            {open && (
-              <motion.ul
-                key="list"
-                layout="position"
-                {...listMotion}
-                transition={rowTransition}
-                className="ol-gha-app-list"
-              >
-                {apps.map((app) => (
-                  <li key={app.name}>
-                    <AppRow app={app} />
-                  </li>
-                ))}
-              </motion.ul>
-            )}
-          </AnimatePresence>
-        </motion.div>
+          <ul className="ol-gha-app-list" aria-hidden={open ? undefined : true}>
+            {apps.map((app) => (
+              <li key={app.name}>
+                <AppRow app={app} />
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

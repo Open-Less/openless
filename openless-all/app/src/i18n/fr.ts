@@ -701,6 +701,12 @@ export const fr: typeof zhCN = {
     llmConfigured: 'LLM actif configuré',
     llmNotConfigured: 'Non configuré',
     statusConfigured: 'Configuré',
+    statusFailed: 'Échec',
+    serviceHint: {
+      asr: 'Reconnaissance vocale : voir si elle est configurée, cliquer pour ouvrir les réglages',
+      llm: 'Traitement du texte : voir si elle est configurée, cliquer pour ouvrir les réglages',
+      omni: 'Voix multimodale : voir si elle est configurée, cliquer pour ouvrir les réglages',
+    },
     statusNotConfigured: 'Non configuré',
     statusUnknown: 'Indisponible',
     credentialsLoadError: 'Impossible de lire l’état des identifiants',
@@ -718,6 +724,10 @@ export const fr: typeof zhCN = {
     activityAppsLabel: 'Applications les plus dictées',
     activityAppsShow: 'Afficher les applis principales',
     activityAppsHide: 'Masquer les applis principales',
+    activityYearTitle: 'Cette année',
+    activityActiveDays: 'Jours actifs',
+    activityPeakDay: 'Jour le plus actif',
+    activityDailyAverage: 'Moyenne quotidienne',
     activityLoadError: 'Impossible de charger l’activité',
     period: {
       ariaLabel: 'Période du rapport',
@@ -2457,11 +2467,12 @@ export const fr: typeof zhCN = {
       models: 'Modèles locaux',
       connections: 'Connexions',
       inactive: 'Inutilisé dans ce mode',
+      unavailable: 'Indisponible',
       inactiveDetail:
         'Ces réglages sont conservés, mais le mode de reconnaissance actuel ne les utilise pas.',
       statusConfigured:
-        'Point vert : au moins un service est activé. Les requêtes utilisent le premier service activé.',
-      statusMissing: 'Point rouge : aucun service n’est activé.',
+        'Au moins un service est activé. Les requêtes utilisent le premier service activé.',
+      statusMissing: 'Aucun service n’est activé.',
     },
     searchPlaceholder: 'Rechercher une catégorie de réglages…',
     clearSearch: 'Effacer la recherche',

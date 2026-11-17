@@ -35,14 +35,14 @@ export function NotificationCenter({ children }: { children?: ReactNode }) {
             >
               {item.state === 'saving' ? (
                 <span className="ol-loading-spinner">
-                  <Icon name="refresh" size={17} />
+                  <Icon name="refresh" size={10} />
                 </span>
               ) : item.state === 'failed' ? (
                 '!'
               ) : item.state === 'info' ? (
                 'i'
               ) : item.state === 'deleted' ? (
-                <Icon name="trash" size={17} />
+                <Icon name="trash" size={10} />
               ) : (
                 '✓'
               )}

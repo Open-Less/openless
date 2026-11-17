@@ -101,10 +101,10 @@ const NAV_TREE: NavNode[] = [
     key: 'tools',
     icon: 'selectionAsk',
     children: [
-      { id: 'translation' },
-      { id: 'selectionAsk' },
-      { id: 'quickNote' },
       { id: 'corrections' },
+      { id: 'selectionAsk' },
+      { id: 'translation' },
+      { id: 'quickNote' },
     ],
   },
 ];
@@ -581,7 +581,9 @@ function FloatingShellBody({
                       os === 'mac'
                         ? `${MAC_TRAFFIC_LIGHT_CLEARANCE - 6}px`
                         : 'max(8px, calc(var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)))'
-                    } var(--ol-grid-margin) ${displayTab === 'overview' ? 16 : 32}px`,
+                    } var(--ol-grid-margin) ${
+                      displayTab === 'overview' ? 'var(--ol-grid-margin)' : '32px'
+                    }`,
                 // position:relative lets the page's "saved" toast anchor at absolute
                 // top:16 right:16 to this console card's corner instead of stretching
                 // across the page header as a full-width banner.
@@ -724,23 +726,34 @@ function FloatingShellBody({
         }
         .ol-nav-btn.ol-nav-btn-active {
           color: var(--ol-ink);
+          -webkit-text-fill-color: var(--ol-ink);
           font-weight: var(--ol-font-weight-semibold);
-          background: var(--ol-choice-active-bg);
+          background-color: var(--ol-choice-active-bg);
         }
         .ol-sidebar-surface .ol-nav-btn {
           color: var(--ol-choice-idle-ink);
+          -webkit-text-fill-color: var(--ol-choice-idle-ink);
           cursor: pointer;
+          background-color: transparent;
+          box-shadow: none;
         }
+        /* Opaque-enough wash plus a 1px ink ring. A translucent background alone
+           disappears in the packaged WKWebView when clip-path: shape() runs, and
+           outline is clipped by the window. The inset ring is the selected mark. */
         .ol-sidebar-surface .ol-nav-btn-active {
           color: var(--ol-ink);
-          background: var(--ol-choice-active-bg);
+          -webkit-text-fill-color: var(--ol-ink);
+          background-color: var(--ol-choice-active-bg);
+          box-shadow: inset 0 0 0 1px var(--ol-ink);
         }
         /* No hover media query and no transition: packaged WKWebViews can report a
            conservative pointer capability and can leave hover transitions frozen at
            their starting frame, which made the sidebar look non-interactive. */
         .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
           color: var(--ol-choice-hover-ink);
-          background: var(--ol-choice-hover-bg);
+          -webkit-text-fill-color: var(--ol-choice-hover-ink);
+          background-color: var(--ol-choice-hover-bg);
+          box-shadow: inset 0 0 0 1px var(--ol-line);
         }
         .ol-sidebar-surface .ol-nav-btn:focus-visible {
           outline: 2px solid var(--ol-blue);

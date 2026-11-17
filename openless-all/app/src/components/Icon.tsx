@@ -69,6 +69,7 @@ export const ICONS: Record<string, LucideIcon> = {
   keyboard: Keyboard,
   help: CircleHelp,
   mic: Mic,
+  text: FileText,
   search: Search,
   plus: Plus,
   check: Check,

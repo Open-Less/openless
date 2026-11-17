@@ -72,7 +72,7 @@ export function Marketplace() {
 
   // Read the cache at startup: the last default view (popular + empty query) list renders instantly; a background refresh corrects it.
   const [items, setItems] = useState<MarketplaceListItem[]>(() => readMarketplaceListCache() ?? []);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => (readMarketplaceListCache()?.length ?? 0) === 0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -205,9 +205,17 @@ export function Marketplace() {
     });
   }, [myPacks, myPacksQuery]);
 
+  const skipCachedEntry = useRef((readMarketplaceListCache()?.length ?? 0) > 0);
   useEffect(() => {
+    const defaultView = sort === 'popular' && debouncedQuery.trim() === '';
+    if (skipCachedEntry.current && defaultView) {
+      skipCachedEntry.current = false;
+      setLoading(false);
+      return;
+    }
+    skipCachedEntry.current = false;
     void refresh();
-  }, [refresh]);
+  }, [refresh, sort, debouncedQuery]);
 
   useEffect(() => {
     void refreshAuthStatus();
@@ -345,6 +353,7 @@ export function Marketplace() {
       await installMarketplacePack(packId);
       setActionMsg({ kind: 'ok', text: t('marketplace.installed', { name: packName }) });
       setSelectedId((current) => (shouldCloseMarketplaceDetail(current, packId) ? null : current));
+      void refresh();
     } catch (error) {
       const errorText = errorMessage(error);
       const message = t('marketplace.errors.install', { err: errorText });
@@ -682,9 +691,6 @@ export function Marketplace() {
               </span>
               <span>{t('marketplace.myPacks.buttonLabel')}</span>
             </button>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
-              {t('common.refresh')}
-            </Btn>
           </div>
         }
       />
@@ -969,6 +975,7 @@ export function Marketplace() {
         onClose={() => {
           setSelectedId(null);
           setInstallError(null);
+          void refresh();
         }}
         render={() =>
           selectedId && (
@@ -1122,6 +1129,7 @@ export function Marketplace() {
                         onClick={() => {
                           setSelectedId(null);
                           setInstallError(null);
+                          void refresh();
                         }}
                       >
                         {installingPackId !== null ? t('common.close') : t('common.cancel')}
@@ -1436,15 +1444,6 @@ export function Marketplace() {
                   })()}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <Btn
-                    icon="refresh"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void refreshMyPacks(true)}
-                    disabled={!marketplaceSignedIn || myPacksLoading}
-                  >
-                    {t('common.refresh')}
-                  </Btn>
                   <span title={canUpload ? '' : t('marketplace.uploadDisabledHint')}>
                     <Btn
                       icon="cloud"

@@ -42,8 +42,7 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
     .locator('.ol-service-views')
     .getByRole('button', { name: '本地模型', exact: true });
   await expect(retired).toBeDisabled();
-  await retired.locator('..').hover();
-  await expect(page.getByRole('tooltip')).toHaveText('该功能已下架，请去实验性与扩展里面');
+  await expect(retired).not.toContainText('已下架');
   await experiments(page);
   const stream = page.locator('[data-experimental-model="text-stream"]');
   await expect(page.locator('[data-experimental-model]').first()).toHaveAttribute(

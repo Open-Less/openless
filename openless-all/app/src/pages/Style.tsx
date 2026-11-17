@@ -274,10 +274,19 @@ export function Style() {
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen('prefs:changed', () => {
+        const stopPrefs = await listen('prefs:changed', () => {
           void loadPacks(selectedIdRef.current);
         });
-        if (cancelled && unlisten) unlisten();
+        const stopPacks = await listen<{ kind?: { type?: string } }>('backend:event', (event) => {
+          if (event.payload?.kind?.type === 'style_packs_changed') {
+            void loadPacks(selectedIdRef.current);
+          }
+        });
+        unlisten = () => {
+          stopPrefs();
+          stopPacks();
+        };
+        if (cancelled) unlisten();
       } catch {
         // Browser dev mock does not have the event bridge.
       }
@@ -809,14 +818,6 @@ export function Style() {
           >
             {/* The marketplace entry moved to the sidebar's "Style" expand group (user decision);
               no button here anymore. */}
-            <Btn
-              variant="ghost"
-              icon="refresh"
-              onClick={() => void loadPacks(selectedId, true)}
-              disabled={busy === 'loading'}
-            >
-              {t('common.refresh')}
-            </Btn>
             <Btn
               variant="blue"
               icon="archive"

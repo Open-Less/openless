@@ -121,13 +121,15 @@ button:disabled {
 }
 .ol-settings-sections > .ol-card {
   border: 0 !important;
-  border-radius: var(--ol-radius);
+  border-radius: 0 !important;
   box-shadow: none !important;
+  clip-path: none !important;
+  corner-shape: unset !important;
   background: transparent !important;
   padding: 0 0 20px !important;
 }
 .ol-settings-sections > .ol-card + .ol-card {
-  border-top: 1px solid var(--ol-line) !important;
+  border: 0 !important;
   padding-top: 20px !important;
 }
 .ol-setting-row {
@@ -550,7 +552,8 @@ button:disabled {
   left: 50%;
   transform: translateX(-50%);
   z-index: 99999;
-  width: min(380px, calc(100vw - 28px));
+  width: max-content;
+  max-width: calc(100vw - 28px);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -571,10 +574,12 @@ button:disabled {
 .ol-notification-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 5px;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 20px;
+  border-radius: 12px;
   /* Same raised surface as the overview / usage cards; only the shadow makes the
      transient toast float above them. */
   background: var(--ol-surface-raised);
@@ -585,6 +590,7 @@ button:disabled {
 }
 .ol-notification-card--progress {
   align-items: flex-start;
+  width: min(240px, calc(100vw - 28px));
 }
 .ol-notification-body {
   display: flex;
@@ -620,11 +626,11 @@ button:disabled {
 .ol-notification-icon {
   display: grid;
   place-items: center;
-  flex: 0 0 36px;
-  height: 36px;
-  border-radius: 11px;
+  flex: 0 0 16px;
+  height: 16px;
+  border-radius: 5px;
   color: white;
-  font-size: 19px;
+  font-size: 11px;
   font-weight: 700;
 }
 .ol-notification-icon--saved {
@@ -648,8 +654,9 @@ button:disabled {
 .ol-notification-message {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: calc(12px * var(--ol-browser-frame-scale, 1));
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 .ol-notification-action {
   color: var(--ol-blue);
@@ -658,8 +665,8 @@ button:disabled {
 .ol-notification-close {
   display: grid;
   place-items: center;
-  flex: 0 0 28px;
-  height: 28px;
+  flex: 0 0 16px;
+  height: 16px;
   color: var(--ol-ink-3);
 }
 .ol-download-card {

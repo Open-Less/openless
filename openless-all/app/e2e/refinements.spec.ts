@@ -221,7 +221,7 @@ test('every main destination and settings category stays readable on desktop and
     await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '工具', exact: true }).click();
-  for (const name of ['翻译', '随便问', '速记', '纠正规则']) {
+  for (const name of ['纠正规则', '随便问', '翻译', '速记']) {
     await page.getByRole('button', { name, exact: true }).click();
     await settleNavigation(page);
     await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();

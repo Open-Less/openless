@@ -1,6 +1,6 @@
 // Overview.tsx — real metrics, derived from listHistory + getCredentials.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import {
@@ -33,8 +33,13 @@ import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } fro
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Segmented } from '../components/ui/Segmented';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
-import { ASR_LABELS } from './settings/shared';
 import { loadOverviewServiceDetails, type OverviewServiceDetails } from '../lib/overviewServices';
+import {
+  overviewFollowsBackendEvent,
+  readOverviewStatusCache,
+  rememberOverviewStatus,
+} from '../lib/overviewStatusCache';
+import { avoidShortLastLine } from '../lib/popupLine';
 import { isHarmonyHost } from '../lib/harmonyBridge';
 import './overview.css';
 import { HarmonyDictation } from '../components/HarmonyDictation';
@@ -63,52 +68,19 @@ interface OverviewProps {
   onOpenSettings?: (section: OverviewSettingsSection, serviceView?: ProviderKind) => void;
 }
 
-// id → i18n nameKey; this keeps display labels only, provider behavior comes from the Core descriptor.
-// (bailian-qwen3-realtime / apple-speech were once missing and fell back to showing the bare id).
-const ASR_NAME_KEY_BY_ID: Record<string, string> = Object.fromEntries(
-  ASR_LABELS.map((p) => [p.id, p.nameKey]),
-);
-
-const LLM_NAME_KEY_BY_ID: Record<string, string> = {
-  ark: 'ark',
-  deepseek: 'deepseek',
-  siliconflow: 'siliconflow',
-  atlascloud: 'atlascloud',
-  openai: 'openai',
-  gemini: 'gemini',
-  codex_oauth: 'codexOAuth',
-  mimo: 'mimo',
-  cometapi: 'cometapi',
-  openrouterFree: 'openrouterFree',
-  requesty: 'requesty',
-  'api-route': 'apiRoute',
-  orcarouter: 'orcarouter',
-  alibabaCoding: 'alibabaCoding',
-  codingPlanX: 'codingPlanX',
-  minimax: 'minimax',
-  stepfun: 'stepfun',
-  opencode: 'opencode',
-  tencentTokenHub: 'tencentTokenHub',
-  custom: 'custom',
-};
-
-const OMNI_NAME_KEY_BY_ID: Record<string, string> = {
-  openai: 'omniOpenai',
-  gemini: 'omniGemini',
-  'dashscope-omni': 'omniDashscope',
-  custom: 'custom',
-};
-
 export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
   const mobile = useMobileLayout();
   const modeLabel = useModeLabels();
+  const cachedStatus = useRef(readOverviewStatusCache());
   const [history, setHistory] = useState<DictationSession[]>([]);
   const [historyError, setHistoryError] = useState(false);
   const [credsError, setCredsError] = useState(false);
-  const [credsLoading, setCredsLoading] = useState(true);
-  const [creds, setCreds] = useState<CredentialsStatus | null>(null);
+  const [credsLoading, setCredsLoading] = useState(!cachedStatus.current?.creds);
+  const [creds, setCreds] = useState<CredentialsStatus | null>(
+    cachedStatus.current?.creds ?? null,
+  );
   const credsRef = useRef(creds);
   credsRef.current = creds;
   const { prefs, capability } = useHotkeySettings();
@@ -152,7 +124,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   // The heatmap doesn't render on mobile (issue #861: fixed horizontal width overflows narrow screens and slows
   // the WebView), but the period metric cards do render, so the IPC can no longer skip on mobile — otherwise
   // mobile period cards would stay empty forever.
-  const [activity, setActivity] = useState<ActivityDay[] | null>(null);
+  const [activity, setActivity] = useState<ActivityDay[] | null>(
+    cachedStatus.current?.activity ?? null,
+  );
   const [activityError, setActivityError] = useState(false);
   const refreshActivity = useCallback((): Promise<RefreshOutcome> => {
     const requestSeq = activityRequestSeq.current + 1;
@@ -162,6 +136,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       .then((stats) => {
         if (requestSeq !== activityRequestSeq.current) return 'stale';
         setActivity(stats);
+        rememberOverviewStatus({ activity: stats });
         return 'ok';
       })
       .catch((error) => {
@@ -194,6 +169,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         setCreds(status);
         setServiceDetails(details);
         setCredsError(false);
+        rememberOverviewStatus({ creds: status });
         return 'ok';
       })
       .catch((error) => {
@@ -288,6 +264,30 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     return () => window.removeEventListener('ol-channels-changed', refreshCredentials);
   }, [refreshCredentials]);
 
+  // Subscribe only while this page is mounted, which is while the main window is open
+  // on Overview. Closing the window unmounts the page and drops the listener.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/event')
+      .then(async ({ listen }) => {
+        const stop = await listen<{ kind?: { type?: string } }>('backend:event', (event) => {
+          if (!overviewFollowsBackendEvent(event.payload?.kind?.type)) return;
+          void refreshHistory();
+          void refreshActivity();
+        });
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Browser preview has no event bridge; the mount read is the refresh.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refreshActivity, refreshHistory]);
+
   const metrics = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -320,18 +320,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hotkeyAvailable: prefs && capability ? capability.adapter !== 'unavailable' : null,
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
-  const providerName = (provider: (typeof setup.providers)[number]) => {
-    const nameKey =
-      provider.id &&
-      (provider.kind === 'asr'
-        ? ASR_NAME_KEY_BY_ID
-        : provider.kind === 'omni'
-          ? OMNI_NAME_KEY_BY_ID
-          : LLM_NAME_KEY_BY_ID)[provider.id];
-    return nameKey
-      ? t(`settings.providers.presets.${nameKey}`)
-      : provider.id || t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
-  };
   const openSettings = (section: OverviewSettingsSection, serviceView?: ProviderKind) =>
     onOpenSettings?.(section, serviceView);
 
@@ -350,16 +338,28 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         minWidth: 0,
         overflowX: 'hidden',
         overflowY: mobile ? 'visible' : 'hidden',
-        gap: 'var(--ol-grid-gutter)',
+        gap: 8,
       }}
     >
       <PageHeader
         compact
         title={t('overview.title')}
         right={
-          <Btn size="sm" icon="refresh" onClick={() => refreshAll(true)}>
-            {t('overview.refresh')}
-          </Btn>
+          setup.providers.length > 0 ? (
+            <div className="ol-overview-services">
+              {setup.providers.map((provider) => (
+                <ServiceChip
+                  key={provider.kind}
+                  kind={provider.kind}
+                  failed={credsError || serviceDetails[provider.kind]?.error === true}
+                  configured={provider.configured}
+                  onConfigure={
+                    onOpenSettings ? () => openSettings('services', provider.kind) : undefined
+                  }
+                />
+              ))}
+            </div>
+          ) : undefined
         }
       />
       <SavedToast
@@ -372,56 +372,15 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
 
       {isHarmonyHost && <HarmonyDictation onComplete={refreshAll} />}
 
-      <div
-        className="ol-grid-12"
-        data-columns={mobile || setup.providers.length < 2 ? '1' : undefined}
-      >
-        {setup.providers.map((provider) => (
-          <div
-            key={provider.kind}
-            className={
-              setup.providers.length >= 3
-                ? 'ol-col-4'
-                : setup.providers.length === 2
-                  ? 'ol-col-6'
-                  : 'ol-col-12'
-            }
-          >
-            <ProviderCard
-              kind={provider.kind}
-              name={providerName(provider)}
-              providerId={provider.id}
-              details={serviceDetails[provider.kind]}
-              status={provider.configured ? 'configured' : 'notConfigured'}
-              onConfigure={
-                onOpenSettings ? () => openSettings('services', provider.kind) : undefined
-              }
-            />
+      {setup.providers.length === 0 && (
+        <Card padding={16}>
+          <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
+            {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
           </div>
-        ))}
-        {setup.providers.length === 0 && (
-          <Card className="ol-col-12" padding={16}>
-            <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
-              {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
-            </div>
-          </Card>
-        )}
-      </div>
+        </Card>
+      )}
 
-      {/* Usage records: title + four metric cards as one group. */}
-      <div className="ol-grid-12">
-        <h2
-          className="ol-col-12"
-          style={{
-            fontSize: 13,
-            fontWeight: 'var(--ol-font-weight-semibold)',
-            color: 'var(--ol-ink-2)',
-            margin: 0,
-          }}
-        >
-          {t('overview.statsTitle')}
-        </h2>
-        <div className="ol-grid-12 ol-grid-stats ol-col-12" data-columns={mobile ? '2' : undefined}>
+      <div className="ol-grid-12 ol-grid-stats" data-columns={mobile ? '2' : undefined}>
           <Metric
             icon="hash"
             label={t('overview.metricChars')}
@@ -456,7 +415,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
             value={historyError ? '—' : formatLocaleNumber(history.length, locale)}
             trend={historyError ? t('overview.historyLoadError') : t('overview.metricTotalTrend')}
           />
-        </div>
       </div>
 
       {/* Bottom row fills the dashboard. Five and seven columns keep the old 1:1.4 split. */}
@@ -522,7 +480,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
               {t('overview.recentAll')}
             </Btn>
           </div>
-          <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <div className="ol-overview-recent" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
             {historyError ? (
               <div
                 style={{
@@ -564,117 +522,114 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         </Card>
       </div>
 
-      {/* The yearly card is the one block that needs its natural width (11px cells ≈ 771px),
-          so it spans the whole grid instead of being squeezed into the 5-column stack. */}
+      {/* The yearly matrix keeps its natural width (11px cells ≈ 771px). The year
+          summary stays beside it. A narrow window scrolls the row instead of
+          centering the matrix alone. */}
       {!mobile &&
         prefs?.showOverviewActivityHeatmap !== false &&
         activity &&
         activity.length > 0 && (
-          <div className="ol-grid-12 ol-overview-heatmap" style={{ flex: '0 0 auto' }}>
-            <ActivityHeatmapCard className="ol-col-12" activity={activity} />
+          <div className="ol-overview-heatmap" style={{ flex: '0 0 auto' }}>
+            <div className="ol-overview-heatmap-row">
+              <ActivityHeatmapCard activity={activity} />
+              <YearSummary activity={activity} />
+            </div>
           </div>
         )}
     </div>
   );
 }
 
-interface ProviderCardProps {
+function ServiceChip({
+  kind,
+  configured,
+  failed,
+  onConfigure,
+}: {
   kind: 'asr' | 'llm' | 'omni';
-  name: string;
-  providerId: string | null;
-  details?: OverviewServiceDetails;
-  status: 'configured' | 'notConfigured';
+  configured: boolean;
+  failed: boolean;
   onConfigure?: () => void;
-}
-
-function ProviderCard({ kind, name, providerId, details, status, onConfigure }: ProviderCardProps) {
+}) {
   const { t } = useTranslation();
-  const modelLabel = details?.error
-    ? t('settings.providers.readFailed')
-    : details?.model
-      ? details.model
-      : null;
-  const detailLabel = [name, providerId, modelLabel].filter(Boolean).join(' · ');
+  const status = failed ? 'failed' : configured ? 'configured' : 'missing';
+  const statusLabel = t(
+    status === 'failed'
+      ? 'overview.statusFailed'
+      : status === 'configured'
+        ? 'overview.statusConfigured'
+        : 'overview.statusNotConfigured',
+  );
+  const kindLabel = t(`overview.${kind}Kind`);
+  const hintRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (hintRef.current) avoidShortLastLine(hintRef.current);
+  }, [kindLabel]);
   return (
-    <Card
-      padding={10}
-      style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, minHeight: 0 }}
-    >
-      <div
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 'var(--ol-control-radius)',
-          flexShrink: 0,
-          background: 'var(--ol-blue-soft)',
-          color: 'var(--ol-blue)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
+    <div className="ol-overview-service" data-status={status}>
+      <button
+        type="button"
+        className="ol-overview-service-icon"
+        disabled={!onConfigure}
+        aria-label={`${kindLabel} ${statusLabel}`}
+        onClick={onConfigure}
       >
-        <Icon name={kind === 'asr' ? 'mic' : 'sparkle'} size={16} />
-      </div>
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}
-      >
-        <span
-          style={{
-            flexShrink: 0,
-            fontSize: 12,
-            color: 'var(--ol-ink-4)',
-            fontWeight: 'var(--ol-font-weight-semibold)',
-          }}
-        >
-          {t(`overview.${kind}Kind`)}
+        <Icon name={kind === 'asr' ? 'mic' : kind === 'llm' ? 'text' : 'sparkle'} size={16} />
+        <span className="ol-overview-service-badge" />
+        <span ref={hintRef} className="ol-overview-service-hint" role="tooltip">
+          {t(`overview.serviceHint.${kind}`)}
         </span>
-        {status === 'configured' ? (
-          <Pill tone="ok" size="sm">
-            <span
-              style={{
-                width: 5,
-                height: 5,
-                borderRadius: 'var(--ol-radius)',
-                background: 'var(--ol-ok)',
-              }}
-            />
-            {t('overview.statusConfigured')}
-          </Pill>
-        ) : (
-          <Pill tone="outline" size="sm">
-            {t('overview.statusNotConfigured')}
-          </Pill>
-        )}
-        <span
-          style={{
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontSize: 14,
-            fontWeight: 'var(--ol-font-weight-semibold)',
-            color: 'var(--ol-ink)',
-          }}
-          title={detailLabel}
-        >
-          {detailLabel}
-        </span>
-      </div>
-      <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
-        {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
-      </Btn>
-    </Card>
+      </button>
+    </div>
   );
 }
 
 /** Yearly activity card: Rare UI's GitHub Activity component fed with local dictation counts.
  *  Month/weekday/date labels and tooltips are generated with Intl in the current language. */
+function daysInYear(year: number): number {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 366 : 365;
+}
+
+function YearSummary({ activity }: { activity: ActivityDay[] }) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language || 'en';
+  const year = new Date().getFullYear();
+  const summary = useMemo(() => {
+    const prefix = `${year}-`;
+    const days = activity.filter((day) => day.date.startsWith(prefix));
+    const total = days.reduce((sum, day) => sum + day.count, 0);
+    const active = days.reduce((sum, day) => sum + (day.count > 0 ? 1 : 0), 0);
+    const peak = days.reduce((top, day) => Math.max(top, day.count), 0);
+    const average = total / daysInYear(year);
+    return { active, peak, average };
+  }, [activity, year]);
+  return (
+    <aside className="ol-overview-year" aria-label={t('overview.activityYearTitle')}>
+      <p className="ol-overview-year-title">{t('overview.activityYearTitle')}</p>
+      <div className="ol-overview-year-stats">
+        <div className="ol-overview-year-stat">
+          <span className="ol-overview-year-value">
+            {formatLocaleNumber(summary.active, locale)}
+          </span>
+          <span className="ol-overview-year-label">{t('overview.activityActiveDays')}</span>
+        </div>
+        <div className="ol-overview-year-stat">
+          <span className="ol-overview-year-value">
+            {formatLocaleNumber(summary.peak, locale)}
+          </span>
+          <span className="ol-overview-year-label">{t('overview.activityPeakDay')}</span>
+        </div>
+        <div className="ol-overview-year-stat">
+          <span className="ol-overview-year-value">
+            {formatLocaleDecimal(summary.average, locale)}
+          </span>
+          <span className="ol-overview-year-label">{t('overview.activityDailyAverage')}</span>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 function ActivityHeatmapCard({
   activity,
   className,
@@ -1131,7 +1086,8 @@ function RecentRow({
       </div>
       <div
         style={{
-          flex: 1,
+          flex: '1 1 0%',
+          minWidth: 0,
           fontSize: 14,
           color: 'var(--ol-ink-2)',
           whiteSpace: 'pre-line',

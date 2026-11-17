@@ -308,17 +308,13 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
         verticalOverflow: scroll.scrollHeight - scroll.clientHeight,
         horizontalOverflow: navigation.scrollWidth - navigation.clientWidth,
         entries: navigation.querySelectorAll('button').length,
-        badgesBelowLabels: [...navigation.querySelectorAll('.ol-service-inactive-tag')].every(
-          (badge) =>
-            badge.getBoundingClientRect().top >=
-            badge.previousElementSibling!.getBoundingClientRect().bottom,
-        ),
+        inactiveTags: navigation.querySelectorAll('.ol-service-inactive-tag').length,
       };
     });
     expect(bounds.verticalOverflow).toBeLessThanOrEqual(1);
     expect(bounds.horizontalOverflow).toBeLessThanOrEqual(1);
     expect(bounds.entries).toBe(5);
-    expect(bounds.badgesBelowLabels).toBe(true);
+    expect(bounds.inactiveTags).toBe(0);
     await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
       ratio: 1,
     });
@@ -400,7 +396,7 @@ test('selection highlights move and settle correctly after a rapid mode return',
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   await expect(page.locator('body')).toHaveAttribute('data-selection-moved', 'true');
   await dialog.getByRole('button', { name: '传统模式', exact: true }).click();
-  for (const selector of ['.ol-service-pipeline-indicator', '.ol-service-view-indicator']) {
+  for (const selector of ['.ol-service-pipeline-indicator']) {
     const indicator = dialog.locator(selector);
     await expect(indicator).toHaveAttribute('data-test-selection-from', /.+/);
     expect(await indicator.getAttribute('data-test-selection-from')).toBe(

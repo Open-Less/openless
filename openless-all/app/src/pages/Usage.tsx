@@ -83,12 +83,23 @@ export function Usage() {
   useEffect(() => {
     mounted.current = true;
     void refresh();
-    const onFocus = () => void refresh();
-    window.addEventListener('focus', onFocus);
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/event')
+      .then(async ({ listen }) => {
+        const stop = await listen<{ kind?: { type?: string } }>('backend:event', (event) => {
+          const type = event.payload?.kind?.type;
+          if (type === 'history_changed') void refresh();
+        });
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
     return () => {
+      cancelled = true;
+      unlisten?.();
       mounted.current = false;
       request.current += 1;
-      window.removeEventListener('focus', onFocus);
     };
   }, [refresh]);
   const rows = useMemo(() => {
@@ -248,49 +259,19 @@ export function Usage() {
           '按服务与用途查看本机保留的使用记录。',
           'Review retained local records by service and purpose.',
         )}
-        right={
-          <Btn icon="refresh" disabled={clearing} onClick={() => void refresh()}>
-            {text('刷新', 'Refresh')}
-          </Btn>
-        }
       />
-      <nav
-        aria-label={text('用量页面', 'Usage pages')}
-        style={{
-          display: 'flex',
-          gap: 8,
-          margin: '0 0 20px',
-          borderBottom: '1px solid var(--ol-line)',
-        }}
-      >
-        {(
-          [
-            ['overview', text('概览', 'Overview')],
-            ['services', text('服务与用途', 'Services and purposes')],
-            ['history', text('记录', 'History')],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={view === id ? 'ol-usage-tab is-active' : 'ol-usage-tab'}
-            aria-current={view === id ? 'page' : undefined}
-            onClick={() => setView(id)}
-            style={{
-              border: 0,
-              // Keep the row height but do not paint an active underline. Weight, ink
-              // and the selection wash mark the open tab.
-              borderBottom: '2px solid transparent',
-              color: view === id ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-              padding: '10px 12px',
-              font: 'inherit',
-              fontWeight: view === id ? 600 : 400,
-              cursor: 'pointer',
-            }}
-          >
-            {label}
-          </button>
-        ))}
+      <nav aria-label={text('用量页面', 'Usage pages')} style={{ margin: '0 0 20px' }}>
+        <Segmented
+          className="ol-usage-tabs"
+          label={text('用量页面', 'Usage pages')}
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'overview', label: text('概览', 'Overview') },
+            { value: 'services', label: text('服务与用途', 'Services and purposes') },
+            { value: 'history', label: text('记录', 'History') },
+          ]}
+        />
       </nav>
       <div className="ol-usage-toolbar">
         <Segmented

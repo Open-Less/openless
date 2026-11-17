@@ -691,6 +691,12 @@ export const es: typeof zhCN = {
     llmConfigured: 'LLM activo configurado',
     llmNotConfigured: 'Sin configurar',
     statusConfigured: 'Configurado',
+    statusFailed: 'No superado',
+    serviceHint: {
+      asr: 'Reconocimiento de voz: ver si está configurado y abrir los ajustes del servicio',
+      llm: 'Procesamiento de texto: ver si está configurado y abrir los ajustes del servicio',
+      omni: 'Voz multimodal: ver si está configurada y abrir los ajustes del servicio',
+    },
     statusNotConfigured: 'Sin configurar',
     statusUnknown: 'No disponible',
     credentialsLoadError: 'No se pudo consultar el estado de las credenciales',
@@ -708,6 +714,10 @@ export const es: typeof zhCN = {
     activityAppsLabel: 'Apps con más dictados',
     activityAppsShow: 'Mostrar apps principales',
     activityAppsHide: 'Ocultar apps principales',
+    activityYearTitle: 'Este año',
+    activityActiveDays: 'Días activos',
+    activityPeakDay: 'Día más activo',
+    activityDailyAverage: 'Media diaria',
     activityLoadError: 'No se pudieron cargar los datos de actividad',
     period: {
       ariaLabel: 'Periodo del informe',
@@ -2427,11 +2437,11 @@ export const es: typeof zhCN = {
       models: 'Modelos locales',
       connections: 'Conexiones',
       inactive: 'No se usa en este modo',
+      unavailable: 'No disponible',
       inactiveDetail:
         'Esta configuración se conserva, pero el modo de reconocimiento actual no la utiliza.',
-      statusConfigured:
-        'Punto verde: hay al menos un servicio activado. Las solicitudes usan el primero.',
-      statusMissing: 'Punto rojo: todavía no hay ningún servicio activado.',
+      statusConfigured: 'Hay al menos un servicio activado. Las solicitudes usan el primero.',
+      statusMissing: 'Todavía no hay ningún servicio activado.',
     },
     searchPlaceholder: 'Buscar una categoría de ajustes…',
     clearSearch: 'Borrar búsqueda',

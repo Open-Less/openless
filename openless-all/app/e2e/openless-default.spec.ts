@@ -61,10 +61,11 @@ test('sidebar distinguishes hover from selection without navigating on hover', a
   const nav = page.locator('.ol-sidebar-surface nav');
   const history = nav.getByRole('button', { name: '历史', exact: true });
   const overview = nav.getByRole('button', { name: '概览', exact: true });
-  // Selected: body ink on the solid surface-2 chip. Idle: light gray, no wash. Hover:
-  // near-black on a lighter wash than the selection, with a pointer.
+  // Selected: body ink on the selection wash, with a 1px ink ring WKWebView can paint.
+  // Idle: light gray, no wash. Hover: near-black on a lighter wash and a gray ring.
   await expect(overview).toHaveCSS('color', 'rgb(9, 9, 11)');
-  await expect(overview).toHaveCSS('background-color', 'rgb(244, 244, 245)');
+  await expect(overview).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.075)');
+  await expect(overview).toHaveCSS('box-shadow', 'rgb(9, 9, 11) 0px 0px 0px 1px inset');
   await expect(history).toHaveCSS('color', 'rgb(133, 133, 142)');
   await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(history).toHaveCSS('cursor', 'pointer');
@@ -75,7 +76,8 @@ test('sidebar distinguishes hover from selection without navigating on hover', a
   await history.click();
   await expect(history).toHaveAttribute('aria-current', 'page');
   await expect(history).toHaveCSS('color', 'rgb(9, 9, 11)');
-  await expect(history).toHaveCSS('background-color', 'rgb(244, 244, 245)');
+  await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.075)');
+  await expect(history).toHaveCSS('box-shadow', 'rgb(9, 9, 11) 0px 0px 0px 1px inset');
   await expect(page.locator('[data-ol-page="history"]')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('navigation.png'), animations: 'disabled' });
 });

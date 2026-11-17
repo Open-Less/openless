@@ -1,11 +1,3 @@
-.ol-usage-tab {
-  background: transparent;
-  border-radius: var(--ol-button-radius);
-}
-.ol-usage-tab.is-active {
-  background: var(--ol-choice-active-bg);
-  color: var(--ol-ink);
-}
 .ol-usage-toolbar {
   display: flex;
   align-items: center;

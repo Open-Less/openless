@@ -33,6 +33,27 @@ const isMainWindow = !windowKind;
 const osQuery = params.get('os') as OS | null;
 const os = osQuery ?? detectOS();
 document.documentElement.dataset.olPlatform = os;
+// Browser preview on :1420 keeps the main window's 1300×835 layout at zoom 1.
+// Shrinking it with CSS zoom makes Cursor's element overlay miss the painted
+// controls. The pane scrolls when it is smaller than the window. Native
+// webviews and Playwright do not set this frame.
+const browserFrame =
+  isMainWindow &&
+  !('__TAURI_INTERNALS__' in window) &&
+  navigator.webdriver !== true &&
+  location.port === '1420';
+const MAIN_WINDOW_WIDTH = 1300;
+const MAIN_WINDOW_HEIGHT = 835;
+
+if (browserFrame) {
+  document.documentElement.dataset.olBrowserFrame = 'main';
+  document.documentElement.style.setProperty('--ol-browser-frame-width', `${MAIN_WINDOW_WIDTH}px`);
+  document.documentElement.style.setProperty(
+    '--ol-browser-frame-height',
+    `${MAIN_WINDOW_HEIGHT}px`,
+  );
+  document.documentElement.style.setProperty('--ol-browser-frame-scale', '1');
+}
 initThemeMode();
 initInteractionMode();
 installImeEnterGuard();

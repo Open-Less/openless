@@ -8,5 +8,121 @@
 .ol-overview-heatmap {
   width: 100%;
   min-width: 0;
+  container-type: inline-size;
+}
+.ol-overview-heatmap-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--ol-grid-gutter);
   overflow-x: auto;
+}
+.ol-overview-year {
+  flex: 1 1 168px;
+  min-width: 168px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 28px;
+  background: var(--ol-surface-raised);
+  box-shadow: inset 0 0 0 0.5px var(--ol-line);
+  color: var(--ol-ink);
+}
+.ol-overview-year-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.3;
+}
+.ol-overview-year-stats {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+.ol-overview-year-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ol-overview-year-value {
+  font-size: 22px;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.ol-overview-year-label {
+  font-size: 13px;
+  color: var(--ol-ink-3);
+}
+.ol-overview-recent {
+  scrollbar-width: thin;
+}
+.ol-overview-recent::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+.ol-overview-services {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ol-overview-service-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  color: var(--ol-ok);
+}
+.ol-overview-service-hint {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 0.5px solid var(--ol-glass-border);
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-glass-bg-strong);
+  color: var(--ol-ink);
+  box-shadow: var(--ol-shadow-md);
+  font: var(--ol-font-weight-medium) 12px / 1.6 var(--ol-font-sans);
+  text-align: start;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.ol-overview-service-icon:hover .ol-overview-service-hint,
+.ol-overview-service-icon:focus-visible .ol-overview-service-hint {
+  opacity: 1;
+  visibility: visible;
+}
+.ol-overview-service[data-status='missing'] .ol-overview-service-icon {
+  color: var(--ol-warn);
+}
+.ol-overview-service[data-status='failed'] .ol-overview-service-icon {
+  color: var(--ol-err);
+}
+.ol-overview-service-icon:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.ol-overview-service-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: currentColor;
+  box-shadow: 0 0 0 1.5px var(--ol-surface);
 }

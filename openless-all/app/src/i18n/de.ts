@@ -695,6 +695,12 @@ export const de: typeof zhCN = {
     llmConfigured: 'Aktives LLM eingerichtet',
     llmNotConfigured: 'Nicht eingerichtet',
     statusConfigured: 'Eingerichtet',
+    statusFailed: 'Fehlgeschlagen',
+    serviceHint: {
+      asr: 'Spracherkennung: Status ansehen und die Diensteinstellungen öffnen',
+      llm: 'Textverarbeitung: Status ansehen und die Diensteinstellungen öffnen',
+      omni: 'Multimodale Sprache: Status ansehen und die Diensteinstellungen öffnen',
+    },
     statusNotConfigured: 'Nicht eingerichtet',
     statusUnknown: 'Nicht verfügbar',
     credentialsLoadError: 'Status der Zugangsdaten konnte nicht gelesen werden',
@@ -712,6 +718,10 @@ export const de: typeof zhCN = {
     activityAppsLabel: 'Meiste Diktate nach App',
     activityAppsShow: 'Top-Apps anzeigen',
     activityAppsHide: 'Top-Apps ausblenden',
+    activityYearTitle: 'Dieses Jahr',
+    activityActiveDays: 'Aktive Tage',
+    activityPeakDay: 'Stärkster Tag',
+    activityDailyAverage: 'Tagesdurchschnitt',
     activityLoadError: 'Aktivitätsdaten konnten nicht geladen werden',
     period: {
       ariaLabel: 'Auswertungszeitraum',
@@ -2448,11 +2458,12 @@ export const de: typeof zhCN = {
       models: 'Lokale Modelle',
       connections: 'Verbindungen',
       inactive: 'In diesem Modus ungenutzt',
+      unavailable: 'Nicht verfügbar',
       inactiveDetail:
         'Diese Einstellungen bleiben gespeichert, werden aber im aktuellen Erkennungsmodus nicht verwendet.',
       statusConfigured:
-        'Grüner Punkt: mindestens ein Dienst ist aktiv. Anfragen nutzen den ersten aktivierten Dienst.',
-      statusMissing: 'Roter Punkt: noch kein Dienst ist aktiviert.',
+        'Mindestens ein Dienst ist aktiv. Anfragen nutzen den ersten aktivierten Dienst.',
+      statusMissing: 'Noch kein Dienst ist aktiviert.',
     },
     searchPlaceholder: 'Einstellungskategorie suchen…',
     clearSearch: 'Suche leeren',

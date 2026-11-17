@@ -49,8 +49,9 @@
   box-shadow: var(--ol-shadow-md);
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
-  font: var(--ol-font-weight-medium) 12px / 1.6 var(--ol-font-sans);
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  text-wrap: pretty;
+  font-size: calc(12px * var(--ol-browser-frame-scale, 1));
   transform-origin: var(--transform-origin);
   transition:
     opacity 125ms ease-out,
@@ -59,6 +60,14 @@
 .ol-tooltip-bubble[data-wrap] {
   max-width: min(320px, calc(var(--available-width) / var(--ol-interface-scale, 1)));
   padding: 9px 12px;
+}
+.ol-popup-copy {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  font: var(--ol-font-weight-medium) 12px / 1.6 var(--ol-font-sans);
+  font-size: calc(12px * var(--ol-browser-frame-scale, 1));
+  text-wrap: pretty;
 }
 .ol-tooltip-bubble p {
   margin: 0;

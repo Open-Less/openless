@@ -683,6 +683,12 @@ export const en: typeof zhCN = {
     llmConfigured: 'Active LLM configured',
     llmNotConfigured: 'Not configured',
     statusConfigured: 'Configured',
+    statusFailed: 'Failed',
+    serviceHint: {
+      asr: 'Speech recognition: see if it is configured, click to open service settings',
+      llm: 'Text processing: see if it is configured, click to open service settings',
+      omni: 'Multimodal voice: see if it is configured, click to open service settings',
+    },
     statusNotConfigured: 'Not configured',
     statusUnknown: 'Unavailable',
     credentialsLoadError: 'Could not read credential status',
@@ -700,6 +706,10 @@ export const en: typeof zhCN = {
     activityAppsLabel: 'Top apps by dictations',
     activityAppsShow: 'Show top apps',
     activityAppsHide: 'Hide top apps',
+    activityYearTitle: 'This year',
+    activityActiveDays: 'Active days',
+    activityPeakDay: 'Busiest day',
+    activityDailyAverage: 'Daily average',
     activityLoadError: 'Activity data load failed',
     period: {
       ariaLabel: 'Reporting period',
@@ -2382,11 +2392,11 @@ export const en: typeof zhCN = {
       models: 'Local models',
       connections: 'Connections',
       inactive: 'Not used in this mode',
+      unavailable: 'Unavailable',
       inactiveDetail:
         'These settings are saved, but the current recognition pipeline does not use them.',
-      statusConfigured:
-        'Green dot: at least one service is on. Requests use the first enabled service.',
-      statusMissing: 'Red dot: no service is turned on yet.',
+      statusConfigured: 'At least one service is on. Requests use the first enabled service.',
+      statusMissing: 'No service is turned on yet.',
     },
     searchPlaceholder: 'Find a settings category…',
     clearSearch: 'Clear search',

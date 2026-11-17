@@ -14,6 +14,31 @@ body,
   overflow: hidden;
 }
 
+/* Dev preview only (set from main.tsx on :1420). The frame is the 1300×835
+   window at zoom 1, so element overlays share the painted coordinates. */
+html[data-ol-browser-frame='main'] {
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+  background: #111114;
+}
+html[data-ol-browser-frame='main'] body {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: #111114;
+}
+html[data-ol-browser-frame='main'] #root {
+  width: var(--ol-browser-frame-width, 1300px);
+  height: var(--ol-browser-frame-height, 835px);
+  flex: 0 0 auto;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
 html[data-ol-platform='linux'],
 html[data-ol-platform='linux'] body,
 html[data-ol-platform='linux'] #root {
@@ -1245,31 +1270,32 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   gap: 4px;
   flex-shrink: 0;
   min-width: 0;
-  border-bottom: 1px solid var(--ol-line);
   margin-bottom: 4px;
 }
 
 .ol-service-views button {
+  position: relative;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
-  gap: 5px;
-  padding: 10px 4px;
-  min-height: 62px;
+  justify-content: flex-end;
+  gap: 0;
+  padding: 16px 8px 8px;
+  min-height: 48px;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
   font: inherit;
   font-size: 13px;
   font-weight: var(--ol-font-weight-medium);
   line-height: 1.35;
   color: var(--ol-choice-idle-ink);
   cursor: pointer;
-  transition:
-    color var(--ol-choice-motion),
-    transform 140ms var(--ol-motion-quick);
+  clip-path: none;
+  corner-shape: unset;
+  transition: color var(--ol-choice-motion);
 }
 
 .ol-service-view-label {
@@ -1281,25 +1307,24 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   overflow-wrap: anywhere;
 }
 
-/* Active required services show whether an enabled channel is configured. */
+/* A missing required service is a corner badge. A configured one shows nothing. */
 .ol-service-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--ol-radius);
-  flex-shrink: 0;
-  transition: background 0.16s var(--ol-motion-quick);
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--ol-err);
 }
 .ol-service-status-dot[data-state='missing'] {
-  background: var(--ol-red, #ef4444);
-}
-.ol-service-status-dot[data-state='ok'] {
-  background: var(--ol-ok, #16a34a);
+  background: var(--ol-err);
 }
 
 .ol-service-views button[aria-pressed='true'] {
   color: var(--ol-ink);
-  background: var(--ol-choice-active-bg);
-  border-radius: var(--ol-button-radius);
+  background: transparent;
+  box-shadow: none;
   font-weight: var(--ol-font-weight-semibold);
 }
 
@@ -1309,8 +1334,31 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
 }
 .ol-service-views button:disabled {
-  color: var(--ol-choice-disabled-ink);
+  color: color-mix(in srgb, var(--ol-choice-disabled-ink) 42%, var(--ol-settings-content-bg));
   cursor: not-allowed;
+  opacity: 1;
+}
+.ol-service-view-slot {
+  position: relative;
+  min-width: 0;
+}
+.ol-service-view-slot > button {
+  width: 100%;
+}
+.ol-service-unavailable {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 2px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: var(--ol-font-weight-medium);
+  color: var(--ol-err);
+  opacity: 0;
+  pointer-events: none;
+}
+.ol-service-view-slot:hover .ol-service-unavailable {
   opacity: 1;
 }
 .ol-service-views button:focus-visible {
@@ -1417,6 +1465,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     gap: 2px;
   }
   .ol-service-views > button,
+  .ol-service-views > .ol-service-view-slot,
   .ol-service-views > .ol-tooltip-anchor {
     flex: 1;
     min-width: 0;
@@ -2513,6 +2562,24 @@ textarea,
 select {
   border-color: transparent !important;
   background-color: var(--ol-control-muted);
+}
+/* WebKit gives type=search an intrinsic width and a results decoration. Inside a
+   clipped card that width paints past the field, so the right edge looks cut off
+   and the column jumps a frame after navigation. */
+input[type='search'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  clip-path: none !important;
+  corner-shape: round !important;
+}
+input[type='search']::-webkit-search-decoration,
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-results-button,
+input[type='search']::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  display: none;
 }
 .ol-range,
 .ol-search-field {

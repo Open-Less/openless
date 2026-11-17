@@ -176,6 +176,25 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
 
   useEffect(() => {
     let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/event')
+      .then(async ({ listen }) => {
+        const stop = await listen<{ kind?: { type?: string } }>('backend:event', (event) => {
+          const type = event.payload?.kind?.type;
+          if (type === 'history_changed') void refresh();
+        });
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
     listStylePacks()
       .then((packs) => {
         if (!cancelled) setAllPacks(packs);
@@ -234,6 +253,12 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
       (s) => s.rawTranscript.toLowerCase().includes(q) || s.finalText.toLowerCase().includes(q),
     );
   }, [items, debouncedQuery]);
+  // Rows already on screen when the page opens stay put. Replaying the entrance
+  // on every visit made the search column lag behind the detail pane.
+  const openedIds = useRef<Set<string> | null>(null);
+  if (!loading && openedIds.current === null) {
+    openedIds.current = new Set(filtered.map((session) => session.id));
+  }
   const item = useMemo(
     () => filtered.find((s) => s.id === selectedId) || filtered[0],
     [filtered, selectedId],
@@ -477,16 +502,11 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         title={quickNotesOnly ? t('quickNote.title', 'Quick notes') : t('history.title')}
         desc={quickNotesOnly ? t('quickNote.desc', 'Permanent audio notes.') : t('history.desc')}
         right={
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
-              {t('common.refresh')}
+          !quickNotesOnly ? (
+            <Btn icon="trash" variant="ghost" size="sm" onClick={onClear}>
+              {t('common.clear')}
             </Btn>
-            {!quickNotesOnly && (
-              <Btn icon="trash" variant="ghost" size="sm" onClick={onClear}>
-                {t('common.clear')}
-              </Btn>
-            )}
-          </div>
+          ) : undefined
         }
       />
       <SavedToast
@@ -521,6 +541,9 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
+                    width: '100%',
+                    minWidth: 0,
+                    boxSizing: 'border-box',
                     padding: '6px 10px',
                     fontSize: 12,
                     border: '0.5px solid var(--ol-line-strong)',
@@ -532,17 +555,18 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                   <Icon name="search" size={12} />
                   <input
                     ref={searchInputRef}
+                    className="ol-search-field"
                     type="search"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder={t('history.searchPlaceholder', { shortcut: searchShortcut })}
                     aria-label={t('history.searchPlaceholder', { shortcut: searchShortcut })}
                     style={{
-                      flex: 1,
+                      flex: '1 1 0%',
+                      width: '100%',
                       minWidth: 0,
                       outline: 'none',
                       border: 0,
-                      background: 'transparent',
                       fontSize: 12,
                       color: 'var(--ol-ink-1)',
                       fontFamily: 'inherit',
@@ -634,9 +658,9 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                         marginBottom: 4,
                         transition:
                           'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
-                        // Rows fade in and drop slightly when search filters or new records
-                        // insert.
-                        animation: 'ol-item-in 0.22s var(--ol-motion-spring) both',
+                        animation: openedIds.current?.has(s.id)
+                          ? undefined
+                          : 'ol-item-in 0.22s var(--ol-motion-spring) both',
                       }}
                     >
                       <div

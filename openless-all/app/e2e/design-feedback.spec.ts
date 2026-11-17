@@ -176,9 +176,9 @@ test('usage tabs and footer stay compact without an extra active box', async ({ 
   const usage = page.locator('.ol-sidebar-surface .ol-nav-btn').filter({ hasText: '用量' }).first();
   await usage.click();
   await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
-  for (const tab of await page.locator('nav[aria-label="用量页面"] button').all()) {
-    await expect(tab).toHaveCSS('border-bottom-color', 'rgba(0, 0, 0, 0)');
-  }
+  const usageNav = page.locator('nav[aria-label="用量页面"]');
+  await expect(usageNav.locator('.ol-segmented')).toBeVisible();
+  await expect(usageNav).toHaveCSS('border-bottom-style', 'none');
   expect((await usage.boundingBox())!.width).toBeLessThan(120);
   await expect(usage).toHaveCSS('justify-self', 'end');
 });
@@ -208,7 +208,7 @@ test('selected segmented options and the overview heatmap stay visible', async (
   const sidebar = page.locator('.ol-sidebar-surface');
   await sidebar.getByRole('button', { name: '用量', exact: true }).click();
   await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
-  const usageTab = page.locator('.ol-usage-tab.is-active');
+  const usageTab = page.locator('.ol-usage-tabs .ol-segmented-option[aria-pressed="true"]');
   await expect(usageTab).toBeVisible();
   const tabBackground = await usageTab.evaluate((node) => getComputedStyle(node).backgroundColor);
   expect(tabBackground).not.toBe('rgba(0, 0, 0, 0)');
@@ -279,9 +279,24 @@ test('selected segmented options and the overview heatmap stay visible', async (
   expect(Math.abs(cellSize.width - 11)).toBeLessThan(0.2);
   expect(Math.abs(cellSize.height - 11)).toBeLessThan(0.2);
   const heatmapBox = (await activityCard.boundingBox())!;
-  const rowBox = (await activityCard.locator('xpath=..').boundingBox())!;
   expect(heatmapBox.width).toBeGreaterThanOrEqual(760);
-  expect(rowBox.width - heatmapBox.width).toBeLessThan(8);
+  expect(heatmapBox.width).toBeLessThan(820);
+  const yearBoard = page.locator('.ol-overview-year');
+  await expect(yearBoard).toBeVisible();
+  const yearBox = (await yearBoard.boundingBox())!;
+  expect(yearBox.x).toBeGreaterThan(heatmapBox.x + heatmapBox.width - 1);
+  const insets = await activityCard.evaluate((card) => {
+    const grid = card.querySelector('.ol-gha-grid');
+    if (!grid) return null;
+    const cardBox = card.getBoundingClientRect();
+    const gridBox = grid.getBoundingClientRect();
+    return {
+      left: gridBox.left - cardBox.left,
+      right: cardBox.right - gridBox.right,
+    };
+  });
+  expect(insets).not.toBeNull();
+  expect(Math.abs((insets?.left ?? 0) - (insets?.right ?? 0))).toBeLessThan(2);
 });
 
 test('marketplace search expands inside the same plate', async ({ page }) => {
