@@ -4,14 +4,19 @@ export function avoidShortLastLine(node: HTMLElement, minLast = 4): void {
   const text = node.textContent ?? '';
   const total = [...text].length;
   if (total <= minLast) return;
-  const cap = Math.min(360, Math.max(node.getBoundingClientRect().width, 1) + 160);
+  // offsetWidth is in the same design pixels as the inline width, even in a zoomed popup.
+  const cap = 360;
   for (let attempt = 0; attempt < 24; attempt += 1) {
     const last = lastLineLength(node);
     if (last >= minLast || last >= total) return;
-    const next = Math.ceil(node.getBoundingClientRect().width + 14);
+    const current = node.offsetWidth;
+    const next = current + 14;
     if (next > cap) return;
     node.style.width = `${next}px`;
-    node.style.maxWidth = `${next}px`;
+    if (node.offsetWidth <= current) {
+      node.style.width = `${current}px`;
+      return;
+    }
   }
 }
 
@@ -23,15 +28,17 @@ function lastLineLength(node: HTMLElement): number {
   const range = document.createRange();
   let lineStart = 0;
   let lineTop = 0;
-  for (let index = 0; index < text.length; index += 1) {
+  let index = 0;
+  for (const char of text) {
     range.setStart(textNode, index);
-    range.setEnd(textNode, index + 1);
+    range.setEnd(textNode, index + char.length);
     const top = range.getBoundingClientRect().top;
     if (index === 0) lineTop = top;
     if (top > lineTop + 1) {
       lineStart = index;
       lineTop = top;
     }
+    index += char.length;
   }
   return [...text.slice(lineStart)].length;
 }

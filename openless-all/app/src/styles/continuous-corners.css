@@ -340,7 +340,7 @@
 
 /* Nested controls use the container's radius less its inset. */
 .ol-seg > .ol-seg-item {
-  --ol-corner-radius: calc(var(--ol-radius) - 3.5px);
+  --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-segmented > :is(.ol-segmented-indicator, .ol-service-view-indicator, .ol-segmented-option) {
   --ol-corner-radius: var(--ol-button-radius);
@@ -397,8 +397,8 @@ html .ol-default-processing-cancel {
   clip-path: none !important;
 }
 html .ol-correction-add {
-  --ol-corner-radius: 8px;
-  border-radius: 8px !important;
+  --ol-corner-radius: var(--ol-button-radius);
+  border-radius: var(--ol-button-radius) !important;
   corner-shape: round !important;
   clip-path: none !important;
 }

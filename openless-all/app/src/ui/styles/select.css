@@ -44,6 +44,7 @@ html[data-ol-input='pointer'] .ol-select-trigger:focus-visible {
   width: calc(var(--anchor-width, 160px) / var(--ol-interface-scale, 1));
   max-width: calc(var(--available-width, 100vw) / var(--ol-interface-scale, 1));
   max-height: calc(var(--available-height, 100vh) / var(--ol-interface-scale, 1));
+  overflow: hidden;
   padding: 4px;
   border: 0;
   border-radius: var(--ol-r-md);
@@ -76,6 +77,23 @@ html[data-ol-input='pointer'] .ol-select-trigger:focus-visible {
   );
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.ol-select-list::-webkit-scrollbar {
+  width: 8px;
+}
+.ol-select-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ol-select-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ol-ink) 22%, transparent);
+  background-clip: padding-box;
+}
+.ol-select-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ol-ink) 34%, transparent);
+  background-clip: padding-box;
 }
 .ol-select-item {
   display: grid;

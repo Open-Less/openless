@@ -42,7 +42,7 @@ export function HistoryList({
   return (
     <Card
       padding={0}
-      className="ol-history-list"
+      className="ol-history-list ol-col-4"
       style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
     >
       {/* The left column is one scroll container; the search box sticks to the top with an

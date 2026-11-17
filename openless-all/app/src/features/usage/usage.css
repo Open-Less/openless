@@ -1,3 +1,14 @@
+.ol-usage-tabs {
+  margin: 0 0 20px;
+}
+.ol-usage-tabs > .ol-segmented {
+  width: fit-content;
+  max-width: 100%;
+}
+.ol-usage-page .ol-card {
+  border-radius: 28px !important;
+  clip-path: none !important;
+}
 .ol-usage-toolbar {
   display: flex;
   align-items: center;

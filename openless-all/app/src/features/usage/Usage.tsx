@@ -87,41 +87,17 @@ export function Usage() {
           </Btn>
         }
       />
-      <nav
-        aria-label={text('用量页面', 'Usage pages')}
-        style={{
-          display: 'flex',
-          gap: 8,
-          margin: '0 0 20px',
-          borderBottom: '1px solid var(--ol-line)',
-        }}
-      >
-        {(
-          [
-            ['overview', text('概览', 'Overview')],
-            ['services', text('服务与用途', 'Services and purposes')],
-            ['history', text('记录', 'History')],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            aria-current={view === id ? 'page' : undefined}
-            onClick={() => setView(id)}
-            style={{
-              border: 0,
-              borderBottom: view === id ? '2px solid var(--ol-blue)' : '2px solid transparent',
-              background: 'transparent',
-              color: view === id ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-              padding: '10px 12px',
-              font: 'inherit',
-              fontWeight: view === id ? 600 : 400,
-              cursor: 'pointer',
-            }}
-          >
-            {label}
-          </button>
-        ))}
+      <nav aria-label={text('用量页面', 'Usage pages')} className="ol-usage-tabs">
+        <Segmented
+          label={text('用量页面', 'Usage pages')}
+          options={[
+            { value: 'overview', label: text('概览', 'Overview') },
+            { value: 'services', label: text('服务与用途', 'Services and purposes') },
+            { value: 'history', label: text('记录', 'History') },
+          ]}
+          value={view}
+          onChange={setView}
+        />
       </nav>
       <div className="ol-usage-toolbar">
         <Segmented

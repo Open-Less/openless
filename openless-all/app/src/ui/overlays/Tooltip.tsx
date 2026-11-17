@@ -1,6 +1,7 @@
-import { useId, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Tooltip as BaseTooltip } from '@base-ui/react/tooltip';
 
+import { avoidShortLastLine } from '../../lib/popupLine';
 import { usePopupViewport } from '../layout/AppViewport';
 
 export function TooltipProvider({ children }: { children: ReactNode }) {
@@ -38,6 +39,13 @@ export function Tooltip({
   const triggerId = id ?? generatedId;
   const [open, setOpen] = useState(false);
   const explicitOpen = useRef(false);
+  const text = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (!open || !text.current) return;
+    const copy = text.current;
+    copy.style.removeProperty('width');
+    avoidShortLastLine(copy);
+  }, [content, open]);
   return (
     <BaseTooltip.Root
       open={open}
@@ -102,7 +110,13 @@ export function Tooltip({
             className="ol-tooltip-bubble"
             data-wrap={wrap || undefined}
           >
-            {content}
+            {typeof content === 'string' ? (
+              <span ref={text} className="ol-popup-copy">
+                {content}
+              </span>
+            ) : (
+              content
+            )}
           </BaseTooltip.Popup>
         </BaseTooltip.Positioner>
       </BaseTooltip.Portal>

@@ -210,16 +210,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
           {actionError}
         </p>
       )}
-      <div
-        ref={grid}
-        style={{
-          display: 'grid',
-          gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(220px, 300px) minmax(0, 1fr)',
-          gap: 14,
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
+      <div ref={grid} className="ol-grid-12 ol-grid-fill" data-columns={mobile ? '1' : undefined}>
         {(!mobile || !mobileDetailOpen) && (
           <HistoryList
             searchInputRef={searchInputRef}
@@ -254,7 +245,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
               notify={notify}
             />
           ) : (
-            <Card padding={20} className="ol-thinscroll" style={{ overflow: 'auto' }}>
+            <Card padding={20} className="ol-thinscroll ol-col-8" style={{ overflow: 'auto' }}>
               {mobile && (
                 <Btn
                   icon="chevLeft"

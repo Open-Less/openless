@@ -65,7 +65,7 @@ export function HistoryDetail({
   return (
     <Card
       padding={20}
-      className="ol-thinscroll"
+      className="ol-thinscroll ol-col-8"
       style={{ overflow: 'auto', minWidth: 0, minHeight: 0 }}
     >
       {mobile && (
@@ -163,13 +163,11 @@ export function HistoryDetail({
                   Insertion is a foreground-delivery detail and is not shown in the note content
                   area. */}
       <div
+        className="ol-grid-12 ol-pipeline-grid"
         style={{
           marginBottom: 16,
           paddingBottom: 14,
           borderBottom: '0.5px solid var(--ol-line-soft)',
-          display: 'grid',
-          gridTemplateColumns: 'auto minmax(0, 1fr) auto',
-          columnGap: 14,
           rowGap: 7,
           fontSize: 11,
           color: 'var(--ol-ink-4)',

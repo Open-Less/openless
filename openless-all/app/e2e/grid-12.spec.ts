@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { fixtureOrigin } from './support/server';
 
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+test.use({ baseURL: fixtureOrigin });
 
 type Box = { left: number; right: number; top: number };
 

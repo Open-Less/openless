@@ -9,13 +9,7 @@ export function UsageOverview({ dashboard }: { dashboard: Dashboard }) {
   const { daily, maxDaily, stats, cacheSummary, historyUnavailable, ledgerUnavailable } = dashboard;
   return (
     <>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-          gap: 12,
-        }}
-      >
+      <div className="ol-grid-12 ol-grid-stats">
         {stats.map(([label, value, exact]) => (
           <Card key={String(label)}>
             <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>

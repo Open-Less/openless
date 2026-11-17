@@ -4,19 +4,19 @@ import { test, expect, type Page } from '@playwright/test';
 
 const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
-test('style and dictionary action buttons retain compact corners', async ({ page }) => {
+test('style and dictionary action buttons share the 12px button radius', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '风格', exact: true }).click();
   await page.getByRole('button', { name: '润色模式', exact: true }).click();
-  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '8px');
+  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '12px');
   await expect(page.getByRole('button', { name: '激活', exact: true }).first()).toHaveCSS(
     'border-radius',
-    '8px',
+    '12px',
   );
   await page.getByRole('button', { name: '词典', exact: true }).click();
   const dictionary = page.locator('[data-ol-page="vocab"]');
   await expect(dictionary).toHaveAttribute('data-transition-phase', 'settled');
-  await expect(dictionary.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
+  await expect(dictionary.locator('.ol-action-button').first()).toHaveCSS('border-radius', '12px');
 });
 
 async function openShortcuts(page: Page) {
@@ -94,6 +94,8 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
 test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
   page,
 }) => {
+  // Make overflow deterministic: the test measures delivery, independent of the default viewport.
+  await page.setViewportSize({ width: 1300, height: 600 });
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
