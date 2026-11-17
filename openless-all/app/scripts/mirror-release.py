@@ -149,7 +149,10 @@ def main():
         channels = root / 'channels' / channel
         generate_manifests(directory, tag, channel, release['published_at'], channels, verify)
         destination = f'oss:{os.environ["OSS_BUCKET"]}'
-        common = ['--checksum', '--transfers', '4', '--retries', '5', '--retries-sleep', '10s']
+        # Bound a stuck OSS request. An unfinished multipart upload otherwise
+        # occupies this step until the job timeout and never advances manifests.
+        common = ['--checksum', '--transfers', '4', '--retries', '5', '--retries-sleep', '10s',
+            '--timeout', '3m', '--contimeout', '20s', '--stats', '1m', '--stats-one-line']
         # Copy binaries first; if any transfer fails, never advance the rolling JSON.
         subprocess.run(['rclone', 'copy', str(directory), f'{destination}/releases/{tag}', *common,
             '--header-upload', 'Cache-Control: public, max-age=31536000, immutable'], check=True)
