@@ -564,6 +564,7 @@ export function SettingsModal({
                               <ServicesTab
                                 asrNavigation={asrNavigation}
                                 initialView={requestedServiceView}
+                                beforeLeave={providerForm.finish}
                               />
                             )}
                             {section === 'cloudServices' && <CloudServicesTab />}

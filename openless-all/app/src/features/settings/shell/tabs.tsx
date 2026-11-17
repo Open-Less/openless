@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../../components/Icon';
-import { Tooltip } from '../../../components/Tooltip';
 import { getRuntimeOS } from '../../../runtime/environment';
 import {
   ExperimentalAsrSection,
@@ -20,6 +19,9 @@ import { TypographySection } from '../sections/TypographySection';
 import { ThemeSection } from '../sections/ThemeSection';
 import { ProvidersSection } from '../../providers/ChannelList';
 import { OmniChannelSection } from '../../providers/ProvidersSection';
+import { WebSearchSection } from '../sections/WebSearchSection';
+import { ensureDeepSeekSuiteConfig } from '../../providers/deepseekSuite';
+import { DeepSeekSuiteSection } from '../../providers/DeepSeekSuiteSection';
 import { NetworkSection } from '../sections/NetworkSection';
 import { MarketplaceSection } from '../sections/MarketplaceSection';
 import { PermissionsSection } from '../../input/PermissionsSection';
@@ -37,8 +39,8 @@ import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
-import { listChannels } from '../../../api/providers';
-import type { PlatformCapabilities } from '../../../api/contracts';
+import { listChannels, listenCredentialsChanges } from '../../../api/providers';
+import type { PipelineMode, PlatformCapabilities } from '../../../api/contracts';
 import { type OS } from '../../../runtime/environment';
 import { useHotkeySettings } from '../../../data/preferences';
 import { emitSaved } from '../../../lib/savedEvent';
@@ -50,7 +52,7 @@ import {
 } from '../../../pages/settings/shared';
 import { Segmented } from '../../../components/ui/Segmented';
 import { Card } from '../../../pages/_atoms';
-import { useContentMotion, useSelectionMotion } from '../../../lib/motion';
+import { useContentMotion } from '../../../lib/motion';
 import { TransitionViewport } from '../../../components/ui/TransitionViewport';
 import {
   availableServiceViews,
@@ -255,11 +257,44 @@ export function AppearanceTab() {
   );
 }
 
+function UnavailableServiceView({
+  label,
+  hint,
+  retired = false,
+}: {
+  label: string;
+  hint: string;
+  retired?: boolean;
+}) {
+  return (
+    <span className="ol-service-view-slot">
+      <button
+        type="button"
+        disabled
+        data-retired-local-models={retired || undefined}
+        aria-label={`${label}。${hint}`}
+      >
+        <span className="ol-service-view-label">
+          <span>{label}</span>
+        </span>
+      </button>
+      <span className="ol-service-unavailable" aria-hidden>
+        {hint}
+      </span>
+    </span>
+  );
+}
+
 // AI services & models: organizes channels, local models, and network settings by current pipeline and platform capabilities.
 export function ServicesTab({
   asrNavigation = 0,
   initialView,
-}: { asrNavigation?: number; initialView?: ServiceViewId } = {}) {
+  beforeLeave,
+}: {
+  asrNavigation?: number;
+  initialView?: ServiceViewId;
+  beforeLeave?: (action: () => void | Promise<void>) => Promise<boolean>;
+} = {}) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
@@ -282,56 +317,79 @@ export function ServicesTab({
     voiceActivationModels,
   );
   const contentRef = useRef<HTMLDivElement>(null);
-  const selectedView = requestedView;
-  const navigationRef = useRef<HTMLDivElement>(null);
-  const navigationIndicatorRef = useRef<HTMLSpanElement>(null);
-  useSelectionMotion(
-    navigationRef,
-    navigationIndicatorRef,
-    `${requestedView}:${views.length}`,
-    true,
-  );
-  const setPipelineMode = (mode: 'traditional' | 'multimodal') => {
-    if (!prefs || (multimodal ? 'multimodal' : 'traditional') === mode) return;
-    void updatePrefs((current) => ({
-      ...current,
-      pipelineMode: mode,
-      multimodalPipelineEnabled: true,
-    })).catch((error) => {
-      console.error('[settings] failed to update pipeline mode', error);
-      emitSaved('failed', t('common.operationFailed'));
-    });
+  const suiteMode = prefs?.pipelineMode === 'deepseek';
+  const selectedView = suiteMode ? 'deepseek' : requestedView;
+  const pipelineMode: PipelineMode = suiteMode
+    ? 'deepseek'
+    : multimodal
+      ? 'multimodal'
+      : 'traditional';
+  const pipelineSwitch = useRef(false);
+  const [switching, setSwitching] = useState(false);
+  const changeService = (action: () => void | Promise<void>) =>
+    beforeLeave
+      ? beforeLeave(action)
+      : Promise.resolve()
+          .then(action)
+          .then(() => true);
+  const selectView = (id: ServiceViewId) => {
+    void changeService(() => setView(id));
   };
-
-  // Language models / speech recognition are required config: the active tabs carry a status dot — red when
-  // unconfigured, green when configured. After any channel add/remove/edit/toggle ChannelList broadcasts
-  // ol-channels-changed and this recomputes immediately.
-  const [requiredConfigured, setRequiredConfigured] = useState<{ llm: boolean; asr: boolean }>({
-    llm: false,
-    asr: false,
-  });
+  const setPipelineMode = (mode: PipelineMode) => {
+    if (!prefs || pipelineMode === mode || pipelineSwitch.current) return;
+    pipelineSwitch.current = true;
+    setSwitching(true);
+    // Flush the old form before its pipeline disappears. Commit the preference
+    // after the new pipeline has read or initialized its independent credentials.
+    void changeService(async () => {
+      if (mode === 'deepseek') await ensureDeepSeekSuiteConfig();
+      await updatePrefs((current) => ({
+        ...current,
+        pipelineMode: mode,
+        multimodalPipelineEnabled: true,
+      }));
+    })
+      .catch(() => emitSaved('failed', t('common.operationFailed')))
+      .finally(() => {
+        pipelineSwitch.current = false;
+        setSwitching(false);
+      });
+  };
+  const [requiredConfigured, setRequiredConfigured] = useState({ llm: false, asr: false });
   useEffect(() => {
+    if (suiteMode) return;
     let cancelled = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
     const load = () => {
+      const observed = ++revision;
       void Promise.all([listChannels('llm'), listChannels('asr')])
         .then(([llm, asr]) => {
-          if (cancelled) return;
+          if (cancelled || observed !== revision) return;
           setRequiredConfigured({
             llm: llm.some((channel) => channel.enabled),
             asr: asr.some((channel) => channel.enabled),
           });
         })
-        .catch(() => {
-          /* On read failure, keep the previous state and don't disturb the user */
-        });
+        .catch(() => undefined);
     };
-    load();
-    window.addEventListener('ol-channels-changed', load);
+    void listenCredentialsChanges(load).then(
+      (stop) => {
+        if (cancelled) stop();
+        else {
+          unlisten = stop;
+          load();
+        }
+      },
+      () => {
+        if (!cancelled) load();
+      },
+    );
     return () => {
       cancelled = true;
-      window.removeEventListener('ol-channels-changed', load);
+      unlisten?.();
     };
-  }, []);
+  }, [suiteMode]);
 
   return (
     <>
@@ -346,13 +404,13 @@ export function ServicesTab({
               className="ol-service-pipeline-track"
               indicatorClassName="ol-service-pipeline-indicator"
               label={t('settings.providers.pipelineModeLabel')}
-              disabled={!prefs}
-              value={multimodal ? 'multimodal' : 'traditional'}
+              disabled={!prefs || switching}
+              value={pipelineMode}
               onChange={setPipelineMode}
-              options={(['traditional', 'multimodal'] as const).map((mode) => ({
+              options={(['traditional', 'multimodal', 'deepseek'] as const).map((mode) => ({
                 value: mode,
                 label: t(
-                  `settings.providers.pipelineMode${mode === 'traditional' ? 'Traditional' : 'Multimodal'}`,
+                  `settings.providers.pipelineMode${mode === 'traditional' ? 'Traditional' : mode === 'multimodal' ? 'Multimodal' : 'Deepseek'}`,
                 ),
               }))}
             />
@@ -361,96 +419,73 @@ export function ServicesTab({
             {t('settings.providers.pipelineIsolationNotice')}
           </p>
         </div>
-        <div
-          ref={navigationRef}
-          role="group"
-          aria-label={t('modal.serviceViews.label')}
-          className="ol-service-views"
-          style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
-        >
-          <span ref={navigationIndicatorRef} aria-hidden className="ol-service-view-indicator" />
-          {views.map((id) => {
-            if (id === 'models' && getRuntimeOS() === 'mac') {
-              return (
-                <Tooltip
-                  key={id}
-                  content={t('experimentalAsr.retiredHint')}
-                  placement="bottom"
-                  wrap
-                  focusable
-                  trigger={<span />}
-                >
-                  <button
-                    type="button"
-                    disabled
-                    data-retired-local-models
-                    aria-label={t('modal.serviceViews.models')}
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    <span>{t('modal.serviceViews.models')}</span>
-                    <span className="ol-service-inactive-tag">
-                      {t('experimentalAsr.retiredLabel')}
-                    </span>
-                  </button>
-                </Tooltip>
+        {!suiteMode && (
+          <div
+            role="group"
+            aria-label={t('modal.serviceViews.label')}
+            className="ol-service-views"
+            style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
+          >
+            {views.map((id) => {
+              if (id === 'models' && getRuntimeOS() === 'mac') {
+                return (
+                  <UnavailableServiceView
+                    key={id}
+                    label={t('modal.serviceViews.models')}
+                    hint={t('modal.serviceViews.unavailable')}
+                    retired
+                  />
+                );
+              }
+              const inactive = isServiceViewInactive(
+                id,
+                multimodal,
+                getRuntimeOS(),
+                voiceActivationModels,
               );
-            }
-            const inactive = isServiceViewInactive(
-              id,
-              multimodal,
-              getRuntimeOS(),
-              voiceActivationModels,
-            );
-            const required = !inactive && (id === 'llm' || id === 'asr');
-            const configured =
-              id === 'llm' ? requiredConfigured.llm : id === 'asr' ? requiredConfigured.asr : false;
-            const label = t(`modal.serviceViews.${id}`);
-            const inactiveLabel = t('modal.serviceViews.inactive');
-            return (
-              <button
-                key={id}
-                type="button"
-                disabled={inactive}
-                aria-pressed={requestedView === id}
-                onClick={() => setView(id)}
-                aria-label={
-                  inactive
-                    ? `${label}。${inactiveLabel}`
-                    : required
-                      ? `${label}。${t(
-                          configured
-                            ? 'modal.serviceViews.statusConfigured'
-                            : 'modal.serviceViews.statusMissing',
-                        )}`
+              const required = !inactive && (id === 'llm' || id === 'asr');
+              const configured =
+                id === 'llm'
+                  ? requiredConfigured.llm
+                  : id === 'asr'
+                    ? requiredConfigured.asr
+                    : false;
+              const label = t(`modal.serviceViews.${id}`);
+              if (inactive) {
+                return (
+                  <UnavailableServiceView
+                    key={id}
+                    label={label}
+                    hint={t('modal.serviceViews.unavailable')}
+                  />
+                );
+              }
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={requestedView === id}
+                  onClick={() => selectView(id)}
+                  aria-label={
+                    required && !configured
+                      ? `${label}。${t('modal.serviceViews.statusMissing')}`
                       : label
-                }
-                title={
-                  inactive
-                    ? inactiveLabel
-                    : required
-                      ? t(
-                          configured
-                            ? 'modal.serviceViews.statusConfigured'
-                            : 'modal.serviceViews.statusMissing',
-                        )
-                      : undefined
-                }
-              >
-                <span className="ol-service-view-label">
-                  {required && (
-                    <span
-                      aria-hidden
-                      className="ol-service-status-dot"
-                      data-state={configured ? 'ok' : 'missing'}
-                    />
+                  }
+                  title={
+                    required && !configured ? t('modal.serviceViews.statusMissing') : undefined
+                  }
+                >
+                  <span className="ol-service-view-label">
+                    <span>{label}</span>
+                  </span>
+                  {required && !configured && (
+                    <span aria-hidden className="ol-service-status-dot" data-state="missing" />
                   )}
-                  <span>{label}</span>
-                </span>
-                {inactive && <span className="ol-service-inactive-tag">{inactiveLabel}</span>}
-              </button>
-            );
-          })}
-        </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <TransitionViewport
           contentKey={selectedView}
           scrollRef={contentRef}
@@ -461,13 +496,14 @@ export function ServicesTab({
           <LocalModelsNavContext.Provider
             value={
               showLocalModel && (!multimodal || voiceActivationModels)
-                ? () => setView('models')
+                ? () => selectView('models')
                 : null
             }
           >
             {selectedView === 'llm' && <ProvidersSection kind="llm" />}
             {selectedView === 'asr' && <ProvidersSection kind="asr" />}
             {selectedView === 'omni' && <OmniChannelSection />}
+            {selectedView === 'deepseek' && <DeepSeekSuiteSection />}
             {showLocalModel && selectedView === 'models' && (
               <>
                 {multimodal && voiceActivationModels && (
@@ -756,6 +792,7 @@ export function AdvancedTab({
                   )}
               </div>
             )}
+            {item.id === 'webSearch' && <WebSearchSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

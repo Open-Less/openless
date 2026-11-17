@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { readCredential, setCredential } from '../../lib/ipc';
-import { emitSaved } from '../../lib/savedEvent';
-import { Btn, Card } from '../_atoms';
-import { inputStyle, SettingRow } from './shared';
+import { readCredential, setCredential } from '../../../api/providers';
+import { emitSaved } from '../../../lib/savedEvent';
+import { Btn, Card } from '../../../pages/_atoms';
+import { inputStyle, SettingRow } from '../../../pages/settings/shared';
 
 export interface WebSearchConfig {
   provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';

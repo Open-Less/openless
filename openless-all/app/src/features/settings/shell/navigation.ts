@@ -14,6 +14,7 @@ export type SettingsSectionId =
 
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
+  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   {
     id: 'voiceEnhancement',
     icon: 'mic',

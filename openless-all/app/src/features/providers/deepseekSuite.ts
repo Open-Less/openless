@@ -1,4 +1,4 @@
-import { listChannels, readCredential, setCredential } from './ipc';
+import { listChannels, readCredential, setCredential } from '../../api/providers';
 import { isOfficialDeepSeekEndpoint } from './deepseekEndpoint';
 export const DEEPSEEK_SUITE_ACCOUNT = 'deepseek_suite.config';
 export interface DeepSeekSuiteConfig {

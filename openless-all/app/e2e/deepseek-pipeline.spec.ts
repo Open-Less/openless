@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { settleNavigation } from './support/navigation';
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+import { fixtureOrigin } from './support/server';
+test.use({ baseURL: fixtureOrigin });
 
 test('three pipelines retain separate credentials and the selected pipeline after settings close', async ({
   page,
@@ -43,6 +44,18 @@ test('three pipelines retain separate credentials and the selected pipeline afte
       'aria-pressed',
       'true',
     );
+    const storedMode = {
+      传统模式: 'traditional',
+      多模态模式: 'multimodal',
+      'DeepSeek 大统一': 'deepseek',
+    }[mode];
+    await expect
+      .poll(() =>
+        page.evaluate(
+          async () => (await (await import('/src/api/preferences.ts')).getSettings()).pipelineMode,
+        ),
+      )
+      .toBe(storedMode);
     await dialog.getByRole('button', { name: '返回应用', exact: true }).click();
     await settleNavigation(page);
     await page.getByRole('button', { name: '设置', exact: true }).click();
