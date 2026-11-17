@@ -2866,7 +2866,8 @@ impl HistoryProviderAttribution {
         llm_call_label: Option<&crate::polish::LlmCallLabel>,
     ) -> Self {
         match context.pipeline_mode {
-            crate::shared_types::PipelineMode::Traditional => Self {
+            crate::shared_types::PipelineMode::Traditional
+            | crate::shared_types::PipelineMode::Deepseek => Self {
                 asr_provider: Some(
                     asr_call_label
                         .map(|label| label.provider.clone())
@@ -5058,7 +5059,9 @@ impl OpenLessBackend {
             self.recover_cloud_notes()?;
         }
         let before = self.get_preferences();
-        let warmed = self.deps.credential_store.status(before).await;
+        let warmed =
+            crate::deepseek_suite::credentials_status(self.deps.credential_store.as_ref(), before)
+                .await;
         if let Some(sync) = &self.encrypted_sync {
             // Keep Settings available even after a denied/failed warm read.
             // The service records its own retryable recovery/storage error;
@@ -5074,7 +5077,11 @@ impl OpenLessBackend {
             // Recovery can replace both preferences and credentials. Recompute
             // from the new in-memory target after it has settled.
             Ok(_) if self.encrypted_sync.is_some() => {
-                self.deps.credential_store.status(preferences.clone()).await
+                crate::deepseek_suite::credentials_status(
+                    self.deps.credential_store.as_ref(),
+                    preferences.clone(),
+                )
+                .await
             }
             Ok(credentials) => Ok(credentials),
             Err(error) => Err(error),
@@ -5880,6 +5887,9 @@ impl OpenLessBackend {
         &self,
         mut status: CredentialsStatus,
     ) -> Result<CredentialsStatus, BackendError> {
+        if status.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            return Ok(status);
+        }
         if let Some(service) = self.deps.credential_store.siwc() {
             let channel_id = self
                 .deps
@@ -5913,11 +5923,11 @@ impl OpenLessBackend {
     }
 
     pub async fn get_credentials_status(&self) -> Result<CredentialsStatus, BackendError> {
-        let status = self
-            .deps
-            .credential_store
-            .status(self.get_preferences())
-            .await?;
+        let status = crate::deepseek_suite::credentials_status(
+            self.deps.credential_store.as_ref(),
+            self.get_preferences(),
+        )
+        .await?;
         let status = self.with_siwc_status(status).await?;
         self.state
             .write()
@@ -6446,6 +6456,9 @@ impl OpenLessBackend {
         &self,
         preferences: &crate::UserPreferences,
     ) -> Result<crate::dictation_context::ProviderInvocation, BackendError> {
+        if preferences.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            return Ok(crate::deepseek_suite::invocation(true));
+        }
         let provider = match self
             .resolve_session_provider(ProviderSlot::Asr, &preferences.active_asr_provider)
             .await
@@ -6645,11 +6658,11 @@ impl OpenLessBackend {
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
-        let status = self
-            .deps
-            .credential_store
-            .status(self.get_preferences())
-            .await?;
+        let status = crate::deepseek_suite::credentials_status(
+            self.deps.credential_store.as_ref(),
+            self.get_preferences(),
+        )
+        .await?;
         let status = self.with_siwc_status(status).await?;
         self.state
             .write()
@@ -8698,6 +8711,7 @@ impl OpenLessBackend {
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let session = DictationSession {
@@ -8831,6 +8845,7 @@ impl OpenLessBackend {
         };
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let llm_used = context.uses_llm_polisher()
@@ -8914,6 +8929,7 @@ impl OpenLessBackend {
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let attribution = HistoryProviderAttribution::from_context(
@@ -9402,7 +9418,7 @@ impl OpenLessBackend {
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
-        let traditional = pipeline_mode == crate::shared_types::PipelineMode::Traditional;
+        let traditional = pipeline_mode != crate::shared_types::PipelineMode::Multimodal;
         let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
             self.resolve_dictation_asr_provider(&preferences).await?
         } else {
@@ -9412,7 +9428,9 @@ impl OpenLessBackend {
         };
         let mut deferred_llm_error = None;
         let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if traditional && !skip_llm_at_capture {
+        let active_llm_provider = if pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            crate::deepseek_suite::invocation(false)
+        } else if traditional && !skip_llm_at_capture {
             match self
                 .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
                 .await

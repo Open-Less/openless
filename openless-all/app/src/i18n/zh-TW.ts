@@ -1136,6 +1136,8 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
@@ -1577,10 +1579,11 @@ export const zhTW: typeof zhCN = {
       omniDesc: '一個模型直接接收「提示詞 + 音訊」一步輸出最終文字（實驗性管線）。',
       pipelineModeLabel: '識別管線',
       pipelineModeHint: '傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。',
+      pipelineModeDeepseek: 'DeepSeek 大统一',
       pipelineModeTraditional: '傳統模式',
       pipelineModeMultimodal: '多模態模式',
       pipelineIsolationNotice:
-        '兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即還原。',
+        '三種管線分別儲存設定。所選管線在關閉設定、關閉視窗和重新啟動應用程式後保持不變；切回即可還原原設定。',
       presets: {
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
@@ -2226,6 +2229,7 @@ export const zhTW: typeof zhCN = {
     experimentsTitle: '實驗與擴充',
     experimentsDescription: '設定實驗功能與擴充選項。',
     serviceViews: {
+      deepseek: 'DeepSeek 大统一',
       label: '服務設定分類',
       llm: '語言模型',
       asr: '語音辨識',
@@ -2247,6 +2251,8 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInput: '設定即時原文在輸入框中的顯示。',
       experiments: '設定實驗功能與擴充選項。',
       customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',

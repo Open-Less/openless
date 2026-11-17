@@ -578,6 +578,7 @@ pub mod platform {
             return false;
         }
 
+        crate::recording_companion::sync_fn(flags & (1 << 23) != 0);
         if let Some(primary) = primary_from_keycode(keycode) {
             if crate::recording_companion::event(&primary, pressed) { return true; }
             handle_primary_key(&primary, pressed);

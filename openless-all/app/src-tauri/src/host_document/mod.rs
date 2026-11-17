@@ -802,3 +802,8 @@ mod tests {
         assert_ne!(result.status, HostDocumentStatus::Unsupported);
     }
 }
+
+#[cfg(target_os = "windows")]
+pub(crate) fn read_qa_selection() -> Option<String> {
+    windows::read_qa_selection()
+}

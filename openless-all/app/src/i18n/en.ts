@@ -1242,6 +1242,8 @@ export const en: typeof zhCN = {
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Text insertion',
       experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Voice enhancement and playback suppression',
@@ -1660,11 +1662,12 @@ export const en: typeof zhCN = {
         'One model that turns audio + prompt into the final text directly (experimental pipeline).',
       pipelineModeLabel: 'Pipeline mode',
       pipelineModeHint:
-        'Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.',
+        'Traditional uses ASR + LLM; multimodal uses one audio model; DeepSeek suite combines its speech, language and search services.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Traditional',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.',
+        'All three pipelines retain independent credentials. Your selection persists after closing settings, closing the window, or restarting the app.',
       presets: {
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
@@ -2359,6 +2362,7 @@ export const en: typeof zhCN = {
     experimentsTitle: 'Experiments & extensions',
     experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Service settings',
       llm: 'Language models',
       asr: 'Speech recognition',
@@ -2382,6 +2386,8 @@ export const en: typeof zhCN = {
     backToAdvanced: 'Back to advanced features',
     back: 'Back',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configure the live transcript in the input field.',
       experiments: 'Configure experimental features and extensions.',
       customSyncServer: 'For self-hosted services only; official sync needs no configuration.',

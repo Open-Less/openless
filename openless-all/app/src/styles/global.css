@@ -1359,8 +1359,18 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   transform: scale(0.97);
 }
 @media (max-width: 720px) {
+  /* Avoid inflated grid intrinsic heights when WebKit resizes the six-tab row. */
   .ol-service-views {
+    display: flex;
     gap: 2px;
+  }
+  .ol-service-views > button,
+  .ol-service-views > .ol-tooltip-anchor {
+    flex: 1;
+    min-width: 0;
+  }
+  .ol-service-views > .ol-tooltip-anchor > button {
+    width: 100%;
   }
   .ol-service-views button {
     font-size: 11px;

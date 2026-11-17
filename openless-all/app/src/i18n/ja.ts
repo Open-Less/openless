@@ -1173,6 +1173,8 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
@@ -1646,10 +1648,11 @@ export const ja: typeof zhCN = {
       pipelineModeLabel: '認識パイプライン',
       pipelineModeHint:
         '従来 = ASR 文字起こし + LLM 整形の2段式。マルチモーダル = 音声対応モデルが1回で完了。',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: '従来モード',
       pipelineModeMultimodal: 'マルチモーダルモード',
       pipelineIsolationNotice:
-        '2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。',
+        '3つのパイプラインは設定を個別に保存します。設定画面やウィンドウを閉じたりアプリを再起動したりしても選択は保持され、切り戻すと元の設定を使えます。',
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK（Volcengine Ark）',
@@ -2327,6 +2330,7 @@ export const ja: typeof zhCN = {
     experimentsTitle: '実験と拡張',
     experimentsDescription: '実験的な機能と拡張オプションを設定します。',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'サービス設定',
       llm: '言語モデル',
       asr: '音声認識',
@@ -2349,6 +2353,8 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: '入力欄に表示するリアルタイム原文を設定します。',
       experiments: '実験的な機能と拡張オプションを設定します。',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',

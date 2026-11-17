@@ -1166,6 +1166,8 @@ export const ko: typeof zhCN = {
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '텍스트 삽입',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       voiceEnhancementTitle: '음성 향상과 재생 억제',
@@ -1637,10 +1639,11 @@ export const ko: typeof zhCN = {
       pipelineModeLabel: '인식 파이프라인',
       pipelineModeHint:
         '전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: '전통 모드',
       pipelineModeMultimodal: '멀티모달 모드',
       pipelineIsolationNotice:
-        '두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.',
+        '세 파이프라인은 설정을 각각 저장합니다. 설정이나 창을 닫고 앱을 다시 시작해도 선택은 유지되며, 다시 전환하면 기존 설정을 사용합니다.',
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK (Volcengine Ark)',
@@ -2312,6 +2315,7 @@ export const ko: typeof zhCN = {
     experimentsTitle: '실험 및 확장',
     experimentsDescription: '실험 기능과 확장 옵션을 설정합니다.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: '서비스 설정',
       llm: '언어 모델',
       asr: '음성 인식',
@@ -2333,6 +2337,8 @@ export const ko: typeof zhCN = {
     backToAdvanced: '고급 기능으로 돌아가기',
     back: '뒤로',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: '입력란의 실시간 원문 표시를 설정합니다.',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',

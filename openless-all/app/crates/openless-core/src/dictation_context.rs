@@ -742,7 +742,8 @@ pub(crate) fn local_asr_fallback(
     asr: &ProviderInvocation,
     local_asr_supported: bool,
 ) -> Option<ProviderInvocation> {
-    if !preferences.local_asr_fallback_enabled
+    if preferences.pipeline_mode == PipelineMode::Deepseek
+        || !preferences.local_asr_fallback_enabled
         || !local_asr_supported
         || !crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES
             .contains(&asr.provider_type.as_str())
@@ -848,6 +849,9 @@ mod tests {
         assert_eq!(local_asr_fallback(&preferences, &local, true), None);
         let unknown = ProviderInvocation::for_provider("experimental-textstream");
         assert_eq!(local_asr_fallback(&preferences, &unknown, true), None);
+        let mut suite = preferences.clone();
+        suite.pipeline_mode = PipelineMode::Deepseek;
+        assert_eq!(local_asr_fallback(&suite, &cloud_asr(), true), None);
         let mut no_model = preferences.clone();
         no_model.sherpa_onnx_model = "  ".into();
         assert_eq!(local_asr_fallback(&no_model, &cloud_asr(), true), None);

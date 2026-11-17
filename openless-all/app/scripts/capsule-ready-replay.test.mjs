@@ -206,6 +206,7 @@ function mount({
     'setTranslation',
     'setWarming',
     'setSelectionPolish',
+    'setQa',
     'setCapsuleStyle',
     'setSuggestions',
     'setInsertFallback',
