@@ -34,6 +34,8 @@ struct Host {
     selection_preview_pending: std::sync::atomic::AtomicBool,
     /// core 的 host action 队列（窗口显隐、打开外链、重启…）。
     host_actions: Option<std::sync::Arc<openless_linux_host::LinuxHostActions>>,
+    /// action pump 的唤醒端：core 推一个 action 就 send 一次，线程立刻 drain。
+    action_wake_rx: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 /// 恢复（云端同步还原）之后要在宿主编生效的效果。
@@ -124,7 +126,14 @@ fn main() {
     // 托盘由这里负责（StatusNotifierItem），而不是渲染宿主：菜单项、本地化
     // （8 种语言）与命令语义因此与 macOS/Windows 完全一致。
     spawn_tray(host.clone());
-    spawn_host_actions(host.clone());
+    let wake_rx = host
+        .action_wake_rx
+        .lock()
+        .expect("action wake lock poisoned")
+        .take();
+    if let Some(wake_rx) = wake_rx {
+        spawn_host_actions(host.clone(), wake_rx);
+    }
     spawn_device_watcher(host.clone());
     loop {
         std::thread::park();
@@ -267,12 +276,20 @@ fn spawn_tray(host: std::sync::Arc<Host>) {
 /// core 的 host action（窗口显隐 / 打开外链 / 重启 / 通知）→ 渲染宿主。
 ///
 /// 这些 action 以前没人 drain，等于全部被丢掉：所以「润色预览」窗口不弹、
-/// 从热键打开 QA 面板也没反应。这里每 120ms 取一次，转成 SSE 事件。
-fn spawn_host_actions(host: std::sync::Arc<Host>) {
+/// 从热键打开 QA 面板也没反应。
+///
+/// 取值方式**事件驱动**：`LinuxHostActions::set_wake` 注入一个回调，
+/// core 每推一个 action 就通过 channel 叫醒这个线程立刻 drain —— 不做定时轮询。
+fn spawn_host_actions(host: std::sync::Arc<Host>, wake: std::sync::mpsc::Receiver<()>) {
     std::thread::Builder::new()
         .name("openless-host-actions".into())
-        .spawn(move || loop {
-            if let Some(actions) = host.host_actions.clone() {
+        .spawn(move || {
+            loop {
+                // 阻塞等待唤醒；超时兜底只为处理「唤醒丢失」的极端情况。
+                let _ = wake.recv_timeout(std::time::Duration::from_secs(30));
+                let Some(actions) = host.host_actions.clone() else {
+                    continue;
+                };
                 actions.drain(|action| {
                     use openless_core::HostAction as A;
                     let event: Option<(&str, Value)> = match action {
@@ -322,43 +339,99 @@ fn spawn_host_actions(host: std::sync::Arc<Host>) {
                     }
                 });
             }
-            std::thread::sleep(std::time::Duration::from_millis(120));
         })
         .ok();
 }
 
-/// 麦克风热插拔：每 3 秒枚举一次设备，变化时刷新托盘菜单并推 `devices:changed`
-/// 给界面（选择麦克风的下拉与托盘子菜单都靠它跟上插拔）。
+/// 麦克风热插拔：用 inotify 监视 `/dev/snd`，设备节点增删时立刻刷新。
+///
+/// 不轮询：`/dev/snd/controlC*` 一出现/消失就说明声卡变了（USB、蓝牙、HDMI 都走这里），
+/// 内核直接通知我们。inotify 初始化失败时才退回 5 秒轮询——那种情况基本只出现在
+/// 容器里没有 /dev/snd 的环境。
 fn spawn_device_watcher(host: std::sync::Arc<Host>) {
     std::thread::Builder::new()
         .name("openless-devices".into())
         .spawn(move || {
             let mut signature: Option<Vec<String>> = None;
-            loop {
-                if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone())
-                {
-                    if let Ok(devices) =
-                        runtime.block_on(backend.services().platform.microphone_devices())
-                    {
-                        let mut names = devices
-                            .iter()
-                            .map(|device| format!("{}|{}", device.name, device.is_default))
-                            .collect::<Vec<_>>();
-                        names.sort();
-                        let changed = signature.as_ref() != Some(&names);
-                        if changed {
-                            if signature.is_some() {
-                                println!("[linux-web] 麦克风设备变化：{} 个", names.len());
-                                let _ = host.host_events.send((
-                                    "devices:changed".into(),
-                                    json!({ "count": names.len() }).to_string(),
-                                ));
+            let mut refresh = |host: &std::sync::Arc<Host>, first: bool| {
+                let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone())
+                else {
+                    return;
+                };
+                let Ok(devices) = runtime.block_on(backend.services().platform.microphone_devices())
+                else {
+                    return;
+                };
+                let mut names = devices
+                    .iter()
+                    .map(|device| format!("{}|{}", device.name, device.is_default))
+                    .collect::<Vec<_>>();
+                names.sort();
+                if signature.as_ref() != Some(&names) {
+                    if !first && signature.is_some() {
+                        println!("[linux-web] 麦克风设备变化：{} 个", names.len());
+                        let _ = host.host_events.send((
+                            "devices:changed".into(),
+                            json!({ "count": names.len() }).to_string(),
+                        ));
+                    }
+                    signature = Some(names);
+                }
+            };
+
+            refresh(&host, true);
+
+            // inotify 钩子。`IN_CREATE|IN_DELETE|IN_ATTRIB` 覆盖声卡节点增删与权限变化。
+            const IN_CREATE: u32 = 0x0000_0100;
+            const IN_DELETE: u32 = 0x0000_0200;
+            const IN_ATTRIB: u32 = 0x0000_0004;
+            const IN_NONBLOCK: i32 = 0o4000;
+            unsafe {
+                let fd = libc::inotify_init1(IN_NONBLOCK);
+                if fd >= 0 {
+                    let dir = std::ffi::CString::new("/dev/snd").unwrap_or_default();
+                    let watch = libc::inotify_add_watch(
+                        fd,
+                        dir.as_ptr(),
+                        IN_CREATE | IN_DELETE | IN_ATTRIB,
+                    );
+                    if watch >= 0 {
+                        let mut buffer = [0u8; 4096];
+                        loop {
+                            // 阻塞读：没有事件时内核把线程挂住，等价于 hook。
+                            let ready = libc::poll(
+                                &mut libc::pollfd {
+                                    fd,
+                                    events: libc::POLLIN,
+                                    revents: 0,
+                                },
+                                1,
+                                -1,
+                            );
+                            if ready <= 0 {
+                                continue;
                             }
-                            signature = Some(names);
+                            let read =
+                                libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len());
+                            if read <= 0 {
+                                continue;
+                            }
+                            // 内核可能一次给多个事件；合并去抖后刷一次。
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                            while libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len())
+                                > 0
+                            {}
+                            refresh(&host, false);
                         }
                     }
+                    libc::close(fd);
                 }
-                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+
+            // 兜底：拿不到 inotify 时（无 /dev/snd 的容器）才用低频轮询。
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                refresh(&host, false);
             }
         })
         .ok();
@@ -392,6 +465,7 @@ fn init_host() -> Host {
         host_events,
         selection_preview_pending: std::sync::atomic::AtomicBool::new(false),
         host_actions: None,
+        action_wake_rx: std::sync::Mutex::new(None),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
@@ -406,9 +480,18 @@ fn init_host() -> Host {
         home_dir,
         ..Default::default()
     };
+    // host action 队列由这里创建，并注入一个唤醒回调：core 一推 action 就
+    // 通过 channel 叫醒 pump 线程，不需要轮询。
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
+    host.action_wake_rx = std::sync::Mutex::new(Some(wake_rx));
+    let host_actions = std::sync::Arc::new(openless_linux_host::LinuxHostActions::new(Some(
+        std::sync::Arc::new(move || {
+            let _ = wake_tx.send(());
+        }),
+    )));
     let _guard = runtime.enter();
     match openless_linux_host::LinuxBackendBuilder::from_shared_providers(config)
-        .and_then(|builder| builder.build())
+        .and_then(|builder| builder.with_host_actions(host_actions.clone()).build())
     {
         Ok(runtime_parts) => {
             println!("[linux-web] 后端就绪（openless-core 已装配）");

@@ -211,6 +211,11 @@ impl LinuxBackendBuilder {
         self
     }
 
+    pub fn with_host_actions(mut self, actions: Arc<LinuxHostActions>) -> Self {
+        self.host_actions = Some(actions);
+        self
+    }
+
     pub fn with_services(mut self, services: BackendServices) -> Self {
         self.services = Some(services);
         self

@@ -21,6 +21,12 @@ impl LinuxHostActions {
         }
     }
 
+    /// 设置唤醒回调：core 每推一个 action 就调用一次，宿主据此立即 drain，
+    /// 不需要定时轮询。
+    pub fn set_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.wake = Some(wake);
+    }
+
     pub fn drain(&self, mut apply: impl FnMut(HostAction)) -> usize {
         let actions = {
             let mut pending = self.pending.lock().expect("host action queue poisoned");
