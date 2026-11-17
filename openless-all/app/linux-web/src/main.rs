@@ -28,7 +28,12 @@ struct Host {
     capsule_language_menu: std::sync::Mutex<bool>,
     shortcut_recording_active: std::sync::Mutex<bool>,
     /// 托盘命令（显示窗口 / 退出）走这条广播，SSE 把它和 Core 事件一起推给渲染宿主。
-    tray_events: tokio::sync::broadcast::Sender<Value>,
+    /// 宿主侧事件（托盘命令、core 的 host action）共用的广播通道。
+    host_events: tokio::sync::broadcast::Sender<(String, String)>,
+    /// core 处在「润色预览」模式时为 true；`get_selection_polish_preview` 用它做门禁。
+    selection_preview_pending: std::sync::atomic::AtomicBool,
+    /// core 的 host action 队列（窗口显隐、打开外链、重启…）。
+    host_actions: Option<std::sync::Arc<openless_linux_host::LinuxHostActions>>,
 }
 
 /// 恢复（云端同步还原）之后要在宿主编生效的效果。
@@ -119,6 +124,8 @@ fn main() {
     // 托盘由这里负责（StatusNotifierItem），而不是渲染宿主：菜单项、本地化
     // （8 种语言）与命令语义因此与 macOS/Windows 完全一致。
     spawn_tray(host.clone());
+    spawn_host_actions(host.clone());
+    spawn_device_watcher(host.clone());
     loop {
         std::thread::park();
     }
@@ -176,14 +183,22 @@ fn spawn_tray(host: std::sync::Arc<Host>) {
                 lang => lang,
             };
             let _ = tray.set_lang(lang);
-            let mut logged_microphones = false;
+            let mut logged_styles = false;
+            let mut devices_rx = host.host_events.subscribe();
+            let mut devices_dirty = true;
             loop {
+                // 热插拔监听线程每 3 秒比对一次，变了就推 `devices:changed`。
+                while let Ok((name, _)) = devices_rx.try_recv() {
+                    if name == "devices:changed" {
+                        devices_dirty = true;
+                    }
+                }
                 let Some(backend) = host.backend.clone() else {
                     std::thread::sleep(std::time::Duration::from_millis(200));
                     continue;
                 };
-                // 麦克风与风格列表随系统/偏好变化：托盘菜单每次重排都拿最新值。
-                if !logged_microphones {
+                // 麦克风列表随插拔刷新；风格列表只拉一次（改动走偏好事件）。
+                if devices_dirty {
                     if let Some(runtime) = host.runtime.clone() {
                         if let Ok(devices) =
                             runtime.block_on(backend.services().platform.microphone_devices())
@@ -199,28 +214,31 @@ fn spawn_tray(host: std::sync::Arc<Host>) {
                                 .collect::<Vec<_>>();
                             let _ = tray.set_microphones(mics);
                         }
-                        // 输出风格子菜单：与 macOS/Windows 的「输出风格」一致。
-                        let active = backend.get_preferences().active_style_pack_id;
-                        if let Ok(packs) = backend.list_style_packs(&active) {
-                            let styles = packs
-                                .into_iter()
-                                .map(|pack| openless_linux_host::TrayStyle {
-                                    active: pack.id == active,
-                                    id: pack.id.clone(),
-                                    name: pack.name.clone(),
-                                })
-                                .collect::<Vec<_>>();
-                            let _ = tray.set_styles(styles);
-                        }
+                        devices_dirty = false;
                     }
-                    logged_microphones = true;
+                }
+                if !logged_styles {
+                    // 输出风格子菜单：与 macOS/Windows 的「输出风格」一致。
+                    let active = backend.get_preferences().active_style_pack_id;
+                    if let Ok(packs) = backend.list_style_packs(&active) {
+                        let styles = packs
+                            .into_iter()
+                            .map(|pack| openless_linux_host::TrayStyle {
+                                active: pack.id == active,
+                                id: pack.id.clone(),
+                                name: pack.name.clone(),
+                            })
+                            .collect::<Vec<_>>();
+                        let _ = tray.set_styles(styles);
+                    }
+                    logged_styles = true;
                 }
                 tray.drain(|command| match command {
                     openless_linux_host::TrayCommand::ShowMain => {
-                        let _ = host.tray_events.send(json!("show"));
+                        let _ = host.host_events.send(("tray:command".into(), "\"show\"".into()));
                     }
                     openless_linux_host::TrayCommand::Quit => {
-                        let _ = host.tray_events.send(json!("quit"));
+                        let _ = host.host_events.send(("tray:command".into(), "\"quit\"".into()));
                     }
                     openless_linux_host::TrayCommand::ActivatePreviousStyle => {
                         let _ = backend.activate_previous_style_pack();
@@ -246,6 +264,106 @@ fn spawn_tray(host: std::sync::Arc<Host>) {
         .ok();
 }
 
+/// core 的 host action（窗口显隐 / 打开外链 / 重启 / 通知）→ 渲染宿主。
+///
+/// 这些 action 以前没人 drain，等于全部被丢掉：所以「润色预览」窗口不弹、
+/// 从热键打开 QA 面板也没反应。这里每 120ms 取一次，转成 SSE 事件。
+fn spawn_host_actions(host: std::sync::Arc<Host>) {
+    std::thread::Builder::new()
+        .name("openless-host-actions".into())
+        .spawn(move || loop {
+            if let Some(actions) = host.host_actions.clone() {
+                actions.drain(|action| {
+                    use openless_core::HostAction as A;
+                    let event: Option<(&str, Value)> = match action {
+                        A::ShowSelectionPreview => {
+                            host.selection_preview_pending
+                                .store(true, std::sync::atomic::Ordering::SeqCst);
+                            let _ = host.host_events.send((
+                                "selection-polish-preview:shown".into(),
+                                "{}".into(),
+                            ));
+                            Some(("host:action", json!({ "action": "showQa" })))
+                        }
+                        A::HideSelectionPreview => {
+                            host.selection_preview_pending
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            let _ = host.host_events.send((
+                                "selection-polish-preview:hide".into(),
+                                "{}".into(),
+                            ));
+                            None
+                        }
+                        A::ShowQa => Some(("host:action", json!({ "action": "showQa" }))),
+                        A::HideQa => Some(("host:action", json!({ "action": "hideQa" }))),
+                        A::ShowMain | A::FocusMain => {
+                            Some(("host:action", json!({ "action": "showMain" })))
+                        }
+                        A::OpenExternalUrl(url) => {
+                            Some(("host:action", json!({ "action": "openUrl", "url": url })))
+                        }
+                        A::OpenSystemSettings(target) => Some((
+                            "host:action",
+                            json!({ "action": "openSystemSettings", "target": target }),
+                        )),
+                        A::RequestRestart => {
+                            Some(("host:action", json!({ "action": "restart" })))
+                        }
+                        A::Notify(text) => {
+                            Some(("host:action", json!({ "action": "notify", "text": text })))
+                        }
+                        // 听写浮层由胶囊自己的事件流驱动；Less Computer 未在 Linux 提供。
+                        A::ShowDictationFeedback | A::HideDictationFeedback | A::ShowLessComputer => {
+                            None
+                        }
+                    };
+                    if let Some((name, payload)) = event {
+                        let _ = host.host_events.send((name.to_string(), payload.to_string()));
+                    }
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(120));
+        })
+        .ok();
+}
+
+/// 麦克风热插拔：每 3 秒枚举一次设备，变化时刷新托盘菜单并推 `devices:changed`
+/// 给界面（选择麦克风的下拉与托盘子菜单都靠它跟上插拔）。
+fn spawn_device_watcher(host: std::sync::Arc<Host>) {
+    std::thread::Builder::new()
+        .name("openless-devices".into())
+        .spawn(move || {
+            let mut signature: Option<Vec<String>> = None;
+            loop {
+                if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone())
+                {
+                    if let Ok(devices) =
+                        runtime.block_on(backend.services().platform.microphone_devices())
+                    {
+                        let mut names = devices
+                            .iter()
+                            .map(|device| format!("{}|{}", device.name, device.is_default))
+                            .collect::<Vec<_>>();
+                        names.sort();
+                        let changed = signature.as_ref() != Some(&names);
+                        if changed {
+                            if signature.is_some() {
+                                println!("[linux-web] 麦克风设备变化：{} 个", names.len());
+                                let _ = host.host_events.send((
+                                    "devices:changed".into(),
+                                    json!({ "count": names.len() }).to_string(),
+                                ));
+                            }
+                            signature = Some(names);
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        })
+        .ok();
+}
+
 fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("OPENLESS_DATA_DIR") {
         return PathBuf::from(dir);
@@ -261,7 +379,7 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 fn init_host() -> Host {
-    let (tray_events, _) = tokio::sync::broadcast::channel::<Value>(16);
+    let (host_events, _) = tokio::sync::broadcast::channel::<(String, String)>(64);
     let mut host = Host {
         backend: None,
         runtime: None,
@@ -271,7 +389,9 @@ fn init_host() -> Host {
         shortcut_recording_active: std::sync::Mutex::new(false),
         qa_expanded: std::sync::Mutex::new(false),
         cloud_sync_status_cache: std::sync::Mutex::new(None),
-        tray_events,
+        host_events,
+        selection_preview_pending: std::sync::atomic::AtomicBool::new(false),
+        host_actions: None,
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
@@ -339,6 +459,7 @@ fn init_host() -> Host {
             }
             host.backend = Some(runtime_parts.backend);
             host.settings_runtime = Some(runtime_parts.settings_runtime);
+            host.host_actions = Some(runtime_parts.host_actions);
         }
         Err(error) => eprintln!("[linux-web] 后端装配失败：{error}"),
     }
@@ -1943,6 +2064,71 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     .map_err(|error| error.to_string())?,
             ))
         }
+        // ── 选区润色的预览 / 确认 / 取消 / 撤销 ───────────────────────────
+        // 与 Tauri 的 `*_selection_polish_preview` 同一套语义：预览模式下面板
+        // 拉一次负载，用户确认后把（可能改过的）文本替换回选区。
+        "get_selection_polish_preview" => {
+            if !host
+                .selection_preview_pending
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                // 没有待处理的润色请求：不要把残留快照当成新请求。
+                return Ok(Value::Null);
+            }
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let snapshot = runtime
+                .block_on(backend.services().selection.snapshot())
+                .map_err(|error| error.to_string())?;
+            match (snapshot.preview_text, snapshot.source_text) {
+                (Some(text), Some(source_text)) => {
+                    Ok(json!({ "text": text, "sourceText": source_text }))
+                }
+                _ => Ok(Value::Null),
+            }
+        }
+        "confirm_selection_polish_preview" => {
+            host.selection_preview_pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let text = required_str(_args, "text")?.to_string();
+            let snapshot = runtime
+                .block_on(backend.services().selection.snapshot())
+                .map_err(|error| error.to_string())?;
+            let session_id = snapshot
+                .session_id
+                .ok_or_else(|| "selection preview is not active".to_string())?;
+            runtime
+                .block_on(backend.services().selection.confirm(session_id, Some(text)))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "confirmed": true }))
+        }
+        "cancel_selection_polish_preview" => {
+            host.selection_preview_pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime
+                .block_on(backend.services().selection.cancel(None))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "cancelled": true }))
+        }
+        "revert_selection_voice_preview" => {
+            // 撤销上一次选区替换（语音编辑与润色共用同一个 selection session）。
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let snapshot = runtime
+                .block_on(backend.services().selection.snapshot())
+                .map_err(|error| error.to_string())?;
+            let session_id = snapshot
+                .session_id
+                .ok_or_else(|| "selection preview is not active".to_string())?;
+            runtime
+                .block_on(backend.services().selection.revert(session_id))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "reverted": true }))
+        }
         "apply_quick_note_repolish" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let session_id = required_str(_args, "sessionId")?.to_string();
@@ -2448,25 +2634,25 @@ fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
     stream.write_all(b": connected\n\n")?;
     stream.flush()?;
     let mut subscription = backend.subscribe();
-    let mut tray_events = host.tray_events.subscribe();
+    let mut host_events = host.host_events.subscribe();
     let mut last_cloud_sync: Option<String> = None;
     loop {
-        // 托盘命令（显示窗口 / 退出）也走这条流：渲染宿主不需要第二种传输。
-        let tray_command = runtime.block_on(async {
+        // 托盘命令与 host action 也走这条流：渲染宿主不需要第二种传输。
+        let host_event = runtime.block_on(async {
             tokio::select! {
                 event = subscription.recv() => Ok(event),
-                command = tray_events.recv() => Err(command),
+                forwarded = host_events.recv() => Err(forwarded),
             }
         });
-        if let Err(command) = tray_command {
-            let Ok(command) = command else { continue };
-            let line = json!({ "name": "tray:command", "payload": command.to_string() });
+        if let Err(forwarded) = host_event {
+            let Ok((name, payload)) = forwarded else { continue };
+            let line = json!({ "name": name, "payload": payload });
             if write!(stream, "data: {line}\n\n").is_err() || stream.flush().is_err() {
                 break;
             }
             continue;
         }
-        let event = match tray_command.expect("checked above") {
+        let event = match host_event.expect("checked above") {
             Ok(event) => event,
             Err(_) => {
                 // 滞后：让页面重新拉快照。

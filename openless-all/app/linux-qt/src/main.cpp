@@ -742,6 +742,24 @@ int main(int argc, char **argv) {
                         QStringLiteral("transcribing"), QStringLiteral("polishing"),
                         QStringLiteral("inserting")};
                     capsule.setVisible(activePhases.contains(phase));
+                } else if (name == "host:action") {
+                    // core 的宿主动作：窗口显隐、打开外链、重启、系统设置。
+                    const QString action = inner.value("action").toString();
+                    if (action == "showQa") {
+                        qa.setVisible(true);
+                    } else if (action == "hideQa") {
+                        qa.setVisible(false);
+                    } else if (action == "showMain") {
+                        mainWindow.raise();
+                    } else if (action == "openUrl") {
+                        QDesktopServices::openUrl(QUrl(inner.value("url").toString()));
+                    } else if (action == "restart") {
+                        QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
+                        QCoreApplication::quit();
+                    }
+                } else if (name == "selection-polish-preview:shown") {
+                    // 润色预览复用问答面板（与 Tauri 一致），面板自己拉负载。
+                    qa.setVisible(true);
                 } else if (name == "tray:command") {
                     // payload 是 JSON 字符串："show" / "quit"
                     if (payload.contains("quit")) {

@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isNativeHostNow, listenHostEvent } from '../lib/hostEventBus';
 import {
   ArrowUpIcon,
   CheckIcon,
@@ -157,7 +158,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   };
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isNativeHostNow()) return;
     let cancelled = false;
     const handles: (() => void)[] = [];
     void (async () => {
@@ -299,10 +300,10 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         // 「润色结果」模式的进入/退出复用本面板，与 host 侧
         // `HostAction::ShowSelectionPreview` 的落点一致。
         handles.push(
-          await listen<unknown>('selection-polish-preview:shown', () => {
+          listenHostEvent('selection-polish-preview:shown', () => {
             void loadPolishResultRef.current();
           }),
-          await listen<unknown>('selection-polish-preview:hide', () => {
+          listenHostEvent('selection-polish-preview:hide', () => {
             // 只有面板正处在润色模式时才收起它：提问对话中的面板不能被润色流程的
             // 收尾动作一起关掉。
             if (!polishActiveRef.current) return;

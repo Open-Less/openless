@@ -57,11 +57,8 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
       options={outputOptions.map((option) => ({
         value: option.value,
         label: t(`settings.selectionPolish.${option.value}`),
-        title:
-          option.value === 'previewConfirm' && !showVoice
-            ? t('settings.selectionWorkspace.previewConfirmComingSoonHint')
-            : t(`settings.selectionPolish.${option.value}Hint`),
-        disabled: option.value === 'previewConfirm' && !showVoice,
+        // 「预览后确认」在 Linux 上已经打通（润色进 QA 面板预览，确认后替换）。
+        title: t(`settings.selectionPolish.${option.value}Hint`),
       }))}
     />
   );

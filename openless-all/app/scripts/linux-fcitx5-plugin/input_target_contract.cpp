@@ -124,23 +124,33 @@ int main() {
         assert(!plugin.commitDictationTarget("destroyed-dictation", "late write"));
         assert(!plugin.applySelectionTarget("destroyed-selection", "original", "late write"));
 
-        // ---- 选区读取模型：只认 clipboard addon 的 PRIMARY ----
-        // 读到什么就捕获什么：不再有「探针 / 缓存 / surrounding」三方抢答。
+        // ---- 选区读取模型：应用自报的选区优先，PRIMARY 兜底 ----
+        // 键盘选中文本时应用不会把内容导出到 PRIMARY，所以 surrounding 的
+        // anchor != cursor 才是首选；两者都有时以 surrounding 为准（它能保证
+        // 后面 Apply 要替换的就是这一段）。
         {
             RecordingInputContext ctx(instance.inputContextManager());
             ctx.surroundingText().setText("stale app selection", 19, 0);
             fcitx::OpenLessInputTargetContract::select(plugin, ctx);
             fcitx::OpenLessInputTargetContract::setSelectionCacheReader(
                 plugin, "fresh primary");
-            assert(plugin.captureSelectionTarget("fresh-primary") == "fresh primary");
-            assert(plugin.getSelectionText() == "fresh primary");
+            assert(plugin.captureSelectionTarget("fresh-primary") == "stale app selection");
+            assert(plugin.getSelectionText() == "stale app selection");
             assert(plugin.cancelSelectionTarget("fresh-primary"));
         }
-        // PRIMARY 为空（图片/文件/密码，或应用根本不导出 PRIMARY）→ 判失效：
-        // 既不退回 surrounding，也不退回上一次的文本。
+        // surrounding 里没有选区（cursor == anchor，只是光标）→ 用 PRIMARY。
+        {
+            RecordingInputContext caretOnly(instance.inputContextManager());
+            caretOnly.surroundingText().setText("just a caret", 5, 5);
+            fcitx::OpenLessInputTargetContract::select(plugin, caretOnly);
+            fcitx::OpenLessInputTargetContract::setSelectionCacheReader(plugin, "mouse pick");
+            assert(plugin.captureSelectionTarget("mouse-pick") == "mouse pick");
+            assert(plugin.cancelSelectionTarget("mouse-pick"));
+        }
+        // 两边都没有 → 判失效：不退回上一次的文本。
         {
             RecordingInputContext imageSelection(instance.inputContextManager());
-            imageSelection.surroundingText().setText("previous selection", 18, 0);
+            imageSelection.surroundingText().setText("previous selection", 18, 18);
             fcitx::OpenLessInputTargetContract::select(plugin, imageSelection);
             fcitx::OpenLessInputTargetContract::setSelectionCacheReader(plugin, "");
             assert(plugin.getSelectionText().empty());
@@ -150,10 +160,11 @@ int main() {
             assert(!plugin.cancelSelectionTarget("no-text"));
         }
         // 恢复注入值后，同一 ticket 名可以重新捕获（不残留旧状态）。
+        // 这里故意让 surrounding 只有光标（cursor == anchor），验证 PRIMARY 兜底。
         {
             fcitx::OpenLessInputTargetContract::setSelectionCacheReader(plugin, "again");
             RecordingInputContext again(instance.inputContextManager());
-            again.surroundingText().setText("again again", 3, 0);
+            again.surroundingText().setText("again again", 3, 3);
             fcitx::OpenLessInputTargetContract::select(plugin, again);
             assert(plugin.captureSelectionTarget("recovered") == "again");
             assert(plugin.cancelSelectionTarget("recovered"));

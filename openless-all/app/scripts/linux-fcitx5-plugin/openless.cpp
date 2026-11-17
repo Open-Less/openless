@@ -390,26 +390,45 @@ public:
         // 契约用例通过 `setSelectionCacheReader` 注入固定值，替代 clipboard addon；
         // 运行时没有注入，就走 addon 的 PRIMARY 读取。
         std::string text;
-        if (selectionCacheReader_) {
-            text = selectionCacheReader_();
-        } else {
-            auto *clipboard = instance_->addonManager().addon("clipboard");
-            if (!clipboard) {
-                FCITX_LOGC(openless, Warn)
-                    << "CaptureSelectionTarget: clipboard addon not loaded";
-                return std::string();
+        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
+                                               : fcitx::SurroundingText();
+        // 第一来源：应用自报的选区（surrounding 里 anchor != cursor 就是选中的那一段）。
+        // 键盘选中文本时应用不会把内容写进 PRIMARY（那是鼠标选中的语义），
+        // 以前只读 PRIMARY 会直接拿不到东西，键盘选区因此什么都没发生。
+        if (surrounding.isValid() && surrounding.anchor() != surrounding.cursor()) {
+            const int start = std::min(surrounding.cursor(), surrounding.anchor());
+            const int end = std::max(surrounding.cursor(), surrounding.anchor());
+            const std::string &full = surrounding.text();
+            if (start >= 0 && end <= static_cast<int>(full.size()) && start < end) {
+                text = full.substr(static_cast<size_t>(start), static_cast<size_t>(end - start));
+                FCITX_LOGC(openless, Debug)
+                    << "CaptureSelectionTarget: surrounding selection " << text.size()
+                    << " chars (cursor=" << surrounding.cursor()
+                    << " anchor=" << surrounding.anchor() << ")";
             }
-            text = clipboard->call<IClipboard::primary>(selectionIc_);
+        }
+        // 第二来源：PRIMARY（鼠标选中文本时应用会把它导出给剪贴板）。
+        if (text.empty()) {
+            if (selectionCacheReader_) {
+                text = selectionCacheReader_();
+            } else {
+                auto *clipboard = instance_->addonManager().addon("clipboard");
+                if (!clipboard) {
+                    FCITX_LOGC(openless, Warn)
+                        << "CaptureSelectionTarget: clipboard addon not loaded";
+                    return std::string();
+                }
+                text = clipboard->call<IClipboard::primary>(selectionIc_);
+            }
         }
         if (text.empty()) {
             FCITX_LOGC(openless, Debug)
-                << "CaptureSelectionTarget: primary selection is empty";
+                << "CaptureSelectionTarget: no selection (surrounding invalid or empty, "
+                   "PRIMARY empty)";
             return std::string();
         }
-        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
-                                               : fcitx::SurroundingText();
         FCITX_LOGC(openless, Debug)
-            << "CaptureSelectionTarget: clipboard primary read " << text.size()
+            << "CaptureSelectionTarget: captured " << text.size()
             << " chars (surrounding valid=" << surrounding.isValid() << ")";
         selectionTargets_[ticket] = {
             selectionIc_, text, std::string(), surrounding.text(),
@@ -709,8 +728,19 @@ public:
     /// 探针不可用（X11 会话、合成器不提供 ext-data-control）或数据没读完时，才退回
     /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
-        // 与 `captureSelectionTarget` 同一条路径：只问 fcitx5 的 clipboard addon，
-        // 不读我们自己的缓存、不碰合成器探针。契约用例用注入值代替 addon。
+        // 与 `captureSelectionTarget` 同一条路径：先看应用自报的选区
+        // （surrounding 的 anchor != cursor），再退回 PRIMARY。
+        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
+                                               : fcitx::SurroundingText();
+        if (surrounding.isValid() && surrounding.anchor() != surrounding.cursor()) {
+            const int start = std::min(surrounding.cursor(), surrounding.anchor());
+            const int end = std::max(surrounding.cursor(), surrounding.anchor());
+            const std::string &full = surrounding.text();
+            if (start >= 0 && end <= static_cast<int>(full.size()) && start < end) {
+                return full.substr(static_cast<size_t>(start),
+                                   static_cast<size_t>(end - start));
+            }
+        }
         std::string text;
         if (selectionCacheReader_) {
             text = selectionCacheReader_();
