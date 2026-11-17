@@ -7,3 +7,32 @@
 .ol-viewport-portals > .ol-settings-workspace > .ol-settings-surface {
   zoom: var(--ol-interface-scale, 1);
 }
+
+.ol-omni-settings {
+  container-type: inline-size;
+}
+
+@container (min-width: 650px) {
+  .ol-omni-connection-fields .ol-channel-form-row:not([data-stacked='true']) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 12px;
+  }
+  .ol-omni-connection-fields .ol-channel-form-row:not([data-stacked='true']) > label {
+    grid-column: 1;
+    padding-top: 9px;
+  }
+  .ol-omni-connection-fields .ol-channel-form-row:not([data-stacked='true']) > :not(label) {
+    grid-column: 2;
+  }
+}
+
+/* Narrow settings panes retain full-width key and address fields. */
+@container (max-width: 500px) {
+  .ol-omni-primary-fields.ol-omni-connection-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .ol-omni-primary-fields.ol-omni-connection-fields > * {
+    grid-column: 1 / -1;
+  }
+}

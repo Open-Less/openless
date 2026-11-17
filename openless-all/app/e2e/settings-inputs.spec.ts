@@ -67,19 +67,26 @@ test('multimodal model menu stays wide enough to read every option', async ({ pa
 test('multimodal provider switches flush the outgoing field to its own slot', async ({ page }) => {
   await openAiSettings(page);
   await page.getByRole('button', { name: '多模态模式', exact: true }).click();
+  await settleNavigation(page);
   const card = page.locator('.ol-omni-settings');
-  const provider = card.getByRole('combobox', { name: '供应商' });
+  const provider = card.getByRole('combobox', { name: '供应商', exact: true });
   const model = card.getByLabel('模型', { exact: true });
+  await expect(provider).toHaveText('自定义');
+  await model.click();
   await model.fill('saved-with-custom-provider');
+  await expect(model).toHaveValue('saved-with-custom-provider');
   await provider.click();
   await page.getByRole('option', { name: 'Google Gemini', exact: true }).click();
   await expect(provider).toContainText('Google Gemini');
-  await expect(model).not.toHaveValue('saved-with-custom-provider');
+  await expect(model).toHaveValue('gemini-3.5-flash-lite');
   const customModel = await page.evaluate(async () => {
     const { readCredential } = await import('/src/api/providers.ts');
     return readCredential('omni.model', 'custom');
   });
   expect(customModel).toBe('saved-with-custom-provider');
+  await provider.click();
+  await page.getByRole('option', { name: '自定义', exact: true }).click();
+  await expect(model).toHaveValue('saved-with-custom-provider');
 });
 
 test('Escape from a General subpage returns focus to its category', async ({ page }) => {

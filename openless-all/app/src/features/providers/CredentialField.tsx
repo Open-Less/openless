@@ -2,6 +2,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -103,7 +104,7 @@ export function CredentialField({
       if (pickerSaveRef.current === save) pickerSaveRef.current = null;
     };
   }, [draft, pickerSaveRef]);
-  useEffect(() => register?.(account, draft.flush), [draft, account, register]);
+  useLayoutEffect(() => register?.(account, draft.flush), [draft, account, register]);
   useEffect(() => {
     const blocked = !loaded || dirty;
     track?.(account, blocked);

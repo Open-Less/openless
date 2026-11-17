@@ -170,8 +170,10 @@ export function ChannelList({
     }
   }, [autoCreateWhenEmpty, loaded, channels.length, startCreate]);
 
-  // The active one = the first enabled channel (the list is already sorted by order).
-  const activeId = channels.find((c) => c.enabled)?.id ?? null;
+  const isRetired = (channel: Channel) =>
+    kind === 'asr' && os === 'mac' && isRetiredMacAsrProvider(channel.providerType);
+  // A legacy row can still arrive in imported data. Only eligible channels can be active.
+  const activeId = channels.find((channel) => channel.enabled && !isRetired(channel))?.id ?? null;
 
   // ── Card verification ──
   // Runs only when the user clicks: verification is a real call (LLM sends one real polish request, cloud ASR
@@ -359,8 +361,7 @@ export function ChannelList({
         }}
       >
         {channels.map((channel) => {
-          const retired =
-            kind === 'asr' && os === 'mac' && isRetiredMacAsrProvider(channel.providerType);
+          const retired = isRetired(channel);
           const isActive = !retired && channel.id === activeId;
           const providerLabel = presetLabel(kind, channel.providerType, t, descriptors);
           const label = channel.name.trim() || providerLabel;

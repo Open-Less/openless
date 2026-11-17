@@ -1639,12 +1639,12 @@ export function OmniChannelSection() {
   const form = useProviderForm();
   const { prefs, updatePrefs } = useHotkeySettings();
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
-  const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
+  const [committedOmniProvider, setCommittedOmniProvider] = useState<string | null>(null);
   const switching = useRef(false);
   const pickerSave = useRef<((model: string) => Promise<boolean>) | null>(null);
   const [omniModel, setOmniModel] = useState('');
   const formRef = useRef<HTMLDivElement>(null);
-  useContentMotion(formRef, committedOmniProvider);
+  useContentMotion(formRef, committedOmniProvider ?? '');
 
   useEffect(() => {
     void listProviderDescriptors('omni')
@@ -1668,12 +1668,21 @@ export function OmniChannelSection() {
   useEffect(() => {
     if (!prefs || switching.current) return;
     const knownOmni = omniPresets.find((x) => x.id === prefs.activeOmniProvider);
-    const omniId = knownOmni ? knownOmni.id : 'custom';
-    setCommittedOmniProvider(omniId);
+    const fallback = omniPresets.find((preset) => preset.id === 'custom');
+    // Never expose editable fields under a guessed slot while the saved provider is loading.
+    setCommittedOmniProvider(knownOmni?.id ?? fallback?.id ?? null);
   }, [prefs, omniPresets]);
 
   const onOmniProviderChange = (id: string) => {
-    if (!prefs || id === committedOmniProvider || switching.current) return;
+    const preset = omniPresets.find((item) => item.id === id);
+    if (
+      !prefs ||
+      !committedOmniProvider ||
+      !preset ||
+      id === committedOmniProvider ||
+      switching.current
+    )
+      return;
     switching.current = true;
     const notice = 'omni-provider-switch';
     void form
@@ -1681,8 +1690,7 @@ export function OmniChannelSection() {
         emitSaved('saving', t('common.saving'), notice);
         let backendSwitched = false;
         try {
-          const preset = omniPresets.find((p) => p.id === id);
-          if (preset && preset.id !== 'custom') {
+          if (preset.id !== 'custom') {
             if (preset.baseUrl && !(await readCredential('omni.endpoint', id))?.trim())
               await setCredential('omni.endpoint', preset.baseUrl, id);
             if (preset.modelPlaceholder && !(await readCredential('omni.model', id))?.trim())
@@ -1713,6 +1721,14 @@ export function OmniChannelSection() {
   };
 
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
+  if (!committedOmniProvider || !omniPreset) {
+    return (
+      <Card className="ol-omni-settings" padding={16}>
+        <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
+        <p role="status">{t('common.loading')}</p>
+      </Card>
+    );
+  }
   const geminiTranscribe =
     committedOmniProvider === 'gemini' &&
     ['gemini-3.5-transcribe', 'gemini-3.5-transcribe-live'].includes(omniModel.trim());
@@ -1744,7 +1760,7 @@ export function OmniChannelSection() {
               account="omni.model"
               provider={committedOmniProvider}
               pickerSaveRef={pickerSave}
-              placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+              placeholder={omniPreset.modelPlaceholder || 'model-name'}
               onValueChange={setOmniModel}
               mono
               trailing={
@@ -1772,21 +1788,23 @@ export function OmniChannelSection() {
               {t('settings.providers.geminiTranscribeOmniNotice')}
             </div>
           )}
-          <CredentialField
-            key={`${committedOmniProvider}:api_key`}
-            label={t('settings.providers.apiKeyLabel')}
-            account="omni.api_key"
-            provider={committedOmniProvider}
-            mono
-            mask
-          />
-          <CredentialField
-            key={`${committedOmniProvider}:endpoint`}
-            label={t('settings.providers.baseUrlLabel')}
-            account="omni.endpoint"
-            provider={committedOmniProvider}
-            placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
-          />
+          <div className="ol-omni-primary-fields ol-omni-connection-fields">
+            <CredentialField
+              key={`${committedOmniProvider}:api_key`}
+              label={t('settings.providers.apiKeyLabel')}
+              account="omni.api_key"
+              provider={committedOmniProvider}
+              mono
+              mask
+            />
+            <CredentialField
+              key={`${committedOmniProvider}:endpoint`}
+              label={t('settings.providers.baseUrlLabel')}
+              account="omni.endpoint"
+              provider={committedOmniProvider}
+              placeholder={omniPreset.baseUrl || 'https://your-endpoint/v1'}
+            />
+          </div>
           {committedOmniProvider === 'custom' && (
             <div className="ol-omni-advanced-fields">
               <CredentialField

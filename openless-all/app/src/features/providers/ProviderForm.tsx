@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -85,7 +84,7 @@ export function useProviderForm() {
     },
     [invalidate],
   );
-  useEffect(() => parent?.(id, () => finish(() => undefined)), [parent, id, finish]);
+  useLayoutEffect(() => parent?.(id, () => finish(() => undefined)), [parent, id, finish]);
   return useMemo(
     () => ({ version, revision, blocked, leaving, invalidate, track, register, finish }),
     [revision, blocked, leaving, invalidate, track, register, finish],

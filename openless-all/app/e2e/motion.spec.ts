@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   const pageErrors: string[] = [];
   errors.set(page, pageErrors);
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.goto('/');
+  await page.goto('/?os=mac');
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
 });
 test.afterEach(async ({ page }) => {
@@ -197,10 +197,12 @@ test('reduced motion keeps model gates and removes the closing delay', async ({ 
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await expect(dialog.getByRole('button', { name: /^多模态模型/ })).toBeDisabled();
-  await expect(dialog.getByRole('button', { name: '本地模型', exact: true })).toBeDisabled();
+  const retired = dialog.getByRole('button', { name: '本地模型。无法使用', exact: true });
+  await expect(retired).toBeDisabled();
+  await expect(retired).toHaveAttribute('data-retired-local-models', 'true');
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   for (const label of ['语言模型', '语音识别']) {
-    await expect(dialog.getByRole('button', { name: new RegExp(`^${label}。`) })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: `${label}。无法使用`, exact: true })).toBeDisabled();
   }
   await expect(dialog.getByRole('button', { name: '多模态模型', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -286,7 +288,7 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   );
 });
 
-test('multimodal settings fit one desktop page and keep inactive notices below labels', async ({
+test('multimodal settings fit one desktop page and keep all service entries visible', async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -294,27 +296,33 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
+  const navigation = dialog.getByRole('group', { name: '服务设置分类', exact: true });
   const card = dialog.locator('.ol-omni-settings');
+  await expect(navigation.getByRole('button')).toHaveText([
+    '语言模型',
+    '语音识别',
+    '多模态模型',
+    '本地模型',
+    '连接与扩展',
+  ]);
+  await expect(navigation.locator('.ol-service-inactive-tag')).toHaveCount(0);
   await expect(card.getByLabel('额外 Headers', { exact: true })).toBeVisible();
   for (const viewport of [
     { width: 1300, height: 835 },
     { width: 1280, height: 720 },
   ]) {
     await page.setViewportSize(viewport);
-    const bounds = await card.evaluate((element) => {
-      const scroll = element.closest('.ol-thinscroll')!;
-      const navigation = document.querySelector('.ol-service-views')!;
-      return {
-        verticalOverflow: scroll.scrollHeight - scroll.clientHeight,
-        horizontalOverflow: navigation.scrollWidth - navigation.clientWidth,
-        entries: navigation.querySelectorAll('button').length,
-        inactiveTags: navigation.querySelectorAll('.ol-service-inactive-tag').length,
-      };
-    });
-    expect(bounds.verticalOverflow).toBeLessThanOrEqual(1);
-    expect(bounds.horizontalOverflow).toBeLessThanOrEqual(1);
-    expect(bounds.entries).toBe(5);
-    expect(bounds.inactiveTags).toBe(0);
+    await expect
+      .poll(() =>
+        card.evaluate((element) => {
+          const scroll = element.closest('.ol-thinscroll')!;
+          return scroll.scrollHeight - scroll.clientHeight;
+        }),
+      )
+      .toBeLessThanOrEqual(1);
+    await expect
+      .poll(() => navigation.evaluate((element) => element.scrollWidth - element.clientWidth))
+      .toBeLessThanOrEqual(1);
     await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
       ratio: 1,
     });

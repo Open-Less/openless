@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../../components/Icon';
+import { isRetiredMacAsrProvider } from '../../../lib/experimentalAsr';
 import { getRuntimeOS } from '../../../runtime/environment';
 import {
   ExperimentalAsrSection,
@@ -254,7 +255,8 @@ export function ServicesTab({
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
-  const showLocalModel = getRuntimeOS() !== 'mac' && platformCaps?.supportsLocalAsr === true;
+  const os = getRuntimeOS();
+  const showLocalModel = os !== 'mac' && platformCaps?.supportsLocalAsr === true;
   const multimodal =
     prefs?.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
   const [view, setView] = useState<ServiceViewId>(initialView ?? (asrNavigation ? 'asr' : 'llm'));
@@ -263,15 +265,9 @@ export function ServicesTab({
     else if (asrNavigation) setView('asr');
   }, [initialView, asrNavigation]);
   const voiceActivationModels =
-    showLocalModel && getRuntimeOS() === 'win' && prefs?.voiceActivationEnabled === true;
-  const views = availableServiceViews(showLocalModel, getRuntimeOS());
-  const requestedView = resolveServiceView(
-    view,
-    views,
-    multimodal,
-    getRuntimeOS(),
-    voiceActivationModels,
-  );
+    showLocalModel && os === 'win' && prefs?.voiceActivationEnabled === true;
+  const views = availableServiceViews(showLocalModel, os);
+  const requestedView = resolveServiceView(view, views, multimodal, os, voiceActivationModels);
   const contentRef = useRef<HTMLDivElement>(null);
   const suiteMode = prefs?.pipelineMode === 'deepseek';
   const selectedView = suiteMode ? 'deepseek' : requestedView;
@@ -324,7 +320,10 @@ export function ServicesTab({
           if (cancelled || observed !== revision) return;
           setRequiredConfigured({
             llm: llm.some((channel) => channel.enabled),
-            asr: asr.some((channel) => channel.enabled),
+            asr: asr.some(
+              (channel) =>
+                channel.enabled && !(os === 'mac' && isRetiredMacAsrProvider(channel.providerType)),
+            ),
           });
         })
         .catch(() => undefined);
@@ -345,7 +344,7 @@ export function ServicesTab({
       cancelled = true;
       unlisten?.();
     };
-  }, [suiteMode]);
+  }, [suiteMode, os]);
 
   return (
     <>
@@ -383,7 +382,7 @@ export function ServicesTab({
             style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
           >
             {views.map((id) => {
-              if (id === 'models' && getRuntimeOS() === 'mac') {
+              if (id === 'models' && os === 'mac') {
                 return (
                   <UnavailableServiceView
                     key={id}
@@ -393,12 +392,7 @@ export function ServicesTab({
                   />
                 );
               }
-              const inactive = isServiceViewInactive(
-                id,
-                multimodal,
-                getRuntimeOS(),
-                voiceActivationModels,
-              );
+              const inactive = isServiceViewInactive(id, multimodal, os, voiceActivationModels);
               const required = !inactive && (id === 'llm' || id === 'asr');
               const configured =
                 id === 'llm'
