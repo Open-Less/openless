@@ -6,4 +6,7 @@ export {
   updateVocab,
   listVocabPresets,
   saveVocabPresets,
+  addLearnedVocab,
+  acceptPendingCorrection,
+  rejectPendingCorrection,
 } from '../lib/ipc/vocab';

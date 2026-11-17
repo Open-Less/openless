@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useReducedMotion } from '../../lib/motion';
+import { useReducedMotion } from '../../../lib/motion';
 
 const BAR_WIDTH = 3;
 const BAR_GAP = 3;

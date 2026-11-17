@@ -3,7 +3,10 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-const source = readFileSync(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf8');
+const source = readFileSync(
+  new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
+  'utf8',
+);
 const ast = ts.createSourceFile(
   'Capsule.tsx',
   source,
@@ -36,7 +39,7 @@ vm.runInNewContext(
 );
 const effectCode = compile(`globalThis.replayEffect = (${effect});`);
 const railSource = readFileSync(
-  new URL('../src/components/LiveTranscriptPill.tsx', import.meta.url),
+  new URL('../src/features/capsule/LiveTranscriptPill.tsx', import.meta.url),
   'utf8',
 );
 const railAst = ts.createSourceFile(
@@ -144,6 +147,7 @@ function mount({
   const scope = {
     ...backend.exports,
     isTauri: true,
+    isTauriHost: () => true,
     capsuleStateFirstLogged: true,
     capsuleStateRef: { current: 'idle' },
     transcriptViewRef: { current: backend.exports.createTranscriptViewState() },
@@ -523,10 +527,22 @@ for (const overlay of [false, true]) {
     vm.runInNewContext(code, {
       exports: module.exports,
       require(name) {
+        if (name === '../../preview/history')
+          return {
+            previewHistory: new Proxy(
+              {},
+              {
+                get() {
+                  assert.fail('native rail visibility must not enter preview data');
+                },
+              },
+            ),
+          };
         if (name === './platform-exports') return { isDesktop: () => true };
         if (name === './shared')
           return {
             isTauriNow: () => true,
+            requireBackendReady: async () => undefined,
             invokeOrMock: async (command, args) => calls.push({ command, visible: args.visible }),
           };
         assert.equal(name, '@tauri-apps/api/webviewWindow');
@@ -545,7 +561,7 @@ for (const overlay of [false, true]) {
 // The main window's recording cue must not see synthetic mirror lifecycle events either.
 {
   const cueSource = readFileSync(
-    new URL('../src/components/AudioCue.tsx', import.meta.url),
+    new URL('../src/features/capsule/AudioCue.tsx', import.meta.url),
     'utf8',
   );
   const cueAst = ts.createSourceFile(

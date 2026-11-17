@@ -1,4 +1,4 @@
-import { releaseWebGL } from '../../lib/webglResources';
+import { releaseWebGL } from '../../../lib/webglResources';
 // orbFeed.ts — shared render source for the capsule's thinking orb.
 //
 // Requirement: every assistant message avatar shows the rotating capsule thinking
@@ -13,7 +13,7 @@ import { releaseWebGL } from '../../lib/webglResources';
 // leaves, stop the loop and release GL resources. With the window hidden, rAF is
 // suspended by WebKit/Chromium and the loop naturally pauses.
 
-import { ORB_FRAGMENT_SRC, VERTEX_SRC } from '../SiriGL';
+import { ORB_FRAGMENT_SRC, VERTEX_SRC } from '../../capsule/SiriGL';
 
 type FrameSubscriber = (source: HTMLCanvasElement) => void;
 

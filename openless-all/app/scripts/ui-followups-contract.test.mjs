@@ -8,7 +8,7 @@ const transitionViewport = readFileSync(
   resolve(root, 'src/ui/layout/TransitionViewport.tsx'),
   'utf8',
 );
-const capsuleStyles = readFileSync(resolve(root, 'src/components/CapsuleStyles.css'), 'utf8');
+const capsuleStyles = readFileSync(resolve(root, 'src/features/capsule/CapsuleStyles.css'), 'utf8');
 const insertMotion = readFileSync(resolve(root, 'src/lib/insertTextAnimation.ts'), 'utf8');
 const themeSection = readFileSync(resolve(root, 'src/pages/settings/ThemeSection.tsx'), 'utf8');
 const languageSection = readFileSync(

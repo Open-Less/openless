@@ -72,7 +72,7 @@ assertMatch(
   'WebView capsules must capture the shared foreground target once per recording session',
 );
 const capsuleTsx = await readFile(
-  new URL('../src/components/Capsule.tsx', import.meta.url),
+  new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
   'utf-8',
 );
 const capsuleLayoutTs = await readFile(
@@ -80,15 +80,15 @@ const capsuleLayoutTs = await readFile(
   'utf-8',
 );
 const capsuleStylesCss = await readFile(
-  new URL('../src/components/CapsuleStyles.css', import.meta.url),
+  new URL('../src/features/capsule/CapsuleStyles.css', import.meta.url),
   'utf-8',
 );
 const defaultCapsuleTsx = await readFile(
-  new URL('../src/components/OpenLessCapsule.tsx', import.meta.url),
+  new URL('../src/features/capsule/OpenLessCapsule.tsx', import.meta.url),
   'utf-8',
 );
 const liveTranscriptTsx = await readFile(
-  new URL('../src/components/LiveTranscriptPill.tsx', import.meta.url),
+  new URL('../src/features/capsule/LiveTranscriptPill.tsx', import.meta.url),
   'utf-8',
 );
 const backendEventTs = await readFile(

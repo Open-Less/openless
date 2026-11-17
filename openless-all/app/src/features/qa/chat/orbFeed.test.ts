@@ -5,7 +5,7 @@ function assertOk(value: unknown, message = 'expected a truthy value'): asserts 
   if (!value) throw new Error(message);
 }
 import { subscribeOrbFrames } from './orbFeed';
-import { isWebGLAvailable } from '../SiriGL';
+import { isWebGLAvailable } from '../../capsule/SiriGL';
 
 type Failure = 'shader' | 'program' | 'link' | 'buffer' | 'none';
 let failure: Failure = 'none';

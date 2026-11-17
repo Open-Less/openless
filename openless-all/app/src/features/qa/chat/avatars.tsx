@@ -12,11 +12,11 @@
 //   on load failure. Used only by selection ask (QA).
 
 import { useEffect, useRef, useState } from 'react';
-import { ThinkingDots } from '../ThinkingDots';
-import { SiriGL, isWebGLAvailable } from '../SiriGL';
+import { ThinkingDots } from '../../../components/ThinkingDots';
+import { SiriGL, isWebGLAvailable } from '../../capsule/SiriGL';
 import { subscribeOrbFrames } from './orbFeed';
-import { getSettings } from '../../lib/ipc/settings';
-import { isTauri } from '../../lib/ipc/shared';
+import { getSettings } from '../../../api/preferences';
+import { isTauriHost } from '../../../runtime/environment';
 import { cn } from './lib/utils';
 import './chat.css';
 
@@ -129,7 +129,7 @@ export function OrbAvatar({ size = 32 }: { size?: number }) {
 export function useGithubLogin(refreshKey?: string | number): string {
   const [login, setLogin] = useState('');
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauriHost()) return;
     let cancelled = false;
     getSettings()
       .then((prefs) => {

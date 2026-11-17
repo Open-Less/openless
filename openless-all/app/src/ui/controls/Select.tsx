@@ -13,6 +13,7 @@ interface SelectProps {
   placeholder?: string;
   style?: CSSProperties;
   onOpenChange?: (open: boolean) => void;
+  onOpenChangeComplete?: (open: boolean) => void;
   open?: boolean;
   side?: 'top' | 'bottom';
   popupStyle?: CSSProperties;
@@ -29,6 +30,7 @@ export function Select({
   placeholder,
   style,
   onOpenChange,
+  onOpenChangeComplete,
   open,
   side = 'bottom',
   popupStyle,
@@ -43,6 +45,7 @@ export function Select({
       disabled={disabled}
       modal={false}
       onOpenChange={onOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
       onValueChange={(next) => {
         if (next !== null) onChange(next);
       }}

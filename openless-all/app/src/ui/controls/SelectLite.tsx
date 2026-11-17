@@ -33,6 +33,7 @@ interface SelectLiteProps {
   style?: CSSProperties;
   ariaLabel?: string;
   onOpenChange?: (open: boolean) => void;
+  onOpenChangeComplete?: (open: boolean) => void;
   open?: boolean;
   side?: 'top' | 'bottom';
   popupStyle?: CSSProperties;
@@ -51,6 +52,7 @@ export function SelectLite({
   style,
   ariaLabel,
   onOpenChange,
+  onOpenChangeComplete,
   open: controlledOpen,
   side = 'bottom',
   popupStyle,
@@ -93,6 +95,7 @@ export function SelectLite({
           popupClassName,
         }}
         onOpenChange={handleOpenChange}
+        onOpenChangeComplete={onOpenChangeComplete}
       />
     );
   }
@@ -112,6 +115,7 @@ export function SelectLite({
         popupClassName,
       }}
       onOpenChange={handleOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
     />
   );
 }
@@ -125,6 +129,7 @@ function SearchableSelect({
   style,
   ariaLabel,
   onOpenChange,
+  onOpenChangeComplete,
   searchPlaceholder,
   emptyMessage,
   open,
@@ -165,6 +170,7 @@ function SearchableSelect({
       inputValue={query}
       onInputValueChange={setQuery}
       itemToStringLabel={(item) => optionMapRef.current.get(item)?.label ?? item}
+      onOpenChangeComplete={onOpenChangeComplete}
       onOpenChange={(next) => {
         if (next) setQuery('');
         onOpenChange?.(next);

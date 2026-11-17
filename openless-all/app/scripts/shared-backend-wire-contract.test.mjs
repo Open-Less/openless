@@ -46,7 +46,7 @@ const [
   mobileSelection,
 ] = await Promise.all([
   read('src/lib/types.ts'),
-  read('src/pages/QaPanel.tsx'),
+  read('src/features/qa/QaPanel.tsx'),
   read('src/lib/ipc/remote-server.ts'),
   read('src/pages/settings/RemoteInputSection.tsx'),
   read('src/lib/ipc/selection-voice-preview.ts'),

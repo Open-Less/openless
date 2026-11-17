@@ -20,7 +20,7 @@ const violations = [];
 const lib = await read('src-tauri/src/lib.rs');
 const capabilities = await read('src-tauri/capabilities/default.json');
 const commands = await read('src-tauri/src/commands/selection_polish_preview.rs');
-const qaPanel = await read('src/pages/QaPanel.tsx');
+const qaPanel = await read('src/features/qa/QaPanel.tsx');
 const appTsx = await read('src/app/windowRoutes.tsx');
 const mainTsx = await read('src/app/bootstrap.tsx');
 

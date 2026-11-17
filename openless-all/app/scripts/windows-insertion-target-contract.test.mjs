@@ -6,7 +6,10 @@ const adapters = await readFile(
   'utf8',
 );
 const events = await readFile(new URL('../src-tauri/src/tauri_events.rs', import.meta.url), 'utf8');
-const capsule = await readFile(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf8');
+const capsule = await readFile(
+  new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
+  'utf8',
+);
 const finalInsert = adapters.match(
   /async fn insert_final\([\s\S]*?(?=\n    async fn copy_fallback)/,
 )?.[0];
@@ -58,7 +61,7 @@ assert.match(
 );
 assert.match(
   capsule,
-  /return <InsertFallbackCard payload=\{insertFallback\} \/>/,
+  /return <InsertFallbackCard key=\{insertFallback.presentationId\} payload=\{insertFallback\} \/>/,
   'the copied text must remain visible in the fallback card',
 );
 

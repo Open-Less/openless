@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import type { CapsuleState, ThemeMode } from '../../src/lib/types';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
+import { AppViewport } from '../../src/ui/layout/AppViewport';
 
 const callbacks = new Map<number, (value: unknown) => void>();
 const listeners = new Map<string, Set<number>>();
@@ -45,6 +46,15 @@ const bridge = {
     bridge.emit('prefs:changed', { themeMode });
   },
   sizes: [] as boolean[],
+  holdQaGeometry: false,
+  rejectQaExpansion: false,
+  applyQaGeometry(expanded: boolean, width?: number, height?: number) {
+    const host = document.querySelector<HTMLElement>('#native-host');
+    if (!host) return;
+    host.style.width = `${width ?? (expanded ? 760 : 480)}px`;
+    host.style.height = `${height ?? (expanded ? 416 : 80)}px`;
+    host.style.bottom = expanded ? '48px' : '8px';
+  },
   target: {
     sessionId: 'recording-a',
     targetLanguage: 'English',
@@ -148,12 +158,8 @@ window.__TAURI_INTERNALS__ = {
     if (command === 'qa_get_snapshot') return { kind: 'idle', messages: [] };
     if (command === 'qa_window_set_expanded') {
       bridge.sizes.push(args.expanded);
-      const host = document.querySelector<HTMLElement>('#native-host');
-      if (host) {
-        host.style.width = args.expanded ? '760px' : '480px';
-        host.style.height = args.expanded ? '416px' : '80px';
-        host.style.bottom = args.expanded ? '48px' : '8px';
-      }
+      if (args.expanded && bridge.rejectQaExpansion) throw new Error('native resize failed');
+      if (!bridge.holdQaGeometry) bridge.applyQaGeometry(args.expanded);
       return;
     }
     if (command === 'qa_window_dismiss') bridge.emit('chat-panel:closing', {});
@@ -238,9 +244,13 @@ createRoot(document.getElementById('root')!).render(
         transform: 'translateX(-50%)',
       }}
     >
-      <QaPanel />
+      <AppViewport scale={false}>
+        <QaPanel />
+      </AppViewport>
     </div>
   ) : (
-    <CapsuleFixture />
+    <AppViewport scale={false}>
+      <CapsuleFixture />
+    </AppViewport>
   ),
 );
