@@ -19,7 +19,7 @@ test('remote input and About only report a copy once the native clipboard accept
 
   await settings
     .getByRole('navigation', { name: '设置分类' })
-    .getByRole('button', { name: '关于', exact: true })
+    .getByRole('button', { name: '关于与更新', exact: true })
     .click();
   const code = settings.locator('kbd').getByText('1078960553');
   const qq = code.locator('..').getByRole('button');
