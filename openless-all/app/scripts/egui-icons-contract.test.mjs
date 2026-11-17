@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { icons } from './sync-egui-lucide-icons.mjs';
 
 const app = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -103,8 +104,49 @@ assert.equal(
     .includes('"nav.quickNote"'),
   false,
 );
-assert.match(
-  tauriNav,
-  /\{ id: 'selectionAsk' \},\s*\{ id: 'quickNote' \},\s*\{ id: 'corrections' \}/,
+
+const navSource = ts.createSourceFile('navigation.ts', tauriNav, ts.ScriptTarget.Latest);
+const navDeclarations = navSource.statements
+  .filter(ts.isVariableStatement)
+  .flatMap((statement) => statement.declarationList.declarations);
+
+function navArray(name) {
+  const initializer = navDeclarations.find(
+    (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name,
+  )?.initializer;
+  assert.ok(initializer && ts.isArrayLiteralExpression(initializer), `${name} must be an array`);
+  return initializer.elements;
+}
+
+function propertyValue(entry, key) {
+  if (!entry || !ts.isObjectLiteralExpression(entry)) return undefined;
+  return entry.properties.find(
+    (property) =>
+      ts.isPropertyAssignment(property) &&
+      (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+      property.name.text === key,
+  )?.initializer;
+}
+
+function stringProperty(entry, key) {
+  const value = propertyValue(entry, key);
+  return value && ts.isStringLiteral(value) ? value.text : undefined;
+}
+
+// The Tauri desktop sidebar and compact More sheet have distinct navigation orders.
+const desktopTools = navArray('NAV_TREE').find((item) => stringProperty(item, 'key') === 'tools');
+assert.equal(stringProperty(desktopTools, 'kind'), 'group', 'Tauri sidebar must group its tools');
+assert.equal(stringProperty(desktopTools, 'icon'), 'selectionAsk', 'Tauri tools group icon');
+const desktopEntries = propertyValue(desktopTools, 'children');
+assert.ok(desktopEntries && ts.isArrayLiteralExpression(desktopEntries), 'Tauri desktop tools');
+assert.deepEqual(
+  desktopEntries.elements.map((item) => stringProperty(item, 'id')),
+  ['corrections', 'selectionAsk', 'translation', 'quickNote'],
+  'Tauri sidebar tools order',
 );
-console.log('egui SVG outlines and tools navigation match Tauri');
+assert.deepEqual(
+  navArray('MORE_TABS').map((item) => stringProperty(item, 'id')),
+  ['vocab', 'translation', 'selectionAsk', 'quickNote', 'corrections'],
+  'Tauri compact More sheet order',
+);
+console.log('egui SVG outlines match Tauri; sidebar and compact navigation orders verified');
