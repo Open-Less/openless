@@ -74,10 +74,10 @@ export const NAV_TREE: NavNode[] = [
     key: 'tools',
     icon: 'selectionAsk',
     children: [
-      { id: 'translation' },
-      { id: 'selectionAsk' },
-      { id: 'quickNote' },
       { id: 'corrections' },
+      { id: 'selectionAsk' },
+      { id: 'translation' },
+      { id: 'quickNote' },
     ],
   },
 ];

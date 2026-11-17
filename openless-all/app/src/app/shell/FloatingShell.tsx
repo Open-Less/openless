@@ -272,10 +272,7 @@ function FloatingShellBody({
               )}
             </button>
 
-            {/* nav — flat items + expandable groups. Flat: overview/history/vocab.
-              Groups: Style (polish modes + marketplace) / Tools (selection ask + translation).
-              Active items get a static surface-2 rounded bg via the .ol-nav-btn-active
-              class; group titles expand/collapse on click. */}
+            {/* Group titles expand and collapse without changing the current page. */}
             <nav style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {NAV_TREE.map((node) => {
                 if (node.kind === 'item') {
@@ -617,45 +614,42 @@ function FloatingShellBody({
       />
       {/* Enter keyframes shared by tab switching, the provider prompt, and the footer popover */}
       <style>{`
-        /* Sidebar nav speaks the shared selection language (tokens.css --ol-choice-*),
-           flat, no sliding pill:
-             idle     → light gray label (icons follow via currentColor)
-             hover    → near-black label on a faint wash, pointer cursor
-             selected → black semibold label on a static wash one step darker;
-                        hovering it changes nothing
-           All via class: sidebar buttons carry no inline colour or background. The base
-           .ol-nav-btn rules serve the mobile bars and sheets, which keep their inline
-           background, so the active bg doesn't reach them. */
         .ol-nav-btn {
           color: var(--ol-ink-3);
           font-weight: var(--ol-font-weight-medium);
         }
         .ol-nav-btn.ol-nav-btn-active {
           color: var(--ol-ink);
+          -webkit-text-fill-color: var(--ol-ink);
           font-weight: var(--ol-font-weight-semibold);
-          background: var(--ol-surface-2);
+          background-color: var(--ol-choice-active-bg);
         }
         .ol-sidebar-surface .ol-nav-btn {
           color: var(--ol-choice-idle-ink);
+          -webkit-text-fill-color: var(--ol-choice-idle-ink);
+          background-color: transparent;
           cursor: pointer;
+          box-shadow: none;
           transition: none;
         }
+        /* The inset ring keeps selection visible when the native WebView does not
+           paint the translucent fill or the window clips an outer outline. */
         .ol-sidebar-surface .ol-nav-btn-active {
           color: var(--ol-ink);
-          background: var(--ol-choice-active-bg);
+          -webkit-text-fill-color: var(--ol-ink);
+          background-color: var(--ol-choice-active-bg);
+          box-shadow: inset 0 0 0 1px var(--ol-ink);
         }
-        @media (hover: hover) and (pointer: fine) {
-          .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
-            color: var(--ol-choice-hover-ink);
-            background: var(--ol-choice-hover-bg);
-          }
+        /* Packaged WebViews can deliver hover while reporting limited pointer capabilities. */
+        .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
+          color: var(--ol-choice-hover-ink);
+          -webkit-text-fill-color: var(--ol-choice-hover-ink);
+          background-color: var(--ol-choice-hover-bg);
+          box-shadow: inset 0 0 0 1px var(--ol-line);
         }
         .ol-sidebar-surface .ol-nav-btn:focus-visible {
           outline: 2px solid var(--ol-blue);
           outline-offset: -2px;
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .ol-sidebar-surface .ol-nav-btn { transition: none; }
         }
       `}</style>
     </div>

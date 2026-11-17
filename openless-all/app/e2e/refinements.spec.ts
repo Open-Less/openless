@@ -1,6 +1,6 @@
 import { fixtureOrigin } from './support/server';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
@@ -205,58 +205,100 @@ test('startup has no video and records real navigation-relative milestones', asy
   await expect(page.locator('video')).toHaveCount(0);
 });
 
-test('every main destination and settings category stays readable on desktop and narrow windows', async ({
-  page,
-}) => {
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto('/');
-  for (const name of ['历史', '词典']) {
-    await page.getByRole('button', { name, exact: true }).click();
-    await settleNavigation(page);
-    await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
-  }
-  await page.getByRole('button', { name: '风格', exact: true }).click();
-  for (const name of ['润色模式', '风格市场']) {
-    await page.getByRole('button', { name, exact: true }).click();
-    await settleNavigation(page);
-    await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
-  }
-  await page.getByRole('button', { name: '工具', exact: true }).click();
-  for (const name of ['翻译', '问任何问题', '速记', '纠正规则']) {
-    await page.getByRole('button', { name, exact: true }).click();
-    await settleNavigation(page);
-    await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
-  }
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  for (const name of [
-    '通用',
-    '快捷键',
-    'AI 与模型',
-    '外观与语言',
-    '权限与数据',
-    '高级功能',
-    '关于与更新',
-  ]) {
-    await page
-      .getByRole('navigation', { name: '设置分类' })
-      .getByRole('button', { name, exact: true })
-      .click();
-    await expect(
-      page
-        .getByRole('dialog', { name: '设置', exact: true })
-        .getByRole('heading', { name, exact: true })
-        .first(),
-    ).toBeVisible();
-  }
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  await settleNavigation(page);
-  const scroll = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
-  expect(await scroll.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: 'test-results/refinements-mobile.png' });
-  expect(errors).toEqual([]);
-});
+const styleDestinations = [
+  ['润色模式', 'style'],
+  ['风格市场', 'marketplace'],
+] as const;
+const toolDestinations = [
+  ['纠正规则', 'corrections'],
+  ['随便问', 'selectionAsk'],
+  ['翻译', 'translation'],
+  ['速记', 'quickNote'],
+] as const;
+
+for (const layout of ['desktop', 'narrow'] as const) {
+  test(`every main destination and settings category stays readable · ${layout}`, async ({
+    page,
+  }, info) => {
+    const narrow = layout === 'narrow';
+    if (narrow) await page.setViewportSize({ width: 375, height: 812 });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto('/?os=mac');
+
+    const nav = page.locator(narrow ? '.ol-mobile-bottom-nav' : '.ol-sidebar-surface nav');
+    const expectDestination = async (id: string) => {
+      const heading = page
+        .locator(`main [data-ol-page="${id}"][data-transition-phase="settled"]`)
+        .getByRole('heading', { level: 1 });
+      await expect(heading).toBeVisible();
+      await expect(heading).toBeInViewport();
+    };
+    const visit = async (scope: Locator, name: string, id: string) => {
+      await scope.getByRole('button', { name, exact: true }).click();
+      await expectDestination(id);
+    };
+
+    await expectDestination('overview');
+    await visit(nav, '历史', 'history');
+    await visit(nav, '概览', 'overview');
+
+    if (narrow) {
+      const visitFromSheet = async (sheet: string, name: string, id: string) => {
+        await nav.getByRole('button', { name: sheet, exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: sheet, exact: true });
+        await dialog.getByRole('button', { name, exact: true }).click();
+        await expect(page.locator('.ol-mobile-navigation-sheet')).toHaveCount(0);
+        await expectDestination(id);
+      };
+      for (const [name, id] of styleDestinations) await visitFromSheet('风格', name, id);
+      await visitFromSheet('更多', '词典', 'vocab');
+      for (const [name, id] of toolDestinations) await visitFromSheet('更多', name, id);
+    } else {
+      await visit(nav, '词典', 'vocab');
+      await nav.getByRole('button', { name: '风格', exact: true }).click();
+      for (const [name, id] of styleDestinations) await visit(nav, name, id);
+      const tools = nav.getByRole('button', { name: '工具', exact: true });
+      await tools.click();
+      await expect(tools).toHaveAttribute('aria-expanded', 'true');
+      await expect(nav.getByRole('button', { name: /^(纠正规则|随便问|翻译|速记)$/ })).toHaveText(
+        toolDestinations.map(([name]) => name),
+      );
+      for (const [name, id] of toolDestinations) await visit(nav, name, id);
+      await visit(page.locator('.ol-sidebar-surface'), '用量', 'usage');
+    }
+
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
+    const categories = settings.getByRole('navigation', { name: '设置分类' });
+    for (const name of [
+      '通用',
+      '快捷键',
+      'AI 与模型',
+      '云服务',
+      '外观与语言',
+      '权限与数据',
+      '高级功能',
+      '关于与更新',
+    ]) {
+      const entry = categories.getByRole('button', { name, exact: true });
+      await entry.click();
+      await expect(entry).toHaveAttribute('aria-current', 'page');
+      await settleNavigation(settings);
+      const heading = settings.getByRole('heading', { name, level: 2, exact: true }).first();
+      await expect(heading).toBeVisible();
+      await expect(heading).toBeInViewport();
+    }
+    if (narrow) {
+      await categories.getByRole('button', { name: '快捷键', exact: true }).click();
+      await settleNavigation(settings);
+      const scroll = settings.locator('.ol-settings-scroll[data-transition-phase="settled"]');
+      expect(await scroll.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: info.outputPath('refinements-mobile.png') });
+    }
+    expect(errors).toEqual([]);
+  });
+}
 
 test('dragging makes a fractional gap, follows the pointer, reverses, cancels and keyboard reorders', async ({
   page,

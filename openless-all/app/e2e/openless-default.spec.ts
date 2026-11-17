@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 test('default capsule follows both themes with eleven bars, including legacy style links', async ({
   page,
@@ -52,35 +52,64 @@ test('processing stays cancellable, hides confirm and shows a compact status', a
   });
 });
 
-test('sidebar distinguishes hover from selection without navigating on hover', async ({
-  page,
-}, info) => {
-  await page.emulateMedia({ colorScheme: 'light' });
-  await page.goto('/');
-  await expect(page.locator('html')).not.toHaveAttribute('data-ol-theme', 'dark');
-  const nav = page.locator('.ol-sidebar-surface nav');
-  const history = nav.getByRole('button', { name: '历史', exact: true });
-  const overview = nav.getByRole('button', { name: '概览', exact: true });
-  // Selected: body ink on the selection wash, with a 1px ink ring WKWebView can paint.
-  // Idle: light gray, no wash. Hover: near-black on a lighter wash and a gray ring.
-  await expect(overview).toHaveCSS('color', 'rgb(9, 9, 11)');
-  await expect(overview).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.075)');
-  await expect(overview).toHaveCSS('box-shadow', 'rgb(9, 9, 11) 0px 0px 0px 1px inset');
-  await expect(history).toHaveCSS('color', 'rgb(133, 133, 142)');
-  await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(history).toHaveCSS('cursor', 'pointer');
-  await history.hover();
-  await expect(history).toHaveCSS('color', 'rgb(24, 24, 27)');
-  await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.04)');
-  await expect(page.locator('[data-ol-page="overview"]')).toBeVisible();
-  await history.click();
-  await expect(history).toHaveAttribute('aria-current', 'page');
-  await expect(history).toHaveCSS('color', 'rgb(9, 9, 11)');
-  await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.075)');
-  await expect(history).toHaveCSS('box-shadow', 'rgb(9, 9, 11) 0px 0px 0px 1px inset');
-  await expect(page.locator('[data-ol-page="history"]')).toHaveCSS('opacity', '1');
-  await page.screenshot({ path: info.outputPath('navigation.png'), animations: 'disabled' });
-});
+for (const theme of [
+  {
+    scheme: 'light' as const,
+    idle: 'rgb(133, 133, 142)',
+    hover: 'rgb(24, 24, 27)',
+    hoverFill: 'rgba(0, 0, 0, 0.04)',
+    hoverRing: 'rgb(228, 228, 231)',
+    selected: 'rgb(9, 9, 11)',
+    selectedFill: 'rgba(0, 0, 0, 0.075)',
+  },
+  {
+    scheme: 'dark' as const,
+    idle: 'rgb(125, 125, 134)',
+    hover: 'rgb(228, 228, 231)',
+    hoverFill: 'rgba(255, 255, 255, 0.035)',
+    hoverRing: 'rgb(39, 39, 42)',
+    selected: 'rgb(250, 250, 250)',
+    selectedFill: 'rgba(255, 255, 255, 0.1)',
+  },
+]) {
+  test(`sidebar distinguishes hover from selection without navigating on hover · ${theme.scheme}`, async ({
+    page,
+  }, info) => {
+    await page.emulateMedia({ colorScheme: theme.scheme });
+    await page.goto('/?os=mac');
+    await expect(page.locator('html')).toHaveCSS('color-scheme', theme.scheme);
+    const nav = page.locator('.ol-sidebar-surface nav');
+    const history = nav.getByRole('button', { name: '历史', exact: true });
+    const overview = nav.getByRole('button', { name: '概览', exact: true });
+    const expectSelected = async (item: Locator) => {
+      await expect(item).toHaveAttribute('aria-current', 'page');
+      await expect(item).toHaveCSS('color', theme.selected);
+      await expect(item).toHaveCSS('-webkit-text-fill-color', theme.selected);
+      await expect(item).toHaveCSS('background-color', theme.selectedFill);
+      await expect(item).toHaveCSS('box-shadow', `${theme.selected} 0px 0px 0px 1px inset`);
+    };
+
+    await expectSelected(overview);
+    await expect(history).toHaveCSS('color', theme.idle);
+    await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(history).toHaveCSS('box-shadow', 'none');
+    await expect(history).toHaveCSS('cursor', 'pointer');
+
+    await history.hover();
+    await expect(history).toHaveCSS('color', theme.hover);
+    await expect(history).toHaveCSS('background-color', theme.hoverFill);
+    await expect(history).toHaveCSS('box-shadow', `${theme.hoverRing} 0px 0px 0px 1px inset`);
+    await expect(history).not.toHaveAttribute('aria-current', 'page');
+    await expectSelected(overview);
+    await expect(page.locator('[data-ol-page="overview"][data-transition-phase="settled"]')).toBeVisible();
+
+    await history.click();
+    await expectSelected(history);
+    await expect(overview).not.toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('[data-ol-page="history"][data-transition-phase="settled"]')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('navigation.png'), animations: 'disabled' });
+  });
+}
 
 test('rapid page choices settle immediately and reduced motion leaves no animation', async ({
   page,
