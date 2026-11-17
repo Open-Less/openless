@@ -13,6 +13,6 @@ const listener = await readFile(
 
 assert.match(app, /case 'capsule':[\s\S]*?<AudioCueListener \/>/);
 assert.doesNotMatch(shell, /AudioCueListener/);
-assert.match(listener, /currentWindow\.label !== 'capsule'/);
+assert.match(listener, /\(await events\.label\(\)\) !== 'capsule'/);
 assert.match(listener, /stopAudioCue\(\);/);
 console.log('audio cue is scoped to the resident capsule window');

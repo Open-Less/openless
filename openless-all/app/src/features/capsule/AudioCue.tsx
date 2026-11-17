@@ -1,115 +1,59 @@
-// 录音提示音：监听 capsule:state 事件，在"开始录音"边沿播放合成提示音。
-// 独立组件，不依赖胶囊窗口显示——胶囊隐藏时也能正常工作。
-// Web Audio 输出会被某些桌面音频栈当作 sink-input，启动/退出时触发音量 OSD；
-// Android 也可能因 Web Audio 输出切换录音输入路由，因此这两个平台禁用。
-
 import { useEffect, useRef } from 'react';
+import { createCapsuleSubscriptions } from '../../api/dictation';
+import { getSettings } from '../../api/preferences';
 import { getRuntimeEnvironment } from '../../runtime/environment';
 import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../../lib/audioCue';
-import type { CapsuleState, UserPreferences } from '../../api/contracts';
-
-interface CapsulePayload {
-  state: CapsuleState;
-  level?: number;
-  message?: string | null;
-  insertedChars?: number | null;
-  translation?: boolean;
-}
+import type { CapsuleState } from '../../api/contracts';
 
 export function AudioCueListener() {
-  const audioCueEnabledRef = useRef<boolean>(true);
-  const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
+  const audioCueEnabledRef = useRef(true);
+  const prevStateRef = useRef<CapsuleState>('idle');
   const { host, os } = getRuntimeEnvironment();
-  const isTauri = host === 'tauri';
-  const audioCueRuntimeEnabled = os !== 'android';
+  const audioCueRuntimeEnabled = host === 'tauri' && os !== 'android';
 
-  // Read settings (enabled by default)
   useEffect(() => {
-    if (!isTauri || !audioCueRuntimeEnabled) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { getSettings } = await import('../../lib/ipc');
-        const prefs = await getSettings();
-        if (!cancelled) audioCueEnabledRef.current = prefs.audioCueOnRecord !== false;
-      } catch {
-        // Read failure: keep the default true
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [audioCueRuntimeEnabled]);
+    if (!audioCueRuntimeEnabled) return;
+    const events = createCapsuleSubscriptions();
+    let disposed = false;
+    let owned = false;
+    let preferenceRevision = 0;
 
-  // Listen for settings changes
-  useEffect(() => {
-    if (!isTauri || !audioCueRuntimeEnabled) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      listen<UserPreferences>('prefs:changed', (event) => {
-        const next = event.payload;
-        if (next) audioCueEnabledRef.current = next.audioCueOnRecord !== false;
-      })
-        .then((fn) => {
-          if (cancelled) fn();
-          else unlisten = fn;
-        })
-        .catch(() => {});
-    })();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [audioCueRuntimeEnabled]);
-
-  // Prime the AudioContext
-  useEffect(() => {
-    if (!isTauri || !audioCueRuntimeEnabled) return;
-    primeAudioCue();
-  }, [audioCueRuntimeEnabled]);
-
-  // Listen for capsule state edges
-  useEffect(() => {
-    if (!isTauri || !audioCueRuntimeEnabled) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-      if (cancelled) return;
-      const currentWindow = getCurrentWebviewWindow();
-      // The cue belongs to the resident recording capsule only. The main window must not
-      // prime an AudioContext or replay the current recording edge when it is opened during
-      // an active session.
-      if (currentWindow.label !== 'capsule') return;
-      const target = { kind: 'WebviewWindow' as const, label: currentWindow.label };
-      listen<CapsulePayload>(
-        'capsule:state',
-        (event) => {
-          if (cancelled) return;
-          const state = event.payload.state;
-          const prev = prevStateRef.current;
+    void (async () => {
+      // Opening another WebView must never play a cue for an existing session.
+      if ((await events.label()) !== 'capsule' || disposed) return;
+      owned = true;
+      prevStateRef.current = 'idle';
+      primeAudioCue();
+      if (
+        !(await events.preferences((next) => {
+          preferenceRevision += 1;
+          if (next) audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+        }))
+      )
+        return;
+      if (
+        !(await events.state(({ state }) => {
+          const previous = prevStateRef.current;
           prevStateRef.current = state;
-          if (state === 'recording' && prev !== 'recording') {
+          if (state === 'recording' && previous !== 'recording') {
             if (audioCueEnabledRef.current) playRecordStartCue();
-          } else if (state !== 'recording' && prev === 'recording') {
+          } else if (state !== 'recording' && previous === 'recording') {
             stopAudioCue();
           }
-        },
-        { target },
+        }))
       )
-        .then((fn) => {
-          if (cancelled) fn();
-          else unlisten = fn;
-        })
-        .catch(() => {});
-    })();
+        return;
+      const observed = preferenceRevision;
+      const preferences = await getSettings();
+      if (!disposed && observed === preferenceRevision) {
+        audioCueEnabledRef.current = preferences.audioCueOnRecord !== false;
+      }
+    })().catch(() => {});
+
     return () => {
-      cancelled = true;
-      unlisten?.();
-      stopAudioCue();
+      disposed = true;
+      events.dispose();
+      if (owned) stopAudioCue();
     };
   }, [audioCueRuntimeEnabled]);
 

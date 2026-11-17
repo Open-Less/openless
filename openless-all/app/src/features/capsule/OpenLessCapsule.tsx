@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
-import { VoiceOrbStage } from '../../components/VoiceOrbStage';
+import { VoiceOrbStage } from './VoiceOrbStage';
 import { useReducedMotion } from '../../lib/motion';
 import type { OS } from '../../components/WindowChrome';
 import type { CapsuleState, CapsuleStyle } from '../../lib/types';

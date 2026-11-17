@@ -5,7 +5,7 @@ import { getRuntimeOS, isTauriHost, type OS } from '../../runtime/environment';
 import { createCapsuleRegionPublisher } from '../../runtime/windows/capsuleInput';
 import { warmUpSiriShaders } from './SiriGL';
 import { useReducedMotion } from '../../lib/motion';
-import { VoiceOrbStage } from '../../components/VoiceOrbStage';
+import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
@@ -18,14 +18,17 @@ import {
   getCapsuleTranscriptRailHeight,
   parseCapsuleStyle,
 } from '../../lib/capsuleLayout';
-import { getCapsuleSnapshot } from '../../api/dictation';
+import {
+  createCapsuleSubscriptions,
+  getCapsuleAuxiliarySnapshot,
+  getCapsuleSnapshot,
+} from '../../api/dictation';
 import type {
   CapsulePayload,
   CapsuleState,
   CapsuleStyle,
   InsertFallbackCardPayload,
   PendingCorrection,
-  UserPreferences,
 } from '../../api/contracts';
 import { VocabSuggestionCard } from '../vocabulary-learning/VocabSuggestionCard';
 import { InsertFallbackCard } from './InsertFallbackCard';
@@ -37,7 +40,6 @@ import {
   clearTranscriptText,
   createTranscriptViewState,
   shouldRetryTranscriptSnapshot,
-  type BackendEvent,
   type TranscriptViewState,
 } from '../../lib/backendEvent';
 
@@ -440,36 +442,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
 
   useEffect(() => {
     if (!isTauri) return;
-    const unlisteners: (() => void)[] = [];
+    const events = createCapsuleSubscriptions();
     let cancelled = false;
     let stateRevision = 0;
     let suggestionsRevision = 0;
     let fallbackRevision = 0;
-    const cleanupListeners = () => {
-      for (const unlisten of unlisteners.splice(0)) unlisten();
-    };
-    (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
-      if (cancelled) return;
-      const subscribe = async <T,>(name: string, apply: (payload: T) => void) => {
-        // Tauri's default Any listener also receives emit_to(otherWindow). In particular,
-        // hiding a mirror sends it idle; that must never exit the primary capsule.
-        const unlisten = await listen<T>(
-          name,
-          (event) => {
-            if (!cancelled) apply(event.payload);
-          },
-          name === 'backend:event' ? undefined : { target },
-        );
-        if (cancelled) {
-          unlisten();
-          return false;
-        }
-        unlisteners.push(unlisten);
-        return true;
-      };
+    void (async () => {
       const replayActiveSessionTranscript = async (sessionId: string) => {
         const snapshot = await getCapsuleSnapshot().catch((error) => {
           if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
@@ -537,14 +515,14 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         operatingRef.current = p.operating === true;
       };
       if (
-        !(await subscribe<CapsulePayload>('capsule:state', (payload) => {
+        !(await events.state((payload) => {
           stateRevision += 1;
           applyPayload(payload);
         }))
       )
         return;
       if (
-        !(await subscribe<BackendEvent>('backend:event', (payload) => {
+        !(await events.transcript((payload) => {
           const next = applyTranscriptEvent(transcriptViewRef.current, payload);
           transcriptViewRef.current = next;
           setLocalAsrText(next.text);
@@ -552,14 +530,14 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       )
         return;
       if (
-        !(await subscribe<PendingCorrection[]>('vocab:suggested', (payload) => {
+        !(await events.suggestions((payload) => {
           suggestionsRevision += 1;
           setSuggestions(payload ?? []);
         }))
       )
         return;
       if (
-        !(await subscribe<InsertFallbackCardPayload | null>('insert:fallback', (payload) => {
+        !(await events.fallback((payload) => {
           fallbackRevision += 1;
           setInsertFallback(payload ?? null);
         }))
@@ -570,12 +548,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const suggestionsAtRead = suggestionsRevision;
       const fallbackAtRead = fallbackRevision;
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        if (cancelled) return;
-        const snapshot = await invoke<{
-          suggestions: PendingCorrection[];
-          fallback: InsertFallbackCardPayload | null;
-        }>('get_capsule_auxiliary_snapshot');
+        const snapshot = await getCapsuleAuxiliarySnapshot();
         if (cancelled) return;
         if (suggestionsRevision === suggestionsAtRead) setSuggestions(snapshot.suggestions);
         if (fallbackRevision === fallbackAtRead) setInsertFallback(snapshot.fallback);
@@ -608,12 +581,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         return;
       }
     })().catch((error) => {
-      cleanupListeners();
+      events.dispose();
       if (!cancelled) console.warn('[capsule] subscription failed', error);
     });
     return () => {
       cancelled = true;
-      cleanupListeners();
+      events.dispose();
     };
   }, []);
 
@@ -621,26 +594,23 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // window and a live restyle mid-session.
   useEffect(() => {
     if (!isTauri) return;
-    let unlisten: (() => void) | undefined;
+    const events = createCapsuleSubscriptions();
     let cancelled = false;
     let preferenceRevision = 0;
-    (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const handle = await listen<UserPreferences>('prefs:changed', (event) => {
-        setTranscriptEnabled(event.payload.capsuleTranscriptEnabled ?? true);
-        setTranscriptFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
-        preferenceRevision += 1;
-        const next = parseCapsuleStyle(event.payload?.capsuleStyle);
-        if (next) {
-          stylePreferenceReadyRef.current = true;
-          setCapsuleStyle(next);
-        }
-      });
-      if (cancelled) {
-        handle();
+    void (async () => {
+      if (
+        !(await events.preferences((preferences) => {
+          preferenceRevision += 1;
+          setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
+          setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+          const next = parseCapsuleStyle(preferences.capsuleStyle);
+          if (next) {
+            stylePreferenceReadyRef.current = true;
+            setCapsuleStyle(next);
+          }
+        }))
+      )
         return;
-      }
-      unlisten = handle;
       const revisionAtRead = preferenceRevision;
       const preferences = await getSettings();
       const next = parseCapsuleStyle(preferences.capsuleStyle);
@@ -653,7 +623,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     })().catch((error) => console.warn('[capsule] preferences subscription failed', error));
     return () => {
       cancelled = true;
-      if (unlisten) unlisten();
+      events.dispose();
     };
   }, []);
 

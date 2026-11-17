@@ -486,7 +486,7 @@ assertMatch(
 );
 assertMatch(
   liveTranscriptTsx,
-  /export function CapsuleTranscriptOverlay[\s\S]*?listen<CapsulePayload>\(\s*'capsule:state'[\s\S]*?listen<BackendEvent>\(\s*'backend:event'[\s\S]*?prefs:changed/,
+  /export function CapsuleTranscriptOverlay[\s\S]*?events\.state\([\s\S]*?events\.transcript\([\s\S]*?events\.preferences\(/,
   'rail should own state, transcript, and preference subscriptions',
 );
 assertMatch(

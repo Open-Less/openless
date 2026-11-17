@@ -32,6 +32,40 @@ const compile = (text) =>
   ts.transpileModule(text, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
+function compileStandalone(relativePath) {
+  const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  const parsed = ts.createSourceFile(relativePath, source, ts.ScriptTarget.ES2020, true);
+  return compile(
+    parsed.statements
+      .filter(
+        (node) =>
+          !ts.isImportDeclaration(node) && !(ts.isExportDeclaration(node) && node.moduleSpecifier),
+      )
+      .map((node) => node.getFullText(parsed))
+      .join(String.fromCharCode(10)),
+  );
+}
+const auxiliaryEventsCode = compileStandalone('../src/runtime/windows/auxiliaryEvents.ts');
+const dictationEventsCode = compileStandalone('../src/api/dictation.ts');
+
+function bindNativeAdapter(scope, tauri = true) {
+  const runtime = {
+    exports: {},
+    isTauriHost: () => tauri,
+    requireBackendReady: async () => undefined,
+    require: scope.require,
+  };
+  vm.runInNewContext(auxiliaryEventsCode, runtime);
+  const api = {
+    exports: {},
+    ...runtime.exports,
+    invokeOrPreview: (command, args, preview) =>
+      tauri ? scope.require('@tauri-apps/api/core').invoke(command, args) : preview(),
+  };
+  vm.runInNewContext(dictationEventsCode, api);
+  Object.assign(scope, api.exports);
+}
+
 const backend = { exports: {} };
 vm.runInNewContext(
   compile(readFileSync(new URL('../src/lib/backendEvent.ts', import.meta.url), 'utf8')),
@@ -223,6 +257,7 @@ function mount({
       writes.push([name, value]);
     };
   }
+  bindNativeAdapter(scope);
   vm.runInNewContext(overlay ? railEffectCode : effectCode, scope);
   const cleanup = scope.replayEffect();
   return {
@@ -576,40 +611,64 @@ for (const overlay of [false, true]) {
     if (
       ts.isCallExpression(node) &&
       node.expression.getText(cueAst) === 'useEffect' &&
-      node.arguments[0]?.getText(cueAst).includes("'capsule:state'")
+      node.arguments[0]?.getText(cueAst).includes('events.state(')
     )
       cueEffect = node.arguments[0].getText(cueAst);
     ts.forEachChild(node, visitCue);
   }
   visitCue(cueAst);
   assert.ok(cueEffect);
-  const bus = eventBus();
-  let plays = 0;
-  let stops = 0;
+  for (const label of ['main', 'capsule', 'capsule-mirror-0']) {
+    const bus = eventBus();
+    let plays = 0;
+    let primes = 0;
+    let stops = 0;
+    const scope = {
+      audioCueRuntimeEnabled: true,
+      prevStateRef: { current: 'idle' },
+      audioCueEnabledRef: { current: true },
+      getSettings: async () => ({ audioCueOnRecord: true }),
+      primeAudioCue: () => primes++,
+      playRecordStartCue: () => plays++,
+      stopAudioCue: () => stops++,
+      require(name) {
+        if (name === '@tauri-apps/api/webviewWindow')
+          return { getCurrentWebviewWindow: () => ({ label }) };
+        assert.equal(name, '@tauri-apps/api/event');
+        return {
+          listen: async (name, callback, options) => bus.listen(label, name, callback, options),
+        };
+      },
+    };
+    bindNativeAdapter(scope);
+    vm.runInNewContext(compile(`globalThis.effect = (${cueEffect});`), scope);
+    const cleanup = scope.effect();
+    await tick();
+    const primary = label === 'capsule';
+    assert.equal(bus.size, primary ? 2 : 0, 'only the resident capsule may own cue subscriptions');
+    assert.equal(primes, primary ? 1 : 0, 'opening another WebView must not prime the cue');
+    assert.equal(plays, 0, 'mounting cannot replay a recording edge');
+    bus.emit('capsule-mirror-0', 'capsule:state', { state: 'recording' });
+    assert.equal(plays, 0, 'a mirror event cannot play the primary capsule cue');
+    bus.emit('capsule', 'capsule:state', { state: 'recording' });
+    bus.emit('capsule', 'capsule:state', { state: 'recording' });
+    assert.equal(plays, primary ? 1 : 0, 'only a fresh primary recording edge may play');
+    bus.emit('capsule', 'capsule:state', { state: 'done' });
+    assert.equal(stops, primary ? 1 : 0);
+    cleanup();
+    assert.equal(bus.size, 0);
+  }
+}
+{
   const scope = {
-    isTauri: true,
-    audioCueRuntimeEnabled: true,
-    prevStateRef: { current: 'idle' },
-    audioCueEnabledRef: { current: true },
-    playRecordStartCue: () => plays++,
-    stopAudioCue: () => stops++,
-    require(name) {
-      if (name === '@tauri-apps/api/webviewWindow')
-        return { getCurrentWebviewWindow: () => ({ label: 'main' }) };
-      assert.equal(name, '@tauri-apps/api/event');
-      return {
-        listen: async (name, callback, options) => bus.listen('main', name, callback, options),
-      };
-    },
+    require: () => assert.fail('preview must not load any native auxiliary adapter'),
   };
-  vm.runInNewContext(compile(`globalThis.effect = (${cueEffect});`), scope);
-  const cleanup = scope.effect();
-  await tick();
-  assert.equal(bus.size, 0, 'main window must not subscribe to capsule recording cues');
-  assert.equal(plays, 0, 'opening the main window must not play the recording cue');
-  assert.equal(stops, 0);
-  cleanup();
-  assert.equal(bus.size, 0);
+  bindNativeAdapter(scope, false);
+  const events = scope.createCapsuleSubscriptions();
+  assert.equal(await events.label(), undefined);
+  assert.equal(await events.state(() => assert.fail('preview dispatched a native event')), false);
+  assert.equal((await scope.getCapsuleAuxiliarySnapshot()).suggestions.length, 0);
+  events.dispose();
 }
 console.log(
   'capsule ready replay: session, card ordering, bounded retries, cleanup and live display isolation passed',

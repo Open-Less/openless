@@ -6,6 +6,7 @@ import '../../ui/styles/select.css';
 import { getSettings } from '../../api/preferences';
 import { isTauriHost } from '../../runtime/environment';
 import {
+  createCapsuleSubscriptions,
   getDictationTranslationTarget,
   selectDictationTranslationTarget,
   type DictationTranslationTarget,
@@ -31,7 +32,7 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void)[] = [];
+    const events = createCapsuleSubscriptions();
     let lastRecording = '';
     const refresh = async () => {
       const request = ++revision.current;
@@ -52,25 +53,17 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
     }
     void (async () => {
       if (isTauriHost()) {
-        const { listen } = await import('@tauri-apps/api/event');
-        const handles = await Promise.all([
-          listen('prefs:changed', () => void refresh()),
-          listen<{ sessionId?: string; state: string; warming?: boolean; translation?: boolean }>(
-            'capsule:state',
-            ({ payload }) => {
-              const key = `${payload.sessionId}:${payload.state}:${payload.warming}:${payload.translation}`;
-              if (key !== lastRecording) {
-                lastRecording = key;
-                void refresh();
-              }
-            },
-          ),
-        ]);
-        if (disposed) {
-          handles.forEach((stop) => stop());
+        if (!(await events.preferences(() => void refresh()))) return;
+        if (
+          !(await events.state((payload) => {
+            const key = `${payload.sessionId}:${payload.state}:${payload.warming}:${payload.translation}`;
+            if (key !== lastRecording) {
+              lastRecording = key;
+              void refresh();
+            }
+          }))
+        )
           return;
-        }
-        unlisten = handles;
       }
       await refresh();
     })().catch(() => {
@@ -79,7 +72,8 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
     return () => {
       disposed = true;
       revision.current++;
-      unlisten.forEach((stop) => stop());
+      events.dispose();
+      pendingChange.current = null;
     };
   }, [visible]);
 
@@ -130,12 +124,13 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
     try {
       const updated = await selectDictationTranslationTarget(sessionId, value);
       // A native dropdown may outlive the recording which opened it.
-      if (current.current?.sessionId === updated.sessionId) {
+      if (pendingChange.current === request && current.current?.sessionId === updated.sessionId) {
         setSnapshot(updated);
         setSavedTarget(updated.targetLanguage);
       }
     } catch {
-      if (current.current?.sessionId === sessionId) setError(true);
+      if (pendingChange.current === request && current.current?.sessionId === sessionId)
+        setError(true);
     } finally {
       if (pendingChange.current === request) {
         pendingChange.current = null;

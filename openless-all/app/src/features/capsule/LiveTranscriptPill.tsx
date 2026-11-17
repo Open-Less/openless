@@ -26,21 +26,14 @@ import {
   clearTranscriptText,
   createTranscriptViewState,
   shouldRetryTranscriptSnapshot,
-  type BackendEvent,
   type TranscriptViewState,
 } from '../../lib/backendEvent';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getCapsuleTranscriptRailHeight, parseCapsuleStyle } from '../../lib/capsuleLayout';
 import { getSettings } from '../../api/preferences';
-import { getCapsuleSnapshot } from '../../api/dictation';
+import { createCapsuleSubscriptions, getCapsuleSnapshot } from '../../api/dictation';
 import { isTauriHost } from '../../runtime/environment';
-import type {
-  CapsulePayload,
-  CapsuleSnapshot,
-  CapsuleState,
-  CapsuleStyle,
-  UserPreferences,
-} from '../../api/contracts';
+import type { CapsuleSnapshot, CapsuleState, CapsuleStyle } from '../../api/contracts';
 
 export type LiveTranscriptTone = 'frost' | 'dark';
 
@@ -146,13 +139,11 @@ export function CapsuleTranscriptOverlay() {
 
   useEffect(() => {
     if (!isTauriHost()) return;
+    const events = createCapsuleSubscriptions();
     let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-      if (cancelled) return;
-      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
+    let preferenceRevision = 0;
+    let stylePreference: CapsuleStyle | undefined;
+    void (async () => {
       const replayActiveSessionTranscript = async (sessionId: string) => {
         const snapshot = await getCapsuleSnapshot();
         if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
@@ -163,10 +154,8 @@ export function CapsuleTranscriptOverlay() {
         transcriptRef.current = next;
         setText(next.text);
       };
-      const stateHandle = await listen<CapsulePayload>(
-        'capsule:state',
-        (event) => {
-          const payload = event.payload;
+      if (
+        !(await events.state((payload) => {
           const previousState = stateRef.current;
           const previousTranscript = transcriptRef.current;
           const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
@@ -174,7 +163,8 @@ export function CapsuleTranscriptOverlay() {
           transcriptRef.current = sessionTranscript;
           stateRef.current = payload.state;
           setState(payload.state);
-          if (payload.capsuleStyle) setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
+          if (!stylePreference && payload.capsuleStyle)
+            setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
           setSelectionPolish(payload.selectionPolish === true);
           setTranslation(payload.translation === true);
           const sessionId = payload.sessionId;
@@ -201,20 +191,30 @@ export function CapsuleTranscriptOverlay() {
             transcriptRef.current = clearTranscriptText(transcriptRef.current);
             setText('');
           }
-        },
-        { target },
-      );
-      const transcriptHandle = await listen<BackendEvent>('backend:event', (event) => {
-        const next = applyTranscriptEvent(transcriptRef.current, event.payload);
-        transcriptRef.current = next;
-        setText(next.text);
-      });
-      const preferenceHandle = await listen<UserPreferences>('prefs:changed', (event) => {
-        setEnabled(event.payload.capsuleTranscriptEnabled ?? true);
-        setFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
-        if (event.payload.capsuleStyle)
-          setStyle(parseCapsuleStyle(event.payload.capsuleStyle) ?? 'classic');
-      });
+        }))
+      )
+        return;
+      if (
+        !(await events.transcript((payload) => {
+          const next = applyTranscriptEvent(transcriptRef.current, payload);
+          transcriptRef.current = next;
+          setText(next.text);
+        }))
+      )
+        return;
+      if (
+        !(await events.preferences((preferences) => {
+          preferenceRevision += 1;
+          setEnabled(preferences.capsuleTranscriptEnabled ?? true);
+          setFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+          const nextStyle = parseCapsuleStyle(preferences.capsuleStyle);
+          if (nextStyle) {
+            stylePreference = nextStyle;
+            setStyle(nextStyle);
+          }
+        }))
+      )
+        return;
       const applySnapshot = (
         snapshot: CapsuleSnapshot,
         fallbackStyle: CapsuleStyle,
@@ -231,7 +231,9 @@ export function CapsuleTranscriptOverlay() {
         const previousState = stateRef.current;
         stateRef.current = snapshot.state;
         setState(snapshot.state);
-        setStyle(parseCapsuleStyle(snapshot.capsuleStyle ?? fallbackStyle) ?? 'classic');
+        setStyle(
+          stylePreference ?? parseCapsuleStyle(snapshot.capsuleStyle ?? fallbackStyle) ?? 'classic',
+        );
         setSelectionPolish(snapshot.selectionPolish === true);
         setTranslation(snapshot.translation === true);
         if (snapshot.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
@@ -257,28 +259,22 @@ export function CapsuleTranscriptOverlay() {
           if (applySnapshot(snapshot, fallbackStyle) === 'done') return;
         }
       };
-      if (cancelled) {
-        stateHandle();
-        transcriptHandle();
-        preferenceHandle();
-      } else {
-        unlisten = () => {
-          stateHandle();
-          transcriptHandle();
-          preferenceHandle();
-        };
-        const preferences = await getSettings();
-        if (!cancelled) {
-          setEnabled(preferences.capsuleTranscriptEnabled ?? true);
-          setFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
-          setStyle(parseCapsuleStyle(preferences.capsuleStyle) ?? 'classic');
-          await replaySnapshot(preferences.capsuleStyle);
-        }
+      const observedPreferences = preferenceRevision;
+      const preferences = await getSettings();
+      if (cancelled) return;
+      if (preferenceRevision === observedPreferences) {
+        setEnabled(preferences.capsuleTranscriptEnabled ?? true);
+        setFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+        stylePreference = parseCapsuleStyle(preferences.capsuleStyle);
+        setStyle(stylePreference ?? 'classic');
       }
-    })().catch((error) => console.warn('[capsule-rail] subscription failed', error));
+      await replaySnapshot(preferences.capsuleStyle);
+    })().catch((error) => {
+      if (!cancelled) console.warn('[capsule-rail] subscription failed', error);
+    });
     return () => {
       cancelled = true;
-      unlisten?.();
+      events.dispose();
     };
   }, []);
 
