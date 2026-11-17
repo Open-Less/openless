@@ -9,6 +9,7 @@ import {
   createStylePackFromTemplate,
   deleteStylePack,
   listStylePacks,
+  listenStylePackChanges,
   previewStylePackRuntime,
   resetBuiltinStylePack,
   saveStylePack,
@@ -173,7 +174,7 @@ export function useStylePackWorkspace() {
     });
   };
 
-  const loadPacks = async (preferredId?: string | null, notify = false) => {
+  const loadPacks = async (preferredId?: string | null) => {
     const sequence = ++loadSequence.current;
     const initialLoad = !packsLoaded.current;
     if (initialLoad) setBusy('loading');
@@ -184,13 +185,13 @@ export function useStylePackWorkspace() {
       const next = listed.filter((pack) => !pendingDeletes.current.has(pack.id));
       packsLoaded.current = true;
       setPacks(next);
+      const target = preferredId || selectedIdRef.current;
       const nextSelectedId =
-        (preferredId && next.some((pack) => pack.id === preferredId) && preferredId) ||
+        (target && next.some((pack) => pack.id === target) && target) ||
         next.find((pack) => pack.active)?.id ||
         next[0]?.id ||
         null;
       setSelectedId(nextSelectedId);
-      if (notify) showSaveStatus('saved', t('common.refreshed'), true);
     } catch (loadError) {
       if (sequence === loadSequence.current)
         showSaveStatus('failed', t('style.pack.loadFailed', { err: String(loadError) }));
@@ -200,24 +201,32 @@ export function useStylePackWorkspace() {
     }
   };
 
+  const loadPacksRef = useRef(loadPacks);
+  loadPacksRef.current = loadPacks;
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenPreferenceChanges(() => {
-      if (!cancelled) void loadPacks(selectedIdRef.current);
-    })
-      .then((stop) => {
-        if (cancelled) stop();
-        else unlisten = stop;
-      })
-      .catch((error) => console.warn('[styles] preference listener failed', error))
-      .finally(() => {
-        if (!cancelled) void loadPacks(selectedIdRef.current);
-      });
+    const unlistens: Array<() => void> = [];
+    const reload = () => {
+      if (!cancelled) void loadPacksRef.current();
+    };
+    const keep = async (source: Promise<() => void>) => {
+      const stop = await source;
+      if (cancelled) stop();
+      else unlistens.push(stop);
+    };
+    void Promise.allSettled([
+      keep(listenPreferenceChanges(reload)),
+      keep(listenStylePackChanges(reload)),
+    ]).then((results) => {
+      for (const result of results)
+        if (result.status === 'rejected')
+          console.warn('[styles] change listener failed', result.reason);
+      reload();
+    });
     return () => {
       cancelled = true;
       loadSequence.current++;
-      unlisten?.();
+      unlistens.forEach((stop) => stop());
     };
   }, []);
 
@@ -626,7 +635,6 @@ export function useStylePackWorkspace() {
     runtimePreview,
     runtimePreviewError,
     showSaveStatus,
-    loadPacks,
     rawPack,
     bodyPacks,
     selectionPolishPackId,

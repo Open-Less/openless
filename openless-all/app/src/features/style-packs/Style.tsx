@@ -28,7 +28,6 @@ export function Style() {
     cardRefs,
     workflowView,
     setWorkflowView,
-    selectedId,
     draft,
     busy,
     undoDelete,
@@ -36,7 +35,6 @@ export function Style() {
     runtimePreview,
     runtimePreviewError,
     showSaveStatus,
-    loadPacks,
     rawPack,
     bodyPacks,
     selectionPolishPackId,
@@ -192,21 +190,10 @@ export function Style() {
               width: stackLayout ? '100%' : undefined,
             }}
           >
-            {/* The marketplace entry moved to the sidebar's "Style" expand group (user decision);
-              no button here anymore. */}
-            <Btn
-              variant="ghost"
-              icon="refresh"
-              onClick={() => void loadPacks(selectedId, true)}
-              disabled={busy === 'loading'}
-            >
-              {t('common.refresh')}
-            </Btn>
             <Btn
               variant="blue"
               icon="archive"
               onClick={() => void handleImportZip()}
-              style={{ '--ol-button-radius': '8px' } as CSSProperties}
               disabled={busy === 'importing'}
             >
               {busy === 'importing' ? t('common.loading') : t('style.pack.importZip')}
@@ -348,13 +335,9 @@ export function Style() {
           style={{ padding: 18, overflow: 'auto', flex: '1 1 0', minHeight: 0 }}
         >
           <div
-            className="ol-grid-auto-cards"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: stackLayout ? '1fr' : 'repeat(auto-fill, minmax(250px, 1fr))',
-              position: 'relative',
-              gap: 12,
-            }}
+            className="ol-grid-auto-cards ol-grid-12 ol-grid-cards"
+            data-columns={stackLayout ? '1' : undefined}
+            style={{ position: 'relative' }}
           >
             <AnimatePresence mode="popLayout" initial={false}>
               {bodyPacks.map((pack) => {
@@ -511,7 +494,6 @@ export function Style() {
                       <Btn
                         size="sm"
                         variant={isCurrentForView ? 'soft' : 'blue'}
-                        style={{ '--ol-button-radius': '8px' } as CSSProperties}
                         disabled={isCurrentForView || busy === 'activating'}
                         onClick={() =>
                           void (workflowView === 'selection'
@@ -819,7 +801,6 @@ export function Style() {
                           icon="check"
                           disabled={draft.active || busy === 'activating'}
                           onClick={() => void handleActivate(draft)}
-                          style={{ '--ol-button-radius': '8px' } as CSSProperties}
                         >
                           {draft.active ? t('style.pack.active') : t('style.pack.activate')}
                         </Btn>
@@ -827,13 +808,8 @@ export function Style() {
                     </div>
 
                     <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: stackLayout
-                          ? '1fr'
-                          : 'repeat(auto-fit, minmax(180px, 1fr))',
-                        gap: 12,
-                      }}
+                      className="ol-grid-12 ol-grid-fields"
+                      data-columns={stackLayout ? '1' : undefined}
                     >
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <span
@@ -928,13 +904,8 @@ export function Style() {
                     </label>
 
                     <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: stackLayout
-                          ? '1fr'
-                          : 'repeat(auto-fit, minmax(180px, 1fr))',
-                        gap: 12,
-                      }}
+                      className="ol-grid-12 ol-grid-fields"
+                      data-columns={stackLayout ? '1' : undefined}
                     >
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <span
@@ -1144,13 +1115,8 @@ export function Style() {
                         </Pill>
                       </div>
                       <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: stackLayout
-                            ? '1fr'
-                            : 'repeat(auto-fit, minmax(160px, 1fr))',
-                          gap: 10,
-                        }}
+                        className="ol-grid-12 ol-grid-meta"
+                        data-columns={stackLayout ? '1' : undefined}
                       >
                         <MetaItem
                           label={t('style.pack.metaSource')}
@@ -1265,13 +1231,8 @@ export function Style() {
                           </div>
 
                           <div
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: stackLayout
-                                ? '1fr'
-                                : 'repeat(auto-fit, minmax(240px, 1fr))',
-                              gap: 12,
-                            }}
+                            className="ol-grid-12 ol-grid-fields"
+                            data-columns={stackLayout ? '1' : undefined}
                           >
                             <div
                               style={{

@@ -188,14 +188,7 @@ export function AudioDspSettings({
               />
             </SettingRow>
             {slider('equalizerPreampDb', label('preamp', 'Equalizer preamp'), -20, 20, ' dB')}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
-                gap: 12,
-                padding: '12px 0',
-              }}
-            >
+            <div className="ol-grid-12 ol-grid-bands" style={{ padding: '12px 0' }}>
               {equalizerFrequencies.map((frequency, index) => (
                 <label key={frequency} style={{ fontSize: 12 }}>
                   {frequency} · {draft.equalizerBandsDb[index]} dB

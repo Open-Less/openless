@@ -46,9 +46,11 @@ export function useMarketplaceWorkspace() {
   const stackLayout = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
 
-  // Read the cache at startup: the last default view (popular + empty query) list renders instantly; a background refresh corrects it.
+  // A fresh cached default list can be used immediately. Returning to it after
+  // a search, an explicit retry, or a mutation fetches an authoritative list.
   const [items, setItems] = useState<MarketplaceListItem[]>(() => readMarketplaceListCache() ?? []);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => items.length === 0);
+  const cachedEntry = useRef(items.length > 0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -162,7 +164,7 @@ export function useMarketplaceWorkspace() {
         if (seq === reqSeqRef.current) setLoading(false);
       }
     },
-    [debouncedQuery, sort, t],
+    [debouncedQuery, sort, setActionMsg, t],
   );
 
   const visibleItems = useMemo(() => {
@@ -189,8 +191,10 @@ export function useMarketplaceWorkspace() {
   }, [myPacks, myPacksQuery]);
 
   useEffect(() => {
+    if (cachedEntry.current && sort === 'popular' && !debouncedQuery.trim()) return;
+    cachedEntry.current = false;
     void refresh();
-  }, [refresh]);
+  }, [refresh, sort, debouncedQuery]);
 
   useEffect(() => {
     void refreshAuthStatus();
@@ -316,6 +320,16 @@ export function useMarketplaceWorkspace() {
     }
   };
 
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const closeDetail = () => {
+    detailSeqRef.current++;
+    setSelectedId(null);
+    setInstallError(null);
+    cachedEntry.current = false;
+    void refresh();
+  };
+
   const onInstall = async () => {
     if (!detail || !canStartMarketplaceInstall(installingPackId)) return;
     const packId = detail.id;
@@ -326,6 +340,8 @@ export function useMarketplaceWorkspace() {
       await installListedPack(packId);
       setActionMsg({ kind: 'ok', text: t('marketplace.installed', { name: packName }) });
       setSelectedId((current) => (shouldCloseMarketplaceDetail(current, packId) ? null : current));
+      cachedEntry.current = false;
+      void refreshRef.current();
     } catch (error) {
       const errorText = errorMessage(error);
       const message = t('marketplace.errors.install', { err: errorText });
@@ -478,7 +494,8 @@ export function useMarketplaceWorkspace() {
   const onDelete = async () => {
     if (!detail || !(await withdraw(detail))) return;
     setSelectedId((current) => (current === detail.id ? null : current));
-    void refresh();
+    cachedEntry.current = false;
+    void refreshRef.current();
   };
 
   const onDeleteMine = async (pack: MarketplaceMyPackItem) => {
@@ -543,7 +560,8 @@ export function useMarketplaceWorkspace() {
       // "my packs" instantly, so a single catch-up refresh suffices; use the longer delay (5s) to ensure
       // eventual consistency, dropping the redundant 1.5s pass.
       window.setTimeout(() => {
-        void refresh();
+        cachedEntry.current = false;
+        void refreshRef.current();
         void refreshMyPacks();
       }, 5000);
     } catch (error) {
@@ -591,7 +609,7 @@ export function useMarketplaceWorkspace() {
     sort,
     setSort,
     selectedId,
-    setSelectedId,
+    closeDetail,
     detail,
     detailLoading,
     installingPackId,

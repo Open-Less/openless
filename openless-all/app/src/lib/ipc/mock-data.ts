@@ -636,6 +636,7 @@ export function mockSetDefaultPolishMode(mode: PolishMode): void {
   }));
   mockSettings = { ...mockSettings, activeStylePackId: packId };
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
 }
 
 export function mockSetStyleEnabled(mode: PolishMode, enabled: boolean): void {
@@ -644,6 +645,7 @@ export function mockSetStyleEnabled(mode: PolishMode, enabled: boolean): void {
     pack.id === packId ? { ...pack, enabled } : { ...pack },
   );
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
 }
 
 export function mockSaveStylePack(stylePack: StylePack): StylePack {
@@ -651,6 +653,7 @@ export function mockSaveStylePack(stylePack: StylePack): StylePack {
     pack.id === stylePack.id ? cloneStylePack(stylePack) : pack,
   );
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
   return cloneStylePack(mockStylePacks.find((pack) => pack.id === stylePack.id) ?? stylePack);
 }
 
@@ -665,6 +668,7 @@ export function mockCreateStylePackFromTemplate(template: StylePack): StylePack 
     updatedAt: new Date().toISOString(),
   };
   mockStylePacks = [...mockStylePacks, created];
+  publishPreviewChange('style-packs');
   return cloneStylePack(created);
 }
 
@@ -676,6 +680,7 @@ export function mockSetActiveStylePack(id: string): StylePack {
   }));
   mockSettings = { ...mockSettings, activeStylePackId: id };
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
   return cloneStylePack(mockStylePacks.find((pack) => pack.id === id)!);
 }
 
@@ -684,6 +689,7 @@ export function mockSetStylePackEnabled(id: string, enabled: boolean): StylePack
     pack.id === id ? { ...pack, enabled } : { ...pack },
   );
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
   return cloneMockStylePacks();
 }
 
@@ -741,12 +747,14 @@ export function mockResetBuiltinStylePack(id: string): StylePack {
       : pack,
   );
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
   return cloneStylePack(mockStylePacks.find((pack) => pack.id === id)!);
 }
 
 export function mockDeleteStylePack(id: string): void {
   mockStylePacks = mockStylePacks.filter((pack) => pack.id !== id);
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
 }
 
 export function mockImportStylePackFromZip(zipPath: string): StylePack {
@@ -765,6 +773,7 @@ export function mockImportStylePackFromZip(zipPath: string): StylePack {
   };
   mockStylePacks = [pack, ...mockStylePacks];
   syncMockSettingsFromStylePacks();
+  publishPreviewChange('style-packs');
   return cloneStylePack(pack);
 }
 

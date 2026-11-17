@@ -27,13 +27,12 @@ export function Marketplace() {
     sort,
     setSort,
     selectedId,
-    setSelectedId,
+    closeDetail,
     detail,
     detailLoading,
     installingPackId,
     downloadingPackId,
     installError,
-    setInstallError,
     showUpload,
     setShowUpload,
     uploadOriginPackId,
@@ -138,9 +137,6 @@ export function Marketplace() {
               </span>
               <span>{t('marketplace.myPacks.buttonLabel')}</span>
             </button>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
-              {t('common.refresh')}
-            </Btn>
           </div>
         }
       />
@@ -238,12 +234,8 @@ export function Marketplace() {
           </Card>
         ) : (
           <div
-            className="ol-grid-auto-cards"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: stackLayout ? '1fr' : 'repeat(auto-fill, minmax(260px, 1fr))',
-              gap: 12,
-            }}
+            className="ol-grid-auto-cards ol-grid-12 ol-grid-cards"
+            data-columns={stackLayout ? '1' : undefined}
           >
             <AnimatePresence mode="sync">
               {visibleItems.map((p) => {
@@ -418,10 +410,7 @@ export function Marketplace() {
       <PresenceModal
         open={Boolean(selectedId)}
         zIndex={mobile || stackLayout ? 70 : 50}
-        onClose={() => {
-          setSelectedId(null);
-          setInstallError(null);
-        }}
+        onClose={closeDetail}
         render={() =>
           selectedId && (
             <>
@@ -568,14 +557,7 @@ export function Marketplace() {
                         }
                         onClick={() => void onLike(detail.id, detail.likeCount)}
                       />
-                      <Btn
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedId(null);
-                          setInstallError(null);
-                        }}
-                      >
+                      <Btn variant="ghost" size="sm" onClick={closeDetail}>
                         {installingPackId !== null ? t('common.close') : t('common.cancel')}
                       </Btn>
                       <Btn
@@ -888,15 +870,6 @@ export function Marketplace() {
                   })()}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <Btn
-                    icon="refresh"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void refreshMyPacks(true)}
-                    disabled={!marketplaceSignedIn || myPacksLoading}
-                  >
-                    {t('common.refresh')}
-                  </Btn>
                   <span title={canUpload ? '' : t('marketplace.uploadDisabledHint')}>
                     <Btn
                       icon="cloud"

@@ -41,3 +41,16 @@ export function listenPreferenceChanges(onChange: () => void): Promise<() => voi
       return listenTauriEvent('prefs:changed', onChange);
   }
 }
+
+export function listenStylePackChanges(onChange: () => void): Promise<() => void> {
+  switch (getRuntimeEnvironment().host) {
+    case 'preview':
+      return Promise.resolve(listenPreviewChange('style-packs', onChange));
+    case 'harmony':
+      return listenHarmonyChanges(onChange);
+    case 'tauri':
+      return listenTauriEvent<BackendEvent>('backend:event', (event) => {
+        if (event.kind.type === 'style_packs_changed') onChange();
+      });
+  }
+}
