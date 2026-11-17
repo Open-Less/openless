@@ -49,6 +49,8 @@ export function TransitionViewport({
   latest.current = { key: contentKey, children };
   const entered = useRef(onEntered);
   entered.current = onEntered;
+  const lastRequested = useRef(contentKey);
+  const pendingEntry = useRef(reduced);
   const [readyKey, setReadyKey] = useState<string | null>(null);
   const switching = committed.key !== contentKey;
   const revealing = switching && readyKey === contentKey;
@@ -59,17 +61,22 @@ export function TransitionViewport({
     if (reduced && switching) setCommitted({ key: contentKey, children });
     if (reduced && readyKey !== null) setReadyKey(null);
   }, [switching, contentKey, children, reduced, readyKey]);
-  useEffect(() => {
-    if (reduced) entered.current?.();
-  }, [contentKey, reduced]);
+  useLayoutEffect(() => {
+    if (lastRequested.current !== contentKey) {
+      lastRequested.current = contentKey;
+      pendingEntry.current = true;
+    }
+    if (!switching && !restoring && pendingEntry.current) {
+      // Child layout effects have cleared inert by the time focus can be restored.
+      pendingEntry.current = false;
+      entered.current?.();
+    }
+  }, [contentKey, switching, restoring]);
   const commit = (key: string) => {
     if (latest.current.key !== key) return;
     retained.current = latest.current;
     setCommitted(latest.current);
     setReadyKey(null);
-    requestAnimationFrame(() => {
-      if (latest.current.key === key) entered.current?.();
-    });
   };
   const currentSurface: Surface = { key: contentKey, children };
   const surfaces = switching && !reduced ? [retained.current, currentSurface] : [currentSurface];

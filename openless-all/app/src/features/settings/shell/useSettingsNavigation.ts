@@ -165,8 +165,8 @@ export function useSettingsNavigation({
     const attribute = section === 'general' ? 'data-ol-general-entry' : 'data-ol-advanced-entry';
     const entry = scrollRef.current?.querySelector<HTMLElement>(`[${attribute}="${id}"]`);
     if (entry && !entry.closest('[inert]')) {
-      returnEntry.current = null;
-      entry.focus({ preventScroll: true });
+      entry.focus();
+      if (document.activeElement === entry) returnEntry.current = null;
     }
   };
   const selectSection = (
