@@ -274,7 +274,6 @@ export const zhCN = {
     copy: '复制',
     delete: '删除',
     later: '稍后',
-    confirmAction: '确认',
     cancel: '取消',
     confirmAction: '确认',
     close: '关闭',

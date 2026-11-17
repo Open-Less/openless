@@ -2,8 +2,6 @@
 import { useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
-import { SavedToast } from '../../../ui/feedback/SavedToast';
-import { useSavedToastListener } from '../../../lib/savedEvent';
 import { openExternal } from '../../../api/files';
 import { useMobileLayout, useConservativeLayout } from '../../../lib/useMobileLayout';
 import type { OS } from '../../../runtime/environment';
@@ -116,7 +114,6 @@ export function SettingsModal({
     });
     if (!navigated) throw new Error(t('common.operationFailed'));
   };
-  const savedToast = useSavedToastListener();
   const overlayRef = useRef<HTMLDivElement>(null);
   const layer = useSettingsLayer({
     overlayRef,
@@ -364,12 +361,6 @@ export function SettingsModal({
                         ref={setChannelBackground}
                         style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
                       >
-                        <SavedToast
-                          saveState={savedToast.state}
-                          message={savedToast.message}
-                          slideFrom="top"
-                          offsetStyle={{ position: 'absolute', top: 12, right: 16 }}
-                        />
                         {/* Desktop: the category title + auto-save hint + close button form
                 the right column's own top bar (like System Settings: the toolbar
                 belongs to the content area, no longer spanning the sidebar). */}

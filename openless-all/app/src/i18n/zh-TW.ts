@@ -274,7 +274,6 @@ export const zhTW: typeof zhCN = {
     copy: '複製',
     delete: '刪除',
     later: '稍後',
-    confirmAction: '確認',
     cancel: '取消',
     confirmAction: '確認',
     close: '關閉',

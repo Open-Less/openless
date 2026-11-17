@@ -292,7 +292,6 @@ export const ja: typeof zhCN = {
     copy: 'コピー',
     delete: '削除',
     later: '後で',
-    confirmAction: '確認',
     cancel: 'キャンセル',
     confirmAction: '確認',
     close: '閉じる',
