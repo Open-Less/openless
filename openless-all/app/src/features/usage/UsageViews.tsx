@@ -227,10 +227,8 @@ export function UsageHistory({ dashboard }: { dashboard: Dashboard }) {
               .map((record) => (
                 <div
                   key={record.id}
+                  className="ol-grid-12 ol-grid-quarters"
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                    gap: 8,
                     padding: '10px 0',
                     borderTop: '1px solid var(--ol-line)',
                   }}

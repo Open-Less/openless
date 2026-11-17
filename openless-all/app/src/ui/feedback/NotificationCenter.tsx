@@ -60,7 +60,7 @@ function NotificationCard({
           className="ol-notification-action"
           disabled={modalActive || !present}
           onClick={() => {
-            dismiss();
+            if (!item.progress) dismiss();
             item.onAction?.();
           }}
         >

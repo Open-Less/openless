@@ -1,12 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
+import { settleNavigation } from './support/navigation';
+import { fixtureOrigin } from './support/server';
 
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+test.use({ baseURL: fixtureOrigin });
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
+});
 
 async function openAiSettings(page: Page) {
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
-  await page.waitForTimeout(300);
+  await settleNavigation(page);
 }
 
 async function openVoiceEnhancement(page: Page) {
@@ -14,7 +20,7 @@ async function openVoiceEnhancement(page: Page) {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '高级功能', exact: true }).click();
   await page.getByRole('button').filter({ hasText: '语音增强与播放抑制' }).click();
-  await page.waitForTimeout(800);
+  await settleNavigation(page);
 }
 
 async function expectRed(element: ReturnType<Page['locator']>) {
@@ -33,7 +39,7 @@ test('sidebar items highlight on hover without a transition, and the brand retur
     .filter({ hasText: '历史' })
     .first();
   await history.hover();
-  await page.waitForTimeout(120);
+  await expect(history).toHaveCSS('transition-duration', '0s');
   const background = await history.evaluate((node) => getComputedStyle(node).backgroundColor);
   expect(background).not.toBe('rgba(0, 0, 0, 0)');
 
@@ -60,7 +66,8 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await page.locator('.ol-channel-delete-button').click();
   const confirm = page.locator('.ol-confirm-dialog');
   await expect(confirm).toBeVisible();
-  await page.waitForTimeout(900);
+  await expect(confirm.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await expect(confirm).toHaveCSS('opacity', '1');
   await expect(confirm).toContainText('删除后该渠道保存的密钥也会一并清除。');
   await expect(page.locator('.ol-channel-delete-confirm')).toHaveCount(0);
   await expect(confirm.locator('.ol-channel-delete-button')).toHaveCount(0);
@@ -71,10 +78,16 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   const [descRed, descGreen] = descriptionColor.match(/\d+/g)!.map(Number);
   expect(Math.abs(descRed - descGreen)).toBeLessThan(40);
 
-  const box = (await confirm.boundingBox())!;
-  const viewport = page.viewportSize()!;
-  expect(Math.abs(box.x + box.width / 2 - viewport.width / 2)).toBeLessThan(10);
-  expect(Math.abs(box.y + box.height / 2 - viewport.height / 2)).toBeLessThan(10);
+  const viewport = (await page.locator('.ol-app-viewport').boundingBox())!;
+  await expect
+    .poll(async () => {
+      const box = (await confirm.boundingBox())!;
+      return Math.max(
+        Math.abs(box.x + box.width / 2 - viewport.x - viewport.width / 2),
+        Math.abs(box.y + box.height / 2 - viewport.y - viewport.height / 2),
+      );
+    })
+    .toBeLessThan(10);
 
   const confirmDelete = confirm.getByRole('button', { name: '确认删除', exact: true });
   const cancel = confirm.getByRole('button', { name: '取消', exact: true });
@@ -176,6 +189,7 @@ test('usage tabs and footer stay compact without an extra active box', async ({ 
   const usage = page.locator('.ol-sidebar-surface .ol-nav-btn').filter({ hasText: '用量' }).first();
   await usage.click();
   await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
+  await settleNavigation(page);
   const usageNav = page.locator('nav[aria-label="用量页面"]');
   await expect(usageNav.locator('.ol-segmented')).toBeVisible();
   await expect(usageNav).toHaveCSS('border-bottom-style', 'none');
@@ -212,7 +226,9 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await expect(usageTab).toBeVisible();
   const tabBackground = await usageTab.evaluate((node) => getComputedStyle(node).backgroundColor);
   expect(tabBackground).not.toBe('rgba(0, 0, 0, 0)');
-  const usageSelected = page.locator('.ol-segmented-option[aria-pressed="true"]').first();
+  const usageSelected = page
+    .getByRole('group', { name: '统计时段' })
+    .locator('.ol-segmented-option[aria-pressed="true"]');
   await expect(usageSelected).toBeVisible();
   await expect(usageSelected).toHaveCSS('clip-path', 'none');
   await expect(usageSelected).toHaveCSS('border-radius', '12px');
@@ -245,7 +261,7 @@ test('selected segmented options and the overview heatmap stay visible', async (
   expect(pipelineStyle.color).not.toBe(pipelineStyle.background);
 
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
-  await page.waitForTimeout(400);
+  await expect(page.locator('.ol-settings-surface')).toBeHidden();
   await sidebar.getByRole('button', { name: '概览', exact: true }).click();
   await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
   const overviewSelected = page
@@ -263,7 +279,9 @@ test('selected segmented options and the overview heatmap stay visible', async (
   // The yearly card is the ported GitHub Activity component: its heading is the yearly
   // count line and its grid is made of real day cells.
   const dashboard = page.locator('.ol-overview-dashboard');
-  await expect(dashboard).toHaveCSS('overflow-y', 'hidden');
+  await expect
+    .poll(() => dashboard.evaluate((element) => element.scrollHeight - element.clientHeight))
+    .toBeLessThan(2);
   const activityCard = page.locator('.ol-gha');
   await expect(activityCard).toBeVisible();
   await expect(activityCard.locator('.ol-gha-heading')).toContainText('次听写');
@@ -279,8 +297,9 @@ test('selected segmented options and the overview heatmap stay visible', async (
   expect(Math.abs(cellSize.width - 11)).toBeLessThan(0.2);
   expect(Math.abs(cellSize.height - 11)).toBeLessThan(0.2);
   const heatmapBox = (await activityCard.boundingBox())!;
-  expect(heatmapBox.width).toBeGreaterThanOrEqual(760);
-  expect(heatmapBox.width).toBeLessThan(820);
+  expect(heatmapBox.width).toBeCloseTo(771, 0);
+  await expect(activityCard).toHaveCSS('border-radius', '28px');
+  await expect(activityCard).toHaveCSS('padding-left', '16px');
   const yearBoard = page.locator('.ol-overview-year');
   await expect(yearBoard).toBeVisible();
   const yearBox = (await yearBoard.boundingBox())!;

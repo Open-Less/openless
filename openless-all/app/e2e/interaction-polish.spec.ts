@@ -140,7 +140,7 @@ for (const platform of ['mac', 'win'] as const) {
       Object.defineProperty(navigator, 'userAgent', { configurable: true, value });
       Object.defineProperty(navigator, 'userAgentData', { configurable: true, value: undefined });
     }, platform);
-    await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?qa');
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?qa`);
     await page.locator('.ol-default-capsule').waitFor();
     await page.evaluate(() => {
       const fixture = (window as any).fixture;
