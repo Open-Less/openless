@@ -2,7 +2,7 @@ import { useReducedMotion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { StylePack, StylePackExample, StylePackRuntimeDiagnostics } from '../../api/contracts';
-import type { NotificationState } from '../../api/interaction';
+import type { NotificationHandle, NotificationState } from '../../api/interaction';
 import { marketplaceAuthStatus, uploadMarketplacePack } from '../../api/marketplace';
 import { listenPreferenceChanges } from '../../api/preferences';
 import {
@@ -37,6 +37,15 @@ type BusyAction =
 
 const BUILTIN_RAW_ID = 'builtin.raw';
 const BUILTIN_BODY_ORDER = ['builtin.light', 'builtin.structured', 'builtin.formal'];
+const DELETE_UNDO_MS = 6000;
+
+interface PendingDelete {
+  pack: StylePack;
+  index: number;
+  timer?: number;
+  undo?: NotificationHandle;
+  committing?: boolean;
+}
 
 // Example prompt pre-filled in the editor when creating a new style pack. Design principles:
 // 1) Show the recommended structure (role → task → general constraints → output) for users to edit
@@ -112,7 +121,6 @@ export function useStylePackWorkspace() {
 
   const [packs, setPacks] = useState<StylePack[]>([]);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
-  const departing = useRef(new Set<string>());
   const mounted = useRef(true);
   const [workflowView, setWorkflowView] = useState<'dictation' | 'selection'>('dictation');
 
@@ -124,10 +132,7 @@ export function useStylePackWorkspace() {
   selectedIdRef.current = selectedId;
   const [draft, setDraft] = useState<StylePack | null>(null);
   const [busy, setBusy] = useState<BusyAction>('loading');
-  const pendingDeletes = useRef(
-    new Map<string, { pack: StylePack; timer: number; index: number; committing: boolean }>(),
-  );
-  const [undoDelete, setUndoDelete] = useState<{ id: string; name: string } | null>(null);
+  const pendingDeletes = useRef(new Map<string, PendingDelete>());
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorClosing, setEditorClosing] = useState(false);
   const editorCloseTimer = useRef<number | null>(null);
@@ -455,21 +460,25 @@ export function useStylePackWorkspace() {
     const pending = pendingDeletes.current.get(id);
     if (!pending || pending.committing) return;
     window.clearTimeout(pending.timer);
+    pending.undo?.dismiss();
     pendingDeletes.current.delete(id);
+    reinsertPack(pending);
+  };
+
+  const reinsertPack = ({ pack, index }: PendingDelete) => {
     setPacks((current) => {
-      if (current.some((pack) => pack.id === id)) return current;
+      if (current.some((item) => item.id === pack.id)) return current;
       const next = current.slice();
-      next.splice(Math.min(pending.index, next.length), 0, pending.pack);
+      next.splice(Math.max(0, Math.min(index, next.length)), 0, pack);
       return next;
     });
-    setUndoDelete((current) => (current?.id === id ? null : current));
   };
 
   const commitDeletedPack = (id: string) => {
     const pending = pendingDeletes.current.get(id);
     if (!pending || pending.committing) return;
     pending.committing = true;
-    setUndoDelete((current) => (current?.id === id ? null : current));
+    pending.undo?.dismiss();
     void deleteStylePack(id)
       .then(() => {
         pendingDeletes.current.delete(id);
@@ -483,35 +492,30 @@ export function useStylePackWorkspace() {
       })
       .catch((deleteError) => {
         pendingDeletes.current.delete(id);
-        setPacks((current) => {
-          if (current.some((pack) => pack.id === id)) return current;
-          const next = current.slice();
-          next.splice(Math.min(pending.index, next.length), 0, pending.pack);
-          return next;
-        });
+        if (!mounted.current) return;
+        reinsertPack(pending);
         showSaveStatus('failed', t('style.pack.deleteFailed', { err: String(deleteError) }));
       });
   };
 
   const handleDeleteImportedPack = async (pack: StylePack) => {
-    if (
-      pack.kind !== 'imported' ||
-      pendingDeletes.current.has(pack.id) ||
-      departing.current.has(pack.id)
-    )
-      return;
-    departing.current.add(pack.id);
-    const index = packs.findIndex((item) => item.id === pack.id);
-    const name = getStylePackPresentation(pack, t).name;
+    if (pack.kind !== 'imported' || pendingDeletes.current.has(pack.id)) return;
+    const pending: PendingDelete = { pack, index: packs.findIndex((item) => item.id === pack.id) };
     // Register before awaiting motion: navigation/unmount must still finish the user's deletion.
-    const timer = window.setTimeout(() => commitDeletedPack(pack.id), 6000);
-    pendingDeletes.current.set(pack.id, { pack, timer, index, committing: false });
+    pendingDeletes.current.set(pack.id, pending);
     await cardDeparture(cardRefs.current.get(pack.id));
-    departing.current.delete(pack.id);
-    if (!mounted.current) return;
+    if (!mounted.current || pendingDeletes.current.get(pack.id) !== pending) return;
     setPacks((current) => current.filter((item) => item.id !== pack.id));
     if (editorOpen && selectedId === pack.id) startEditorClose();
-    setUndoDelete({ id: pack.id, name });
+    const name = getStylePackPresentation(pack, t).name;
+    pending.undo = notify({
+      state: 'deleting',
+      message: `${t('style.pack.deleteImported')}: ${name}`,
+      actionLabel: t('style.pack.undoDelete'),
+      onAction: () => restoreDeletedPack(pack.id),
+    });
+    // Start the Undo window when its notification is published, after the card's departure.
+    pending.timer = window.setTimeout(() => commitDeletedPack(pack.id), DELETE_UNDO_MS);
   };
 
   const handleDeleteImported = async () => {
@@ -630,7 +634,6 @@ export function useStylePackWorkspace() {
     selectedId,
     draft,
     busy,
-    undoDelete,
     editorOpen,
     runtimePreview,
     runtimePreviewError,
@@ -650,7 +653,6 @@ export function useStylePackWorkspace() {
     handleActivate,
     handleActivateSelectionStyle,
     handleResetBuiltin,
-    restoreDeletedPack,
     handleDeleteImportedPack,
     handleDeleteImported,
     handleCreateFromTemplate,

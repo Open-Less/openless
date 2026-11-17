@@ -15,7 +15,7 @@ export interface WarningOptions {
   dismissLabel?: string;
 }
 
-export type NotificationState = 'info' | 'saved' | 'failed' | 'deleted' | 'saving';
+export type NotificationState = 'info' | 'saved' | 'failed' | 'deleting' | 'deleted' | 'saving';
 
 export interface NotificationOptions {
   message: string;

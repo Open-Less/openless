@@ -19,6 +19,7 @@ function NotificationCard({
   const reduced = useReducedMotion();
   const present = useIsPresent();
   const state = item.state ?? 'info';
+  const iconState = state === 'deleting' ? 'deleted' : state;
   return (
     <motion.div
       className={`ol-notification-card${item.progress ? ' ol-notification-card--progress' : ''}`}
@@ -29,12 +30,12 @@ function NotificationCard({
       exit={{ opacity: 0, y: reduced ? 0 : '-110%' }}
       transition={reduced ? { duration: 0 } : { type: 'spring', stiffness: 320, damping: 30 }}
     >
-      <span className={`ol-notification-icon ol-notification-icon--${state}`} aria-hidden="true">
+      <span className={`ol-notification-icon ol-notification-icon--${iconState}`} aria-hidden="true">
         {state === 'saving' ? (
           <span className="ol-loading-spinner">
             <Icon name="refresh" size={10} />
           </span>
-        ) : state === 'deleted' ? (
+        ) : iconState === 'deleted' ? (
           <Icon name="trash" size={10} />
         ) : state === 'failed' ? (
           '!'

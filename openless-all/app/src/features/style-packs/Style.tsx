@@ -2,7 +2,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { type CSSProperties } from 'react';
 import type { PolishMode } from '../../api/contracts';
 import { Icon } from '../../components/Icon';
-import { SavedToast } from '../../components/SavedToast';
 import { StylePackIconPicker } from './StylePackIconPicker';
 import { ChoiceChips } from '../../components/ui/ChoiceChips';
 import { ExpandableText } from '../../components/ui/Disclosure';
@@ -30,7 +29,6 @@ export function Style() {
     setWorkflowView,
     draft,
     busy,
-    undoDelete,
     editorOpen,
     runtimePreview,
     runtimePreviewError,
@@ -50,7 +48,6 @@ export function Style() {
     handleActivate,
     handleActivateSelectionStyle,
     handleResetBuiltin,
-    restoreDeletedPack,
     handleDeleteImportedPack,
     handleDeleteImported,
     handleCreateFromTemplate,
@@ -201,19 +198,6 @@ export function Style() {
           </div>
         }
       />
-
-      {/* Anchored to the console card's top-right — same zone as the marketplace / refresh /
-          import ZIP buttons; the pale blue pill flashes for 0.8s only and never covers the
-          buttons for long. */}
-      {undoDelete && (
-        <SavedToast
-          saveState="saving"
-          message={t('style.pack.deletePending', { defaultValue: undoDelete.name })}
-          actionLabel={t('style.pack.undoDelete')}
-          onAction={() => restoreDeletedPack(undoDelete.id)}
-          durationMs={6000}
-        />
-      )}
 
       <Card
         padding={0}

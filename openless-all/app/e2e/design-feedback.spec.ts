@@ -203,18 +203,32 @@ test('style pack deletion uses the red trash notification and keeps undo', async
   await sidebar.getByRole('button', { name: '风格', exact: true }).click();
   await sidebar.getByRole('button', { name: '润色模式', exact: true }).click();
   await expect(page.getByRole('heading', { name: '风格包', exact: true })).toBeVisible();
-  const deleteButtons = page.getByRole('button', { name: '删除', exact: true });
-  await expect(deleteButtons.first()).toBeVisible();
-  await deleteButtons.first().click();
-  const toast = page.locator('.ol-notification-card').filter({ hasText: '已删除' });
+  const pack = page.locator('[data-ol-style-pack="imported.creator-note"]');
+  const deleteButton = pack.getByRole('button', { name: '删除', exact: true });
+  const toast = page.locator('.ol-notification-card[data-state="deleting"]');
+  const deleted = page.locator('.ol-notification-card').filter({ hasText: '已删除' });
+  await deleteButton.click();
   await expect(toast).toBeVisible();
+  await expect(toast).toContainText('创作者口播');
+  await expect(deleted).toHaveCount(0);
   const icon = toast.locator('.ol-notification-icon--deleted');
   await expect(icon).toBeVisible();
   const iconColor = await icon.evaluate((node) => getComputedStyle(node).backgroundColor);
   const [red, green] = iconColor.match(/\d+/g)!.map(Number);
   expect(red).toBeGreaterThan(200);
   expect(green).toBeLessThan(160);
-  await expect(toast.getByRole('button', { name: '撤销', exact: true })).toBeVisible();
+  const undo = toast.getByRole('button', { name: '撤销', exact: true });
+  await expect(undo).toBeVisible();
+  await expect(pack).toHaveCount(0);
+  await undo.click();
+  await expect(pack).toBeVisible();
+  await expect(toast).toHaveCount(0);
+
+  await deleteButton.click();
+  await expect(toast).toBeVisible();
+  await expect(deleted).toBeVisible({ timeout: 8000 });
+  await expect(toast).toHaveCount(0);
+  await expect(pack).toHaveCount(0);
 });
 
 test('selected segmented options and the overview heatmap stay visible', async ({ page }) => {
