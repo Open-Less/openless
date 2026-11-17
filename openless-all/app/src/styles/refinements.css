@@ -72,7 +72,7 @@ button:disabled {
 .ol-thinscroll {
   overflow-anchor: auto;
 }
-.ol-dialog-overlay {
+.ol-dialog-overlay::before {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }

@@ -1,15 +1,15 @@
 import type { ActivityDay, DictationSession } from '../types';
 import { invokeOrMock } from './shared';
-import { mockActivityDays, mockHistory } from './mock-data';
+import { previewHistory } from '../../preview/history';
 
 export function listHistory(): Promise<DictationSession[]> {
-  return invokeOrMock('list_history', undefined, () => mockHistory);
+  return invokeOrMock('list_history', undefined, () => previewHistory.list());
 }
 
 /** Daily dictation activity counts (ascending by date), the overview page's yearly heatmap
     data source. Decoupled from the history retention policy. */
 export function getActivityStats(): Promise<ActivityDay[]> {
-  return invokeOrMock('get_activity_stats', undefined, () => mockActivityDays);
+  return invokeOrMock('get_activity_stats', undefined, () => previewHistory.getActivityDays());
 }
 
 export function getActivityApps(year: number): Promise<[string, number][]> {
@@ -20,11 +20,11 @@ export function getActivityApps(year: number): Promise<[string, number][]> {
 }
 
 export function deleteHistoryEntry(id: string): Promise<void> {
-  return invokeOrMock('delete_history_entry', { id }, () => undefined);
+  return invokeOrMock('delete_history_entry', { id }, () => previewHistory.delete(id));
 }
 
 export function clearHistory(): Promise<void> {
-  return invokeOrMock('clear_history', undefined, () => undefined);
+  return invokeOrMock('clear_history', undefined, () => previewHistory.clear());
 }
 
 /** Reads the data URL (base64) of a session's original microphone WAV.
@@ -32,7 +32,9 @@ export function clearHistory(): Promise<void> {
  *  Returns `data:audio/wav;base64,...`, used directly by the frontend `<audio>` and the
  *  export button. */
 export function readAudioRecording(sessionId: string): Promise<string> {
-  return invokeOrMock('read_audio_recording', { sessionId }, () => 'data:audio/wav;base64,');
+  return invokeOrMock('read_audio_recording', { sessionId }, () =>
+    previewHistory.readRecording(sessionId),
+  );
 }
 
 export interface HistoryRetranscriptionResult {
@@ -49,10 +51,9 @@ export interface HistoryRetranscriptionResult {
  *  Callable on successful, polish-failed, and transcription-failed entries; the backend
  *  re-validates the recording and capability boundaries. */
 export function retranscribeRecording(sessionId: string): Promise<HistoryRetranscriptionResult> {
-  return invokeOrMock('retranscribe_recording', { sessionId }, () => ({
-    text: mockHistory[0].rawTranscript,
-    updatedEntry: null,
-  })) as Promise<HistoryRetranscriptionResult>;
+  return invokeOrMock('retranscribe_recording', { sessionId }, () =>
+    previewHistory.retranscribe(sessionId),
+  );
 }
 
 export function applyQuickNoteRepolish(
@@ -63,6 +64,6 @@ export function applyQuickNoteRepolish(
   return invokeOrMock(
     'apply_quick_note_repolish',
     { sessionId, text, stylePackId: stylePackId ?? null },
-    () => mockHistory[0],
-  ) as Promise<DictationSession>;
+    () => previewHistory.repolishQuickNote(sessionId, text, stylePackId),
+  );
 }

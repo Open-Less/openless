@@ -274,6 +274,7 @@ export const zhCN = {
     copy: '复制',
     delete: '删除',
     later: '稍后',
+    confirmAction: '确认',
     cancel: '取消',
     confirmAction: '确认',
     close: '关闭',
@@ -1242,6 +1243,11 @@ export const zhCN = {
     vocabularyLearning: {
       title: '手改学词',
       enabled: '启用手改学词',
+      suggestionPosition: '建议卡片位置',
+      positionNearInput: '输入位置附近',
+      positionBottomRight: '固定右下角',
+      suggestionPositionHint:
+        '仅 Windows：默认靠近文本光标或输入框；定位不可用时回退到原输入目标所在屏幕的右下角。固定右下角始终使用该屏幕的工作区。',
       observationSeconds: '观察时长',
       observationSecondsHint: '听写落字后观察当前输入框的最长时间，10–60 秒。',
       suggestionSeconds: '建议保留时长',
@@ -1478,11 +1484,6 @@ export const zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多数编辑器）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（聊天输入框）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: '在键盘列表中显示 OpenLess',
-      windowsShowOpenlessInKeyboardListDesc:
-        '关闭后 Win+Space 切换输入法时不会出现 OpenLess；SendInput 与剪贴板粘贴插入不受影响。重新开启本项可恢复显示。',
-      windowsShowOpenlessInKeyboardListError:
-        '无法更新键盘列表：系统拒绝更改 OpenLess 语言配置文件。',
       historyGroupTitle: '历史与上下文',
       historyRetentionLabel: '历史保留天数',
       historyRetentionDesc: '超过保留天数的历史在写入新条目时被清理；0 = 不按时间清理。',

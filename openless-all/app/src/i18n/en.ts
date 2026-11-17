@@ -301,6 +301,7 @@ export const en: typeof zhCN = {
     copy: 'Copy',
     delete: 'Delete',
     later: 'Later',
+    confirmAction: 'Confirm',
     cancel: 'Cancel',
     confirmAction: 'Confirm',
     close: 'Close',
@@ -1300,6 +1301,11 @@ export const en: typeof zhCN = {
     vocabularyLearning: {
       title: 'Learn from corrections',
       enabled: 'Enable learning from corrections',
+      suggestionPosition: 'Suggestion card position',
+      positionNearInput: 'Near input',
+      positionBottomRight: 'Fixed bottom-right',
+      suggestionPositionHint:
+        'Windows only: prefer the text caret or input field; if unavailable, fall back to the original input screen’s bottom-right corner. Fixed bottom-right always uses that screen’s work area.',
       observationSeconds: 'Observation duration',
       observationSecondsHint:
         'Maximum time to observe the current field after dictation: 10–60 seconds.',
@@ -1539,11 +1545,6 @@ export const en: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (most editors)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (chat input boxes)',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'Show OpenLess in keyboard list',
-      windowsShowOpenlessInKeyboardListDesc:
-        'When off, Win+Space will not cycle to OpenLess. SendInput and clipboard-paste insertion are unaffected. Turn this back on to restore the entry.',
-      windowsShowOpenlessInKeyboardListError:
-        'Could not update the keyboard list: the system rejected changing the OpenLess language profile.',
       historyGroupTitle: 'History & context',
       historyRetentionLabel: 'History retention (days)',
       historyRetentionDesc:

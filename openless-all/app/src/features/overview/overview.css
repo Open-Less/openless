@@ -1,0 +1,134 @@
+.ol-overview-dashboard {
+  display: flex;
+  flex: 1 1 0%;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.ol-overview-dashboard[data-mobile] {
+  flex: 1 0 auto;
+  height: auto;
+  overflow: visible;
+}
+
+.ol-overview-header-actions,
+.ol-overview-services {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ol-overview-header-actions {
+  justify-content: flex-end;
+}
+
+.ol-overview-service-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ol-ink-4);
+}
+
+.ol-overview-service-marker[data-status='ready'] {
+  background: var(--ol-ok);
+}
+
+.ol-overview-service-marker[data-status='failed'] {
+  background: var(--ol-err);
+}
+
+.ol-overview-service-status {
+  color: var(--ol-ink-3);
+  font-size: 12px;
+}
+
+.ol-overview-metrics {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 8px;
+}
+
+.ol-overview-lower {
+  display: flex;
+  align-items: stretch;
+  flex: 1 0 240px;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ol-overview-lower > .ol-overview-period {
+  flex: 5 1 300px;
+}
+
+.ol-overview-lower > .ol-overview-recent-card {
+  flex: 7 1 320px;
+  min-height: 200px;
+}
+
+.ol-overview-heatmap,
+.ol-overview-year {
+  flex: 0 0 auto;
+}
+
+.ol-overview-heatmap-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.ol-overview-calendar {
+  flex: 4 1 700px;
+  min-width: 0;
+}
+
+.ol-overview-year {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.ol-overview-year h3,
+.ol-overview-apps-status {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ol-ink-3);
+}
+
+.ol-overview-apps-status {
+  margin: 8px 6px 0;
+}
+
+.ol-overview-year-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+}
+
+.ol-overview-year-stats div {
+  display: flex;
+  flex: 1 1 76px;
+  flex-direction: column-reverse;
+  min-width: 0;
+  gap: 5px;
+}
+
+.ol-overview-year-stats dd {
+  margin: 0;
+  font: 18px var(--ol-font-numeric);
+}
+
+.ol-overview-year-stats dt {
+  font-size: 11px;
+  color: var(--ol-ink-3);
+}

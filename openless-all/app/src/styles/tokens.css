@@ -11,6 +11,7 @@
   --ol-danger-solid-bg: var(--ol-err);
   --ol-danger-solid-ink: #ffffff;
   --ol-control-radius: var(--ol-radius);
+  --ol-button-radius: 12px;
   --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */

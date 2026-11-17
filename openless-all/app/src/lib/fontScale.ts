@@ -1,6 +1,5 @@
-// Global font-size tiers — scales the whole UI via documentElement.style.zoom (supported by
-// WebKit/Tauri). localStorage is the single source of truth; it's read once at window
-// startup, and changes made in Settings' "personalization" overwrite it directly.
+// Preserve the local preference for both early startup and cloud restore. The viewport
+// applies it to content and popup surfaces without changing the root coordinates.
 
 export type FontScaleId = 'small' | 'medium' | 'large';
 
@@ -25,14 +24,7 @@ export function readFontScale(): FontScaleId {
 }
 
 export function applyFontScale(id: FontScaleId): void {
-  // The browser preview must stay at zoom 1. Cursor's element overlay uses layout
-  // coordinates, and CSS zoom paints the page somewhere else, so the highlight
-  // misses the control. The native window still uses the saved scale.
-  const scale =
-    document.documentElement.dataset.olBrowserFrame === 'main' ? 1 : FONT_SCALE_VALUES[id];
-  // CSS zoom isn't in the W3C standard but WebKit/Blink both support it; Tauri desktop runs
-  // Wry/WebKit, so it's fine.
-  (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(scale);
+  const scale = FONT_SCALE_VALUES[id];
   document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
 }
 

@@ -1,0 +1,8 @@
+# React 前端重构：现状与证据
+
+- 取证基线：Dev-1 c45430f4（2.0.2-dev.4+build.20261115）；它比 6d6ced54 仅多旧规划索引。实施基线：最新远端 beta 3bddad3b，与 Dev-1 分叉（4 / 53）；不整体带入该分支。逐项核对 d04e6256、205579c7、6d6ced54 的有效 UI 行为及独立功能依赖。参考 Dev-1 上的 .handoff 截图、REVIEW、REQUIREMENTS 和 docs/frontend-unification/README.md。本机实际安装为 2.0.2+build.20261115，不能用于同构建结论。
+- Chromium：Vite 1420 → index.html → public/startup.js → src/main.tsx → App；Playwright 的 5325 路径不启用普通预览框。Tauri dev 同一 Vite，打包使用 dist；macOS WKWebView、Windows WebView2、Android WebView 均运行同一 React。Harmony 由 scripts/build-harmony-frontend.sh 把 IIFE 交给 HAP，Index.ets 用 rawfile 加载，再经 OpenLessHarmonyApi 调用。Android 授权 UI 通过 @android 接入。Linux egui、iOS 原生、Windows 原生边框、宿主/后端拆分、原生输入法及远程输入独立网页不纳入。
+- 主窗口配置 macOS 1300×835、Windows 1240×800，最小各 980×640；需实测内容区。独立窗口路径有胶囊、Windows 转写轨、QA、语音编辑、选区意图；Android QA、语音编辑内嵌。Less Computer 原生仍产生窗口而 React 空白，保留兼容入口，不能假称死代码可删。
+- Dev-1 实测：Chromium 视口 1710×964，应用框 1300×835、左偏移 205px；清空历史遮罩覆盖浏览器整页。普通预览固定 100%，安装版默认 110%；Portal、祖先 overflow/clip-path、CSS zoom 和原生边界分别检查。QA 已有窗口展开请求，胶囊语言菜单按 session 申请尺寸，插入失败卡报告 presentationId。请求返回或等两帧不能直接证明已绘制。
+- Dev-1 Chromium 实测：?os=win 只使根节点为 win，部分页面仍探测 mac，MLX/IME 能力与 ⌘K 错配；mock delete/clear 列表数 8→8→8。历史页、概览、用量各自订阅后台事件；应用排行榜只跟年份更新。Core 写历史、累计活动时可能先后发 HistoryChanged；保留随手记及累计活动。服务账本另计。Harmony 有 openless:harmony-backend-change 以及听写完成，Tauri lag 无专用历史重同步信号。Harmony 清空后遍历旧条目删除音频，随手记条目可保留但音频无法由 React 保证。
+- Dev-1 定向 Playwright 30/32，两个失败是把 110% 下约 848px 的绘制宽度与未缩放 <820px 比较；设计宽约 771px。TypeScript 及 Android IPC、Harmony startup、Windows UI 和 UI follow-up 契约通过。所有证据都应在当前实施基线及最终 SHA 重跑。远端 beta CI 44066898834 的 UI/Windows/macOS/Android/Harmony 检查通过，iOS 用例失败、设备构建取消，Dev-1 无对应 CI。验收不得用 Playwright WebKit 冒充真实 WKWebView。

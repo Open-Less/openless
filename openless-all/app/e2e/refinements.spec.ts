@@ -1,19 +1,22 @@
+import { fixtureOrigin } from './support/server';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
-test('style and dictionary action buttons share the 12px button radius', async ({ page }) => {
+test('style and dictionary action buttons retain compact corners', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '风格', exact: true }).click();
   await page.getByRole('button', { name: '润色模式', exact: true }).click();
-  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '12px');
+  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '8px');
   await expect(page.getByRole('button', { name: '激活', exact: true }).first()).toHaveCSS(
     'border-radius',
-    '12px',
+    '8px',
   );
   await page.getByRole('button', { name: '词典', exact: true }).click();
-  await expect(page.locator('.ol-action-button').first()).toHaveCSS('border-radius', '12px');
+  const dictionary = page.locator('[data-ol-page="vocab"]');
+  await expect(dictionary).toHaveAttribute('data-transition-phase', 'settled');
+  await expect(dictionary.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
 });
 
 async function openShortcuts(page: Page) {
@@ -91,21 +94,18 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
 test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
   page,
 }) => {
-  // A shorter window keeps the settings form scrollable at every zoom; the wheel is
-  // about native scroll delivery, not about the form happening to overflow 835px.
-  await page.setViewportSize({ width: 1300, height: 600 });
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
   const content = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   await expect(content).toHaveCSS('scroll-behavior', 'auto');
   await expect(content).toHaveCSS('scrollbar-width', 'none');
-  const prevented = await content.evaluate((el) => {
+  await content.evaluate((el) => {
     const event = new WheelEvent('wheel', { deltaY: 13.25, bubbles: true, cancelable: true });
     el.dispatchEvent(event);
-    return event.defaultPrevented;
+    el.setAttribute('data-wheel-prevented', String(event.defaultPrevented));
   });
-  expect(prevented).toBe(false);
+  await expect(content).toHaveAttribute('data-wheel-prevented', 'false');
   await page
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '通用', exact: true })
@@ -165,7 +165,7 @@ test('compact typography selects persist font, size and reading width without ne
   });
   await page.reload();
   await expect(page.locator('html')).toHaveCSS('--ol-reading-width', '56ch');
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '外观与语言', exact: true }).click();
   await expect(section.getByRole('combobox', { name: '字体系列' })).toHaveText(
@@ -221,7 +221,7 @@ test('every main destination and settings category stays readable on desktop and
     await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '工具', exact: true }).click();
-  for (const name of ['纠正规则', '随便问', '翻译', '速记']) {
+  for (const name of ['翻译', '问任何问题', '速记', '纠正规则']) {
     await page.getByRole('button', { name, exact: true }).click();
     await settleNavigation(page);
     await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();

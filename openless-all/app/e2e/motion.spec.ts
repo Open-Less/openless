@@ -227,7 +227,7 @@ test('mobile drawers retain their exit and can be opened again', async ({ page }
   await expect(drawer).toHaveCSS('opacity', '1');
   await page.evaluate(() => {
     const observer = new MutationObserver(() => {
-      const drawer = document.querySelector('[role="dialog"][aria-label="更多"]');
+      const drawer = document.querySelector('.ol-mobile-navigation-sheet .ol-dialog-card');
       if (drawer?.getAnimations().some((animation) => animation.id === 'ol-surface-exit')) {
         document.body.dataset.testDrawerExit = 'true';
         observer.disconnect();

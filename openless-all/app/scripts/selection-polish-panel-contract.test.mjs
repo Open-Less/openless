@@ -20,9 +20,9 @@ const violations = [];
 const lib = await read('src-tauri/src/lib.rs');
 const capabilities = await read('src-tauri/capabilities/default.json');
 const commands = await read('src-tauri/src/commands/selection_polish_preview.rs');
-const qaPanel = await read('src/pages/QaPanel.tsx');
-const appTsx = await read('src/App.tsx');
-const mainTsx = await read('src/main.tsx');
+const qaPanel = await read('src/features/qa/QaPanel.tsx');
+const appTsx = await read('src/app/windowRoutes.tsx');
+const mainTsx = await read('src/app/bootstrap.tsx');
 
 // 1. 独立窗口彻底下线：能力表、前端路由、页面文件都不再有它。
 const windowCapabilities = JSON.parse(capabilities).windows;
@@ -33,8 +33,8 @@ if (!windowCapabilities.includes('qa')) {
   violations.push('capabilities/default.json dropped the qa window (the merged panel needs it)');
 }
 for (const [name, source] of [
-  ['src/App.tsx', appTsx],
-  ['src/main.tsx', mainTsx],
+  ['src/app/windowRoutes.tsx', appTsx],
+  ['src/app/bootstrap.tsx', mainTsx],
 ]) {
   if (source.includes('selection-polish-preview')) {
     violations.push(`${name}: still routes the deleted selection-polish-preview window`);

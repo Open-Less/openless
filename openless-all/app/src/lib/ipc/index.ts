@@ -64,16 +64,14 @@ export {
 } from './channels';
 
 // history
+export { listHistory, getActivityStats } from './history';
 export {
-  listHistory,
   deleteHistoryEntry,
   clearHistory,
-  getActivityStats,
-  getActivityApps,
   readAudioRecording,
   retranscribeRecording,
   applyQuickNoteRepolish,
-} from './history';
+} from '../../api/history';
 
 // vocab
 export {
@@ -170,8 +168,6 @@ export {
   getQaHotkeyLabel,
   setQaHotkey,
   qaWindowDismiss,
-  qaCancelTurn,
-  qaStopRecording,
   qaWindowSetExpanded,
   qaGetSnapshot,
   qaToggleRecording,

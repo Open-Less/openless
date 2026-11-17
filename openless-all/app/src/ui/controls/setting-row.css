@@ -1,0 +1,56 @@
+.ol-setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, var(--ol-row-label-width, 200px)) minmax(0, 1fr);
+  gap: 16px;
+  padding: var(--ol-row-padding, 14px) 0;
+  border-top: 0.5px solid var(--ol-line-soft);
+  align-items: center;
+}
+.ol-setting-row[data-description-placement='inline'] {
+  --ol-row-padding: 12px;
+  --ol-row-label-width: 180px;
+  --ol-row-label-size: 13px;
+}
+.ol-setting-row-label {
+  min-width: 0;
+  color: var(--ol-ink);
+  font-size: var(--ol-row-label-size, 14px);
+  font-weight: var(--ol-font-weight-medium);
+  overflow-wrap: anywhere;
+}
+.ol-setting-row-description {
+  margin-top: 4px;
+  color: var(--ol-ink-4);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.ol-setting-row-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  width: var(--ol-row-control-width, auto);
+  max-width: 100%;
+}
+html:is([data-ol-platform='android'], [data-ol-platform='harmony']) .ol-setting-row {
+  grid-template-columns: minmax(0, 1fr);
+  padding-block: 12px;
+  gap: 8px;
+}
+html:is([data-ol-platform='android'], [data-ol-platform='harmony']) .ol-setting-row-control {
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+@media (max-width: 719px) {
+  .ol-setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    padding-block: 12px;
+    gap: 8px;
+  }
+  .ol-setting-row-control {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}

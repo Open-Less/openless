@@ -1,0 +1,151 @@
+.ol-confirm-dialog,
+.ol-interaction-dialog {
+  display: grid;
+  gap: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+:is(.ol-confirm-dialog, .ol-interaction-dialog) h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ol-ink);
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.ol-confirm-dialog-description {
+  color: var(--ol-ink-3);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.ol-confirm-dialog {
+  --ol-confirm-ink: var(--ol-blue);
+  --ol-confirm-soft: var(--ol-blue-soft);
+}
+
+.ol-confirm-dialog[data-tone='danger'] {
+  --ol-confirm-ink: var(--ol-err);
+  --ol-confirm-soft: color-mix(in srgb, var(--ol-err) 12%, transparent);
+}
+
+.ol-confirm-dialog[data-tone='warning'] {
+  --ol-confirm-ink: var(--ol-warn);
+  --ol-confirm-soft: var(--ol-warn-soft);
+}
+
+.ol-confirm-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--ol-control-radius);
+  color: var(--ol-confirm-ink);
+  background: var(--ol-confirm-soft);
+}
+
+.ol-confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ol-confirm-dialog-actions button {
+  max-width: 100%;
+  padding: 7px 14px;
+  min-height: 32px;
+  font-size: 13.5px;
+  font-weight: var(--ol-font-weight-semibold);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ol-confirm-primary {
+  color: var(--ol-accent-solid-ink);
+  background: var(--ol-accent-solid-bg);
+}
+.ol-confirm-danger {
+  color: var(--ol-danger-solid-ink);
+  background: var(--ol-danger-solid-bg);
+}
+.ol-confirm-cancel {
+  color: var(--ol-ink-2);
+  background: var(--ol-surface-2);
+}
+
+.ol-notification-center {
+  position: absolute;
+  inset: 12px 12px auto;
+  max-height: calc(100% - 24px);
+  z-index: var(--ol-layer-notification, 1400);
+  display: grid;
+  justify-items: end;
+  overflow: clip;
+  pointer-events: none;
+}
+.ol-notification-stack {
+  display: grid;
+  gap: 8px;
+  width: min(360px, 100%);
+  max-height: 100%;
+  padding: 4px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  zoom: var(--ol-interface-scale, 1);
+}
+.ol-notification-card {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 22px;
+  align-items: start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-raised);
+  color: var(--ol-ink);
+  box-shadow: var(--ol-shadow-md);
+}
+.ol-notification-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--ol-ink-2);
+  background: var(--ol-surface-2);
+}
+.ol-notification-card[data-state='saved'] .ol-notification-icon {
+  color: var(--ol-accent-solid-ink);
+  background: var(--ol-accent-solid-bg);
+}
+.ol-notification-card:is([data-state='deleted'], [data-state='failed']) .ol-notification-icon {
+  color: var(--ol-err);
+  background: color-mix(in srgb, var(--ol-err) 12%, transparent);
+}
+.ol-notification-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ol-notification-body progress {
+  width: 100%;
+  accent-color: var(--ol-accent-solid-bg);
+}
+.ol-notification-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--ol-ink-3);
+}
+.ol-notification-center:not([data-modal-active]) .ol-notification-close {
+  pointer-events: auto;
+}
+.ol-notification-center[data-modal-active] .ol-notification-close {
+  visibility: hidden;
+}

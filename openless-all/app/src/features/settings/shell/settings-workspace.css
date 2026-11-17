@@ -1,0 +1,9 @@
+.ol-viewport-portals > .ol-settings-workspace {
+  pointer-events: auto;
+}
+.ol-viewport-portals > .ol-settings-workspace[inert] {
+  pointer-events: none;
+}
+.ol-viewport-portals > .ol-settings-workspace > .ol-settings-surface {
+  zoom: var(--ol-interface-scale, 1);
+}

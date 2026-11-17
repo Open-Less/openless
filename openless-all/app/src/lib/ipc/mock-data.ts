@@ -3,12 +3,8 @@ export const mockCredentialValues = new Map<string, string>([
   ['orcarouter-asr:asr.model', 'google/gemini-2.5-flash'],
 ]);
 import type {
-  ActivityDay,
   CorrectionRule,
-  DictationSession,
   DictionaryEntry,
-  HotkeyCapability,
-  HotkeyStatus,
   PolishMode,
   StylePack,
   StylePackExample,
@@ -16,11 +12,12 @@ import type {
   StylePackRuntimeDiagnostics,
   StyleSystemPrompts,
   UserPreferences,
-  WindowsImeStatus,
   CredentialsStatus,
   MicrophoneDevice,
 } from '../types';
 import { OL_DATA } from '../mockData';
+import { publishPreviewChange } from '../../preview/events';
+import { readPreviewThemePreference } from '../../preview/preferences';
 import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
@@ -129,7 +126,7 @@ export let mockSettings: UserPreferences = {
   polishContextWindowMinutes: 5,
   polishSkipMaxChars: 0,
   startMinimized: false,
-  themeMode: 'system',
+  themeMode: readPreviewThemePreference(),
   updateChannel: 'stable',
   updateChannelExplicit: false,
   streamingInsert: true,
@@ -140,7 +137,12 @@ export let mockSettings: UserPreferences = {
   cursorContextEnabled: true,
   vocabularyLearningEnabled: false,
   expressionLearningEnabled: false,
-  vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },
+  vocabularyLearningSettings: {
+    observationSeconds: 60,
+    suggestionSeconds: 10,
+    maxPhraseChars: 12,
+    suggestionPosition: 'nearInput',
+  },
   showOverviewActivityHeatmap: true,
   stackedRowLayout: false,
   conservativeLayout: false,
@@ -524,7 +526,9 @@ export function composeMockStylePackRuntimeDiagnostics(
   };
 }
 
-export function syncMockSettingsFromStylePacks() {
+export let mockSettingsRevision = 0;
+
+function syncMockSettingsFromStylePacks() {
   const enabled = mockStylePacks.filter((pack) => pack.enabled);
   const active =
     mockStylePacks.find((pack) => pack.id === mockSettings.activeStylePackId && pack.enabled) ??
@@ -556,28 +560,11 @@ export function syncMockSettingsFromStylePacks() {
         mockSettings.styleSystemPrompts.formal,
     },
   };
+  mockSettingsRevision++;
+  publishPreviewChange('preferences');
 }
 
 syncMockSettingsFromStylePacks();
-
-export const mockHotkeyCapability: HotkeyCapability = {
-  adapter: 'windowsLowLevel',
-  availableTriggers: [
-    'rightControl',
-    'rightAlt',
-    'leftControl',
-    'leftShift',
-    'rightShift',
-    'mediaPlayPause',
-    'custom',
-  ],
-  requiresAccessibilityPermission: false,
-  supportsModifierOnlyTrigger: true,
-  supportsSideSpecificModifiers: true,
-  explicitFallbackAvailable: false,
-  statusHint:
-    '默认建议使用“右Ctrl + 单击”；若更习惯按住说话，可在录音设置里切回“按住”。若无响应，可在权限页查看 hook 安装状态。',
-};
 
 export const mockCredentialsStatus: CredentialsStatus = {
   activeAsrProvider: 'foundry-local-whisper',
@@ -590,62 +577,10 @@ export const mockCredentialsStatus: CredentialsStatus = {
   arkConfigured: true,
 };
 
-export const mockHotkeyStatus: HotkeyStatus = {
-  adapter: 'windowsLowLevel',
-  state: 'installed',
-  message: 'Windows 低层键盘 hook 已安装',
-  lastError: null,
-};
-
-export const mockWindowsImeStatus: WindowsImeStatus = {
-  state: 'notWindows',
-  usingTsfBackend: false,
-  message: 'Browser dev mock',
-  dllPath: null,
-};
-
 export const mockMicrophoneDevices: MicrophoneDevice[] = [
   { name: 'Built-in Microphone', isDefault: true },
   { name: 'USB Microphone', isDefault: false },
 ];
-
-export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
-  id: `mock-${i}`,
-  createdAt: new Date().toISOString(),
-  rawTranscript: h.preview,
-  asrTranscript: null,
-  finalText: h.preview,
-  mode: 'structured',
-  stylePackId: 'builtin.structured',
-  translationActive: false,
-  polishSource: null,
-  appBundleId: null,
-  appName: 'VS Code',
-  insertStatus: 'inserted',
-  errorCode: null,
-  durationMs: 600,
-  dictionaryEntryCount: 28,
-  hasAudioRecording: null,
-  // Rotate three profiles covering the shapes UI acceptance looks at: sub-second streaming
-  // finish (millisecond precision), volc resource id, very long provider/model text wrapping;
-  // i%4==3 simulates Raw passthrough (no LLM row) and older entries missing duration.
-  asrProvider: ['bailian-qwen3-realtime', 'volcengine', 'openrouter', 'apple-speech'][i % 4],
-  asrModel: [
-    'qwen3-asr-flash-realtime',
-    'volc.seedasr.sauc.duration',
-    'openai/whisper-large-v3-turbo-preview-2026-01-31',
-    null,
-  ][i % 4],
-  llmProvider: ['ark', 'codex_oauth', 'openrouter', null][i % 4],
-  llmModel: [
-    'deepseek-v3-2',
-    'gpt-5.5-codex-spark',
-    'anthropic/claude-sonnet-5-20260203-preview-long-context',
-    null,
-  ][i % 4],
-  asrMs: [120, 64, 9840, null][i % 4],
-  polishMs: [1240, 890, 12400, null][i % 4],
-}));
 
 export const mockVocab: DictionaryEntry[] = OL_DATA.vocab.map((v, i) => ({
   id: `vocab-${i}`,
@@ -836,31 +771,3 @@ export function mockImportStylePackFromZip(zipPath: string): StylePack {
 // ── Activity heatmap (browser dev demo data) ────────────────────────────
 // Sparse daily counts over the past year, laid out to give the heatmap visual contrast.
 // The seed is pseudo-random from the day index, staying stable across reloads.
-export const mockActivityDays: ActivityDay[] = (() => {
-  const days: ActivityDay[] = [];
-  const today = new Date();
-  for (let i = 364; i >= 0; i -= 1) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i);
-    const seed = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
-    if (seed < 0.55) continue;
-    const count = Math.max(1, Math.round(seed * 22) - 8);
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    // Chars/duration derive at ~120 chars and ~9s per entry so the periodic metric cards have
-    // visible data under browser dev too. The oldest 30 days intentionally carry only count
-    // (no chars/durationMs), simulating pre-upgrade data and verifying that "old dates show 0
-    // in the chars/duration metrics" doesn't crash.
-    const legacy = i > 334;
-    days.push(
-      legacy
-        ? { date: iso, count }
-        : {
-            date: iso,
-            count,
-            chars: count * (90 + Math.round(seed * 70)),
-            durationMs: count * (6000 + Math.round(seed * 7000)),
-          },
-    );
-  }
-  return days;
-})();
