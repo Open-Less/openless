@@ -1,6 +1,10 @@
 const FOCUSABLE =
   'a[href], button, textarea, select, input:not([type="hidden"]), [contenteditable="true"], [tabindex]';
 
+export const OPEN_POPUP = ':is(.ol-select-positioner, .ol-tooltip-positioner)[data-open]';
+export const DIALOG_LAYER = 50;
+export const REQUEST_LAYER = 1200;
+
 export interface ModalLayer {
   overlay: HTMLElement;
   card: HTMLElement;
@@ -27,6 +31,7 @@ export function createModalStack() {
   let top: ModalLayer | undefined;
   let active = false;
   let restoreToPage: HTMLElement | null = null;
+  let clickTarget: HTMLElement | null = null;
 
   function focusLayer(layer: ModalLayer) {
     const preferred = layer.focus();
@@ -86,6 +91,7 @@ export function createModalStack() {
   function onKeydown(event: KeyboardEvent) {
     if (!top || event.defaultPrevented || event.isComposing) return;
     if (event.key === 'Escape') {
+      if (top.overlay.querySelector(OPEN_POPUP)) return;
       event.preventDefault();
       event.stopPropagation();
       top.close();
@@ -115,6 +121,23 @@ export function createModalStack() {
   }
 
   return {
+    captureClick(target: EventTarget | null) {
+      const control = target instanceof Element ? target.closest<HTMLElement>(FOCUSABLE) : null;
+      clickTarget = canFocus(control) ? control : null;
+    },
+    captureKey() {
+      clickTarget = null;
+    },
+    getReturnFocus() {
+      // Safari mouse clicks do not focus buttons. Keep the initiating control
+      // for the current surface so dismissal can return to it in that engine.
+      const surface = top?.overlay ?? content;
+      if (canFocus(clickTarget) && surface?.contains(clickTarget)) return clickTarget;
+      return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    },
+    focus(layer: ModalLayer) {
+      if (top === layer) focusLayer(layer);
+    },
     setContent(node: HTMLElement | null) {
       content = node;
       if (content) content.inert = active;

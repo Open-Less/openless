@@ -1,7 +1,8 @@
-import { useId, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useId, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { PresenceModal } from './Modal';
+import { REQUEST_LAYER } from './modalStack';
 import type { InteractionController } from './interactionController';
 
 export function ConfirmDialogHost({ controller }: { controller: InteractionController }) {
@@ -14,13 +15,6 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
   const titleId = useId();
   const descriptionId = useId();
   const leastDestructive = useRef<HTMLButtonElement>(null);
-  const requestChanged = useRef<number>();
-  useLayoutEffect(() => {
-    if (!request || requestChanged.current === request.id) return;
-    requestChanged.current = request.id;
-    leastDestructive.current?.focus({ preventScroll: true });
-  }, [request]);
-
   return (
     <PresenceModal
       open={!!request}
@@ -94,7 +88,8 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
         );
       }}
       onClose={() => request?.cancel()}
-      zIndex={1200}
+      zIndex={REQUEST_LAYER}
+      focusKey={request?.id}
       width={
         request?.kind === 'dialog'
           ? (request.options.width ?? 'min(560px, 100%)')

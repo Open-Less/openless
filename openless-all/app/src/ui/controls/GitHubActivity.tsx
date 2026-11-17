@@ -145,7 +145,7 @@ function DayTooltip({
           sideOffset={TOOLTIP_EDGE}
           className="ol-tooltip-positioner ol-gha-tooltip"
         >
-          <BaseTooltip.Popup className="ol-tooltip-bubble ol-gha-tooltip-bubble">
+          <BaseTooltip.Popup role="tooltip" className="ol-tooltip-bubble ol-gha-tooltip-bubble">
             {text}
           </BaseTooltip.Popup>
         </BaseTooltip.Positioner>

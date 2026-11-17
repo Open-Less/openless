@@ -46,6 +46,8 @@ export function AppViewport({
         ref={setBoundary}
         className={['ol-app-viewport', className].filter(Boolean).join(' ')}
         data-ol-scale={scale ? 'preferences' : 'fixed'}
+        onClickCapture={(event) => modalStack.captureClick(event.target)}
+        onKeyDownCapture={modalStack.captureKey}
       >
         <div className="ol-viewport-content" ref={modalStack.setContent} tabIndex={-1}>
           {boundary && portal && children}

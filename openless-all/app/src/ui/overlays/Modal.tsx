@@ -9,7 +9,7 @@ import {
 import { useOverlayMotion } from '../../lib/motion';
 import { useExitMount } from '../../lib/useExitMount';
 import { PopupContainer, ViewportPortal, useAppViewport } from '../layout/AppViewport';
-import type { ModalLayer } from './modalStack';
+import { DIALOG_LAYER, OPEN_POPUP, type ModalLayer } from './modalStack';
 
 export interface ModalProps {
   children: ReactNode;
@@ -22,13 +22,14 @@ export interface ModalProps {
   labelledBy?: string;
   describedBy?: string;
   initialFocus?: RefObject<HTMLElement>;
+  focusKey?: number | string;
   motionVariant?: 'card' | 'pop';
 }
 
 export function Modal({
   children,
   onClose,
-  zIndex = 50,
+  zIndex = DIALOG_LAYER,
   width = 'min(560px, 100%)',
   style,
   closing = false,
@@ -36,6 +37,7 @@ export function Modal({
   labelledBy,
   describedBy,
   initialFocus,
+  focusKey,
   motionVariant = 'card',
 }: ModalProps) {
   const { boundary, modalStack } = useAppViewport();
@@ -44,9 +46,8 @@ export function Modal({
   const [popupHost, setPopupHost] = useState<HTMLDivElement | null>(null);
   const config = useRef({ onClose, initialFocus, closing, zIndex });
   config.current = { onClose, initialFocus, closing, zIndex };
-  const returnFocus = useRef(
-    document.activeElement instanceof HTMLElement ? document.activeElement : null,
-  );
+  const returnFocus = useRef(modalStack.getReturnFocus());
+  const pressedWithPopup = useRef(false);
   const registered = useRef<ModalLayer | null>(null);
 
   useOverlayMotion(overlayRef, closing, 'backdrop');
@@ -73,10 +74,17 @@ export function Modal({
 
   useLayoutEffect(() => {
     if (!registered.current) return;
+    if (registered.current.closing && !closing) {
+      registered.current.returnFocus = modalStack.getReturnFocus();
+    }
     registered.current.closing = closing;
     registered.current.priority = zIndex;
     modalStack.refresh();
   }, [closing, zIndex, modalStack]);
+
+  useLayoutEffect(() => {
+    if (focusKey !== undefined && registered.current) modalStack.focus(registered.current);
+  }, [focusKey, modalStack]);
 
   return (
     <ViewportPortal>
@@ -86,12 +94,17 @@ export function Modal({
           .filter(Boolean)
           .join(' ')}
         data-ol-contained={boundary ? '' : undefined}
+        onPointerDownCapture={(event) => {
+          pressedWithPopup.current =
+            event.target === event.currentTarget && !!popupHost?.querySelector(OPEN_POPUP);
+        }}
         onClick={(event) => {
+          if (event.target !== event.currentTarget) return;
+          event.stopPropagation();
           const layer = registered.current;
-          if (event.target === event.currentTarget && layer && modalStack.isTop(layer)) {
-            event.stopPropagation();
-            onClose();
-          }
+          const dismiss = !pressedWithPopup.current && !popupHost?.querySelector(OPEN_POPUP);
+          pressedWithPopup.current = false;
+          if (dismiss && layer && modalStack.isTop(layer)) onClose();
         }}
         style={{ zIndex }}
       >
