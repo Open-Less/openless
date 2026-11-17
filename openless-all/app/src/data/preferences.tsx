@@ -9,7 +9,11 @@ import {
   type ReactNode,
 } from 'react';
 import { getHotkeyCapability } from '../api/hotkeys';
-import { getSettingsSnapshot, listenPreferenceChanges, updateSettingFields } from '../api/preferences';
+import {
+  getSettingsSnapshot,
+  listenPreferenceChanges,
+  updateSettingFields,
+} from '../api/preferences';
 import type { HotkeyBinding, HotkeyCapability, UserPreferences } from '../api/contracts';
 import { applyThemeFromPreference } from '../lib/themeMode';
 import { applyStackedLayoutFromPrefs } from '../lib/stackedLayout';

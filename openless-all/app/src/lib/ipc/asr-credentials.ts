@@ -99,11 +99,7 @@ export async function listProviderModels(
     );
     if (descriptor?.staticModels.length) return { models: descriptor.staticModels };
   }
-  if (
-    isPreviewHost() &&
-    providerType === 'orcarouter' &&
-    (kind === 'llm' || kind === 'asr')
-  ) {
+  if (isPreviewHost() && providerType === 'orcarouter' && (kind === 'llm' || kind === 'asr')) {
     const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
     const endpoint = mockCredentialValues.get(`${channelId ?? ''}:${endpointAccount}`);
     if (endpoint && new URL(endpoint).hostname.toLowerCase() === 'api.orcarouter.ai') {

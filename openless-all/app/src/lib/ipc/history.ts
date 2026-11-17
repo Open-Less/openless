@@ -25,7 +25,9 @@ export function clearHistory(): Promise<void> {
  *  Returns `data:audio/wav;base64,...`, used directly by the frontend `<audio>` and the
  *  export button. */
 export function readAudioRecording(sessionId: string): Promise<string> {
-  return invokeOrMock('read_audio_recording', { sessionId }, () => previewHistory.readRecording(sessionId));
+  return invokeOrMock('read_audio_recording', { sessionId }, () =>
+    previewHistory.readRecording(sessionId),
+  );
 }
 
 export interface HistoryRetranscriptionResult {

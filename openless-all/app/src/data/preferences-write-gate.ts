@@ -33,7 +33,7 @@ export function preferenceEdits(previous: unknown, next: unknown, path = ''): Pr
 function clonePreference<T>(value: T): T {
   // Preference values are a JSON wire contract, including on older WebViews.
   if (typeof structuredClone === 'function') return structuredClone(value);
-  return value === undefined ? value : JSON.parse(JSON.stringify(value)) as T;
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }
 
 function applyEdits<T>(value: T, edits: PreferenceEdits): T {

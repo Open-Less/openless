@@ -7,8 +7,7 @@ import { isPreviewHost } from '../runtime/environment';
 import { SnapshotQuery } from './snapshot-query';
 
 export type YearlyActivityApps =
-  | { status: 'available'; rows: [name: string, count: number][] }
-  | { status: 'unsupported' };
+  { status: 'available'; rows: [name: string, count: number][] } | { status: 'unsupported' };
 
 export function supportsActivityApps(): boolean {
   // The current native activity DTO contains counts, characters, and duration only.
@@ -41,20 +40,24 @@ export function createHistoryStore(source: HistorySource) {
     for (const query of years.values()) query.invalidate();
   };
   const start = (): Promise<() => void> => {
-    subscribed ??= source.listen((revision) => {
-      if (revision !== undefined) {
-        // Concurrent producers can emit different revisions out of numeric order.
-        if (revisions.has(revision)) return;
-        revisions.add(revision);
-      }
-      invalidate();
-    }).catch((error: unknown) => {
-      subscribed = null;
-      throw error;
-    });
+    subscribed ??= source
+      .listen((revision) => {
+        if (revision !== undefined) {
+          // Concurrent producers can emit different revisions out of numeric order.
+          if (revisions.has(revision)) return;
+          revisions.add(revision);
+        }
+        invalidate();
+      })
+      .catch((error: unknown) => {
+        subscribed = null;
+        throw error;
+      });
     return subscribed;
   };
-  const awaitSubscription = async () => { await start(); };
+  const awaitSubscription = async () => {
+    await start();
+  };
   const records = new SnapshotQuery(source.listHistory, async () => {
     await awaitSubscription();
     while (pendingWrites) await pendingWrites;
@@ -78,13 +81,20 @@ export function createHistoryStore(source: HistorySource) {
     refreshRecords: records.refresh,
     refreshActivity: activity.refresh,
     refreshApps: (year: number) => apps(year).refresh(),
-    refresh: () => Promise.all([
-      records.refresh(),
-      activity.refresh(),
-      ...Array.from(years.values(), (query) => query.refresh()),
-    ]),
-    async mutate<T>(command: () => Promise<T>, changesRecords: (result: T) => boolean = () => true): Promise<T> {
-      if (writes++ === 0) pendingWrites = new Promise((resolve) => { resolveWrites = resolve; });
+    refresh: () =>
+      Promise.all([
+        records.refresh(),
+        activity.refresh(),
+        ...Array.from(years.values(), (query) => query.refresh()),
+      ]),
+    async mutate<T>(
+      command: () => Promise<T>,
+      changesRecords: (result: T) => boolean = () => true,
+    ): Promise<T> {
+      if (writes++ === 0)
+        pendingWrites = new Promise((resolve) => {
+          resolveWrites = resolve;
+        });
       try {
         // Pair any push emitted during the invocation with its post-commit refresh.
         // A listener failure must not substitute for the actual command result.
@@ -92,6 +102,10 @@ export function createHistoryStore(source: HistorySource) {
         const result = await command();
         if (changesRecords(result)) records.invalidate();
         return result;
+      } catch (error) {
+        // A transport can reject after a commit; only a new snapshot can reconcile that state.
+        records.invalidate();
+        throw error;
       } finally {
         if (--writes === 0) {
           pendingWrites = null;

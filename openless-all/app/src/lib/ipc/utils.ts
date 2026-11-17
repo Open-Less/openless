@@ -41,7 +41,9 @@ export async function openExternal(url: string): Promise<void> {
 export async function exportErrorLog(suggestedFileName: string): Promise<string | null> {
   if (isHarmonyRuntime())
     return invokeOrMock<string | null>(
-      'export_harmony_error_log', { fileName: suggestedFileName }, () => null
+      'export_harmony_error_log',
+      { fileName: suggestedFileName },
+      () => null,
     );
   if (isPreviewHost()) {
     return `~/Downloads/${suggestedFileName}`;

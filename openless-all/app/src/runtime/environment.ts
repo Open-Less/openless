@@ -58,9 +58,12 @@ export function resolveRuntimeEnvironment(hints: EnvironmentHints): RuntimeEnvir
   const host = hasTauri || nativeOrigin || tauriPlatform ? 'tauri' : 'preview';
   const text = `${hints.userAgent ?? ''} ${hints.platform ?? ''}`;
   const isIos = tauriPlatform === 'ios' || /iPhone|iPad|iPod/i.test(text);
-  const nativeOS = tauriPlatform === 'android' || /Android/i.test(text)
-    ? 'android'
-    : tauriPlatform === 'windows' || /Windows|Win32|Win64/i.test(text) ? 'win' : 'mac';
+  const nativeOS =
+    tauriPlatform === 'android' || tauriPlatform === 'androideabi' || /Android/i.test(text)
+      ? 'android'
+      : tauriPlatform === 'windows' || /Windows|Win32|Win64/i.test(text)
+        ? 'win'
+        : 'mac';
   const override = host === 'preview' ? parsePreviewOS(hints.search) : undefined;
   const os = override ?? nativeOS;
   return { host, os, isMobile: os === 'android' || os === 'harmony' || (!override && isIos) };
@@ -69,8 +72,7 @@ export function resolveRuntimeEnvironment(hints: EnvironmentHints): RuntimeEnvir
 export function getRuntimeEnvironment(): RuntimeEnvironment {
   const window = globalThis.window;
   const nav = globalThis.navigator as
-    | (Navigator & { userAgentData?: { platform?: string } })
-    | undefined;
+    (Navigator & { userAgentData?: { platform?: string } }) | undefined;
   return resolveRuntimeEnvironment({
     buildPlatform: import.meta.env?.VITE_OPENLESS_PLATFORM,
     tauriPlatform: import.meta.env?.TAURI_ENV_PLATFORM,
@@ -101,7 +103,10 @@ export function isHarmonyRuntime(): boolean {
 }
 
 export function shortcutPlatformFor(environment: RuntimeEnvironment): ShortcutPlatform {
-  return { isMac: environment.os === 'mac' && !environment.isMobile, isWindows: environment.os === 'win' };
+  return {
+    isMac: environment.os === 'mac' && !environment.isMobile,
+    isWindows: environment.os === 'win',
+  };
 }
 
 export function getShortcutPlatform(): ShortcutPlatform {

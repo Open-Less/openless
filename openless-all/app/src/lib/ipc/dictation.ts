@@ -4,7 +4,9 @@ import { invokeOrMock, isTauriNow, platformCapabilities, requireBackendReady } f
 import type { CapsuleSnapshot } from '../types';
 
 export function startDictation(): Promise<void> {
-  return invokeOrMock('start_dictation', undefined, () => { previewHistory.startRecording(); });
+  return invokeOrMock('start_dictation', undefined, () => {
+    previewHistory.startRecording();
+  });
 }
 
 export function stopDictation(): Promise<void> {

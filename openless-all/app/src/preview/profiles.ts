@@ -1,5 +1,15 @@
-import type { HotkeyCapability, HotkeyStatus, PlatformCapabilities, WindowsImeStatus } from '../api/contracts';
-import { getRuntimeOS, shortcutPlatformFor, type OS, type ShortcutPlatform } from '../runtime/environment';
+import type {
+  HotkeyCapability,
+  HotkeyStatus,
+  PlatformCapabilities,
+  WindowsImeStatus,
+} from '../api/contracts';
+import {
+  getRuntimeOS,
+  shortcutPlatformFor,
+  type OS,
+  type ShortcutPlatform,
+} from '../runtime/environment';
 
 interface PreviewProfile {
   viewport: { width: number; height: number };
@@ -63,8 +73,27 @@ export function getPreviewProfile(os: OS = getRuntimeOS()): PreviewProfile {
       ? {
           adapter,
           availableTriggers: windows
-            ? ['rightControl', 'rightAlt', 'leftControl', 'leftShift', 'rightShift', 'mediaPlayPause', 'custom']
-            : ['rightControl', 'rightOption', 'leftOption', 'leftControl', 'rightCommand', 'leftCommand', 'leftShift', 'rightShift', 'fn', 'custom'],
+            ? [
+                'rightControl',
+                'rightAlt',
+                'leftControl',
+                'leftShift',
+                'rightShift',
+                'mediaPlayPause',
+                'custom',
+              ]
+            : [
+                'rightControl',
+                'rightOption',
+                'leftOption',
+                'leftControl',
+                'rightCommand',
+                'leftCommand',
+                'leftShift',
+                'rightShift',
+                'fn',
+                'custom',
+              ],
           requiresAccessibilityPermission: !windows,
           supportsModifierOnlyTrigger: true,
           supportsSideSpecificModifiers: true,
@@ -72,7 +101,9 @@ export function getPreviewProfile(os: OS = getRuntimeOS()): PreviewProfile {
           statusHint: '',
         }
       : null,
-    hotkeyStatus: desktop ? { adapter, state: 'installed', message: 'Browser preview', lastError: null } : null,
+    hotkeyStatus: desktop
+      ? { adapter, state: 'installed', message: 'Browser preview', lastError: null }
+      : null,
     windowsImeStatus: {
       state: windows ? 'installed' : 'notWindows',
       usingTsfBackend: windows,

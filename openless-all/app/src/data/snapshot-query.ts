@@ -21,7 +21,9 @@ export class SnapshotQuery<T> {
   subscribe = (listener: () => void): (() => void) => {
     this.subscribers.add(listener);
     if (this.wanted === 0) void this.refresh();
-    return () => { this.subscribers.delete(listener); };
+    return () => {
+      this.subscribers.delete(listener);
+    };
   };
 
   load = (): Promise<QuerySnapshot<T>> =>

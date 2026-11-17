@@ -24,7 +24,11 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
 
 export function getPlatformCapabilities(): Promise<PlatformCapabilities> {
   if (cachedCapabilities) return Promise.resolve(cachedCapabilities);
-  pendingCapabilities ??= invokeOrPreview('get_platform_capabilities', undefined, inferPlatformCapabilities)
+  pendingCapabilities ??= invokeOrPreview(
+    'get_platform_capabilities',
+    undefined,
+    inferPlatformCapabilities,
+  )
     .then((capabilities) => (cachedCapabilities = capabilities))
     .finally(() => (pendingCapabilities = null));
   return pendingCapabilities;

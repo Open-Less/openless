@@ -19,9 +19,11 @@ export function validateStartupSnapshot(snapshot: StartupSnapshot): StartupSnaps
 }
 
 export async function waitForNativeBridge(host: 'tauri' | 'harmony'): Promise<void> {
-  const isReady = () => host === 'harmony'
-    ? typeof globalThis.window?.OpenLessHarmonyApi?.invoke === 'function'
-    : typeof (globalThis.window?.__TAURI_INTERNALS__ as { invoke?: unknown } | undefined)?.invoke === 'function';
+  const isReady = () =>
+    host === 'harmony'
+      ? typeof globalThis.window?.OpenLessHarmonyApi?.invoke === 'function'
+      : typeof (globalThis.window?.__TAURI_INTERNALS__ as { invoke?: unknown } | undefined)
+          ?.invoke === 'function';
   const deadline = Date.now() + 2_000;
   while (!isReady()) {
     if (Date.now() >= deadline) throw new Error(`${host} backend bridge is not ready`);
@@ -44,7 +46,10 @@ let backendReady: Promise<StartupSnapshot> | undefined;
 export function requireBackendReady(): Promise<StartupSnapshot> {
   const { host } = getRuntimeEnvironment();
   if (host === 'preview') {
-    return Promise.resolve({ contractVersion: BACKEND_CONTRACT_VERSION, backend: { running: true } });
+    return Promise.resolve({
+      contractVersion: BACKEND_CONTRACT_VERSION,
+      backend: { running: true },
+    });
   }
   backendReady ??= waitForNativeBridge(host)
     .then(() => invokeNative<StartupSnapshot>(host, 'get_startup_snapshot'))

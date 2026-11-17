@@ -1,5 +1,5 @@
 import type { ActivityDay, DictationSession } from '../api/contracts';
-import { mockActivityDays, mockHistory } from '../lib/ipc/mock-data';
+import { previewActivityDays, previewHistoryEntries } from './fixtures';
 import { publishPreviewChange } from './events';
 
 type ActivityApp = [name: string, count: number];
@@ -39,7 +39,7 @@ export function createPreviewHistory(
     return entry;
   };
   const replaceEntry = (entry: DictationSession) => {
-    entries = entries.map((previous) => previous.id === entry.id ? entry : previous);
+    entries = entries.map((previous) => (previous.id === entry.id ? entry : previous));
     changed();
     return { ...entry };
   };
@@ -47,10 +47,14 @@ export function createPreviewHistory(
   return {
     list: () => entries.map((entry) => ({ ...entry })),
     getActivityDays: () =>
-      [...activity.values()].sort((a, b) => a.date.localeCompare(b.date)).map((day) => ({ ...day })),
-    getActivityApps: (year: number): ActivityApp[] => [...(apps.get(year) ?? [])].sort((a, b) => b[1] - a[1]),
+      [...activity.values()]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((day) => ({ ...day })),
+    getActivityApps: (year: number): ActivityApp[] =>
+      [...(apps.get(year) ?? [])].sort((a, b) => b[1] - a[1]),
     delete(id: string) {
-      if (active === id) throw new Error('cannot delete the active recording; stop or cancel it first');
+      if (active === id)
+        throw new Error('cannot delete the active recording; stop or cancel it first');
       entries = entries.filter((entry) => entry.id !== id);
       changed();
     },
@@ -65,27 +69,42 @@ export function createPreviewHistory(
     },
     retranscribe(id: string) {
       const entry = entryFor(id);
-      if (active === id) throw new Error('recording is still active; stop it before retranscribing');
+      if (active === id)
+        throw new Error('recording is still active; stop it before retranscribing');
       if (!entry.hasAudioRecording) throw new Error('history entry has no archived recording');
       if (entry.pipelineMode === 'multimodal' && entry.source !== 'quick_note') {
         throw new Error('multimodal history does not support retranscription');
       }
       const text = entry.rawTranscript || 'Preview transcription';
-      const shouldRepair = entry.source === 'quick_note' ||
+      const shouldRepair =
+        entry.source === 'quick_note' ||
         ['transcribeFailed', 'emptyTranscript', 'recording'].includes(entry.errorCode ?? '');
       return {
         text,
         updatedEntry: shouldRepair
-          ? replaceEntry({ ...entry, rawTranscript: text, finalText: text, errorCode: null,
-              llmProvider: null, llmModel: null, polishMs: null })
+          ? replaceEntry({
+              ...entry,
+              rawTranscript: text,
+              finalText: text,
+              errorCode: null,
+              llmProvider: null,
+              llmModel: null,
+              polishMs: null,
+            })
           : null,
       };
     },
     repolishQuickNote(id: string, text: string, stylePackId?: string) {
       if (!text.trim()) throw new Error('repolish text is empty');
       const entry = entryFor(id);
-      if (entry.source !== 'quick_note') throw new Error('only quick-note history can apply repolish results');
-      return replaceEntry({ ...entry, finalText: text, errorCode: null, stylePackId: stylePackId ?? entry.stylePackId });
+      if (entry.source !== 'quick_note')
+        throw new Error('only quick-note history can apply repolish results');
+      return replaceEntry({
+        ...entry,
+        finalText: text,
+        errorCode: null,
+        stylePackId: stylePackId ?? entry.stylePackId,
+      });
     },
     startRecording(id = `preview-recording-${++nextId}`) {
       if (active !== null) throw new Error('a recording is already active');
@@ -103,7 +122,10 @@ export function createPreviewHistory(
       if (!template) return;
       const now = new Date();
       const createdAt = now.toISOString();
-      entries = [{ ...template, id, createdAt, source: 'voice' }, ...entries.filter((entry) => entry.id !== id)];
+      entries = [
+        { ...template, id, createdAt, source: 'voice' },
+        ...entries.filter((entry) => entry.id !== id),
+      ];
       const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const previous = activity.get(date);
       activity.set(date, {
@@ -118,7 +140,7 @@ export function createPreviewHistory(
   };
 }
 
-export const previewHistory = createPreviewHistory(mockHistory, mockActivityDays, () =>
+export const previewHistory = createPreviewHistory(previewHistoryEntries, previewActivityDays, () =>
   publishPreviewChange('history'),
 );
 
@@ -128,7 +150,8 @@ function previewRecording(): string {
   const bytes = new Uint8Array(44 + frames * 2);
   const view = new DataView(bytes.buffer);
   const label = (offset: number, value: string) => {
-    for (let index = 0; index < value.length; index++) bytes[offset + index] = value.charCodeAt(index);
+    for (let index = 0; index < value.length; index++)
+      bytes[offset + index] = value.charCodeAt(index);
   };
   label(0, 'RIFF');
   view.setUint32(4, bytes.length - 8, true);
@@ -143,7 +166,7 @@ function previewRecording(): string {
   label(36, 'data');
   view.setUint32(40, frames * 2, true);
   for (let frame = 0; frame < frames; frame++) {
-    view.setInt16(44 + frame * 2, Math.sin(2 * Math.PI * frame * 440 / sampleRate) * 1000, true);
+    view.setInt16(44 + frame * 2, Math.sin((2 * Math.PI * frame * 440) / sampleRate) * 1000, true);
   }
   return 'data:audio/wav;base64,' + btoa(String.fromCharCode(...bytes));
 }

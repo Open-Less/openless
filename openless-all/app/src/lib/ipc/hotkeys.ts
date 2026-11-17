@@ -21,7 +21,11 @@ export function getHotkeyStatus(): Promise<HotkeyStatus> {
     if (!caps.supportsDesktopHotkey) {
       return androidHotkeyStatus;
     }
-    return invokeOrMock('get_hotkey_status', undefined, () => getPreviewProfile().hotkeyStatus ?? androidHotkeyStatus);
+    return invokeOrMock(
+      'get_hotkey_status',
+      undefined,
+      () => getPreviewProfile().hotkeyStatus ?? androidHotkeyStatus,
+    );
   });
 }
 
@@ -30,7 +34,11 @@ export function getHotkeyCapability(): Promise<HotkeyCapability> {
     if (!caps.supportsDesktopHotkey) {
       return androidHotkeyCapability;
     }
-    return invokeOrMock('get_hotkey_capability', undefined, () => getPreviewProfile().hotkeyCapability ?? androidHotkeyCapability);
+    return invokeOrMock(
+      'get_hotkey_capability',
+      undefined,
+      () => getPreviewProfile().hotkeyCapability ?? androidHotkeyCapability,
+    );
   });
 }
 
@@ -39,7 +47,11 @@ export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
     if (caps.platform !== 'desktop') {
       return androidWindowsImeStatus;
     }
-    return invokeOrMock('get_windows_ime_status', undefined, () => getPreviewProfile().windowsImeStatus);
+    return invokeOrMock(
+      'get_windows_ime_status',
+      undefined,
+      () => getPreviewProfile().windowsImeStatus,
+    );
   });
 }
 

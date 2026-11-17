@@ -19,9 +19,13 @@ export function listenHistoryChanges(onChange: (revision?: number) => void): Pro
       return listenTauriEvent<BackendEvent>('backend:event', (event) => {
         if (event.kind.type === 'history_changed') {
           const revision = (event.kind.payload as { revision?: unknown } | undefined)?.revision;
-          onChange(typeof revision === 'number' && Number.isSafeInteger(revision) && revision >= 0
-            ? revision
-            : undefined);
+          onChange(
+            typeof revision === 'number' && Number.isSafeInteger(revision) && revision >= 0
+              ? revision
+              : undefined,
+          );
+        } else if (event.kind.type === 'cloud_sync_restore_completed') {
+          onChange();
         }
       });
   }

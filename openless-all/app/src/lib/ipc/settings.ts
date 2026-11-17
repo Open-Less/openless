@@ -6,7 +6,12 @@ import {
   requireBackendReady,
   type StartupSnapshot,
 } from './shared';
-import { mockSettings, mockDefaultStyleSystemPrompts, mockSetSettings, mockSettingsRevision } from './mock-data';
+import {
+  mockSettings,
+  mockDefaultStyleSystemPrompts,
+  mockSetSettings,
+  mockSettingsRevision,
+} from './mock-data';
 import { invalidateMockChannelTests } from './channels';
 
 export { BACKEND_CONTRACT_VERSION };

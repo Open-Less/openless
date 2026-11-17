@@ -10,5 +10,7 @@ export function publishPreviewChange(domain: PreviewSignal): void {
 
 export function listenPreviewChange(domain: PreviewSignal, listener: () => void): () => void {
   listeners[domain].add(listener);
-  return () => { listeners[domain].delete(listener); };
+  return () => {
+    listeners[domain].delete(listener);
+  };
 }

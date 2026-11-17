@@ -286,7 +286,9 @@ export function formatComboLabel(
   return formatComboParts(binding).join(currentPlatform().isMac ? '' : '+');
 }
 
-export const currentPlatform = getShortcutPlatform;
+export function currentPlatform() {
+  return getShortcutPlatform();
+}
 
 /** Build side-specific modifier tags from Web KeyboardEvent.code values. */
 export function sideModifiersFromPressedCodes(codes: Iterable<string>): string[] {
