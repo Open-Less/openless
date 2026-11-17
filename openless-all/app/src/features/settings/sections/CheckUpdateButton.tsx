@@ -4,7 +4,9 @@ import { useEffect } from 'react';
 import { btnGhostStyle } from '../../../pages/settings/shared';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
-import { UpdateDialog, useAutoUpdate } from '../../../components/AutoUpdate';
+import { UpdateDialog } from '../../updates/UpdateDialog';
+import { useAutoUpdate } from '../../updates/useAutoUpdate';
+import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 import type { UpdateChannel } from '../../../api/contracts';
 
 export function CheckUpdateButton({
@@ -18,18 +20,23 @@ export function CheckUpdateButton({
 }) {
   const { t } = useTranslation();
   const updater = useAutoUpdate();
-  const { status, checking, busy } = updater;
+  const { status, checking, busy, errorMessage, dismissDialog, checkForUpdates } = updater;
+  const { notify } = useInteraction('update-check');
 
   useEffect(() => {
-    if (status === 'none' || status === 'error') {
-      const id = window.setTimeout(() => {
-        void updater.dismissDialog();
-      }, 2500);
-      return () => window.clearTimeout(id);
-    }
-    return undefined;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+    if (status !== 'none' && status !== 'error') return;
+    notify({
+      key: 'update-check-result',
+      state: status === 'error' ? 'failed' : 'saved',
+      message:
+        status === 'error'
+          ? (errorMessage ?? t('settings.about.updateError'))
+          : t('settings.about.upToDate'),
+      durationMs: status === 'error' ? 5000 : undefined,
+    });
+    const timer = window.setTimeout(() => void dismissDialog(), 2500);
+    return () => window.clearTimeout(timer);
+  }, [status, errorMessage, dismissDialog, notify, t]);
 
   const upToDate = status === 'none';
   const failed = status === 'error';
@@ -42,10 +49,8 @@ export function CheckUpdateButton({
   const label = checking ? t('settings.about.checkingUpdate') : t(labelKey);
 
   useEffect(() => {
-    if (autoCheckChannel) void updater.checkForUpdates(autoCheckChannel);
-    // checkForUpdates changes with updater state; this effect is driven only by a channel switch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoCheckChannel]);
+    if (autoCheckChannel) void checkForUpdates(autoCheckChannel);
+  }, [autoCheckChannel, checkForUpdates]);
 
   return (
     <>

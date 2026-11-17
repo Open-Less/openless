@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { addLearnedVocab } from '../../api/vocabulary';
 import { Button as Btn } from '../../ui/controls/Button';
 import { inputStyle } from '../../pages/settings/shared';
+import { useInteraction } from '../../ui/overlays/InteractionProvider';
 
 /** An explicit, cross-platform alternative when a host editor cannot be read. */
 export function LearnVocabulary() {
   const { t } = useTranslation();
+  const { notify } = useInteraction();
   const [open, setOpen] = useState(false);
   const [phrase, setPhrase] = useState('');
   const [busy, setBusy] = useState(false);
@@ -19,7 +21,7 @@ export function LearnVocabulary() {
       await addLearnedVocab(phrase.trim());
       setPhrase('');
       setOpen(false);
-      setMessage(t('vocabLearning.saved', '已记住，可在词典中管理'));
+      notify({ state: 'saved', message: t('vocabLearning.saved', '已记住，可在词典中管理') });
     } catch (error) {
       setMessage(t('vocabLearning.failed', '保存失败：{{error}}', { error: String(error) }));
     } finally {
@@ -78,7 +80,7 @@ export function LearnVocabulary() {
         </div>
       )}
       {message && (
-        <div role="status" style={{ marginTop: 8, overflowWrap: 'anywhere' }}>
+        <div role="alert" style={{ marginTop: 8, overflowWrap: 'anywhere' }}>
           {message}
         </div>
       )}
