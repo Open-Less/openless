@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { TooltipProvider } from '../ui/overlays/Tooltip';
 import { installEncryptedSyncUiBridge } from '../lib/encryptedSyncUiBridge';
 import { markStartup } from '../lib/startupMetrics';
@@ -9,6 +9,12 @@ import { PreviewFrame } from '../ui/layout/PreviewFrame';
 import { InteractionProvider } from '../ui/overlays/InteractionProvider';
 import { CoreStartupScreen } from './CoreStartupScreen';
 import { isCompactWindow, isDormantWindow, WindowRoutes, type WindowKind } from './windowRoutes';
+
+const GlobalDownloadProgress = lazy(() =>
+  import('../features/downloads/GlobalDownloadProgress').then((module) => ({
+    default: module.GlobalDownloadProgress,
+  })),
+);
 
 interface AppProps {
   kind: WindowKind;
@@ -62,7 +68,15 @@ export function App({
   const renderStartup = error || backend === 'checking';
   const viewport = (
     <AppViewport scale={kind === 'main'}>
-      <InteractionProvider>
+      <InteractionProvider
+        notificationAside={
+          kind === 'main' && !renderStartup ? (
+            <Suspense fallback={null}>
+              <GlobalDownloadProgress />
+            </Suspense>
+          ) : null
+        }
+      >
         <TooltipProvider>
           {renderStartup ? (
             <CoreStartupScreen compact={compact} error={error} />

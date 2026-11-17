@@ -1,6 +1,5 @@
 import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GlobalDownloadProgress } from '../features/downloads/GlobalDownloadProgress';
 import { HotkeySettingsProvider } from '../data/preferences';
 import { useReducedMotion } from '../lib/motion';
 import type { OS } from '../runtime/environment';
@@ -33,7 +32,6 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
 
   return (
     <HotkeySettingsProvider>
-      <GlobalDownloadProgress />
       <Suspense fallback={<CoreStartupScreen />}>
         {panel.kind === 'qa' ? (
           <div key={panel.epoch} className="ol-embedded-panel">

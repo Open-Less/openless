@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useReducedMotion } from '../../lib/motion';
 import { Icon } from '../../components/Icon';
+import { useModalActive } from '../../ui/layout/AppViewport';
 import type { ProgressItem } from './useDownloadJobs';
 
 export default function DownloadProgressCards({
@@ -19,6 +20,7 @@ export default function DownloadProgressCards({
 }) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
+  const modalActive = useModalActive();
   return (
     <div className="ol-global-downloads">
       <AnimatePresence initial={false}>
@@ -43,6 +45,10 @@ export default function DownloadProgressCards({
               <button
                 type="button"
                 disabled={pending.includes(item.key)}
+                tabIndex={modalActive ? -1 : undefined}
+                onPointerDown={(event) => {
+                  if (modalActive) event.preventDefault();
+                }}
                 onClick={() => void onCancel(item)}
                 aria-label={t('common.cancel')}
                 title={t('common.cancel')}

@@ -1,5 +1,3 @@
-.ol-viewport-portals > .ol-global-downloads {
-  position: absolute;
-  max-width: min(320px, calc(100% - 28px));
-  pointer-events: auto;
+.ol-notification-center .ol-global-downloads {
+  max-width: min(320px, 100%);
 }
