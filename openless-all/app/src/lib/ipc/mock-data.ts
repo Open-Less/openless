@@ -46,6 +46,7 @@ export let mockSettings: UserPreferences = {
   capsuleDisplayMode: 'cursorScreen',
   capsuleTranscriptEnabled: true,
   capsuleTranscriptFontSize: 14,
+  capsuleSiriEnhanced: false,
   muteDuringRecording: false,
   stableTranscriptionEnabled: false,
   lowLatencyDictationEnabled: false,

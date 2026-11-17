@@ -211,6 +211,7 @@ function mount({
     'setInsertFallback',
     'setText',
     'setStyle',
+    'setSiriEnhanced',
     'setEnabled',
     'setFontSize',
   ]) {
