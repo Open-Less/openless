@@ -163,7 +163,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
     } catch (error) {
       const message = t('history.clearFailed', { err: errorMessage(error) });
       setActionError(message);
-      notify({ message, state: 'failed', durationMs: 3500 });
     } finally {
       clearRequest.current = false;
       setClearing(false);
@@ -195,6 +194,22 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
           </div>
         }
       />
+      {actionError && (
+        <p
+          role="alert"
+          style={{
+            margin: '0 0 8px',
+            padding: '9px 10px',
+            borderRadius: 'var(--ol-control-radius)',
+            background: 'rgba(239,68,68,0.08)',
+            color: 'var(--ol-red, #ef4444)',
+            fontSize: 12,
+            lineHeight: 1.45,
+          }}
+        >
+          {actionError}
+        </p>
+      )}
       <div
         ref={grid}
         style={{
@@ -219,7 +234,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
               if (mobile) setMobileDetailOpen(true);
             }}
             trigger={binding ? formatComboLabel(binding) : ''}
-            actionError={actionError}
             loading={loading}
             loadError={loadError}
             refresh={refresh}

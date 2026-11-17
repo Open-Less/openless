@@ -16,7 +16,6 @@ interface Props {
   selectedId?: string;
   onSelect: (id: string) => void;
   trigger: string;
-  actionError: string | null;
   loading: boolean;
   loadError: string | null;
   refresh: (notify: boolean) => Promise<void>;
@@ -33,7 +32,6 @@ export function HistoryList({
   selectedId,
   onSelect,
   trigger,
-  actionError,
   loading,
   loadError,
   refresh,
@@ -95,22 +93,6 @@ export function HistoryList({
           </div>
         </div>
         <div style={{ padding: 6 }}>
-          {actionError && (
-            <div
-              role="alert"
-              style={{
-                margin: 8,
-                padding: '9px 10px',
-                borderRadius: 'var(--ol-control-radius)',
-                background: 'rgba(239,68,68,0.08)',
-                color: 'var(--ol-red, #ef4444)',
-                fontSize: 12,
-                lineHeight: 1.45,
-              }}
-            >
-              {actionError}
-            </div>
-          )}
           {loading && (
             <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>
               {t('common.loading')}
