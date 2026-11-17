@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import * as api from '../../api/cloud-sync';
+import { createInteractionController } from '../../ui/overlays/interactionController';
 import { matchesRestorePreview } from './restoreContext';
 import type { EncryptedSyncStatus, RestorePreview } from '../../api/cloud-sync';
 
@@ -14,6 +15,8 @@ class Hooks {
   slots: Hook[] = [];
   cursor = 0;
   pending: Array<() => void> = [];
+  notifications = createInteractionController();
+  scope = this.notifications.createScope();
   constructor(seed: unknown[] = []) {
     this.slots = seed.map((value) => ({ value }));
   }
@@ -57,6 +60,7 @@ class Hooks {
   }
   unmount() {
     this.slots.forEach((slot) => slot.cleanup?.());
+    this.scope.dispose();
   }
 }
 let active: Hooks;
@@ -153,6 +157,7 @@ const events = new Map<string, (event: { payload: unknown }) => void>();
 const calls: Array<[string, any?]> = [];
 let server = { ...initial };
 let deferredStatus: Promise<EncryptedSyncStatus> | null = null;
+let deferredRestore: Promise<EncryptedSyncStatus> | null = null;
 let nextStep: api.EnablePreparation['nextStep'] = 'unlock';
 let mockMarketplaceSignedIn = true;
 let savedOrigin: string | null = null;
@@ -163,6 +168,7 @@ const update = (value: Partial<EncryptedSyncStatus>) => {
   server = { ...server, ...value, sequence: (BigInt(server.sequence) + 1n).toString() };
   return { ...server };
 };
+const translation = { t: (key: string) => key, i18n: { language: 'en' } };
 const dependencies: Record<string, any> = {
   ...api,
   CONSENT_VERSION: api.CLOUD_SYNC_E2EE_CONSENT_VERSION,
@@ -170,7 +176,8 @@ const dependencies: Record<string, any> = {
   useRef: (value: unknown) => active.ref(value),
   useEffect: (effect: () => void | (() => void), deps?: unknown[]) => active.effect(effect, deps),
   useId: () => 'fixture-id',
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
+  useTranslation: () => translation,
+  useInteraction: () => active.scope.interaction,
   useHotkeySettings: () => ({
     prefs: { marketplaceDevLogin: 'fixture', syncCustomServerOrigin: savedOrigin },
     refresh: async () => {
@@ -226,7 +233,7 @@ const dependencies: Record<string, any> = {
   },
   cloudSyncE2eeApplyRestore: async (value: unknown) => {
     calls.push(['apply', value]);
-    return update({});
+    return deferredRestore ?? update({});
   },
   cloudSyncE2eeSetEnabled: async (enabled: boolean) => {
     calls.push(['enable', enabled]);
@@ -429,9 +436,37 @@ try {
   ).props.onChange({ currentTarget: { checked: true } });
   reviewTree = reviewHooks.render(() => components.RestoreReview(review.props));
   assert.equal(applyButton().props.disabled, false);
+  let resolveRestore!: (value: EncryptedSyncStatus) => void;
+  deferredRestore = new Promise((resolve) => {
+    resolveRestore = resolve;
+  });
   applyButton().props.onClick();
+  render();
+  assert.deepEqual(
+    hooks.notifications
+      .getNotifications()
+      .map(({ key, state, message, progress }) => ({ key, state, message, progress })),
+    [
+      {
+        key: 'cloud-sync-working',
+        state: 'saving',
+        message: 'cloudSyncE2ee.working',
+        progress: true,
+      },
+    ],
+    'a pending native restore shows progress without announcing success',
+  );
+  resolveRestore(update({}));
   await settle();
+  deferredRestore = null;
   tree = render();
+  assert.deepEqual(
+    hooks.notifications
+      .getNotifications()
+      .map(({ key, state, message }) => ({ key, state, message })),
+    [{ key: 'cloud-sync-result', state: 'saved', message: 'cloudSyncE2ee.restored' }],
+    'the completed restore dismisses progress and announces its result',
+  );
   assert.deepEqual(calls.find(([name]) => name === 'apply')?.[1], {
     previewId: 'review',
     mode: 'merge',
@@ -601,6 +636,11 @@ try {
   await settle();
   assert.equal(savedOrigin, 'https://old.example.com');
   assert.equal(savedToken, 'old-token');
+  assert.deepEqual(
+    customHooks.notifications.getNotifications().map(({ state, message }) => ({ state, message })),
+    [{ state: 'failed', message: 'cloudSyncE2ee.errors.unknown' }],
+    'a rejected native configuration is reported as a failure',
+  );
   assert.deepEqual(
     calls.map(([name, ...args]) => [name, ...args]),
     [['configureServer', { origin: 'https://new.example.com', token: 'new-token' }]],
