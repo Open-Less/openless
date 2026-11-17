@@ -1,3 +1,6 @@
+import { isTauriHost } from '../runtime/environment';
+import { invokeOrPreview } from '../runtime/transport';
+import { downloadUrl } from '../runtime/files';
 import type { ActivityDay, DictationSession } from './contracts';
 import type { QuerySnapshot } from '../data/snapshot-query';
 import { historyStore } from '../data/history';
@@ -37,4 +40,15 @@ export async function listHistory(): Promise<DictationSession[]> {
 
 export async function getActivityStats(): Promise<ActivityDay[]> {
   return readData(await historyStore.activity.load());
+}
+
+export async function exportAudioRecording(sessionId: string): Promise<void> {
+  if (isTauriHost()) {
+    return invokeOrPreview('export_audio_recording', { sessionId }, () => undefined);
+  }
+  const dataUrl = await commands.readAudioRecording(sessionId);
+  if (!dataUrl.startsWith('data:audio/wav;base64,') || dataUrl.endsWith(',')) {
+    throw new Error('empty recording');
+  }
+  downloadUrl(dataUrl, `openless-recording-${sessionId}.wav`);
 }

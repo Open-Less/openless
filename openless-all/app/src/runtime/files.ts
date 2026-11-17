@@ -58,3 +58,15 @@ export async function shareFiles(title: string, files: File[]): Promise<boolean>
   await navigator.share(data);
   return true;
 }
+
+export function downloadUrl(url: string, fileName: string): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+  }
+}

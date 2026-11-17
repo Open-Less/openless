@@ -80,6 +80,8 @@ test('usage separates the dashboard, services and history', async ({ page }) => 
   expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client + 1);
   await page.screenshot({ path: test.info().outputPath('usage-history.png') });
   await clear.click();
+  const confirmation = page.getByRole('dialog', { name: '清除已记录 Token' });
+  await confirmation.getByRole('button', { name: '清除已记录 Token' }).click();
   await expect(page.getByText('该时段没有已保存的服务商 token 报告。')).toBeVisible();
   await page.getByRole('button', { name: '近 7 天' }).click();
   await expect(page.getByRole('button', { name: '近 7 天' })).toHaveAttribute(
