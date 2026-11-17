@@ -15,7 +15,10 @@ import {
 import { getOverviewSetup, type OverviewSettingsSection } from '../../lib/overviewSetup';
 import { useHotkeySettings } from '../../data/preferences';
 import { isDesktop } from '../../runtime/platform';
-import { Button } from '../../ui/controls/Button';
+import { isPreviewHost } from '../../runtime/environment';
+import { readOverviewStatusCache, rememberOverviewStatus } from '../../lib/overviewStatusCache';
+import { Icon } from '../../components/Icon';
+import { Tooltip } from '../../ui/overlays/Tooltip';
 
 type RefreshOutcome = 'ok' | 'stale' | 'error';
 type Details = Partial<Record<ProviderKind, OverviewServiceDetails>>;
@@ -31,11 +34,9 @@ export function useOverviewServices() {
   const preferences = useRef(prefs);
   preferences.current = prefs;
   const request = useRef(0);
-  const [state, setState] = useState<ServiceState>({
-    creds: null,
-    serviceDetails: {},
-    loading: true,
-    error: false,
+  const [state, setState] = useState<ServiceState>(() => {
+    const creds = isPreviewHost() ? null : (readOverviewStatusCache()?.creds ?? null);
+    return { creds, serviceDetails: {}, loading: creds === null, error: false };
   });
 
   const refresh = useCallback(async (): Promise<RefreshOutcome> => {
@@ -49,6 +50,7 @@ export function useOverviewServices() {
       });
       if (request.current !== id) return 'stale';
       setState({ creds: status, serviceDetails: details, loading: false, error: false });
+      if (!isPreviewHost()) rememberOverviewStatus({ creds: status });
       return 'ok';
     } catch (error) {
       if (request.current !== id) return 'stale';
@@ -112,44 +114,37 @@ export function OverviewServiceStatus({
   onOpenSettings?: (section: OverviewSettingsSection, serviceView?: ProviderKind) => void;
 }) {
   const { t } = useTranslation();
-  if (services.setup.providers.length === 0) {
-    return (
-      <span role="status" className="ol-overview-service-status">
-        {t(services.loading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
-      </span>
-    );
-  }
   return (
     <div className="ol-overview-services">
-      {services.setup.providers.map((provider) => {
-        const { kind, configured, id } = provider;
-        const detail = services.serviceDetails[kind];
-        const failed = services.error || detail?.error;
-        const status = t(
+      {services.setup.providers.map(({ kind, configured }) => {
+        const failed = services.error || services.serviceDetails[kind]?.error;
+        const status = failed ? 'failed' : configured ? 'configured' : 'missing';
+        const statusLabel = t(
           failed
-            ? 'settings.providers.readFailed'
+            ? 'overview.statusFailed'
             : configured
               ? 'overview.statusConfigured'
               : 'overview.statusNotConfigured',
         );
-        const summary = [status, id, detail?.model].filter(Boolean).join(' · ');
         return (
-          <Button
-            key={kind}
-            title={summary}
-            className="ol-overview-service"
-            icon={kind === 'asr' ? 'mic' : 'sparkle'}
-            size="sm"
-            disabled={!onOpenSettings}
-            onClick={() => onOpenSettings?.('services', kind)}
-            ariaLabel={`${t(`overview.${kind}Kind`)} · ${summary}`}
-          >
-            <span
-              className="ol-overview-service-marker"
-              data-status={failed ? 'failed' : configured ? 'ready' : 'missing'}
-            />
-            {t(`overview.${kind}Kind`)}
-          </Button>
+          <div key={kind} className="ol-overview-service" data-status={status}>
+            <Tooltip
+              content={t(`overview.serviceHint.${kind}`)}
+              placement="bottom"
+              className="ol-overview-service-icon"
+              trigger={
+                <button
+                  type="button"
+                  disabled={!onOpenSettings}
+                  aria-label={`${t(`overview.${kind}Kind`)} ${statusLabel}`}
+                  onClick={() => onOpenSettings?.('services', kind)}
+                />
+              }
+            >
+              <Icon name={kind === 'asr' ? 'mic' : kind === 'llm' ? 'text' : 'sparkle'} size={16} />
+              <span className="ol-overview-service-badge" />
+            </Tooltip>
+          </div>
         );
       })}
     </div>

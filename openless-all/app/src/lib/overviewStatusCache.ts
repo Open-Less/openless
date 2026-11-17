@@ -1,9 +1,9 @@
-import type { ActivityDay, CredentialsStatus } from './types';
+import type { ActivityDay, CredentialsStatus } from '../api/contracts';
 
 const CACHE_KEY = 'ol-overview-status-v1';
 
-export interface OverviewStatusCache {
-  creds: CredentialsStatus;
+interface OverviewStatusCache {
+  creds: CredentialsStatus | null;
   activity: ActivityDay[] | null;
 }
 
@@ -13,46 +13,43 @@ function isCreds(value: unknown): value is CredentialsStatus {
   return typeof creds.asrConfigured === 'boolean' && typeof creds.llmConfigured === 'boolean';
 }
 
-/** Last overview status, so a reopened window can paint before the next read. */
+function isActivityDay(value: unknown): value is ActivityDay {
+  if (!value || typeof value !== 'object') return false;
+  const day = value as Partial<ActivityDay>;
+  return typeof day.date === 'string' && typeof day.count === 'number';
+}
+
+/** Reopened native windows can paint the last confirmed status before IPC is ready. */
 export function readOverviewStatusCache(): OverviewStatusCache | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<OverviewStatusCache>;
-    if (!isCreds(parsed.creds)) return null;
-    const activity = Array.isArray(parsed.activity) ? parsed.activity : null;
-    return { creds: parsed.creds, activity };
+    const parsed = JSON.parse(raw) as Partial<OverviewStatusCache> | null;
+    if (!parsed) return null;
+    const creds = isCreds(parsed.creds) ? parsed.creds : null;
+    const activity =
+      Array.isArray(parsed.activity) && parsed.activity.every(isActivityDay)
+        ? parsed.activity
+        : null;
+    return { creds, activity };
   } catch {
     return null;
   }
 }
 
-export function writeOverviewStatusCache(next: OverviewStatusCache): void {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(next));
-  } catch {
-    /* Private mode or a full disk leaves the previous paint in place. */
-  }
-}
-
-let remembered: OverviewStatusCache | null = null;
-
-/** Merge one fresh read into the last status without dropping the other half. */
+/** Each successful read replaces only its own part of the last confirmed status. */
 export function rememberOverviewStatus(patch: Partial<OverviewStatusCache>): void {
-  const current = remembered ?? readOverviewStatusCache();
-  const creds = patch.creds ?? current?.creds;
-  if (!creds) return;
-  const next = {
-    creds,
-    activity: patch.activity !== undefined ? patch.activity : (current?.activity ?? null),
-  };
-  remembered = next;
-  writeOverviewStatusCache(next);
-}
-
-/** A history read is valid only after the row is stored. `history_changed` is
- *  published from the write that just returned. `dictation_completed` is earlier:
- *  the gesture and the transcript can both finish while the row is still absent. */
-export function overviewFollowsBackendEvent(type: string | undefined): boolean {
-  return type === 'history_changed';
+  try {
+    const current = readOverviewStatusCache();
+    localStorage.setItem(
+      CACHE_KEY,
+      JSON.stringify({
+        creds: current?.creds ?? null,
+        activity: current?.activity ?? null,
+        ...patch,
+      }),
+    );
+  } catch {
+    // A full disk or blocked storage must not turn a successful IPC read into an error.
+  }
 }

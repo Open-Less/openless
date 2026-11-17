@@ -13,10 +13,7 @@ export function getActivityStats(): Promise<ActivityDay[]> {
 }
 
 export function getActivityApps(year: number): Promise<[string, number][]> {
-  return invokeOrMock('get_activity_apps', { year }, () => [
-    ['Editor', 42],
-    ['Browser', 18],
-  ]);
+  return invokeOrMock('get_activity_apps', { year }, () => previewHistory.getActivityApps(year));
 }
 
 export function deleteHistoryEntry(id: string): Promise<void> {

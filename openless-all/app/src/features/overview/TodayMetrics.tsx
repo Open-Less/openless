@@ -4,12 +4,14 @@ import { Icon } from '../../components/Icon';
 import { countCodePoints } from '../../lib/unicode';
 import { formatLocaleDecimal, formatLocaleNumber } from '../../lib/localeFormat';
 import type { DictationSession } from '../../api/contracts';
-import { Card } from '../../pages/_atoms';
+import { Card } from '../../ui/layout/Card';
 
 export function TodayMetrics({
+  mobile,
   history,
   historyError,
 }: {
+  mobile: boolean;
   history: DictationSession[];
   historyError: boolean;
 }) {
@@ -30,7 +32,11 @@ export function TodayMetrics({
     };
   }, [history]);
   return (
-    <section className="ol-overview-metrics" aria-label={t('overview.statsTitle')}>
+    <section
+      className="ol-grid-12 ol-grid-stats ol-overview-metrics"
+      data-columns={mobile ? '2' : undefined}
+      aria-label={t('overview.statsTitle')}
+    >
       <Metric
         icon="hash"
         label={t('overview.metricChars')}

@@ -6,7 +6,7 @@ import type { QuerySnapshot } from '../data/snapshot-query';
 import { historyStore } from '../data/history';
 import * as commands from '../lib/ipc/history';
 
-export { getActivityApps, supportsActivityApps, type YearlyActivityApps } from '../data/history';
+export { getActivityApps, type YearlyActivityApps } from '../data/history';
 export { readAudioRecording, type HistoryRetranscriptionResult } from '../lib/ipc/history';
 
 export function deleteHistoryEntry(id: string): Promise<void> {

@@ -11,8 +11,9 @@ import {
   type ActivityPeriod,
   type ActivityMetric,
 } from '../../lib/activityMetrics';
-import { HarmonyDictation } from '../../components/HarmonyDictation';
-import { Btn, PageHeader } from '../../pages/_atoms';
+import { HarmonyDictation } from '../dictation/HarmonyDictation';
+import { Card } from '../../ui/layout/Card';
+import { PageHeader } from '../../ui/layout/PageHeader';
 import { useModalActive } from '../../ui/layout/AppViewport';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { PeriodMetricsCard } from './PeriodMetricsCard';
@@ -87,20 +88,28 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         compact
         title={t('overview.title')}
         right={
-          <div className="ol-overview-header-actions">
+          services.setup.providers.length > 0 ? (
             <OverviewServiceStatus services={services} onOpenSettings={onOpenSettings} />
-            <Btn size="sm" icon="refresh" onClick={() => void refreshAll()}>
-              {t('overview.refresh')}
-            </Btn>
-          </div>
+          ) : undefined
         }
       />
       {runtime.host === 'harmony' && <HarmonyDictation onComplete={historyStore.invalidate} />}
+      {services.setup.providers.length === 0 && (
+        <Card padding={16}>
+          <div role="status" className="ol-overview-service-status">
+            {t(services.loading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
+          </div>
+        </Card>
+      )}
       <TodayMetrics
+        mobile={runtime.isMobile}
         history={history.data ?? emptyHistory}
         historyError={history.error !== null && history.data === null}
       />
-      <section className="ol-overview-lower">
+      <section
+        className="ol-grid-12 ol-grid-fill ol-overview-lower"
+        data-columns={runtime.isMobile ? '1' : undefined}
+      >
         <PeriodMetricsCard
           series={series}
           period={period}

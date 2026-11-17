@@ -8,27 +8,22 @@ import {
   type Contribution,
   type ContributionLevel,
 } from '../../ui/controls/GitHubActivity';
-import { Card } from '../../pages/_atoms';
 
 function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function useActivityLabels() {
+export function ActivityHeatmap({ activity }: { activity: ActivityDay[] }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || 'en';
-  const labels = (key: string, english: string, chinese: string) =>
-    t(`overview.${key}`, { defaultValue: locale.startsWith('zh') ? chinese : english });
-  return { labels, locale, t };
-}
-
-export function ActivityHeatmap({ activity }: { activity: ActivityDay[] }) {
-  const { labels, locale, t } = useActivityLabels();
   const year = new Date().getFullYear();
   const apps = useActivityApps(year);
   const appRows =
     apps.data?.status === 'available'
-      ? apps.data.rows.slice(0, 5).map(([name, count]) => ({ name, count }))
+      ? [...apps.data.rows]
+          .sort(([, left], [, right]) => right - left)
+          .slice(0, 5)
+          .map(([name, count]) => ({ name, count }))
       : [];
   const data = useMemo(() => {
     const first = new Date(year, 0, 1);
@@ -81,13 +76,12 @@ export function ActivityHeatmap({ activity }: { activity: ActivityDay[] }) {
             cellSize={11}
             showMonths
             contributions={data.contributions}
-            style={{ width: '100%' }}
             apps={appRows}
             accent="var(--ol-accent-solid-bg)"
             heading={`${t('overview.activityCount', { count: data.total })} · ${year}`}
-            label={labels('activityAppsLabel', 'Top apps by dictations', '语音输入次数最多的软件')}
-            showLabel={labels('activityAppsShow', 'Show top apps', '展开常用软件')}
-            hideLabel={labels('activityAppsHide', 'Hide top apps', '收起常用软件')}
+            label={t('overview.activityAppsLabel')}
+            showLabel={t('overview.activityAppsShow')}
+            hideLabel={t('overview.activityAppsHide')}
             monthNames={data.monthNames}
             formatDay={(day) =>
               `${dateFormat.format(new Date(`${day.date}T00:00:00`))} · ${t('overview.activityCount', { count: day.count })}`
@@ -95,40 +89,38 @@ export function ActivityHeatmap({ activity }: { activity: ActivityDay[] }) {
           />
           {apps.data?.status === 'unsupported' && (
             <p className="ol-overview-apps-status">
-              {labels(
-                'activityAppsUnavailable',
-                'Yearly activity by app is unavailable on this host.',
-                '当前平台不提供按软件汇总的年度活动。',
-              )}
+              {t('overview.activityAppsUnavailable', {
+                defaultValue: 'Yearly activity by app is unavailable on this host.',
+              })}
             </p>
           )}
           {apps.error !== null && (
             <p className="ol-overview-apps-status" role="status">
-              {labels(
-                'activityAppsError',
-                'Could not load yearly activity by app.',
-                '无法读取按软件汇总的年度活动。',
-              )}
+              {t('overview.activityAppsError', {
+                defaultValue: 'Could not load yearly activity by app.',
+              })}
             </p>
           )}
         </div>
-        <Card className="ol-overview-year" padding={14}>
-          <h3>{labels('activityYearTitle', 'This year', '今年')}</h3>
+        <aside className="ol-overview-year" aria-label={t('overview.activityYearTitle')}>
+          <p className="ol-overview-year-title">{t('overview.activityYearTitle')}</p>
           <dl className="ol-overview-year-stats">
-            <div>
-              <dd>{formatLocaleNumber(data.active, locale)}</dd>
-              <dt>{labels('activityActiveDays', 'Active days', '活跃天数')}</dt>
+            <div className="ol-overview-year-stat">
+              <dd className="ol-overview-year-value">{formatLocaleNumber(data.active, locale)}</dd>
+              <dt className="ol-overview-year-label">{t('overview.activityActiveDays')}</dt>
             </div>
-            <div>
-              <dd>{formatLocaleNumber(data.peak, locale)}</dd>
-              <dt>{labels('activityPeakDay', 'Busiest day', '单日最多')}</dt>
+            <div className="ol-overview-year-stat">
+              <dd className="ol-overview-year-value">{formatLocaleNumber(data.peak, locale)}</dd>
+              <dt className="ol-overview-year-label">{t('overview.activityPeakDay')}</dt>
             </div>
-            <div>
-              <dd>{formatLocaleDecimal(data.average, locale)}</dd>
-              <dt>{labels('activityDailyAverage', 'Daily average', '日均')}</dt>
+            <div className="ol-overview-year-stat">
+              <dd className="ol-overview-year-value">
+                {formatLocaleDecimal(data.average, locale)}
+              </dd>
+              <dt className="ol-overview-year-label">{t('overview.activityDailyAverage')}</dt>
             </div>
           </dl>
-        </Card>
+        </aside>
       </div>
     </section>
   );

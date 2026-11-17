@@ -7,68 +7,9 @@ import {
   type ActivityPeriod,
 } from '../../lib/activityMetrics';
 import { formatLocaleDate, formatLocaleNumber } from '../../lib/localeFormat';
-import { Btn, Card } from '../../pages/_atoms';
-
-/** Segmented toggle (shared by period / metric). Narrow enough to fit both groups on one line. */
-function SegmentedToggle<T extends string | number>({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-}: {
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (next: T) => void;
-  ariaLabel: string;
-}) {
-  return (
-    <div
-      className="ol-overview-segment"
-      role="group"
-      aria-label={ariaLabel}
-      style={{
-        display: 'flex',
-        gap: 2,
-        padding: 2,
-        borderRadius: 'var(--ol-control-radius)',
-        background: 'var(--ol-surface-2)',
-        boxShadow: 'inset 0 0 0 0.5px var(--ol-line)',
-      }}
-    >
-      {options.map((option) => {
-        const selected = option.value === value;
-        return (
-          <button
-            key={String(option.value)}
-            type="button"
-            aria-pressed={selected}
-            onClick={() => onChange(option.value)}
-            style={{
-              padding: '3px 9px',
-              fontSize: 12.5,
-              fontWeight: selected
-                ? 'var(--ol-font-weight-semibold)'
-                : 'var(--ol-font-weight-medium)',
-              border: 0,
-              borderRadius: 'var(--ol-r-sm)',
-              background: selected ? 'var(--ol-blue)' : 'transparent',
-              color: selected ? '#fff' : 'var(--ol-ink-3)',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-              whiteSpace: 'nowrap',
-              transition:
-                'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
-            }}
-          >
-            <span className="ol-segmented-label" data-label={option.label}>
-              {option.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+import { Button } from '../../ui/controls/Button';
+import { Segmented } from '../../ui/controls/Segmented';
+import { Card } from '../../ui/layout/Card';
 
 /**
  * Period metrics card: last 7 / 30 days × count / chars / duration.
@@ -96,7 +37,7 @@ export function PeriodMetricsCard({
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
   const periodOptions = ACTIVITY_PERIODS.map((days) => ({
-    value: days,
+    value: String(days),
     label: t(`overview.period.last${days}Days`),
   }));
   const metricOptions = ACTIVITY_METRICS.map((id) => ({
@@ -106,13 +47,14 @@ export function PeriodMetricsCard({
 
   return (
     <Card
-      className="ol-overview-period"
+      className="ol-overview-period ol-col-5"
       padding={18}
       style={{
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        minHeight: 240,
+        minHeight: 0,
+        overflow: 'hidden',
       }}
     >
       {/* flexWrap: the card is narrow inside a 1fr column; wrap instead of squashing buttons when the two toggles don't fit. */}
@@ -127,17 +69,20 @@ export function PeriodMetricsCard({
           flexShrink: 0,
         }}
       >
-        <SegmentedToggle
-          value={period}
+        <Segmented
+          value={String(period)}
           options={periodOptions}
-          onChange={onPeriodChange}
-          ariaLabel={t('overview.period.ariaLabel')}
+          onChange={(value) => {
+            const next = ACTIVITY_PERIODS.find((days) => String(days) === value);
+            if (next !== undefined) onPeriodChange(next);
+          }}
+          label={t('overview.period.ariaLabel')}
         />
-        <SegmentedToggle
+        <Segmented
           value={metric}
           options={metricOptions}
           onChange={onMetricChange}
-          ariaLabel={t('overview.metricName.ariaLabel')}
+          label={t('overview.metricName.ariaLabel')}
         />
       </div>
 
@@ -156,9 +101,9 @@ export function PeriodMetricsCard({
           }}
         >
           {t('overview.activityLoadError')}
-          <Btn size="sm" onClick={onRetry}>
+          <Button size="sm" onClick={onRetry}>
             {t('overview.historyRetry')}
-          </Btn>
+          </Button>
         </div>
       ) : (
         <>

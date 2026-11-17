@@ -1,7 +1,11 @@
 import { useSyncExternalStore } from 'react';
 import type { ActivityDay, DictationSession } from '../api/contracts';
-import { getActivityStats, listHistory } from '../lib/ipc/history';
-import { previewHistory } from '../preview/history';
+import {
+  getActivityApps as readActivityApps,
+  getActivityStats,
+  listHistory,
+} from '../lib/ipc/history';
+import { readOverviewStatusCache, rememberOverviewStatus } from '../lib/overviewStatusCache';
 import { listenHistoryChanges } from '../runtime/domain-events';
 import { isPreviewHost } from '../runtime/environment';
 import { SnapshotQuery } from './snapshot-query';
@@ -9,20 +13,31 @@ import { SnapshotQuery } from './snapshot-query';
 export type YearlyActivityApps =
   { status: 'available'; rows: [name: string, count: number][] } | { status: 'unsupported' };
 
-export function supportsActivityApps(): boolean {
-  // The current native activity DTO contains counts, characters, and duration only.
-  return isPreviewHost();
-}
-
 export async function getActivityApps(year: number): Promise<YearlyActivityApps> {
-  return supportsActivityApps()
-    ? { status: 'available', rows: previewHistory.getActivityApps(year) }
-    : { status: 'unsupported' };
+  try {
+    return { status: 'available', rows: await readActivityApps(year) };
+  } catch (error) {
+    // Older hosts may not expose the command. Do not label a backend read failure unsupported.
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      /(?:command|get_activity_apps).*(?:not found|not implemented|unsupported|unknown)/i.test(
+        message,
+      ) ||
+      /(?:unsupported|unknown|unrecognized) command.*get_activity_apps/i.test(message)
+    ) {
+      return { status: 'unsupported' };
+    }
+    throw error;
+  }
 }
 
 interface HistorySource {
   listHistory(): Promise<DictationSession[]>;
   getActivityStats(): Promise<ActivityDay[]>;
+  activityHydration?: {
+    initialData: ActivityDay[] | null;
+    remember: (data: ActivityDay[]) => void;
+  };
   getActivityApps(year: number): Promise<YearlyActivityApps>;
   listen(onChange: (revision?: number) => void): Promise<() => void>;
 }
@@ -62,7 +77,11 @@ export function createHistoryStore(source: HistorySource) {
     await awaitSubscription();
     while (pendingWrites) await pendingWrites;
   });
-  const activity = new SnapshotQuery(source.getActivityStats, awaitSubscription);
+  const activity = new SnapshotQuery(
+    source.getActivityStats,
+    awaitSubscription,
+    source.activityHydration,
+  );
   const apps = (year: number) => {
     let query = years.get(year);
     if (!query) {
@@ -121,6 +140,12 @@ export const historyStore = createHistoryStore({
   listHistory,
   getActivityStats,
   getActivityApps,
+  activityHydration: isPreviewHost()
+    ? undefined
+    : {
+        initialData: readOverviewStatusCache()?.activity ?? null,
+        remember: (activity) => rememberOverviewStatus({ activity }),
+      },
   listen(onChange) {
     return listenHistoryChanges(onChange).then((unlisten) => {
       // Keep one native subscription for this WebView; tab switches don't leave a gap.

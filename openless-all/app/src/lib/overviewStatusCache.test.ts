@@ -1,13 +1,7 @@
-import {
-  overviewFollowsBackendEvent,
-  readOverviewStatusCache,
-  writeOverviewStatusCache,
-} from './overviewStatusCache';
-import type { CredentialsStatus } from './types';
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(message);
-}
+// @ts-nocheck — Node runtime harness; application builds do not include Node types.
+import assert from 'node:assert/strict';
+import { readOverviewStatusCache, rememberOverviewStatus } from './overviewStatusCache';
+import type { CredentialsStatus } from '../api/contracts';
 
 const memory = new Map<string, string>();
 Object.defineProperty(globalThis, 'localStorage', {
@@ -18,7 +12,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 });
 
-const creds: CredentialsStatus = {
+const creds = {
   activeAsrProvider: 'foundry-local-whisper',
   activeLlmProvider: 'ark',
   pipelineMode: 'traditional',
@@ -27,22 +21,13 @@ const creds: CredentialsStatus = {
   omniConfigured: false,
   volcengineConfigured: false,
   arkConfigured: true,
-};
-
-assert(
-  !overviewFollowsBackendEvent('dictation_completed'),
-  'completion is not yet a stored history row',
-);
-assert(overviewFollowsBackendEvent('history_changed'), 'a stored history change refreshes overview');
-assert(!overviewFollowsBackendEvent('prefs_changed'), 'unrelated events do not refresh overview');
-assert(!overviewFollowsBackendEvent(undefined), 'a missing event type does not refresh overview');
-
-writeOverviewStatusCache({ creds, activity: [{ date: '2026-11-16', count: 2 }] });
-const cached = readOverviewStatusCache();
-assert(cached?.creds.activeAsrProvider === 'foundry-local-whisper', 'cached status round-trips');
-assert(cached?.activity?.[0]?.count === 2, 'cached activity round-trips');
-
+} satisfies CredentialsStatus;
+const activity = [{ date: '2026-11-16', count: 2 }];
+rememberOverviewStatus({ activity });
+assert.deepEqual(readOverviewStatusCache(), { creds: null, activity });
+rememberOverviewStatus({ creds });
+assert.deepEqual(readOverviewStatusCache(), { creds, activity });
+rememberOverviewStatus({ activity: [] });
+assert.deepEqual(readOverviewStatusCache(), { creds, activity: [] });
 localStorage.setItem('ol-overview-status-v1', '{');
-assert(readOverviewStatusCache() === null, 'a broken cache is ignored');
-
-console.log('overview status cache passed');
+assert.equal(readOverviewStatusCache(), null);

@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next';
 import type { DictationSession, PolishMode } from '../../api/contracts';
 import { copyTextToClipboard } from '../../api/files';
 import { formatHistoryTime, formatLocaleDecimal } from '../../lib/localeFormat';
-import { Btn, Card, Pill } from '../../pages/_atoms';
+import { Button } from '../../ui/controls/Button';
+import { Pill } from '../../ui/controls/Pill';
+import { Card } from '../../ui/layout/Card';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -33,7 +35,7 @@ export function RecentHistory({
   return (
     <Card
       padding={0}
-      className="ol-overview-recent-card"
+      className="ol-overview-recent-card ol-col-7"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -43,7 +45,7 @@ export function RecentHistory({
     >
       <div
         style={{
-          padding: '12px 18px',
+          padding: '12px var(--ol-grid-gutter)',
           borderBottom: '0.5px solid var(--ol-line)',
           display: 'flex',
           alignItems: 'center',
@@ -60,9 +62,9 @@ export function RecentHistory({
         >
           {t('overview.recentTitle')}
         </span>
-        <Btn size="sm" variant="ghost" disabled={!onOpenHistory} onClick={onOpenHistory}>
+        <Button size="sm" variant="ghost" disabled={!onOpenHistory} onClick={onOpenHistory}>
           {t('overview.recentAll')}
-        </Btn>
+        </Button>
       </div>
       <div
         className="ol-thinscroll ol-overview-recent"
@@ -82,9 +84,9 @@ export function RecentHistory({
             }}
           >
             <span>{t('overview.recentLoadFailed')}</span>
-            <Btn size="sm" variant="ghost" onClick={onRetry}>
+            <Button size="sm" variant="ghost" onClick={onRetry}>
               {t('overview.historyRetry')}
-            </Btn>
+            </Button>
           </div>
         ) : (
           <>
@@ -195,7 +197,7 @@ function RecentRow({
         <span style={{ fontSize: 12, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
           {formatDuration(session.durationMs ?? 0, t, locale)}
         </span>
-        <Btn
+        <Button
           size="sm"
           variant="ghost"
           icon={copied ? 'check' : 'copy'}
@@ -203,7 +205,7 @@ function RecentRow({
           style={{ padding: '3px 8px' }}
         >
           {copied ? t('common.copied') : t('common.copy')}
-        </Btn>
+        </Button>
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ export interface QuerySnapshot<T> {
 }
 
 export class SnapshotQuery<T> {
-  private snapshot: QuerySnapshot<T> = { data: null, loading: true, error: null };
+  private snapshot: QuerySnapshot<T>;
   private subscribers = new Set<() => void>();
   private wanted = 0;
   private published = 0;
@@ -14,7 +14,10 @@ export class SnapshotQuery<T> {
   constructor(
     private readonly read: () => Promise<T>,
     private readonly beforeRead: () => Promise<void>,
-  ) {}
+    private readonly hydration: { initialData?: T | null; remember?: (data: T) => void } = {},
+  ) {
+    this.snapshot = { data: hydration.initialData ?? null, loading: true, error: null };
+  }
 
   getSnapshot = (): QuerySnapshot<T> => this.snapshot;
 
@@ -58,6 +61,7 @@ export class SnapshotQuery<T> {
             // Signals invalidate requests even when their actual response arrives later.
             if (generation !== this.wanted) continue;
             this.published = generation;
+            this.hydration.remember?.(data);
             this.publish({ data, loading: false, error: null });
           } catch (error) {
             if (generation !== this.wanted) continue;
