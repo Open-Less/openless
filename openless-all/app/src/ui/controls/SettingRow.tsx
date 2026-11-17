@@ -1,6 +1,5 @@
 import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react';
 import { Switch } from '@base-ui/react/switch';
-import { toggleGroupFeedback } from '../../lib/toggleFeedback';
 import { Hint } from '../overlays/Tooltip';
 import './setting-row.css';
 
@@ -74,10 +73,6 @@ export function Toggle({
       aria-label={label}
       aria-labelledby={label ? undefined : labelId}
       disabled={disabled}
-      onClick={(event) => {
-        if (disabled) return;
-        if (event.detail > 0) toggleGroupFeedback(event.currentTarget);
-      }}
     >
       {/* Geometry, colours and motion live in .ol-switch (refinements.css). Width and
           height are locked there, so a column-direction row can't stretch it into a ball. */}
