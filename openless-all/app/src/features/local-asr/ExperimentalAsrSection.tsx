@@ -128,45 +128,51 @@ export function ExperimentalAsrSection({
                   </button>
                 )}
               </div>
-              <Toggle
-                label={name}
-                on={status.enabled}
-                disabled={
-                  loading ||
-                  pending.includes(status.model) ||
-                  status.phase === 'removing' ||
-                  (!status.available && !status.enabled)
-                }
-                onToggle={(next) => void toggle(status.model, next).catch(() => {})}
-              />
-              {status.phase === 'failed' && (
-                <Btn
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void toggle(status.model, status.enabled).catch(() => {})}
-                  disabled={pending.includes(status.model)}
-                >
-                  {t('experimentalAsr.retry')}
-                </Btn>
-              )}
-              {!status.enabled && status.downloadedBytes > 0 && (
-                <Btn
-                  size="sm"
-                  variant="ghost"
-                  disabled={pending.includes(status.model) || status.phase === 'removing'}
-                  onClick={async () => {
-                    if (
-                      await confirm({
-                        title: t('localAsr.deleteConfirm', { name }),
-                        tone: 'danger',
-                      })
-                    )
-                      await remove(status.model).catch(() => {});
-                  }}
-                >
-                  {t('localAsr.delete')}
-                </Btn>
-              )}
+              <div className="ol-experimental-model-actions">
+                <div className="ol-experimental-model-action-slot">
+                  {status.phase === 'failed' ? (
+                    <Btn
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending.includes(status.model)}
+                      onClick={() => void toggle(status.model, status.enabled).catch(() => {})}
+                    >
+                      {t('experimentalAsr.retry')}
+                    </Btn>
+                  ) : !status.enabled && status.downloadedBytes > 0 ? (
+                    <Btn
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending.includes(status.model) || status.phase === 'removing'}
+                      onClick={async () => {
+                        if (
+                          await confirm({
+                            title: t('localAsr.delete'),
+                            description: t('localAsr.deleteConfirm', { name }),
+                            confirmLabel: t('common.delete'),
+                            tone: 'danger',
+                            icon: 'trash',
+                          })
+                        )
+                          await remove(status.model).catch(() => {});
+                      }}
+                    >
+                      {t('localAsr.delete')}
+                    </Btn>
+                  ) : null}
+                </div>
+                <Toggle
+                  label={name}
+                  on={status.enabled}
+                  disabled={
+                    loading ||
+                    pending.includes(status.model) ||
+                    status.phase === 'removing' ||
+                    (!status.available && !status.enabled)
+                  }
+                  onToggle={(next) => void toggle(status.model, next).catch(() => {})}
+                />
+              </div>
             </SettingRow>
             <Collapse open={!!status.error}>
               <p

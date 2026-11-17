@@ -178,6 +178,20 @@ type RefreshGuard = () => boolean;
 export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const { t } = useTranslation();
   const { confirm } = useInteraction();
+  const askDelete = (name: string) =>
+    confirm({
+      title: t('localAsr.delete'),
+      description: t('localAsr.deleteConfirm', { name }),
+      confirmLabel: t('common.delete'),
+      tone: 'danger',
+      icon: 'trash',
+    });
+  const askConfirm = (description: string) =>
+    confirm({
+      title: t('common.confirmAction'),
+      description,
+      icon: 'info',
+    });
   const keepLoadedOptions = LOCAL_ASR_KEEP_LOADED_OPTIONS.map(({ seconds, labelKey }) => ({
     value: String(seconds),
     label: t(labelKey),
@@ -789,14 +803,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
     const picked = await selectDirectory({ title: t('localAsr.storageChooseTitle') });
     if (!picked) return;
-    if (
-      !(await confirm({
-        title: t('localAsr.storageChangeConfirm', {
-          path: picked,
-        }),
-        tone: 'danger',
-      }))
-    ) {
+    if (!(await askConfirm(t('localAsr.storageChangeConfirm', { path: picked })))) {
       return;
     }
     await applyModelsBaseDir(picked);
@@ -804,12 +811,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
   const handleResetModelsBaseDir = async () => {
     if (
-      !(await confirm({
-        title: t('localAsr.storageResetConfirm', {
-          path: settings?.modelsRootDir ?? '',
-        }),
-        tone: 'danger',
-      }))
+      !(await askConfirm(
+        t('localAsr.storageResetConfirm', { path: settings?.modelsRootDir ?? '' }),
+      ))
     ) {
       return;
     }
@@ -919,7 +923,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       await downloadFoundryLocalAsrModel(alias);
       await refreshFoundryStatus();
       await refreshFoundryCatalog();
-      if (await confirm({ title: t('localAsr.runtimeDownloadRestart') })) {
+      if (await askConfirm(t('localAsr.runtimeDownloadRestart'))) {
         await restartApp();
       }
     } catch (e) {
@@ -976,16 +980,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         (FOUNDRY_LOCAL_ASR_MODELS.find((m) => m.alias === alias) ?? FOUNDRY_LOCAL_ASR_MODELS[0])
           .labelKey,
       );
-    if (
-      !(await confirm({
-        title: t('localAsr.deleteConfirm', {
-          name: displayName,
-        }),
-        tone: 'danger',
-      }))
-    ) {
-      return;
-    }
+    if (!(await askDelete(displayName))) return;
     setFoundryBusy('delete');
     try {
       setError(null);
@@ -1126,16 +1121,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         (SHERPA_ONNX_ASR_MODELS.find((m) => m.alias === alias) ?? SHERPA_ONNX_ASR_MODELS[0])
           .labelKey,
       );
-    if (
-      !(await confirm({
-        title: t('localAsr.deleteConfirm', {
-          name: displayName,
-        }),
-        tone: 'danger',
-      }))
-    ) {
-      return;
-    }
+    if (!(await askDelete(displayName))) return;
     setSherpaBusy('delete');
     try {
       setError(null);
@@ -1286,16 +1272,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   };
 
   const handleDelete = async (modelId: string) => {
-    if (
-      !(await confirm({
-        title: t('localAsr.deleteConfirm', {
-          name: modelId,
-        }),
-        tone: 'danger',
-      }))
-    ) {
-      return;
-    }
+    if (!(await askDelete(modelId))) return;
     setBusyModelId(modelId);
     try {
       await deleteLocalAsrModel(modelId);
