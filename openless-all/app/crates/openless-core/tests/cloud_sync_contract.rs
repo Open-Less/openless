@@ -210,6 +210,57 @@ async fn cloud_sync_requires_an_official_service_and_never_invents_an_empty_back
 }
 
 #[tokio::test]
+async fn enter_stop_policy_restores_in_both_directions_with_other_portable_data() {
+    let server = Server::new().await;
+    let source = Device::new(&server).await;
+    let target = Device::new(&server).await;
+    let mut local = target.backend.get_preferences();
+    local.dictation_hotkey = openless_core::shared_types::ShortcutBinding {
+        primary: "F9".into(),
+        modifiers: Vec::new(),
+    };
+    openless_core::sync_dictation_hotkey_legacy_fields(&mut local);
+    target
+        .backend
+        .repositories()
+        .preferences
+        .set(local)
+        .unwrap();
+    let word = source
+        .backend
+        .add_vocabulary("Enter stop".into(), None)
+        .unwrap();
+    let mut revision = 0;
+    for enabled in [true, false] {
+        let mut preferences = source.backend.get_preferences();
+        preferences.enter_stop_enabled = enabled;
+        source
+            .backend
+            .repositories()
+            .preferences
+            .set(preferences)
+            .unwrap();
+        let uploaded = source
+            .backend
+            .cloud_sync_upload(revision, CloudSyncUiPreferences::default())
+            .await
+            .unwrap();
+        revision = uploaded.revision;
+        assert_ne!(target.backend.get_preferences().enter_stop_enabled, enabled);
+        let local_hotkey = target.backend.get_preferences().dictation_hotkey;
+        let restored = target.backend.cloud_sync_restore().await.unwrap();
+        assert_eq!(restored.status, uploaded);
+        let preferences = target.backend.get_preferences();
+        assert_eq!(preferences.enter_stop_enabled, enabled);
+        assert_eq!(preferences.dictation_hotkey, local_hotkey);
+        assert_eq!(
+            target.backend.list_vocabulary().unwrap(),
+            vec![word.clone()]
+        );
+    }
+}
+
+#[tokio::test]
 async fn portable_data_round_trips_without_uploading_credentials_or_device_settings() {
     use base64::Engine;
     let server = Server::new().await;

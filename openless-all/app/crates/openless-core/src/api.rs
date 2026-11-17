@@ -4378,6 +4378,26 @@ impl OpenLessBackend {
             .or(state.dictation_start_output_target)
     }
 
+    /// Nonblocking live capture lookup for native keyboard callbacks. Never
+    /// reads preferences or waits for a state writer; callers must revalidate
+    /// the captured session when handling the queued stop request.
+    pub fn try_recording_session(&self) -> Option<(SessionId, DictationOutputTarget)> {
+        let state = self.state.try_read().ok()?;
+        if !matches!(
+            state.dictation.phase,
+            DictationPhase::Starting | DictationPhase::Recording
+        ) {
+            return None;
+        }
+        let output_target = state
+            .dictation_context
+            .as_ref()
+            .map(|context| context.output_target)
+            .or(state.dictation_start_output_target)
+            .unwrap_or_default();
+        Some((state.dictation.session_id?, output_target))
+    }
+
     /// Dispatch a launcher/single-instance intent through the same state
     /// machine and domain Interfaces used by normal host calls.
     pub async fn dispatch_cli_intent(
@@ -8362,6 +8382,35 @@ mod tests {
     fn backend_is_safe_to_share_between_host_and_ui_tasks() {
         assert_send_sync::<OpenLessBackend>();
         assert_send_sync::<LessComputerVoiceSession>();
+    }
+
+    #[tokio::test]
+    async fn recording_session_lookup_never_waits_for_preferences_or_state_writers() {
+        let (backend, _) = backend();
+        let backend = Arc::new(backend);
+        backend.start().await.unwrap();
+        assert_eq!(backend.try_recording_session(), None);
+        let session = backend.start_dictation().await.unwrap();
+        for block_preferences in [true, false] {
+            let preferences = block_preferences.then(|| backend.preferences.cloud_sync_access());
+            let state = (!block_preferences).then(|| backend.state.write().unwrap());
+            let (send, receive) = std::sync::mpsc::channel();
+            let lookup_backend = Arc::clone(&backend);
+            let lookup = std::thread::spawn(move || {
+                let _ = send.send(lookup_backend.try_recording_session());
+            });
+            let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+            // Always unblock and join before asserting, including on regression.
+            drop(state);
+            drop(preferences);
+            lookup.join().unwrap();
+            assert_eq!(
+                result.unwrap(),
+                block_preferences.then_some((session, DictationOutputTarget::ForegroundApp))
+            );
+        }
+        backend.cancel_dictation(None).await.unwrap();
+        assert_eq!(backend.try_recording_session(), None);
     }
 
     #[derive(Default)]

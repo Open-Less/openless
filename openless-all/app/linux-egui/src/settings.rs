@@ -90,10 +90,8 @@ impl LinuxSettingsRuntime {
 fn hotkeys_require_native_update(
     change: &openless_core::SettingsValueChange<HotkeyRuntimeTarget>,
 ) -> bool {
-    let mut previous = change.previous.clone();
-    previous.enter_stop_enabled = change.next.enter_stop_enabled;
     // Equal targets explicitly request startup reapplication of native bindings.
-    change.previous == change.next || previous != change.next
+    change.previous == change.next || !change.previous.native_bindings_match(&change.next)
 }
 
 impl SettingsRuntime for LinuxSettingsRuntime {

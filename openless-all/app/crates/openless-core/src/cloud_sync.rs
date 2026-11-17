@@ -364,7 +364,17 @@ impl CloudSyncService {
         let mut next_preferences = preferences.clone();
         apply_preferences(&mut next_preferences, &payload.preferences);
         crate::sync_style_pack_preferences(&mut next_preferences, &next_packs);
-        if !crate::SettingsEffectPlan::between(&preferences, &next_preferences).is_empty() {
+        let mut effects = crate::SettingsEffectPlan::between(&preferences, &next_preferences);
+        if effects
+            .hotkeys
+            .as_ref()
+            .is_some_and(|change| change.previous.native_bindings_match(&change.next))
+        {
+            // Enter-stop is portable policy. It needs no native registration;
+            // keep rejecting actual device-specific runtime changes below.
+            effects.hotkeys = None;
+        }
+        if !effects.is_empty() {
             return Err(invalid("云端偏好包含不能跨设备还原的运行设置。"));
         }
         let mut writes = Vec::new();

@@ -52,13 +52,48 @@ pub(super) fn install_enter_stop_provider(inner: &Arc<Inner>) {
 }
 
 pub(super) fn enter_stop_session(inner: &Arc<Inner>) -> Option<openless_core::SessionId> {
+    if inner.shutdown.load(std::sync::atomic::Ordering::SeqCst)
+        || inner
+            .shortcut_recording_active
+            .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return None;
+    }
+    // Native hooks must not wait on the preferences store: its lock covers
+    // disk writes and fsync. The settings transaction maintains this separate
+    // in-memory target, including rollback and cloud-restore reconciliation.
+    {
+        let target = inner.hotkey_runtime_target.try_lock()?;
+        if !target.enter_stop_enabled || target.dictation_mode != crate::types::HotkeyMode::Toggle {
+            return None;
+        }
+    }
+    let (session_id, output_target) = inner.backend.try_recording_session()?;
+    (!matches!(
+        output_target,
+        openless_core::DictationOutputTarget::VoiceEdit | openless_core::DictationOutputTarget::Qa
+    ))
+    .then_some(session_id)
+}
+
+pub(super) async fn handle_enter_stop(inner: &Arc<Inner>, session_id: openless_core::SessionId) {
+    // This runs on the bridge worker, outside the native hook. Recheck the
+    // persisted policy because the in-memory target is staged before commit.
+    // Unlike the hook, the worker can wait for state writers to finish rather
+    // than dropping a stop request whose Enter gesture was already consumed.
     let preferences = inner.backend.get_preferences();
+    let dictation = inner.backend.snapshot().dictation;
     if inner.shutdown.load(std::sync::atomic::Ordering::SeqCst)
         || inner
             .shortcut_recording_active
             .load(std::sync::atomic::Ordering::SeqCst)
         || !preferences.enter_stop_enabled
         || preferences.hotkey.mode != crate::types::HotkeyMode::Toggle
+        || dictation.session_id != Some(session_id)
+        || !matches!(
+            dictation.phase,
+            openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+        )
         || matches!(
             inner.backend.dictation_output_target(),
             Some(
@@ -67,19 +102,6 @@ pub(super) fn enter_stop_session(inner: &Arc<Inner>) -> Option<openless_core::Se
             )
         )
     {
-        return None;
-    }
-    let dictation = inner.backend.snapshot().dictation;
-    matches!(
-        dictation.phase,
-        openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
-    )
-    .then_some(dictation.session_id)
-    .flatten()
-}
-
-pub(super) async fn handle_enter_stop(inner: &Arc<Inner>, session_id: openless_core::SessionId) {
-    if enter_stop_session(inner) != Some(session_id) {
         return;
     }
     if let Err(error) = inner.backend.stop_dictation_session(session_id).await {
@@ -219,7 +241,52 @@ mod enter_stop_tests {
     fn enable_enter_stop(inner: &Arc<Inner>) {
         let mut preferences = inner.backend.get_preferences();
         preferences.enter_stop_enabled = true;
+        *inner.hotkey_runtime_target.lock() = (&preferences).into();
         crate::set_backend_preferences_for_test(&inner.backend, preferences);
+    }
+
+    #[tokio::test]
+    async fn enter_stop_never_waits_for_the_runtime_target_lock() {
+        let (coordinator, _, data_dir) = fixture_coordinator(HotkeyMode::Toggle, Duration::ZERO);
+        let inner = &coordinator.inner;
+        enable_enter_stop(inner);
+        inner.backend.start().await.unwrap();
+        let session = inner.backend.start_dictation().await.unwrap();
+        assert_eq!(enter_stop_session(inner), Some(session));
+        let target = inner.hotkey_runtime_target.lock();
+        let (send, receive) = std::sync::mpsc::channel();
+        let lookup_inner = Arc::clone(inner);
+        let lookup = std::thread::spawn(move || {
+            let _ = send.send(enter_stop_session(&lookup_inner));
+        });
+        let result = receive.recv_timeout(Duration::from_secs(1));
+        drop(target);
+        lookup.join().unwrap();
+        assert_eq!(result.unwrap(), None);
+        assert_eq!(enter_stop_session(inner), Some(session));
+        inner.backend.cancel_dictation(None).await.unwrap();
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn staged_enter_stop_policy_cannot_stop_before_preferences_commit() {
+        let (coordinator, recorder, data_dir) =
+            fixture_coordinator(HotkeyMode::Toggle, Duration::ZERO);
+        let inner = &coordinator.inner;
+        inner.backend.start().await.unwrap();
+        let session = inner.backend.start_dictation().await.unwrap();
+        inner.hotkey_runtime_target.lock().enter_stop_enabled = true;
+        assert_eq!(enter_stop_session(inner), Some(session));
+        handle_enter_stop(inner, session).await;
+        assert_eq!(recorder.stop_count(), 0);
+        assert_eq!(
+            inner.backend.snapshot().dictation.phase,
+            DictationPhase::Recording
+        );
+        inner.backend.cancel_dictation(None).await.unwrap();
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[tokio::test]
@@ -237,6 +304,7 @@ mod enter_stop_tests {
         assert_eq!(enter_stop_session(inner), Some(session_id));
         let mut preferences = inner.backend.get_preferences();
         preferences.enter_stop_enabled = false;
+        *inner.hotkey_runtime_target.lock() = (&preferences).into();
         crate::set_backend_preferences_for_test(&inner.backend, preferences);
         assert_eq!(enter_stop_session(inner), None);
         handle_enter_stop(inner, session_id).await;
