@@ -1,5 +1,5 @@
-//! Execute the production Windows side-aware mapper without Tauri's native ASR DLLs.
-#![cfg(target_os = "windows")]
+//! Execute shared hotkey matching and Windows key normalization without Tauri's
+//! native ASR DLLs. Windows additionally exercises its production VK mapper.
 
 #[path = "../../../crates/openless-core/tests/scrolllock_hotkeys.rs"]
 mod core_contract;
