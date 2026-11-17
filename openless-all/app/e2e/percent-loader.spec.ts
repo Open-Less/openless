@@ -1,18 +1,17 @@
 import { expect, test } from '@playwright/test';
 
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+import { fixtureOrigin } from './support/server';
 
 function percent(text: string) {
   return Number(text.replace('%', ''));
 }
 
-test('the counting percent loader covers startup and stays off settled pages', async ({
-  page,
-}) => {
-  await page.goto('/e2e/fixtures/percent-loader.html');
+test('the counting percent loader covers startup and stays off settled pages', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/percent-loader.html`);
   const startup = page.locator('.ol-startup [role="progressbar"]');
   await expect(startup).toBeVisible();
   await expect(startup).toHaveAttribute('aria-label', 'Loading');
+  await expect(startup).not.toHaveAttribute('aria-valuenow');
   const before = percent(await startup.locator('.ol-percent-loader-label').innerText());
   await expect
     .poll(async () => percent(await startup.locator('.ol-percent-loader-label').innerText()))
