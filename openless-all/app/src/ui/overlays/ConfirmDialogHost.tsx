@@ -67,19 +67,19 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
               ) : (
                 <>
                   <button
+                    type="button"
+                    className={`ol-pressable ol-action-button ${danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}`}
+                    onClick={request.accept}
+                  >
+                    {request.options.confirmLabel ?? t('common.confirmAction')}
+                  </button>
+                  <button
                     ref={leastDestructive}
                     type="button"
                     className="ol-pressable ol-action-button ol-confirm-cancel"
                     onClick={request.cancel}
                   >
                     {request.options.cancelLabel ?? t('common.cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    className={`ol-pressable ol-action-button ${danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}`}
-                    onClick={request.accept}
-                  >
-                    {request.options.confirmLabel ?? t('common.confirmAction')}
                   </button>
                 </>
               )}

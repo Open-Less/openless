@@ -9,13 +9,31 @@ import {
 } from 'react';
 import { createInteractionController } from './interactionController';
 import { ConfirmDialogHost } from './ConfirmDialogHost';
+import { bindNotificationSink } from '../../lib/notifications';
 import { NotificationCenter } from '../feedback/NotificationCenter';
 import './interaction.css';
 
 const Controller = createContext<ReturnType<typeof createInteractionController> | null>(null);
 
-export function InteractionProvider({ children }: { children: ReactNode }) {
+export function InteractionProvider({
+  children,
+  notificationAside,
+}: {
+  children: ReactNode;
+  notificationAside?: ReactNode;
+}) {
   const [controller] = useState(createInteractionController);
+  useLayoutEffect(() => {
+    const scope = controller.createScope();
+    const unbind = bindNotificationSink({
+      notify: scope.interaction.notify,
+      dismissByKey: controller.dismissByKey,
+    });
+    return () => {
+      unbind();
+      scope.dispose();
+    };
+  }, [controller]);
   useEffect(() => {
     window.addEventListener('pagehide', controller.clear);
     return () => {
@@ -27,7 +45,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     <Controller.Provider value={controller}>
       {children}
       <ConfirmDialogHost controller={controller} />
-      <NotificationCenter controller={controller} />
+      <NotificationCenter controller={controller} aside={notificationAside} />
     </Controller.Provider>
   );
 }

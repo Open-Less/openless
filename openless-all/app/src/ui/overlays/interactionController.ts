@@ -60,9 +60,7 @@ export function createInteractionController() {
 
   function startTimer(item: NotificationItem) {
     clearTimer(item.id);
-    const duration =
-      item.durationMs ??
-      (item.progress || item.state === 'saving' || item.state === 'failed' ? 0 : 3500);
+    const duration = item.durationMs ?? (isTransientSuccess(item) ? 3500 : 0);
     if (duration > 0) {
       timers.set(
         item.id,
@@ -73,8 +71,21 @@ export function createInteractionController() {
     }
   }
 
-  function success(item: NotificationOptions) {
-    return !item.progress && (item.state === 'saved' || item.state === 'deleted');
+  function isTransientSuccess(item: NotificationOptions) {
+    return (
+      !item.progress && !item.actionLabel && (item.state === 'saved' || item.state === 'deleted')
+    );
+  }
+
+  function pruneFor(item: NotificationItem, keepId = false) {
+    return notifications.filter((entry) => {
+      if (keepId && entry.id === item.id) return true;
+      const replaced =
+        (item.key !== undefined && entry.key === item.key) ||
+        (isTransientSuccess(item) && isTransientSuccess(entry));
+      if (replaced) clearTimer(entry.id);
+      return !replaced;
+    });
   }
 
   return {
@@ -87,6 +98,10 @@ export function createInteractionController() {
     getRequest: () => request,
     getNotifications: () => notifications,
     dismiss,
+    dismissByKey(key: string) {
+      const item = notifications.find((entry) => entry.key === key);
+      if (item) dismiss(item.id);
+    },
     clear() {
       request?.cancel();
       if (notifications.length === 0) return;
@@ -156,14 +171,7 @@ export function createInteractionController() {
             if (!active) return dismissed;
             const id = ++sequence;
             const item: NotificationItem = { ...options, id, owner };
-            const next = notifications.filter((entry) => {
-              const replaced =
-                (options.key !== undefined && entry.key === options.key) ||
-                (success(options) && success(entry));
-              if (replaced) clearTimer(entry.id);
-              return !replaced;
-            });
-            notifyItems([item, ...next]);
+            notifyItems([item, ...pruneFor(item)]);
             startTimer(item);
             return {
               dismiss: () => dismiss(id),
@@ -171,7 +179,9 @@ export function createInteractionController() {
                 const current = notifications.find((entry) => entry.id === id);
                 if (!current) return;
                 const updated = { ...current, ...change };
-                notifyItems(notifications.map((entry) => (entry.id === id ? updated : entry)));
+                notifyItems(
+                  pruneFor(updated, true).map((entry) => (entry.id === id ? updated : entry)),
+                );
                 startTimer(updated);
               },
             };

@@ -23,6 +23,8 @@ export interface NotificationOptions {
   durationMs?: number;
   key?: string;
   progress?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 export interface NotificationHandle {

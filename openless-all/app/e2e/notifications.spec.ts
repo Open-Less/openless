@@ -1,6 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
+import { fixtureOrigin } from './support/server';
+import { settleNavigation } from './support/navigation';
 
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+test.use({ baseURL: fixtureOrigin });
 
 /** Import the exact module instance the app loaded (Vite appends an HMR query). */
 async function emitNotifications(
@@ -25,7 +27,9 @@ async function emitNotifications(
 test('notifications stack above settings, preserve errors and support dismissal', async ({
   page,
 }) => {
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await page.goto('/?os=mac');
+  await expect(page.locator('.ol-notification-center')).toHaveCount(1);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await emitNotifications(page, [
     { state: 'saved', message: 'First notification', durationMs: 10000 },
@@ -35,7 +39,8 @@ test('notifications stack above settings, preserve errors and support dismissal'
   await expect(cards).toHaveCount(2);
   await expect(page.getByRole('alert').filter({ hasText: 'Second notification' })).toBeVisible();
   const center = await cards.first().boundingBox();
-  expect(Math.abs(center!.x + center!.width / 2 - 650)).toBeLessThan(2);
+  const viewport = (await page.locator('.ol-app-viewport').boundingBox())!;
+  expect(Math.abs(center!.x + center!.width / 2 - viewport.x - viewport.width / 2)).toBeLessThan(2);
   await cards.last().getByRole('button').click();
   await expect(cards).toHaveCount(1);
 });
@@ -43,7 +48,9 @@ test('notifications stack above settings, preserve errors and support dismissal'
 test('transient confirmations drop from the window top and replace each other', async ({
   page,
 }) => {
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await page.goto('/?os=mac');
+  await expect(page.locator('.ol-notification-center')).toHaveCount(1);
   await emitNotifications(page, [
     { state: 'saved', message: 'First saved', durationMs: 10000 },
     { state: 'saved', message: 'Second saved', durationMs: 10000 },
@@ -53,7 +60,8 @@ test('transient confirmations drop from the window top and replace each other', 
   await expect(cards.first()).toContainText('Second saved');
   const box = (await cards.first().boundingBox())!;
   // The host is flush with the window edge; the card itself keeps only the safe-area inset.
-  expect(box.y).toBeLessThan(12);
+  const bounds = (await page.locator('.ol-app-viewport').boundingBox())!;
+  expect(box.y - bounds.y).toBeLessThan(12);
 
   // Success uses the standard theme blue and the same raised surface as content cards.
   const savedIcon = page.locator('.ol-notification-icon--saved');
@@ -115,9 +123,12 @@ for (const kind of ['qa', 'voice-edit', 'selection-voice-intent']) {
 }
 
 test('progress notification paints above a portaled channel editor', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await page.goto('/?os=mac');
+  await expect(page.locator('.ol-notification-center')).toHaveCount(1);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  await settleNavigation(page);
   await page.locator('.ol-channel-edit-button').first().click();
   await expect(page.locator('.ol-channel-dialog')).toBeVisible();
 
@@ -127,14 +138,15 @@ test('progress notification paints above a portaled channel editor', async ({ pa
   const card = page.locator('.ol-notification-card');
   await expect(card).toBeVisible();
   await expect(page.locator('.ol-notification-progress')).toBeVisible();
-  // The drop-in spring starts above the window; measure after it settles.
-  await page.waitForTimeout(500);
-  const box = (await card.boundingBox())!;
-  expect(
-    await page.evaluate(
-      ([x, y]) => !!document.elementFromPoint(x, y)?.closest('.ol-notification-card'),
-      [box.x + box.width / 2, box.y + box.height / 2],
-    ),
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      card.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        return !!document
+          .elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+          ?.closest('.ol-notification-card');
+      }),
+    )
+    .toBe(true);
   await expect(page.locator('.ol-channel-dialog')).toBeVisible();
 });

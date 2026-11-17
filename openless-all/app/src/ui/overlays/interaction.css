@@ -9,25 +9,30 @@
 :is(.ol-confirm-dialog, .ol-interaction-dialog) h2 {
   margin: 0;
   font-size: 15px;
+  font-weight: var(--ol-font-weight-semibold);
   color: var(--ol-ink);
   line-height: 1.35;
   letter-spacing: -0.02em;
 }
 
 .ol-confirm-dialog-description {
+  margin: 0;
   color: var(--ol-ink-3);
   font-size: 13.5px;
   line-height: 1.6;
 }
 
 .ol-confirm-dialog {
-  --ol-confirm-ink: var(--ol-blue);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  --ol-confirm-ink: var(--ol-accent-solid-bg);
   --ol-confirm-soft: var(--ol-blue-soft);
 }
 
 .ol-confirm-dialog[data-tone='danger'] {
   --ol-confirm-ink: var(--ol-err);
-  --ol-confirm-soft: color-mix(in srgb, var(--ol-err) 12%, transparent);
+  --ol-confirm-soft: rgba(220, 38, 38, 0.1);
 }
 
 .ol-confirm-dialog[data-tone='warning'] {
@@ -38,9 +43,9 @@
 .ol-confirm-dialog-icon {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--ol-control-radius);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ol-radius);
   color: var(--ol-confirm-ink);
   background: var(--ol-confirm-soft);
 }
@@ -50,15 +55,19 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 4px;
+  width: 100%;
+  align-items: center;
 }
 
 .ol-confirm-dialog-actions button {
   max-width: 100%;
   padding: 7px 14px;
-  min-height: 32px;
+  min-height: 34px;
+  border-radius: var(--ol-button-radius);
+  --ol-corner-radius: var(--ol-button-radius);
   font-size: 13.5px;
-  font-weight: var(--ol-font-weight-semibold);
+  font-weight: var(--ol-font-weight-medium);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -73,79 +82,141 @@
 }
 .ol-confirm-cancel {
   color: var(--ol-ink-2);
-  background: var(--ol-surface-2);
+  background: var(--ol-control-solid);
+  border: 0.5px solid var(--ol-line-strong);
 }
 
+/* The unscaled viewport anchors the stack; each card is painted at the interface scale. */
 .ol-notification-center {
   position: absolute;
-  inset: 12px 12px auto;
-  max-height: calc(100% - 24px);
+  inset: 0 0 0;
   z-index: var(--ol-layer-notification, 1400);
-  display: grid;
-  justify-items: end;
+  display: flex;
+  justify-content: center;
   overflow: clip;
   pointer-events: none;
 }
 .ol-notification-stack {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 8px;
-  width: min(360px, 100%);
-  max-height: 100%;
-  padding: 4px;
+  max-width: 100%;
+  padding: max(8px, env(safe-area-inset-top, 0px)) 14px 16px;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-width: none;
   zoom: var(--ol-interface-scale, 1);
 }
+.ol-notification-stack > * {
+  flex-shrink: 0;
+}
 .ol-notification-card {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 22px;
-  align-items: start;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--ol-line);
-  border-radius: var(--ol-r-md);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 5px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 12px;
+  /* Same raised surface as the overview / usage cards; only the shadow makes the
+     transient toast float above them. */
   background: var(--ol-surface-raised);
   color: var(--ol-ink);
-  box-shadow: var(--ol-shadow-md);
+  box-shadow:
+    0 18px 48px -18px rgba(15, 23, 42, 0.32),
+    0 4px 14px -6px rgba(15, 23, 42, 0.16);
+}
+.ol-notification-card--progress {
+  align-items: flex-start;
+  width: min(240px, 100%);
+}
+.ol-notification-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.ol-notification-progress {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ol-line);
+}
+.ol-notification-progress-value {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ol-accent-solid-bg);
+  animation: ol-notification-indeterminate 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes ol-notification-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(320%);
+  }
 }
 .ol-notification-icon {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  color: var(--ol-ink-2);
-  background: var(--ol-surface-2);
+  flex: 0 0 16px;
+  height: 16px;
+  border-radius: 5px;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
 }
-.ol-notification-card[data-state='saved'] .ol-notification-icon {
-  color: var(--ol-accent-solid-ink);
+.ol-notification-icon--saved {
   background: var(--ol-accent-solid-bg);
+  color: var(--ol-accent-solid-ink);
 }
-.ol-notification-card:is([data-state='deleted'], [data-state='failed']) .ol-notification-icon {
-  color: var(--ol-err);
-  background: color-mix(in srgb, var(--ol-err) 12%, transparent);
+.ol-notification-icon--failed,
+.ol-notification-icon--deleted {
+  /* Pure red reads as a destructive result; the theme's soft error tint looked
+     pink/orange on the raised toast surface. */
+  background: #e00000;
 }
-.ol-notification-body {
-  display: grid;
-  gap: 6px;
+.ol-notification-icon--saving {
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-3);
+}
+.ol-notification-icon--info {
+  background: var(--ol-blue-soft);
+  color: var(--ol-blue);
+}
+.ol-notification-message {
   min-width: 0;
-  line-height: 1.5;
   overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  text-wrap: pretty;
 }
-.ol-notification-body progress {
-  width: 100%;
-  accent-color: var(--ol-accent-solid-bg);
+.ol-notification-action {
+  color: var(--ol-blue);
+  font-weight: 600;
 }
 .ol-notification-close {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  flex: 0 0 16px;
+  height: 16px;
   color: var(--ol-ink-3);
 }
-.ol-notification-center:not([data-modal-active]) .ol-notification-close {
+
+.ol-notification-card:not([aria-hidden]) {
   pointer-events: auto;
 }
-.ol-notification-center[data-modal-active] .ol-notification-close {
-  visibility: hidden;
+@media (prefers-reduced-motion: reduce) {
+  .ol-notification-progress-value {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
 }
