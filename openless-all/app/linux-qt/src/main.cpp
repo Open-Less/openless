@@ -9,6 +9,10 @@
 // 同时 Qt 走**原生 Wayland**，能用 LayerShellQt 做贴底/不给键盘/透明的浮层
 // （Tauri v3 的 CEF 在 Linux 上强制 X11，这两件事都做不到）。
 #include <QApplication>
+#include <QFile>
+#include <sys/stat.h>
+#include <QDir>
+#include <QThread>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QQuickWindow>
@@ -19,6 +23,8 @@
 #include <QCloseEvent>
 #include <cstdlib>
 #include <unistd.h>
+#include <csignal>
+#include <sys/prctl.h>
 #include <QDesktopServices>
 #include <QWebEngineUrlScheme>
 #include <QWebEngineUrlSchemeHandler>
@@ -225,6 +231,30 @@ protected:
 private:
     bool closeHides_;
 };
+
+/// 找出当前用户下还活着的后端进程（`openless-linux-web`）。
+///
+/// 只在「已经确认没有第二个 Qt 宿主在跑」时调用：那种情况下活着的后端只可能是
+/// 上次宿主崩溃留下的孤儿（父进程没了，PDEATHSIG 也就无人触发），它占着
+/// `openless-web.sock`，会让新后端启动即退出 —— 表现为「点图标起不来」。
+static QList<qint64> orphanBackendPids(const QString &expectedBinary) {
+    QList<qint64> pids;
+    const QByteArray expected = QFile::encodeName(QFileInfo(expectedBinary).fileName());
+    const QDir proc(QStringLiteral("/proc"));
+    for (const QString &entry : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool numeric = false;
+        const qint64 pid = entry.toLongLong(&numeric);
+        if (!numeric || pid == ::getpid()) continue;
+        const QByteArray link = QFile::encodeName(QStringLiteral("/proc/%1/exe").arg(pid));
+        char buffer[4096];
+        const ssize_t length = ::readlink(link.constData(), buffer, sizeof(buffer) - 1);
+        if (length <= 0) continue;
+        buffer[length] = '\0';
+        const QByteArray exe(buffer);
+        if (exe.endsWith('/' + expected)) pids.append(pid);
+    }
+    return pids;
+}
 
 /// 一个 webview 窗口。胶囊/问答用 layer-shell，主窗口是普通窗口。
 class SurfaceWindow {
@@ -513,6 +543,10 @@ int main(int argc, char **argv) {
         }
         const QString hostBin = qEnvironmentVariable("OPENLESS_HOST_BIN", defaultHost);
         QStringList args;
+        // 后端必须随宿主一起退出：宿主被 kill/崩溃后留下的孤儿后端会一直占着
+        // `$XDG_RUNTIME_DIR/openless-web.sock`，下一个后端启动时抢不到就立刻退出，
+        // 宿主于是等端口等到超时 —— 表现就是「点图标没反应 / 起不来」。
+        backend->setChildProcessModifier([]() { prctl(PR_SET_PDEATHSIG, SIGTERM); });
         backend->start(hostBin, args);
         if (!backend->waitForStarted(5000)) {
             qCritical("无法启动后端 %s", qPrintable(hostBin));
@@ -520,7 +554,51 @@ int main(int argc, char **argv) {
         }
         QElapsedTimer timer;
         timer.start();
+        bool retriedAfterStaleSocket = false;
         while (timer.elapsed() < 20000 && baseUrl.isEmpty()) {
+            if (backend->state() != QProcess::Running && backend->state() != QProcess::Starting) {
+                // 后端刚起就退出：几乎一定是单实例锁被占。
+                const QString socketPath =
+                    QStringLiteral("%1/openless-web.sock")
+                        .arg(QString::fromLocal8Bit(qgetenv("XDG_RUNTIME_DIR")));
+                bool holderAlive = false;
+                {
+                    QLocalSocket probe;
+                    probe.connectToServer(socketPath);
+                    holderAlive = probe.waitForConnected(200);
+                }
+                if (!holderAlive && !retriedAfterStaleSocket) {
+                    // 空壳 socket：清掉再来一次。
+                    qWarning("后端启动失败（socket 是上次崩溃的残留），清理后重试一次");
+                    QLocalServer::removeServer(socketPath);
+                    QFile::remove(socketPath);
+                    retriedAfterStaleSocket = true;
+                    backend->start(hostBin, args);
+                    continue;
+                }
+                if (holderAlive && !retriedAfterStaleSocket) {
+                    // 走到这里说明没有第二个 Qt 宿主（上面的单实例探测已经排除），
+                    // 那占着后端的就只可能是上次崩溃留下的孤儿：回收它再重试一次。
+                    const QList<qint64> holders = orphanBackendPids(hostBin);
+                    for (qint64 pid : holders) {
+                        qWarning("回收孤儿后端进程 %lld（上次宿主退出时没被带走）",
+                                 static_cast<long long>(pid));
+                        ::kill(static_cast<pid_t>(pid), SIGTERM);
+                    }
+                    if (!holders.isEmpty()) {
+                        QThread::msleep(500);
+                        QLocalServer::removeServer(socketPath);
+                        QFile::remove(socketPath);
+                        retriedAfterStaleSocket = true;
+                        backend->start(hostBin, args);
+                        continue;
+                    }
+                }
+                qCritical("后端无法启动：另一个 OpenLess 后端占着 %s，且无法回收。"
+                          "先结束它（pkill -f openless-linux-web）再启动。",
+                          qPrintable(socketPath));
+                return 1;
+            }
             backend->waitForReadyRead(200);
             const QString output = QString::fromUtf8(backend->readAll());
             for (const QString &line : output.split('\n')) {
