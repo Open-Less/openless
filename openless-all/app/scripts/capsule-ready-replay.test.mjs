@@ -168,6 +168,7 @@ function mount({
     throw new Error('unsupported');
   },
   label = 'capsule',
+  preferences = () => ({ capsuleStyle: 'classic' }),
   bus,
   overlay = false,
 } = {}) {
@@ -192,8 +193,9 @@ function mount({
     stateRef: { current: 'idle' },
     snapshotRetryDelays: [0, 16, 32, 64, 128, 256],
     capsuleTranscriptFontSize: (value) => value ?? 14,
-    getSettings: async () => ({ capsuleStyle: 'classic' }),
-    parseCapsuleStyle: () => undefined,
+    getSettings: async () => preferences(),
+    parseCapsuleStyle: (value) =>
+      ['classic', 'typeless', 'siri'].includes(value) ? value : undefined,
     console: { info() {}, warn: (...args) => warnings.push(args) },
     window: {
       setTimeout: (done, delay) => {
@@ -544,6 +546,33 @@ for (const overlay of [false, true]) {
   release(mirror);
   assert.equal(bus.size, 0);
   probe('P4', 'cleanup_finished', { overlay, listeners: bus.size });
+}
+// A newer rail preference must outlive both the first settings read and replayed frame.
+{
+  const oldSettings = deferred();
+  let reading = false;
+  const rail = mount({
+    label: 'capsule-rail',
+    overlay: true,
+    snapshot: () => frame({ capsuleStyle: 'classic' }),
+    preferences: () => {
+      reading = true;
+      return oldSettings.promise;
+    },
+  });
+  await until(() => reading);
+  rail.emit('prefs:changed', {
+    capsuleStyle: 'siri',
+    capsuleTranscriptEnabled: false,
+    capsuleTranscriptFontSize: 18,
+  });
+  oldSettings.resolve({ capsuleStyle: 'classic', capsuleTranscriptEnabled: true });
+  await until(() => rail.requests > 0);
+  await tick();
+  assert.equal(rail.values.setStyle, 'siri');
+  assert.equal(rail.values.setEnabled, false);
+  assert.equal(rail.values.setFontSize, 18);
+  release(rail);
 }
 // Only the primary capsule may drive native transcript visibility, including teardown.
 {

@@ -10,6 +10,7 @@ const capsule = await readFile(
   new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
   'utf8',
 );
+const dictationApi = await readFile(new URL('../src/api/dictation.ts', import.meta.url), 'utf8');
 const finalInsert = adapters.match(
   /async fn insert_final\([\s\S]*?(?=\n    async fn copy_fallback)/,
 )?.[0];
@@ -55,8 +56,13 @@ assert.match(
   'the fallback event must reach the native card',
 );
 assert.match(
+  dictationApi,
+  /fallback:[\s\S]*?events\.listen\('insert:fallback', onPayload, 'window'\)/,
+  'fallback events must remain bound to the current capsule window',
+);
+assert.match(
   capsule,
-  /subscribe<InsertFallbackCardPayload \| null>\([\s\S]*?'insert:fallback'[\s\S]*?setInsertFallback\(payload \?\? null\)/,
+  /events\.fallback\([\s\S]*?setInsertFallback\(payload \?\? null\)/,
   'the capsule must consume the fallback card payload',
 );
 assert.match(
