@@ -1,4 +1,12 @@
-import { useContext, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import {
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -59,7 +67,7 @@ export function ChannelEditor({
   const form = useProviderForm();
   const [name, setName] = useState(channel.name);
   const [providerType, setProviderType] = useState(channel.providerType);
-  const [changingProvider, setChangingProvider] = useState(false);
+  const [providerChangeError, setProviderChangeError] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameId = useId();
@@ -78,15 +86,29 @@ export function ChannelEditor({
     },
   };
   const closeRequestedRef = useRef(false);
+  const lifetime = useRef<symbol | null>(null);
+  const pendingSwitch = useRef<{ closeInstead: boolean } | null>(null);
+  useLayoutEffect(() => {
+    lifetime.current = closing ? null : Symbol();
+    return () => {
+      lifetime.current = null;
+    };
+  }, [channel.id, closing]);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const closeEditor = () => {
+    if (!lifetime.current || closeRequestedRef.current) return false;
+    closeRequestedRef.current = true;
+    onCloseRef.current();
+    return true;
+  };
   const requestClose = () => {
-    if (closeRequestedRef.current) return;
-    void form.finish(() => {
-      if (closeRequestedRef.current) return;
-      closeRequestedRef.current = true;
-      onCloseRef.current();
-    });
+    if (!lifetime.current || closeRequestedRef.current) return;
+    if (pendingSwitch.current) {
+      pendingSwitch.current.closeInstead = true;
+      return;
+    }
+    void form.finish(closeEditor);
   };
 
   useEffect(() => {
@@ -154,22 +176,31 @@ export function ChannelEditor({
   // After switching providers, write the preset's default endpoint / model into EMPTY slots (never overwrite
   // user-entered custom values). Channels are isolated per card, so this reads/writes by card id; Codex OAuth /
   // local engines / custom OpenAI-compatible (empty baseUrl/model) naturally skip. Failures are logged only.
-  const fillProviderDefaults = async (next: string) => {
+  const fillProviderDefaults = async (next: string, isCurrent: () => boolean) => {
     try {
       const preset = presets.find((item) => item.id === next);
-      if (!preset) return;
+      if (!preset || !isCurrent()) return;
       const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
       const modelAccount = kind === 'llm' ? 'ark.model_id' : 'asr.model';
       if (next === 'orcarouter') {
         if (preset.defaultEndpoint)
           await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
-        if (preset.defaultModel) await setCredential(modelAccount, preset.defaultModel, channel.id);
+        if (preset.defaultModel && isCurrent())
+          await setCredential(modelAccount, preset.defaultModel, channel.id);
         return;
       }
-      if (preset.defaultEndpoint && !(await readCredential(endpointAccount, channel.id))?.trim()) {
+      if (
+        preset.defaultEndpoint &&
+        !(await readCredential(endpointAccount, channel.id))?.trim() &&
+        isCurrent()
+      ) {
         await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
       }
-      if (preset.defaultModel && !(await readCredential(modelAccount, channel.id))?.trim()) {
+      if (
+        preset.defaultModel &&
+        !(await readCredential(modelAccount, channel.id))?.trim() &&
+        isCurrent()
+      ) {
         await setCredential(modelAccount, preset.defaultModel, channel.id);
       }
     } catch (error) {
@@ -178,26 +209,43 @@ export function ChannelEditor({
   };
 
   const changeProvider = async (next: string) => {
-    const previous = providerType;
+    const owner = lifetime.current;
+    if (!owner || closeRequestedRef.current || pendingSwitch.current || next === providerType)
+      return;
+    const request = { closeInstead: false };
+    pendingSwitch.current = request;
+    const isCurrent = () =>
+      lifetime.current === owner && pendingSwitch.current === request && !closeRequestedRef.current;
+    setProviderChangeError(false);
     onUserMutation();
-    await form.finish(() => undefined);
-    setChangingProvider(true);
     try {
-      await setChannelProviderType(kind, channel.id, next);
-      await fillProviderDefaults(next);
-      setProviderType(next);
-      const defaultName = defaultChannelNameForProvider(next, name);
-      if (defaultName !== name) {
-        await renameChannel(kind, channel.id, defaultName);
-        setName(defaultName);
-      }
-      await onChanged();
+      const finished = await form.finish(async () => {
+        if (!isCurrent()) return false;
+        if (request.closeInstead) return closeEditor();
+        await setChannelProviderType(kind, channel.id, next);
+        if (!isCurrent()) return false;
+        await fillProviderDefaults(next, isCurrent);
+        if (!isCurrent()) return false;
+        // The provider is durable now. A later rename or list refresh cannot undo it.
+        setProviderType(next);
+        try {
+          const defaultName = defaultChannelNameForProvider(next, name);
+          if (defaultName !== name) {
+            await renameChannel(kind, channel.id, defaultName);
+            if (isCurrent()) setName(defaultName);
+          }
+        } finally {
+          if (isCurrent()) await onChanged();
+        }
+        if (isCurrent() && request.closeInstead) closeEditor();
+        return true;
+      });
+      if (!finished && isCurrent()) setProviderChangeError(true);
     } catch (error) {
       console.error('[channels] change provider failed', error);
-      setProviderType(previous);
-      emitSaved('failed', t('common.operationFailed'));
+      if (isCurrent()) setProviderChangeError(true);
     } finally {
-      setChangingProvider(false);
+      if (pendingSwitch.current === request) pendingSwitch.current = null;
     }
   };
 
@@ -269,7 +317,7 @@ export function ChannelEditor({
             <ChannelFormRow label={t('settings.channels.providerLabel')}>
               <SelectLite
                 value={providerType}
-                disabled={changingProvider || form.leaving}
+                disabled={form.leaving}
                 onChange={(next) => void changeProvider(next)}
                 options={presets.map((p) => ({
                   value: p.id,
@@ -278,6 +326,11 @@ export function ChannelEditor({
                 ariaLabel={t('settings.channels.providerLabel')}
                 style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
               />
+              {providerChangeError && (
+                <p role="alert" className="ol-channel-change-error">
+                  {t('common.operationFailed')}
+                </p>
+              )}
             </ChannelFormRow>
             <ChannelFormRow label={t('settings.channels.nameLabel')} htmlFor={nameId}>
               <input
@@ -295,17 +348,15 @@ export function ChannelEditor({
             </ChannelFormRow>
 
             {/* Model list, provider-specific fields, and test results all stay in the same scroll area. */}
-            {!changingProvider && (
-              <ChannelCredentialFields
-                key={`${channel.id}:${providerType}`}
-                kind={kind}
-                providerType={providerType}
-                channelId={channel.id}
-                descriptor={descriptor}
-                onTested={() => void onChanged()}
-                onUserMutation={onUserMutation}
-              />
-            )}
+            <ChannelCredentialFields
+              key={`${channel.id}:${providerType}`}
+              kind={kind}
+              providerType={providerType}
+              channelId={channel.id}
+              descriptor={descriptor}
+              onTested={() => void onChanged()}
+              onUserMutation={onUserMutation}
+            />
             {isLocalEngine && (
               <p className="ol-channel-local-hint">{t('settings.channels.localEngineModelHint')}</p>
             )}

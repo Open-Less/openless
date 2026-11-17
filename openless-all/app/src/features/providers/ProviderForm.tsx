@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,6 +25,13 @@ export function useProviderForm() {
   const blockers = useRef<Record<string, boolean>>({});
   const flushers = useRef(new Map<string, () => Promise<boolean>>());
   const busy = useRef(false);
+  const lifetime = useRef<symbol | null>(null);
+  useLayoutEffect(() => {
+    lifetime.current = Symbol();
+    return () => {
+      lifetime.current = null;
+    };
+  }, []);
   const [leaving, setLeaving] = useState(false);
   const invalidate = useCallback((account = '') => {
     if (!['ark.model_id', 'asr.model', 'omni.model'].includes(account)) version.current += 1;
@@ -38,6 +46,7 @@ export function useProviderForm() {
   const register = useCallback((account: string, flush: () => Promise<boolean>) => {
     flushers.current.set(account, flush);
     return () => {
+      if (flushers.current.get(account) !== flush) return;
       flushers.current.delete(account);
       delete blockers.current[account];
       setBlocked((previous) => {
@@ -48,25 +57,30 @@ export function useProviderForm() {
     };
   }, []);
   const finish = useCallback(
-    async (action: () => void | Promise<void>) => {
-      if (busy.current) return false;
+    async (action: () => void | boolean | Promise<void | boolean>) => {
+      const owner = lifetime.current;
+      if (busy.current || owner === null) return false;
       busy.current = true;
       setLeaving(true);
       invalidate();
       try {
-        const results = await Promise.all([...flushers.current.values()].map((flush) => flush()));
+        const fields = [...flushers.current];
+        // Keep the form locked until every pending field settles, even if one rejects.
+        const results = await Promise.allSettled(fields.map(async ([, flush]) => flush()));
         if (
-          !results.every(Boolean) ||
+          lifetime.current !== owner ||
+          results.some((result) => result.status === 'rejected' || !result.value) ||
+          fields.length !== flushers.current.size ||
+          fields.some(([account, flush]) => flushers.current.get(account) !== flush) ||
           Object.entries(blockers.current).some(
             ([account, blocked]) => blocked && !flushers.current.has(account),
           )
         )
           return false;
-        await action();
-        return true;
+        return (await action()) !== false;
       } finally {
         busy.current = false;
-        setLeaving(false);
+        if (lifetime.current === owner) setLeaving(false);
       }
     },
     [invalidate],

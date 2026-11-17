@@ -1,20 +1,23 @@
-// @ts-nocheck — exercise the real page handlers with fake stores and controlled timers.
+// @ts-nocheck — exercise the real workspace handlers with fake stores and controlled timers.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
 const source = ts.createSourceFile(
-  'Style.tsx',
-  readFileSync(new URL('./Style.tsx', import.meta.url), 'utf8'),
+  'useStylePackWorkspace.ts',
+  readFileSync(
+    new URL('../features/style-packs/useStylePackWorkspace.ts', import.meta.url),
+    'utf8',
+  ),
   ts.ScriptTarget.ES2022,
   true,
-  ts.ScriptKind.TSX,
+  ts.ScriptKind.TS,
 );
-const page = source.statements.find(
-  (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'Style',
+const workspace = source.statements.find(
+  (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'useStylePackWorkspace',
 );
 const names = ['loadPacks', 'restoreDeletedPack', 'commitDeletedPack', 'handleDeleteImportedPack'];
-const handlers = page.body.statements.filter(
+const handlers = workspace.body.statements.filter(
   (node) =>
     ts.isVariableStatement(node) &&
     node.declarationList.declarations.some((value) => names.includes(value.name.getText(source))),
