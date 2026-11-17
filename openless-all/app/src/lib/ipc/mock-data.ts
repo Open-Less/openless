@@ -17,6 +17,7 @@ import type {
 } from '../types';
 import { OL_DATA } from '../mockData';
 import { publishPreviewChange } from '../../preview/events';
+import { readPreviewThemePreference } from '../../preview/preferences';
 import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
@@ -125,7 +126,7 @@ export let mockSettings: UserPreferences = {
   polishContextWindowMinutes: 5,
   polishSkipMaxChars: 0,
   startMinimized: false,
-  themeMode: 'system',
+  themeMode: readPreviewThemePreference(),
   updateChannel: 'stable',
   updateChannelExplicit: false,
   streamingInsert: true,
