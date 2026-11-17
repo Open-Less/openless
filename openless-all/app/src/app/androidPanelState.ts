@@ -17,6 +17,7 @@ export function createAndroidPanelState(
   let view: AndroidPanelView = { kind: null, epoch: 0 };
   let generation = 0;
   let pending: PanelTransition | undefined;
+  let cancellation: { epoch: number; promise: Promise<void> } | undefined;
   let disposed = false;
 
   const show = (kind: AndroidPanelView['kind']) => {
@@ -36,10 +37,24 @@ export function createAndroidPanelState(
       pending = undefined;
       return Promise.resolve(true);
     }
-    const promise = Promise.resolve()
-      .then(() => {
-        if (isCurrent()) return cancel(current, isCurrent);
-      })
+    const source = view;
+    if (cancellation?.epoch !== source.epoch) {
+      const isSourceCurrent = () =>
+        !disposed && view.epoch === source.epoch && view.kind === source.kind;
+      const operation = {
+        epoch: source.epoch,
+        promise: Promise.resolve()
+          .then(() => {
+            if (isSourceCurrent()) return cancel(current, isSourceCurrent);
+          })
+          .finally(() => {
+            if (cancellation === operation) cancellation = undefined;
+          }),
+      };
+      cancellation = operation;
+    }
+    // Upgrading a close to a switch shares cleanup for the same panel generation.
+    const promise = cancellation.promise
       .then(() => {
         if (!isCurrent()) return false;
         show(target);
@@ -81,6 +96,7 @@ export function createAndroidPanelState(
     dispose() {
       disposed = true;
       pending = undefined;
+      cancellation = undefined;
       ++generation;
     },
   };

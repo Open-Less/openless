@@ -9,6 +9,7 @@ const directories = fs
   .map((file) => `${ipc}/${file}`);
 const staticSources = [
   ...directories,
+  'src/api/in-app-dictation.ts',
   'src/runtime/files.ts',
   'src/runtime/platform.ts',
   'src/runtime/transport.ts',

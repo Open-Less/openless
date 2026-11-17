@@ -25,7 +25,7 @@ const recordingSection = readFileSync(
 
 assert.match(
   floatingShell,
-  /import \{ SettingsModal, type SettingsSectionId \} from '\.\.\/\.\.\/components\/SettingsModal';/,
+  /import \{ SettingsModal, type SettingsSectionId \} from '\.\.\/\.\.\/features\/settings\/shell\/SettingsModal';/,
   'settings must be ready before the first open instead of lazy-loading a flash placeholder',
 );
 assert.doesNotMatch(

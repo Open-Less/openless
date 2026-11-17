@@ -6,7 +6,7 @@ const fixture = `${origin}/e2e/fixtures/startup-gate.html`;
 
 test.beforeEach(async ({ page }) => {
   await page.route(
-    /\/src\/(?:app\/shell\/FloatingShell|components\/(?:Onboarding|GlobalDownloadProgress))\.tsx(?:\?.*)?$/,
+    /\/src\/(?:app\/shell\/FloatingShell|features\/(?:onboarding\/Onboarding|downloads\/GlobalDownloadProgress))\.tsx(?:\?.*)?$/,
     async (route) => {
       const response = await page.request.get(`${origin}/e2e/fixtures/startup-destinations.tsx`);
       await route.fulfill({ response });

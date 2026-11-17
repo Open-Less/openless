@@ -9,9 +9,9 @@ import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../ui/overlays/Tooltip';
 import { WindowChrome } from './WindowChrome';
 import { getRuntimeOS, getShortcutPlatform, type OS } from '../../runtime/environment';
-import { SettingsModal, type SettingsSectionId } from '../../components/SettingsModal';
-import type { ServiceViewId } from '../../pages/settings/navigation';
-import { CloudSyncSetupPrompt } from '../../components/CloudSyncSetupPrompt';
+import { SettingsModal, type SettingsSectionId } from '../../features/settings/shell/SettingsModal';
+import type { ServiceViewId } from '../../features/settings/shell/navigation';
+import { CloudSyncSetupPrompt } from '../../features/cloud-sync/CloudSyncSetupPrompt';
 import { IS_BETA_BUILD } from '../../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,

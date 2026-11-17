@@ -14,7 +14,6 @@ const publish = createCapsuleRegionPublisher(async (rects) => {
     await new Promise<void>((resolve) => {
       finishFirst = resolve;
       didStart();
-
     });
 });
 

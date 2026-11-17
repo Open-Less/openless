@@ -1267,7 +1267,8 @@
     {
       "name": "stop_dictation",
       "calledFrom": [
-        "src/lib/ipc/dictation.ts"
+        "src/lib/ipc/dictation.ts",
+        "src/api/in-app-dictation.ts"
       ],
       "implementation": "arkts"
     },

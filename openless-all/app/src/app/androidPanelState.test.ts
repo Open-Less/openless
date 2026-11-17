@@ -57,4 +57,24 @@ cancellations[3].resolve();
 assert.equal(await back, false, 'pre-rebuild IPC cannot publish after disposal');
 assert.equal(views[views.length - 1]?.kind, 'qa');
 
+let cleanupCount = 0;
+const completion = deferred();
+const handoff = createAndroidPanelState(
+  async () => {
+    cleanupCount++;
+    await completion.promise;
+  },
+  () => {},
+);
+await handoff.switchTo('voice-edit');
+const dismissed = handoff.close(handoff.current());
+const switching = handoff.switchTo('qa');
+await Promise.resolve();
+assert.equal(cleanupCount, 1, 'close and switch from the same panel share native cleanup');
+completion.resolve();
+assert.equal(await dismissed, false, 'the newer destination owns the completed cleanup');
+assert.equal(await switching, true);
+assert.equal(handoff.current().kind, 'qa');
+handoff.dispose();
+
 console.log('Android panel transitions retain errors and ignore stale results');

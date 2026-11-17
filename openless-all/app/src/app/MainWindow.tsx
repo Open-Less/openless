@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GlobalDownloadProgress } from '../components/GlobalDownloadProgress';
+import { GlobalDownloadProgress } from '../features/downloads/GlobalDownloadProgress';
 import { HotkeySettingsProvider } from '../data/preferences';
 import { useReducedMotion } from '../lib/motion';
 import type { OS } from '../runtime/environment';
@@ -12,10 +12,12 @@ import { Shell, QaPanel, VoiceEditPanel } from './destinations';
 import './main-window.css';
 
 const AutoUpdateGate = lazy(() =>
-  import('../components/AutoUpdateGate').then((module) => ({ default: module.AutoUpdateGate })),
+  import('../features/updates/AutoUpdateGate').then((module) => ({
+    default: module.AutoUpdateGate,
+  })),
 );
 const Onboarding = lazy(() =>
-  import('../components/Onboarding').then((module) => ({ default: module.Onboarding })),
+  import('../features/onboarding/Onboarding').then((module) => ({ default: module.Onboarding })),
 );
 
 export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboarding: boolean }) {

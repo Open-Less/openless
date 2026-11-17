@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
-import { Capsule } from '../components/Capsule';
-import { CapsuleTranscriptOverlay } from '../components/LiveTranscriptPill';
-import { AudioCueListener } from '../components/AudioCue';
+import { Capsule } from '../features/capsule/Capsule';
+import { CapsuleTranscriptOverlay } from '../features/capsule/LiveTranscriptPill';
+import { AudioCueListener } from '../features/capsule/AudioCue';
 import type { OS } from '../runtime/environment';
 import { QaPanel, VoiceEditPanel } from './destinations';
 
@@ -9,7 +9,7 @@ const MainWindow = lazy(() =>
   import('./MainWindow').then((module) => ({ default: module.MainWindow })),
 );
 const SelectionVoiceIntentPicker = lazy(() =>
-  import('../pages/SelectionVoiceIntentPicker').then((module) => ({
+  import('../features/selection-intent/SelectionVoiceIntentPicker').then((module) => ({
     default: module.SelectionVoiceIntentPicker,
   })),
 );

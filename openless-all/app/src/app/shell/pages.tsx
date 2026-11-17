@@ -1,22 +1,33 @@
 import { lazy, type ComponentType } from 'react';
-import { Overview } from '../../pages/Overview';
+import { Overview } from '../../features/overview/Overview';
 import type { AppTab } from './navigation';
 
 const loaders = {
-  history: () => import('../../pages/History').then((module) => ({ default: module.History })),
-  usage: () => import('../../pages/Usage').then((module) => ({ default: module.Usage })),
-  vocab: () => import('../../pages/Vocab').then((module) => ({ default: module.Vocab })),
-  style: () => import('../../pages/Style').then((module) => ({ default: module.Style })),
+  history: () =>
+    import('../../features/history/History').then((module) => ({ default: module.History })),
+  usage: () => import('../../features/usage/Usage').then((module) => ({ default: module.Usage })),
+  vocab: () =>
+    import('../../features/vocabulary/Vocab').then((module) => ({ default: module.Vocab })),
+  style: () =>
+    import('../../features/style-packs/Style').then((module) => ({ default: module.Style })),
   marketplace: () =>
-    import('../../pages/Marketplace').then((module) => ({ default: module.Marketplace })),
+    import('../../features/marketplace/Marketplace').then((module) => ({
+      default: module.Marketplace,
+    })),
   translation: () =>
-    import('../../pages/Translation').then((module) => ({ default: module.Translation })),
+    import('../../features/translation/Translation').then((module) => ({
+      default: module.Translation,
+    })),
   selectionAsk: () =>
-    import('../../pages/SelectionAsk').then((module) => ({ default: module.SelectionAsk })),
+    import('../../features/selection-guide/SelectionAsk').then((module) => ({
+      default: module.SelectionAsk,
+    })),
   quickNote: () =>
-    import('../../pages/QuickNote').then((module) => ({ default: module.QuickNote })),
+    import('../../features/quick-note/QuickNote').then((module) => ({ default: module.QuickNote })),
   corrections: () =>
-    import('../../pages/Corrections').then((module) => ({ default: module.Corrections })),
+    import('../../features/corrections/Corrections').then((module) => ({
+      default: module.Corrections,
+    })),
 };
 
 export { Overview };
