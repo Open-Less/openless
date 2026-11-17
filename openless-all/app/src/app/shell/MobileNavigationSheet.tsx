@@ -25,6 +25,7 @@ export function MobileNavigationSheet({
         <Modal
           closing={closing}
           labelledBy={titleId}
+          motionVariant="sheet"
           onClose={onClose}
           overlayClassName="ol-mobile-navigation-sheet"
           width="100%"

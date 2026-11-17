@@ -163,7 +163,7 @@ test('compact typography selects persist font, size and reading width without ne
   });
   await page.reload();
   await expect(page.locator('html')).toHaveCSS('--ol-reading-width', '56ch');
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '外观与语言', exact: true }).click();
   await expect(section.getByRole('combobox', { name: '字体系列' })).toHaveText(

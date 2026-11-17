@@ -21,7 +21,7 @@ for (const theme of ['dark', 'light'] as const) {
     await page.getByRole('button', { name: '设置', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '设置', exact: true });
     const navigation = dialog.getByRole('navigation', { name: '设置分类' });
-    await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+    await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
     await expect(page.locator('html')).toHaveCSS('color-scheme', theme);
 
     for (const section of ['快捷键', '外观与语言']) {

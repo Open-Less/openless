@@ -7,6 +7,7 @@ import { initInteractionMode } from '../../src/lib/interactionMode';
 import { Toggle } from '../../src/pages/settings/shared';
 import { Collapse, ExpandableText } from '../../src/components/ui/Disclosure';
 import { SelectLite } from '../../src/components/ui/SelectLite';
+import { AppViewport } from '../../src/ui/layout/AppViewport';
 import { PresenceModal } from '../../src/components/ui/Modal';
 import { ChoiceChips } from '../../src/components/ui/ChoiceChips';
 import { DismissibleCard } from '../../src/components/ui/DismissibleCard';
@@ -188,7 +189,9 @@ initInteractionMode();
 void i18nReady.then(() =>
   createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <Fixture />
+      <AppViewport>
+        <Fixture />
+      </AppViewport>
     </React.StrictMode>,
   ),
 );

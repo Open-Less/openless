@@ -23,7 +23,7 @@ export interface ModalProps {
   describedBy?: string;
   initialFocus?: RefObject<HTMLElement>;
   focusKey?: number | string;
-  motionVariant?: 'card' | 'pop';
+  motionVariant?: 'card' | 'pop' | 'sheet';
 }
 
 export function Modal({
