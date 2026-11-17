@@ -1,6 +1,6 @@
-import { isHarmonyHost } from '../harmonyBridge';
 import type { CredentialsStatus } from '../types';
-import { invokeOrMock, isTauri } from './shared';
+import { invokeOrMock } from './shared';
+import { isPreviewHost } from '../../runtime/environment';
 import { mockCredentialsStatus, mockCredentialValues } from './mock-data';
 import { invalidateMockChannelTest } from './channels';
 import { listProviderDescriptors, type LlmRequestFormat } from './providers';
@@ -93,15 +93,14 @@ export async function listProviderModels(
   channelId?: string,
   providerType?: string,
 ): Promise<ProviderModelsResult> {
-  if (!isTauri && !isHarmonyHost) {
+  if (isPreviewHost()) {
     const descriptor = (await listProviderDescriptors(kind)).find(
       (item) => item.providerType === providerType,
     );
     if (descriptor?.staticModels.length) return { models: descriptor.staticModels };
   }
   if (
-    !isTauri &&
-    !isHarmonyHost &&
+    isPreviewHost() &&
     providerType === 'orcarouter' &&
     (kind === 'llm' || kind === 'asr')
   ) {

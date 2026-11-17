@@ -1,4 +1,5 @@
 import i18n from '../i18n';
+import { getShortcutPlatform } from '../runtime/environment';
 import type {
   ComboBinding,
   HotkeyBinding,
@@ -285,15 +286,7 @@ export function formatComboLabel(
   return formatComboParts(binding).join(currentPlatform().isMac ? '' : '+');
 }
 
-export function currentPlatform(): { isMac: boolean; isWindows: boolean } {
-  const nav = typeof navigator === 'undefined' ? null : navigator;
-  const platform = nav?.platform || '';
-  const userAgent = nav?.userAgent || '';
-  return {
-    isMac: platform.includes('Mac') || userAgent.includes('Mac'),
-    isWindows: platform.includes('Win') || userAgent.includes('Windows'),
-  };
-}
+export const currentPlatform = getShortcutPlatform;
 
 /** Build side-specific modifier tags from Web KeyboardEvent.code values. */
 export function sideModifiersFromPressedCodes(codes: Iterable<string>): string[] {

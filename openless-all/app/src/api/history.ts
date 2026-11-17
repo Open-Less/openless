@@ -1,0 +1,43 @@
+import type { ActivityDay, DictationSession } from './contracts';
+import type { QuerySnapshot } from '../data/snapshot-query';
+import { historyStore } from '../data/history';
+import * as commands from '../lib/ipc/history';
+
+export { getActivityApps, supportsActivityApps, type YearlyActivityApps } from '../data/history';
+export {
+  readAudioRecording,
+  type HistoryRetranscriptionResult,
+} from '../lib/ipc/history';
+
+export function deleteHistoryEntry(id: string): Promise<void> {
+  return historyStore.mutate(() => commands.deleteHistoryEntry(id));
+}
+
+export function clearHistory(): Promise<void> {
+  return historyStore.mutate(commands.clearHistory);
+}
+
+export function retranscribeRecording(sessionId: string) {
+  return historyStore.mutate(
+    () => commands.retranscribeRecording(sessionId),
+    (result) => result.updatedEntry !== null,
+  );
+}
+
+export function applyQuickNoteRepolish(sessionId: string, text: string, stylePackId?: string) {
+  return historyStore.mutate(() => commands.applyQuickNoteRepolish(sessionId, text, stylePackId));
+}
+
+function readData<T>({ data, error }: QuerySnapshot<T>): T {
+  if (error !== null) throw error;
+  if (data === null) throw new Error('History snapshot is unavailable');
+  return data;
+}
+
+export async function listHistory(): Promise<DictationSession[]> {
+  return readData(await historyStore.records.load());
+}
+
+export async function getActivityStats(): Promise<ActivityDay[]> {
+  return readData(await historyStore.activity.load());
+}

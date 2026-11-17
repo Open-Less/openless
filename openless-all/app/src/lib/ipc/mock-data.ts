@@ -7,8 +7,6 @@ import type {
   CorrectionRule,
   DictationSession,
   DictionaryEntry,
-  HotkeyCapability,
-  HotkeyStatus,
   PolishMode,
   StylePack,
   StylePackExample,
@@ -16,11 +14,11 @@ import type {
   StylePackRuntimeDiagnostics,
   StyleSystemPrompts,
   UserPreferences,
-  WindowsImeStatus,
   CredentialsStatus,
   MicrophoneDevice,
 } from '../types';
 import { OL_DATA } from '../mockData';
+import { publishPreviewChange } from '../../preview/events';
 import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
@@ -529,7 +527,9 @@ export function composeMockStylePackRuntimeDiagnostics(
   };
 }
 
-export function syncMockSettingsFromStylePacks() {
+export let mockSettingsRevision = 0;
+
+function syncMockSettingsFromStylePacks() {
   const enabled = mockStylePacks.filter((pack) => pack.enabled);
   const active =
     mockStylePacks.find((pack) => pack.id === mockSettings.activeStylePackId && pack.enabled) ??
@@ -561,28 +561,11 @@ export function syncMockSettingsFromStylePacks() {
         mockSettings.styleSystemPrompts.formal,
     },
   };
+  mockSettingsRevision++;
+  publishPreviewChange('preferences');
 }
 
 syncMockSettingsFromStylePacks();
-
-export const mockHotkeyCapability: HotkeyCapability = {
-  adapter: 'windowsLowLevel',
-  availableTriggers: [
-    'rightControl',
-    'rightAlt',
-    'leftControl',
-    'leftShift',
-    'rightShift',
-    'mediaPlayPause',
-    'custom',
-  ],
-  requiresAccessibilityPermission: false,
-  supportsModifierOnlyTrigger: true,
-  supportsSideSpecificModifiers: true,
-  explicitFallbackAvailable: false,
-  statusHint:
-    '默认建议使用“右Ctrl + 单击”；若更习惯按住说话，可在录音设置里切回“按住”。若无响应，可在权限页查看 hook 安装状态。',
-};
 
 export const mockCredentialsStatus: CredentialsStatus = {
   activeAsrProvider: 'foundry-local-whisper',
@@ -595,20 +578,6 @@ export const mockCredentialsStatus: CredentialsStatus = {
   arkConfigured: true,
 };
 
-export const mockHotkeyStatus: HotkeyStatus = {
-  adapter: 'windowsLowLevel',
-  state: 'installed',
-  message: 'Windows 低层键盘 hook 已安装',
-  lastError: null,
-};
-
-export const mockWindowsImeStatus: WindowsImeStatus = {
-  state: 'notWindows',
-  usingTsfBackend: false,
-  message: 'Browser dev mock',
-  dllPath: null,
-};
-
 export const mockMicrophoneDevices: MicrophoneDevice[] = [
   { name: 'Built-in Microphone', isDefault: true },
   { name: 'USB Microphone', isDefault: false },
@@ -616,6 +585,7 @@ export const mockMicrophoneDevices: MicrophoneDevice[] = [
 
 export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
   id: `mock-${i}`,
+  source: 'voice',
   createdAt: new Date().toISOString(),
   rawTranscript: h.preview,
   asrTranscript: null,
@@ -651,6 +621,18 @@ export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
   asrMs: [120, 64, 9840, null][i % 4],
   polishMs: [1240, 890, 12400, null][i % 4],
 }));
+
+mockHistory.push({
+  ...mockHistory[0],
+  id: 'mock-quick-note',
+  source: 'quick_note',
+  durationMs: 1200,
+  rawTranscript: 'Remember to bring the notes to the planning meeting.',
+  finalText: 'Bring the notes to the planning meeting.',
+  appName: null,
+  insertStatus: 'notRequested',
+  hasAudioRecording: true,
+});
 
 export const mockVocab: DictionaryEntry[] = OL_DATA.vocab.map((v, i) => ({
   id: `vocab-${i}`,
