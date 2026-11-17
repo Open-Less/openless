@@ -58,7 +58,9 @@ test('QA keeps a reachable close action when the host rejects expansion', async 
   await expect(alert).toBeVisible();
   await expect(page.locator('#native-host')).toHaveCSS('height', '80px');
   await alert.getByRole('button').click();
-  await expect(alert).toBeHidden();
+  const closing = page.locator('.qa-capsule-shell.is-closing');
+  await expect(closing).toHaveAttribute('inert', '');
+  await expect(closing).toHaveCSS('opacity', '0');
 });
 
 test('language menu waits for drawable room and releases its own reservation on Escape', async ({
@@ -66,6 +68,7 @@ test('language menu waits for drawable room and releases its own reservation on 
 }) => {
   await page.setViewportSize({ width: 460, height: 92 });
   await page.goto(fixture);
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
   await page.evaluate(() => (window as any).fixture.setCapsule({ translation: true }));
   const picker = page.getByRole('combobox', { name: '翻译目标语言' });
   await expect(picker).toBeEnabled();
@@ -74,6 +77,14 @@ test('language menu waits for drawable room and releases its own reservation on 
     .poll(() => page.evaluate(() => (window as any).fixture.menuChanges.at(-1)?.open))
     .toBe(true);
   await expect(page.getByRole('listbox')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.menuChanges.at(-1)?.open))
+    .toBe(false);
+  await picker.click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.menuChanges.at(-1)?.open))
+    .toBe(true);
   await page.setViewportSize({ width: 460, height: 415 });
   const list = page.getByRole('listbox');
   await expect(list).toBeVisible();
@@ -86,4 +97,24 @@ test('language menu waits for drawable room and releases its own reservation on 
       open: false,
       sessionId: 'recording-a',
     });
+});
+
+test('the fallback card exposes Copy only after its presentation fits', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 112 });
+  await page.goto(fixture + '?fallback');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.fallbackReports.length))
+    .toBe(1);
+  const report = await page.evaluate(() => (window as any).fixture.fallbackReports[0]);
+  expect(report.presentationId).toBe(23);
+  expect(report.height).toBeGreaterThan(112);
+  const waiting = page.locator('[data-layout=waiting]');
+  await expect(waiting).toHaveCSS('visibility', 'hidden');
+  await page.setViewportSize({ width: 360, height: report.height + 1 });
+  const ready = page.locator('[data-layout=ready]');
+  await expect(ready).toBeVisible();
+  await ready.getByRole('button').first().click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.copiedFallback.at(-1)))
+    .toBe('待复制的长文本。\n'.repeat(36));
 });

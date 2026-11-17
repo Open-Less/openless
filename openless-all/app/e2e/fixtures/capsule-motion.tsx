@@ -47,6 +47,8 @@ const bridge = {
   },
   sizes: [] as boolean[],
   holdQaGeometry: false,
+  fallbackReports: [] as { presentationId: number; height: number }[],
+  copiedFallback: [] as string[],
   rejectQaExpansion: false,
   applyQaGeometry(expanded: boolean, width?: number, height?: number) {
     const host = document.querySelector<HTMLElement>('#native-host');
@@ -155,6 +157,14 @@ window.__TAURI_INTERNALS__ = {
       bridge.emit('prefs:changed', {});
       return { ...bridge.target };
     }
+    if (command === 'report_insert_fallback_card_height') {
+      bridge.fallbackReports.push(args);
+      return;
+    }
+    if (command === 'copy_text_to_clipboard') {
+      bridge.copiedFallback.push(args.text);
+      return;
+    }
     if (command === 'qa_get_snapshot') return { kind: 'idle', messages: [] };
     if (command === 'qa_window_set_expanded') {
       bridge.sizes.push(args.expanded);
@@ -169,6 +179,7 @@ window.__TAURI_INTERNALS__ = {
 Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} } });
 const { i18nReady } = await import('../../src/i18n');
 await i18nReady;
+const { InsertFallbackCard } = await import('../../src/features/capsule/InsertFallbackCard');
 const { OpenLessPill } = await import('../../src/components/OpenLessCapsule');
 const { CapsuleTranslationBadge, CapsuleTranscriptOverlay } =
   await import('../../src/components/LiveTranscriptPill');
@@ -217,7 +228,17 @@ function CapsuleFixture() {
 }
 document.body.style.background = '#0b1215';
 createRoot(document.getElementById('root')!).render(
-  params.has('rail') ? (
+  params.has('fallback') ? (
+    <AppViewport scale={false}>
+      <InsertFallbackCard
+        payload={{
+          presentationId: 23,
+          text: '待复制的长文本。\n'.repeat(36),
+          reason: 'insertFailed',
+        }}
+      />
+    </AppViewport>
+  ) : params.has('rail') ? (
     <CapsuleTranscriptOverlay />
   ) : params.has('full') ? (
     <div
