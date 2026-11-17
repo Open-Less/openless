@@ -1229,6 +1229,11 @@ export const zhTW: typeof zhCN = {
     vocabularyLearning: {
       title: '手改學詞',
       enabled: '啟用手改學詞',
+      suggestionPosition: '建議卡片位置',
+      positionNearInput: '輸入位置附近',
+      positionBottomRight: '固定右下角',
+      suggestionPositionHint:
+        '僅 Windows：預設靠近文字游標或輸入框；無法定位時退回原輸入目標所在螢幕的右下角。固定右下角一律使用該螢幕的工作區。',
       observationSeconds: '觀察時長',
       observationSecondsHint: '聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。',
       suggestionSeconds: '建議保留時長',
@@ -1454,11 +1459,6 @@ export const zhTW: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多數編輯器）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（聊天輸入框）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: '在鍵盤列表中顯示 OpenLess',
-      windowsShowOpenlessInKeyboardListDesc:
-        '關閉後 Win+Space 切換輸入法時不會出現 OpenLess；SendInput 與剪貼簿貼上插入不受影響。重新開啟本項可還原顯示。',
-      windowsShowOpenlessInKeyboardListError:
-        '無法更新鍵盤列表：系統拒絕更改 OpenLess 語言設定檔。',
       historyGroupTitle: '歷史與上下文',
       historyRetentionLabel: '歷史保留天數',
       historyRetentionDesc: '超過保留天數的歷史在寫入新條目時被清理；0 = 不按時間清理。',

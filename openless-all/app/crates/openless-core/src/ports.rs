@@ -841,6 +841,14 @@ pub trait TextInsertionSession: Send + Sync {
 /// document baseline. Keeping that decision here prevents macOS AX code from
 /// owning vocabulary policy or accepting a report from a stale generation.
 pub trait EditObservationSink: Send + Sync {
+    fn observation_id(&self) -> Option<u64> {
+        None
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        None
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }

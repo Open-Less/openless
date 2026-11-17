@@ -1322,6 +1322,11 @@ export const fr: typeof zhCN = {
     vocabularyLearning: {
       title: 'Apprendre des corrections',
       enabled: 'Activer l’apprentissage des corrections',
+      suggestionPosition: 'Position de la carte',
+      positionNearInput: 'Près de la saisie',
+      positionBottomRight: 'Fixe en bas à droite',
+      suggestionPositionHint:
+        'Windows uniquement : près du curseur de texte ou du champ ; sinon, en bas à droite de l’écran de saisie d’origine. La position fixe utilise toujours la zone de travail de cet écran.',
       observationSeconds: 'Durée d’observation',
       observationSecondsHint:
         'Observer le champ actuel pendant 10 à 60 secondes au maximum après la dictée.',
@@ -1565,11 +1570,6 @@ export const fr: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (plupart des éditeurs)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (champs de discussion)',
       windowsSendInputNewlineModeCrLf: 'Unicode CR+LF',
-      windowsShowOpenlessInKeyboardListLabel: 'Afficher OpenLess dans la liste des claviers',
-      windowsShowOpenlessInKeyboardListDesc:
-        'Si cette option est désactivée, Win+Space ne passe plus par OpenLess. SendInput et le collage ne sont pas affectés. Réactivez-la pour restaurer l’entrée.',
-      windowsShowOpenlessInKeyboardListError:
-        'Impossible de mettre à jour la liste des claviers : le système a refusé la modification du profil linguistique d’OpenLess.',
       historyGroupTitle: 'Historique et contexte',
       historyRetentionLabel: 'Conservation de l’historique (jours)',
       historyRetentionDesc:

@@ -1311,6 +1311,11 @@ export const de: typeof zhCN = {
     vocabularyLearning: {
       title: 'Aus Korrekturen lernen',
       enabled: 'Lernen aus Korrekturen aktivieren',
+      suggestionPosition: 'Position der Vorschlagskarte',
+      positionNearInput: 'Nahe der Eingabe',
+      positionBottomRight: 'Unten rechts fixiert',
+      suggestionPositionHint:
+        'Nur Windows: bevorzugt beim Textcursor oder Eingabefeld; andernfalls unten rechts auf dem ursprünglichen Eingabebildschirm. Die feste Position nutzt immer dessen Arbeitsbereich.',
       observationSeconds: 'Beobachtungsdauer',
       observationSecondsHint:
         'Das aktuelle Eingabefeld nach dem Diktat höchstens 10–60 Sekunden beobachten.',
@@ -1556,11 +1561,6 @@ export const de: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (die meisten Editoren)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (Chateingabefelder)',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'OpenLess in der Tastaturliste anzeigen',
-      windowsShowOpenlessInKeyboardListDesc:
-        'Wenn deaktiviert, wechselt Win+Space nicht zu OpenLess. SendInput und Einfügen über die Zwischenablage funktionieren weiterhin. Aktiviere die Option erneut, um den Eintrag wiederherzustellen.',
-      windowsShowOpenlessInKeyboardListError:
-        'Die Tastaturliste konnte nicht aktualisiert werden: Das System hat die Änderung des OpenLess-Sprachprofils abgelehnt.',
       historyGroupTitle: 'Verlauf und Kontext',
       historyRetentionLabel: 'Verlauf aufbewahren (Tage)',
       historyRetentionDesc:

@@ -1272,6 +1272,11 @@ export const ja: typeof zhCN = {
     vocabularyLearning: {
       title: '修正から単語を学習',
       enabled: '修正からの学習を有効にする',
+      suggestionPosition: '提案カードの位置',
+      positionNearInput: '入力位置の近く',
+      positionBottomRight: '右下に固定',
+      suggestionPositionHint:
+        'Windows のみ：テキストカーソルまたは入力欄の近くに表示し、位置を取得できない場合は元の入力先画面の右下に表示します。固定表示では常にその画面の作業領域を使います。',
       observationSeconds: '監視時間',
       observationSecondsHint: '音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。',
       suggestionSeconds: '候補の表示時間',
@@ -1511,11 +1516,6 @@ export const ja: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多くのエディタ）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（チャット入力）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'キーボード一覧に OpenLess を表示',
-      windowsShowOpenlessInKeyboardListDesc:
-        'オフにすると Win+Space で OpenLess に切り替わりません。SendInput とクリップボード貼り付け挿入には影響しません。オンに戻すと一覧に再表示されます。',
-      windowsShowOpenlessInKeyboardListError:
-        'キーボード一覧を更新できません：システムが OpenLess 言語プロファイルの変更を拒否しました。',
       historyGroupTitle: '履歴とコンテキスト',
       historyRetentionLabel: '履歴保持期間（日）',
       historyRetentionDesc:

@@ -5,7 +5,7 @@ use windows::Win32::UI::Shell::{
     DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST,
+    GetWindowRect, HTTRANSPARENT, MA_NOACTIVATE, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCHITTEST,
 };
 
 const SUBCLASS_ID: usize = 1;
@@ -18,6 +18,11 @@ pub(crate) struct CapsuleHitTestRect {
     pub(crate) bottom: i32,
 }
 
+struct CapsuleHitTestState {
+    rect: CapsuleHitTestRect,
+    no_activate: bool,
+}
+
 unsafe extern "system" fn capsule_hit_test_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -28,12 +33,17 @@ unsafe extern "system" fn capsule_hit_test_subclass_proc(
 ) -> LRESULT {
     if msg == WM_NCDESTROY {
         let _ = RemoveWindowSubclass(hwnd, Some(capsule_hit_test_subclass_proc), subclass_id);
-        drop(Box::from_raw(data as *mut CapsuleHitTestRect));
+        drop(Box::from_raw(data as *mut CapsuleHitTestState));
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 
+    let state = &*(data as *const CapsuleHitTestState);
+    if msg == WM_MOUSEACTIVATE && state.no_activate {
+        return LRESULT(MA_NOACTIVATE as isize);
+    }
+
     if msg == WM_NCHITTEST {
-        let control = *(data as *const CapsuleHitTestRect);
+        let control = state.rect;
         let screen_x = (lparam.0 as i32 & 0xffff) as u16 as i16 as i32;
         let screen_y = ((lparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
         let mut rect = RECT::default();
@@ -57,6 +67,38 @@ pub(crate) fn install_capsule_hit_test_proc(
     hwnd: HWND,
     rect: CapsuleHitTestRect,
 ) -> windows::core::Result<()> {
+    install_capsule_hit_test_proc_with_activation(hwnd, rect, false)
+}
+
+pub(crate) fn install_capsule_card_hit_test_proc(
+    hwnd: HWND,
+    rect: CapsuleHitTestRect,
+) -> windows::core::Result<()> {
+    install_capsule_hit_test_proc_with_activation(hwnd, rect, true)
+}
+
+/// Release the card's activation policy without replacing its subclass chain.
+pub(crate) fn set_capsule_no_activate(hwnd: HWND, no_activate: bool) {
+    let mut data = 0;
+    unsafe {
+        if GetWindowSubclass(
+            hwnd,
+            Some(capsule_hit_test_subclass_proc),
+            SUBCLASS_ID,
+            Some(&mut data),
+        )
+        .as_bool()
+        {
+            (*(data as *mut CapsuleHitTestState)).no_activate = no_activate;
+        }
+    }
+}
+
+fn install_capsule_hit_test_proc_with_activation(
+    hwnd: HWND,
+    rect: CapsuleHitTestRect,
+    no_activate: bool,
+) -> windows::core::Result<()> {
     if hwnd.0.is_null() {
         return Err(windows::core::Error::from_hresult(
             windows::Win32::Foundation::E_INVALIDARG,
@@ -74,10 +116,10 @@ pub(crate) fn install_capsule_hit_test_proc(
         )
         .as_bool()
         {
-            *(data as *mut CapsuleHitTestRect) = rect;
+            *(data as *mut CapsuleHitTestState) = CapsuleHitTestState { rect, no_activate };
             return Ok(());
         }
-        let data = Box::into_raw(Box::new(rect));
+        let data = Box::into_raw(Box::new(CapsuleHitTestState { rect, no_activate }));
         if !SetWindowSubclass(
             hwnd,
             Some(capsule_hit_test_subclass_proc),
@@ -105,7 +147,8 @@ mod tests {
     use windows::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW,
         RegisterClassW, SendMessageW, SetWindowLongPtrW, UnregisterClassW, GWLP_USERDATA,
-        GWLP_WNDPROC, HTCLIENT, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WNDCLASSW,
+        GWLP_WNDPROC, HTCLIENT, HWND_MESSAGE, MA_ACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+        WNDCLASSW,
     };
 
     const PROBE_MESSAGE: u32 = WM_APP + 42;
@@ -136,6 +179,7 @@ mod tests {
                 }
                 WM_NCDESTROY => probe.destroyed.set(true),
                 WM_NCHITTEST => return LRESULT(HTCLIENT as isize),
+                WM_MOUSEACTIVATE => return LRESULT(MA_ACTIVATE as isize),
                 _ => {}
             }
         }
@@ -227,6 +271,10 @@ mod tests {
             );
         }
 
+        fn mouse_activate(&self) -> isize {
+            unsafe { SendMessageW(self.hwnd, WM_MOUSEACTIVATE, WPARAM(0), LPARAM(0)) }.0
+        }
+
         fn hit_test(&self, x: i32, y: i32) -> isize {
             let mut bounds = RECT::default();
             unsafe { GetWindowRect(self.hwnd, &mut bounds) }.unwrap();
@@ -305,6 +353,42 @@ mod tests {
         assert_eq!(window.probe.messages.get(), 2);
         assert_eq!(window.probe.upper_calls.get(), 2);
         assert_eq!(window.hit_test(0, 0), HTTRANSPARENT as isize);
+    }
+
+    #[test]
+    fn card_mode_preserves_upper_subclasses_and_releases_no_activate_on_restore() {
+        let window = TestWindow::new();
+        install_capsule_card_hit_test_proc(window.hwnd, rect()).unwrap();
+        window.add_upper_subclass();
+        assert_eq!(window.mouse_activate(), MA_NOACTIVATE as isize);
+        install_capsule_card_hit_test_proc(window.hwnd, rect()).unwrap();
+        assert_eq!(window.mouse_activate(), MA_NOACTIVATE as isize);
+        window.send_probe();
+        assert_eq!(window.probe.upper_calls.get(), 1);
+
+        set_capsule_no_activate(window.hwnd, false);
+        assert_eq!(window.mouse_activate(), MA_ACTIVATE as isize);
+        assert_eq!(window.hit_test(15, 35), HTCLIENT as isize);
+
+        install_capsule_card_hit_test_proc(window.hwnd, rect()).unwrap();
+        install_capsule_hit_test_proc(window.hwnd, rect()).unwrap();
+        assert_eq!(window.mouse_activate(), MA_ACTIVATE as isize);
+    }
+
+    #[test]
+    fn activation_policy_belongs_to_each_window_and_is_cleared_on_destruction() {
+        let mut card = TestWindow::new();
+        let capsule = TestWindow::new();
+        install_capsule_card_hit_test_proc(card.hwnd, rect()).unwrap();
+        install_capsule_hit_test_proc(capsule.hwnd, rect()).unwrap();
+        assert_eq!(card.mouse_activate(), MA_NOACTIVATE as isize);
+        assert_eq!(capsule.mouse_activate(), MA_ACTIVATE as isize);
+        card.destroy();
+
+        let recreated = TestWindow::new();
+        install_capsule_hit_test_proc(recreated.hwnd, rect()).unwrap();
+        assert_eq!(recreated.mouse_activate(), MA_ACTIVATE as isize);
+        assert_eq!(capsule.mouse_activate(), MA_ACTIVATE as isize);
     }
 
     #[test]
