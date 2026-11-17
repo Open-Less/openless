@@ -108,7 +108,7 @@ pub use settings::{
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };
-pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
+pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone, TrayStyle};
 
 /// Coordinates Core operations with Linux settings and recording lifecycles.
 ///

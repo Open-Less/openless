@@ -33,7 +33,6 @@
 #include <QClipboard>
 #include <QBuffer>
 #include <QSet>
-#include <QMenu>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -41,7 +40,6 @@
 #include <QProcessEnvironment>
 #include <QFileInfo>
 #include <QScreen>
-#include <QSystemTrayIcon>
 #include <QTimer>
 #include <QUrl>
 #include <QWebEnginePage>
@@ -678,18 +676,9 @@ int main(int argc, char **argv) {
     });
 
     // ── 3. 托盘 ─────────────────────────────────────────────────────────────
-    auto *tray = new QSystemTrayIcon(&app);
-    const QIcon trayIcon = openlessIcon();
-    tray->setIcon(trayIcon);
-    qInfo("tray available=%d iconNull=%d", tray->isSystemTrayAvailable(),
-          trayIcon.isNull() ? 1 : 0);
-    auto *menu = new QMenu();
-    menu->addAction("打开 OpenLess", [&mainWindow]() { mainWindow.raise(); });
-    menu->addAction("隐藏窗口", [&mainWindow]() { mainWindow.setVisible(false); });
-    menu->addSeparator();
-    menu->addAction("退出", []() { QCoreApplication::quit(); });
-    tray->setContextMenu(menu);
-    tray->show();
+    // 托盘由 Rust 侧（`linux-web`）注册 StatusNotifierItem：与 macOS/Windows 共用
+    // 同一套菜单（显示主窗口 / 输出风格 / 选择麦克风 / 退出）和同一份 8 语言文案。
+    // 这里的窗口只负责响应它推来的 `tray:command` 事件。
 
     // ── 4. 事件：dictation:state 控制胶囊，qa:state 控制问答面板 ────────────
     auto *manager = new QNetworkAccessManager(&app);
@@ -701,7 +690,7 @@ int main(int argc, char **argv) {
         capsule.setVisible(false);
     });
     QObject::connect(reply, &QNetworkReply::readyRead, &app,
-                     [reply, buffer, &capsule, &qa, capsuleHideTimer]() {
+                     [reply, buffer, &mainWindow, &capsule, &qa, capsuleHideTimer]() {
         buffer->append(reply->readAll());
         int index;
         while ((index = buffer->indexOf("\n\n")) >= 0) {
@@ -727,6 +716,13 @@ int main(int argc, char **argv) {
                         QStringLiteral("transcribing"), QStringLiteral("polishing"),
                         QStringLiteral("inserting")};
                     capsule.setVisible(activePhases.contains(phase));
+                } else if (name == "tray:command") {
+                    // payload 是 JSON 字符串："show" / "quit"
+                    if (payload.contains("quit")) {
+                        QCoreApplication::quit();
+                    } else if (payload.contains("show")) {
+                        mainWindow.raise();
+                    }
                 } else if (name == "selection:state") {
                     // 选区助手：润色期间把胶囊显示出来（SelectionPolishNotice），
                     // 出结果后留 2.5 秒给用户看一眼再收起。

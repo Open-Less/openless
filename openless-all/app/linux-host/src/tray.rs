@@ -31,12 +31,15 @@ const PREVIOUS_STYLE_ID: i32 = 2;
 const MICROPHONES_ID: i32 = 3;
 const SEPARATOR_ID: i32 = 4;
 const QUIT_ID: i32 = 5;
+const STYLES_ID: i32 = 6;
 const FIRST_MICROPHONE_ID: i32 = 100;
+const FIRST_STYLE_ID: i32 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayCommand {
     ShowMain,
     ActivatePreviousStyle,
+    SelectStyle(String),
     SelectMicrophone(String),
     Quit,
 }
@@ -46,6 +49,14 @@ pub struct TrayMicrophone {
     pub name: String,
     pub is_default: bool,
     pub selected: bool,
+}
+
+/// 一个可切换的输出风格（与 macOS/Windows 托盘的「输出风格」子菜单一致）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayStyle {
+    pub id: String,
+    pub name: String,
+    pub active: bool,
 }
 
 #[derive(Debug)]
@@ -67,6 +78,7 @@ impl std::error::Error for TrayError {}
 
 enum TrayControl {
     SetMicrophones(Vec<TrayMicrophone>),
+    SetStyles(Vec<TrayStyle>),
     SetLang(Lang),
     Shutdown,
 }
@@ -75,6 +87,7 @@ enum TrayControl {
 struct TrayMenuState {
     revision: u32,
     microphones: Vec<TrayMicrophone>,
+    styles: Vec<TrayStyle>,
     lang: Option<Lang>,
 }
 
@@ -85,10 +98,14 @@ impl TrayMenuState {
             PREVIOUS_STYLE_ID => Some(TrayCommand::ActivatePreviousStyle),
             QUIT_ID => Some(TrayCommand::Quit),
             FIRST_MICROPHONE_ID => Some(TrayCommand::SelectMicrophone(String::new())),
-            id if id > FIRST_MICROPHONE_ID => self
+            id if id > FIRST_MICROPHONE_ID && id < FIRST_STYLE_ID => self
                 .microphones
                 .get((id - FIRST_MICROPHONE_ID - 1) as usize)
                 .map(|device| TrayCommand::SelectMicrophone(device.name.clone())),
+            id if id >= FIRST_STYLE_ID => self
+                .styles
+                .get((id - FIRST_STYLE_ID) as usize)
+                .map(|style| TrayCommand::SelectStyle(style.id.clone())),
             _ => None,
         }
     }
@@ -175,6 +192,12 @@ impl LinuxTray {
     pub fn set_microphones(&self, microphones: Vec<TrayMicrophone>) -> Result<(), TrayError> {
         self.control
             .send(TrayControl::SetMicrophones(microphones))
+            .map_err(|_| TrayError::Worker("tray worker has stopped".into()))
+    }
+
+    pub fn set_styles(&self, styles: Vec<TrayStyle>) -> Result<(), TrayError> {
+        self.control
+            .send(TrayControl::SetStyles(styles))
             .map_err(|_| TrayError::Worker("tray worker has stopped".into()))
     }
 
@@ -286,6 +309,21 @@ fn run_dbus_worker(
     while !shutdown.load(Ordering::Acquire) {
         while let Ok(control) = control_rx.try_recv() {
             match control {
+                TrayControl::SetStyles(styles) => {
+                    let revision = {
+                        let mut state = menu.lock().expect("tray menu lock poisoned");
+                        state.styles = styles;
+                        state.revision = state.revision.wrapping_add(1).max(1);
+                        state.revision
+                    };
+                    let signal =
+                        dbus::Message::new_signal(MENU_PATH, MENU_INTERFACE, "LayoutUpdated")
+                            .map_err(TrayError::Dbus)?
+                            .append2(revision, 0i32);
+                    connection.send(signal).map_err(|_| {
+                        TrayError::Dbus("failed to announce tray menu layout".into())
+                    })?;
+                }
                 TrayControl::SetMicrophones(microphones) => {
                     let revision = {
                         let mut state = menu.lock().expect("tray menu lock poisoned");
@@ -493,6 +531,15 @@ fn menu_tree(state: &TrayMenuState) -> MenuNode {
             Vec::new(),
         ));
     }
+    let mut styles_children = Vec::new();
+    for (index, style) in state.styles.iter().enumerate() {
+        let mut props = menu_properties(&style.name);
+        props.insert("toggle-type".into(), property("checkmark".to_string()));
+        props.insert("toggle-state".into(), property(i32::from(style.active)));
+        styles_children.push(menu_item(FIRST_STYLE_ID + index as i32, props, Vec::new()));
+    }
+    let mut styles_props = menu_properties(tr_l10n(lang, "tray.style"));
+    styles_props.insert("children-display".into(), property("submenu".to_string()));
     let mut microphone_props = menu_properties(tr_l10n(lang, "settings.microphone"));
     microphone_props.insert("children-display".into(), property("submenu".to_string()));
     let separator = HashMap::from([("type".into(), property("separator".to_string()))]);
@@ -510,6 +557,7 @@ fn menu_tree(state: &TrayMenuState) -> MenuNode {
                 menu_properties(tr_l10n(lang, "tray.previous_style")),
                 Vec::new(),
             ),
+            menu_item(STYLES_ID, styles_props, styles_children),
             menu_item(MICROPHONES_ID, microphone_props, microphone_children),
             menu_item(SEPARATOR_ID, separator, Vec::new()),
             menu_item(
@@ -876,6 +924,7 @@ mod tests {
                 is_default: true,
                 selected: true,
             }],
+            styles: Vec::new(),
             lang: None,
         };
         assert_eq!(state.command_for_id(SHOW_ID), Some(TrayCommand::ShowMain));

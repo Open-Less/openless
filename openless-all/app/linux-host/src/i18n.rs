@@ -193,14 +193,27 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "tray.show",
         text: [
-            "显示 OpenLess",
-            "顯示 OpenLess",
-            "Show OpenLess",
-            "OpenLess を表示",
-            "OpenLess 표시",
-            "Mostrar OpenLess",
-            "Afficher OpenLess",
-            "OpenLess anzeigen"
+            "显示主窗口",
+            "顯示主視窗",
+            "Show main window",
+            "メインウィンドウを表示",
+            "메인 창 표시",
+            "Mostrar ventana principal",
+            "Afficher la fenêtre principale",
+            "Hauptfenster anzeigen",
+        ],
+    },
+    Msg {
+        key: "tray.style",
+        text: [
+            "输出风格",
+            "輸出風格",
+            "Output style",
+            "出力スタイル",
+            "출력 스타일",
+            "Estilo de salida",
+            "Style de sortie",
+            "Ausgabestil"
         ],
     },
     Msg {

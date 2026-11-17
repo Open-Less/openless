@@ -27,6 +27,8 @@ struct Host {
     capsule_transcript_visible: std::sync::Mutex<bool>,
     capsule_language_menu: std::sync::Mutex<bool>,
     shortcut_recording_active: std::sync::Mutex<bool>,
+    /// 托盘命令（显示窗口 / 退出）走这条广播，SSE 把它和 Core 事件一起推给渲染宿主。
+    tray_events: tokio::sync::broadcast::Sender<Value>,
 }
 
 /// 恢复（云端同步还原）之后要在宿主编生效的效果。
@@ -107,24 +109,16 @@ fn main() {
     }
     println!("[linux-web] serving {} at {}", dist.display(), url);
 
-    // 无头宿主：只留后端 + HTTP 命令桥，把主线程停住即可（不起 GTK）。
-    if std::env::var("OPENLESS_HEADLESS").ok().as_deref() == Some("1") {
-        println!("[linux-web] 无头模式：只提供 /api 与静态资源");
-        // 无头模式仍要挂热键监听：快捷键 → 听写/QA → 事件推给渲染宿主。
-        // 之前漏了这步，所以「按快捷键没反应」。
-        if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) {
-            hotkeys::spawn_headless(backend, runtime);
-        }
-        loop {
-            std::thread::park();
-        }
-    }
-
-    // 窗口渲染由 Qt 宿主（`linux-qt`）负责，这里只做后端 + 命令桥。
+    // 再无头 GUI 分支：窗口渲染由 Qt 宿主负责，这里只提供 /api 与静态资源。
     println!("[linux-web] 后端就绪，等待宿主连接");
+    // 无头模式仍要挂热键监听：快捷键 → 听写/QA → 事件推给渲染宿主。
+    // 之前漏了这步，所以「按快捷键没反应」。
     if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) {
         hotkeys::spawn_headless(backend, runtime);
     }
+    // 托盘由这里负责（StatusNotifierItem），而不是渲染宿主：菜单项、本地化
+    // （8 种语言）与命令语义因此与 macOS/Windows 完全一致。
+    spawn_tray(host.clone());
     loop {
         std::thread::park();
     }
@@ -161,6 +155,97 @@ fn resolve_dist() -> PathBuf {
     dev
 }
 
+/// 托盘：菜单与 macOS/Windows 对齐（显示主窗口 / 输出风格 / 选择麦克风 / 退出），
+/// 文案用 Rust 侧同一份 8 语言目录。
+///
+/// 窗口与退出属于渲染宿主的职责，所以通过 `tray:command` 事件转交（Qt 宿主在
+/// `/api/events` 上接收）；风格与麦克风直接改后端偏好。
+fn spawn_tray(host: std::sync::Arc<Host>) {
+    std::thread::Builder::new()
+        .name("openless-tray".into())
+        .spawn(move || {
+            let tray = match openless_linux_host::LinuxTray::start() {
+                Ok(tray) => tray,
+                Err(error) => {
+                    eprintln!("[linux-web] 托盘注册失败：{error}");
+                    return;
+                }
+            };
+            println!("[linux-web] 托盘已注册");
+            let lang = match openless_linux_host::LocalePref::from_tag("system").resolve() {
+                lang => lang,
+            };
+            let _ = tray.set_lang(lang);
+            let mut logged_microphones = false;
+            loop {
+                let Some(backend) = host.backend.clone() else {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    continue;
+                };
+                // 麦克风与风格列表随系统/偏好变化：托盘菜单每次重排都拿最新值。
+                if !logged_microphones {
+                    if let Some(runtime) = host.runtime.clone() {
+                        if let Ok(devices) =
+                            runtime.block_on(backend.services().platform.microphone_devices())
+                        {
+                            let selected = backend.get_preferences().microphone_device_name;
+                            let mics = devices
+                                .into_iter()
+                                .map(|device| openless_linux_host::TrayMicrophone {
+                                    is_default: device.is_default,
+                                    name: device.name.clone(),
+                                    selected: selected == device.name,
+                                })
+                                .collect::<Vec<_>>();
+                            let _ = tray.set_microphones(mics);
+                        }
+                        // 输出风格子菜单：与 macOS/Windows 的「输出风格」一致。
+                        let active = backend.get_preferences().active_style_pack_id;
+                        if let Ok(packs) = backend.list_style_packs(&active) {
+                            let styles = packs
+                                .into_iter()
+                                .map(|pack| openless_linux_host::TrayStyle {
+                                    active: pack.id == active,
+                                    id: pack.id.clone(),
+                                    name: pack.name.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            let _ = tray.set_styles(styles);
+                        }
+                    }
+                    logged_microphones = true;
+                }
+                tray.drain(|command| match command {
+                    openless_linux_host::TrayCommand::ShowMain => {
+                        let _ = host.tray_events.send(json!("show"));
+                    }
+                    openless_linux_host::TrayCommand::Quit => {
+                        let _ = host.tray_events.send(json!("quit"));
+                    }
+                    openless_linux_host::TrayCommand::ActivatePreviousStyle => {
+                        let _ = backend.activate_previous_style_pack();
+                    }
+                    openless_linux_host::TrayCommand::SelectStyle(id) => {
+                        if let Err(error) = backend.activate_style_pack(&id) {
+                            eprintln!("[linux-web] 托盘切换风格失败：{error}");
+                        }
+                    }
+                    openless_linux_host::TrayCommand::SelectMicrophone(device) => {
+                        if let Err(error) = backend.select_microphone_device(device) {
+                            eprintln!("[linux-web] 托盘切换麦克风失败：{error}");
+                        }
+                    }
+                });
+                if let Some(error) = tray.take_error() {
+                    eprintln!("[linux-web] 托盘出错：{error}");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        })
+        .ok();
+}
+
 fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("OPENLESS_DATA_DIR") {
         return PathBuf::from(dir);
@@ -176,6 +261,7 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 fn init_host() -> Host {
+    let (tray_events, _) = tokio::sync::broadcast::channel::<Value>(16);
     let mut host = Host {
         backend: None,
         runtime: None,
@@ -185,6 +271,7 @@ fn init_host() -> Host {
         shortcut_recording_active: std::sync::Mutex::new(false),
         qa_expanded: std::sync::Mutex::new(false),
         cloud_sync_status_cache: std::sync::Mutex::new(None),
+        tray_events,
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
@@ -2310,9 +2397,25 @@ fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
     stream.write_all(b": connected\n\n")?;
     stream.flush()?;
     let mut subscription = backend.subscribe();
+    let mut tray_events = host.tray_events.subscribe();
     let mut last_cloud_sync: Option<String> = None;
     loop {
-        let event = match runtime.block_on(subscription.recv()) {
+        // 托盘命令（显示窗口 / 退出）也走这条流：渲染宿主不需要第二种传输。
+        let tray_command = runtime.block_on(async {
+            tokio::select! {
+                event = subscription.recv() => Ok(event),
+                command = tray_events.recv() => Err(command),
+            }
+        });
+        if let Err(command) = tray_command {
+            let Ok(command) = command else { continue };
+            let line = json!({ "name": "tray:command", "payload": command.to_string() });
+            if write!(stream, "data: {line}\n\n").is_err() || stream.flush().is_err() {
+                break;
+            }
+            continue;
+        }
+        let event = match tray_command.expect("checked above") {
             Ok(event) => event,
             Err(_) => {
                 // 滞后：让页面重新拉快照。
