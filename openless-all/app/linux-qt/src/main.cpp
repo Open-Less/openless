@@ -24,6 +24,8 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <csignal>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/prctl.h>
 #include <QDesktopServices>
 #include <QWebEngineUrlScheme>
@@ -518,25 +520,49 @@ int main(int argc, char **argv) {
     app.setQuitOnLastWindowClosed(false);
 
     // ── 0. 单实例 ───────────────────────────────────────────────────────────
-    // 托盘 / 桌面图标每点一次都会执行一次 `/usr/bin/openless`。没有这道锁时
-    // 每点一次就多出一个宿主进程（各带一套窗口、托盘图标，第二个后端还会因为
-    // 抢不到 socket 直接退出，最后报「后端 20 秒内没有报告端口」）。
-    // 这里用 QLocalServer 做「首实例监听、后续实例转交并退出」。
+    // 托盘 / 桌面图标每点一次都会执行一次 `/usr/bin/openless`。这里必须用**原子**
+    // 的方式判断谁是首实例：早先用「先 connect，连不上再 listen」有竞态 —— 两个
+    // 进程在对方还没 listen 时同时进来，两个都会认为自己 是首实例，于是出现两套
+    // 窗口与两个托盘图标（实测发生过）。
+    //
+    // 现在用 flock 文件锁：拿到锁的是首实例，拿不到的转交给它并退出。
+    const QString runtimeDir =
+        qEnvironmentVariable("XDG_RUNTIME_DIR", QStringLiteral("/tmp"));
+    const QString lockPath = runtimeDir + QStringLiteral("/openless.lock");
+    int instanceLock = ::open(QFile::encodeName(lockPath).constData(),
+                              O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    bool isPrimary = false;
+    if (instanceLock < 0) {
+        qWarning("无法创建单实例锁 %s：继续启动（可能多开）", qPrintable(lockPath));
+        isPrimary = true;
+    } else if (::flock(instanceLock, LOCK_EX | LOCK_NB) == 0) {
+        isPrimary = true;
+        // 锁文件永不删除：删掉会让后来者拿到一个新 inode，锁就失效了。
+    } else {
+        ::close(instanceLock);
+        instanceLock = -1;
+    }
+
     const QString instanceKey =
         QStringLiteral("openless-qt-%1").arg(static_cast<qulonglong>(::geteuid()));
-    {
-        QLocalSocket probe;
-        probe.connectToServer(instanceKey);
-        if (probe.waitForConnected(300)) {
-            // 已有实例：让它把窗口抬起来，然后本进程立刻退出。
-            probe.write("show\n");
-            probe.flush();
-            probe.waitForBytesWritten(300);
-            fprintf(stderr, "openless-qt: another instance is running; handing over and exiting\n");
-            return 0;
+    if (!isPrimary) {
+        // 已有实例：让它抬起窗口，本进程退出。等一小会儿是因为对方的监听
+        // socket 可能刚建好（它也要跑完 QApplication 初始化）。
+        for (int attempt = 0; attempt < 30; ++attempt) {
+            QLocalSocket probe;
+            probe.connectToServer(instanceKey);
+            if (probe.waitForConnected(200)) {
+                probe.write("show\n");
+                probe.flush();
+                probe.waitForBytesWritten(300);
+                break;
+            }
+            QThread::msleep(100);
         }
+        fprintf(stderr, "openless-qt: another instance is running; handing over and exiting\n");
+        return 0;
     }
-    // 上一次崩溃留下的 socket 文件会让 listen 失败：先清掉（此时已确认无活实例）。
+    // 首实例：清掉上次崩溃遗留的 socket，然后自己监听。
     QLocalServer::removeServer(instanceKey);
     auto *instanceServer = new QLocalServer(&app);
     if (!instanceServer->listen(instanceKey)) {
