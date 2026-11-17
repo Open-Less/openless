@@ -30,7 +30,7 @@ Tauri 宿主发布标签（仅由管理员创建）：
 
 独立的 Android 每周/调试/手动构建以及 HarmonyOS 手动修复仍然可用。桌面分支/手动构建和 Windows 草稿修复保持现有范围。依赖关系图见[发布分发](docs/release-distribution.md)。
 
-Linux 使用独立工作流：`check-linux.yml` 负责 Core/Host 测试、Qt 宿主编译与 deb/rpm 打包校验，`release-linux.yml` 负责发版。只有该 tag 有真机验收记录（`LINUX_ACCEPTED_RELEASE_TAG`）时才会随桌面发布一起附加 Linux 包；仅编译通过不等于设备验收。Linux 没有应用内更新器，也没有 AppImage。详见 [docs/linux-host-handoff/07-acceptance.md](docs/linux-host-handoff/07-acceptance.md)。
+Linux 使用独立工作流：`ci.yml` 的 `linux-check` / `linux-package` 负责 Core/Host 测试、Qt 宿主编译与 deb/rpm 打包校验，`release-tauri.yml` 的 `linux` 作业负责发版。只有该 tag 有真机验收记录（`LINUX_ACCEPTED_RELEASE_TAG`）时才会随桌面发布一起附加 Linux 包；仅编译通过不等于设备验收。Linux 没有应用内更新器，也没有 AppImage。详见 [docs/linux-host-handoff/07-acceptance.md](docs/linux-host-handoff/07-acceptance.md)。
 
 HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并且可以把已签名的软件包（App Pack）上传到 HUAWEI AppGallery Connect。自动的可复用调用使用 `channel: none`，即仓库路径：HAP 以未签名形式附加到 GitHub Release，任何东西都不会到达应用商店。将仓库变量 `HARMONY_AUTO_CHANNEL` 设为 `release`（生产）或 `test`（测试渠道），即可让已签名的软件包自动作为 AGC 候选包上传；该上传绝不会提交审核，因此无论哪种方式，上架提交仍然是人工决定。
 

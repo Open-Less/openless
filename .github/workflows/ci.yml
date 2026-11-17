@@ -6,7 +6,7 @@ name: CI
 #   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux Core、
 #      remote_tls、host 和 deb/rpm 统一使用发版构建链检查（PR 不上传 Release）。
 # macOS/Windows/Android 不跑完整 Tauri bundle；Linux 运行完整 deb/rpm 构建校验
-# （Qt6 WebEngine 宿主 + openless-linux-web 后端，见 check-linux.yml）。
+# （Qt6 WebEngine 宿主 + openless-linux-web 后端），与其他平台同在本文件里定义。
 
 on:
   # Feature branches are covered by their pull request. Running both produced two full
@@ -733,68 +733,115 @@ jobs:
             "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
             "$version_name" "$version_code" --allow-unsigned
 
-  # The Linux core/host/deb+rpm checks live in a reusable workflow, which runs
-  # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
-  # plus the Linux host, fcitx5 and package contracts.
-  linux-host-package:
+  linux-check:
     needs: [changes]
-    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
-    name: Linux Core, host and deb/rpm checks
-    permissions:
-      contents: read
-    uses: ./.github/workflows/check-linux.yml
-    with:
-      # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
-      scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
-
-  windows-frontend:
-    # Split out of `cross-platform`: the job used to serialise 6 minutes of
-    # frontend work behind 15 minutes of Rust compiling on the same runner, and
-    # the Windows runner is the slowest of the three. Running them in parallel
-    # costs one extra setup but removes ~6 minutes from the critical path.
-    needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
-    name: Windows frontend and contracts
-    runs-on: windows-latest
-    timeout-minutes: 40
+    if: needs.changes.outputs.linux != 'false'
+    name: Linux checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
+      CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-    defaults:
-      run:
-        working-directory: openless-all/app
+      CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/target
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
-      - name: Cache npm from beta
-        uses: ./.github/actions/cache-npm
-      - name: Install frontend dependencies
+          node-version: '22'
+
+      - name: Install native build and test dependencies
         timeout-minutes: 10
-        run: npm ci
-      - name: Check Windows prerequisites
-        shell: pwsh
-        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
-      - name: Check PowerShell scripts
-        shell: pwsh
+        uses: ./.github/actions/setup-linux-dependencies
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: test-linux-host
+          workspaces: |
+            openless-all/app -> target
+            openless-all/app/src-tauri/backend-tests -> ../../target
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
+      - name: Build and test fcitx5 plugin
+        working-directory: openless-all/app/scripts/linux-fcitx5-plugin
         run: |
-          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
-            $errors = $null
-            [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
-            if ($errors) {
-              $errors | Format-List
-              exit 1
-            }
-          }
-      - name: Build frontend
-        timeout-minutes: 10
-        run: npm run build
-      - name: Run the platform-sensitive contracts
-        # `process.platform` branches and the `windows-*` contracts only mean
-        # anything here; everything else runs on macOS (full suite) and Linux.
-        run: node scripts/frontend-test-runner.mjs --platform-only windows
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          test -s build/libopenless.so
+          test -s build/openless.conf
+
+      - name: Test Core, Linux host, and platform boundaries
+        timeout-minutes: 40
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          cargo test --locked -p openless-core
+          # 命名化重跑热键边沿门禁：上面的 cargo test 已经编好，这里几乎免费，
+          # 改名会在这里响，而不是悄悄丢掉门禁。
+          cargo test --locked -p openless-core --lib \
+            api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics -- --exact \
+            | tee "$RUNNER_TEMP/openless-hotkey-edge.log"
+          grep -Fq 'test api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics ... ok' \
+            "$RUNNER_TEMP/openless-hotkey-edge.log"
+          cargo test --locked -p openless-harmony-host
+          cargo clippy --locked -p openless-core --all-targets -- -D warnings
+          cargo test --locked -p openless-linux-host --all-targets
+          cargo clippy --locked -p openless-linux-host --all-targets -- -D warnings
+          node scripts/linux-host-tauri-free-contract.test.mjs
+          node scripts/linux-host-release-contract.test.mjs
+          node scripts/ci-changed-areas.test.mjs
+          node scripts/ci-cache-usage.test.mjs
+          node scripts/ci-cache-sharing.test.mjs
+          node scripts/harmony-release-contract.test.mjs
+          node scripts/tauri-linux-free-contract.test.mjs
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-host
+          pwsh -NoProfile -File ./scripts/check-core-secret-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
+          pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
+          pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
+
+      - name: Test remote input TLS identity and Unix key permissions
+        timeout-minutes: 20
+        working-directory: openless-all/app
+        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
+
+  linux-package:
+    needs: [changes]
+    if: needs.changes.outputs.linux != 'false'
+    name: Linux packages
+    # PipeWire/libspa 需要 24.04；包目标 glibc >= 2.39。
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Build verified deb/rpm
+        uses: ./.github/actions/build-linux-packages
+
+      - name: Upload verified packages
+        # push 构建只用来暖缓存，不产资产；PR 与 tag 构建才是消费者。
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          retention-days: 14
+          name: openless-linux-host-x86_64
+          path: openless-all/app/target/linux-host-packages/*
+          if-no-files-found: error
+
+      - name: Upload direct download aliases
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          retention-days: 14
+          name: openless-linux-host-direct-download
+          path: ${{ runner.temp }}/openless-linux-host-direct-download/*
+          if-no-files-found: error
 
   cross-platform:
     needs: [changes]
@@ -912,6 +959,13 @@ jobs:
         # Rust compile below needs the frontend built on Windows too.
         if: runner.os == 'Windows'
         run: npm run build
+
+      - name: Run the platform-sensitive contracts
+        # Windows 只跑它自己的平台子集：完整套件在 macOS 上跑，Windows 上再跑一遍
+        # 只是把一个更慢的进程塞进关键路径。
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: node scripts/frontend-test-runner.mjs --platform-only windows
 
       - name: Build frontend and run frontend/contract tests
         timeout-minutes: 10

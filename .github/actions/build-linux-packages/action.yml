@@ -1,0 +1,164 @@
+name: Build Linux packages
+description: >
+  Compile the Qt6 WebEngine host, the Rust backend and the React bundle, then
+  produce verified deb/rpm artifacts. Shared by CI and the release workflow so
+  the two cannot drift: exactly one definition of "how a Linux package is built".
+
+inputs:
+  checkout-ref:
+    description: Git ref to check out (the release tag for tag builds).
+    required: false
+    default: ''
+  revision-file:
+    description: File holding the release revision used in the package version.
+    required: false
+    default: openless-all/app/linux-host/package-revision
+
+outputs:
+  version:
+    description: Package version (application version plus the -N revision).
+    value: ${{ steps.version.outputs.version }}
+  package-dir:
+    description: Absolute directory holding the deb/rpm and SHA256SUMS.
+    value: ${{ github.workspace }}/openless-all/app/target/linux-host-packages
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: false
+        ref: ${{ inputs.checkout-ref || github.ref }}
+
+    - name: Install native build and packaging dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/setup-linux-dependencies
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Resolve package version
+      id: version
+      shell: bash
+      working-directory: openless-all/app
+      env:
+        REVISION_FILE: ${{ inputs.revision-file }}
+      run: |
+        set -euo pipefail
+        VERSION=$(node -p "require('./package.json').version")
+        REVISION=$(< "$REVISION_FILE")
+        [[ "$REVISION" =~ ^[1-9][0-9]*$ ]] || {
+          echo "::error::$REVISION_FILE must hold a positive integer revision (got '$REVISION')"
+          exit 1
+        }
+        echo "version=${VERSION%%+*}-$REVISION" >> "$GITHUB_OUTPUT"
+
+    - uses: swatinem/rust-cache@v2
+      with:
+        # Release-profile cache, separate from the test-profile one in `linux-check`.
+        shared-key: build-linux-host
+        workspaces: openless-all/app -> target
+        cache-on-failure: true
+        save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
+    - name: Build the fcitx5 plugin
+      # 包内要装 `libopenless.so` + `openless.conf`；断言与 ctest 在 `linux-check` 里跑。
+      working-directory: openless-all/app/scripts/linux-fcitx5-plugin
+      shell: bash
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+        cmake --build build --parallel
+
+    - name: Validate Linux desktop metadata
+      shell: bash
+      run: |
+        desktop-file-validate openless-all/app/linux-host/packaging/openless.desktop
+        appstreamcli validate --no-net openless-all/app/linux-host/packaging/top.openless.OpenLess.metainfo.xml
+
+    - name: Build the Rust backend
+      timeout-minutes: 40
+      working-directory: openless-all/app
+      shell: bash
+      run: cargo build --locked --release -p openless-linux-host -p openless-linux-web
+
+    - name: Install Qt6 WebEngine toolchain
+      timeout-minutes: 15
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
+          liblayershellqtinterface-dev qt6-wayland-dev \
+          libqt6webenginewidgets6 libqt6webenginecore6
+
+    - name: Build the Qt window host
+      timeout-minutes: 25
+      working-directory: openless-all/app
+      shell: bash
+      run: |
+        set -euo pipefail
+        # 用 pkg-config 的 cflags，而不是自己拼 -I：发行版把 Qt 头文件放在
+        # /usr/include/<triplet>/qt6，手写的 -I$INC/QtQuick 在 Ubuntu 上根本不存在。
+        # LayerShellQt 的 .pc 名字各发行版不同（有的没有），单独兜底。
+        QT_CFLAGS=$(pkg-config --cflags Qt6Quick Qt6WebEngineWidgets Qt6Widgets Qt6Gui Qt6Core Qt6Network)
+        QT_LIBS=$(pkg-config --libs Qt6Quick Qt6WebEngineWidgets Qt6WebEngineCore Qt6Widgets Qt6Gui Qt6Core Qt6Network)
+        LS_CFLAGS=$(pkg-config --cflags LayerShellQtInterface 2>/dev/null || echo "-I/usr/include")
+        LS_LIBS=$(pkg-config --libs LayerShellQtInterface 2>/dev/null || echo "-lLayerShellQtInterface")
+        g++ -std=c++17 -O2 -s -fPIC linux-qt/src/main.cpp -o linux-qt/openless-qt \
+          $QT_CFLAGS $LS_CFLAGS $QT_LIBS $LS_LIBS
+
+    - name: Build the React frontend bundle
+      timeout-minutes: 20
+      working-directory: openless-all/app
+      shell: bash
+      run: |
+        set -euo pipefail
+        # dist/ 不入库：包里的界面必须现场构建，否则会拿旧 bundle 打出
+        # 「代码改了但界面没变」的包（本地踩过：dist 落后 4 天，能力屏蔽整段没生效）。
+        npm ci --prefer-offline --no-audit --no-fund
+        VITE_OPENLESS_PLATFORM=gtk npx vite build --outDir linux-web/dist --emptyOutDir
+
+    - name: Package deb and rpm
+      timeout-minutes: 10
+      working-directory: openless-all/app
+      shell: bash
+      env:
+        OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
+        OPENLESS_LINUX_ARCH: x86_64
+      run: |
+        # CI runners are disposable; ignore outputs restored by a cache.
+        rm -f target/linux-host-packages/*.deb target/linux-host-packages/*.rpm \
+          target/linux-host-packages/SHA256SUMS
+        bash scripts/package-linux-qt.sh
+
+    - name: Checksums and package verification
+      working-directory: openless-all/app
+      shell: bash
+      run: |
+        set -euo pipefail
+        OUTPUT=target/linux-host-packages
+        ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+        # 桌面与 Android 资产各有自己的 SHA256SUMS，Linux 这份换个名字。
+        cp "$OUTPUT/SHA256SUMS" "$OUTPUT/SHA256SUMS-linux"
+        bash scripts/verify-linux-host-packages.sh
+
+    - name: Stage direct download aliases
+      working-directory: openless-all/app
+      shell: bash
+      run: |
+        set -euo pipefail
+        output=target/linux-host-packages
+        alias_dir="$RUNNER_TEMP/openless-linux-host-direct-download"
+        rm -rf "$alias_dir"
+        mkdir -p "$alias_dir"
+        debs=("$output"/OpenLess-Linux-qt-*.deb)
+        rpms=("$output"/OpenLess-Linux-qt-*.rpm)
+        test "${#debs[@]}" -eq 1
+        test "${#rpms[@]}" -eq 1
+        cp "${debs[0]}" "$alias_dir/OpenLess_linux_x86_64.deb"
+        cp "${rpms[0]}" "$alias_dir/OpenLess_linux_x86_64.rpm"

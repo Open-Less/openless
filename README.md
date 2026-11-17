@@ -126,7 +126,7 @@ Six hosts share one framework-independent backend (`openless-core`); they differ
 | --- | --- | --- | --- |
 | macOS 14 Sonoma+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app: hotkey, insertion, history, style packs, cursor context, Apple Speech, experimental local ASR | DMG (Apple Silicon / Intel), Homebrew cask |
 | Windows 10+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app, plus a native TSF input method (`windows-ime/`) and Foundry/sherpa local ASR | NSIS installer |
-| Linux | Qt6 WebEngine window host (`linux-qt/`) over the `linux-web` backend bridge, no Tauri or WebKitGTK | Same React UI as the desktop app, driven over `/api/invoke` + `/api/events` | deb/rpm from `check-linux.yml`; publishing needs recorded device acceptance |
+| Linux | Qt6 WebEngine window host (`linux-qt/`) over the `linux-web` backend bridge, no Tauri or WebKitGTK | Same React UI as the desktop app, driven over `/api/invoke` + `/api/events` | deb/rpm from the `linux-package` job in `ci.yml`; publishing needs recorded device acceptance |
 | Android 8.0+ | Tauri mobile host + React, OpenLess keyboard (`android/`, `mobile-ime/`) | App, floating capsule, IME, cursor context, in-app updates | APKs per ABI |
 | iOS 16+ | Native SwiftUI/UIKit app, keyboard extension, recording widget (`openless-all/ios/`) | Chinese/English typing, voice-focused and hold-space modes, speech translation | Unsigned IPA from source, personal signing |
 | HarmonyOS (API 12+) | ArkTS + ArkWeb host and input method extension (`harmony/`, `harmony/rust`) | Host, IME and voice pipeline wired; network recognition, update flow and store listing still in progress | Unsigned HAP on Releases |
@@ -444,7 +444,7 @@ ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 
 `openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-host-backend-contract.md`](docs/linux-host-backend-contract.md).
 
-The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux packaging runs in the separate `check-linux.yml` / `release-linux.yml` workflows; publishing to the shared Release requires recorded device acceptance for that tag. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
+The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux packaging runs in the `ci.yml` / `release-tauri.yml` Linux jobs; publishing to the shared Release requires recorded device acceptance for that tag. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 

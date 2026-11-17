@@ -40,7 +40,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-host
 ```
 
-Linux packaging runs in its own workflows: `check-linux.yml` compiles the Qt6 host, runs the Core/Host tests and produces deb/rpm (AppImage is retired); `release-linux.yml` publishes it. Automated publication requires the acceptance records described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
+Linux packaging lives in the shared workflows: the `linux-check` / `linux-package` jobs in `ci.yml` compile the Qt6 host, run the Core/Host tests and produce deb/rpm (AppImage is retired); the `linux` job in `release-tauri.yml` publishes them. Automated publication requires the acceptance records described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
 
 ## macOS Build
 

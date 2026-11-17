@@ -6,7 +6,8 @@ const appRoot = new URL('..', import.meta.url);
 const roots = [
   new URL('../linux-host', import.meta.url),
   new URL('../scripts/package-linux-qt.sh', import.meta.url),
-  new URL('../../../.github/workflows/release-linux.yml', import.meta.url),
+  // Linux 已并入公共工作流：检查它自己的打包 action 与 ci.yml 里的 Linux 作业片段。
+  new URL('../../../.github/actions/build-linux-packages/action.yml', import.meta.url),
 ];
 const sourceExtensions = new Set(['.rs', '.toml', '.sh', '.yml', '.yaml']);
 
@@ -25,6 +26,9 @@ async function collect(url) {
 }
 
 const files = (await Promise.all(roots.map(collect))).flat();
+
+// `ci.yml` 里的 Linux 作业会调用 `src-tauri/backend-tests`（独立的 remote TLS
+// 测试 crate，不链 Tauri 运行时），所以这份契约只扫 Linux 自己的打包定义。
 const violations = [];
 for (const file of files) {
   const source = await readFile(file, 'utf8');

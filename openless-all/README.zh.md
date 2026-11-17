@@ -40,7 +40,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-host
 ```
 
-Linux 打包由独立工作流完成：`check-linux.yml` 编译 Qt6 宿主、运行 Core/Host 测试并产出 deb/rpm（AppImage 已弃用），`release-linux.yml` 负责发版；自动化发布需要 [`RELEASING.md`](../RELEASING.md) 与 [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md) 中所述的验收记录。
+Linux 打包由独立工作流完成：`ci.yml` 的 Linux 作业编译 Qt6 宿主、运行 Core/Host 测试并产出 deb/rpm（AppImage 已弃用），`release-tauri.yml` 的 `linux` 作业负责发版；自动化发布需要 [`RELEASING.md`](../RELEASING.md) 与 [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md) 中所述的验收记录。
 
 ## macOS 构建
 

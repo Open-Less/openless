@@ -6,7 +6,7 @@ name: Release (all platforms)
 #
 # Outputs:
 #   macOS arm64/x64 .dmg + Windows x64 .msi/.exe, uploaded automatically as GitHub Release assets.
-#   Linux is built separately by release-linux.yml (Qt6 WebEngine host + linux-web backend).
+#   Linux is a job in this file (`linux`), gated on recorded device acceptance.
 #
 # macOS distribution:
 #   - With APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
@@ -913,20 +913,62 @@ jobs:
     secrets: inherit
 
   linux:
-    # Linux 包（Qt6 WebEngine 宿主 + openless-linux-web 后端）走独立工作流：
-    # 与桌面共用同一份 Rust 缓存，但打包和校验在 Ubuntu 上单独做。
-    # 只有真机验收记录过这个 tag 才发（LINUX_ACCEPTED_RELEASE_TAG），
-    # 否则跳过并在汇总里说明，不影响桌面/Android 的发布。
+    # Linux 包（Qt6 WebEngine 宿主 + openless-linux-web 后端）与桌面在同一个
+    # 工作流里发布：构建 + 校验用 CI 那份 composite action，发布前要求该 tag 有
+    # 真机验收记录（LINUX_ACCEPTED_RELEASE_TAG），否则整步跳过、不影响桌面/Android。
     name: Linux packages
     needs: prepare-release
     if: >-
       github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
       endsWith(github.ref_name, '-tauri') &&
       vars.LINUX_ACCEPTED_RELEASE_TAG == github.ref_name
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       contents: write
-    uses: ./.github/workflows/release-linux.yml
-    with:
-      tag: ${{ github.ref_name }}
-      publish: true
-    secrets: inherit
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      LINUX_ACCEPTED_RELEASE_TAG: ${{ vars.LINUX_ACCEPTED_RELEASE_TAG }}
+    steps:
+      - name: Verify exact-tag Linux acceptance
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_TAG" ] || [ "$LINUX_ACCEPTED_RELEASE_TAG" != "$RELEASE_TAG" ]; then
+            echo "::error::Linux device acceptance must be recorded for this exact release tag before publication."
+            exit 1
+          fi
+      - name: Build verified deb/rpm
+        uses: ./.github/actions/build-linux-packages
+        with:
+          checkout-ref: ${{ github.ref_name }}
+      - name: Attach Linux packages to the GitHub Release
+        run: |
+          set -euo pipefail
+          output=openless-all/app/target/linux-host-packages
+          alias_dir="$RUNNER_TEMP/openless-linux-host-direct-download"
+          for file in "$output"/OpenLess-Linux-qt-*.deb "$output"/OpenLess-Linux-qt-*.rpm \
+              "$output/SHA256SUMS-linux" "$alias_dir/OpenLess_linux_x86_64.deb" \
+              "$alias_dir/OpenLess_linux_x86_64.rpm"; do
+            [ -s "$file" ] || { echo "::error::missing Linux release asset $file"; exit 1; }
+          done
+          # 桌面作业先创建 Release，这里只等不抢。
+          for attempt in $(seq 1 40); do
+            if gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" = 40 ]; then
+              echo "::error::release $RELEASE_TAG was not created by the desktop workflow"
+              exit 1
+            fi
+            sleep 15
+          done
+          gh release upload "$RELEASE_TAG" \
+            "$output"/OpenLess-Linux-qt-*.deb \
+            "$output"/OpenLess-Linux-qt-*.rpm \
+            "$output/SHA256SUMS-linux" \
+            "$alias_dir/OpenLess_linux_x86_64.deb" \
+            "$alias_dir/OpenLess_linux_x86_64.rpm" \
+            --clobber
+          echo "attached Linux assets to $RELEASE_TAG"

@@ -108,28 +108,24 @@ for (const command of [
 ]) {
   assert.ok(deviceCommands.includes(command), `retain device check: ${command}`);
 }
-// Linux 已恢复：旧的自绘 UI 流水线退役，改为 Qt 宿主链路（linux-host-package →
-// check-linux.yml），发布走 release-linux.yml。
-assert.equal(ci.jobs['linux-host-legacy-package'], undefined, 'the retired Linux CI job stays gone');
-for (const name of ['check-linux-host-legacy.yml', 'release-linux-host-legacy.yml']) {
-  assert.equal(existsSync(path(name)), false, `${name} must stay removed`);
+// Linux 与其它平台一样直接写进 ci.yml / release-tauri.yml：
+// 不再有独立的 Linux 工作流文件。
+for (const name of ['check-linux.yml', 'release-linux.yml']) {
+  assert.equal(existsSync(path(name)), false, `${name} must stay removed: one workflow file per platform`);
 }
-assert.ok(ci.jobs['linux-host-package'], 'Linux CI runs through check-linux.yml');
+assert.ok(ci.jobs['linux-check'], 'Linux checks live in ci.yml');
+assert.ok(ci.jobs['linux-package'], 'Linux packaging lives in ci.yml');
 assert.equal(ci.jobs.changes.outputs.linux, '${{ steps.detect.outputs.linux }}');
-// Windows 前端契约在独立作业里跑，cross-platform 不再重复启动第二个 VM。
-const windowsFrontend = ci.jobs['windows-frontend'];
-assert.ok(windowsFrontend, 'windows frontend has its own job');
-assert.equal(
-  windowsFrontend.steps.find((s) =>
-    String(s.run ?? '').includes('--platform-only windows'),
-  )?.run,
-  'node scripts/frontend-test-runner.mjs --platform-only windows',
-);
+// Windows 平台契约复用 cross-platform 的同一个 VM（不再启动第二个 Windows runner）。
+assert.equal(ci.jobs['windows-frontend'], undefined, 'no duplicate Windows frontend VM');
 const stable = ci.jobs['cross-platform'];
+const windowsContracts = stable.steps.find(
+  (s) => s.name === 'Run the platform-sensitive contracts',
+);
+assert.equal(windowsContracts.if, "runner.os == 'Windows'");
 assert.equal(
-  stable.steps.find((s) => s.name === 'Run the platform-sensitive contracts'),
-  undefined,
-  'do not run the Windows-only contracts twice',
+  windowsContracts.run,
+  'node scripts/frontend-test-runner.mjs --platform-only windows',
 );
 const frontend = stable.steps.find((s) => s.name === 'Build the frontend for the Tauri context');
 assert.equal(frontend.if, "runner.os == 'Windows'");

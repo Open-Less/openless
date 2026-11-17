@@ -33,7 +33,7 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
 
 契约测试 `scripts/ci-changed-areas.test.mjs` 用真实 git diff 驱动这些判定，双向断言：够不到的必须跳过，其余的必须运行。改动前它抓到的真实故障（`linux` 输出漏写导致 Linux job 被误跳过）就是这条规则存在的理由。
 
-Linux 使用独立工作流：`check-linux.yml` 负责 Core/Host 测试、Qt 宿主编译与 deb/rpm 打包校验，`release-linux.yml` 负责发版；桌面 tag 发布通过可复用工作流调用，并需要该 tag 的真机验收记录（`LINUX_ACCEPTED_RELEASE_TAG`）。
+Linux 使用独立工作流：`ci.yml` 的 `linux-check` / `linux-package` 负责 Core/Host 测试、Qt 宿主编译与 deb/rpm 打包校验，`release-tauri.yml` 的 `linux` 作业负责发版；桌面 tag 发布通过可复用工作流调用，并需要该 tag 的真机验收记录（`LINUX_ACCEPTED_RELEASE_TAG`）。
 
 `ui-motion` 使用生产前端构建运行 `npm run test:ui-motion`，在 Chromium 与 WebKit 上验证快速往返切页、弹窗中断、手机抽屉退出以及减少动态效果下的模型入口规则。失败时保留浏览器 trace 和截图；浏览器 mock 验证不替代原生权限与设备交互。
 
@@ -43,7 +43,7 @@ Linux 使用独立工作流：`check-linux.yml` 负责 Core/Host 测试、Qt 宿
   该数字由依赖实际要求决定：`tauri 2.12` 要 1.90、`aes 0.9.3`/`uuid 1.28` 要 1.89，代码库选择跟随当前 stable（1.99）以保持单一数字，不再为旧工具链回退依赖。
 - 工具链不同 ⇒ cargo fingerprint 全失效、产物与缓存不能共用。历史上 stable 与 MSRV 挤在同一个 job 里共用缓存，串行 29 分 59 秒（见 [`macos-build-performance.md`](macos-build-performance.md)）；拆成并行独立 job、缓存分开后是 stable 8m36s / MSRV 3m39s。
 - 平台专属依赖图不同，所以 macOS 与 Windows 各自验证：macOS 是 `keyring/apple-native`；Windows 是 `keyring/windows-native`、TSF IME。Windows MSRV 也在独立 job 中运行，避免 stable → MSRV 串行重编译和污染 stable 缓存。`Windows checks` 汇总两路结果，任一路失败、取消或意外跳过都会失败。
-- Linux 宿主 `linux-host` / `linux-web` 与桌面侧同用 `rust-version = "1.99"`，由 `check-linux.yml` 在每次 PR 上编译验证。
+- Linux 宿主 `linux-host` / `linux-web` 与桌面侧同用 `rust-version = "1.99"`，由 `ci.yml` 的 Linux 作业在每次 PR 上编译验证。
 
 ## 3. 缓存配额分配（10 GB / 仓库）
 
@@ -133,7 +133,7 @@ Linux 发行自动化已暂停，不再有独立构建或自动附件上传；�
 ## 7. 已知取舍
 
 - 改动范围门控只跳过“够不到”的平台；`push` 到 `main`/`beta` 对仍启用的平台始终全量。Linux 专属自动化暂停后，不再承诺其原生验证证据。
-- Linux 原生产生证据（fcitx5 插件、remote TLS、deb/rpm 打包链）由 `check-linux.yml` 在每次 PR 上跑；本地契约测试不能替代这些原生运行证据。
+- Linux 原生产生证据（fcitx5 插件、remote TLS、deb/rpm 打包链）由 `ci.yml` 的 Linux 作业在每次 PR 上跑；本地契约测试不能替代这些原生运行证据。
 - 所有 job 都设了 `timeout-minutes`，避免卡死的运行长时间占用并发与时间。
 
 ## 桌面整理后的依赖与维护

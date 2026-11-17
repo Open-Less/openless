@@ -126,7 +126,7 @@ OpenLess 是一个跨平台（macOS、Windows、Linux、Android、iOS 与 Harmon
 | --- | --- | --- | --- |
 | macOS 14 Sonoma+ | Tauri 2 + React（`src-tauri/`） | 完整桌面应用：快捷键、插入、历史、风格包、光标上下文、Apple Speech、实验性本地 ASR | DMG（Apple Silicon / Intel）、Homebrew Cask |
 | Windows 10+ | Tauri 2 + React（`src-tauri/`） | 完整桌面应用，另有原生 TSF 输入法（`windows-ime/`）与 Foundry/sherpa 本地 ASR | NSIS 安装包 |
-| Linux | Qt6 WebEngine 宿主（`linux-qt/`）+ `linux-web` 后端桥（不依赖 Tauri 或 WebKitGTK） | 与桌面端同一套 React 界面，经 `/api/invoke` + `/api/events` 驱动 | `check-linux.yml` 产出 deb/rpm；发布需真机验收记录 |
+| Linux | Qt6 WebEngine 宿主（`linux-qt/`）+ `linux-web` 后端桥（不依赖 Tauri 或 WebKitGTK） | 与桌面端同一套 React 界面，经 `/api/invoke` + `/api/events` 驱动 | `ci.yml` 的 `linux-package` 作业产出 deb/rpm；发布需真机验收记录 |
 | Android 8.0+ | Tauri 移动宿主 + React、OpenLess 键盘（`android/`、`mobile-ime/`） | 应用、悬浮胶囊、输入法、光标上下文、应用内更新 | 按 ABI 分发的 APK |
 | iOS 16+ | 原生 SwiftUI/UIKit 应用、键盘扩展、录音小组件（`openless-all/ios/`） | 中英文输入、语音优先与按住空格模式、语音翻译 | 源码构建的未签名 IPA，个人签名 |
 | HarmonyOS（API 12+） | ArkTS + ArkWeb 宿主与输入法扩展（`harmony/`、`harmony/rust`） | 宿主、输入法与语音管线已打通；联网识别、更新流程与上架仍在进行 | Release 中的未签名 HAP |

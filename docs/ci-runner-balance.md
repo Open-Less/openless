@@ -2,7 +2,7 @@
 
 ## 当前决定
 
-- Linux 专属 CI（Qt 宿主 + `linux-web`）保留为独立工作流 `check-linux.yml`；发行走 `release-linux.yml`，由真机验收 tag 控制。
+- Linux（Qt 宿主 + `linux-web`）与其它平台同文件：CI 在 `ci.yml` 的 `linux-check` / `linux-package`，发版在 `release-tauri.yml` 的 `linux` 作业，由真机验收 tag 控制。
 - Windows 平台敏感契约合入现有 stable job，复用已有 checkout、npm 安装、前端构建和 PowerShell 解析，不再单独启动 Windows 前端 VM。
 - iOS 测试与真机构建复用统一变更检测，但独立运行：两者不共享产物，不必串行。保留 `test` / `device-build` 检查名；两项都应作为合并门禁，不能仅要求其中一项。
 - 不增加大规格收费 runner、不增加浏览器 worker 或 Android ABI。浏览器双引擎、stable/MSRV、胶囊继续保留独立缓存/任务，避免强行合并造成关键路径重编译。

@@ -305,16 +305,25 @@ check(
   workflow.includes("needs.changes.outputs.harmony != 'false'"),
   true,
 );
-check('Linux CI runs the Qt host chain', workflow.includes('\n  linux-host-package:'), true);
+check(
+  'Linux checks live in ci.yml',
+  workflow.includes('\n  linux-check:') && workflow.includes('\n  linux-package:'),
+  true,
+);
+check(
+  'Linux gate is fail-open',
+  workflow.includes("needs.changes.outputs.linux != 'false'"),
+  true,
+);
 
 // Balance VM count and latency: the small Windows-only subset reuses the
 // existing stable runner; Linux tests and packaging remain parallel.
 check(
-  'windows frontend runs in its own job',
-  /  windows-frontend:[\s\S]*?runs-on: windows-latest/.test(workflow),
+  'windows contracts reuse the stable job',
+  /  cross-platform:[\s\S]*?name: Run the platform-sensitive contracts\n[\s\S]*?if: runner\.os == 'Windows'\n\s+timeout-minutes: 10\n\s+run: node scripts\/frontend-test-runner\.mjs --platform-only windows/.test(workflow),
   true,
 );
-check('no duplicate Windows frontend VM', /  cross-platform:[\s\S]*?Run the platform-sensitive contracts/.test(workflow), false);
+check('no duplicate Windows frontend VM', workflow.includes('\n  windows-frontend:'), false);
 check(
   'windows only runs the platform-sensitive contracts',
   workflow.includes('--platform-only windows'),
