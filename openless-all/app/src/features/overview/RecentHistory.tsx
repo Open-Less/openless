@@ -148,6 +148,7 @@ function RecentRow({
 
   return (
     <div
+      data-overview-record={session.id}
       style={{
         padding: '12px 18px',
         borderBottom: '0.5px solid var(--ol-line-soft)',
