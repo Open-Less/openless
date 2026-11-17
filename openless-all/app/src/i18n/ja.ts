@@ -694,6 +694,9 @@ export const ja: typeof zhCN = {
     activityAppsLabel: '音声入力が多いアプリ',
     activityAppsShow: 'よく使うアプリを表示',
     activityAppsHide: 'よく使うアプリを隠す',
+    activityAppsUnavailable:
+      'このプラットフォームではアプリ別の年間アクティビティを表示できません。',
+    activityAppsError: 'アプリ別の年間アクティビティを読み込めませんでした。',
     activityYearTitle: '今年',
     activityActiveDays: '活動日数',
     activityPeakDay: '最多の日',

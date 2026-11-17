@@ -718,6 +718,9 @@ export const de: typeof zhCN = {
     activityAppsLabel: 'Meiste Diktate nach App',
     activityAppsShow: 'Top-Apps anzeigen',
     activityAppsHide: 'Top-Apps ausblenden',
+    activityAppsUnavailable:
+      'Die jährliche Aktivität nach App ist auf dieser Plattform nicht verfügbar.',
+    activityAppsError: 'Die jährliche Aktivität nach App konnte nicht geladen werden.',
     activityYearTitle: 'Dieses Jahr',
     activityActiveDays: 'Aktive Tage',
     activityPeakDay: 'Stärkster Tag',

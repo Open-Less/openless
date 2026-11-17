@@ -667,6 +667,8 @@ export const zhTW: typeof zhCN = {
     activityAppsLabel: '語音輸入次數最多的軟體',
     activityAppsShow: '展開常用軟體',
     activityAppsHide: '收合常用軟體',
+    activityAppsUnavailable: '目前平台不支援依應用程式查看年度活動。',
+    activityAppsError: '無法載入依應用程式統計的年度活動。',
     activityYearTitle: '今年',
     activityActiveDays: '活躍天數',
     activityPeakDay: '單日最多',

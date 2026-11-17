@@ -688,6 +688,8 @@ export const ko: typeof zhCN = {
     activityAppsLabel: '음성 입력이 많은 앱',
     activityAppsShow: '자주 쓰는 앱 표시',
     activityAppsHide: '자주 쓰는 앱 숨기기',
+    activityAppsUnavailable: '이 플랫폼은 앱별 연간 활동을 지원하지 않습니다.',
+    activityAppsError: '앱별 연간 활동을 불러올 수 없습니다.',
     activityYearTitle: '올해',
     activityActiveDays: '활동 일수',
     activityPeakDay: '하루 최다',

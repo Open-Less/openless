@@ -724,6 +724,9 @@ export const fr: typeof zhCN = {
     activityAppsLabel: 'Applications les plus dictées',
     activityAppsShow: 'Afficher les applis principales',
     activityAppsHide: 'Masquer les applis principales',
+    activityAppsUnavailable:
+      'L’activité annuelle par application est indisponible sur cette plateforme.',
+    activityAppsError: 'Impossible de charger l’activité annuelle par application.',
     activityYearTitle: 'Cette année',
     activityActiveDays: 'Jours actifs',
     activityPeakDay: 'Jour le plus actif',

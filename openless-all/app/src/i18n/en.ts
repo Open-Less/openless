@@ -706,6 +706,8 @@ export const en: typeof zhCN = {
     activityAppsLabel: 'Top apps by dictations',
     activityAppsShow: 'Show top apps',
     activityAppsHide: 'Hide top apps',
+    activityAppsUnavailable: 'Yearly activity by app is unavailable on this platform.',
+    activityAppsError: 'Could not load yearly activity by app.',
     activityYearTitle: 'This year',
     activityActiveDays: 'Active days',
     activityPeakDay: 'Busiest day',

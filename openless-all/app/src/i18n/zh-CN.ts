@@ -667,6 +667,8 @@ export const zhCN = {
     activityAppsLabel: '语音输入次数最多的软件',
     activityAppsShow: '展开常用软件',
     activityAppsHide: '收起常用软件',
+    activityAppsUnavailable: '当前平台不支持按应用查看年度活动。',
+    activityAppsError: '无法加载按应用统计的年度活动。',
     activityYearTitle: '今年',
     activityActiveDays: '活跃天数',
     activityPeakDay: '单日最多',
