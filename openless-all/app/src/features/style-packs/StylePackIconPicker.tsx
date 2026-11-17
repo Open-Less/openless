@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Icon } from './Icon';
-import { readStylePackIcon, setStylePackIcon } from '../lib/ipc';
-import { isStyleIconDataUrl, rasterizeStyleSvg } from '../lib/stylePackIcon';
-import type { StylePack } from '../lib/types';
-import { getStylePackPresentation } from '../lib/stylePackPresentation';
+import { Icon } from '../../components/Icon';
+import { readStylePackIcon, setStylePackIcon } from '../../api/style-packs';
+import { isStyleIconDataUrl, rasterizeStyleSvg } from '../../lib/stylePackIcon';
+import type { StylePack } from '../../api/contracts';
+import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 
 const DEFAULT_ICONS = { raw: 'mic', light: 'feather', structured: 'layout', formal: 'doc' };
 

@@ -1,17 +1,17 @@
 import { lazy, Suspense, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
-import { PresenceModal } from './ui/Modal';
-import { PageSkeleton } from './ui/PageSkeleton';
-import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
-import { ChannelEditorHostContext } from '../pages/settings/ChannelEditorHostContext';
-import { useSmoothWheelScroll } from '../lib/useSmoothWheelScroll';
+import { PresenceModal } from '../../ui/overlays/Modal';
+import { PageSkeleton } from '../../components/ui/PageSkeleton';
+import { ProviderLeaveContext, useProviderForm } from '../providers/ProviderForm';
+import { ChannelEditorHostContext } from '../settings/shell/ChannelEditorHostContext';
+import { useSmoothWheelScroll } from '../../lib/useSmoothWheelScroll';
 
 const ProvidersSection = lazy(() =>
-  import('../pages/settings/ChannelList').then((module) => ({ default: module.ProvidersSection })),
+  import('../providers/ChannelList').then((module) => ({ default: module.ProvidersSection })),
 );
 const OmniChannelSection = lazy(() =>
-  import('../pages/settings/ProvidersSection').then((module) => ({
+  import('../providers/ProvidersSection').then((module) => ({
     default: module.OmniChannelSection,
   })),
 );

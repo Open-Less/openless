@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
 import { Icon } from '../../components/Icon';
-import { LikeButton } from '../../components/LikeButton';
+import { LikeButton } from './LikeButton';
 import { ThinkingDots } from '../../components/ThinkingDots';
 import { ExitPresence, PresenceModal } from '../../components/ui/Modal';
 import {

@@ -11,7 +11,7 @@ import {
 import { getHotkeyUsageHint, setDictationHotkey } from '../../api/hotkeys';
 import { getCredentials } from '../../api/providers';
 import { CloudSyncWelcome } from '../../components/CloudSyncSetupPrompt';
-import { ModelSetupDialog } from '../../components/ModelSetupDialog';
+import { ModelSetupDialog } from './ModelSetupDialog';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { RevealText } from '../../components/ui/RevealText';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';

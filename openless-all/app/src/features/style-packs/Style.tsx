@@ -3,7 +3,7 @@ import { type CSSProperties } from 'react';
 import type { PolishMode } from '../../api/contracts';
 import { Icon } from '../../components/Icon';
 import { SavedToast } from '../../components/SavedToast';
-import { StylePackIconPicker } from '../../components/StylePackIconPicker';
+import { StylePackIconPicker } from './StylePackIconPicker';
 import { ChoiceChips } from '../../components/ui/ChoiceChips';
 import { ExpandableText } from '../../components/ui/Disclosure';
 import { DismissibleCard } from '../../components/ui/DismissibleCard';
