@@ -35,6 +35,8 @@ const bridge = {
   inputRegions: [] as any[],
   regionWrites: [] as any[],
   dictationActions: [] as string[],
+  qaActions: [] as { command: string; args: unknown }[],
+  pipelineMode: params.get('pipelineMode') === 'deepseek' ? 'deepseek' : 'traditional',
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
   theme: 'light' as ThemeMode,
@@ -84,6 +86,9 @@ window.__TAURI_INTERNALS__ = {
     callbacks.delete(id);
   },
   async invoke(command: string, args: any) {
+    if (['qa_cancel_turn', 'qa_stop_recording', 'qa_submit_text'].includes(command)) {
+      bridge.qaActions.push({ command, args });
+    }
     if (command === 'set_capsule_interactive_regions') {
       bridge.inputRegions = args.rects;
       bridge.regionWrites.push(args.rects);
@@ -115,6 +120,7 @@ window.__TAURI_INTERNALS__ = {
       const settings = {
         translationTargetLanguage: bridge.target.targetLanguage,
         capsuleStyle: 'classic',
+        pipelineMode: bridge.pipelineMode,
         capsuleTranscriptEnabled: params.has('transcript'),
         ...(themeSync ? { themeMode: bridge.theme } : {}),
       };

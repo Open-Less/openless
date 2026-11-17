@@ -89,11 +89,11 @@ test('capsule buttons address the active recording mode', async ({ page }) => {
     });
   await sendState(true, 'question');
   await expect(page.locator('.ol-qa-capsule-badge')).toHaveAttribute('data-visible', 'true');
-  await pill.getByRole('button', { name: '确认', exact: true }).click();
+  await pill.getByRole('button', { name: '胶囊确认插入', exact: true }).click();
   await pill.getByRole('button', { name: '取消', exact: true }).click();
   await sendState(false, 'dictation');
   await expect(page.locator('.ol-qa-capsule-badge')).toHaveCount(0);
-  await pill.getByRole('button', { name: '确认', exact: true }).click();
+  await pill.getByRole('button', { name: '胶囊确认插入', exact: true }).click();
   await pill.getByRole('button', { name: '取消', exact: true }).click();
   expect(await page.evaluate(() => (window as any).fixture.dictationActions)).toEqual([
     'qa_stop_recording',
