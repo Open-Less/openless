@@ -232,6 +232,19 @@ private:
     bool closeHides_;
 };
 
+/// OpenLess 的图标：优先主题名 `openless`，其次包内 hicolor 尺寸，最后兜底。
+static QIcon openlessIcon() {
+    QIcon icon = QIcon::fromTheme("openless");
+    if (!icon.isNull()) return icon;
+    for (const QString &candidate :
+         {QStringLiteral("/usr/share/icons/hicolor/256x256/apps/openless.png"),
+          QStringLiteral("/usr/share/icons/hicolor/128x128/apps/openless.png"),
+          QStringLiteral("/usr/share/pixmaps/openless.png")}) {
+        if (QFileInfo::exists(candidate)) return QIcon(candidate);
+    }
+    return QIcon::fromTheme("audio-input-microphone");
+}
+
 /// 找出当前用户下还活着的后端进程（`openless-linux-web`）。
 ///
 /// 只在「已经确认没有第二个 Qt 宿主在跑」时调用：那种情况下活着的后端只可能是
@@ -435,6 +448,7 @@ void SurfaceWindow::applyLayerShell() {
 }
 
 void SurfaceWindow::raise() {
+    topLevel()->setWindowIcon(openlessIcon());
     QWidget *window = topLevel();
     window->setVisible(true);
     window->raise();
@@ -497,6 +511,12 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     app.setApplicationName("OpenLess");
     app.setApplicationDisplayName("OpenLess");
+    // Wayland 的 app_id 取自 desktopFileName（缺省时退回可执行文件名
+    // `openless-qt`）；必须在 `openless.desktop` 里能查到，否则任务栏与
+    // 窗口装饰只能显示通用的 Wayland 图标。
+    app.setDesktopFileName(QStringLiteral("openless"));
+    // X11 及不支持按 .desktop 取图标的桌面用它兜底。
+    app.setWindowIcon(openlessIcon());
     app.setQuitOnLastWindowClosed(false);
 
     // ── 0. 单实例 ───────────────────────────────────────────────────────────
@@ -659,16 +679,7 @@ int main(int argc, char **argv) {
 
     // ── 3. 托盘 ─────────────────────────────────────────────────────────────
     auto *tray = new QSystemTrayIcon(&app);
-    QIcon trayIcon = QIcon::fromTheme("openless");
-    if (trayIcon.isNull()) {
-        // 主题里没有就用包内图标（hicolor 已装，但某些桌面主题不索引它）。
-        for (const QString &candidate : {QStringLiteral("/usr/share/icons/hicolor/256x256/apps/openless.png"),
-                                         QStringLiteral("/usr/share/icons/hicolor/128x128/apps/openless.png"),
-                                         QStringLiteral("/usr/share/pixmaps/openless.png")}) {
-            if (QFileInfo::exists(candidate)) { trayIcon = QIcon(candidate); break; }
-        }
-    }
-    if (trayIcon.isNull()) trayIcon = QIcon::fromTheme("audio-input-microphone");
+    const QIcon trayIcon = openlessIcon();
     tray->setIcon(trayIcon);
     qInfo("tray available=%d iconNull=%d", tray->isSystemTrayAvailable(),
           trayIcon.isNull() ? 1 : 0);
