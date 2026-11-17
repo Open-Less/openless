@@ -253,21 +253,6 @@
   }
 }
 
-/* ─── 胶囊同款思考动画的承托（SiriGL orb 白色光点需要深色底才可见）──── */
-.olchat-orb-stage {
-  position: relative;
-  overflow: hidden;
-  background: #0b0b0f;
-  border-radius: var(--ol-r-xl);
-  flex-shrink: 0;
-}
-.olchat-orb-stage > div {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
 /* ─── 助手 markdown 正文（原 qa-answer / lc-answer 合并，token 换 shadcn）──
  * Inherit host color so History/QuickNote follow app light/dark ink tokens.
  * Inside .olchat-shell the shell still pins a light foreground (intentional). */
@@ -416,14 +401,6 @@
 }
 .olchat-shell [data-slot='message'] {
   gap: 10px;
-}
-.olchat-shell [data-slot='message-avatar'] {
-  align-self: flex-start;
-  margin-top: 3px;
-  width: 27px;
-  min-width: 27px;
-  height: 27px;
-  box-shadow: 0 0 0 2px #fff;
 }
 .olchat-shell [data-slot='bubble'] {
   max-width: 90%;

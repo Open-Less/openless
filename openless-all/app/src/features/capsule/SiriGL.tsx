@@ -61,8 +61,6 @@ const RENDER_SCALE = 0.75;
  */
 const WARMING_RESOLVED = 0.2;
 
-// Exported for chat/orbFeed (shared orb render source: one GL context mirrored to
-// several small avatars).
 export const VERTEX_SRC = 'attribute vec2 aPos; void main(){ gl_Position=vec4(aPos,0.0,1.0); }';
 
 const WAVE_FRAGMENT_SRC = `

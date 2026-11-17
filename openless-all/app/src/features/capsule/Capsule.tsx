@@ -2,7 +2,7 @@ import { collectCapsuleInputRegions } from '../../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getRuntimeOS, isTauriHost, type OS } from '../../runtime/environment';
-import { setCapsuleInteractiveRegions } from '../../runtime/windows/capsuleInput';
+import { createCapsuleRegionPublisher } from '../../runtime/windows/capsuleInput';
 import { warmUpSiriShaders } from './SiriGL';
 import { useReducedMotion } from '../../lib/motion';
 import { VoiceOrbStage } from '../../components/VoiceOrbStage';
@@ -361,6 +361,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
   const os = forcedOs ?? getRuntimeOS();
   const isTauri = isTauriHost();
+  const [publishInputRegions] = useState(createCapsuleRegionPublisher);
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const reducedMotion = useReducedMotion();
   const metrics = getCapsulePillMetrics(os);
@@ -777,9 +778,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (serialized !== last) {
         last = serialized;
         if (!stopped)
-          await setCapsuleInteractiveRegions(rects).catch((error) =>
-            console.warn('[capsule] input region sync failed', error),
-          );
+          await publishInputRegions(rects).catch((error) => {
+            if (!stopped && last === serialized) last = '';
+            console.warn('[capsule] input region sync failed', error);
+          });
       }
     };
     const schedule = () => {
@@ -820,9 +822,18 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       cancelAnimationFrame(frame);
       window.removeEventListener('resize', schedule);
     };
-  }, [os, state, leaving, insertFallback, suggestions.length]);
+  }, [isTauri, os, state, leaving, insertFallback, suggestions.length, publishInputRegions]);
 
-  // Always release the native hit-test region when the capsule webview is torn down.
+  useEffect(() => {
+    if (!isTauri || os !== 'mac') return;
+    return () => {
+      void publishInputRegions([]).catch((error) =>
+        console.warn('[capsule] input region cleanup failed', error),
+      );
+    };
+  }, [isTauri, os, publishInputRegions]);
+
+  // Transcript rail visibility is owned by the primary capsule.
   useEffect(() => {
     if (!isTauri) return;
     return () => {
