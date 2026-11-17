@@ -154,7 +154,9 @@ test('Android overlay changes use shared field writes and roll back on failure',
   await expect(activation).toHaveValue('tap');
   await page.evaluate(() => (window as any).androidGuideFixture.rejectNextWrite());
   await activation.selectOption('long_press');
-  await expect(page.getByRole('alert')).toContainText('操作失败');
+  const alert = page.getByRole('alert');
+  await expect(alert).toHaveCount(1);
+  await expect(alert).toHaveText('Fixture rejected the preference write');
   await expect(activation).toHaveValue('tap');
   await activation.selectOption('long_press');
   await expect

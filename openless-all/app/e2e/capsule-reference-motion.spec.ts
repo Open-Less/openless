@@ -146,13 +146,15 @@ test('QA opens the conversation while recording and starts fresh after close', a
   await emit(page, 'qa:state', { kind: 'recording', sessionId: 'a', messages: [] });
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-prompt')).toBeVisible();
-  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
+  const host = page.locator('#native-host');
+  await expect(host).toHaveCSS('width', '720px');
+  await expect(host).toHaveCSS('height', '380px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'a', messages: [messages[0]] });
   await expect(page.locator('.qa-thought')).toBeVisible();
   await expect(page.locator('.ol-default-capsule')).toHaveCount(0);
   await emit(page, 'qa:state', { kind: 'answer', sessionId: 'a', messages });
-  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
-  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  await expect(page.locator('.qa-assistant-message')).toContainText('我会尽力为你解答');
+  await expect(host).toHaveCSS('width', '720px');
   await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('qa-result.png') });
   await emit(page, 'chat-panel:closing', {});
@@ -172,21 +174,34 @@ test('QA opens the conversation while recording and starts fresh after close', a
   await expect(page.locator('.qa-capsule-shell')).not.toHaveClass(/is-closing/);
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-assistant-message')).toHaveCount(0);
-  await expect(page.locator('#native-host')).toHaveCSS('height', '380px');
+  await expect(host).toHaveCSS('height', '380px');
   expect(errors).toEqual([]);
 });
 
 test('immediate geometry acknowledgements keep each QA result visible', async ({ page }) => {
   await page.goto(fixture + '?qa');
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  const compact = page.locator('.ol-default-capsule');
+  await expect(compact).toBeVisible();
   for (let index = 0; index < 12; index++) {
     const sessionId = `instant-layout-${index}`;
     await emit(page, 'qa:state', { kind: 'recording', sessionId, messages: [] });
-    await expect(page.locator('.qa-answer-panel')).toBeVisible();
-    await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
-    await emit(page, 'qa:state', { kind: 'answer', sessionId, messages });
-    await expect(page.locator('.qa-answer-panel')).toBeVisible();
-    await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
+    await expect(page.locator('.qa-prompt')).toBeVisible();
+    await expect(page.locator('.qa-assistant-message')).toHaveCount(0);
+    const content = `Answer for turn ${index}`;
+    await emit(page, 'qa:state', {
+      kind: 'answer',
+      sessionId,
+      messages: [messages[0], { role: 'assistant', content }],
+    });
+    const result = page.locator('.qa-assistant-message');
+    await expect(result).toContainText(content);
+    await expect(result).toBeInViewport();
+    await page.evaluate(() => {
+      const bridge = (window as any).fixture;
+      bridge.emit('chat-panel:closing', {});
+      bridge.emit('chat-panel:shown', {});
+    });
+    await expect(compact).toBeVisible();
   }
 });
 

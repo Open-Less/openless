@@ -1,11 +1,12 @@
 import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
+import type { QaStatePayload } from '../src/api/contracts';
 
 const fixture = `${fixtureOrigin}/e2e/fixtures/capsule-motion.html`;
 
 test.use({ reducedMotion: 'reduce' });
 
-test('QA waits for observed geometry after acknowledgment and discards a closing layout', async ({
+test('QA waits for observed geometry and reopens without the closed transcript', async ({
   page,
 }) => {
   await page.goto(fixture + '?qa');
@@ -14,32 +15,36 @@ test('QA waits for observed geometry after acknowledgment and discards a closing
   await page.evaluate(() => {
     const bridge = (window as any).fixture;
     bridge.holdQaGeometry = true;
+    bridge.applyQaGeometry(false, 320);
     bridge.emit('qa:state', { kind: 'recording', sessionId: 'old', messages: [] });
     bridge.emit('qa:state', {
       kind: 'answer',
       sessionId: 'old',
-      messages: [{ role: 'assistant', text: 'Old result' }],
-    });
+      messages: [{ role: 'assistant', content: 'Old result' }],
+    } satisfies QaStatePayload);
   });
   await expect.poll(() => page.evaluate(() => (window as any).fixture.sizes.at(-1))).toBe(true);
   await expect(host).toHaveCSS('height', '80px');
   await expect(page.locator('.qa-answer-panel')).toBeHidden();
 
   await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 320, 220));
-  await expect(page.locator('.qa-answer-panel')).toBeVisible();
+  const answer = page.locator('.qa-answer-panel');
+  await expect(answer).toBeVisible();
+  await expect(answer.getByText('Old result', { exact: true })).toBeVisible();
+  await expect(host).toHaveCSS('width', '320px');
   await expect(host).toHaveCSS('height', '220px');
 
   await page.evaluate(() => {
     const bridge = (window as any).fixture;
     bridge.emit('chat-panel:closing', {});
     bridge.emit('chat-panel:shown', {});
-    bridge.emit('qa:state', { kind: 'recording', sessionId: 'new', messages: [] });
+    bridge.emit('qa:state', { kind: 'idle' } satisfies QaStatePayload);
   });
   await expect.poll(() => page.evaluate(() => (window as any).fixture.sizes.at(-1))).toBe(false);
   await expect(page.locator('.ol-default-capsule')).toBeHidden();
-  await page.evaluate(() => (window as any).fixture.applyQaGeometry(false));
+  await expect(answer).toHaveCount(0);
+  await page.evaluate(() => (window as any).fixture.applyQaGeometry(false, 320));
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  await expect(page.locator('.qa-answer-panel')).toHaveCount(0);
 });
 
 test('QA keeps a reachable close action when the host rejects expansion', async ({ page }) => {
@@ -52,13 +57,15 @@ test('QA keeps a reachable close action when the host rejects expansion', async 
     bridge.emit('qa:state', {
       kind: 'answer',
       sessionId: 'failed',
-      messages: [{ role: 'assistant', text: 'Answer' }],
-    });
+      messages: [{ role: 'assistant', content: 'Answer' }],
+    } satisfies QaStatePayload);
   });
   const alert = page.locator('.qa-layout-failure');
   await expect(alert).toBeVisible();
   await expect(page.locator('#native-host')).toHaveCSS('height', '80px');
-  await alert.getByRole('button').click();
+  const close = alert.getByRole('button');
+  await expect(close).toBeInViewport();
+  await close.click();
   const closing = page.locator('.qa-capsule-shell.is-closing');
   await expect(closing).toHaveAttribute('inert', '');
   await expect(closing).toHaveCSS('opacity', '0');

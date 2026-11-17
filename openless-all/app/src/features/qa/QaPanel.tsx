@@ -135,10 +135,8 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   const modeRequestRef = useRef<symbol | null>(null);
   const cancelRequestRef = useRef<symbol | null>(null);
   const dismissRef = useRef<symbol | null>(null);
-  const { enterEpoch, closing: nativeClosing } = useChatPanelLifecycle(isTauri && !embedded);
+  const nativeClosingRef = useRef(false);
   const [dismissEpoch, setDismissEpoch] = useState<number | null>(null);
-  const closing = nativeClosing;
-  const presentationClosing = closing || dismissEpoch === enterEpoch;
   const tRef = useRef(t);
   tRef.current = t;
   const embeddedRef = useRef(embedded);
@@ -171,6 +169,33 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     setModeBusy(false);
   };
 
+  const { enterEpoch, closing } = useChatPanelLifecycle(isTauri && !embedded, (next) => {
+    nativeClosingRef.current = next;
+    if (!next) return;
+    // A fast reopen can arrive before React paints the exit. End the old session
+    // at the close event so it cannot leak into the next presentation.
+    invalidateRequests();
+    activeSessionIdRef.current = null;
+    changeStatus('idle');
+    setMessages([]);
+    setErrorMsg('');
+    setStreamingAnswer('');
+    setSelectionPreview('');
+    setComposerText('');
+    setEditInstructionMode(false);
+    setPolishResult(null);
+    setPolishError('');
+    setPolishBusy(false);
+    setEditApplyAvailable(false);
+    setEditRevertAvailable(false);
+    setLevel(0);
+    setSubmitted(false);
+    setActivity(undefined);
+    setThoughts([]);
+    setThoughtSeconds(0);
+  });
+  const presentationClosing = closing || dismissEpoch === enterEpoch;
+
   useEffect(() => {
     if (!isTauri) return;
     let cancelled = false;
@@ -180,7 +205,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
         const listen = listenTauriEvent;
         let stateEpoch = 0;
         const applyState = (payload: QaStatePayload) => {
-          if (cancelled) return;
+          if (cancelled || nativeClosingRef.current) return;
           const sessionEvent = acceptQaSessionEvent(activeSessionIdRef.current, payload);
           if (!sessionEvent.accepted) return;
           nativeStateEpoch.current += 1;
@@ -384,7 +409,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
         // A lazily created desktop/embedded view can miss its initial recording
         // event. Subscribe first, then hydrate from the actual Core snapshot.
         // A state transition while the RPC is in flight supersedes that reply.
-        for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+        for (let attempt = 0; attempt < 4 && !cancelled && !nativeClosingRef.current; attempt += 1) {
           const observed = stateEpoch;
           const lifecycle = panelEpoch.current;
           let snapshot: QaStatePayload;
@@ -417,29 +442,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
       handles.forEach((handle) => handle());
     };
   }, []);
-
-  useEffect(() => {
-    if (!closing) return;
-    invalidateRequests();
-    activeSessionIdRef.current = null;
-    changeStatus('idle');
-    setMessages([]);
-    setErrorMsg('');
-    setStreamingAnswer('');
-    setSelectionPreview('');
-    setComposerText('');
-    setEditInstructionMode(false);
-    setPolishResult(null);
-    setPolishError('');
-    setPolishBusy(false);
-    setEditApplyAvailable(false);
-    setEditRevertAvailable(false);
-    setLevel(0);
-    setSubmitted(false);
-    setActivity(undefined);
-    setThoughts([]);
-    setThoughtSeconds(0);
-  }, [closing]);
 
   useEffect(() => {
     if (status !== 'thinking') return;

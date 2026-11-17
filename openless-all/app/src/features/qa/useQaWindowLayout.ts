@@ -18,7 +18,7 @@ const COMPACT_HEIGHT = 80;
 function fitsQa(size: ViewportSize, expanded: boolean) {
   if (size.width < 220) return false;
   // The host clamps dimensions to the monitor work area, so check a usable
-  // content region rather than requiring the nominal 760 × 416 window.
+  // content region instead of requiring the full window dimensions.
   return expanded
     ? size.height >= COMPACT_HEIGHT + 44
     : size.height >= 55 && size.height <= COMPACT_HEIGHT + 2;

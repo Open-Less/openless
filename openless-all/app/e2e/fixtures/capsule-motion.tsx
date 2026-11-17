@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CapsuleState, ThemeMode } from '../../src/lib/types';
+import type { QaStatePayload } from '../../src/api/contracts';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
 import { AppViewport } from '../../src/ui/layout/AppViewport';
@@ -20,8 +21,16 @@ let themeReadStarted!: () => void;
 const firstThemeRead = new Promise<void>((resolve) => {
   themeReadStarted = resolve;
 });
+let qaSnapshot: QaStatePayload = { kind: 'idle', messages: [] };
 const bridge = {
   emit(event: string, payload: unknown) {
+    if (event === 'chat-panel:closing') qaSnapshot = { kind: 'idle', messages: [] };
+    if (event === 'qa:state') {
+      const state = payload as QaStatePayload;
+      // Stream chunks, activity and the host's lightweight idle are not snapshots.
+      if (state.kind !== 'answer_delta' && state.kind !== 'activity' && state.messages)
+        qaSnapshot = state;
+    }
     for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload });
   },
   emitTo(label: string, event: string, payload: unknown) {
@@ -55,8 +64,9 @@ const bridge = {
   applyQaGeometry(expanded: boolean, width?: number, height?: number) {
     const host = document.querySelector<HTMLElement>('#native-host');
     if (!host) return;
-    host.style.width = `${width ?? (expanded ? 760 : 480)}px`;
-    host.style.height = `${height ?? (expanded ? 416 : 80)}px`;
+    // Match the native window's nominal dimensions; tests can deliver a work-area clamp.
+    host.style.width = `${width ?? (expanded ? 720 : 480)}px`;
+    host.style.height = `${height ?? (expanded ? 380 : 80)}px`;
     host.style.bottom = expanded ? '48px' : '8px';
   },
   target: {
@@ -175,7 +185,7 @@ window.__TAURI_INTERNALS__ = {
       bridge.copiedFallback.push(args.text);
       return;
     }
-    if (command === 'qa_get_snapshot') return { kind: 'idle', messages: [] };
+    if (command === 'qa_get_snapshot') return structuredClone(qaSnapshot);
     if (command === 'qa_window_set_expanded') {
       bridge.sizes.push(args.expanded);
       if (args.expanded && bridge.rejectQaExpansion) throw new Error('native resize failed');

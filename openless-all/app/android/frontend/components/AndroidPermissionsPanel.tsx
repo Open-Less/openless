@@ -155,7 +155,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       current.androidOverlayTrigger === 'keyboard'
         ? { ...current, androidOverlayTrigger: normalizeAndroidOverlayTrigger('keyboard') }
         : current,
-    ).catch(reportFailure);
+    ).catch(() => undefined);
   }, [androidPrefs?.androidOverlayTrigger, updatePrefs]);
 
   const finishSizeDraft = (revision: number) => {
@@ -166,13 +166,10 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
 
   const saveAndroidOverlaySize = async (value: number, revision: number) => {
     setActionError(false);
-    try {
-      await updatePrefs((current) => ({ ...current, androidOverlaySizeDp: value }));
-    } catch {
-      if (loaded.current) reportFailure();
-    } finally {
-      finishSizeDraft(revision);
-    }
+    await updatePrefs((current) => ({ ...current, androidOverlaySizeDp: value })).catch(
+      () => undefined,
+    );
+    finishSizeDraft(revision);
   };
 
   const handleAndroidOverlaySizeChange = (value: number) => {
@@ -221,7 +218,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       });
       await refreshAndroid();
     } catch {
-      if (loaded.current) reportFailure();
+      // The shared preferences owner rolls back and reports failed writes.
     } finally {
       if (oldDraft !== null) finishSizeDraft(revision);
     }

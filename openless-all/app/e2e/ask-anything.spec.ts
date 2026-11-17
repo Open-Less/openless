@@ -83,7 +83,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
   });
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-recording-selection')).toContainText('selected source');
-  await expect(page.locator('#native-host')).toHaveCSS('width', '760px');
+  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'ask-a', messages: [] });
   await emit(page, 'qa:state', {
     kind: 'activity',

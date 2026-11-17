@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isTauriHost } from '../../../runtime/environment';
 import { listenTauriEvent } from '../../../runtime/transport';
 
-export function useChatPanelLifecycle(nativeWindow: boolean): {
-  enterEpoch: number;
-  closing: boolean;
-} {
+export function useChatPanelLifecycle(
+  nativeWindow: boolean,
+  onClosingChange: (closing: boolean) => void,
+) {
+  const onClosingChangeRef = useRef(onClosingChange);
+  onClosingChangeRef.current = onClosingChange;
   const [lifecycle, setLifecycle] = useState({ enterEpoch: 0, closing: false });
 
   useEffect(() => {
@@ -22,9 +24,11 @@ export function useChatPanelLifecycle(nativeWindow: boolean): {
     }
     void Promise.all([
       attach('chat-panel:shown', () => {
+        onClosingChangeRef.current(false);
         setLifecycle(({ enterEpoch }) => ({ enterEpoch: enterEpoch + 1, closing: false }));
       }),
       attach('chat-panel:closing', () => {
+        onClosingChangeRef.current(true);
         setLifecycle(({ enterEpoch }) => ({ enterEpoch, closing: true }));
       }),
     ]).catch((error) => {

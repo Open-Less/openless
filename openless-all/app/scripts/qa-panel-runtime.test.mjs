@@ -41,20 +41,21 @@ const factory = new Function(
   'require',
   `${compiled};return {QaPanel,Composer,MessageRow,ErrorContent};`,
 );
-const layoutSource = readFileSync(resolve(app, 'src/features/qa/useQaWindowLayout.ts'), 'utf8');
-const layoutAst = ts.createSourceFile(
-  'useQaWindowLayout.ts',
-  layoutSource,
-  ts.ScriptTarget.ES2020,
-  true,
-);
-const layoutCompiled = ts.transpileModule(
-  layoutAst.statements
-    .filter((statement) => !ts.isImportDeclaration(statement))
-    .map((statement) => statement.getFullText(layoutAst))
-    .join('\n'),
-  { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } },
-).outputText;
+function compileHook(file) {
+  const ast = ts.createSourceFile(
+    file,
+    readFileSync(resolve(app, 'src/features/qa', file), 'utf8'),
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  return ts.transpileModule(
+    ast.statements
+      .filter((statement) => !ts.isImportDeclaration(statement))
+      .map((statement) => statement.getFullText(ast))
+      .join('\n'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } },
+  ).outputText;
+}
 const makeLayout = new Function(
   'useEffect',
   'useRef',
@@ -63,7 +64,16 @@ const makeLayout = new Function(
   'qaWindowSetExpanded',
   'waitForViewportGeometry',
   'exports',
-  `${layoutCompiled};return useQaWindowLayout;`,
+  `${compileHook('useQaWindowLayout.ts')};return useQaWindowLayout;`,
+);
+const makeLifecycle = new Function(
+  'useEffect',
+  'useRef',
+  'useState',
+  'isTauriHost',
+  'listenTauriEvent',
+  'exports',
+  `${compileHook('chat/lifecycle.ts')};return useChatPanelLifecycle;`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -153,7 +163,6 @@ function context(native = true, embedded = false) {
       close: 0,
     };
   const pending = {};
-  const lifecycle = { enterEpoch: 0, closing: false };
   globalThis.window = {
     location: { search: '?window=qa&demo=1' },
     addEventListener: (name, fn) => {
@@ -184,7 +193,7 @@ function context(native = true, embedded = false) {
     useEffect: effect,
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
-    useChatPanelLifecycle: () => lifecycle,
+    useChatPanelLifecycle: makeLifecycle(effect, ref, state, () => native, listen, {}),
     useModalActive: () => false,
     useQaPipeline: () => 'deepseek',
     getRuntimeOS: () => 'mac',
@@ -294,7 +303,6 @@ function context(native = true, embedded = false) {
     emit,
     calls,
     pending,
-    lifecycle,
     events,
     keys,
     composer,
@@ -471,10 +479,9 @@ await test('cancel during resize prevents queued question and late layout failur
   c.render();
   await tick();
   await c.closePanel();
-  c.lifecycle.closing = true;
+  c.emit('chat-panel:closing', {});
   c.render();
-  c.lifecycle.closing = false;
-  c.lifecycle.enterEpoch++;
+  c.emit('chat-panel:shown', {});
   c.render();
   assert.deepEqual(c.calls.resize, [false, true]);
   c.pending.resize = undefined;
@@ -849,12 +856,17 @@ await test('snapshot completion after dismiss cannot reopen old recording state'
   c.pending.snapshot = () => first.promise;
   c.render();
   await tick();
-  c.emit('qa:dismiss', {});
-  c.lifecycle.closing = true;
-  c.render();
+  c.emit('chat-panel:closing', {});
+  c.emit('chat-panel:shown', {});
+  c.emit('qa:state', {
+    kind: 'recording',
+    sessionId: 'new',
+    messages: [],
+    selectionPreview: 'new',
+  });
   first.resolve({ kind: 'recording', sessionId: 'old', messages: [], selectionPreview: 'old' });
   await tick();
-  assert(!c.render().props.className.includes('is-expanded'));
+  assert.equal(c.composer(c.render()).selectionPreview, 'new');
   c.hooks.unmount();
 });
 await test('a snapshot read failure does not silently remove all established live subscriptions', async () => {
