@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactNode } from 'react';
 
+import { ViewportPortal } from '../../ui/layout/AppViewport';
 import type { OS } from '../../runtime/environment';
 
 const MAC_TITLEBAR_HEIGHT = 44;
@@ -56,19 +57,21 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
       }
     >
       {os === 'mac' && (
-        <div
-          data-tauri-drag-region
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: `calc(${MAC_SYSTEM_CONTROLS_RESERVED_WIDTH}px / var(--ol-interface-scale, 1))`,
-            right: 0,
-            height: `calc(${MAC_TITLEBAR_HEIGHT}px / var(--ol-interface-scale, 1))`,
-            // Settings is a full-window surface at z-index 50. The native drag strip
-            // must remain above it, outside the inert application background.
-            zIndex: 100,
-          }}
-        />
+        <ViewportPortal>
+          <div
+            data-tauri-drag-region
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: MAC_SYSTEM_CONTROLS_RESERVED_WIDTH,
+              right: 0,
+              height: MAC_TITLEBAR_HEIGHT,
+              pointerEvents: 'auto',
+              // Dragging uses unscaled native coordinates above the settings workspace.
+              zIndex: 100,
+            }}
+          />
+        </ViewportPortal>
       )}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>{children}</div>
     </div>

@@ -341,32 +341,18 @@
 .ol-model-setting-group code {
   overflow-wrap: anywhere;
 }
-.ol-model-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--ol-dialog-backdrop);
+.ol-dialog-overlay.ol-model-dialog-overlay {
+  padding: clamp(8px, 3vmin, 24px);
 }
 .ol-model-dialog {
   display: flex;
   flex-direction: column;
-  width: min(1000px, 100%);
-  /* The font-size setting zooms the whole document (lib/fontScale.ts), and
-     viewport units grow with it: undo that, or a large font pushes the
-     header under the status bar and the footer off screen. */
-  height: min(720px, calc(100dvh / var(--ol-interface-scale, 1) - 48px));
+  width: 100%;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--ol-dialog-border);
-  border-radius: var(--ol-dialog-radius);
-  box-shadow: var(--ol-dialog-shadow);
   background: var(--ol-surface);
   color: var(--ol-ink);
-  outline: none;
 }
 .ol-model-dialog-header {
   display: flex;
@@ -542,13 +528,6 @@
   }
 }
 @media (max-width: 759px) {
-  .ol-model-dialog-overlay {
-    padding: 10px;
-  }
-  .ol-model-dialog {
-    height: calc(100dvh - 20px);
-    border-radius: var(--ol-r-lg);
-  }
   .ol-model-dialog-header {
     padding: 18px;
     gap: 10px;
@@ -564,12 +543,6 @@
   }
 }
 @media (max-height: 500px) {
-  .ol-model-dialog-overlay {
-    padding: 8px;
-  }
-  .ol-model-dialog {
-    height: calc(100dvh - 16px);
-  }
   .ol-model-dialog-header {
     padding: 12px 18px;
   }

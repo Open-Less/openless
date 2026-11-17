@@ -1,0 +1,387 @@
+import { useContext, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
+import {
+  deleteChannel,
+  readCredential,
+  renameChannel,
+  setChannelProviderType,
+  setCredential,
+  type Channel,
+} from '../../api/providers';
+import { Icon } from '../../components/Icon';
+import { Modal } from '../../ui/overlays/Modal';
+import { SelectLite } from '../../ui/controls/SelectLite';
+import { useOverlayMotion } from '../../lib/motion';
+import { emitSaved } from '../../lib/savedEvent';
+import { Btn } from '../../pages/_atoms';
+import { inputStyle } from '../../pages/settings/shared';
+import { ChannelEditorHostContext } from '../settings/shell/ChannelEditorHostContext';
+import { ProviderFormContext, useProviderForm } from './ProviderForm';
+import { ChannelCredentialFields, ChannelFormRow, ChannelSectionHeading } from './ProvidersSection';
+
+import {
+  defaultChannelNameForProvider,
+  type ChannelKind,
+  type PresetOption,
+} from './channelCatalog';
+
+/**
+ * Add and edit share the same credential form inside a bounded modal or its setup host.
+ * Creating a channel first obtains the ID the credentials belong to; on close only blank drafts that never saw user action are recycled.
+ */
+export function ChannelEditor({
+  kind,
+  channel,
+  presets,
+  isDraft,
+  mobile,
+  closing = false,
+  onClose,
+  onChanged,
+  onUserMutation,
+}: {
+  kind: ChannelKind;
+  channel: Channel;
+  presets: PresetOption[];
+  /** Draft card in the create flow: title says "add channel"; recyclable while untouched. */
+  isDraft: boolean;
+  mobile: boolean;
+  /** Keeps the editor mounted until its exit finishes. */
+  closing?: boolean;
+  onClose: () => void;
+  onChanged: () => void | Promise<void>;
+  /** The user made a meaningful change to the draft; must fire synchronously before async writes. */
+  onUserMutation: () => void;
+}) {
+  const { t } = useTranslation();
+  // Drain the channel form's unwritten async writes before closing / switching provider (#1044 semantics).
+  const form = useProviderForm();
+  const [name, setName] = useState(channel.name);
+  const [providerType, setProviderType] = useState(channel.providerType);
+  const [changingProvider, setChangingProvider] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const nameId = useId();
+  const editorHost = useContext(ChannelEditorHostContext);
+  const embedded = Boolean(
+    editorHost?.presentation === 'inline' && editorHost.container && editorHost.background,
+  );
+  useOverlayMotion(dialogRef, closing, 'drawer', embedded);
+  const openerRef = useRef(document.activeElement);
+  const initialFocus = {
+    get current() {
+      return (
+        dialogRef.current?.querySelector<HTMLElement>('[role="combobox"], input:not([disabled])') ??
+        null
+      );
+    },
+  };
+  const closeRequestedRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const requestClose = () => {
+    if (closeRequestedRef.current) return;
+    void form.finish(() => {
+      if (closeRequestedRef.current) return;
+      closeRequestedRef.current = true;
+      onCloseRef.current();
+    });
+  };
+
+  useEffect(() => {
+    const opener = openerRef.current;
+    const background = embedded ? editorHost?.background : null;
+    const wasInert = background?.inert ?? false;
+    if (embedded) {
+      (initialFocus.current ?? dialogRef.current)?.focus({ preventScroll: true });
+      if (background) background.inert = true;
+    }
+    editorHost?.registerClose(requestClose);
+    return () => {
+      editorHost?.registerClose(null);
+      if (background) background.inert = wasInert;
+      if (embedded && opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
+
+  const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const dialog = dialogRef.current;
+    if (!dialog || event.defaultPrevented) return;
+    if (event.target instanceof Element && event.target.closest('[role="dialog"]') !== dialog)
+      return;
+    if (event.key === 'Escape') {
+      // SelectLite handles its open menu first. Never close both layers at once.
+      if (dialog.querySelector('[role="combobox"][aria-expanded="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestClose();
+    } else if (event.key === 'Tab') {
+      const controls = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) {
+        event.preventDefault();
+        dialog.focus();
+      } else if (
+        event.shiftKey &&
+        (document.activeElement === first || document.activeElement === dialog)
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
+
+  const saveName = async () => {
+    if (name.trim() === channel.name.trim()) return;
+    try {
+      await renameChannel(kind, channel.id, name.trim());
+      await onChanged();
+    } catch (error) {
+      console.error('[channels] rename failed', error);
+      emitSaved('failed', t('common.operationFailed'));
+    }
+  };
+
+  // After switching providers, write the preset's default endpoint / model into EMPTY slots (never overwrite
+  // user-entered custom values). Channels are isolated per card, so this reads/writes by card id; Codex OAuth /
+  // local engines / custom OpenAI-compatible (empty baseUrl/model) naturally skip. Failures are logged only.
+  const fillProviderDefaults = async (next: string) => {
+    try {
+      const preset = presets.find((item) => item.id === next);
+      if (!preset) return;
+      const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
+      const modelAccount = kind === 'llm' ? 'ark.model_id' : 'asr.model';
+      if (next === 'orcarouter') {
+        if (preset.defaultEndpoint)
+          await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
+        if (preset.defaultModel) await setCredential(modelAccount, preset.defaultModel, channel.id);
+        return;
+      }
+      if (preset.defaultEndpoint && !(await readCredential(endpointAccount, channel.id))?.trim()) {
+        await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
+      }
+      if (preset.defaultModel && !(await readCredential(modelAccount, channel.id))?.trim()) {
+        await setCredential(modelAccount, preset.defaultModel, channel.id);
+      }
+    } catch (error) {
+      console.error('[channels] failed to fill provider defaults', error);
+    }
+  };
+
+  const changeProvider = async (next: string) => {
+    const previous = providerType;
+    onUserMutation();
+    await form.finish(() => undefined);
+    setChangingProvider(true);
+    try {
+      await setChannelProviderType(kind, channel.id, next);
+      await fillProviderDefaults(next);
+      setProviderType(next);
+      const defaultName = defaultChannelNameForProvider(next, name);
+      if (defaultName !== name) {
+        await renameChannel(kind, channel.id, defaultName);
+        setName(defaultName);
+      }
+      await onChanged();
+    } catch (error) {
+      console.error('[channels] change provider failed', error);
+      setProviderType(previous);
+      emitSaved('failed', t('common.operationFailed'));
+    } finally {
+      setChangingProvider(false);
+    }
+  };
+
+  const remove = async () => {
+    try {
+      await deleteChannel(kind, channel.id);
+      emitSaved('saved', t('common.saved'));
+      requestClose();
+    } catch (error) {
+      console.error('[channels] delete failed', error);
+      emitSaved('failed', t('common.operationFailed'));
+    }
+  };
+
+  const descriptor = presets.find((item) => item.id === providerType);
+  const isLocalEngine = descriptor?.authRequirement === 'none' && providerType !== 'apple-speech';
+
+  const content = (
+    <ProviderFormContext.Provider value={form}>
+      <div
+        ref={dialogRef}
+        className={`ol-channel-dialog${embedded ? ' ol-channel-dialog-embedded' : ''}`}
+        data-closing={closing ? 'true' : undefined}
+        role="dialog"
+        aria-label={t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
+        tabIndex={-1}
+        onKeyDown={onDialogKeyDown}
+      >
+        <header className="ol-channel-dialog-header">
+          {embedded ? (
+            <button
+              type="button"
+              className="ol-settings-back"
+              onClick={requestClose}
+              aria-label={t('settings.channels.backToList')}
+              title={t('settings.channels.backToList')}
+            >
+              <Icon name="chevLeft" size={19} />
+            </button>
+          ) : (
+            <span className="ol-channel-dialog-icon">
+              <Icon name={kind === 'llm' ? 'style' : 'mic'} size={22} />
+            </span>
+          )}
+          <div className="ol-channel-dialog-heading">
+            <div className="ol-channel-dialog-title">
+              <h2>
+                {t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
+              </h2>
+              <span>{t(`settings.channels.${kind}Title`)}</span>
+            </div>
+            <p>{t('settings.channels.autoSaveHint')}</p>
+          </div>
+          {!embedded && (
+            <button
+              type="button"
+              className="ol-channel-dialog-close"
+              onClick={requestClose}
+              aria-label={t('common.close')}
+            >
+              <Icon name="close" size={18} />
+            </button>
+          )}
+        </header>
+
+        <div className="ol-channel-dialog-body ol-thinscroll">
+          <div className="ol-channel-form-sheet">
+            <ChannelSectionHeading icon="cloud" title={t('settings.channels.connectionTitle')} />
+            <ChannelFormRow label={t('settings.channels.providerLabel')}>
+              <SelectLite
+                value={providerType}
+                disabled={changingProvider || form.leaving}
+                onChange={(next) => void changeProvider(next)}
+                options={presets.map((p) => ({
+                  value: p.id,
+                  label: t(`settings.providers.presets.${p.nameKey}`),
+                }))}
+                ariaLabel={t('settings.channels.providerLabel')}
+                style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+              />
+            </ChannelFormRow>
+            <ChannelFormRow label={t('settings.channels.nameLabel')} htmlFor={nameId}>
+              <input
+                id={nameId}
+                value={name}
+                onChange={(e) => {
+                  onUserMutation();
+                  setName(e.target.value);
+                }}
+                onBlur={() => void saveName()}
+                placeholder={t('settings.channels.namePlaceholder')}
+                style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+              />
+              <p className="ol-channel-name-hint">{t('settings.channels.nameHint')}</p>
+            </ChannelFormRow>
+
+            {/* Model list, provider-specific fields, and test results all stay in the same scroll area. */}
+            {!changingProvider && (
+              <ChannelCredentialFields
+                key={`${channel.id}:${providerType}`}
+                kind={kind}
+                providerType={providerType}
+                channelId={channel.id}
+                descriptor={descriptor}
+                onTested={() => void onChanged()}
+                onUserMutation={onUserMutation}
+              />
+            )}
+            {isLocalEngine && (
+              <p className="ol-channel-local-hint">{t('settings.channels.localEngineModelHint')}</p>
+            )}
+          </div>
+        </div>
+
+        <footer className="ol-channel-dialog-footer">
+          {confirmDelete ? (
+            <div
+              className="ol-channel-delete-confirm"
+              role="group"
+              aria-label={t('settings.channels.delete')}
+            >
+              <p>{t('settings.channels.deleteConfirm')}</p>
+              <button
+                type="button"
+                autoFocus
+                className="ol-channel-delete-button"
+                onClick={() => void remove()}
+              >
+                <Icon name="trash" size={15} />
+                {t('settings.channels.confirmDelete')}
+              </button>
+              <button type="button" onClick={() => setConfirmDelete(false)} style={ghostBtn}>
+                {t('common.cancel')}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="ol-channel-delete-button"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Icon name="trash" size={15} />
+              {t('settings.channels.delete')}
+            </button>
+          )}
+          <div className="ol-channel-dialog-footer-end">
+            <span className="ol-channel-autosave-hint">{t('modal.autoSaveHint')}</span>
+            <Btn
+              variant={embedded ? 'primary' : 'blue'}
+              onClick={requestClose}
+              disabled={form.leaving}
+            >
+              {t(embedded ? 'settings.channels.done' : 'common.close')}
+            </Btn>
+          </div>
+        </footer>
+      </div>
+    </ProviderFormContext.Provider>
+  );
+  return embedded ? (
+    createPortal(content, editorHost!.container!)
+  ) : (
+    <Modal
+      onClose={requestClose}
+      zIndex={1000}
+      closing={closing}
+      motionVariant="pop"
+      initialFocus={initialFocus}
+      width={mobile ? '100%' : 'min(800px, 100%)'}
+      style={{ padding: 0, overflow: 'hidden', maxHeight: '100%' }}
+    >
+      {content}
+    </Modal>
+  );
+}
+
+const ghostBtn: CSSProperties = {
+  height: 32,
+  padding: '0 14px',
+  border: '0.5px solid var(--ol-line-strong)',
+  borderRadius: 'var(--ol-control-radius)',
+  background: 'var(--ol-control-solid)',
+  color: 'var(--ol-ink-2)',
+  cursor: 'pointer',
+  fontSize: 12.5,
+  fontWeight: 'var(--ol-font-weight-medium)',
+};

@@ -1,4 +1,4 @@
-import { protocolValidationError, type ProtocolValues } from './LlmProtocolFields';
+import { protocolValidationError, type ProtocolValues } from './llmProtocol';
 import { listProviderDescriptors } from '../../lib/ipc/providers';
 import {
   createChannel,
@@ -10,7 +10,7 @@ import {
 } from '../../lib/ipc/channels';
 import { readCredential, setCredential } from '../../lib/ipc/asr-credentials';
 import { getSettings, setSettings } from '../../lib/ipc/settings';
-import { presetsFor } from './ChannelList';
+import { presetsFor } from './channelCatalog';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

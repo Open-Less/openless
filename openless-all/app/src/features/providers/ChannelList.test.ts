@@ -1,12 +1,12 @@
 import type { OS } from '../../components/WindowChrome';
-import type { ProviderDescriptor } from '../../lib/ipc';
+import type { ProviderDescriptor } from '../../lib/ipc/index';
 import {
   channelRowViewportTop,
   channelTestMode,
   defaultChannelNameForProvider,
   presetsFor,
   shouldRecycleDraft,
-} from './ChannelList';
+} from './channelCatalog';
 
 // A scrolled settings panel must not shift drag hit testing by the scroll offset.
 const offsetParent = {

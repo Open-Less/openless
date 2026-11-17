@@ -2,8 +2,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import * as api from '../../lib/ipc/cloud-sync-e2ee';
-import type { EncryptedSyncStatus, RestorePreview } from '../../lib/ipc/cloud-sync-e2ee';
+import * as api from '../../api/cloud-sync';
+import { matchesRestorePreview } from './restoreContext';
+import type { EncryptedSyncStatus, RestorePreview } from '../../api/cloud-sync';
 
 // Replay the real component handlers; only React rendering/hooks and IPC/event
 // boundaries are replaced. No browser vault, password store or network is used.
@@ -71,23 +72,35 @@ function find(tree: unknown, predicate: (node: Node) => boolean): Node {
   return node;
 }
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-const source = readFileSync(new URL('./CloudSyncSection.tsx', import.meta.url), 'utf8');
-const parsed = ts.createSourceFile(
-  'CloudSyncSection.tsx',
-  source,
-  ts.ScriptTarget.ES2020,
-  true,
-  ts.ScriptKind.TSX,
+const sources = ['CloudSyncSection.tsx', 'RestoreReview.tsx'].map((name) =>
+  ts.createSourceFile(
+    name,
+    readFileSync(new URL(name, import.meta.url), 'utf8'),
+    ts.ScriptTarget.ES2020,
+    true,
+    ts.ScriptKind.TSX,
+  ),
 );
-const imports = parsed.statements.filter(ts.isImportDeclaration).flatMap((node) => {
-  const bindings = node.importClause?.namedBindings;
-  return bindings && ts.isNamedImports(bindings)
-    ? bindings.elements.map((item) => item.name.text)
-    : [];
-});
-const body = parsed.statements
-  .filter((node) => !ts.isImportDeclaration(node))
-  .map((node) => node.getFullText(parsed))
+const imports = [
+  ...new Set(
+    sources.flatMap((parsed) =>
+      parsed.statements.filter(ts.isImportDeclaration).flatMap((node) => {
+        const bindings = node.importClause?.namedBindings;
+        return bindings && ts.isNamedImports(bindings)
+          ? bindings.elements
+              .map((item) => item.name.text)
+              .filter((name) => name !== 'RestoreReview')
+          : [];
+      }),
+    ),
+  ),
+];
+const body = sources
+  .flatMap((parsed) =>
+    parsed.statements
+      .filter((node) => !ts.isImportDeclaration(node))
+      .map((node) => node.getFullText(parsed)),
+  )
   .join('\n')
   .replace("import('@tauri-apps/api/event')", 'Promise.resolve({listen: __listen})');
 const compiled = ts.transpileModule(body, {
@@ -181,7 +194,8 @@ const dependencies: Record<string, any> = {
   Btn: 'button',
   Card: 'card',
   Toggle: 'toggle',
-  isTauriNow: () => true,
+  isTauriHost: () => true,
+  matchesRestorePreview,
   marketplaceAuthStatus: async () => ({ signedIn: mockMarketplaceSignedIn }),
   cloudSyncE2eeStatus: async () => deferredStatus ?? { ...server },
   mirrorEncryptedSyncUiPreferences: async () => {

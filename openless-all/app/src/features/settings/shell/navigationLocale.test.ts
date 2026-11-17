@@ -1,12 +1,12 @@
 import { createInstance } from 'i18next';
-import { zhCN } from '../../i18n/zh-CN';
-import { zhTW } from '../../i18n/zh-TW';
-import { en } from '../../i18n/en';
-import { ja } from '../../i18n/ja';
-import { ko } from '../../i18n/ko';
-import { de } from '../../i18n/de';
-import { fr } from '../../i18n/fr';
-import { es } from '../../i18n/es';
+import { zhCN } from '../../../i18n/zh-CN';
+import { zhTW } from '../../../i18n/zh-TW';
+import { en } from '../../../i18n/en';
+import { ja } from '../../../i18n/ja';
+import { ko } from '../../../i18n/ko';
+import { de } from '../../../i18n/de';
+import { fr } from '../../../i18n/fr';
+import { es } from '../../../i18n/es';
 import { ADVANCED_PAGES, SETTINGS_SECTIONS, searchSettingsSections } from './navigation';
 
 const retiredServiceNames = [

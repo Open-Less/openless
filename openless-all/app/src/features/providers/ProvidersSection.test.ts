@@ -1,6 +1,5 @@
-import { LLM_LABELS } from './ProvidersSection';
-import { ASR_LABELS } from './shared';
-import { presetsFor } from './ChannelList';
+import { ASR_LABELS, LLM_LABELS } from './labels';
+import { presetsFor } from './channelCatalog';
 import { filterOrcaRouterModels } from '../../lib/ipc/asr-credentials';
 
 const atlascloudPreset = LLM_LABELS.find((p) => p.id === 'atlascloud');

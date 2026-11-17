@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const source = readFileSync(
-  new URL('../src/components/CloudSyncSetupPrompt.tsx', import.meta.url),
+  new URL('../src/features/cloud-sync/CloudSyncSetupPrompt.tsx', import.meta.url),
   'utf8',
 );
 const code = ts.transpileModule(source, {
@@ -75,15 +75,15 @@ function context({ native = true, blocked = false } = {}) {
     'react-i18next': { useTranslation: () => ({ t: (k) => k }) },
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
     'lucide-react': { CloudIcon: 'cloud', XIcon: 'x' },
-    '../lib/ipc/shared': { isTauri: native },
-    '../lib/ipc/cloud-sync-e2ee': {
+    '../../runtime/environment': { isTauriHost: () => native },
+    '../../api/cloud-sync': {
       cloudSyncE2eeClaimSetupPrompt: async () => {
         calls++;
         return typeof response === 'function' ? response() : response;
       },
     },
-    '../pages/settings/CloudSyncSection': { CloudSyncSection: 'sync-section' },
-    './ui/Modal': {
+    './CloudSyncSection': { CloudSyncSection: 'sync-section' },
+    '../../ui/overlays/Modal': {
       // Eligibility tests do not advance animation clocks; closed presence has
       // no interactive content. Browser tests verify its retained inert exit.
       PresenceModal: ({ open, render, ...props }) =>

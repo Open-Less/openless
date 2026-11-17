@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ExperimentalSectionTitle } from './shared';
+import { ExperimentalSectionLabel } from './ExperimentalSectionLabel';
 
 const markup = renderToStaticMarkup(
-  ExperimentalSectionTitle({ children: 'Local ASR models', badge: 'Experimental' }),
+  ExperimentalSectionLabel({ children: 'Local ASR models', badge: 'Experimental' }),
 );
 
 if (!markup.includes('Local ASR models')) {
