@@ -1461,9 +1461,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   .ol-omni-advanced-fields > * {
     grid-column: 1 / -1;
   }
-  .ol-omni-model-picker > * {
-    grid-column: 1 / -1;
-  }
 }
 
 .ol-settings-surface[data-ol-mobile='true'] {
@@ -2367,6 +2364,11 @@ html:lang(de) {
   grid-column: 4 / 7;
   min-width: 0;
   width: 100%;
+}
+@media (max-width: 720px) {
+  .ol-omni-model-picker > * {
+    grid-column: 1 / -1;
+  }
 }
 .ol-omni-model-picker .ol-select-trigger {
   width: 100%;

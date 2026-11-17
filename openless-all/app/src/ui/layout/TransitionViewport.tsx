@@ -111,7 +111,6 @@ export function TransitionViewport({
           </TransitionSurface>
         );
       })}
-      <div className="ol-transition-mask" aria-hidden="true" />
     </div>
   );
 }
