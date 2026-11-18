@@ -88,7 +88,6 @@ export function SettingsModal({
     contentDescription,
     contentTitle,
     destination,
-    headingRef,
     jumpToAsr,
     openAdvancedPage,
     openLocalModels,
@@ -182,308 +181,313 @@ export function SettingsModal({
   );
 
   return (
-    <VoiceEnhancementDepthContext.Provider
-      value={{ open: voiceSettingsOpen, setOpen: setVoiceSettingsOpen }}
-    >
-      <ProviderLeaveContext.Provider value={providerForm.register}>
-        <ViewportPortal>
-          <div
-            ref={overlayRef}
-            className="ol-settings-workspace"
-            style={{
-              position: layer.boundary ? 'absolute' : mobile ? 'fixed' : 'absolute',
-              inset: 0,
-              background: 'var(--ol-surface)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              zIndex: layer.priority,
-              pointerEvents: closing ? 'none' : undefined,
-            }}
-          >
-            <PopupContainer.Provider value={layer.popupHost}>
-              <div
-                ref={surfaceRef}
-                role="dialog"
-                aria-label={t('shell.footer.settings')}
-                className="ol-settings-surface"
-                data-ol-mobile={mobile ? 'true' : undefined}
-                onClick={(event) => event.stopPropagation()}
-                tabIndex={-1}
-                style={{
-                  width: '100%',
-                  maxWidth: '100%',
-                  height: '100%',
-                  maxHeight: '100%',
-                  minHeight: 0,
-                  background: 'var(--ol-settings-content-bg)',
-                  borderRadius: 0,
-                  border: 'none',
-                  boxShadow: 'none',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                }}
-              >
-                {/* Desktop no longer has a title bar spanning both columns;
+    <ProviderLeaveContext.Provider value={providerForm.register}>
+      <ViewportPortal>
+        <div
+          ref={overlayRef}
+          className="ol-settings-workspace"
+          style={{
+            position: layer.boundary ? 'absolute' : mobile ? 'fixed' : 'absolute',
+            inset: 0,
+            background: 'var(--ol-surface)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            zIndex: layer.priority,
+            pointerEvents: closing ? 'none' : undefined,
+          }}
+        >
+          <PopupContainer.Provider value={layer.popupHost}>
+            <div
+              ref={surfaceRef}
+              role="dialog"
+              aria-label={t('shell.footer.settings')}
+              className="ol-settings-surface"
+              data-ol-mobile={mobile ? 'true' : undefined}
+              onClick={(event) => event.stopPropagation()}
+              tabIndex={-1}
+              style={{
+                width: '100%',
+                maxWidth: '100%',
+                height: '100%',
+                maxHeight: '100%',
+                minHeight: 0,
+                background: 'var(--ol-settings-content-bg)',
+                borderRadius: 0,
+                border: 'none',
+                boxShadow: 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }}
+            >
+              {/* Desktop no longer has a title bar spanning both columns;
             the sidebar and content each run to the top, with title/auto-save/close
             folded into the right column's top. Mobile keeps the full-width header
             (title + close + full-row search). */}
-                {mobile && (
-                  <header
+              {mobile && (
+                <header
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    padding: 'calc(12px + env(safe-area-inset-top, 0px)) 16px 12px',
+                    borderBottom: '0.5px solid var(--ol-line-soft)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <div
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                      gap: 12,
-                      padding: 'calc(12px + env(safe-area-inset-top, 0px)) 16px 12px',
-                      borderBottom: '0.5px solid var(--ol-line-soft)',
-                      flexShrink: 0,
+                      flex: 1,
+                      order: 0,
+                      fontSize: 17,
+                      fontWeight: 'var(--ol-font-weight-demibold)',
                     }}
                   >
-                    <div
-                      style={{
-                        flex: 1,
-                        order: 0,
-                        fontSize: 17,
-                        fontWeight: 'var(--ol-font-weight-demibold)',
-                      }}
-                    >
-                      {t('shell.footer.settings')}
-                    </div>
+                    {t('shell.footer.settings')}
+                  </div>
+                  <button
+                    ref={closeRef}
+                    type="button"
+                    onClick={closeSettings}
+                    aria-label={t('common.close')}
+                    style={{ ...iconButtonStyle, order: 1 }}
+                  >
+                    <Icon name="close" size={17} />
+                  </button>
+                  <div style={{ order: 2, flex: '1 0 100%', minWidth: 0 }}>{searchBox}</div>
+                </header>
+              )}
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: 'flex',
+                  flexDirection: mobile ? 'column' : 'row',
+                }}
+              >
+                <aside
+                  style={{
+                    width: mobile ? undefined : 226,
+                    flexShrink: 0,
+                    minHeight: 0,
+                    overflow: 'auto',
+                    padding: mobile ? '8px 12px' : os === 'mac' ? '48px 12px 16px' : '20px 12px',
+                    background: 'var(--ol-settings-rail-bg)',
+                    borderRight: mobile ? undefined : '0.5px solid var(--ol-line-soft)',
+                    borderBottom: mobile ? '0.5px solid var(--ol-line-soft)' : undefined,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                  }}
+                >
+                  {!mobile && (
                     <button
                       ref={closeRef}
                       type="button"
+                      className="ol-settings-return ol-settings-rail-link"
                       onClick={closeSettings}
-                      aria-label={t('common.close')}
-                      style={{ ...iconButtonStyle, order: 1 }}
                     >
-                      <Icon name="close" size={17} />
+                      <Icon name="chevLeft" size={16} />
+                      {t('uiRefinement.back')}
                     </button>
-                    <div style={{ order: 2, flex: '1 0 100%', minWidth: 0 }}>{searchBox}</div>
-                  </header>
-                )}
-                <div
-                  style={{
-                    flex: 1,
-                    minHeight: 0,
-                    display: 'flex',
-                    flexDirection: mobile ? 'column' : 'row',
-                  }}
-                >
-                  <aside
+                  )}
+                  {!mobile && searchBox}
+                  <nav
+                    aria-label={t('modal.categoriesLabel')}
+                    className="ol-thinscroll"
                     style={{
-                      width: mobile ? undefined : 226,
-                      flexShrink: 0,
-                      minHeight: 0,
-                      overflow: 'auto',
-                      padding: mobile ? '8px 12px' : os === 'mac' ? '48px 12px 16px' : '20px 12px',
-                      background: 'var(--ol-settings-rail-bg)',
-                      borderRight: mobile ? undefined : '0.5px solid var(--ol-line-soft)',
-                      borderBottom: mobile ? '0.5px solid var(--ol-line-soft)' : undefined,
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: 12,
+                      flexDirection: mobile ? 'row' : 'column',
+                      gap: 4,
+                      overflowX: mobile ? 'auto' : undefined,
                     }}
                   >
-                    {!mobile && (
-                      <button
-                        ref={closeRef}
-                        type="button"
-                        className="ol-settings-return ol-settings-rail-link"
-                        onClick={closeSettings}
-                      >
-                        <Icon name="chevLeft" size={16} />
-                        {t('uiRefinement.back')}
-                      </button>
-                    )}
-                    {!mobile && searchBox}
-                    <nav
-                      aria-label={t('modal.categoriesLabel')}
-                      className="ol-thinscroll"
-                      style={{
-                        display: 'flex',
-                        flexDirection: mobile ? 'row' : 'column',
-                        gap: 4,
-                        overflowX: mobile ? 'auto' : undefined,
-                      }}
-                    >
-                      {/* States (idle / hover / selected) come from .ol-settings-rail-btn, the
+                    {/* States (idle / hover / selected) come from .ol-settings-rail-btn, the
                     same selection language as the main sidebar. */}
-                      {sections.map((item) => {
-                        const active = !searching && section === item.id;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            aria-current={active ? 'page' : undefined}
-                            onClick={() => selectSection(item.id)}
-                            className="ol-settings-rail-btn"
-                            style={{
-                              ...railButtonStyle,
-                              padding: mobile ? '8px 10px' : '10px',
-                              whiteSpace: mobile ? 'nowrap' : 'normal',
-                            }}
-                          >
-                            {!mobile && <Icon name={item.icon} size={16} />}
-                            <span
-                              style={{ minWidth: 0, overflowWrap: mobile ? undefined : 'anywhere' }}
-                            >
-                              {item.title}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </nav>
-                    {!mobile && <HelpLinks />}
-                  </aside>
-                  <div
-                    ref={setChannelContainer}
-                    className="ol-settings-content-pane"
-                    data-ol-advanced={section === 'advanced' && !searching ? 'true' : undefined}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      minHeight: 0,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      position: 'relative',
-                    }}
-                  >
-                    <ChannelEditorHostContext.Provider
-                      value={{
-                        container: channelContainer,
-                        background: channelBackground,
-                        registerClose: (close) => {
-                          channelCloseRef.current = close;
-                        },
-                      }}
-                    >
-                      <div
-                        ref={setChannelBackground}
-                        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
-                      >
-                        {/* Desktop: the category title + auto-save hint + close button form
-                the right column's own top bar (like System Settings: the toolbar
-                belongs to the content area, no longer spanning the sidebar). */}
-                        {(!mobile || activeAdvancedPage || activeGeneralPage) && (
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 12,
-                              padding: mobile
-                                ? '18px var(--ol-grid-margin, 24px) 0'
-                                : os === 'mac'
-                                  ? '48px var(--ol-grid-margin, 28px) 0'
-                                  : '24px var(--ol-grid-margin, 28px) 0',
-                              flexShrink: 0,
-                            }}
-                          >
-                            {(activeAdvancedPage || activeGeneralPage) && (
-                              <button
-                                type="button"
-                                className="ol-settings-back"
-                                onClick={
-                                  activeAdvancedPage
-                                    ? backToAdvanced
-                                    : () => onGeneralPageChange('root')
-                                }
-                                aria-label={t('modal.back')}
-                                title={t('modal.back')}
-                              >
-                                <Icon name="chevLeft" size={19} />
-                              </button>
-                            )}
-                            <h2
-                              ref={headingRef}
-                              tabIndex={-1}
-                              style={{
-                                margin: 0,
-                                flex: 1,
-                                minWidth: 0,
-                                fontSize: 21,
-                                fontWeight: 'var(--ol-font-weight-demibold)',
-                                letterSpacing: '-0.025em',
-                                outline: 'none',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {contentTitle}
-                              {activeAdvancedPage &&
-                                'beta' in activeAdvancedPage &&
-                                activeAdvancedPage.beta && (
-                                  <span className="ol-beta-tag">Beta</span>
-                                )}
-                            </h2>
-                            {!mobile && (
-                              <span
-                                style={{ color: 'var(--ol-ink-3)', fontSize: 12, flexShrink: 0 }}
-                              >
-                                {t('modal.autoSaveHint')}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        <div
+                    {sections.map((item) => {
+                      const active = !searching && section === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          aria-current={active ? 'page' : undefined}
+                          onClick={() => selectSection(item.id)}
+                          className="ol-settings-rail-btn"
                           style={{
-                            padding: mobile ? '18px 16px 12px' : '8px 28px 12px',
-                            flexShrink: 0,
+                            ...railButtonStyle,
+                            padding: mobile ? '8px 10px' : '10px',
+                            whiteSpace: mobile ? 'nowrap' : 'normal',
                           }}
                         >
-                          {mobile && !activeAdvancedPage && !activeGeneralPage && (
-                            <h2
-                              ref={headingRef}
-                              tabIndex={-1}
+                          {!mobile && <Icon name={item.icon} size={16} />}
+                          <span
+                            style={{ minWidth: 0, overflowWrap: mobile ? undefined : 'anywhere' }}
+                          >
+                            {item.title}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </nav>
+                  {!mobile && <HelpLinks />}
+                </aside>
+                <div
+                  ref={setChannelContainer}
+                  className="ol-settings-content-pane"
+                  data-ol-advanced={section === 'advanced' && !searching ? 'true' : undefined}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    minHeight: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    position: 'relative',
+                  }}
+                >
+                  <ChannelEditorHostContext.Provider
+                    value={{
+                      container: channelContainer,
+                      background: channelBackground,
+                      registerClose: (close) => {
+                        channelCloseRef.current = close;
+                      },
+                    }}
+                  >
+                    <div
+                      ref={setChannelBackground}
+                      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+                    >
+                      <TransitionViewport
+                        mode="page"
+                        header={
+                          <>
+                            {/* The toolbar belongs to its page; retained forms keep their matching title. */}
+                            {(!mobile || activeAdvancedPage || activeGeneralPage) && (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 12,
+                                  padding: mobile
+                                    ? '18px var(--ol-grid-margin, 24px) 0'
+                                    : os === 'mac'
+                                      ? '48px var(--ol-grid-margin, 28px) 0'
+                                      : '24px var(--ol-grid-margin, 28px) 0',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {(activeAdvancedPage || activeGeneralPage) && (
+                                  <button
+                                    type="button"
+                                    className="ol-settings-back"
+                                    onClick={
+                                      activeAdvancedPage
+                                        ? backToAdvanced
+                                        : () => onGeneralPageChange('root')
+                                    }
+                                    aria-label={t('modal.back')}
+                                    title={t('modal.back')}
+                                  >
+                                    <Icon name="chevLeft" size={19} />
+                                  </button>
+                                )}
+                                <h2
+                                  tabIndex={-1}
+                                  style={{
+                                    margin: 0,
+                                    flex: 1,
+                                    minWidth: 0,
+                                    fontSize: 21,
+                                    fontWeight: 'var(--ol-font-weight-demibold)',
+                                    letterSpacing: '-0.025em',
+                                    outline: 'none',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {contentTitle}
+                                  {activeAdvancedPage &&
+                                    'beta' in activeAdvancedPage &&
+                                    activeAdvancedPage.beta && (
+                                      <span className="ol-beta-tag">Beta</span>
+                                    )}
+                                </h2>
+                                {!mobile && (
+                                  <span
+                                    style={{
+                                      color: 'var(--ol-ink-3)',
+                                      fontSize: 12,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    {t('modal.autoSaveHint')}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            <div
                               style={{
-                                margin: 0,
-                                fontSize: 20,
-                                fontWeight: 'var(--ol-font-weight-demibold)',
-                                letterSpacing: '-0.025em',
-                                outline: 'none',
+                                padding: mobile ? '18px 16px 12px' : '8px 28px 12px',
+                                flexShrink: 0,
                               }}
                             >
-                              {contentTitle}
-                            </h2>
-                          )}
-                          {activeAdvancedPage?.id !== 'localModels' && (
-                            <p
-                              style={{
-                                margin:
-                                  mobile && !activeAdvancedPage && !activeGeneralPage
-                                    ? '7px 0 0'
-                                    : 0,
-                                fontSize: 13,
-                                lineHeight: 1.6,
-                                color: 'var(--ol-ink-3)',
-                              }}
-                              aria-live="polite"
-                            >
-                              {contentDescription}
-                            </p>
-                          )}
-                        </div>
-                        <TransitionViewport
-                          scrollRef={scrollRef}
-                          onEntered={focusReturnedEntry}
-                          contentKey={`${destination}:${showingVoiceSettings ? 'dsp' : 'page'}:${searching ? 'search' : 'content'}`}
-                          className={[
-                            'ol-thinscroll ol-settings-scroll',
-                            conservative ? 'ol-conservative-scope' : '',
-                          ].join(' ')}
-                          style={{
-                            flex: 1,
-                            minHeight: 0,
-                            overflow: 'auto',
-                            padding: mobile
-                              ? '0 16px calc(20px + env(safe-area-inset-bottom, 0px))'
-                              : section === 'services'
-                                ? '0 28px 6px'
-                                : '0 28px 28px',
-                          }}
+                              {mobile && !activeAdvancedPage && !activeGeneralPage && (
+                                <h2
+                                  tabIndex={-1}
+                                  style={{
+                                    margin: 0,
+                                    fontSize: 20,
+                                    fontWeight: 'var(--ol-font-weight-demibold)',
+                                    letterSpacing: '-0.025em',
+                                    outline: 'none',
+                                  }}
+                                >
+                                  {contentTitle}
+                                </h2>
+                              )}
+                              {activeAdvancedPage?.id !== 'localModels' && (
+                                <p
+                                  style={{
+                                    margin:
+                                      mobile && !activeAdvancedPage && !activeGeneralPage
+                                        ? '7px 0 0'
+                                        : 0,
+                                    fontSize: 13,
+                                    lineHeight: 1.6,
+                                    color: 'var(--ol-ink-3)',
+                                  }}
+                                  aria-live="polite"
+                                >
+                                  {contentDescription}
+                                </p>
+                              )}
+                            </div>
+                          </>
+                        }
+                        scrollRef={scrollRef}
+                        onEntered={focusReturnedEntry}
+                        contentKey={`${destination}:${showingVoiceSettings ? 'dsp' : 'page'}:${searching ? 'search' : 'content'}`}
+                        className={[
+                          'ol-thinscroll ol-settings-scroll',
+                          conservative ? 'ol-conservative-scope' : '',
+                        ].join(' ')}
+                        style={{
+                          flex: 1,
+                          minHeight: 0,
+                          overflow: 'auto',
+                          padding: mobile
+                            ? '0 16px calc(20px + env(safe-area-inset-bottom, 0px))'
+                            : section === 'services'
+                              ? '0 28px 6px'
+                              : '0 28px 28px',
+                        }}
+                      >
+                        <VoiceEnhancementDepthContext.Provider
+                          value={{ open: voiceSettingsOpen, setOpen: setVoiceSettingsOpen }}
                         >
                           {searching && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -598,22 +602,22 @@ export function SettingsModal({
                             {section === 'about' && <AboutTab />}
                           </div>
                           {mobile && !searching && <HelpLinks />}
-                        </TransitionViewport>
-                      </div>
-                    </ChannelEditorHostContext.Provider>
-                  </div>
+                        </VoiceEnhancementDepthContext.Provider>
+                      </TransitionViewport>
+                    </div>
+                  </ChannelEditorHostContext.Provider>
                 </div>
               </div>
-            </PopupContainer.Provider>
-            <div ref={layer.setPopupHost} />
-          </div>
-        </ViewportPortal>
-        <ExperimentalAsrGuidance
-          controller={experimentalAsr}
-          onOpenAsr={openExperimentalAsrChannels}
-        />
-      </ProviderLeaveContext.Provider>
-    </VoiceEnhancementDepthContext.Provider>
+            </div>
+          </PopupContainer.Provider>
+          <div ref={layer.setPopupHost} />
+        </div>
+      </ViewportPortal>
+      <ExperimentalAsrGuidance
+        controller={experimentalAsr}
+        onOpenAsr={openExperimentalAsrChannels}
+      />
+    </ProviderLeaveContext.Provider>
   );
 }
 

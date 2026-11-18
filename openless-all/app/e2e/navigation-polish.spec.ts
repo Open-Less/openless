@@ -9,110 +9,131 @@ async function settings(page: Page) {
   return dialog;
 }
 
-test('a pending lazy page keeps the old page visible and crossfades without blur or scale', async ({
-  page,
-}) => {
-  let release!: () => void;
-  let requested!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const request = new Promise<void>((resolve) => {
-    requested = resolve;
-  });
-  await page.route(/\/assets\/History-[^/]+\.js/, async (route) => {
-    requested();
-    await gate;
-    await route.continue();
-  });
-  await page.goto('/?os=mac');
-  await page.getByRole('button', { name: '历史', exact: true }).click();
-  await request;
-  const previous = page.locator('main [data-transition-phase="settled"]');
-  await expect(previous.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
-  await expect(previous).toHaveCSS('opacity', '1');
-  await page.evaluate(() => {
-    const animate = Element.prototype.animate;
-    (window as any).navigationAnimations = [];
-    (window as any).restoreNavigationClock = () => {
-      Element.prototype.animate = animate;
-    };
-    Element.prototype.animate = function (keyframes, options) {
-      const animation = animate.call(this, keyframes, options);
-      if (
-        this.matches('main [data-transition-phase="enter"], main [data-transition-phase="exit"]')
-      ) {
-        // Sample the native timeline deterministically even when a busy runner skips RAF callbacks.
-        animation.pause();
-        animation.currentTime = 0;
-        (window as any).navigationAnimations.push({ animation, element: this });
-      }
-      return animation;
-    };
-  });
-  release();
-  await page.waitForFunction(() => {
-    const active = (window as any).navigationAnimations as { animation: Animation }[];
-    return ['ol-page-enter', 'ol-page-exit'].every((id) =>
-      active.some(({ animation }) => animation.id === id && animation.playState !== 'idle'),
-    );
-  });
-  const samples = await page.evaluate(async () => {
-    const active = (
-      (window as any).navigationAnimations as { animation: Animation; element: Element }[]
-    ).filter(({ animation }) => animation.playState !== 'idle');
-    await Promise.all(active.map(({ animation }) => animation.ready));
-    const end = Math.max(
-      ...active.map(({ animation }) => Number(animation.effect!.getComputedTiming().endTime)),
-    );
+type NavigationProbe = Window & { restoreNavigationClock?: () => void };
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`a pending page leaves its layout in place, then fades through the ${theme} surface`, async ({
+    page,
+  }, testInfo) => {
+    let release!: () => void;
+    let requested!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const request = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    await page.route(/\/assets\/History-[^/]+\.js/, async (route) => {
+      requested();
+      await gate;
+      await route.continue();
+    });
+    await page.emulateMedia({ colorScheme: theme });
+    await page.goto('/?os=mac');
+    await expect(page.locator('html')).toHaveCSS('color-scheme', theme);
+    const viewport = page.locator('main .ol-transition-viewport');
+    const overview = viewport.locator('[data-ol-page="overview"]');
+    const history = viewport.locator('[data-ol-page="history"]');
     try {
-      return Array.from({ length: 20 }, (_, index) => {
-        for (const { animation } of active) animation.currentTime = (end * index) / 20;
-        return active.map(({ element }) => {
-          const style = getComputedStyle(element);
-          return {
-            phase: element.getAttribute('data-transition-phase'),
-            opacity: Number(style.opacity),
-            filter: style.filter,
-            scale: new DOMMatrixReadOnly(style.transform).m11,
-          };
-        });
+      await page.getByRole('button', { name: '历史', exact: true }).click();
+      await request;
+      await expect(overview).toHaveAttribute('data-transition-phase', 'retained');
+      await expect(overview.getByText('今日概览', { exact: true })).toBeVisible();
+      await expect(overview).toHaveCSS('opacity', '1');
+      await expect(overview).toHaveCSS('overflow', 'hidden');
+      await expect(overview).toHaveClass(/\bol-page-fixed\b/);
+      await expect(history).toHaveAttribute('data-transition-phase', 'waiting');
+      await expect(history).toHaveCSS('opacity', '0');
+      await page.evaluate(() => {
+        const animate = Element.prototype.animate;
+        (window as NavigationProbe).restoreNavigationClock = () => {
+          Element.prototype.animate = animate;
+        };
+        Element.prototype.animate = function (keyframes, options) {
+          const animation = animate.call(this, keyframes, options);
+          if (
+            this.matches(
+              'main [data-transition-phase="enter"], main [data-transition-phase="exit"]',
+            )
+          ) {
+            // Sample the real effect without depending on a busy runner painting every frame.
+            animation.pause();
+            animation.currentTime = 0;
+          }
+          return animation;
+        };
       });
+      release();
+
+      const sample = async (surface: typeof overview, phase: 'exit' | 'enter') => {
+        await expect(surface).toHaveAttribute('data-transition-phase', phase);
+        return surface.evaluate(async (element, id) => {
+          const animation = element.getAnimations().find((candidate) => candidate.id === id)!;
+          await animation.ready;
+          const duration = Number(animation.effect!.getComputedTiming().activeDuration);
+          return [0, 0.35, 0.7].map((fraction) => {
+            animation.currentTime = duration * fraction;
+            const style = getComputedStyle(element);
+            return {
+              opacity: Number(style.opacity),
+              blur: parseFloat(style.filter.match(/blur\(([\d.]+)px\)/)?.[1] ?? '0'),
+              scale: new DOMMatrixReadOnly(style.transform).m11,
+            };
+          });
+        }, `ol-page-${phase}`);
+      };
+      const exit = await sample(overview, 'exit');
+      await page.screenshot({
+        path: testInfo.outputPath(`acceptance-transition-${theme}-exit.png`),
+      });
+      await expect(history).toHaveAttribute('data-transition-phase', 'waiting');
+      await expect(history).toHaveCSS('opacity', '0');
+      expect(exit[0].opacity).toBe(1);
+      expect(exit[1].opacity).toBeGreaterThan(exit[2].opacity);
+      expect(exit[0].blur).toBeLessThan(exit[1].blur);
+      expect(exit[1].blur).toBeLessThan(exit[2].blur);
+      await overview.evaluate((el) =>
+        el
+          .getAnimations()
+          .find((a) => a.id === 'ol-page-exit')!
+          .finish(),
+      );
+
+      await expect(history).toHaveAttribute('data-transition-phase', 'enter');
+      await expect(overview).toHaveCSS('opacity', '0');
+      await expect(history).toHaveCSS('opacity', '0');
+      await expect(viewport).toHaveCSS(
+        'background-color',
+        theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(28, 28, 31)',
+      );
+      await page.screenshot({
+        path: testInfo.outputPath(`acceptance-transition-${theme}-surface.png`),
+      });
+      const enter = await sample(history, 'enter');
+      await page.screenshot({
+        path: testInfo.outputPath(`acceptance-transition-${theme}-enter.png`),
+      });
+      expect(enter[0].opacity).toBe(0);
+      expect(enter[1].opacity).toBeLessThan(enter[2].opacity);
+      expect(enter[0].blur).toBeGreaterThan(enter[1].blur);
+      expect(enter[1].blur).toBeGreaterThan(enter[2].blur);
+      expect([...exit, ...enter].map(({ scale }) => scale)).toEqual(Array(6).fill(1));
+      await history.evaluate((el) =>
+        el
+          .getAnimations()
+          .find((a) => a.id === 'ol-page-enter')!
+          .play(),
+      );
+      await expect(history).toHaveAttribute('data-transition-phase', 'settled');
+      await expect(history).toHaveCSS('opacity', '1');
+      await expect(history).toHaveCSS('filter', 'none');
+      await expect(overview).toHaveCount(0);
     } finally {
-      (window as any).restoreNavigationClock();
-      for (const { animation } of active) animation.play();
+      release();
+      await page.evaluate(() => (window as NavigationProbe).restoreNavigationClock?.());
     }
   });
-  await expect(page.locator('[data-ol-page="history"]')).toHaveAttribute(
-    'data-transition-phase',
-    'settled',
-  );
-  expect(
-    samples.some((frame) =>
-      frame.some(
-        (node) =>
-          node.phase === 'exit' &&
-          node.opacity > 0 &&
-          node.opacity < 1 &&
-          Math.abs(node.scale - 1) < 0.02 &&
-          node.filter === 'none',
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    samples.some((frame) =>
-      frame.some(
-        (node) =>
-          node.phase === 'enter' &&
-          node.opacity > 0 &&
-          node.opacity < 1 &&
-          Math.abs(node.scale - 1) < 0.02 &&
-          node.filter === 'none',
-      ),
-    ),
-  ).toBe(true);
-  expect(samples.every((frame) => frame.some((node) => node.opacity > 0.01))).toBe(true);
-});
+}
 
 test('fetching and selecting models keeps the form and verify button at the same position', async ({
   page,

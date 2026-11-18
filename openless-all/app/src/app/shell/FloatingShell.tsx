@@ -465,6 +465,7 @@ function FloatingShellBody({
                   - height:100% pages (History's two columns): 100% resolves against the
                     wrapper's fixed height so each column's own overflow:auto can scroll */}
             <TransitionViewport
+              mode="page"
               scrollRef={pageRef}
               contentKey={displayTab}
               page={displayTab}

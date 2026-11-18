@@ -38,12 +38,12 @@ export function useSettingsNavigation({
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
   const searchRef = useRef<HTMLInputElement>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingQuery = useRef('');
   const returnEntry = useRef<GeneralPageId | AdvancedPageId | null>(null);
+  const focusHeading = useRef(false);
   const supportsShortcuts = platformCaps?.supportsDesktopHotkey ?? (os === 'mac' || os === 'win');
   const sections = visibleSettingsSections(supportsShortcuts, platformCaps?.platform).map(
     (item) => ({
@@ -124,6 +124,7 @@ export function useSettingsNavigation({
     });
   };
   const changeQuery = (next: string) => {
+    focusHeading.current = false;
     if (!channelCloseRef.current && (section !== 'services' || searching)) {
       setQuery(next);
       return;
@@ -137,11 +138,13 @@ export function useSettingsNavigation({
   };
   const openAdvancedPage = (page: AdvancedPageId) => {
     returnEntry.current = null;
+    focusHeading.current = true;
     setAdvancedPage(page);
-    window.requestAnimationFrame(() => headingRef.current?.focus());
   };
   const backToAdvanced = () => {
+    focusHeading.current = false;
     if (advancedPage === 'voiceEnhancement' && voiceSettingsOpen) {
+      focusHeading.current = true;
       setVoiceSettingsOpen(false);
       return;
     }
@@ -152,14 +155,26 @@ export function useSettingsNavigation({
   };
   const onGeneralPageChange = (page: GeneralPageId | 'root') => {
     if (page === 'root') {
+      focusHeading.current = false;
       returnEntry.current = activeGeneralPage?.id ?? null;
     } else {
       returnEntry.current = null;
-      window.requestAnimationFrame(() => headingRef.current?.focus());
+      focusHeading.current = true;
     }
     setGeneralPage(page);
   };
   const focusReturnedEntry = () => {
+    if (focusHeading.current) {
+      // The heading belongs to the incoming surface and cannot receive focus while inert.
+      const heading = surfaceRef.current?.querySelector<HTMLElement>(
+        '[data-transition-phase="settled"] h2',
+      );
+      if (heading && !heading.closest('[inert]')) {
+        heading.focus({ preventScroll: true });
+        if (document.activeElement === heading) focusHeading.current = false;
+      }
+      return;
+    }
     const id = returnEntry.current;
     if (!id) return;
     const attribute = section === 'general' ? 'data-ol-general-entry' : 'data-ol-advanced-entry';
@@ -181,8 +196,8 @@ export function useSettingsNavigation({
       setAdvancedPage(null);
       setGeneralPage('root');
       returnEntry.current = null;
+      focusHeading.current = fromSearch;
       setQuery('');
-      if (fromSearch) window.requestAnimationFrame(() => headingRef.current?.focus());
     });
   };
   const jumpToAsr = () => {
@@ -191,10 +206,12 @@ export function useSettingsNavigation({
     setAdvancedPage(null);
     setGeneralPage('root');
     returnEntry.current = null;
+    focusHeading.current = false;
     setSection('services');
   };
   const onEscape = () => {
     if (query) {
+      focusHeading.current = false;
       setQuery('');
       searchRef.current?.focus();
     } else if (activeAdvancedPage) backToAdvanced();
@@ -216,7 +233,6 @@ export function useSettingsNavigation({
     contentDescription,
     contentTitle,
     destination: `${section}:${activeAdvancedPage?.id ?? activeGeneralPage?.id ?? ''}`,
-    headingRef,
     jumpToAsr,
     onEscape,
     openAdvancedPage,
@@ -236,6 +252,9 @@ export function useSettingsNavigation({
     scrollRef,
     surfaceRef,
     voiceSettingsOpen,
-    setVoiceSettingsOpen,
+    setVoiceSettingsOpen: (open: boolean) => {
+      focusHeading.current = true;
+      setVoiceSettingsOpen(open);
+    },
   };
 }

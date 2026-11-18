@@ -99,11 +99,11 @@ test('returning to General retires Appearance when its animation finishes during
     Element.prototype.animate = function (keyframes, options) {
       const animation = animate.call(this, keyframes, options);
       if (
-        this.matches('.ol-settings-scroll[data-transition-phase="enter"]') &&
+        this.matches('.ol-transition-page-with-header[data-transition-phase="enter"]') &&
         this.querySelector('[data-section="appearance"]')
       ) {
         Element.prototype.animate = animate;
-        // Finish the painted crossfade while the real return click is being handled.
+        // Finish the painted entrance while the real return click is being handled.
         animation.pause();
         const duration = animation.effect?.getComputedTiming().activeDuration ?? 0;
         animation.currentTime = duration / 2;
@@ -127,6 +127,53 @@ test('returning to General retires Appearance when its animation finishes during
   await page.keyboard.press('Escape');
   await expect(recording).toBeFocused();
   await expect(surfaces).toHaveCount(1);
+});
+
+test('settings retains the old title with its form and focuses a subpage after deblurring', async ({
+  page,
+}) => {
+  const dialog = await openSettings(page);
+  const viewport = dialog.locator('.ol-settings-content-pane .ol-transition-viewport').first();
+  const surfaces = viewport.locator(':scope > [data-transition-phase]');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this.matches('.ol-transition-page-with-header[data-transition-phase="exit"]')) {
+        Element.prototype.animate = animate;
+        animation.pause();
+        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
+      }
+      return animation;
+    };
+  });
+  const rail = dialog.getByRole('navigation', { name: '设置分类' });
+  await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
+  const outgoing = surfaces.filter({ has: page.locator('[data-section="general"]') });
+  const incoming = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
+  await expect(outgoing).toHaveAttribute('data-transition-phase', 'exit');
+  await expect(outgoing.locator('h2')).toHaveText('通用');
+  await expect(incoming.locator('h2')).toHaveText('外观与语言');
+  await expect(incoming).toHaveCSS('opacity', '0');
+  await expect(outgoing).toHaveCSS('filter', /blur\(/);
+  expect(await outgoing.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
+  expect(await incoming.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
+  await outgoing.evaluate((el) =>
+    el
+      .getAnimations()
+      .find((a) => a.id === 'ol-page-exit')!
+      .play(),
+  );
+  await settleNavigation(dialog);
+  await expect(surfaces).toHaveCount(1);
+  await expect(incoming).toHaveCSS('filter', 'none');
+  await rail.getByRole('button', { name: '通用', exact: true }).click();
+  await settleNavigation(dialog);
+  const entry = dialog.getByRole('button', { name: /^麦克风与录音/ });
+  await entry.click();
+  await expect(dialog.getByRole('heading', { name: '麦克风与录音', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(entry).toBeFocused();
 });
 
 for (const scale of [1, 1.1]) {

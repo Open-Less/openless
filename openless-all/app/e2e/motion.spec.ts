@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openCapsuleStyleSettings } from './support/navigation';
+import { openCapsuleStyleSettings, settleNavigation } from './support/navigation';
 
 const errors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
@@ -130,8 +130,7 @@ test('rapid return to the current page cannot leave it transparent or inert', as
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.getByRole('button', { name: '历史', exact: true }).press('Enter');
     await page.getByRole('button', { name: '概览', exact: true }).press('Enter');
-    // Inspect beyond the complete transition budget to catch stale completion callbacks.
-    await page.waitForTimeout(500);
+    await settleNavigation(page);
     const content = page.locator('main [data-ol-page="overview"]');
     await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
     await expect(content).toHaveCSS('opacity', '1');
@@ -141,6 +140,72 @@ test('rapid return to the current page cannot leave it transparent or inert', as
       .poll(() => content.evaluate((element) => (element as HTMLElement).style.willChange))
       .toBe('');
   }
+});
+
+for (const phase of ['exit', 'enter'] as const) {
+  test(`returning during a painted page ${phase} restores its opacity and blur`, async ({
+    page,
+  }) => {
+    await page.evaluate((phase) => {
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (keyframes, options) {
+        const animation = animate.call(this, keyframes, options);
+        if (this.matches(`main [data-transition-phase="${phase}"]`)) {
+          Element.prototype.animate = animate;
+          animation.pause();
+          animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
+          document.body.dataset.testPageInterruption = phase;
+        }
+        return animation;
+      };
+    }, phase);
+    await page.getByRole('button', { name: '历史', exact: true }).click();
+    await expect(page.locator('body')).toHaveAttribute('data-test-page-interruption', phase);
+    const interrupted = page.locator(`main [data-transition-phase="${phase}"]`).first();
+    const opacity = Number(
+      await interrupted.evaluate((element) => getComputedStyle(element).opacity),
+    );
+    expect(opacity).toBeGreaterThan(0);
+    expect(opacity).toBeLessThan(1);
+    await expect(interrupted).toHaveCSS('filter', /blur\(/);
+    await page.getByRole('button', { name: '概览', exact: true }).click();
+    await settleNavigation(page);
+    const surface = page.locator('main [data-ol-page="overview"]');
+    await expect(
+      page.locator('main .ol-transition-viewport > [data-transition-phase]'),
+    ).toHaveCount(1);
+    await expect(surface).toHaveCSS('opacity', '1');
+    await expect(surface).toHaveCSS('filter', 'none');
+    expect(await surface.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+  });
+}
+
+test('enabling reduced motion during a page exit immediately settles the latest page', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this.matches('main [data-transition-phase="exit"]')) {
+        Element.prototype.animate = animate;
+        animation.pause();
+        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
+        document.body.dataset.testPageExit = 'true';
+      }
+      return animation;
+    };
+  });
+  await page.getByRole('button', { name: '历史', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-test-page-exit', 'true');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await settleNavigation(page);
+  const surface = page.locator('main [data-ol-page="history"]');
+  await expect(surface).toHaveCSS('opacity', '1');
+  await expect(surface).toHaveCSS('filter', 'none');
+  expect(await surface.evaluate((element) => element.getAnimations().length)).toBe(0);
+  expect(await surface.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+  await expect(page.locator('main [data-ol-page="overview"]')).toHaveCount(0);
 });
 
 test('closing during entry preserves the painted opacity and releases the dialog', async ({
@@ -202,7 +267,9 @@ test('reduced motion keeps model gates and removes the closing delay', async ({ 
   await expect(retired).toHaveAttribute('data-retired-local-models', 'true');
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   for (const label of ['语言模型', '语音识别']) {
-    await expect(dialog.getByRole('button', { name: `${label}。无法使用`, exact: true })).toBeDisabled();
+    await expect(
+      dialog.getByRole('button', { name: `${label}。无法使用`, exact: true }),
+    ).toBeDisabled();
   }
   await expect(dialog.getByRole('button', { name: '多模态模型', exact: true })).toHaveAttribute(
     'aria-pressed',

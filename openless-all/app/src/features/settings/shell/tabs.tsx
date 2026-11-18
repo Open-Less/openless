@@ -437,6 +437,7 @@ export function ServicesTab({
           </div>
         )}
         <TransitionViewport
+          mode="page"
           contentKey={selectedView}
           scrollRef={contentRef}
           className="ol-service-content ol-thinscroll"

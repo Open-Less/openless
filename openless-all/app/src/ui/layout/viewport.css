@@ -17,6 +17,19 @@
   --ol-interface-scale: 1;
 }
 
+/* The page fades through its solid surface; portal feedback keeps its own layer. */
+.ol-transition-viewport[data-ol-transition='page'] {
+  background: var(--ol-surface);
+  isolation: isolate;
+}
+
+.ol-transition-page-with-header {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .ol-viewport-content,
 .ol-viewport-portals {
   position: absolute;
