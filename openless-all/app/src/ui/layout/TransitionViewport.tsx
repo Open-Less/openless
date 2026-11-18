@@ -138,12 +138,20 @@ export function TransitionViewport({
                 setCommitted(latest.current.request);
                 setHandoff(null);
               } else {
-                setHandoff((current) => (current === handoff ? null : current));
+                // A queued exit can advance the retired request to its enter stage
+                // during this restore. Retire the whole request, not one stage object.
+                setHandoff((current) =>
+                  current && current.requestId < target.id ? null : current,
+                );
               }
             }}
             onExited={() => {
               if (latest.current.id === target.id && mode === 'page') {
-                setHandoff({ requestId: target.id, stage: 'enter' });
+                setHandoff((current) =>
+                  current?.requestId === target.id && current.stage === 'exit'
+                    ? { requestId: target.id, stage: 'enter' }
+                    : current,
+                );
               }
             }}
           >
