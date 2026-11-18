@@ -235,7 +235,8 @@ test('a notice finishes outside the viewport after reflow during exit', async ({
   await emitNotifications(page, [
     {
       state: 'info',
-      message: '正在同步云端最新内容，请等待当前任务完成。长文案在窗口改变时应继续完整换行。'.repeat(2),
+      message:
+        '正在同步云端最新内容，请等待当前任务完成。长文案在窗口改变时应继续完整换行。'.repeat(2),
       durationMs: 0,
     },
   ]);
@@ -286,11 +287,12 @@ test('a notice finishes outside the viewport after reflow during exit', async ({
   await page.evaluate(() => (window as any).noticeResizeMotion.latest.play());
   await expect(notice).toHaveCount(0);
   const finished = await page.evaluate(
-    () => (window as any).noticeResizeMotion.finished as {
-      bottom: number;
-      top: number;
-      connected: boolean;
-    }[],
+    () =>
+      (window as any).noticeResizeMotion.finished as {
+        bottom: number;
+        top: number;
+        connected: boolean;
+      }[],
   );
   expect(finished).toHaveLength(1);
   expect(finished[0].connected).toBe(true);
