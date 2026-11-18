@@ -241,7 +241,7 @@ function WebSearchFixture() {
   const [active, setActive] = useState(false);
   return (
     <main style={{ width: '100%', display: 'flex', flexDirection: 'column' }}>
-      <button onClick={() => setActive(!active)}>
+      <button style={{ alignSelf: 'flex-start' }} onClick={() => setActive(!active)}>
         {active ? 'Leave web search' : 'Open web search'}
       </button>
       <TransitionViewport
