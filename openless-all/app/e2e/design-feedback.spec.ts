@@ -119,9 +119,13 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
 test('noise reduction uses one slider track', async ({ page }) => {
   await openVoiceEnhancement(page);
   await page.getByRole('button').filter({ hasText: '语音增强设置' }).click();
-  const denoise = page.getByRole('slider', { name: '降噪强度' });
-  await expect(denoise).toBeVisible();
-  await expect(denoise).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const denoise = page.getByRole('slider', { name: '降噪强度', exact: true });
+  await expect(denoise).toHaveCount(1);
+  const control = page.locator('.ol-slider-control').filter({ has: denoise });
+  const track = control.locator('.ol-slider-track');
+  await expect(track).toHaveCount(1);
+  await expect(track).toBeVisible();
+  await expect(track).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 });
 
 test('toggling echo suppression does not nudge the voice enhancement switch', async ({ page }) => {

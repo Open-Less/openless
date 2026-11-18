@@ -3,6 +3,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const fixtureUrl = `${fixtureOrigin}/e2e/fixtures/android-onboarding.html?os=android`;
 const surface = (page: Page) => page.locator('.ol-onboarding-layer > div');
+const sizeControl = (page: Page) =>
+  surface(page).locator('.ol-slider-control').filter({ has: page.getByRole('slider') });
 const next = (page: Page) => page.getByRole('button', { name: '下一步', exact: true });
 const back = (page: Page) => page.getByRole('button', { name: '上一步', exact: true });
 const defer = (page: Page) => page.getByRole('button', { name: '先进入应用', exact: true });
@@ -16,7 +18,7 @@ async function reachOverlayConfig(page: Page) {
   await expect(page.getByText('悬浮窗配置', { exact: true })).toBeVisible();
   // These are the production AndroidPermissionsPanel controls, not filler content.
   await expect(page.getByRole('combobox')).toHaveCount(7);
-  await expect(page.getByRole('slider')).toHaveValue('72');
+  await expect(surface(page).getByRole('slider')).toHaveValue('72');
   await surface(page).evaluate((element) => {
     element.scrollTop = 0;
   });
@@ -38,8 +40,11 @@ async function expectBoundedOverflow(page: Page) {
 }
 
 async function fullyInViewport(target: Locator, page: Page) {
-  const bounds = await target.boundingBox();
-  return !!bounds && bounds.y >= 0 && bounds.y + bounds.height <= page.viewportSize()!.height;
+  const [bounds, scrollport] = await Promise.all([target.boundingBox(), surface(page).boundingBox()]);
+  if (!bounds || !scrollport) return false;
+  const top = Math.max(scrollport.y, 0);
+  const bottom = Math.min(scrollport.y + scrollport.height, page.viewportSize()!.height);
+  return bounds.y >= top && bounds.y + bounds.height <= bottom;
 }
 
 async function wheelTo(page: Page, target: Locator) {
@@ -64,8 +69,8 @@ for (const viewport of [
     page.on('pageerror', (error) => errors.push(error.message));
     await reachOverlayConfig(page);
     await expectBoundedOverflow(page);
-    await wheelTo(page, page.getByRole('slider'));
-    await expect(page.getByRole('slider')).toBeInViewport();
+    await wheelTo(page, sizeControl(page));
+    await expect(sizeControl(page).locator('.ol-slider-track')).toBeInViewport({ ratio: 1 });
     await wheelTo(page, defer(page));
     await expect(next(page)).toBeInViewport();
     await expect(back(page)).toBeInViewport();
@@ -125,7 +130,8 @@ test.describe('Android native touch scrolling', () => {
       expect(await fullyInViewport(target, page)).toBe(true);
     };
     try {
-      await swipeTo(page.getByRole('slider'));
+      await swipeTo(sizeControl(page));
+      await expect(sizeControl(page).locator('.ol-slider-track')).toBeInViewport({ ratio: 1 });
       expect(await surface(page).evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
       await swipeTo(defer(page));
       await expect(next(page)).toBeInViewport();
