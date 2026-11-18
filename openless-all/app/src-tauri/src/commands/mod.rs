@@ -977,3 +977,6 @@ mod tests {
         assert!(!is_valid_local_pack_id(&"a".repeat(129)));
     }
 }
+
+mod deepseek_tts;
+pub use deepseek_tts::*;

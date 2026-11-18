@@ -291,6 +291,14 @@ jobs:
           path: |
             openless-all/app/test-results/
             openless-all/app/playwright-report/
+      - name: Upload UI acceptance screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-acceptance-${{ matrix.browser }}
+          path: openless-all/app/test-results/**/acceptance-*.png
+          retention-days: 7
+          if-no-files-found: ignore
 
   # Preserve the existing required-check name. A skipped browser matrix is only
   # acceptable when the change classifier explicitly says it is out of scope.

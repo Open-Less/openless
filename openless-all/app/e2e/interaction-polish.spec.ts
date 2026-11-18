@@ -1,7 +1,8 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
 test('IME confirmation and the next 500ms do not trigger Enter handlers', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/');
+  await page.goto(`${fixtureOrigin}/`);
   const result = await page.evaluate(async () => {
     const input = document.createElement('input');
     document.body.append(input);
@@ -41,7 +42,7 @@ test('IME confirmation and the next 500ms do not trigger Enter handlers', async 
 });
 
 test('message follow yields to the reader and resumes at the bottom', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/');
+  await page.goto(`${fixtureOrigin}/`);
   await page.evaluate(async () => {
     const root = document.createElement('div');
     root.id = 'follow-fixture';
@@ -88,7 +89,7 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
 test('QA jump control appears only more than 120 pixels from the latest message', async ({
   page,
 }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?qa');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?qa`);
   await page.locator('.ol-default-capsule').waitFor();
   await page.evaluate(() => {
     const fixture = (window as any).fixture;
@@ -130,3 +131,53 @@ test('QA jump control appears only more than 120 pixels from the latest message'
     .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
     .toBeLessThanOrEqual(1);
 });
+
+for (const platform of ['mac', 'win'] as const) {
+  test(`QA header and scrolling follow ${platform} conventions`, async ({ page }) => {
+    await page.addInitScript((platform) => {
+      const value = platform === 'mac' ? 'MacIntel' : 'Win32';
+      Object.defineProperty(navigator, 'platform', { configurable: true, value });
+      Object.defineProperty(navigator, 'userAgent', { configurable: true, value });
+      Object.defineProperty(navigator, 'userAgentData', { configurable: true, value: undefined });
+    }, platform);
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?qa`);
+    await page.locator('.ol-default-capsule').waitFor();
+    await page.evaluate(() => {
+      const fixture = (window as any).fixture;
+      fixture.emit('qa:state', { kind: 'recording', sessionId: 'chrome', messages: [] });
+      fixture.emit('qa:state', {
+        kind: 'answer',
+        sessionId: 'chrome',
+        messages: Array.from({ length: 12 }, (_, index) => ({
+          role: index % 2 ? 'assistant' : 'user',
+          content: `Message ${index}: ${'content '.repeat(30)}`,
+        })),
+      });
+    });
+    const panel = page.locator('.qa-answer-panel');
+    const header = panel.locator('.qa-answer-header');
+    await expect(panel).toHaveAttribute('data-platform', platform);
+    await expect(header.locator('h1')).toContainText('Message 0:');
+    await expect(header).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await expect(header.locator('.qa-symbol')).toHaveCount(0);
+    const headerBox = (await header.boundingBox())!;
+    const closeBox = (await header.locator('.qa-close').boundingBox())!;
+    expect(
+      platform === 'mac'
+        ? closeBox.x - headerBox.x
+        : headerBox.x + headerBox.width - closeBox.x - closeBox.width,
+    ).toBeLessThan(25);
+    const viewport = panel.locator('[data-slot="message-scroller-viewport"]');
+    await expect(viewport).toHaveCSS('scrollbar-width', 'none');
+    await expect
+      .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight))
+      .toBeGreaterThan(150);
+    await viewport.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    expect(await viewport.evaluate((el) => el.scrollTop)).toBe(0);
+    expect(await header.evaluate((el) => getComputedStyle(el, '::after').backdropFilter)).toContain(
+      'blur',
+    );
+  });
+}

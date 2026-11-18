@@ -2,18 +2,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const ipc = path.join(root, 'src/lib/ipc');
+const ipc = 'src/lib/ipc';
+const directories = fs
+  .readdirSync(path.join(root, ipc))
+  .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && file !== 'mock-data.ts')
+  .map((file) => `${ipc}/${file}`);
+const staticSources = [
+  ...directories,
+  'src/api/in-app-dictation.ts',
+  'src/runtime/files.ts',
+  'src/runtime/platform.ts',
+  'src/runtime/transport.ts',
+];
 const calls = new Map();
-for (const file of fs
-  .readdirSync(ipc)
-  .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'mock-data.ts')) {
-  const text = fs.readFileSync(path.join(ipc, file), 'utf8');
-  for (const match of text.matchAll(
-    /(?:invokeOrMock|invoke)(?:<[^;]*?>)?\(\s*['"]([a-z][a-z0-9_]+)['"]/g,
-  )) {
-    const name = match[1];
-    if (!calls.has(name)) calls.set(name, []);
-    calls.get(name).push(`src/lib/ipc/${file}`);
+for (const file of staticSources) {
+  const text = fs.readFileSync(path.join(root, file), 'utf8');
+  for (const pattern of [
+    /\b(?:invokeOrMock|invokeOrPreview|invoke|invokeHarmony)(?:<[^;]*?>)?\(\s*['"]([a-z][a-z0-9_]+)['"]/g,
+    /\binvokeNative(?:<[^;]*?>)?\(\s*host\s*,\s*['"]([a-z][a-z0-9_]+)['"]/g,
+  ]) {
+    for (const match of text.matchAll(pattern)) {
+      const name = match[1];
+      if (!calls.has(name)) calls.set(name, []);
+      calls.get(name).push(file);
+    }
   }
 }
 const rust = fs.readFileSync(path.join(root, 'harmony/rust/src/lib.rs'), 'utf8');
@@ -34,7 +46,7 @@ const commands = [...calls]
   }));
 const report = {
   scope:
-    'Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.',
+    'Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.',
   total: commands.length,
   wired: commands.filter((x) => x.implementation !== 'unimplemented').length,
   missing: commands.filter((x) => x.implementation === 'unimplemented').length,

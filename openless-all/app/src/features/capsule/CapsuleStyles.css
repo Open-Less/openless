@@ -1,0 +1,606 @@
+/* Shared by the recording pill and its translation badge in every host. */
+.ol-default-capsule,
+.ol-classic-translation {
+  --ol-pill-scheme: light;
+  --ol-pill-fill: rgb(255 255 255 / 86%);
+  --ol-pill-border: rgb(79 91 115 / 24%);
+  --ol-pill-highlight: rgb(255 255 255 / 82%);
+  --ol-pill-ink: #1d4ed8;
+  --ol-pill-sweep: rgb(147 197 253 / 28%);
+  --ol-pill-cancel: rgb(102 116 139 / 10%);
+  --ol-pill-cancel-hover: rgb(102 116 139 / 18%);
+  --ol-pill-cancel-ink: #525d6e;
+  --ol-pill-confirm: #2563eb;
+  --ol-pill-confirm-hover: #1d4ed8;
+  --ol-pill-error: #c92d36;
+  --ol-pill-shadow: rgb(15 23 42 / 18%);
+}
+[data-ol-theme='dark'] .ol-default-capsule,
+[data-ol-theme='dark'] .ol-classic-translation {
+  --ol-pill-scheme: dark;
+  --ol-pill-fill: rgb(28 34 45 / 88%);
+  --ol-pill-border: rgb(218 231 255 / 26%);
+  --ol-pill-highlight: rgb(235 244 255 / 13%);
+  --ol-pill-ink: #a7c7ff;
+  --ol-pill-sweep: rgb(90 145 240 / 22%);
+  --ol-pill-cancel: rgb(225 235 255 / 10%);
+  --ol-pill-cancel-hover: rgb(225 235 255 / 18%);
+  --ol-pill-cancel-ink: #e2eaf7;
+  --ol-pill-confirm: #3979f3;
+  --ol-pill-confirm-hover: #528eff;
+  --ol-pill-error: #ff9b99;
+  --ol-pill-shadow: rgb(0 0 0 / 38%);
+}
+
+.ol-typeless-capsule-wrap {
+  --ol-typeless-bg: #18181b;
+  --ol-typeless-border: #52525b;
+  --ol-typeless-ink: #fafafa;
+  --ol-typeless-button-bg: #3f3f46;
+  --ol-typeless-button-hover: #52525b;
+  --ol-typeless-confirm-bg: #fafafa;
+  --ol-typeless-confirm-ink: #18181b;
+  position: relative;
+  font-family: var(--ol-font-sans);
+  /* 整体缩放使药丸面积为原尺寸的 1/5（线性 1/√5≈0.447），与 206×57 的胶囊窗口配套；
+     尺寸基准见 src-tauri/src/lib.rs 的 capsule_window_bounds_for_style。 */
+  zoom: 0.447;
+}
+
+/* 黑色胶囊配白色波纹。 */
+.ol-typeless-capsule .ol-capsule-waveform > span {
+  background: #ffffff;
+}
+
+.ol-capsule-transcript-rail {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  pointer-events: none;
+  position: relative;
+  z-index: 2;
+}
+
+/* Windows owns this rail in a separate transparent WebView window. Its HWND is
+   always cursor-through, so the full transcript/gutter can never intercept a
+   click destined for another process. */
+.ol-capsule-transcript-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 460px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ol-capsule-transcript-overlay[data-style='classic'] {
+  gap: 8px;
+}
+
+.ol-classic-translation {
+  display: inline-flex;
+  flex: 0 0 28px;
+  height: 28px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border-radius: var(--ol-r-sm);
+  font-size: 11px;
+  color: var(--ol-pill-ink);
+  color-scheme: var(--ol-pill-scheme);
+  background: var(--ol-pill-fill);
+  border: 0.5px solid var(--ol-pill-border);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow:
+    0 3px 10px var(--ol-pill-shadow),
+    inset 0 1px 0 var(--ol-pill-highlight);
+  white-space: nowrap;
+  transform-origin: center bottom;
+}
+.ol-translation-language {
+  pointer-events: auto;
+  max-width: 174px;
+}
+.ol-select-popup.ol-capsule-language-popup {
+  background: var(--ol-select-popover-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: none;
+}
+.ol-capsule-language-popup[data-ending-style] {
+  pointer-events: none;
+}
+.ol-translation-language .ol-select-trigger {
+  height: 22px;
+  min-width: 92px;
+  max-width: 174px;
+  width: auto;
+  padding: 0 7px;
+  border-radius: var(--ol-radius);
+  background: var(--ol-control-solid);
+  font-size: 11px;
+}
+.ol-translation-language[data-busy='true'] {
+  opacity: 0.6;
+}
+.ol-classic-translation[data-visible='false'] .ol-translation-language {
+  pointer-events: none;
+}
+.ol-translation-error {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 280px;
+  padding: 5px 8px;
+  border-radius: var(--ol-r-sm);
+  background: #fff;
+  color: #dc2626;
+  font-size: 10px;
+  white-space: normal;
+  width: max-content;
+}
+
+.ol-capsule-transcript-overlay .ol-capsule-transcript-rail {
+  height: 52px;
+}
+
+.ol-capsule-transcript-overlay[data-style='siri'] {
+  height: 40px;
+}
+
+.ol-capsule-transcript-overlay[data-style='siri'] .ol-capsule-transcript-rail {
+  height: 40px;
+}
+
+.ol-capsule-transcript-overlay--typeless {
+  width: 460px;
+  zoom: 0.447;
+}
+
+.ol-classic-capsule-stack,
+.ol-siri-capsule-stack,
+.ol-typeless-capsule-stack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ol-classic-capsule-stack,
+.ol-siri-capsule-stack,
+.ol-typeless-capsule-stack {
+  width: 460px;
+}
+
+.ol-siri-capsule-stack .ol-capsule-transcript-rail {
+  height: 40px;
+}
+
+.ol-classic-capsule-stack .ol-capsule-transcript-rail,
+.ol-typeless-capsule-stack .ol-capsule-transcript-rail {
+  height: 52px;
+}
+
+.ol-typeless-capsule-stack {
+  gap: 0;
+}
+
+.ol-typeless-translation-row {
+  display: flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 20px;
+  pointer-events: none;
+}
+
+.ol-typeless-capsule-stage {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.ol-typeless-capsule {
+  position: relative;
+  width: 176px;
+  height: 64px;
+  overflow: hidden;
+  border: 0.5px solid var(--ol-typeless-border);
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: var(--ol-typeless-bg);
+  color: var(--ol-typeless-ink);
+  box-shadow:
+    0 5px 14px rgb(0 0 0 / 16%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+  transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ol-typeless-capsule[data-recording='true'],
+.ol-typeless-capsule[data-processing='true'] {
+  width: 232px;
+}
+.ol-typeless-capsule[data-error='true'] {
+  width: 300px;
+}
+
+.ol-typeless-recording,
+.ol-typeless-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.ol-typeless-recording {
+  width: 230px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.ol-typeless-capsule[data-recording='true'] .ol-typeless-recording,
+.ol-typeless-capsule[data-processing='true'] .ol-typeless-recording {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ol-typeless-capsule:not([data-recording='true']):not([data-processing='true'])
+  .ol-typeless-status {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ol-typeless-action {
+  display: inline-flex;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ol-typeless-button-bg);
+  color: var(--ol-typeless-ink);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.ol-typeless-confirm {
+  background: var(--ol-typeless-confirm-bg);
+  color: var(--ol-typeless-confirm-ink);
+}
+.ol-typeless-action:hover {
+  background: var(--ol-typeless-button-hover);
+}
+.ol-typeless-confirm:hover {
+  background: var(--ol-typeless-confirm-bg);
+  opacity: 0.85;
+}
+.ol-typeless-action:focus-visible,
+.ol-typeless-stop:focus-visible {
+  outline: 2px solid #79b0ff;
+  outline-offset: 2px;
+}
+
+.ol-capsule-waveform {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 80px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.ol-capsule-waveform > span {
+  width: 3px;
+  height: 28px;
+  border-radius: 999px;
+  background: #3478f6;
+  transform-origin: center;
+  transition: transform 100ms linear;
+}
+
+.ol-capsule-waveform[data-warming='true'] {
+  opacity: 0.5;
+}
+.ol-typeless-status {
+  gap: 6px;
+  padding-inline: 18px;
+}
+.ol-typeless-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.4;
+}
+.ol-typeless-capsule[data-error='true'] .ol-typeless-status {
+  color: var(--ol-err);
+}
+.ol-typeless-capsule[data-processing='true'] .ol-typeless-status > span {
+  animation: ol-typeless-thinking 1.8s ease-in-out infinite;
+}
+.ol-typeless-stop {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ol-typeless-button-bg);
+  color: var(--ol-typeless-ink);
+  padding: 0;
+  cursor: pointer;
+}
+.ol-typeless-translation {
+  position: static;
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: var(--ol-font-weight-medium);
+  color: var(--ol-typeless-ink);
+  background: var(--ol-typeless-bg);
+  border: 1px solid var(--ol-typeless-border);
+  border-radius: var(--ol-radius);
+}
+
+.ol-capsule-style-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 256px;
+  max-width: 100%;
+  height: 96px;
+  margin-top: 8px;
+  border-radius: var(--ol-r-lg);
+  background: var(--ol-surface-2);
+  pointer-events: none;
+}
+.ol-typeless-capsule-wrap[data-preview='true'] {
+  transform: scale(0.86);
+}
+.ol-classic-capsule-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 176px;
+  height: 42px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border: 1px solid var(--ol-capsule-pill-border);
+  border-radius: 999px;
+  background: var(--ol-capsule-pill-bg);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
+}
+.ol-classic-capsule-preview > span:not(.ol-capsule-waveform) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--ol-capsule-btn-ink);
+  background: var(--ol-capsule-btn-bg);
+}
+.ol-classic-capsule-preview .ol-capsule-waveform {
+  width: 60px;
+  transform: scale(0.7);
+}
+/* Siri 预览 = 缩小的真实光效舞台（460×180 → ×0.5 = 230×90，正好放进 256×96 预览框）。 */
+.ol-siri-capsule-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ol-siri-capsule-preview > div {
+  transform: scale(0.5);
+}
+
+[data-ol-theme='dark'] .ol-typeless-capsule-wrap {
+  --ol-typeless-bg: #101014;
+  --ol-typeless-border: #3f3f46;
+  --ol-typeless-ink: #fafafa;
+  --ol-typeless-button-bg: #27272a;
+  --ol-typeless-button-hover: #3f3f46;
+  --ol-typeless-confirm-bg: #fafafa;
+  --ol-typeless-confirm-ink: #18181b;
+}
+
+@keyframes ol-typeless-thinking {
+  50% {
+    opacity: 0.55;
+  }
+}
+.ol-live-transcript-stage {
+  position: relative;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.ol-live-transcript-pill {
+  position: absolute;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 40px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  isolation: isolate;
+  clip-path: inset(0 round 999px);
+  box-sizing: border-box;
+}
+
+.ol-live-transcript-pill[data-tone='frost'] {
+  background: var(--ol-capsule-pill-bg);
+  border: 0.5px solid var(--ol-capsule-pill-border);
+  box-shadow: var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset);
+}
+
+.ol-live-transcript-pill[data-tone='dark'] {
+  background: var(--ol-typeless-bg, #18181b);
+  border: 0.5px solid var(--ol-typeless-border, #52525b);
+  box-shadow:
+    0 5px 14px rgb(0 0 0 / 16%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+
+.ol-live-transcript-track {
+  position: absolute;
+  top: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: hidden;
+  font-family: var(--ol-font-sans);
+  font-size: 16px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: pre;
+  color: var(--ol-capsule-center-ink);
+  pointer-events: none;
+  border-radius: 999px;
+  overflow: hidden;
+  clip-path: inset(0 round 999px);
+}
+
+.ol-live-transcript-stage[data-tone='dark'] .ol-live-transcript-track {
+  color: var(--ol-typeless-ink, #fafafa);
+}
+
+.ol-live-transcript-track[data-overflow='true'] {
+  mask-image: linear-gradient(to right, transparent, #000 22px);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 22px);
+  mask-clip: border-box;
+  -webkit-mask-clip: border-box;
+}
+
+.ol-live-transcript-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--ol-capsule-btn-ink);
+  background: var(--ol-capsule-btn-bg);
+}
+
+.ol-live-transcript-stage[data-tone='dark'] .ol-live-transcript-control {
+  color: var(--ol-typeless-ink, #fafafa);
+  background: var(--ol-typeless-button-bg, #3f3f46);
+}
+
+.ol-live-transcript-confirm {
+  background: var(--ol-capsule-btn-bg-confirm);
+}
+
+.ol-live-transcript-stage[data-tone='dark'] .ol-live-transcript-confirm {
+  color: var(--ol-typeless-confirm-ink, #18181b);
+  background: var(--ol-typeless-confirm-bg, #fafafa);
+}
+
+.ol-live-transcript-control:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.ol-live-transcript-control:focus-visible {
+  outline: 2px solid #79b0ff;
+  outline-offset: 2px;
+}
+
+.ol-live-transcript-position {
+  position: absolute;
+  left: 100%;
+  flex: none;
+}
+
+.ol-live-transcript-char {
+  display: inline-block;
+  transform-origin: 50% 85%;
+}
+
+.ol-live-transcript-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ol-typeless-capsule,
+  .ol-typeless-recording,
+  .ol-typeless-status,
+  .ol-capsule-waveform > span {
+    transition: none;
+  }
+  .ol-typeless-capsule[data-processing='true'] .ol-typeless-status > span {
+    animation: none;
+  }
+  .ol-live-transcript-pill,
+  .ol-live-transcript-char,
+  .ol-live-transcript-position {
+    will-change: auto;
+  }
+}
+
+.ol-qa-capsule-badge {
+  padding: 5px 12px;
+  border-radius: 9px;
+  background: var(--ol-capsule-badge-bg);
+  color: var(--ol-capsule-center-ink);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 180ms ease,
+    transform 220ms ease;
+}
+.ol-qa-capsule-badge[data-visible='true'] {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-qa-capsule-badge {
+    transition: none;
+  }
+}

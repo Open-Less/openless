@@ -1,0 +1,248 @@
+/* GitHub Activity — ported from Rare UI (https://rareui.com/components/githubactivity).
+   MIT + Commons Clause; attribution required. Geometry mirrors the upstream card:
+   11px cells, 3px gap, 16px padding, 28px radius, top-apps panel overlaid at the bottom. */
+
+.ol-gha {
+  position: relative;
+  box-sizing: border-box;
+  max-width: none;
+  overflow: hidden;
+  border-radius: 28px;
+  /* Same floor as the overview metric cards. */
+  background: var(--ol-surface-raised);
+  box-shadow: inset 0 0 0 0.5px var(--ol-line);
+  padding: 16px;
+  color: var(--ol-ink);
+}
+.ol-gha--with-panel {
+  padding-bottom: 76px;
+}
+
+.ol-gha-heading {
+  margin: 0 0 16px;
+  padding: 0 6px;
+  font-size: 16px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.3;
+  color: var(--ol-ink);
+}
+
+.ol-gha-grid {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+.ol-gha-months {
+  display: flex;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+.ol-gha-month {
+  position: relative;
+  height: 12px;
+  flex-shrink: 0;
+}
+.ol-gha-month-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--ol-ink-4);
+}
+
+.ol-gha-weeks {
+  display: flex;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+.ol-gha-week {
+  display: flex;
+  flex-direction: column;
+}
+
+.ol-gha-cell {
+  flex-shrink: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ol-ink) 8%, transparent);
+  will-change: opacity, transform;
+}
+.ol-gha-cell-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.ol-gha-tooltip {
+  position: fixed;
+  z-index: 1300;
+  pointer-events: none;
+}
+.ol-gha-tooltip-bubble {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--ol-ink);
+  color: var(--ol-surface);
+  font-size: 11px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.35;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+.ol-gha-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  /* Bottom-anchored. Height is written in pixels; growing it moves the top
+     edge up. Do not also set top: the two fight and WebKit drops the motion. */
+  height: 52px;
+  overflow: hidden;
+  border-radius: 18px;
+  /* Opaque on purpose: over a 53-week grid the upstream 90% glass ghosted the cells
+     and the card heading through the panel text. Light mode matches the
+     segmented track (plain surface). Dark mode stays a step under the card. */
+  background: var(--ol-surface);
+  box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
+}
+[data-ol-theme='dark'] .ol-gha-panel {
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--ol-surface-raised) 97%, black 3%) 92%,
+    black 8%
+  );
+  box-shadow: inset 0 0 0 0.5px var(--ol-line);
+}
+.ol-gha-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 12px 16px;
+}
+.ol-gha-panel-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--ol-ink);
+}
+.ol-gha-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ol-gha-app-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.ol-gha-app-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 150px;
+  padding: 3px 9px;
+  border-radius: 999px !important;
+  corner-shape: round !important;
+  clip-path: none !important;
+  background: var(--ol-surface-2);
+  font-size: 11.5px;
+  color: var(--ol-ink-2);
+  white-space: nowrap;
+}
+.ol-gha-app-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ol-gha-app-chip-count {
+  color: var(--ol-ink-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.ol-gha-toggle {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px !important;
+  corner-shape: round !important;
+  clip-path: none !important;
+  background: var(--ol-surface);
+  color: var(--ol-ink-3);
+  cursor: pointer;
+}
+.ol-gha-toggle:hover {
+  color: var(--ol-ink);
+}
+.ol-gha-chevron {
+  width: 28px;
+  height: 28px;
+  color: var(--ol-ink-4);
+}
+
+.ol-gha-app-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 2px 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  list-style: none;
+}
+.ol-gha-app-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.ol-gha-app-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 8px;
+  padding: 8px;
+  border-radius: 12px;
+  transition: background 0.14s var(--ol-motion-quick);
+}
+.ol-gha-app-row:hover {
+  background: color-mix(in srgb, var(--ol-ink) 5%, transparent);
+}
+.ol-gha-app-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--ol-ink);
+}
+.ol-gha-app-count {
+  flex-shrink: 0;
+  font-size: 14px;
+  color: var(--ol-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ol-gha-app-row {
+    transition: none;
+  }
+}

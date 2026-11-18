@@ -99,6 +99,7 @@ pub(crate) fn voice_activation_payload(enabled: bool, style: CapsuleStyle) -> Ca
         warming: false,
         capsule_style: style,
         selection_polish: false,
+        qa: false,
     }
 }
 
@@ -275,6 +276,7 @@ mod tests {
                 );
                 assert_eq!(payload.capsule_style, style);
                 assert!(!payload.selection_polish && !payload.warming && !payload.operating);
+                assert!(!payload.qa);
                 assert!(payload.session_id.is_none());
             }
         }

@@ -142,12 +142,10 @@ async fn forward_legacy_event(
             }
         }
     }
-    if cfg!(mobile)
-        && matches!(
-            kind,
-            BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
-        )
-    {
+    if matches!(
+        kind,
+        BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
+    ) {
         let selection = backend.services().selection.snapshot().await.ok();
         let selection_voice = backend.services().selection_voice.snapshot().await.ok();
         // Read QA after the other async snapshots. Queued levels/terminals from
@@ -245,6 +243,7 @@ async fn forward_legacy_event(
                     warming: false,
                     capsule_style: backend.get_preferences().capsule_style,
                     selection_polish: false,
+                    qa: false,
                 });
             }
         }
@@ -326,6 +325,7 @@ async fn forward_legacy_event(
                             warming: *phase == LessComputerVoicePhase::Starting,
                             capsule_style: backend.get_preferences().capsule_style,
                             selection_polish: false,
+                            qa: false,
                         });
                     }
                 }
@@ -395,6 +395,7 @@ async fn forward_legacy_event(
                         warming: false,
                         capsule_style: backend.get_preferences().capsule_style,
                         selection_polish: false,
+                        qa: false,
                     });
                 }
             }
@@ -575,6 +576,7 @@ fn map_dictation_state(
         ) && !snapshot.recording_ready,
         capsule_style,
         selection_polish: false,
+        qa: false,
     }
 }
 
@@ -655,6 +657,7 @@ fn transcription_notice_payload(
         warming: false,
         capsule_style: style,
         selection_polish: false,
+        qa: false,
     })
 }
 
@@ -773,6 +776,7 @@ fn mobile_qa_capsule_payload(
         warming: state == CapsuleState::Recording && !matches!(event, BackendEventKind::QaLevel(_)),
         capsule_style: style,
         selection_polish: false,
+        qa: true,
     })
 }
 
@@ -987,7 +991,7 @@ mod tests {
         )
         .expect("mobile QA recording uses the overlay capsule");
         assert_eq!(payload.state, CapsuleState::Recording);
-        assert!(payload.warming);
+        assert!(payload.warming && payload.qa);
         assert_eq!(owners.qa_voice, Some(session_id));
         for expected_level in [0.0, 0.35] {
             let level = mobile_qa_capsule_payload(

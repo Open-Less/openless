@@ -117,7 +117,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val event = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
         if (event.optLong("requestId") != imeRequestId || imeRequestId == 0L) {
             if (event.optLong("requestId") == lastCancelledImeRequest && event.optString("error") == "Persistence") {
-                Toast.makeText(this, ui("录音清理失败，重新打开应用后重试", "Recording cleanup failed; reopen the app to retry"), Toast.LENGTH_LONG).show()
+                OpenLessNativeNotice.makeText(this, ui("录音清理失败，重新打开应用后重试", "Recording cleanup failed; reopen the app to retry"), Toast.LENGTH_LONG).show()
             }
             return
         }
@@ -951,9 +951,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setTextColor(rawModeHintColor())
             visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
             isClickable = true
-            setOnClickListener { Toast.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show() }
+            setOnClickListener { OpenLessNativeNotice.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show() }
             setOnLongClickListener {
-                Toast.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show()
+                OpenLessNativeNotice.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show()
                 true
             }
         }
@@ -3356,7 +3356,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (!englishCandidateProvider.isCustomWord(word)) return
         englishCandidateProvider.forgetCustomWord(word)
         performKeyHaptic()
-        Toast.makeText(this, ui("已移除“$word”", "Removed \"$word\""), Toast.LENGTH_SHORT).show()
+        OpenLessNativeNotice.makeText(this, ui("已移除“$word”", "Removed \"$word\""), Toast.LENGTH_SHORT).show()
         updateEnglishCandidates()
     }
 
@@ -4149,7 +4149,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (requestId == imeRequestId) {
             setState("error", message)
         } else {
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            OpenLessNativeNotice.makeText(this, message, Toast.LENGTH_LONG).show()
         }
         return message
     }
@@ -4331,7 +4331,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 } else {
                     closeDraft()
                     // The status line only exists on the voice panel.
-                    if (inputMode != InputMode.VOICE) Toast.makeText(this, displayStatus(message), Toast.LENGTH_SHORT).show()
+                    if (inputMode != InputMode.VOICE) OpenLessNativeNotice.makeText(this, displayStatus(message), Toast.LENGTH_SHORT).show()
                 }
             } else {
                 showDraftMessage(
@@ -4686,7 +4686,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val original = when {
             selected != null -> selected
             requireSelection -> {
-                Toast.makeText(this, ui("请先选中字词", "Please select word"), Toast.LENGTH_SHORT).show()
+                OpenLessNativeNotice.makeText(this, ui("请先选中字词", "Please select word"), Toast.LENGTH_SHORT).show()
                 return
             }
             else -> lastDictationText?.takeIf { resultIntact } ?: return

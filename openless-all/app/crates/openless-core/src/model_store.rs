@@ -1734,6 +1734,17 @@ impl ModelStore {
 
     pub fn cleanup_incomplete(&self, target: &LocalAsrTarget) -> Result<(), BackendError> {
         validate_model_id(target.model_id())?;
+        // Hold the download gate so a new transfer cannot create staging files during cleanup.
+        let active = self
+            .active_downloads
+            .lock()
+            .expect("model download lock poisoned");
+        if active.contains_key(target) {
+            return Err(BackendError::new(
+                BackendErrorCode::Busy,
+                "model download is in progress",
+            ));
+        }
         let staging = self.models_root_dir().join(staging_dir_name(target));
         if staging.exists() {
             std::fs::remove_dir_all(staging).map_err(platform_error)?;

@@ -75,7 +75,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
 
     private fun saveMigrationSetting(write: () -> Unit) {
         if (!OpenLessMigrationState.settings(write)) {
-            Toast.makeText(this, ui("正在恢复配置，请稍后重试", "Configuration restore is in progress; try again shortly"), Toast.LENGTH_SHORT).show()
+            OpenLessNativeNotice.show(this, ui("正在恢复配置，请稍后重试", "Configuration restore is in progress; try again shortly"), Toast.LENGTH_SHORT, isDarkTheme)
             setContentView(buildContent())
         }
     }
@@ -625,7 +625,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
     }
 
     private fun toast(zh: String, en: String) {
-        Toast.makeText(applicationContext, ui(zh, en), Toast.LENGTH_LONG).show()
+        OpenLessNativeNotice.show(this, ui(zh, en), Toast.LENGTH_LONG, isDarkTheme)
     }
 
     /** Applies the saved fuzzy-pinyin groups; toggles made while one redeploy runs are folded into the next. */
