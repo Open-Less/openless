@@ -1158,6 +1158,11 @@ impl EncryptedSyncService {
                 return Err(error("account_changed"));
             }
             self.refresh_metadata(&mut runtime).await?;
+            if let Some(expected_vault) = expected_scope.as_ref().and_then(|scope| scope.vault_id.as_deref()) {
+                if self.status().vault_id.as_deref() != Some(expected_vault) {
+                    return Err(error("account_changed"));
+                }
+            }
             self.try_remembered(&mut runtime).await?;
             let step = if self.metadata(&runtime)?.value().state != VaultState::Active {
                 EnableStep::Create
@@ -1175,6 +1180,9 @@ impl EncryptedSyncService {
                 EnableStep::RestoreReview
             };
             self.current_account(&runtime).await?;
+            let resume = runtime.settings.enabled
+                && runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION)
+                && step == EnableStep::Ready;
             let mut settings = runtime.settings.clone();
             settings.consent_version = Some(consent_version);
             settings.prompted = true;
@@ -1183,6 +1191,9 @@ impl EncryptedSyncService {
                 .write("device", "client", settings.clone())
                 .await?;
             runtime.settings = settings;
+            if resume {
+                self.0.wake.notify_one();
+            }
             Ok(step)
         }
         .await;
@@ -1211,11 +1222,10 @@ impl EncryptedSyncService {
         self.0.auto_suspended.store(false, Ordering::Release);
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
+            self.require_consent(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
-            if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
-                return Err(error("consent_required"));
-            }
             let snapshot = self.download(&mut runtime).await?;
             let encoded = snapshot.clone();
             let metadata = self.metadata(&runtime)?.value().clone();
@@ -1275,6 +1285,8 @@ impl EncryptedSyncService {
         }
         log::warn!("[e2ee-token] create: entered, observed_revision={observed_revision}");
         let observed = Revision::parse(&observed_revision).map_err(protocol_error)?;
+        let password = NormalizedPassword::confirmed_new(password, confirmation)
+            .map_err(protocol_error)?;
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.0.auto_suspended.store(false, Ordering::Release);
         self.begin();
@@ -1294,9 +1306,6 @@ impl EncryptedSyncService {
                 log::warn!("[e2ee-token] create: revision_conflict (state or revision mismatch)");
                 return Err(error("revision_conflict"));
             }
-            if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
-                return Err(error("consent_required"));
-            }
             self.retire_reviewed_pending(&mut runtime, None).await?;
             let context = EncryptContext {
                 owner_github_id: GithubId::parse(self.owner(&runtime)?).map_err(protocol_error)?,
@@ -1314,8 +1323,6 @@ impl EncryptedSyncService {
                 .await?;
             let documents = captured.documents.documents().clone();
             let (snapshot, key) = tokio::task::spawn_blocking(move || {
-                let password = NormalizedPassword::confirmed_new(password, confirmation)
-                    .map_err(protocol_error)?;
                 let key =
                     Arc::new(crypto::derive_key(&password, &context.kdf).map_err(protocol_error)?);
                 let snapshot =
@@ -1329,8 +1336,10 @@ impl EncryptedSyncService {
                 .await?;
             self.upload(&mut runtime, snapshot, captured, None).await?;
             self.check_cancelled()?;
-            runtime.settings.enabled = true;
-            self.save_settings(&runtime).await?;
+            let mut settings = runtime.settings.clone();
+            settings.enabled = true;
+            self.0.local.write("device", "client", settings.clone()).await?;
+            runtime.settings = settings;
             Ok(())
         }
         .await;
@@ -1828,6 +1837,7 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.current_account(&runtime).await?;
             self.unlocked(&runtime)?;
             self.refresh_metadata(&mut runtime).await?;

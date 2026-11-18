@@ -37,7 +37,10 @@ function context({ native = true, blocked = false } = {}) {
     calls = 0,
     response = false,
     props = { blocked, onSetup: () => {} },
-    last;
+    last,
+    status = { enabled: false, consentVersion: null, serviceOrigin: 'https://sync.example', account: { githubId: 'owner' }, vaultId: 'vault' },
+    preparations = 0,
+    prepareResult;
   const document = Object.assign(new EventTarget(), {
     visibilityState: 'visible',
     hasFocus: () => true,
@@ -77,12 +80,19 @@ function context({ native = true, blocked = false } = {}) {
     'lucide-react': { CloudIcon: 'cloud', XIcon: 'x' },
     '../../runtime/environment': { isTauriHost: () => native },
     '../../api/cloud-sync': {
+      cloudSyncE2eeStatus: async () => ({ ...status }),
+      CLOUD_SYNC_E2EE_CONSENT_VERSION: 'encrypted-full-snapshot-v2',
+      encryptedSyncScope: (s) => JSON.stringify([s.serviceOrigin, s.account?.githubId ?? null, s.vaultId]),
+      encryptedSyncErrorKey: () => 'unknown',
       cloudSyncE2eeClaimSetupPrompt: async () => {
         calls++;
         return typeof response === 'function' ? response() : response;
       },
     },
-    './CloudSyncSection': { CloudSyncSection: 'sync-section' },
+    './CloudSyncSection': {
+      CloudSyncSection: 'sync-section', CloudSyncTermsDialog: (props) => jsx('terms', props),
+      prepareEncryptedSync: async () => { preparations++; return prepareResult ? prepareResult() : { nextStep: 'ready' }; },
+    },
     '../../ui/overlays/Modal': {
       // Eligibility tests do not advance animation clocks; closed presence has
       // no interactive content. Browser tests verify its retained inert exit.
@@ -135,6 +145,9 @@ function context({ native = true, blocked = false } = {}) {
       props = { ...props, blocked: v };
     },
     calls: () => calls,
+    setStatus: (v) => { status = { ...status, ...v }; },
+    setPreparation: (fn) => { prepareResult = fn; },
+    preparations: () => preparations,
     listeners,
     timers,
     event: (type) => listeners.get('backend:event')?.({ payload: { kind: { type } } }),
@@ -245,4 +258,42 @@ for (const change of ['hidden', 'focus', 'recording']) {
   assert.equal(c.render(), null, `late claim after ${change} must not open`);
   c.unmount();
 }
-console.log('encrypted sync setup prompt: 10 lifecycle cases passed');
+{
+  const c = context();
+  c.setStatus({ enabled: true, consentVersion: 'encrypted-full-snapshot-v1' });
+  c.render();
+  let tree = await c.flush();
+  assert.equal(tree.type, 'terms');
+  assert.equal(tree.props.updated, true);
+  assert.equal(c.calls(), 0, 'renewal bypasses the once-per-installation setup claim');
+  assert.equal(c.preparations(), 0, 'opening never accepts');
+  tree.props.onClose();
+  await c.flush();
+  assert.equal(c.render(), null);
+  c.window.dispatchEvent(new Event('focus'));
+  await c.flush();
+  assert.equal(c.render(), null, 'dismissal keeps sync paused without prompting on every focus');
+  c.setStatus({ vaultId: 'other-vault' });
+  c.event('cloud_sync_state_changed');
+  tree = await c.flush();
+  assert.equal(tree.type, 'terms', 'a different scope needs its own review');
+  const pending = deferred();
+  c.setPreparation(() => pending.promise);
+  tree.props.onConfirm();
+  tree = c.render();
+  assert.equal(tree.props.busy, true);
+  tree.props.onClose();
+  assert.equal(c.render().type, 'terms', 'busy review cannot dismiss');
+  pending.reject(new Error('PRIVATE_RAW_ERROR'));
+  await tick();
+  tree = c.render();
+  assert.equal(tree.props.error, 'cloudSyncE2ee.errors.unknown');
+  assert.equal(tree.props.busy, false);
+  c.setPreparation(() => ({ nextStep: 'ready' }));
+  tree.props.onConfirm();
+  await tick();
+  assert.equal(c.render(), null);
+  assert.equal(c.preparations(), 2);
+  c.unmount();
+}
+console.log('encrypted sync setup prompt lifecycle and reconsent cases passed');

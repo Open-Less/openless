@@ -5,6 +5,7 @@ import ts from 'typescript';
 import * as api from '../../api/cloud-sync';
 import { createInteractionController } from '../../ui/overlays/interactionController';
 import { matchesRestorePreview } from './restoreContext';
+import { syncDisclosure } from './disclosure';
 import type { EncryptedSyncStatus, RestorePreview } from '../../api/cloud-sync';
 
 // Replay the real component handlers; only React rendering/hooks and IPC/event
@@ -119,7 +120,7 @@ const factory = new Function(
   'exports',
   'require',
   '__listen',
-  `${compiled};return {CloudSyncSection,CustomSyncServerSection,PasswordForm,ConsentForm,ProtocolWarning,RestoreReview,normalizeCustomServerOrigin};`,
+  `${compiled};return {CloudSyncSection,CustomSyncServerSection,PasswordForm,ConsentForm,RestoreReview,normalizeCustomServerOrigin};`,
 );
 
 const initial: EncryptedSyncStatus = {
@@ -195,7 +196,12 @@ const dependencies: Record<string, any> = {
   }),
   Icon: 'icon',
   GithubLoginModal: 'login',
-  Modal: 'modal',
+  StructuredDialog: 'modal',
+  DialogHeader: 'header',
+  DialogBody: 'body',
+  DialogFooter: 'footer',
+  DialogAction: 'button',
+  syncDisclosure,
   ExitPresence: 'exit-presence',
   Collapse: 'collapse',
   Btn: 'button',
@@ -312,11 +318,12 @@ try {
         },
       }),
     );
-    form.props.onCompositionStart();
-    form.props.onSubmit({ preventDefault() {} });
+    const actualForm = find(form, (node) => node.type === 'form');
+    actualForm.props.onCompositionStart();
+    actualForm.props.onSubmit({ preventDefault() {} });
     assert.equal(submitted, 0, 'IME confirmation must not submit or clear the password');
     let prevented = false;
-    form.props.onKeyDown({
+    actualForm.props.onKeyDown({
       key: 'Enter',
       nativeEvent: { isComposing: true },
       keyCode: 13,
@@ -325,8 +332,8 @@ try {
       },
     });
     assert(prevented);
-    form.props.onCompositionEnd();
-    form.props.onSubmit({ preventDefault() {} });
+    actualForm.props.onCompositionEnd();
+    actualForm.props.onSubmit({ preventDefault() {} });
     assert.equal(submitted, 1);
   }
   const passwordHooks = new Hooks();
@@ -352,23 +359,7 @@ try {
     components.ConsentForm({ busy: false, onConfirm() {} }),
   );
   assert.equal(find(consent, (node) => node.type === 'input').props.checked, false);
-  assert.equal(find(consent, (node) => node.type === 'button').props.disabled, true);
-
-  const protocolHooks = new Hooks();
-  const protocolProps = { busy: false, onConfirm() {}, onCancel() {} };
-  let protocolTree = protocolHooks.render(() => components.ProtocolWarning(protocolProps));
-  const confirmProtocol = () =>
-    find(protocolTree, (node) => node.props.children === 'cloudSyncE2ee.protocolConfirm');
-  assert.equal(confirmProtocol().props.disabled, true);
-  find(protocolTree, (node) => node.type === 'input').props.onChange({
-    currentTarget: { checked: true },
-  });
-  protocolTree = protocolHooks.render(() => components.ProtocolWarning(protocolProps));
-  assert.equal(confirmProtocol().props.disabled, false);
-  protocolTree = protocolHooks.render(() =>
-    components.ProtocolWarning({ ...protocolProps, busy: true }),
-  );
-  assert.equal(confirmProtocol().props.disabled, true);
+  assert.equal(find(consent, (node) => node.type === 'button' && node.props.tone !== 'neutral').props.disabled, true);
 
   const hooks = new Hooks();
   const render = () => hooks.render(() => components.CloudSyncSection());
@@ -381,23 +372,13 @@ try {
   assert.equal(credentialReads, 0, 'normal sync must not load the self-hosted server token');
   syncSwitch(tree).props.onToggle(true);
   tree = render();
-  find(tree, (node) => node.type === components.ConsentForm).props.onConfirm();
+  find(tree, (node) => node.type === components.ConsentForm).props.onCancel();
   await settle();
   tree = render();
-  assert.deepEqual(
-    calls,
-    [],
-    'scope consent alone must not prepare or upload before the privacy warning',
-  );
-  find(tree, (node) => node.type === components.ProtocolWarning).props.onCancel();
-  tree = render();
-  assert.deepEqual(calls, [], 'canceling the warning must not perform native sync work');
-  assert(!nodes(tree).some((node) => node.type === components.ProtocolWarning));
+  assert.deepEqual(calls, [], 'cancel must not persist consent, prepare or upload');
   syncSwitch(tree).props.onToggle(true);
   tree = render();
   find(tree, (node) => node.type === components.ConsentForm).props.onConfirm();
-  tree = render();
-  find(tree, (node) => node.type === components.ProtocolWarning).props.onConfirm();
   await settle();
   tree = render();
   assert.deepEqual(
@@ -559,10 +540,6 @@ try {
   find(tree, (node) => node.type === 'toggle').props.onToggle(true);
   tree = fresh();
   find(tree, (node) => node.type === components.ConsentForm).props.onConfirm();
-  await settle();
-  tree = fresh();
-  assert.deepEqual(calls, [], 'a new vault also requires the second privacy acknowledgement');
-  find(tree, (node) => node.type === components.ProtocolWarning).props.onConfirm();
   await settle();
   tree = fresh();
   const createForm = find(tree, (node) => node.type === components.PasswordForm);

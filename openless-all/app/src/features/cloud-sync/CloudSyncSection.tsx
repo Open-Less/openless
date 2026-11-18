@@ -102,7 +102,8 @@ function setupFocus(
   const noSnapshot = status.hasCloudSnapshot !== true;
   const locked = status.keyState !== 'unlocked';
   if (!status.enabled) {
-    if (reached === 'password' || (noSnapshot && status.consentVersion)) return 'password';
+    if (reached === 'password' || (noSnapshot && status.consentVersion === CONSENT_VERSION))
+      return 'password';
     if (reached === 'unlock' || (status.hasCloudSnapshot === true && locked)) return 'unlock';
     if (status.hasCloudSnapshot === true && !locked) return 'closed';
     return 'enable';
@@ -111,6 +112,14 @@ function setupFocus(
   if (noSnapshot) return 'password';
   return 'done';
 }
+function retainsSyncScope(previous: EncryptedSyncStatus, next: EncryptedSyncStatus): boolean {
+  return (
+    previous.serviceOrigin === next.serviceOrigin &&
+    (!previous.account || previous.account.githubId === next.account?.githubId) &&
+    (!previous.vaultId || previous.vaultId === next.vaultId)
+  );
+}
+
 function localError(reason: string): unknown {
   return { details: { reason } };
 }
@@ -352,13 +361,15 @@ export function CloudSyncSection() {
     const sequence = syncSequence(next.sequence);
     const previous = syncSequence(watermark.current);
     if (sequence === null || previous === null || sequence < previous) return false;
-    const scopeChanged =
-      current.current && encryptedSyncScope(current.current) !== encryptedSyncScope(next);
+    const before = current.current;
+    const scopeChanged = before && encryptedSyncScope(before) !== encryptedSyncScope(next);
     current.current = next;
     watermark.current = next.sequence;
     setStatus(next);
     if (scopeChanged) {
-      setDialog(null);
+      if (activeAction.current === null || !retainsSyncScope(before, next)) {
+        setDialog(null);
+      }
       awaitingSync.current = false;
       syncIntent.current = false;
     } else if (awaitingSync.current && next.syncState !== 'syncing') {
@@ -511,10 +522,11 @@ export function CloudSyncSection() {
     notificationSettled.current = false;
     setBusy(true);
     setNotice(null);
-    const scope = current.current ? encryptedSyncScope(current.current) : null;
+    const initial = current.current;
     const valid = () =>
-      alive.current && actionSequence.current === action &&
-      (!scope || !current.current || encryptedSyncScope(current.current) === scope);
+      alive.current &&
+      actionSequence.current === action &&
+      (!initial || !current.current || retainsSyncScope(initial, current.current));
     try {
       await work(valid);
     } catch (error) {
@@ -581,7 +593,7 @@ export function CloudSyncSection() {
   };
   const begin = (intent: Intent) => {
     setNotice(null);
-    if (intent === 'enable' || current.current?.consentVersion !== CONSENT_VERSION) {
+    if (current.current?.consentVersion !== CONSENT_VERSION) {
       setDialog({ kind: 'consent', intent });
     } else {
       const scope = current.current ? encryptedSyncScope(current.current) : undefined;
@@ -787,6 +799,7 @@ export function CloudSyncSection() {
           ? 'passwordTitle'
           : `${dialog?.kind ?? 'consent'}Title`;
   const closeDialog = () => {
+    if (activeAction.current !== null) return;
     if (!working) {
       setDialog(null);
       setNotice(null);
@@ -982,10 +995,15 @@ export function CloudSyncSection() {
                       observedRevision: snapshot.remoteRevision!,
                       confirmed: true,
                     });
-                    if (!alive.current || !current.current || encryptedSyncScope(current.current) !== scope) return;
-                    acceptStatus(next);
                     if (next.lastError) throw next.lastError;
-                    announce('done');
+                    if (
+                      alive.current &&
+                      current.current?.serviceOrigin === snapshot.serviceOrigin &&
+                      current.current.account?.githubId === snapshot.account?.githubId &&
+                      acceptStatus(next)
+                    ) {
+                      announce('done');
+                    }
                   },
                 });
               }}
@@ -1117,7 +1135,7 @@ export function CloudSyncSection() {
                   </Btn></DialogFooter>
                 </>
               )}
-              {working && status?.taskId && (
+              {working && status?.taskId && dialog.kind === 'restore' && (
                 <div className="ol-cloud-sync-actions">{taskControls}</div>
               )}
             </SyncDialog>

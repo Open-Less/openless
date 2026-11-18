@@ -1940,6 +1940,8 @@ async fn legacy_unknown_operation_keeps_exact_bytes_and_stays_on_its_original_se
         .is_none());
     fixture.data.set_custom_server_origin(None);
     fixture.set_custom_token("token-a").await;
+    assert_eq!(reopened.sync_now().await.unwrap_err().message, "consent_required");
+    reopened.prepare_enable(CONSENT_VERSION.into()).await.unwrap();
     reopened.sync_now().await.unwrap();
     assert!(local
         .read::<serde_json::Value>(&original_namespace, "pending")
@@ -2060,4 +2062,65 @@ async fn configuration_failure_discards_cached_identity_and_memory_key() {
             .next_step,
         EnableStep::Unlock
     );
+}
+
+#[tokio::test]
+async fn outdated_consent_blocks_startup_manual_and_review_pending_replay_until_accepted() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.data.edit("pending private change");
+    server.state.lock().unwrap().drop_response = true;
+    assert_eq!(fixture.service.sync_now().await.unwrap_err().message, "outcome_unknown");
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    let pending: serde_json::Value = local.read(&namespace, "pending").await.unwrap().unwrap();
+    let mut settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    settings.consent_version = Some("encrypted-full-snapshot-v1".into());
+    local.write("device", "client", settings).await.unwrap();
+    let reopened = fixture.reopen(&server);
+    let requests = server.state.lock().unwrap().requests;
+    let puts = server.state.lock().unwrap().puts.len();
+    reopened.start(Arc::new(crate::TokioTaskSpawner)).await.unwrap();
+    wait_for_auto_sync(|| reopened.status().last_error.as_ref().is_some_and(|failure| failure.code == "consent_required")).await;
+    assert_eq!(reopened.sync_now().await.unwrap_err().message, "consent_required");
+    assert_eq!(reopened.preview_restore("2".into()).await.unwrap_err().message, "consent_required");
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    assert_eq!(server.state.lock().unwrap().puts.len(), puts);
+    assert_eq!(local.read::<serde_json::Value>(&namespace, "pending").await.unwrap().unwrap(), pending);
+    let declined: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(declined.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    server.state.lock().unwrap().drop_response = false;
+    reopened.prepare_enable(CONSENT_VERSION.into()).await.unwrap();
+    reopened.sync_now().await.unwrap();
+    assert!(local.read::<serde_json::Value>(&namespace, "pending").await.unwrap().is_none());
+    assert_eq!(server.state.lock().unwrap().puts.len(), puts);
+    assert_eq!(reopened.status().consent_version.as_deref(), Some(CONSENT_VERSION));
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_or_stale_preparation_does_not_accept_the_new_disclosure() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    let mut settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    settings.consent_version = Some("encrypted-full-snapshot-v1".into());
+    local.write("device", "client", settings).await.unwrap();
+    let reopened = fixture.reopen(&server);
+    let requests = server.state.lock().unwrap().requests;
+    let scope = ConsentScope { service_origin: "https://changed.example".into(), account_id: Some(OWNER.into()), vault_id: None };
+    assert_eq!(reopened.prepare_enable_scoped(CONSENT_VERSION.into(), Some(scope)).await.unwrap_err().message, "account_changed");
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    server.state.lock().unwrap().drop_metadata_response = true;
+    assert!(reopened.prepare_enable(CONSENT_VERSION.into()).await.is_err());
+    let declined: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(declined.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert_eq!(reopened.status().consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    reopened.shutdown().await;
 }

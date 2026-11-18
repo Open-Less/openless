@@ -18,6 +18,7 @@ const PROMPT_EVENTS = new Set([
   'less_computer_event',
   'local_asr_engine_changed',
   'permission_changed',
+  'cloud_sync_state_changed',
 ]);
 
 /** Core owns eligibility and the durable once-per-installation claim. */
@@ -97,8 +98,8 @@ export function CloudSyncSetupPrompt({
       setReview(null);
     };
     const eligibilityChanged = () => {
-      // A preference event alone does not revoke the displayed account scope.
-      // The next read validates it without resetting an acknowledgement.
+      // Recheck a displayed review without resetting its acknowledgement.
+      if (!reviewRef.current || document.visibilityState !== 'visible') invalidate();
       schedule();
     };
     void import('@tauri-apps/api/event')
@@ -164,9 +165,8 @@ export function CloudSyncSetupPrompt({
       setBusy(false);
     }
   };
+  if (review && !blocked) return <CloudSyncTermsDialog key={encryptedSyncScope(review)} updated busy={busy} error={error} onClose={closeReview} onConfirm={() => void acceptReview()} />;
   return (
-    <>
-      {review && !blocked && <CloudSyncTermsDialog key={encryptedSyncScope(review)} updated busy={busy} error={error} onClose={closeReview} onConfirm={() => void acceptReview()} />}
     <PresenceModal
       open={open && !blocked}
       onClose={() => setOpen(false)}
@@ -238,7 +238,6 @@ export function CloudSyncSetupPrompt({
         </section>
       )}
     />
-    </>
   );
 }
 

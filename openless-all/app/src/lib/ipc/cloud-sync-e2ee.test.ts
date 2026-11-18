@@ -61,6 +61,11 @@ try {
       { consentVersion: api.CLOUD_SYNC_E2EE_CONSENT_VERSION },
       () => api.cloudSyncE2eePrepareEnable(api.CLOUD_SYNC_E2EE_CONSENT_VERSION),
     ],
+    [
+      'prepare_enable',
+      { consentVersion: api.CLOUD_SYNC_E2EE_CONSENT_VERSION, expectedScope: { serviceOrigin: 'https://sync.example', accountId: 'owner', vaultId: 'vault' } },
+      () => api.cloudSyncE2eePrepareEnable(api.CLOUD_SYNC_E2EE_CONSENT_VERSION, { serviceOrigin: 'https://sync.example', accountId: 'owner', vaultId: 'vault' }),
+    ],
     ['create', create, () => api.cloudSyncE2eeCreate(create)],
     [
       'unlock',
