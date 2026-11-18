@@ -35,13 +35,32 @@ test('channel fields stay editable right after the editor opens', async ({ page 
   }
 });
 
-test('multimodal model menu stays wide enough to read every option', async ({ page }) => {
+test('multimodal tools share a flat row and the model menu stays readable', async ({ page }) => {
   await openAiSettings(page);
   await page.getByRole('button', { name: '多模态模式', exact: true }).click();
-  const fetch = page.getByRole('button', { name: '拉取模型' });
+  const tools = page.getByRole('region', { name: '连接验证' });
+  const fetch = tools.getByRole('button', { name: '拉取模型', exact: true });
+  const picker = tools.getByRole('combobox', { name: '选择一个模型写入上方字段' });
+  const verify = tools.getByRole('button', { name: '验证', exact: true });
+  const result = tools.getByRole('status');
+  await expect(tools.getByText('手动发起文本连接请求，可能消耗服务器额度')).toBeVisible();
+  await expect(fetch).toHaveCSS('box-shadow', 'none');
+  await expect(verify).toHaveCSS('box-shadow', 'none');
   await fetch.click();
-  const picker = page.getByRole('combobox', { name: '选择一个模型写入上方字段' });
   await expect(picker).toBeEnabled();
+  await expect(result).toContainText(/已拉取 \d+ 个模型/);
+  await expect
+    .poll(async () => {
+      const bounds = await Promise.all([fetch, result, picker, verify].map((node) => node.boundingBox()));
+      if (bounds.some((box) => box === null)) return false;
+      const items = bounds.map((box) => box!);
+      const centers = items.map((box) => box.y + box.height / 2);
+      return (
+        Math.max(...centers) - Math.min(...centers) <= 1 &&
+        items.every((box, index) => index === 0 || items[index - 1].x < box.x)
+      );
+    })
+    .toBe(true);
   await picker.click();
   const popup = page.locator('.ol-select-popup');
   await expect(popup).toBeVisible();
@@ -62,6 +81,8 @@ test('multimodal model menu stays wide enough to read every option', async ({ pa
     )
     .toBe(expected);
   await expect(page.getByLabel('模型', { exact: true })).toHaveValue(expected!);
+  await verify.click();
+  await expect(result).toContainText('文本连通性通过');
 });
 
 test('multimodal provider switches flush the outgoing field to its own slot', async ({ page }) => {

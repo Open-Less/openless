@@ -1640,8 +1640,7 @@ export const en: typeof zhCN = {
       validationTitle: 'Connection check',
       validationHint:
         'Manually send a real request to check this configuration. It may use service credits. Saving settings does not run a check.',
-      validationHintOmni:
-        'Manually send a text-only connectivity request (no recording). Passing does not mean audio dictation works—please confirm with a short recording. It may use service credits.',
+      validationHintOmni: 'Manually send a text-only connection request. It may use server credits.',
       autoSaveHint:
         'Changes save automatically. Once configured, you can check the connection manually.',
       nameHint:

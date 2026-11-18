@@ -1558,8 +1558,7 @@ export const zhCN = {
       validationTitle: '连接验证',
       validationHint:
         '手动发起一次真实请求，检查当前配置；可能消耗服务额度。保存设置不会自动验证。',
-      validationHintOmni:
-        '手动发起一次文本连通性请求（不含录音）。通过不代表音频听写可用，请再做一次短录音确认。可能消耗服务额度。',
+      validationHintOmni: '手动发起文本连接请求，可能消耗服务器额度',
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',

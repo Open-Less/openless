@@ -1441,6 +1441,7 @@ function ProviderTools({
     });
   };
 
+  const actionStyle = compact ? { ...miniBtnStyle, boxShadow: 'none' } : miniBtnStyle;
   const resultMessage = message && (
     <span
       className="ol-provider-result ol-provider-result-inline"
@@ -1464,35 +1465,32 @@ function ProviderTools({
       options={models.map((model) => ({ value: model, label: model }))}
       placeholder={t('settings.providers.selectModel')}
       ariaLabel={t('settings.providers.selectModel')}
-      style={{ width: '100%', minWidth: 0, height: 38 }}
+      style={{ width: '100%', minWidth: 0, height: compact ? undefined : 38 }}
       popupStyle={{
         minWidth: 'min(280px, calc(100vw - 24px))',
         maxWidth: 'min(380px, calc(100vw - 24px))',
       }}
     />
   );
-  const modelTools = showFetchModels && (
-    <div className="ol-channel-model-tools">
-      <div className="ol-channel-model-fetch">
-        <button
-          className="ol-channel-fetch-models"
-          type="button"
-          onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
-          style={miniBtnStyle}
-          disabled={disabled || status === 'loading'}
-        >
-          <Icon
-            name={modelsUrl ? 'external' : 'refresh'}
-            size={14}
-            className={
-              status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
-            }
-          />
-          {modelsUrl ? t('settings.providers.viewModels') : t('settings.providers.fetchModels')}
-        </button>
-        <div className="ol-provider-status-slot">{operation === 'models' && resultMessage}</div>
-      </div>
-      {!compact && !modelsUrl && modelSelect}
+  const fetchModels = (
+    <div className="ol-channel-model-fetch">
+      <button
+        className="ol-channel-fetch-models"
+        type="button"
+        onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
+        style={actionStyle}
+        disabled={disabled || status === 'loading'}
+      >
+        <Icon
+          name={modelsUrl ? 'external' : 'refresh'}
+          size={14}
+          className={
+            status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+          }
+        />
+        {modelsUrl ? t('settings.providers.viewModels') : t('settings.providers.fetchModels')}
+      </button>
+      <div className="ol-provider-status-slot">{operation === 'models' && resultMessage}</div>
     </div>
   );
   const verifyButton = (
@@ -1500,7 +1498,7 @@ function ProviderTools({
       className="ol-channel-verify"
       type="button"
       onClick={validate}
-      style={{ ...miniBtnStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
+      style={{ ...actionStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
       disabled={disabled || status === 'loading'}
     >
       <Icon
@@ -1536,10 +1534,12 @@ function ProviderTools({
     return (
       <section className="ol-omni-tools" aria-label={t('settings.channels.validationTitle')}>
         <div className="ol-omni-tools-actions">
-          {modelTools}
+          {showFetchModels && fetchModels}
+          {showFetchModels && !modelsUrl && (
+            <div className="ol-omni-model-picker">{modelSelect}</div>
+          )}
           {verifyButton}
         </div>
-        {showFetchModels && !modelsUrl && <div className="ol-omni-model-picker">{modelSelect}</div>}
         <div className="ol-omni-tools-hint">
           {operation === 'validate' && message
             ? resultMessage
@@ -1556,7 +1556,12 @@ function ProviderTools({
   return (
     <>
       {showFetchModels && (
-        <ChannelFormRow label={t('settings.channels.availableModels')}>{modelTools}</ChannelFormRow>
+        <ChannelFormRow label={t('settings.channels.availableModels')}>
+          <div className="ol-channel-model-tools">
+            {fetchModels}
+            {!modelsUrl && modelSelect}
+          </div>
+        </ChannelFormRow>
       )}
       <section className="ol-channel-validation" style={channelSectionStyle}>
         {validation}

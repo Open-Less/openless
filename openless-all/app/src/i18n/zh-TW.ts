@@ -1560,8 +1560,7 @@ export const zhTW: typeof zhCN = {
       validationTitle: '連線驗證',
       validationHint:
         '手動發出一次實際請求，檢查目前設定；可能消耗服務額度。儲存設定不會自動驗證。',
-      validationHintOmni:
-        '手動發出一次文字連通性請求（不含錄音）。通過不代表音訊聽寫可用，請再做一次短錄音確認。可能消耗服務額度。',
+      validationHintOmni: '手動發出文字連線請求，可能消耗伺服器額度',
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',

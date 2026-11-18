@@ -1667,7 +1667,7 @@ export const es: typeof zhCN = {
       validationHint:
         'Envía manualmente una solicitud real para comprobar la configuración. Puede consumir saldo del servicio. Guardar los ajustes no ejecuta esta comprobación.',
       validationHintOmni:
-        'Envía manualmente una solicitud solo de texto (sin grabación). Pasar no significa que el dictado de audio funcione: confirma con una grabación corta. Puede consumir saldo del servicio.',
+        'Envía manualmente una solicitud de conexión solo de texto. Puede consumir saldo del servidor.',
       autoSaveHint:
         'Los cambios se guardan automáticamente. Después de configurar el servicio, puedes comprobar la conexión.',
       nameHint:

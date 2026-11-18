@@ -1686,7 +1686,7 @@ export const fr: typeof zhCN = {
       validationHint:
         'Envoyez manuellement une requête réelle pour vérifier cette configuration. Elle peut consommer des crédits du service. L’enregistrement des réglages ne lance pas de vérification.',
       validationHintOmni:
-        'Envoyez manuellement une requête de connectivité texte uniquement (sans enregistrement). Réussir ne signifie pas que la dictée audio fonctionne — confirmez avec un court enregistrement. Elle peut consommer des crédits du service.',
+        'Envoie une requête de connexion textuelle. Elle peut utiliser des crédits du serveur.',
       autoSaveHint:
         'Les modifications sont enregistrées automatiquement. Une fois le service configuré, vous pouvez vérifier la connexion.',
       nameHint:

@@ -1391,8 +1391,8 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-omni-tools {
   border-top: 1px solid var(--ol-line);
-  margin-top: 6px;
-  padding-top: 6px;
+  margin-top: 4px;
+  padding-top: 4px;
 }
 .ol-omni-tools-actions {
   display: flex;
@@ -1400,11 +1400,38 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-wrap: wrap;
   gap: 8px;
 }
+.ol-omni-tools-actions > .ol-channel-model-fetch {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+.ol-omni-tools-actions .ol-provider-status-slot:empty {
+  display: none;
+}
+.ol-omni-tools-actions .ol-provider-result-inline > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ol-omni-model-picker {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 100%;
+}
+.ol-omni-model-picker .ol-select-trigger {
+  min-height: 32px;
+  height: auto;
+  padding-block: 6px;
+}
+.ol-omni-model-picker .ol-select-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .ol-omni-tools-hint {
-  margin: 8px 0 0;
+  min-height: 20px;
+  margin: 6px 0 0;
   color: var(--ol-ink-3);
   font-size: 11px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .ol-service-inactive-tag,
 .ol-provider-result {
@@ -2327,9 +2354,6 @@ html:lang(de) {
   flex: 0 1 50%;
   justify-content: flex-end;
 }
-.ol-omni-tools .ol-channel-validation-heading {
-  margin-top: 12px;
-}
 @media (max-width: 700px) {
   .ol-channel-model-tools {
     grid-template-columns: minmax(0, 1fr);
@@ -2346,54 +2370,6 @@ html:lang(de) {
   }
 }
 
-.ol-omni-tools-actions > .ol-channel-model-tools {
-  flex: 1;
-  width: auto;
-  min-width: 0;
-}
-/* The fetched-model menu shares the API key / endpoint field's left edge and
-   the Temperature field's right edge (columns 4–6 of the same 12-column grid). */
-.ol-omni-model-picker {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  column-gap: var(--ol-grid-gutter);
-  margin-top: 8px;
-  min-width: 0;
-}
-.ol-omni-model-picker > * {
-  grid-column: 4 / 7;
-  min-width: 0;
-  width: 100%;
-}
-@media (max-width: 720px) {
-  .ol-omni-model-picker > * {
-    grid-column: 1 / -1;
-  }
-}
-.ol-omni-model-picker .ol-select-trigger {
-  width: 100%;
-  box-sizing: border-box;
-  height: 38px;
-}
-.ol-omni-tools-actions {
-  flex-wrap: nowrap;
-}
-.ol-omni-tools-hint {
-  min-height: 20px;
-}
-@media (max-width: 700px) {
-  .ol-omni-tools-actions {
-    flex-wrap: wrap;
-  }
-  .ol-omni-tools-actions > .ol-channel-model-tools {
-    flex-basis: 100%;
-  }
-}
-
-.ol-omni-tools {
-  padding-top: 4px;
-  margin-top: 4px;
-}
 .ol-settings-sections[data-section='services'] {
   height: 100%;
   min-height: 0;

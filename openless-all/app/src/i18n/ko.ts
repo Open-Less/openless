@@ -1614,8 +1614,7 @@ export const ko: typeof zhCN = {
       validationTitle: '연결 확인',
       validationHint:
         '실제 요청을 보내 현재 설정을 확인합니다. 서비스 사용량이 차감될 수 있습니다. 설정을 저장해도 자동으로 확인하지 않습니다.',
-      validationHintOmni:
-        '텍스트 연결만 수동으로 확인합니다(녹음 없음). 통과해도 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 다시 확인하세요. 서비스 사용량이 차감될 수 있습니다.',
+      validationHintOmni: '텍스트 연결 요청을 수동으로 보내며, 서버 사용량 한도를 소모할 수 있습니다.',
       autoSaveHint:
         '변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.',
       nameHint:
