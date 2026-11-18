@@ -171,3 +171,115 @@
     padding: 12px 16px;
   }
 }
+
+.ol-dialog-overlay.ol-dialog-overlay--origin {
+  background: rgb(0 0 0 / 80%);
+}
+.ol-dialog-overlay--origin::before {
+  display: none;
+}
+.ol-dialog-overlay--origin > .ol-structured-dialog {
+  --ol-dialog-radius: 12px;
+  --ol-corner-radius: var(--ol-dialog-radius);
+  background-image: none;
+  box-shadow: 0 10px 22px rgb(0 0 0 / 10%);
+}
+.ol-dialog-icon-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  margin-block: -4px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ol-ink-3);
+  background: transparent;
+}
+.ol-dialog-icon-close:hover:not(:disabled) {
+  color: var(--ol-ink);
+  background: var(--ol-choice-hover-bg);
+}
+.ol-dialog-icon-close:disabled {
+  opacity: 0.5;
+}
+
+/* Terms panels keep both separators fixed while a single middle pane scrolls. */
+.ol-dialog-overlay > .ol-structured-dialog--terms {
+  max-height: min(640px, 80dvh, 100%);
+}
+.ol-structured-dialog--terms :is(.ol-dialog-header, .ol-channel-dialog-header) {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--ol-line);
+}
+.ol-structured-dialog--terms :is(.ol-dialog-body, .ol-channel-dialog-body) {
+  padding: 16px 24px;
+}
+.ol-structured-dialog--terms :is(.ol-dialog-footer, .ol-channel-dialog-footer) {
+  padding: 16px 24px;
+  background: transparent;
+}
+.ol-structured-dialog--terms :is(.ol-dialog-header, .ol-channel-dialog-header) :is(h2, h3) {
+  font-size: 16px;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure {
+  gap: 16px;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure section {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure h4 {
+  margin-bottom: 4px;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure p {
+  margin: 0;
+  color: var(--ol-ink-3);
+}
+.ol-structured-dialog--channel .ol-channel-dialog {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Compact destructive decisions use a centered alert and equal action columns. */
+.ol-dialog-overlay > .ol-structured-dialog--decision {
+  overflow: hidden;
+  padding: 24px;
+}
+.ol-structured-dialog--decision .ol-confirm-dialog {
+  min-height: 0;
+}
+.ol-structured-dialog--decision .ol-dialog-header {
+  display: block;
+  padding: 0 26px 4px;
+  text-align: center;
+}
+.ol-structured-dialog--decision .ol-dialog-header h2 {
+  font-size: 18px;
+}
+.ol-structured-dialog--decision .ol-confirm-dialog-icon {
+  margin: 0 auto 8px;
+  border: 1px solid var(--ol-line);
+  border-radius: 50%;
+  color: var(--ol-ink-2);
+  background: transparent;
+}
+.ol-structured-dialog--decision .ol-dialog-icon-close {
+  position: absolute;
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
+  margin: 0;
+}
+.ol-structured-dialog--decision .ol-dialog-body {
+  padding: 0 0 16px;
+  text-align: center;
+}
+.ol-structured-dialog--decision .ol-dialog-footer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}

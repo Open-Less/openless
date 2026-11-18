@@ -65,7 +65,8 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
             onClose={cancel}
             zIndex={REQUEST_LAYER}
             focusKey={request.id}
-            width={custom ? (request.options.width ?? 'min(560px, 100%)') : 'min(480px, 100%)'}
+            layout={danger ? 'decision' : 'standard'}
+            width={custom ? request.options.width : danger ? undefined : 'min(480px, 100%)'}
             labelledBy={titleId}
             describedBy={request.options.description != null ? descriptionId : undefined}
             initialFocus={leastDestructive}
@@ -96,7 +97,7 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
                       <Icon
                         name={
                           request.kind === 'confirm'
-                            ? (request.options.icon ?? (danger ? 'trash' : 'info'))
+                            ? (request.options.icon ?? (danger ? 'alert' : 'info'))
                             : 'info'
                         }
                         size={18}
@@ -106,6 +107,17 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
                       {request.options.title}
                     </h2>
                   </div>
+                  {danger && (
+                    <button
+                      type="button"
+                      className="ol-dialog-icon-close"
+                      aria-label={t('common.close')}
+                      disabled={busy}
+                      onClick={cancel}
+                    >
+                      <Icon name="close" size={16} />
+                    </button>
+                  )}
                 </DialogHeader>
                 <DialogBody>
                   {request.options.description != null && (
@@ -131,14 +143,6 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
                     </button>
                   ) : (
                     <>
-                      <DialogAction
-                        tone={danger ? 'danger' : 'primary'}
-                        className={danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}
-                        disabled={busy}
-                        onClick={() => void accept()}
-                      >
-                        {request.options.confirmLabel ?? t('common.confirmAction')}
-                      </DialogAction>
                       <button
                         ref={leastDestructive}
                         type="button"
@@ -148,6 +152,14 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
                       >
                         {request.options.cancelLabel ?? t('common.cancel')}
                       </button>
+                      <DialogAction
+                        tone={danger ? 'danger' : 'primary'}
+                        className={danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}
+                        disabled={busy}
+                        onClick={() => void accept()}
+                      >
+                        {request.options.confirmLabel ?? t('common.confirmAction')}
+                      </DialogAction>
                     </>
                   )}
                 </DialogFooter>

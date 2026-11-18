@@ -13,6 +13,7 @@ import {
   DialogBody,
   DialogFooter,
   DialogAction,
+  type DialogLayout,
 } from '../../ui/overlays/Dialog';
 import { syncDisclosure } from './disclosure';
 import { SyncPasswordField } from './SyncPasswordField';
@@ -45,6 +46,9 @@ import {
   mirrorEncryptedSyncUiPreferences,
   encryptedSyncScope,
   encryptedSyncErrorKey,
+  listenEncryptedSyncStateChanges,
+  listenEncryptedSyncConflicts,
+  listenEncryptedSyncRestores,
   matchesEncryptedSyncEvent,
   syncSequence,
   syncPasswordMeetsBasicRequirements,
@@ -495,19 +499,19 @@ export function CloudSyncSection() {
     void (async () => {
       try {
         if (isTauriHost()) {
-          const { listen } = await import('@tauri-apps/api/event');
-          for (const [name, kind] of [
-            ['cloud-sync-e2ee:state', 'state'],
-            ['cloud-sync-e2ee:conflict', 'conflict'],
-            ['cloud-sync-e2ee:restored', 'restored'],
-          ] as const) {
-            const stop = await listen(name, (event) => {
-              if (disposed) return;
-              if (kind === 'state') eventsRef.current.state(event.payload as EncryptedSyncEvent);
-              else if (kind === 'conflict')
-                eventsRef.current.conflict(event.payload as EncryptedSyncConflictEvent);
-              else eventsRef.current.restored(event.payload as EncryptedSyncRestoreEvent);
-            });
+          const subscriptions = [
+            () => listenEncryptedSyncStateChanges((event) => {
+              if (!disposed) eventsRef.current.state(event);
+            }),
+            () => listenEncryptedSyncConflicts((event) => {
+              if (!disposed) eventsRef.current.conflict(event);
+            }),
+            () => listenEncryptedSyncRestores((event) => {
+              if (!disposed) eventsRef.current.restored(event);
+            }),
+          ];
+          for (const subscribe of subscriptions) {
+            const stop = await subscribe();
             if (disposed) {
               stop();
               return;
@@ -1111,6 +1115,7 @@ export function CloudSyncSection() {
             <SyncDialog
               closing={closing}
               key={dialog.kind}
+              layout={dialog.kind === 'consent' ? 'terms' : undefined}
               title={
                 dialog.kind === 'consent'
                   ? syncDisclosure(i18n.resolvedLanguage ?? i18n.language)[
@@ -1281,6 +1286,7 @@ export function CloudSyncTermsDialog({
   return (
     <SyncDialog
       title={updated ? disclosure.updatedTitle : disclosure.firstTimeTitle}
+      layout="terms"
       descriptionId={descriptionId}
       busy={busy}
       onClose={onClose}
@@ -1467,6 +1473,7 @@ export function CloudBackupDeletionDisclosure({
 
 function SyncDialog({
   title,
+  layout = 'standard',
   descriptionId,
   closing = false,
   busy,
@@ -1474,6 +1481,7 @@ function SyncDialog({
   children,
 }: {
   title: string;
+  layout?: DialogLayout;
   descriptionId?: string;
   closing?: boolean;
   busy: boolean;
@@ -1486,7 +1494,8 @@ function SyncDialog({
   return (
     <StructuredDialog
       zIndex={100}
-      width="min(680px, 100%)"
+      layout={layout}
+      width={layout === 'standard' ? 'min(560px, 100%)' : undefined}
       labelledBy={titleId}
       describedBy={descriptionId}
       initialFocus={cancelRef}
@@ -1503,9 +1512,9 @@ function SyncDialog({
           disabled={busy}
           onClick={onClose}
           aria-label={t('common.close')}
-          className="ol-tool-close"
+          className="ol-dialog-icon-close"
         >
-          <Icon name="close" size={17} />
+          <Icon name="close" size={16} />
         </button>
       </DialogHeader>
       {children}

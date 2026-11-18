@@ -131,7 +131,7 @@ for (const [scale, factor] of [
 
     await page.getByRole('button', { name: 'First confirmation' }).click();
     const confirm = page.getByRole('dialog', { name: 'First prompt' });
-    expect((await bounds(confirm)).width / factor).toBeCloseTo(480, 0);
+    expect((await bounds(confirm)).width / factor).toBeCloseTo(400, 0);
     await page.keyboard.press('Escape');
 
     await page.setViewportSize({ width: 330, height: 356 });
@@ -143,8 +143,21 @@ for (const [scale, factor] of [
     expect(card.x + card.width).toBeLessThanOrEqual(330);
     expect(card.y).toBeGreaterThanOrEqual(0);
     expect(card.y + card.height).toBeLessThanOrEqual(356);
-    expect(await long.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
-    await long.getByRole('button', { name: 'Keep unchanged' }).click();
+    const body = long.locator('.ol-dialog-body');
+    const lastLine = long.getByTestId('long-detail-end');
+    const cancel = long.getByRole('button', { name: 'Keep unchanged' });
+    await expect.poll(() => body.evaluate((node) => node.scrollHeight - node.clientHeight))
+      .toBeGreaterThan(0);
+    await expect(lastLine).not.toBeInViewport();
+    await expect(cancel).toBeInViewport();
+    const footerBefore = await bounds(cancel);
+    await body.hover();
+    await page.mouse.wheel(0, 20_000);
+    await expect(lastLine).toBeInViewport();
+    const footerAfter = await bounds(cancel);
+    expect(Math.abs(footerAfter.y - footerBefore.y)).toBeLessThan(1);
+    expect(await long.evaluate((node) => node.scrollTop)).toBe(0);
+    await cancel.click();
     await expect(page.getByText('Long prompt:false')).toBeVisible();
   });
 }

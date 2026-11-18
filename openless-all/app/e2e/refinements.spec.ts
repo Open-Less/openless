@@ -60,6 +60,10 @@ test('awareness settings have a dedicated advanced page', async ({ page }) => {
   await expression.click();
   await expect(expression).toHaveAttribute('aria-checked', 'true');
   await dialog.getByRole('button', { name: '清除表达习惯', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: '清除表达习惯' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: '清空', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
   await expect(dialog.getByText('已形成 0 项稳定偏好')).toBeVisible();
 });
 

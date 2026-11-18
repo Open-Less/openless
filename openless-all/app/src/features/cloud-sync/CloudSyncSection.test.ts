@@ -106,8 +106,7 @@ const body = sources
       .filter((node) => !ts.isImportDeclaration(node))
       .map((node) => node.getFullText(parsed)),
   )
-  .join('\n')
-  .replace("import('@tauri-apps/api/event')", 'Promise.resolve({listen: __listen})');
+  .join('\n');
 const compiled = ts.transpileModule(body, {
   compilerOptions: {
     target: ts.ScriptTarget.ES2020,
@@ -119,7 +118,6 @@ const factory = new Function(
   ...imports,
   'exports',
   'require',
-  '__listen',
   `${compiled};return {CloudSyncSection,CustomSyncServerSection,PasswordForm,ConsentForm,RestoreReview,normalizeCustomServerOrigin};`,
 );
 
@@ -154,6 +152,10 @@ const preview: RestorePreview = {
   conflicts: [{ id: 'opaque-conflict', kind: 'history', reason: 'no_common_baseline' }],
 };
 const events = new Map<string, (event: { payload: unknown }) => void>();
+const listen = async (name: string, callback: (payload: unknown) => void) => {
+  events.set(name, (event) => callback(event.payload));
+  return () => events.delete(name);
+};
 const calls: Array<[string, any?]> = [];
 let server = { ...initial };
 let deferredStatus: Promise<EncryptedSyncStatus> | null = null;
@@ -209,6 +211,9 @@ const dependencies: Record<string, any> = {
   Toggle: 'toggle',
   getCloudSyncPreviewScenario: () => undefined,
   isTauriHost: () => true,
+  listenEncryptedSyncStateChanges: (callback) => listen('cloud-sync-e2ee:state', callback),
+  listenEncryptedSyncConflicts: (callback) => listen('cloud-sync-e2ee:conflict', callback),
+  listenEncryptedSyncRestores: (callback) => listen('cloud-sync-e2ee:restored', callback),
   matchesRestorePreview,
   marketplaceAuthStatus: async () => ({ signedIn: mockMarketplaceSignedIn }),
   cloudSyncE2eeStatus: async () => deferredStatus ?? { ...server },
@@ -273,10 +278,6 @@ const components = factory(
   ...imports.map((name) => dependencies[name]),
   {},
   () => ({ jsx, jsxs: jsx }),
-  async (name: string, callback: (event: { payload: unknown }) => void) => {
-    events.set(name, callback);
-    return () => events.delete(name);
-  },
 );
 assert.equal(
   components.normalizeCustomServerOrigin(' https://sync.example.com/ '),

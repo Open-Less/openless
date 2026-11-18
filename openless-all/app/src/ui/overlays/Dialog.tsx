@@ -2,12 +2,24 @@ import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { Modal, type ModalProps } from './Modal';
 import './dialog.css';
 
+export type DialogLayout = 'standard' | 'terms' | 'decision';
+
 /** Structured dialogs share the viewport portal, stack, focus ownership and motion with Modal. */
-export function Dialog({ children, ...props }: ModalProps) {
+export function Dialog({
+  children,
+  layout = 'standard',
+  cardClassName,
+  overlayClassName,
+  width,
+  ...props
+}: ModalProps & { layout?: DialogLayout }) {
+  const originLayout = layout !== 'standard';
   return (
     <Modal
       {...props}
-      cardClassName="ol-structured-dialog"
+      width={width ?? (layout === 'terms' ? 'min(512px, 100%)' : layout === 'decision' ? 'min(400px, 100%)' : undefined)}
+      cardClassName={['ol-structured-dialog', `ol-structured-dialog--${layout}`, cardClassName].filter(Boolean).join(' ')}
+      overlayClassName={[originLayout && 'ol-dialog-overlay--origin', overlayClassName].filter(Boolean).join(' ')}
       motionVariant={props.motionVariant ?? 'pop'}
     >
       {children}

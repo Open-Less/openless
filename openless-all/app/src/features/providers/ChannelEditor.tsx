@@ -10,7 +10,7 @@ import {
   type Channel,
 } from '../../api/providers';
 import { Icon } from '../../components/Icon';
-import { Modal } from '../../ui/overlays/Modal';
+import { Dialog } from '../../ui/overlays/Dialog';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { SelectLite } from '../../ui/controls/SelectLite';
 import { useOverlayMotion } from '../../lib/motion';
@@ -66,6 +66,7 @@ export function ChannelEditor({
   const interaction = useInteraction(`${channel.id}:${closing}`);
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameId = useId();
+  const headingId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
   const embedded = Boolean(
     editorHost?.presentation === 'inline' && editorHost.container && editorHost.background,
@@ -283,8 +284,8 @@ export function ChannelEditor({
         ref={dialogRef}
         className={`ol-channel-dialog${embedded ? ' ol-channel-dialog-embedded' : ''}`}
         data-closing={closing ? 'true' : undefined}
-        role="dialog"
-        aria-label={t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
+        role={embedded ? 'dialog' : undefined}
+        aria-labelledby={embedded ? headingId : undefined}
         tabIndex={-1}
         onKeyDown={onDialogKeyDown}
       >
@@ -299,14 +300,10 @@ export function ChannelEditor({
             >
               <Icon name="chevLeft" size={19} />
             </button>
-          ) : (
-            <span className="ol-channel-dialog-icon">
-              <Icon name={kind === 'llm' ? 'style' : 'mic'} size={22} />
-            </span>
-          )}
+          ) : null}
           <div className="ol-channel-dialog-heading">
             <div className="ol-channel-dialog-title">
-              <h2>
+              <h2 id={headingId}>
                 {t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
               </h2>
               <span>{t(`settings.channels.${kind}Title`)}</span>
@@ -316,7 +313,7 @@ export function ChannelEditor({
           {!embedded && (
             <button
               type="button"
-              className="ol-channel-dialog-close"
+              className="ol-dialog-icon-close"
               onClick={requestClose}
               aria-label={t('common.close')}
             >
@@ -404,16 +401,17 @@ export function ChannelEditor({
   return embedded ? (
     createPortal(content, editorHost!.container!)
   ) : (
-    <Modal
+    <Dialog
+      layout="terms"
+      cardClassName="ol-structured-dialog--channel"
+      labelledBy={headingId}
       onClose={requestClose}
       zIndex={1000}
       closing={closing}
-      motionVariant="pop"
       initialFocus={initialFocus}
-      width={mobile ? '100%' : 'min(800px, 100%)'}
-      style={{ padding: 0, overflow: 'hidden', maxHeight: '100%' }}
+      width={mobile ? '100%' : undefined}
     >
       {content}
-    </Modal>
+    </Dialog>
   );
 }

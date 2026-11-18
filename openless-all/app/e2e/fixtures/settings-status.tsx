@@ -140,7 +140,7 @@ mockIPC((command, args) => {
       preferences: { ...mockSettings, themeMode: params.get('theme') ?? 'light' },
       revision: 1,
     };
-  if (command === 'set_remote_locale' || command === 'plugin:app|set_theme') return undefined;
+  if (command === 'set_remote_locale' || command === 'plugin:app|set_app_theme') return undefined;
   if (command === 'marketplace_auth_status') return { signedIn: true };
   if (command === 'cloud_sync_e2ee_status') return { ...status };
   if (command === 'read_credential') return stored;

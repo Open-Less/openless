@@ -69,7 +69,12 @@ function Scene() {
         tone: 'danger',
         description:
           title === 'Long prompt'
-            ? 'Long detail with translated text. '.repeat(164)
+            ? (
+                <>
+                  {'Long detail with translated text. '.repeat(164)}
+                  <span data-testid="long-detail-end">End of the long explanation.</span>
+                </>
+              )
             : 'Choose carefully.',
         confirmLabel: 'Proceed with change',
         cancelLabel: 'Keep unchanged',
