@@ -177,7 +177,7 @@ for (const theme of ['light', 'dark'] as const) {
         path: testInfo.outputPath(`acceptance-transition-${theme}-surface.png`),
       });
       const { duration: enterMs, frames: enter } = await sample(history, 'enter');
-      expect(exitMs + enterMs).toBeLessThanOrEqual(200);
+      expect(exitMs + enterMs).toBeLessThanOrEqual(165);
       await page.screenshot({
         path: testInfo.outputPath(`acceptance-transition-${theme}-enter.png`),
       });

@@ -15,9 +15,9 @@ import './viewport.css';
 
 const crossfadeEasing = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const pageExitEasing = 'cubic-bezier(0.4, 0, 0.73, 0.55)';
-const PAGE_EXIT_MS = 72;
-const PAGE_ENTER_MS = 116;
-const PAGE_READY_WAIT_MS = 48;
+const PAGE_EXIT_MS = 54;
+const PAGE_ENTER_MS = 96;
+const PAGE_READY_WAIT_MS = 32;
 const settled = { opacity: 1, transform: 'none', filter: 'none' };
 const hidden = { ...settled, opacity: 0 };
 const blurred = { ...hidden, filter: 'blur(3px)' };
@@ -369,15 +369,15 @@ function ReadyFrame({
       window.clearTimeout(deadline);
       callback.current();
     };
+    const loading = pageMotion
+      ? '.ol-page-skeleton'
+      : '[aria-busy="true"], .ol-page-skeleton, .ol-loading-spinner';
+    const check = () => {
+      frame = 0;
+      if (node.childElementCount > 0 && !node.querySelector(loading)) finish();
+    };
     const scheduleCheck = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        const loading = pageMotion
-          ? '.ol-page-skeleton'
-          : '[aria-busy="true"], .ol-page-skeleton, .ol-loading-spinner';
-        if (node.childElementCount > 0 && !node.querySelector(loading)) finish();
-      });
+      if (!frame) frame = requestAnimationFrame(check);
     };
     const observer = new MutationObserver(scheduleCheck);
     observer.observe(node, {
@@ -388,7 +388,9 @@ function ReadyFrame({
     });
     // A slow module or local request can show its loading state on the new page.
     const deadline = window.setTimeout(finish, pageMotion ? PAGE_READY_WAIT_MS : 1200);
-    scheduleCheck();
+    // Ready page content has committed its layout before this effect runs.
+    if (pageMotion) check();
+    else scheduleCheck();
     return () => {
       finished = true;
       observer.disconnect();
