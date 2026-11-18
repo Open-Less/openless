@@ -3,8 +3,10 @@
 // per channel, so this switches the globally active model; management actions like download / delete /
 // mirror stay in "Services → Local models" (jump via useLocalModelsNav).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { createDeletionBatch, IncompleteDeletion } from '../../../api/deletion-batch';
+import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 import { SelectLite } from '../../../components/ui/SelectLite';
 import { Btn } from '../../../pages/_atoms';
 import { SettingRow, inputStyle } from '../../../pages/settings/shared';
@@ -40,12 +42,14 @@ interface ModelOption {
   value: string;
   label: string;
   downloaded: boolean;
-  /** Downloaded bytes but not installed = interrupted leftovers, cleanable with one click. */
+  /** Downloaded bytes but not installed = interrupted leftovers available for cleanup. */
   partialBytes?: number;
 }
 
 export function LocalModelPicker({ providerType }: { providerType: string }) {
   const { t } = useTranslation();
+  const { confirm, notify } = useInteraction(providerType);
+  const deleteRequest = useRef(false);
   const openModels = useLocalModelsNav();
   const experimental = isExperimentalAsrProvider(providerType);
   const retired = getRuntimeOS() === 'mac' && isRetiredMacAsrProvider(providerType);
@@ -135,17 +139,52 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
     }
   };
 
-  const cleanupPartial = async (modelId: string) => {
-    setBusy(true);
+  const cleanupPartials = async () => {
+    if (deleteRequest.current || !partials.length) return;
+    deleteRequest.current = true;
+    const remove = createDeletionBatch(
+      partials.map((option) => option.value),
+      cleanupIncompleteLocalAsrModel,
+    );
     try {
-      await cleanupIncompleteLocalAsrModel(modelId);
-      emitSaved('saved', t('common.saved'));
-      await load();
-    } catch (error) {
-      console.error('[local-models] failed to cleanup incomplete download', error);
-      emitSaved('failed', t('common.operationFailed'));
+      await confirm({
+        title: t('localAsr.cleanupIncomplete'),
+        description: t('localAsr.cleanupBatchScope', {
+          count: partials.length,
+          defaultValue:
+            'Permanently delete {{count}} incomplete downloads from this device? Installed models are kept.',
+        }),
+        confirmLabel: t('common.delete'),
+        tone: 'danger',
+        icon: 'trash',
+        errorMessage: (error) =>
+          error instanceof IncompleteDeletion
+            ? t('localAsr.cleanupIncompleteError', {
+                count: error.remaining,
+                defaultValue:
+                  'Could not remove {{count}} incomplete downloads. Retry to remove the remaining downloads.',
+              })
+            : t('common.operationFailed'),
+        onConfirm: async () => {
+          setBusy(true);
+          try {
+            await remove((removed) =>
+              setOptions(
+                (current) =>
+                  current?.map((option) =>
+                    removed.has(option.value) ? { ...option, partialBytes: undefined } : option,
+                  ) ?? null,
+              ),
+            );
+            notify({ state: 'deleted', message: t('common.deleted') });
+          } finally {
+            await load();
+            setBusy(false);
+          }
+        },
+      });
     } finally {
-      setBusy(false);
+      deleteRequest.current = false;
     }
   };
 
@@ -188,14 +227,7 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
           label={t('localAsr.partialDownloadsLabel')}
           desc={t('localAsr.partialDownloadsDesc')}
         >
-          <Btn
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => {
-              for (const option of partials) void cleanupPartial(option.value);
-            }}
-          >
+          <Btn variant="ghost" size="sm" disabled={busy} onClick={() => void cleanupPartials()}>
             {t('localAsr.cleanupIncomplete')}
           </Btn>
         </SettingRow>

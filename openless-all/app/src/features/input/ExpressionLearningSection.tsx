@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   clearExpressionProfile,
   getExpressionProfile,
   type StableExpressionDirection,
-} from '../../lib/ipc/expression';
+} from '../../api/input';
+import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { useHotkeySettings } from '../../data/preferences';
 import { Card } from '../../pages/_atoms';
 import {
@@ -16,22 +17,25 @@ import {
 
 export function ExpressionLearningSection() {
   const { t } = useTranslation();
+  const { confirm, notify } = useInteraction();
+  const deleteRequest = useRef(false);
+  const readGeneration = useRef(0);
   const { prefs, updatePrefs } = useHotkeySettings();
   const [directions, setDirections] = useState<StableExpressionDirection[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   useEffect(() => {
-    let alive = true;
+    const generation = ++readGeneration.current;
     void getExpressionProfile().then(
       (directions) => {
-        if (alive) setDirections(directions);
+        if (generation === readGeneration.current) setDirections(directions);
       },
       () => {
-        if (alive) setError(true);
+        if (generation === readGeneration.current) setError(true);
       },
     );
     return () => {
-      alive = false;
+      readGeneration.current++;
     };
   }, []);
   if (!prefs) return null;
@@ -86,15 +90,34 @@ export function ExpressionLearningSection() {
         style={btnGhostStyle}
         disabled={busy}
         onClick={async () => {
-          setBusy(true);
-          setError(false);
+          if (deleteRequest.current) return;
+          deleteRequest.current = true;
           try {
-            await clearExpressionProfile();
-            setDirections([]);
-          } catch {
-            setError(true);
+            await confirm({
+              title: t('settings.expressionLearning.clear'),
+              description: t('settings.expressionLearning.clearScope', {
+                defaultValue:
+                  'Permanently delete learned expression habits on this device? Dictation history is kept.',
+              }),
+              confirmLabel: t('common.clear'),
+              tone: 'danger',
+              icon: 'trash',
+              errorMessage: t('settings.expressionLearning.error'),
+              onConfirm: async () => {
+                setBusy(true);
+                setError(false);
+                try {
+                  await clearExpressionProfile();
+                  readGeneration.current++;
+                  setDirections([]);
+                  notify({ state: 'deleted', message: t('common.deleted') });
+                } finally {
+                  setBusy(false);
+                }
+              },
+            });
           } finally {
-            setBusy(false);
+            deleteRequest.current = false;
           }
         }}
       >

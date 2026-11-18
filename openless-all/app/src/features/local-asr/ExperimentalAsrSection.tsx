@@ -1,5 +1,5 @@
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PresenceModal } from '../../components/ui/Modal';
 import { Collapse } from '../../components/ui/Disclosure';
@@ -26,7 +26,8 @@ export function ExperimentalAsrSection({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const { confirm } = useInteraction();
+  const { confirm, notify } = useInteraction();
+  const deleteRequest = useRef(false);
   const { models, error, pending, toggle, remove } = controller;
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const loading = models.length === 0;
@@ -145,16 +146,24 @@ export function ExperimentalAsrSection({
                       variant="ghost"
                       disabled={pending.includes(status.model) || status.phase === 'removing'}
                       onClick={async () => {
-                        if (
+                        if (deleteRequest.current) return;
+                        deleteRequest.current = true;
+                        try {
                           await confirm({
                             title: t('localAsr.delete'),
                             description: t('localAsr.deleteConfirm', { name }),
                             confirmLabel: t('common.delete'),
                             tone: 'danger',
                             icon: 'trash',
-                          })
-                        )
-                          await remove(status.model).catch(() => {});
+                            errorMessage: t('common.operationFailed'),
+                            onConfirm: async () => {
+                              await remove(status.model);
+                              notify({ state: 'deleted', message: t('common.deleted') });
+                            },
+                          });
+                        } finally {
+                          deleteRequest.current = false;
+                        }
                       }}
                     >
                       {t('localAsr.delete')}

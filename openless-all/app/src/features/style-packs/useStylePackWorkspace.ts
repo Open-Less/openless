@@ -422,20 +422,34 @@ export function useStylePackWorkspace() {
   };
 
   const handleResetBuiltin = async () => {
-    if (!selectedPack || selectedPack.kind !== 'builtin') return;
-    setBusy('resetting');
+    const pack = selectedPack;
+    if (!pack || pack.kind !== 'builtin' || deleteRequest.current) return;
+    deleteRequest.current = true;
+    const name = getStylePackPresentation(pack, t).name;
     try {
-      await resetBuiltinStylePack(selectedPack.id);
-      showSaveStatus(
-        'saved',
-        t('style.pack.resetSuccess', { name: getStylePackPresentation(selectedPack, t).name }),
-        true,
-      );
-      await loadPacks(selectedPack.id);
-    } catch (resetError) {
-      showSaveStatus('failed', t('style.pack.resetFailed', { err: String(resetError) }));
+      await confirm({
+        title: t('style.pack.resetBuiltin'),
+        description: t('style.pack.resetBuiltinScope', {
+          name,
+          defaultValue:
+            'Permanently replace the saved customizations for “{{name}}” with its defaults? If encrypted sync is enabled, the reset can sync to other devices.',
+        }),
+        tone: 'danger',
+        confirmLabel: t('style.pack.resetBuiltin'),
+        errorMessage: t('style.pack.resetFailed', { err: t('common.operationFailed') }),
+        onConfirm: async () => {
+          setBusy('resetting');
+          try {
+            await resetBuiltinStylePack(pack.id);
+            showSaveStatus('saved', t('style.pack.resetSuccess', { name }), true);
+          } finally {
+            if (mounted.current) await loadPacks(pack.id);
+            if (mounted.current) setBusy(null);
+          }
+        },
+      });
     } finally {
-      setBusy(null);
+      deleteRequest.current = false;
     }
   };
 

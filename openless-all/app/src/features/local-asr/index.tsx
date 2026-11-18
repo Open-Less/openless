@@ -77,7 +77,6 @@ import { Icon } from '../../components/Icon';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { listenModelProgress } from '../../data/model-progress';
 import { useHotkeySettings } from '../../data/preferences';
-import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack } from '../../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader, Pill } from '../../pages/_atoms';
 import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
@@ -177,15 +176,34 @@ type RefreshGuard = () => boolean;
 
 export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const { t } = useTranslation();
-  const { confirm } = useInteraction();
-  const askDelete = (name: string) =>
-    confirm({
-      title: t('localAsr.delete'),
-      description: t('localAsr.deleteConfirm', { name }),
-      confirmLabel: t('common.delete'),
-      tone: 'danger',
-      icon: 'trash',
-    });
+  const { confirm, notify } = useInteraction();
+  const deleteRequest = useRef(false);
+  const askDelete = async (name: string, action: () => Promise<void>, incomplete = false) => {
+    if (deleteRequest.current) return;
+    deleteRequest.current = true;
+    try {
+      await confirm({
+        title: incomplete ? t('localAsr.cleanupIncomplete') : t('localAsr.delete'),
+        description: incomplete
+          ? t('localAsr.cleanupScope', {
+              name,
+              defaultValue:
+                'Permanently delete the incomplete download for {{name}} from this device? Installed models are kept.',
+            })
+          : t('localAsr.deleteConfirm', { name }),
+        confirmLabel: t('common.delete'),
+        tone: 'danger',
+        icon: 'trash',
+        errorMessage: t('common.operationFailed'),
+        onConfirm: async () => {
+          await action();
+          notify({ state: 'deleted', message: t('common.deleted') });
+        },
+      });
+    } finally {
+      deleteRequest.current = false;
+    }
+  };
   const askConfirm = (description: string) =>
     confirm({
       title: t('common.confirmAction'),
@@ -980,19 +998,20 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         (FOUNDRY_LOCAL_ASR_MODELS.find((m) => m.alias === alias) ?? FOUNDRY_LOCAL_ASR_MODELS[0])
           .labelKey,
       );
-    if (!(await askDelete(displayName))) return;
-    setFoundryBusy('delete');
-    try {
+    await askDelete(displayName, async () => {
+      setFoundryBusy('delete');
       setError(null);
-      await deleteFoundryLocalAsrModel(alias);
-      await refreshFoundryStatus();
-      await refreshFoundryCatalog();
-      await refreshFoundryModelDir(alias);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setFoundryBusy(null);
-    }
+      try {
+        await deleteFoundryLocalAsrModel(alias);
+      } finally {
+        await Promise.all([
+          refreshFoundryStatus(),
+          refreshFoundryCatalog(),
+          refreshFoundryModelDir(alias),
+        ]);
+        setFoundryBusy(null);
+      }
+    });
   };
 
   const activateSherpaProvider = async (modelAlias: SherpaOnnxModelAlias) => {
@@ -1121,23 +1140,21 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         (SHERPA_ONNX_ASR_MODELS.find((m) => m.alias === alias) ?? SHERPA_ONNX_ASR_MODELS[0])
           .labelKey,
       );
-    if (!(await askDelete(displayName))) return;
-    setSherpaBusy('delete');
-    try {
+    await askDelete(displayName, async () => {
+      setSherpaBusy('delete');
       setError(null);
-      await deleteSherpaOnnxAsrModel(alias);
-      setSherpaDownloadProgress((prev) => {
-        const next = { ...prev };
-        delete next[alias];
-        return next;
-      });
-      await refreshSherpaStatus();
-      await refreshSherpaCatalog();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSherpaBusy(null);
-    }
+      try {
+        await deleteSherpaOnnxAsrModel(alias);
+        setSherpaDownloadProgress((prev) => {
+          const next = { ...prev };
+          delete next[alias];
+          return next;
+        });
+      } finally {
+        await Promise.all([refreshSherpaStatus(), refreshSherpaCatalog()]);
+        setSherpaBusy(null);
+      }
+    });
   };
 
   const handleDownloadSherpa = async (aliasOverride?: SherpaOnnxModelAlias) => {
@@ -1271,22 +1288,22 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  const handleDelete = async (modelId: string) => {
-    if (!(await askDelete(modelId))) return;
-    setBusyModelId(modelId);
-    try {
-      await deleteLocalAsrModel(modelId);
-      setProgress((prev) => {
-        const next = { ...prev };
-        delete next[modelId];
-        return next;
-      });
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyModelId(null);
-    }
+  const handleDelete = async (modelId: string, displayName: string) => {
+    await askDelete(displayName, async () => {
+      setBusyModelId(modelId);
+      setError(null);
+      try {
+        await deleteLocalAsrModel(modelId);
+        setProgress((prev) => {
+          const next = { ...prev };
+          delete next[modelId];
+          return next;
+        });
+      } finally {
+        await refresh();
+        setBusyModelId(null);
+      }
+    });
   };
 
   const handleRevealModelDir = async (modelId: string) => {
@@ -1302,18 +1319,21 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   };
 
   // Clean up the staging directory of an interrupted download; installed models are unaffected (guaranteed by the backend).
-  const handleCleanupIncomplete = async (modelId: string) => {
-    setBusyModelId(modelId);
-    try {
-      setError(null);
-      await cleanupIncompleteLocalAsrModel(modelId);
-      emitSaved('saved', t('common.saved'));
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyModelId(null);
-    }
+  const handleCleanupIncomplete = async (modelId: string, displayName: string) => {
+    await askDelete(
+      displayName,
+      async () => {
+        setBusyModelId(modelId);
+        setError(null);
+        try {
+          await cleanupIncompleteLocalAsrModel(modelId);
+        } finally {
+          await refresh();
+          setBusyModelId(null);
+        }
+      },
+      true,
+    );
   };
 
   const handleKeepLoadedChange = async (seconds: number) => {
@@ -1698,11 +1718,11 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   ) => {
     if (entry.engine === 'qwen3') {
       if (action === 'download') void handleDownload(entry.id);
-      else if (action === 'delete') void handleDelete(entry.id);
+      else if (action === 'delete') void handleDelete(entry.id, entry.displayName ?? entry.name);
       else if (action === 'reveal') void handleRevealModelDir(entry.id);
     } else if (entry.engine === 'whisper') {
       if (action === 'download') void handleDownload(entry.id);
-      else if (action === 'delete') void handleDelete(entry.id);
+      else if (action === 'delete') void handleDelete(entry.id, entry.displayName ?? entry.name);
       else if (action === 'reveal') void handleRevealModelDir(entry.id);
     } else if (entry.engine === 'sherpa') {
       const alias = entry.id as SherpaOnnxModelAlias;
@@ -1713,7 +1733,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         window.setTimeout(() => void handleDownloadSherpa(alias), 0);
       } else if (action === 'delete') {
         setSelectedSherpaAlias(alias);
-        window.setTimeout(() => void handleDeleteSherpa(alias), 0);
+        void handleDeleteSherpa(alias);
       } else if (action === 'reveal') {
         void handleRevealSherpaDir(alias);
       }
@@ -1877,7 +1897,11 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                       selectedEntry &&
                       (selectedEntry.engine === 'qwen3' || selectedEntry.engine === 'whisper') &&
                       selectedEntry.partialBytes
-                        ? () => void handleCleanupIncomplete(selectedEntry.id)
+                        ? () =>
+                            void handleCleanupIncomplete(
+                              selectedEntry.id,
+                              selectedEntry.displayName ?? selectedEntry.name,
+                            )
                         : undefined
                     }
                     onTest={() => {
