@@ -12,6 +12,7 @@ import {
   type ActivityMetric,
 } from '../../lib/activityMetrics';
 import { HarmonyDictation } from '../dictation/HarmonyDictation';
+import { useMobileLayout } from '../../lib/useMobileLayout';
 import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { useModalActive } from '../../ui/layout/AppViewport';
@@ -36,6 +37,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const modalActive = useModalActive();
   const { prefs } = useHotkeySettings();
   const runtime = getRuntimeEnvironment();
+  const mobile = useMobileLayout();
   const { isMac } = getShortcutPlatform();
   const history = useHistoryRecords();
   const activity = useActivityStats();
@@ -83,7 +85,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   }, [isMac, modalActive, refreshAll]);
 
   return (
-    <div className="ol-overview-dashboard" data-mobile={runtime.isMobile || undefined}>
+    <div className="ol-overview-dashboard" data-mobile={mobile || undefined}>
       <PageHeader
         compact
         title={t('overview.title')}
@@ -95,20 +97,20 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       />
       {runtime.host === 'harmony' && <HarmonyDictation onComplete={historyStore.invalidate} />}
       {services.setup.providers.length === 0 && (
-        <Card padding={16}>
+        <Card className="ol-overview-service-card" padding={16}>
           <div role="status" className="ol-overview-service-status">
             {t(services.loading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
           </div>
         </Card>
       )}
       <TodayMetrics
-        mobile={runtime.isMobile}
+        mobile={mobile}
         history={history.data ?? emptyHistory}
         historyError={history.error !== null && history.data === null}
       />
       <section
         className="ol-grid-12 ol-grid-fill ol-overview-lower"
-        data-columns={runtime.isMobile ? '1' : undefined}
+        data-columns={mobile ? '1' : undefined}
       >
         <PeriodMetricsCard
           series={series}
@@ -128,7 +130,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         />
       </section>
       {!runtime.isMobile && prefs?.showOverviewActivityHeatmap !== false && activity.data && (
-        <ActivityHeatmap activity={activity.data} />
+        <ActivityHeatmap activity={activity.data} mobile={mobile} />
       )}
     </div>
   );

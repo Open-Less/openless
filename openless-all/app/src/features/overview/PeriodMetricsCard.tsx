@@ -53,19 +53,17 @@ export function PeriodMetricsCard({
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        minHeight: 0,
         overflow: 'hidden',
       }}
     >
-      {/* flexWrap: the card is narrow inside a 1fr column; wrap instead of squashing buttons when the two toggles don't fit. */}
       <div
+        className="ol-overview-period-controls"
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 8,
           flexWrap: 'wrap',
-          marginBottom: 12,
           flexShrink: 0,
         }}
       >
@@ -89,7 +87,8 @@ export function PeriodMetricsCard({
       {loadError ? (
         <div
           style={{
-            minHeight: 132,
+            minHeight: 0,
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             gap: 10,
@@ -107,7 +106,7 @@ export function PeriodMetricsCard({
         </div>
       ) : (
         <>
-          <div style={{ marginBottom: 12, flexShrink: 0 }}>
+          <div className="ol-overview-period-summary">
             <div
               style={{
                 fontSize: 26,
@@ -152,7 +151,7 @@ function PeriodChart({
   // The chart area stretches with the card's remaining height (single-screen fixed page): bar heights scale
   // as a percentage of the container instead of a fixed 100px.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 60 }}>
+    <div className="ol-overview-period-chart">
       <div
         style={{
           display: 'flex',
@@ -208,6 +207,7 @@ function PeriodChart({
         })}
       </div>
       <div
+        className="ol-overview-period-dates"
         style={{
           display: 'flex',
           justifyContent: 'space-between',

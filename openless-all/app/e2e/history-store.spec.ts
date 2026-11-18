@@ -81,36 +81,70 @@ for (const [font, scale] of [
   ['medium', 1],
   ['large', 1.1],
 ] as const) {
-  test(`overview stays scrollable and keeps 11px heatmap cells at ${Math.round(scale * 100)}%`, async ({
-    page,
-  }) => {
+  test(`overview fits the minimum window at ${Math.round(scale * 100)}%`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 980, height: 640 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript((value) => localStorage.setItem('ol-font-scale', value), font);
     await page.goto('/?os=mac');
-    const dashboard = page.locator('.ol-overview-dashboard');
-    await expect(dashboard).toBeVisible();
-    const calendar = page.locator('.ol-gha');
-    await expect(calendar).toBeVisible();
-    const cell = page.locator('.ol-gha-cell').first();
-    expect(
-      await cell.evaluate((node) => Number.parseFloat(getComputedStyle(node).width)),
-    ).toBeCloseTo(11, 1);
-    expect(
-      await cell.evaluate((node) => Number.parseFloat(getComputedStyle(node.parentElement!).gap)),
-    ).toBeCloseTo(3, 1);
-    await expect
-      .poll(async () => Math.abs((await cell.boundingBox())!.width - 11 * scale))
-      .toBeLessThan(0.2);
-    const summary = page.locator('.ol-overview-year');
-    await summary.scrollIntoViewIfNeeded();
-    await expect(summary).toBeInViewport();
-    const geometry = await dashboard.evaluate((element) => ({
-      scrollWidth: element.scrollWidth,
-      width: element.clientWidth,
-      scrollHeight: element.scrollHeight,
-      height: element.clientHeight,
-    }));
-    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width + 1);
-    expect(geometry.scrollHeight).toBeGreaterThanOrEqual(geometry.height);
+    const surface = page.locator('[data-ol-page="overview"]');
+    const dashboard = surface.locator('.ol-overview-dashboard');
+    const calendar = dashboard.locator('.ol-gha-grid');
+    const cells = calendar.locator('.ol-gha-cell');
+    const summary = dashboard.locator('.ol-overview-year');
+    const toggle = dashboard.getByRole('button', { name: '展开常用软件' });
+    await expect(calendar.locator('.ol-gha-week')).toHaveCount(53);
+    await expect(cells.first()).toBeInViewport({ ratio: 1 });
+    await expect(cells.last()).toBeInViewport({ ratio: 1 });
+    await expect(summary).toBeInViewport({ ratio: 1 });
+    await expect(toggle).toBeInViewport({ ratio: 1 });
+    await expect(dashboard.locator('.ol-overview-period-dates')).toBeInViewport({ ratio: 1 });
+
+    for (const owner of [page.locator('#root'), surface, dashboard, calendar]) {
+      const excess = await owner.evaluate((node) => ({
+        x: node.scrollWidth - node.clientWidth,
+        y: node.scrollHeight - node.clientHeight,
+      }));
+      expect(excess.x).toBeLessThanOrEqual(1);
+      expect(excess.y).toBeLessThanOrEqual(1);
+    }
+    const first = (await cells.first().boundingBox())!;
+    const next = (await cells.nth(1).boundingBox())!;
+    expect(first.width / scale).toBeLessThanOrEqual(11.1);
+    expect(first.width / scale).toBeGreaterThan(8);
+    expect((next.y - first.y - first.height) / first.width).toBeCloseTo(3 / 11, 1);
+    await cells.last().hover();
+    await expect(page.getByRole('tooltip')).toContainText('次听写');
+
+    const recent = dashboard.locator('.ol-overview-recent');
+    await recent.hover();
+    await page.mouse.wheel(0, 190);
+    await expect.poll(() => recent.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    expect(await surface.evaluate((node) => node.scrollTop)).toBe(0);
+    await toggle.click();
+    await expect(dashboard.locator('.ol-gha-app-list')).toBeInViewport();
+    await expect(summary).toBeInViewport({ ratio: 1 });
+    if (scale === 1.1) {
+      await page.screenshot({ path: testInfo.outputPath('acceptance-overview-minimum-shell-110.png') });
+    }
   });
 }
+
+test('a 375px desktop preview keeps one vertical scroll owner', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/?os=mac');
+  const surface = page.locator('[data-ol-page="overview"]');
+  const dashboard = surface.locator('.ol-overview-dashboard');
+  await expect(dashboard).toHaveAttribute('data-mobile', 'true');
+  const recent = dashboard.locator('.ol-overview-recent');
+  const annual = dashboard.locator('.ol-overview-year');
+  await expect(dashboard.locator('.ol-gha-week')).toHaveCount(53);
+  const toggle = dashboard.getByRole('button', { name: '展开常用软件' });
+  await toggle.click();
+  await expect(dashboard.locator('.ol-gha-app-list')).toBeVisible();
+  await annual.scrollIntoViewIfNeeded();
+  await expect(annual).toBeInViewport({ ratio: 1 });
+  await expect.poll(() => surface.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  for (const owner of [page.locator('#root'), dashboard, recent, dashboard.locator('.ol-gha-app-list')]) {
+    expect(await owner.evaluate((node) => node.scrollHeight - node.clientHeight)).toBeLessThanOrEqual(1);
+  }
+});

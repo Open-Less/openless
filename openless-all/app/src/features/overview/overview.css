@@ -1,4 +1,4 @@
-/* The dashboard owns overflow when the viewport cannot fit the chart and calendar together. */
+/* Desktop keeps finite rows; only the two content lists own vertical scrolling. */
 .ol-overview-dashboard {
   display: flex;
   flex: 1 1 0%;
@@ -8,39 +8,40 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  container: overview / inline-size;
-}
-.ol-overview-dashboard[data-mobile] {
-  flex: 1 0 auto;
-  height: auto;
   overflow: visible;
+  container: overview / size;
 }
 .ol-overview-metrics,
 .ol-overview-heatmap {
   flex: 0 0 auto;
 }
 .ol-overview-lower {
-  flex-basis: 205px;
-  min-height: 205px;
+  flex: 1 1 0%;
+  min-height: 0;
 }
-.ol-overview-dashboard[data-mobile] .ol-overview-lower {
-  flex-basis: auto;
-  grid-template-rows: auto;
+.ol-overview-period-controls,
+.ol-overview-period-summary {
+  flex-shrink: 0;
+  margin-bottom: 12px;
 }
-.ol-overview-dashboard[data-mobile] .ol-overview-recent-card {
-  max-height: 420px;
+.ol-overview-period-chart {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.ol-overview-dashboard[data-mobile] .ol-overview-period-chart {
+  min-height: 60px;
 }
 .ol-overview-service-status {
   font-size: 13px;
   color: var(--ol-ink-3);
 }
+.ol-overview-service-card {
+  flex: none;
+}
 
-/* Overview cards share one deliberately larger radius. The global continuous-corner
-   helper defaults to 16px and clips the card, so both the radius and clip are
-   overridden here; nested controls keep their own radii. */
+/* The dashboard radius must not clip card controls or focus rings. */
 .ol-overview-dashboard .ol-card {
   border-radius: 28px !important;
   clip-path: none !important;
@@ -49,32 +50,35 @@
   width: 100%;
   min-width: 0;
 }
-.ol-overview-heatmap-row {
-  display: flex;
-  align-items: stretch;
-  gap: var(--ol-grid-gutter);
-  flex-wrap: wrap;
+.ol-overview-activity {
+  min-height: 246px;
+  padding-right: 200px;
 }
-.ol-overview-calendar {
-  min-width: 0;
-  max-width: 100%;
+.ol-overview-activity .ol-gha-panel {
+  right: 196px;
+}
+.ol-overview-activity .ol-gha-heading {
+  padding: 0;
 }
 .ol-overview-apps-status {
-  margin: 8px 6px 0;
-  font-size: 13px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
   color: var(--ol-ink-3);
 }
 .ol-overview-year {
-  flex: 1 1 168px;
-  min-width: 168px;
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 168px;
+  min-width: 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px 18px;
-  border-radius: 28px;
-  background: var(--ol-surface-raised);
-  box-shadow: inset 0 0 0 0.5px var(--ol-line);
+  gap: 12px;
+  padding-left: 18px;
+  border-left: 0.5px solid var(--ol-line);
   color: var(--ol-ink);
 }
 .ol-overview-year-title {
@@ -90,11 +94,12 @@
   gap: 12px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   margin: 0;
 }
 .ol-overview-year-stat {
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 2px;
   min-width: 0;
 }
@@ -105,17 +110,151 @@
   letter-spacing: -0.02em;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 .ol-overview-year-label {
   font-size: 13px;
+  line-height: 1.3;
   color: var(--ol-ink-3);
+  overflow-wrap: anywhere;
 }
 .ol-overview-recent {
-  scrollbar-width: thin;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
 }
 .ol-overview-recent::-webkit-scrollbar {
-  display: block;
-  width: 6px;
+  display: none;
+}
+
+/* Below the calendar + 168px summary + gutter, keep the summary in its heading. */
+@container overview (max-width: 955px) or (max-height: 599px) {
+  .ol-overview-activity {
+    min-height: 0;
+    padding-right: 16px;
+  }
+  .ol-overview-activity .ol-gha-panel {
+    right: 12px;
+  }
+  .ol-overview-activity .ol-gha-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .ol-overview-activity .ol-gha-heading {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: 14px;
+  }
+  .ol-overview-year {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    width: auto;
+    max-width: 62%;
+    padding-left: 12px;
+  }
+  .ol-overview-year-title {
+    font-size: 12px;
+  }
+  .ol-overview-year-stats {
+    flex-direction: row;
+    gap: 14px;
+  }
+  .ol-overview-year-value {
+    font-size: 18px;
+  }
+  .ol-overview-year-label {
+    font-size: 11px;
+  }
+}
+
+/* Density follows the measured unzoomed dashboard height, including host chrome. */
+@container overview (max-height: 599px) {
+  .ol-overview-metric {
+    padding: 10px 12px !important;
+  }
+  .ol-overview-metric > :first-child {
+    margin-bottom: 4px !important;
+  }
+  .ol-overview-metric > :last-child {
+    margin-top: 3px !important;
+    font-size: 11px !important;
+    line-height: 1.25;
+  }
+  .ol-overview-period {
+    grid-column: span 7;
+    padding: 12px !important;
+  }
+  .ol-overview-recent-card {
+    grid-column: span 5;
+  }
+  .ol-overview-period-controls {
+    gap: 4px !important;
+    margin-bottom: 6px;
+  }
+  .ol-overview-period .ol-segmented-option {
+    padding: 3px 5px;
+    font-size: 11px;
+  }
+  .ol-overview-period-summary {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin-bottom: 6px;
+  }
+  .ol-overview-period-summary > :first-child {
+    font-size: 22px !important;
+  }
+  .ol-overview-period-summary > :last-child {
+    margin-top: 0 !important;
+  }
+  .ol-overview-activity {
+    padding-top: 12px;
+  }
+  .ol-overview-activity .ol-gha-heading-row {
+    margin-bottom: 8px;
+  }
+  .ol-overview-activity .ol-gha-panel-header {
+    padding-block: 8px;
+  }
+  .ol-overview-activity.ol-gha--with-panel {
+    padding-bottom: calc(var(--ol-gha-panel-height, 44px) + 20px);
+  }
+}
+
+/* Narrow desktop previews share the shell's growing mobile page and scroll owner. */
+.ol-overview-dashboard[data-mobile] {
+  flex: 1 0 auto;
+  height: auto;
+  container-type: inline-size;
+}
+.ol-overview-dashboard[data-mobile] .ol-overview-lower {
+  flex: none;
+  grid-template-rows: auto;
+}
+.ol-overview-dashboard[data-mobile] .ol-overview-period {
+  min-height: 250px;
+}
+.ol-overview-dashboard[data-mobile] .ol-overview-recent {
+  overflow: visible !important;
+  flex: none !important;
+}
+@container overview (max-width: 480px) {
+  .ol-overview-activity .ol-gha-heading-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ol-overview-year {
+    max-width: none;
+    border-left: none;
+    border-top: 0.5px solid var(--ol-line);
+    padding: 8px 0 0;
+  }
 }
 .ol-overview-services {
   display: flex;
@@ -150,31 +289,4 @@
   border-radius: 99px;
   background: currentColor;
   box-shadow: 0 0 0 1.5px var(--ol-surface);
-}
-
-@container overview (max-width: 959px) {
-  .ol-overview-calendar {
-    flex-basis: 100%;
-  }
-  .ol-overview-year-stats {
-    flex-direction: row;
-    justify-content: start;
-    flex-wrap: wrap;
-  }
-  .ol-overview-year-stat {
-    flex: 1 1 110px;
-  }
-}
-@container overview (max-width: 630px) {
-  .ol-overview-lower {
-    flex-basis: auto;
-    grid-template-rows: auto;
-  }
-  .ol-overview-period,
-  .ol-overview-recent-card {
-    grid-column: 1 / -1;
-  }
-  .ol-overview-recent-card {
-    max-height: 420px;
-  }
 }

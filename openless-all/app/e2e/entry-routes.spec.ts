@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 const profiles = [
-  { os: 'mac', width: 1300, height: 835 },
+  { os: 'mac', width: 1400, height: 900 },
   { os: 'win', width: 1240, height: 800 },
   { os: 'android', width: 412, height: 892 },
   { os: 'harmony', width: 420, height: 900 },

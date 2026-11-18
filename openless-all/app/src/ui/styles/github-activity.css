@@ -15,7 +15,7 @@
   color: var(--ol-ink);
 }
 .ol-gha--with-panel {
-  padding-bottom: 94px;
+  padding-bottom: calc(var(--ol-gha-panel-height, 52px) + 42px);
   container-type: inline-size;
 }
 
@@ -259,4 +259,22 @@
   .ol-gha-app-row {
     transition: none;
   }
+}
+
+.ol-gha[data-in-flow].ol-gha--with-panel {
+  padding-bottom: 12px;
+}
+.ol-gha[data-in-flow] .ol-gha-panel {
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  height: auto;
+  margin-top: 18px;
+}
+.ol-gha[data-in-flow] .ol-gha-panel[data-state='closed'] .ol-gha-app-list {
+  display: none;
+}
+.ol-gha[data-in-flow] .ol-gha-app-list {
+  overflow: visible;
 }

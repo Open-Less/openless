@@ -8,12 +8,19 @@ import {
   type Contribution,
   type ContributionLevel,
 } from '../../ui/controls/GitHubActivity';
+import './overview.css';
 
 function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-export function ActivityHeatmap({ activity }: { activity: ActivityDay[] }) {
+export function ActivityHeatmap({
+  activity,
+  mobile = false,
+}: {
+  activity: ActivityDay[];
+  mobile?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || 'en';
   const year = new Date().getFullYear();
@@ -67,61 +74,67 @@ export function ActivityHeatmap({ activity }: { activity: ActivityDay[] }) {
     [locale],
   );
 
+  const appStatus =
+    apps.error !== null
+      ? t('overview.activityAppsError')
+      : apps.data?.status === 'unsupported'
+        ? t('overview.activityAppsUnavailable')
+        : null;
+
   return (
     <section className="ol-overview-heatmap" aria-label={t('overview.activityTitle')}>
-      <div className="ol-overview-heatmap-row">
-        <div className="ol-overview-calendar">
-          <GitHubActivity
-            year={year}
-            cellSize={11}
-            showMonths
-            contributions={data.contributions}
-            apps={appRows}
-            accent="var(--ol-accent-solid-bg)"
-            heading={`${t('overview.activityCount', { count: data.total })} · ${year}`}
-            label={t('overview.activityAppsLabel')}
-            showLabel={t('overview.activityAppsShow')}
-            hideLabel={t('overview.activityAppsHide')}
-            monthNames={data.monthNames}
-            formatDay={(day) =>
-              `${dateFormat.format(new Date(`${day.date}T00:00:00`))} · ${t('overview.activityCount', { count: day.count })}`
-            }
-          />
-          {apps.data?.status === 'unsupported' && (
-            <p className="ol-overview-apps-status">
-              {t('overview.activityAppsUnavailable', {
-                defaultValue: 'Yearly activity by app is unavailable on this host.',
-              })}
-            </p>
-          )}
-          {apps.error !== null && (
+      <GitHubActivity
+        className="ol-overview-activity"
+        style={{ width: '100%' }}
+        summary={
+          <aside className="ol-overview-year" aria-label={t('overview.activityYearTitle')}>
+            <p className="ol-overview-year-title">{t('overview.activityYearTitle')}</p>
+            <dl className="ol-overview-year-stats">
+              <div className="ol-overview-year-stat">
+                <dt className="ol-overview-year-label">{t('overview.activityActiveDays')}</dt>
+                <dd className="ol-overview-year-value">
+                  {formatLocaleNumber(data.active, locale)}
+                </dd>
+              </div>
+              <div className="ol-overview-year-stat">
+                <dt className="ol-overview-year-label">{t('overview.activityPeakDay')}</dt>
+                <dd className="ol-overview-year-value">
+                  {formatLocaleNumber(data.peak, locale)}
+                </dd>
+              </div>
+              <div className="ol-overview-year-stat">
+                <dt className="ol-overview-year-label">{t('overview.activityDailyAverage')}</dt>
+                <dd className="ol-overview-year-value">
+                  {formatLocaleDecimal(data.average, locale)}
+                </dd>
+              </div>
+            </dl>
+          </aside>
+        }
+        footer={
+          appStatus && (
             <p className="ol-overview-apps-status" role="status">
-              {t('overview.activityAppsError', {
-                defaultValue: 'Could not load yearly activity by app.',
-              })}
+              {appStatus}
             </p>
-          )}
-        </div>
-        <aside className="ol-overview-year" aria-label={t('overview.activityYearTitle')}>
-          <p className="ol-overview-year-title">{t('overview.activityYearTitle')}</p>
-          <dl className="ol-overview-year-stats">
-            <div className="ol-overview-year-stat">
-              <dd className="ol-overview-year-value">{formatLocaleNumber(data.active, locale)}</dd>
-              <dt className="ol-overview-year-label">{t('overview.activityActiveDays')}</dt>
-            </div>
-            <div className="ol-overview-year-stat">
-              <dd className="ol-overview-year-value">{formatLocaleNumber(data.peak, locale)}</dd>
-              <dt className="ol-overview-year-label">{t('overview.activityPeakDay')}</dt>
-            </div>
-            <div className="ol-overview-year-stat">
-              <dd className="ol-overview-year-value">
-                {formatLocaleDecimal(data.average, locale)}
-              </dd>
-              <dt className="ol-overview-year-label">{t('overview.activityDailyAverage')}</dt>
-            </div>
-          </dl>
-        </aside>
-      </div>
+          )
+        }
+        inFlow={mobile}
+        year={year}
+        cellSize={11}
+        fitToWidth
+        showMonths
+        contributions={data.contributions}
+        apps={appRows}
+        accent="var(--ol-accent-solid-bg)"
+        heading={`${t('overview.activityCount', { count: data.total })} · ${year}`}
+        label={t('overview.activityAppsLabel')}
+        showLabel={t('overview.activityAppsShow')}
+        hideLabel={t('overview.activityAppsHide')}
+        monthNames={data.monthNames}
+        formatDay={(day) =>
+          `${dateFormat.format(new Date(`${day.date}T00:00:00`))} · ${t('overview.activityCount', { count: day.count })}`
+        }
+      />
     </section>
   );
 }

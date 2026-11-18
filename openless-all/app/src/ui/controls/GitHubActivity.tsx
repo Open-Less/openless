@@ -3,9 +3,10 @@
 /**
  * Ported from Rare UI "GitHub Activity" (https://rareui.com/components/githubactivity).
  * Copyright (c) 2026 Swami Malode. MIT + Commons Clause; attribution required.
- * The upstream geometry, week/month layout, tooltip and expandable panel are kept as-is;
- * the GitHub username fetch and the repo avatars are replaced with local dictation data
- * and plain app name/count chips. See docs/ATTRIBUTION.md.
+ * The week/month layout, tooltip and expandable panel follow upstream. Callers can fit
+ * the calendar to a dashboard or expand the app list in a growing page. Local dictation
+ * data and app name/count chips replace the GitHub fetch and repo avatars.
+ * See docs/ATTRIBUTION.md.
  */
 
 import * as React from 'react';
@@ -158,6 +159,7 @@ const ContributionGrid = ({
   contributions,
   scale,
   cellSize,
+  cellGap,
   months,
   showMonths,
   label,
@@ -168,6 +170,7 @@ const ContributionGrid = ({
   contributions: Contribution[];
   scale: LevelStyle[];
   cellSize: number;
+  cellGap: number;
   months: number;
   showMonths: boolean;
   label: string;
@@ -176,7 +179,7 @@ const ContributionGrid = ({
   reduceMotion: boolean | null;
 }) => {
   const weeks = React.useMemo(() => toWeeks(contributions), [contributions]);
-  const gap = gapFor(cellSize);
+  const gap = cellGap;
   const ref = React.useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = React.useState<HoveredDay>();
 
@@ -304,12 +307,19 @@ export type GitHubActivityProps = {
   year?: number;
   accent?: string | string[];
   cellSize?: number;
+  /** Fit all visible weeks in the card while keeping the requested size as the upper bound. */
+  fitToWidth?: boolean;
   months?: number;
   showMonths?: boolean;
   /** Panel footer label, e.g. "Top apps by dictations". */
   label?: string;
   /** Overrides the "${total} contributions in ${year}" heading. */
   heading?: React.ReactNode;
+  /** Optional annual summary, laid out with the heading by the consuming dashboard. */
+  summary?: React.ReactNode;
+  footer?: React.ReactNode;
+  /** On growing pages, expand in normal flow and leave vertical scrolling to the page. */
+  inFlow?: boolean;
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -330,10 +340,14 @@ const GitHubActivity = ({
   year,
   accent = DEFAULT_ACCENT,
   cellSize = DEFAULT_CELL_SIZE,
+  fitToWidth = false,
   months = DEFAULT_MONTHS,
   showMonths = false,
   label = '',
   heading,
+  summary,
+  footer,
+  inFlow = false,
   defaultOpen = false,
   open: openProp,
   onOpenChange,
@@ -352,6 +366,26 @@ const GitHubActivity = ({
     if (openProp === undefined) setOpenState(!open);
     onOpenChange?.(!open);
   };
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  const [contentWidth, setContentWidth] = React.useState<number | null>(null);
+  React.useLayoutEffect(() => {
+    const card = cardRef.current;
+    if (!card || !fitToWidth) return;
+    const measure = () => {
+      const padding = getComputedStyle(card);
+      setContentWidth(
+        card.clientWidth -
+          Number.parseFloat(padding.paddingLeft) -
+          Number.parseFloat(padding.paddingRight),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [fitToWidth]);
+
+  const headingRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
   const headerRef = React.useRef<HTMLDivElement>(null);
   const panelMotion = React.useRef<Animation | null>(null);
@@ -362,11 +396,28 @@ const GitHubActivity = ({
     const header = headerRef.current;
     const card = panel?.parentElement;
     if (!panel || !header || !card) return;
+    if (inFlow) {
+      panelMotion.current?.cancel();
+      panelMotion.current = null;
+      panelReady.current = false;
+      panel.style.removeProperty('height');
+      return;
+    }
     let target = -1;
 
     const measure = () => {
       const closed = header.offsetHeight;
-      const next = open ? Math.max(closed, card.clientHeight - 24) : closed;
+      // Reserve the measured collapsed header even when its translated label wraps.
+      card.style.setProperty('--ol-gha-panel-height', `${closed}px`);
+      const inset = Number.parseFloat(getComputedStyle(panel).bottom) || 0;
+      const heading = headingRef.current;
+      const summaryElement = heading?.children[1];
+      const reservedTop =
+        heading && summaryElement && getComputedStyle(summaryElement).position !== 'absolute'
+          ? heading.offsetTop + heading.offsetHeight + 8
+          : inset;
+      // An inline summary remains visible above an expanded app list.
+      const next = open ? Math.max(closed, card.clientHeight - inset - reservedTop) : closed;
       if (next === target) return;
       target = next;
       // The animated height is in design pixels even when the viewport zooms.
@@ -397,10 +448,11 @@ const GitHubActivity = ({
     const observer = new ResizeObserver(measure);
     observer.observe(card);
     observer.observe(header);
+    if (headingRef.current) observer.observe(headingRef.current);
     return () => {
       observer.disconnect();
     };
-  }, [open, reduceMotion, appsProp.length]);
+  }, [open, reduceMotion, appsProp.length, inFlow]);
 
   React.useLayoutEffect(
     () => () => {
@@ -425,21 +477,32 @@ const GitHubActivity = ({
 
   const gap = gapFor(cellSize);
   const columns = Math.min(Math.ceil(contributions.length / 7), weeksFor(months));
-  const width = Math.max(MIN_CARD_WIDTH, columns * (cellSize + gap) - gap + CARD_PADDING);
+  const gridWidth = columns * (cellSize + gap) - gap;
+  const width = Math.max(MIN_CARD_WIDTH, gridWidth + CARD_PADDING);
+  const fit =
+    fitToWidth && contentWidth !== null && gridWidth > 0
+      ? Math.min(1, Math.max(0, contentWidth - 1) / gridWidth)
+      : 1;
 
   return (
     <div
+      ref={cardRef}
       className={['ol-gha', apps.length > 0 && 'ol-gha--with-panel', className]
         .filter(Boolean)
         .join(' ')}
+      data-in-flow={inFlow || undefined}
       style={{ width, ...style }}
     >
-      <p className="ol-gha-heading">{headingText}</p>
+      <div ref={headingRef} className="ol-gha-heading-row">
+        <p className="ol-gha-heading">{headingText}</p>
+        {summary}
+      </div>
 
       <ContributionGrid
         contributions={contributions}
         scale={scale}
-        cellSize={cellSize}
+        cellSize={cellSize * fit}
+        cellGap={gap * fit}
         months={months}
         showMonths={showMonths}
         label={typeof headingText === 'string' ? headingText : label}
@@ -447,6 +510,8 @@ const GitHubActivity = ({
         formatDay={formatDay ?? ((day) => `${day.count} · ${day.date}`)}
         reduceMotion={reduceMotion}
       />
+
+      {footer}
 
       {apps.length > 0 && (
         <div
@@ -481,7 +546,11 @@ const GitHubActivity = ({
             </div>
           </div>
 
-          <ul className="ol-gha-app-list" aria-hidden={open ? undefined : true}>
+          <ul
+            className="ol-gha-app-list"
+            aria-hidden={open ? undefined : true}
+            tabIndex={open && !inFlow ? 0 : undefined}
+          >
             {apps.map((app) => (
               <li key={app.name}>
                 <AppRow app={app} />

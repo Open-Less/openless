@@ -84,7 +84,7 @@ interface MetricProps {
 
 function Metric({ icon, label, value, trend }: MetricProps) {
   return (
-    <Card padding={14} style={{ minWidth: 0 }}>
+    <Card className="ol-overview-metric" padding={14} style={{ minWidth: 0 }}>
       <div
         style={{
           display: 'flex',

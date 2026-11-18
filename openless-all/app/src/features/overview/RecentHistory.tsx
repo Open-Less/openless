@@ -68,6 +68,7 @@ export function RecentHistory({
       </div>
       <div
         className="ol-thinscroll ol-overview-recent"
+        tabIndex={0}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
         {historyError ? (

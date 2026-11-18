@@ -16,8 +16,9 @@
       {
         "label": "main",
         "title": "OpenLess",
-        "width": 1300,
-        "height": 835,
+        "width": 1400,
+        "height": 900,
+        "preventOverflow": true,
         "minWidth": 980,
         "minHeight": 640,
         "resizable": true,

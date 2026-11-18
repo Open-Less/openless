@@ -34,7 +34,7 @@ export const unavailableMobileCapabilities: PlatformCapabilities = {
 };
 
 const viewports: Record<OS, PreviewProfile['viewport']> = {
-  mac: { width: 1300, height: 835 },
+  mac: { width: 1400, height: 900 },
   win: { width: 1240, height: 800 },
   android: { width: 412, height: 892 },
   harmony: { width: 420, height: 900 },

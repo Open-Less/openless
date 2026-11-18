@@ -231,7 +231,9 @@ test('style pack deletion uses the red trash notification and keeps undo', async
   await expect(pack).toHaveCount(0);
 });
 
-test('selected segmented options and the overview heatmap stay visible', async ({ page }) => {
+test('selected segmented options and the overview heatmap stay visible', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await page.goto('/?os=mac');
   const sidebar = page.locator('.ol-sidebar-surface');
   await sidebar.getByRole('button', { name: '用量', exact: true }).click();
@@ -311,25 +313,21 @@ test('selected segmented options and the overview heatmap stay visible', async (
   expect(Math.abs(cellSize.width - 11)).toBeLessThan(0.2);
   expect(Math.abs(cellSize.height - 11)).toBeLessThan(0.2);
   const heatmapBox = (await activityCard.boundingBox())!;
-  expect(heatmapBox.width).toBeCloseTo(771, 0);
+  expect(heatmapBox.width).toBeGreaterThan(950);
   await expect(activityCard).toHaveCSS('border-radius', '28px');
   await expect(activityCard).toHaveCSS('padding-left', '16px');
   const yearBoard = page.locator('.ol-overview-year');
   await expect(yearBoard).toBeVisible();
   const yearBox = (await yearBoard.boundingBox())!;
-  expect(yearBox.x).toBeGreaterThan(heatmapBox.x + heatmapBox.width - 1);
-  const insets = await activityCard.evaluate((card) => {
-    const grid = card.querySelector('.ol-gha-grid');
-    if (!grid) return null;
-    const cardBox = card.getBoundingClientRect();
-    const gridBox = grid.getBoundingClientRect();
-    return {
-      left: gridBox.left - cardBox.left,
-      right: cardBox.right - gridBox.right,
-    };
-  });
-  expect(insets).not.toBeNull();
-  expect(Math.abs((insets?.left ?? 0) - (insets?.right ?? 0))).toBeLessThan(2);
+  const gridBox = (await activityCard.locator('.ol-gha-grid').boundingBox())!;
+  const footerBox = (await activityCard.locator('.ol-gha-panel-header').boundingBox())!;
+  expect(gridBox.width).toBeCloseTo(739, 0);
+  expect(yearBox.x).toBeGreaterThan(gridBox.x + gridBox.width);
+  expect(yearBox.x).toBeGreaterThan(footerBox.x + footerBox.width);
+  expect(yearBox.x + yearBox.width).toBeLessThan(heatmapBox.x + heatmapBox.width);
+  await expect(yearBoard).toBeInViewport({ ratio: 1 });
+  await expect(activityCard.locator('.ol-gha-panel-header')).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: testInfo.outputPath('acceptance-overview-default-shell.png') });
 });
 
 test('marketplace search expands inside the same plate', async ({ page }) => {
