@@ -125,10 +125,11 @@ impl SideAwareComboState {
 
     fn release_active(&mut self) -> Option<HotkeyEvent> {
         let press_id = self.active_press_id.take()?;
-        self.companion_seen = false;
+        let combined = std::mem::take(&mut self.companion_seen);
         Some(HotkeyEvent::Released {
             at: Instant::now(),
             press_id,
+            combined,
         })
     }
 
@@ -349,6 +350,22 @@ fn primary_eq(expected: &str, actual: &str) -> bool {
     expected.trim().eq_ignore_ascii_case(actual.trim())
 }
 
+/// Windows can translate Ctrl+ScrollLock to VK_CANCEL before WH_KEYBOARD_LL.
+/// Keep its physical identity, including a release that arrives as VK_SCROLL
+/// after Ctrl was released. Extended E0-46 is the separate Ctrl+Break key.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn normalize_windows_vk(vk_code: u32, scan_code: u32, extended: bool) -> u32 {
+    const VK_CANCEL: u32 = 0x03;
+    const VK_SCROLL: u32 = 0x91;
+    const SCROLL_LOCK_SCAN_CODE: u32 = 0x46;
+
+    if vk_code == VK_CANCEL && scan_code == SCROLL_LOCK_SCAN_CODE && !extended {
+        VK_SCROLL
+    } else {
+        vk_code
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub mod platform {
     use super::*;
@@ -359,7 +376,7 @@ pub mod platform {
         VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
         VK_LWIN, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
         VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RCONTROL, VK_RETURN, VK_RIGHT,
-        VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
+        VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SPACE, VK_TAB, VK_UP,
     };
 
     pub fn dispatch_vk(vk_code: u32, pressed: bool) -> bool {
@@ -398,6 +415,7 @@ pub mod platform {
         }
         let named = match vk_code {
             x if x == VK_SPACE.0 as u32 => "Space",
+            x if x == VK_SCROLL.0 as u32 => "ScrollLock",
             x if x == VK_RETURN.0 as u32 => "Enter",
             x if x == VK_TAB.0 as u32 => "Tab",
             x if x == VK_BACK.0 as u32 => "Backspace",
@@ -444,6 +462,100 @@ pub mod platform {
             _ => return None,
         };
         Some(named.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use windows::Win32::UI::Input::KeyboardAndMouse::VK_CANCEL;
+
+        #[test]
+        fn scroll_lock_maps_to_the_canonical_primary() {
+            assert_eq!(
+                primary_from_vk(VK_SCROLL.0 as u32).as_deref(),
+                Some("ScrollLock")
+            );
+        }
+
+        #[test]
+        fn scroll_lock_side_combo_pairs_edges_and_ignores_repeat() {
+            let primary = primary_from_vk(VK_SCROLL.0 as u32).unwrap();
+            let mut state = SideAwareComboState::new(ShortcutBinding {
+                primary: "ScrollLock".into(),
+                modifiers: vec!["ctrl-right".into()],
+            });
+            state.set_side(SideModifier::CtrlLeft, true);
+            assert_eq!(state.on_primary(&primary, true), None);
+            state.set_side(SideModifier::CtrlLeft, false);
+            state.set_side(SideModifier::CtrlRight, true);
+            let press_id = match state.on_primary(&primary, true) {
+                Some(HotkeyEvent::Pressed { press_id, .. }) => press_id,
+                other => panic!("expected ScrollLock Pressed, got {other:?}"),
+            };
+            assert_eq!(state.on_primary(&primary, true), None);
+            assert!(matches!(
+                state.on_primary(&primary, false),
+                Some(HotkeyEvent::Released { press_id: released_id, .. }) if released_id == press_id
+            ));
+            assert_eq!(state.on_primary(&primary, false), None);
+            assert!(matches!(
+                state.on_primary(&primary, true),
+                Some(HotkeyEvent::Pressed { .. })
+            ));
+            assert!(matches!(
+                state.on_modifier_release(SideModifier::CtrlRight),
+                Some(HotkeyEvent::Released { .. })
+            ));
+            assert_eq!(state.on_primary(&primary, false), None);
+        }
+
+        #[test]
+        fn ctrl_scroll_lock_cancel_edges_keep_their_physical_primary() {
+            let primary = primary_from_vk(normalize_windows_vk(VK_CANCEL.0 as u32, 0x46, false))
+                .expect("physical ScrollLock primary");
+            assert_eq!(primary, "ScrollLock");
+
+            for (modifier, required, other) in [
+                ("ctrl-left", SideModifier::CtrlLeft, SideModifier::CtrlRight),
+                (
+                    "ctrl-right",
+                    SideModifier::CtrlRight,
+                    SideModifier::CtrlLeft,
+                ),
+            ] {
+                for release_ctrl_first in [false, true] {
+                    let mut state = SideAwareComboState::new(ShortcutBinding {
+                        primary: "ScrollLock".into(),
+                        modifiers: vec![modifier.into()],
+                    });
+                    state.on_modifier_press(other);
+                    assert_eq!(state.on_primary(&primary, true), None);
+                    assert_eq!(state.on_primary(&primary, false), None);
+                    state.on_modifier_release(other);
+                    state.on_modifier_press(required);
+                    let press_id = match state.on_primary(&primary, true) {
+                        Some(HotkeyEvent::Pressed { press_id, .. }) => press_id,
+                        other => panic!("expected ScrollLock Pressed, got {other:?}"),
+                    };
+                    assert_eq!(state.on_primary(&primary, true), None);
+                    let released = if release_ctrl_first {
+                        state.on_modifier_release(required)
+                    } else {
+                        state.on_primary(&primary, false)
+                    };
+                    assert!(matches!(
+                        released,
+                        Some(HotkeyEvent::Released { press_id: released_id, .. })
+                            if released_id == press_id
+                    ));
+                    // Once Ctrl is up, the same physical key can release as VK_SCROLL.
+                    let up = primary_from_vk(normalize_windows_vk(VK_SCROLL.0 as u32, 0x46, false))
+                        .unwrap();
+                    assert_eq!(state.on_primary(&up, false), None);
+                    assert_eq!(state.on_modifier_release(required), None);
+                }
+            }
+        }
     }
 }
 
@@ -578,6 +690,7 @@ pub mod platform {
             return false;
         }
 
+        crate::recording_companion::sync_fn(flags & (1 << 23) != 0);
         if let Some(primary) = primary_from_keycode(keycode) {
             if crate::recording_companion::event(&primary, pressed) { return true; }
             handle_primary_key(&primary, pressed);
@@ -643,6 +756,18 @@ pub mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_ctrl_scroll_lock_normalizes_cancel_but_preserves_other_keys() {
+        assert_eq!(normalize_windows_vk(0x03, 0x46, false), 0x91);
+        assert_eq!(normalize_windows_vk(0x91, 0x46, false), 0x91);
+        // Do not turn a dedicated Ctrl+Break, a scan-less injected Cancel,
+        // or another key at the same scan code into ScrollLock.
+        assert_eq!(normalize_windows_vk(0x03, 0x46, true), 0x03);
+        assert_eq!(normalize_windows_vk(0x03, 0, false), 0x03);
+        assert_eq!(normalize_windows_vk(0x03, 0x45, false), 0x03);
+        assert_eq!(normalize_windows_vk(0x41, 0x46, false), 0x41);
+    }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]

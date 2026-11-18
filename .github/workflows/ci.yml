@@ -263,12 +263,12 @@ jobs:
         timeout-minutes: 12
         run: |
           # Keep regional mirror stalls from blocking browser validation indefinitely.
-          # ubuntu.sources uses mirror+file:/etc/apt/apt-mirrors.txt, so the Azure
-          # host is not in *.list or *.sources.
+          # Hosted runners can use Azure or regional EC2 archive mirrors, often
+          # via mirror+file:/etc/apt/apt-mirrors.txt in ubuntu.sources.
           printf '%s\n' 'Acquire::Retries "2";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' |
             sudo tee /etc/apt/apt.conf.d/80-openless-ci-network >/dev/null
           while IFS= read -r -d '' apt_source; do
-            sudo sed -i -E 's#https?://azure[.]archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
+            sudo sed -i -E 's#https?://([a-z0-9-]+[.])*archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
           done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' -o -name 'apt-mirrors.txt' \) -print0)
           npx playwright install-deps "${{ matrix.browser }}"
       - name: Install Playwright browsers on cache miss
@@ -292,6 +292,14 @@ jobs:
           path: |
             openless-all/app/test-results/
             openless-all/app/playwright-report/
+      - name: Upload UI acceptance screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-acceptance-${{ matrix.browser }}
+          path: openless-all/app/test-results/**/acceptance-*.png
+          retention-days: 7
+          if-no-files-found: ignore
 
   # Preserve the existing required-check name. A skipped browser matrix is only
   # acceptable when the change classifier explicitly says it is out of scope.

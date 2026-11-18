@@ -110,6 +110,8 @@ export const ko: typeof zhCN = {
     noSnapshot: '아직 암호화된 클라우드 백업이 없습니다.',
     snapshotUnknown: '클라우드 백업을 아직 확인하지 않았습니다.',
     lastSync: '마지막 동기화: {{time}}',
+    synced: '동기화 완료',
+    syncing: '최신 클라우드 데이터를 동기화하는 중…',
     syncNow: '지금 동기화',
     checkPending: '확인 대기 결과 조회',
     unlock: '잠금 해제',
@@ -139,12 +141,21 @@ export const ko: typeof zhCN = {
     newPassword: '새 동기화 비밀번호',
     currentPassword: '현재 동기화 비밀번호',
     confirmPassword: '새 비밀번호 확인',
+    setSyncPasswordTitle: '동기화 비밀번호 설정',
+    setSyncPasswordDescription:
+      'OpenLess는 이 비밀번호로 기기에서 데이터를 암호화하고 클라우드 백업을 만듭니다. 백업 생성이 완료되면 동기화가 켜집니다.',
+    confirmSyncPassword: '동기화 비밀번호 확인',
+    confirmAndContinue: '확인하고 계속',
+    revealPassword: '비밀번호 표시 ({{field}})',
+    concealPassword: '비밀번호 숨기기 ({{field}})',
+    previewNotice: '클라우드 동기화 미리보기입니다. 예시 비밀번호를 사용하세요. 서버에 연결하거나 인증 정보를 저장하지 않습니다.',
     passwordPolicy: '12~128자로 영문 대문자, 소문자, 숫자를 포함하세요. 흔한 비밀번호는 피하세요.',
     rememberKey: '이 기기의 보안 저장소에 잠금 해제 키 기억',
     disableTitle: '암호화 동기화를 끌까요?',
     disableDescription:
       '이후 동기화를 중지합니다. 클라우드 백업과 로컬 데이터는 유지됩니다. 백업 삭제는 별도 작업입니다.',
     confirmDisable: '동기화 끄기',
+    refreshBackup: '클라우드 백업 보기 또는 새로고침',
     deleteTitle: '암호화된 클라우드 백업을 삭제할까요?',
     deleteDescription:
       '이 계정의 클라우드 백업만 삭제합니다. 로컬 데이터는 유지됩니다. 다른 기기에서 복원하려면 새 백업이 필요합니다.',
@@ -229,6 +240,7 @@ export const ko: typeof zhCN = {
       cancelled: '작업이 취소되었습니다.',
       network: '동기화 서비스에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.',
       rateLimited: '요청이 너무 많습니다. 잠시 후 다시 시도하세요.',
+      deletePendingOperation: '이전 클라우드 작업의 결과가 확인되지 않았습니다. 나중에 상태를 새로 고친 뒤 다시 삭제하세요.',
       outcomeUnknown:
         '클라우드 결과가 확인되지 않았습니다. 새 백업을 만들기 전에 대기 중인 결과를 확인하세요.',
       recovery:
@@ -289,10 +301,13 @@ export const ko: typeof zhCN = {
     delete: '삭제',
     later: '나중에',
     cancel: '취소',
+    confirmAction: '확인',
     close: '닫기',
     show: '표시',
     hide: '숨기기',
+    apiKeySaved: 'API 키가 저장되었습니다',
     saved: '저장됨',
+    deleted: '삭제됨',
     refreshed: '새로고침했습니다',
     saving: '저장 중',
     experimental: '실험적',
@@ -304,6 +319,7 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
+    asking: '무엇이든 질문',
     thinking: 'thinking',
     using: 'using',
     cancelled: '취소됨',
@@ -361,6 +377,9 @@ export const ko: typeof zhCN = {
     title: '질문',
     headerHint: '언제든 질문하세요',
     thinking: '생각 중…',
+    thoughtLive: '생각 중 ({{seconds}}초)',
+    thoughtDone: '생각함 ({{seconds}}초)',
+    stop: '중지',
     error: '오류가 발생했습니다. 잠시 후 다시 시도해 주세요.',
     errorRetry: '재시도',
     errorRetryHint: '다시 시도해 주세요.',
@@ -516,6 +535,7 @@ export const ko: typeof zhCN = {
   shell: {
     shortcutLabel: '녹음 단축키',
     shortcutHint: '시작 / 정지',
+    homeLabel: '개요로 돌아가기',
     betaTag: 'BETA',
     betaNote: '로컬 저장, 선택적 클라우드 백업',
     navHint: {
@@ -539,6 +559,7 @@ export const ko: typeof zhCN = {
         tagline: '로컬 기반 음성 입력 레이어',
         releaseNotes: '릴리스 노트 보기 ↗',
         docs: '도움말 센터 ↗',
+        credits: '컴포넌트',
       },
     },
     providerPrompt: {
@@ -660,6 +681,12 @@ export const ko: typeof zhCN = {
     llmConfigured: '활성 LLM 구성됨',
     llmNotConfigured: '구성되지 않음',
     statusConfigured: '구성됨',
+    statusFailed: '실패',
+    serviceHint: {
+      asr: '음성 인식: 구성 상태를 보고, 클릭하면 서비스 설정으로 이동',
+      llm: '문자 처리: 구성 상태를 보고, 클릭하면 서비스 설정으로 이동',
+      omni: '멀티모달 음성: 구성 상태를 보고, 클릭하면 서비스 설정으로 이동',
+    },
     statusNotConfigured: '구성되지 않음',
     statusUnknown: '읽을 수 없음',
     credentialsLoadError: '자격 증명 상태를 읽을 수 없습니다',
@@ -674,6 +701,15 @@ export const ko: typeof zhCN = {
     metricTotalTrend: '로컬 보관(상한 200)',
     activityTitle: '연간 활동',
     activityCount: '{{count}}회 받아쓰기',
+    activityAppsLabel: '음성 입력이 많은 앱',
+    activityAppsShow: '자주 쓰는 앱 표시',
+    activityAppsHide: '자주 쓰는 앱 숨기기',
+    activityAppsUnavailable: '이 플랫폼은 앱별 연간 활동을 지원하지 않습니다.',
+    activityAppsError: '앱별 연간 활동을 불러올 수 없습니다.',
+    activityYearTitle: '올해',
+    activityActiveDays: '활동 일수',
+    activityPeakDay: '하루 최다',
+    activityDailyAverage: '일평균',
     activityLoadError: '활동 데이터 로드 실패',
     period: {
       ariaLabel: '집계 기간',
@@ -1170,6 +1206,8 @@ export const ko: typeof zhCN = {
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '텍스트 삽입',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       voiceEnhancementTitle: '음성 향상과 재생 억제',
@@ -1533,6 +1571,15 @@ export const ko: typeof zhCN = {
       voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
       voiceActivationLocalOnly:
         '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
+      voiceActivationHotkeyLinked: "녹음 단축키와 연동",
+      voiceActivationHotkeyLinkedDesc: "기존 녹음 동작 대신 한 번 눌러 깨우기 대기를 시작하거나 일시 중지합니다. 앱 시작 시에는 중지됩니다. 중지하면 대기 마이크 예열을 끄지만 다른 녹음은 중단하지 않습니다. 깨우기는 로컬에서 처리하며 받아쓰기는 현재 서비스를 사용합니다.",
+      voiceActivationDisabled: "음성 활성화 꺼짐",
+      voiceActivationPaused: "깨우기 대기 일시 중지됨",
+      voiceActivationPausing: "깨우기 대기 중지 중…",
+      voiceActivationStarting: "깨우기 대기 시작 중…",
+      voiceActivationListening: "깨우기 명령 대기 중",
+      voiceActivationDictating: "받아쓰기 또는 마무리 중",
+      voiceActivationError: "대기를 시작할 수 없습니다. 모델, 마이크 권한 및 장치를 확인하세요.",
       voiceActivationMultimodalModels:
         '여기에서 음성 활성화 모델을 준비합니다. 받아쓰기는 현재 멀티모달 서비스를 계속 사용합니다.',
       voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',
@@ -1588,8 +1635,7 @@ export const ko: typeof zhCN = {
       validationTitle: '연결 확인',
       validationHint:
         '실제 요청을 보내 현재 설정을 확인합니다. 서비스 사용량이 차감될 수 있습니다. 설정을 저장해도 자동으로 확인하지 않습니다.',
-      validationHintOmni:
-        '텍스트 연결만 수동으로 확인합니다(녹음 없음). 통과해도 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 다시 확인하세요. 서비스 사용량이 차감될 수 있습니다.',
+      validationHintOmni: '텍스트 연결 요청을 수동으로 보내며, 서버 사용량 한도를 소모할 수 있습니다.',
       autoSaveHint:
         '변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.',
       nameHint:
@@ -1648,10 +1694,11 @@ export const ko: typeof zhCN = {
       pipelineModeLabel: '인식 파이프라인',
       pipelineModeHint:
         '전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: '전통 모드',
       pipelineModeMultimodal: '멀티모달 모드',
       pipelineIsolationNotice:
-        '두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.',
+        '세 파이프라인은 설정을 각각 저장합니다. 설정이나 창을 닫고 앱을 다시 시작해도 선택은 유지되며, 다시 전환하면 기존 설정을 사용합니다.',
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK (Volcengine Ark)',
@@ -2333,6 +2380,7 @@ export const ko: typeof zhCN = {
     experimentsTitle: '실험 및 확장',
     experimentsDescription: '실험 기능과 확장 옵션을 설정합니다.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: '서비스 설정',
       llm: '언어 모델',
       asr: '음성 인식',
@@ -2340,9 +2388,10 @@ export const ko: typeof zhCN = {
       models: '로컬 모델',
       connections: '연결 및 확장',
       inactive: '현재 모드에서 사용 안 함',
+      unavailable: '사용할 수 없음',
       inactiveDetail: '이 설정은 저장되지만 현재 인식 파이프라인에서는 사용되지 않습니다.',
-      statusConfigured: '초록 점: 켜진 서비스가 있습니다. 요청은 켜진 목록의 첫 항목을 사용합니다.',
-      statusMissing: '빨간 점: 아직 켜진 서비스가 없습니다.',
+      statusConfigured: '켜진 서비스가 있습니다. 요청은 켜진 목록의 첫 항목을 사용합니다.',
+      statusMissing: '아직 켜진 서비스가 없습니다.',
     },
     searchPlaceholder: '설정 카테고리 찾기…',
     clearSearch: '검색 지우기',
@@ -2354,6 +2403,8 @@ export const ko: typeof zhCN = {
     backToAdvanced: '고급 기능으로 돌아가기',
     back: '뒤로',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: '입력란의 실시간 원문 표시를 설정합니다.',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',

@@ -198,6 +198,10 @@ python3 scripts/package-ipa.py \
 
 手动触发的工作流仍可生成 ad-hoc 签名的测试构建，但若缺少签名/公证 secrets，带标签的 macOS 发布将会失败。
 
+## 第三方组件
+
+概览页的年度活动卡片移植自 [Rare UI GitHub Activity](https://rareui.com/components/githubactivity)（Copyright (c) 2026 Swami Malode）。许可是 MIT 加 Commons Clause。格子尺寸、间距、圆角、内边距、月份标签、悬浮提示和可展开面板保持上游组件；本地听写次数替换 GitHub 提交，语音输入最多的软件替换仓库。应用内署名在「设置 → 关于与更新 → 组件来源」。详见 [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md)。
+
 ## 忽略的本地输出
 
 以下内容有意仅保留在本地：

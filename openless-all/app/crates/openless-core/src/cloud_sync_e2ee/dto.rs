@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const CONSENT_VERSION: &str = "encrypted-full-snapshot-v1";
+pub const CONSENT_VERSION: &str = "encrypted-full-snapshot-v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -222,4 +222,13 @@ pub struct EncryptedSyncRestoreEvent {
 pub struct EncryptedUiPreferencesSnapshot {
     pub preferences: Option<crate::CloudSyncUiPreferences>,
     pub revision: Option<String>,
+}
+
+/// Local review scope only; this is not a server-side legal acceptance receipt.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsentScope {
+    pub service_origin: String,
+    pub account_id: Option<String>,
+    pub vault_id: Option<String>,
 }

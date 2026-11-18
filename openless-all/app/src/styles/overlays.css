@@ -9,7 +9,12 @@
   --ol-dialog-wash: color-mix(in srgb, var(--ol-blue) 3%, var(--ol-surface));
 }
 
-.ol-dialog-overlay {
+/* Keep backdrop blur off the positioner's ancestor chain. */
+.ol-dialog-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   backdrop-filter: blur(8px) saturate(115%);
   -webkit-backdrop-filter: blur(8px) saturate(115%);
 }
@@ -244,8 +249,19 @@
 }
 .ol-intent-options {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
+}
+.ol-intent-options > * {
+  grid-column: span 6;
+}
+@media (max-width: 640px) {
+  .ol-intent-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-intent-options > * {
+    grid-column: 1 / -1;
+  }
 }
 .ol-intent-options .ol-tool-button {
   min-height: 38px;
@@ -282,7 +298,7 @@
 }
 
 /* Embedded settings/model editors retain their own focus, scrolling and mobile layouts. */
-.ol-model-dialog-overlay {
+.ol-model-dialog-overlay::before {
   backdrop-filter: blur(8px) saturate(115%);
   -webkit-backdrop-filter: blur(8px) saturate(115%);
 }

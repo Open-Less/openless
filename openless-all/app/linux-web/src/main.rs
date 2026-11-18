@@ -1379,9 +1379,13 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
             let consent = required_str(_args, "consentVersion")?.to_string();
+            let expected_scope = serde_json::from_value(
+                _args.get("expectedScope").cloned().unwrap_or(Value::Null),
+            )
+            .map_err(|error| error.to_string())?;
             Ok(json_value(
                 runtime
-                    .block_on(backend.cloud_sync_e2ee_prepare_enable(consent))
+                    .block_on(backend.cloud_sync_e2ee_prepare_enable(consent, expected_scope))
                     .map_err(|error| error.to_string())?,
             ))
         }

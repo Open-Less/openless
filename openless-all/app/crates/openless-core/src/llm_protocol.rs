@@ -496,6 +496,40 @@ impl TextEventStream {
         if kind == "error" || !value["error"].is_null() {
             return Err(response_error("llmStreamError"));
         }
+        if self.format == LlmRequestFormat::ChatCompletions {
+            if value["choices"][0]["finish_reason"] == "content_filter" {
+                return Err(response_error("llmContentFiltered"));
+            }
+            if let Some(annotations) = value["choices"][0]["delta"]["annotations"].as_array() {
+                let mut urls = std::collections::BTreeSet::new();
+                for annotation in annotations {
+                    if let Some(raw) = annotation["url_citation"]["url"].as_str() {
+                        if let Ok(url) = url::Url::parse(raw) {
+                            if matches!(url.scheme(), "https" | "http") {
+                                urls.insert(
+                                    url.to_string()
+                                        .replace(')', "%29")
+                                        .replace('(', "%28")
+                                        .replace('>', "%3E")
+                                        .replace('<', "%3C"),
+                                );
+                            }
+                        }
+                    }
+                }
+                if !urls.is_empty() {
+                    let mut text = value["choices"][0]["delta"]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    text.push_str("\n\n");
+                    for (i, url) in urls.iter().enumerate() {
+                        text.push_str(&format!("[{}](<{}>) ", i + 1, url));
+                    }
+                    return Ok(Some(StreamEvent::Text(text)));
+                }
+            }
+        }
         let text = match self.format {
             LlmRequestFormat::ChatCompletions => value["choices"][0]["delta"]["content"].as_str(),
             LlmRequestFormat::Responses => match kind {
@@ -565,6 +599,20 @@ impl TextEventStream {
 mod tests {
     use super::*;
     use crate::credentials::{InMemoryCredentialStore, SecretValue};
+
+    #[test]
+    fn deepseek_final_chunk_citations_and_refusals() {
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream.push(b"data: {\"choices\":[{\"delta\":{\"annotations\":[{\"type\":\"url_citation\",\"url_citation\":{\"url\":\"https://example.com/weather\"}}]},\"finish_reason\":\"stop\"}]}\n\n").unwrap();
+        assert!(
+            matches!(stream.next().unwrap(), Some(StreamEvent::Text(text)) if text.contains("https://example.com/weather"))
+        );
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream
+            .push(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n")
+            .unwrap();
+        assert!(stream.next().is_err());
+    }
 
     #[test]
     fn streaming_usage_is_collected_without_discarding_text_or_guessing_counts() {

@@ -35,6 +35,11 @@ on:
         type: choice
         options: [all, macos, macos-aarch64, macos-x86_64, windows]
         default: all
+      macos_smoke_sha:
+        description: Full branch commit SHA for an optional Apple Silicon packaged-app launch smoke
+        type: string
+        required: false
+        default: ''
       windows_hang_diagnostics:
         description: Opt-in issue 1266 Windows observation build (branch dispatch only)
         type: boolean
@@ -51,7 +56,7 @@ on:
 # Tag publishes and draft repairs use a unique group
 # and are not cancelled: cancelling them would abort a release.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}', github.ref, inputs.platform, inputs.windows_hang_diagnostics) || format('{0}-{1}', github.ref, github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}-{3}', github.ref, inputs.platform, inputs.windows_hang_diagnostics, inputs.macos_smoke_sha) || format('{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' }}
 
 jobs:
@@ -123,6 +128,21 @@ jobs:
           [ "$permission" = admin ] || { echo "::error::Release repair requires an administrator"; exit 1; }
           draft=$(gh release view "$OPENLESS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '(.isDraft and (.isPrerelease | not))')
           [ "$draft" = true ] || { echo "::error::Only an existing Stable draft may be repaired"; exit 1; }
+
+      - name: Verify requested macOS smoke commit
+        if: inputs.macos_smoke_sha != ''
+        shell: bash
+        env:
+          SMOKE_SHA: ${{ inputs.macos_smoke_sha }}
+          INPUT_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/* ||
+                "$INPUT_PLATFORM" != macos-aarch64 || "$OPENLESS_RELEASE_IS_TAG" != false ||
+                ! "$SMOKE_SHA" =~ ^[0-9a-f]{40}$ || "$SMOKE_SHA" != "$GITHUB_SHA" ]]; then
+            echo '::error::Launch smoke requires a branch dispatch at the requested SHA, with platform=macos-aarch64 and no release tag.'
+            exit 1
+          fi
 
       - uses: actions/checkout@v4
         with:
@@ -684,6 +704,43 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
             openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}*.json
           if-no-files-found: error
+
+      - name: Launch the packaged Apple Silicon app
+        if: inputs.macos_smoke_sha != '' && matrix.updater-arch == 'aarch64'
+        timeout-minutes: 2
+        shell: bash
+        working-directory: openless-all/app
+        env:
+          SMOKE_SHA: ${{ inputs.macos_smoke_sha }}
+        run: |
+          set -euo pipefail
+          app=src-tauri/target/release/bundle/macos/OpenLess.app
+          evidence="$RUNNER_TEMP/openless-macos-launch-smoke"
+          mkdir -p "$evidence"
+          [[ "$OPENLESS_BUILD_ID" == "$SMOKE_SHA" && "$(uname -m)" == arm64 ]]
+          lipo "$app/Contents/MacOS/openless" -verify_arch arm64
+          status=0
+          swift scripts/macos-packaged-launch-smoke.swift "$app" "$SMOKE_SHA" "$evidence" || status=$?
+          {
+            echo '### Packaged macOS app launch smoke'
+            if [[ -s "$evidence/result.txt" ]]; then
+              echo '```text'
+              cat "$evidence/result.txt"
+              echo '```'
+            else
+              echo 'The smoke tooling did not produce results.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload macOS launch evidence
+        if: ${{ !cancelled() && inputs.macos_smoke_sha != '' && matrix.updater-arch == 'aarch64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-macos-launch-smoke-aarch64
+          path: ${{ runner.temp }}/openless-macos-launch-smoke/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - uses: actions/setup-python@v5
         if: matrix.platform == 'windows-latest'

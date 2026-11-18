@@ -20,7 +20,7 @@ Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotl
 
 ```mermaid
 flowchart TB
-    React["React 页面 / 窗口"] --> IPC["src/lib/ipc · typed wrapper"]
+    React["React 页面 / 窗口"] --> IPC["src/api + src/runtime · typed commands"]
     IPC --> Tauri["Tauri commands / coordinator / core_adapters"]
     Qt["Qt6 WebEngine 窗口层"] --> Bridge["linux-web · /api/invoke + /api/events"]
     Bridge --> Linux["LinuxHost / LinuxBackendBuilder"]
@@ -35,13 +35,12 @@ flowchart TB
     Events --> Linux
 ```
 
-- 桌面：React → 类型化 IPC 门面（`src/lib/ipc/`）→ Tauri command → Core；Core 事件由 Host 转发回界面。
-- Linux：host UI → `LinuxHost`（`lib.rs`：`snapshot` / `subscribe` / `save_settings` / `drain_events` 等）→ `OpenLessBackend` → Core，类型化 Rust 接口，不经 IPC。
+- 桌面：React → 分域 API（`src/api/`）与宿主传输（`src/runtime/`）→ Tauri command 或 Linux HTTP 桥 → Core；Core 事件由 Host 转发回界面。
 - 浏览器预览：provider 公开目录由 Core 生成到 `src/lib/ipc/provider-descriptors.generated.json`（`cargo run --locked -p openless-core --example export_provider_descriptors` 重新生成；只含公开元数据，无凭据）；原生端走同一受启动合同保护的 IPC。
 - 语言目录：`contract/language-catalog.json` 是工作语言原生名、识别代码与 Apple locale 的单一来源；React `languageCatalog.ts` 和 Core `language_catalog.rs` 读取同一份数据，识别服务仍在运行时判断具体语种是否可用。界面语言独立保存在 `ol.locale`，启动和切换经既有 `set_remote_locale` 将解析后的语言同步给原生托盘与手机远程输入页。
 - 旧 React command/event 名称只保留在 Tauri 兼容 Adapter；跨平台合同以 `contract/backend-2.0.json` 为准。
 
-启动时，`src/App.tsx` 经 `src/lib/ipc/shared.ts` 请求 `get_startup_snapshot`，校验合同版本和 backend 运行状态后进入业务界面。Core 事件定义在 `events.rs`，Tauri 的转译入口为 `src-tauri/src/tauri_events.rs`，Linux 直接订阅类型化事件。
+启动时，`src/app/App.tsx` 由 `src/runtime/transport.ts` 等待原生桥，调用 `get_startup_snapshot` 校验合同版本和后台运行状态后进入业务界面。浏览器预览由 `src/preview/` 提供独立适配。Core 事件定义在 `events.rs`，Tauri 的转译入口为 `src-tauri/src/tauri_events.rs`，Linux 直接订阅类型化事件。
 
 听写主链由 `dictation_engine.rs` 管理：触发会话 → 录音/ASR → 清理与润色 → Host 插入 → 历史与事件。Host 音频处理 worker 在原生采样停止后通过 FIFO Shutdown 排空并退出，不能依赖 CPAL 回调中所有 sender 都析构才结束，否则指定麦克风时可能堵住停止与后续多模态请求。Tauri 在 `coordinator/dictation_core.rs` 接入该链路；本地 ASR 的模型管理归 Core，原生执行实现分别位于 Host。取消、失败和旧会话事件处理也属于该业务链，而不是页面各自实现。
 
@@ -73,15 +72,11 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 
 ## 5. 窗口体系
 
-`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/main.tsx` 读取 `?window=`，`src/App.tsx` 按类型加载胶囊、`qa`（含复用它的「润色结果」模式）、`selection-voice-intent`、`less-computer` 和 `less-computer-glow`；未指定类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-host/src/single_instance.rs` 守护并转发启动意图。
+`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/app/bootstrap.tsx` 读取 `?window=`，`src/app/windowRoutes.tsx` 分派胶囊、Windows 转写轨、`qa`（含复用它的「润色结果」模式）、语音编辑和选区意图。Less Computer 的兼容路由保持空界面；无辅助类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
 
 macOS 全局热键在后台 CGEventTap 线程读取按键与修饰键边沿。只有配置的 Fn 正处于按住状态时，监听器才解析系统功能键负载；`NSEvent eventWithCGEvent:` 的转换同步交给主线程，完成分类后再处理 Fn 松键。此转换会进入 HIToolbox 的输入源逻辑，不能在热键线程执行；普通 Caps Lock 中英文切换不需要该转换。Esc 与组合键取消仍由原有独立通道处理。
-
-Linux 主窗口和 QA 面板由常驻宿主拉起的独立进程承载。QA 空态没有 Core 会话，宿主与面板统一使用空态标识校验操作；文字发送通过 `submit_text_in_context` 在 Core 中检查当前上下文并创建新轮次。早期调用失败回传到对应面板，迟到的失败不能覆盖新轮次。弹窗消息使用宿主递增的序号，不依赖 Core 是否发布了新事件；显式收起 QA 结束窗口进程，隐藏时的 QA 快照只更新宿主状态，下一次打开再创建窗口。没有托盘时，正常关闭主窗口仍会退出应用，托盘注册失败的原因写入启动日志。
-
-Linux 的 Siri 波形包络在分数次幂运算前限制为非负值，避免浮点端点误差生成 NaN。设置和胶囊绘制回归须经过 host tessellation 并检查生成顶点的有限性，文字快照不能单独证明绘制成功。
 
 QA 与润色预览共用浮窗时，宿主记录实际发送的上下文，只允许当前上下文的隐藏请求结束窗口；切回 QA 会创建新的窗口协议状态，后台 QA 更新不能覆盖正在显示的润色预览。异步 QA 调用结果还绑定窗口代次，空态关闭后重新打开仍没有 Core 会话 ID，旧代次的结果也不能显示到新面板。
 

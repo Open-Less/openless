@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{watch, Mutex as AsyncMutex};
+use tokio::sync::{oneshot, watch, Mutex as AsyncMutex};
 
 use crate::credentials::{ChannelKind, ChannelMutation, CredentialStore};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -292,7 +292,7 @@ impl ExperimentalAsrService {
             // Restoring an installed enabled item only reconciles channel metadata.
             // Only an explicitly persisted interrupted download may fetch files.
             if needed {
-                self.launch(model);
+                self.launch(model, None);
             }
         }
     }
@@ -325,10 +325,13 @@ impl ExperimentalAsrService {
                 return Err(e);
             }
         }
-        self.launch(model);
+        self.launch(model, None);
         Ok(())
     }
-    pub fn delete_model(self: &Arc<Self>, model: ExperimentalAsrModel) -> Result<(), BackendError> {
+    pub async fn delete_model(
+        self: &Arc<Self>,
+        model: ExperimentalAsrModel,
+    ) -> Result<(), BackendError> {
         {
             let mut slots = self.slots.lock().unwrap();
             let slot = &mut slots[model.index()];
@@ -346,14 +349,25 @@ impl ExperimentalAsrService {
                 return Err(error);
             }
         }
-        self.launch(model);
-        Ok(())
+        // A persisted request is restart-safe, but filesystem deletion completes in the worker.
+        let (complete, done) = oneshot::channel();
+        self.launch(model, Some(complete));
+        done.await.map_err(|_| {
+            BackendError::new(BackendErrorCode::Cancelled, "Model deletion was superseded")
+        })?
     }
 
-    fn launch(self: &Arc<Self>, model: ExperimentalAsrModel) {
+    fn launch(
+        self: &Arc<Self>,
+        model: ExperimentalAsrModel,
+        complete: Option<oneshot::Sender<Result<(), BackendError>>>,
+    ) {
         let (generation, enabled, rx) = {
             let mut slots = self.slots.lock().unwrap();
             let slot = &mut slots[model.index()];
+            if complete.is_some() && (slot.saved.enabled || !slot.saved.delete_pending) {
+                return;
+            }
             if let Some(tx) = slot.cancel.take() {
                 let _ = tx.send(true);
             }
@@ -380,9 +394,12 @@ impl ExperimentalAsrService {
             if slot.generation != generation {
                 return;
             }
-            if let Err(e) = outcome {
+            if let Err(e) = &outcome {
                 slot.phase = ExperimentalAsrPhase::Failed;
                 slot.error = Some(e.to_string());
+            }
+            if let Some(complete) = complete {
+                let _ = complete.send(outcome);
             }
         }));
     }

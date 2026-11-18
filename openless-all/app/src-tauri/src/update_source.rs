@@ -1,6 +1,7 @@
 //! Concurrent release discovery and bounded transport sampling for the updater.
-//! GitHub owns release freshness; the rolling CDN is an independent backup and accelerator.
-//! Tauri still verifies the signed artifact and version before installation.
+//! The official CDN manifest and the GitHub release are checked together. The
+//! newer semver wins; equal versions use the faster measured path. Tauri still
+//! verifies the signed artifact and version before installation.
 
 use crate::types::UpdateChannel;
 #[path = "update_source/artifact_fallback.rs"]
@@ -114,6 +115,58 @@ mod tests {
 #[cfg(not(mobile))]
 pub(crate) fn mirror_is_faster(mirror: (f64, f64), github: (f64, f64)) -> bool {
     mirror.0 <= github.0 * 1.2 && mirror.1 >= github.1 * 0.8
+}
+
+#[cfg(not(mobile))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleaseSource {
+    Mirror,
+    Github,
+}
+
+/// The newer semver wins. Equal releases use estimated finish time
+/// (first-byte latency plus a shared byte budget divided by throughput).
+/// A source that could not be timed loses to one that could. If neither
+/// sample is usable, GitHub is the tie.
+#[cfg(not(mobile))]
+pub(crate) fn choose_release(
+    mirror_version: &str,
+    github_version: &str,
+    mirror_sample: Option<(f64, f64)>,
+    github_sample: Option<(f64, f64)>,
+) -> Result<ReleaseSource, String> {
+    let mirror = semver::Version::parse(mirror_version).map_err(|e| e.to_string())?;
+    let github = semver::Version::parse(github_version).map_err(|e| e.to_string())?;
+    Ok(match mirror.cmp_precedence(&github) {
+        std::cmp::Ordering::Greater => ReleaseSource::Mirror,
+        std::cmp::Ordering::Less => ReleaseSource::Github,
+        std::cmp::Ordering::Equal => faster_release(mirror_sample, github_sample),
+    })
+}
+
+#[cfg(not(mobile))]
+fn finish_seconds(sample: Option<(f64, f64)>) -> f64 {
+    const REFERENCE_BYTES: f64 = 100.0 * 1024.0 * 1024.0;
+    match sample {
+        Some((latency, throughput))
+            if latency.is_finite()
+                && latency >= 0.0
+                && throughput.is_finite()
+                && throughput > 0.0 =>
+        {
+            latency + REFERENCE_BYTES / throughput
+        }
+        _ => f64::INFINITY,
+    }
+}
+
+#[cfg(not(mobile))]
+fn faster_release(mirror: Option<(f64, f64)>, github: Option<(f64, f64)>) -> ReleaseSource {
+    if finish_seconds(mirror) < finish_seconds(github) {
+        ReleaseSource::Mirror
+    } else {
+        ReleaseSource::Github
+    }
 }
 
 #[cfg(not(mobile))]
@@ -263,6 +316,33 @@ mod routing_tests {
         assert!(mirror_is_faster((0.04, 30_000_000.), (0.2, 10_000_000.)));
         assert!(!mirror_is_faster((0.2, 30_000_000.), (0.1, 10_000_000.)));
         assert!(!mirror_is_faster((0.1, 2_000_000.), (0.1, 10_000_000.)));
+    }
+
+    #[test]
+    fn newer_release_wins_and_equal_releases_follow_the_faster_path() {
+        assert_eq!(
+            choose_release("2.0.3", "2.0.2", None, None).unwrap(),
+            ReleaseSource::Mirror
+        );
+        assert_eq!(
+            choose_release("2.0.2-Beta.7", "2.0.2-Beta.8", None, None).unwrap(),
+            ReleaseSource::Github
+        );
+        assert_eq!(
+            choose_release("2.0.2", "2.0.2", Some((0.05, 8_000_000.)), Some((0.4, 1_000_000.)))
+                .unwrap(),
+            ReleaseSource::Mirror
+        );
+        assert_eq!(
+            choose_release("2.0.2", "2.0.2", Some((0.4, 1_000_000.)), Some((0.05, 8_000_000.)))
+                .unwrap(),
+            ReleaseSource::Github
+        );
+        assert_eq!(
+            choose_release("2.0.2+build.1", "2.0.2+build.2", None, Some((0.2, 1_000_000.)))
+                .unwrap(),
+            ReleaseSource::Github
+        );
     }
 }
 

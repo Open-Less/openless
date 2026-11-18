@@ -1,4 +1,4 @@
-import type { OS } from '../components/WindowChrome';
+import type { OS } from '../runtime/environment';
 import type { CapsuleStyle } from './types';
 
 export type CapsuleMessageKind = 'default' | 'processing' | 'error';

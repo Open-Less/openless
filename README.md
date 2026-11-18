@@ -498,6 +498,15 @@ OpenLess also recognizes and appreciates the LinuxDo community for its open, pra
 
 This acknowledgement does not imply official endorsement or affiliation.
 
+## Third-party components
+
+The Overview yearly-activity card is a port of **Rare UI**'s [GitHub Activity](https://rareui.com/components/githubactivity)
+component (Copyright (c) 2026 Swami Malode, MIT + Commons Clause, attribution required).
+The port keeps the upstream layout, week/month maths, tooltip and expandable panel, and
+replaces the GitHub data source with local dictation counts. Source:
+`openless-all/app/src/components/ui/GitHubActivity.tsx` and `github-activity.css`.
+The same credit is shown in Settings → About → Component credits.
+
 ## License
 
 OpenLess 2.0 is released under the [AGPL-3.0-only license](LICENSE).

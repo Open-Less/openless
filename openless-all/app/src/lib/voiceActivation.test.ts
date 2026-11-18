@@ -1,5 +1,6 @@
 import {
   isVoiceActivationModelMissing,
+  voiceActivationStatusKey,
   VOICE_ACTIVATION_MODEL_MISSING_MESSAGE,
 } from './voiceActivation';
 
@@ -29,6 +30,8 @@ assertEqual(
 );
 for (const phase of [
   'disabled',
+  'paused',
+  'pausing',
   'starting',
   'listening_for_wake',
   'listening_for_finish',
@@ -41,3 +44,16 @@ for (const phase of [
 }
 assertEqual(isVoiceActivationModelMissing(null), false, 'null state is ignored');
 assertEqual(isVoiceActivationModelMissing(undefined), false, 'missing state is ignored');
+
+for (const [phase, key] of [
+  ['paused', 'voiceActivationPaused'],
+  ['pausing', 'voiceActivationPausing'],
+  ['listening_for_wake', 'voiceActivationListening'],
+  ['failed', 'voiceActivationError'],
+  ['permission_denied', 'voiceActivationError'],
+  ['mic_busy', 'voiceActivationError'],
+] as const) {
+  if (voiceActivationStatusKey({ phase }) !== 'settings.recording.' + key) {
+    throw new Error('wrong persistent status for ' + phase);
+  }
+}

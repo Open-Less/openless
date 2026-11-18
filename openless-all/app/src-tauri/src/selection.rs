@@ -628,6 +628,28 @@ pub(crate) fn selection_target_still_front(target: &SelectionInsertionTarget) ->
     true
 }
 
+/// Q&A accepts only an explicit native selection. Copy shortcuts can copy an
+/// entire editor line with no selection, so they are not evidence for this path.
+pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, SelectionInsertionTarget)
+{
+    let target = capture_selection_insertion_target();
+    #[cfg(target_os = "macos")]
+    let text = macos_ax::read_explicit_qa_text();
+    #[cfg(target_os = "windows")]
+    let text = crate::host_document::read_qa_selection();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let text: Option<String> = None;
+    let selection = text.filter(|text| !text.trim().is_empty()).map(|text| {
+        let (text, omits_middle) = stored_selection_text(text.trim());
+        SelectionContext {
+            text,
+            omits_middle,
+            source_app: current_front_app(),
+        }
+    });
+    (selection, target)
+}
+
 /// 捕获当前前台应用的选区；失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     capture_selection_with_status_diag().0
@@ -1046,10 +1068,18 @@ mod macos_ax {
             attribute: CFStringRef,
             value: *mut CFTypeRef,
         ) -> AxError;
+        fn AXUIElementCopyParameterizedAttributeValue(
+            element: AxUiElementRef,
+            attribute: CFStringRef,
+            parameter: CFTypeRef,
+            value: *mut CFTypeRef,
+        ) -> AxError;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
+        fn CFGetTypeID(value: CFTypeRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
         fn CFRelease(cf: CFTypeRef);
         fn CFStringCreateWithCString(
             allocator: CFAllocatorRef,
@@ -1120,6 +1150,95 @@ mod macos_ax {
 
             let result = cfstring_to_rust(selected);
             CFRelease(selected);
+            result
+        }
+    }
+
+    unsafe fn attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<CFTypeRef> {
+        let key = cfstring_from_static(name)?;
+        let mut value = std::ptr::null();
+        let result = AXUIElementCopyAttributeValue(element, key, &mut value);
+        CFRelease(key);
+        if result == AX_ERROR_SUCCESS && !value.is_null() {
+            Some(value)
+        } else {
+            if !value.is_null() {
+                CFRelease(value);
+            }
+            None
+        }
+    }
+    unsafe fn string_attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<String> {
+        let value = attribute(element, name)?;
+        let text = if CFGetTypeID(value) == CFStringGetTypeID() {
+            cfstring_to_rust(value)
+        } else {
+            None
+        };
+        CFRelease(value);
+        text
+    }
+    /// Web content may expose its selection through text markers on an ancestor.
+    /// This path reads selected ranges only and never falls back to document text or Copy.
+    pub fn read_explicit_qa_text() -> Option<String> {
+        unsafe {
+            let system = AXUIElementCreateSystemWide();
+            if system.is_null() {
+                return None;
+            }
+            let focused = attribute(system, b"AXFocusedUIElement\0");
+            CFRelease(system as CFTypeRef);
+            let mut current = focused?;
+            if string_attribute(current as AxUiElementRef, b"AXSubrole\0").as_deref()
+                == Some("AXSecureTextField")
+            {
+                CFRelease(current);
+                return None;
+            }
+            let mut result = None;
+            for _ in 0..8 {
+                if let Some(text) = string_attribute(current as AxUiElementRef, b"AXSelectedText\0")
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    result = Some(text);
+                    break;
+                }
+                if let Some(range) =
+                    attribute(current as AxUiElementRef, b"AXSelectedTextMarkerRange\0")
+                {
+                    if let Some(key) = cfstring_from_static(b"AXStringForTextMarkerRange\0") {
+                        let mut value = std::ptr::null();
+                        if AXUIElementCopyParameterizedAttributeValue(
+                            current as AxUiElementRef,
+                            key,
+                            range,
+                            &mut value,
+                        ) == AX_ERROR_SUCCESS
+                            && !value.is_null()
+                        {
+                            if CFGetTypeID(value) == CFStringGetTypeID() {
+                                result = cfstring_to_rust(value).filter(|s| !s.trim().is_empty());
+                            }
+                            CFRelease(value);
+                        }
+                        CFRelease(key);
+                    }
+                    CFRelease(range);
+                    if result.is_some() {
+                        break;
+                    }
+                }
+                let Some(parent) = attribute(current as AxUiElementRef, b"AXParent\0") else {
+                    break;
+                };
+                if parent == current {
+                    CFRelease(parent);
+                    break;
+                }
+                CFRelease(current);
+                current = parent;
+            }
+            CFRelease(current);
             result
         }
     }

@@ -236,7 +236,7 @@ test('every settings switch slides between on and off', async ({ page }) => {
     if (categoryCount > 0) {
       for (let index = 0; index < categoryCount; index++) {
         await categoryEntries.nth(index).click();
-        const back = dialog.locator('.ol-settings-back-button');
+        const back = dialog.locator('.ol-settings-back');
         await expect(back).toBeVisible();
         const subHeaders = dialog.locator('[data-ol-toggle-group] > button[aria-expanded]');
         for (let headerIndex = 0; headerIndex < (await subHeaders.count()); headerIndex++) {
@@ -301,33 +301,45 @@ test('channel sorting waits for a slow knob transition to finish', async ({ page
 
 test('the Selection Ask history switch slides', async ({ page }) => {
   await page.getByRole('button', { name: '工具', exact: true }).click();
-  await page.getByRole('button', { name: '问任何问题', exact: true }).click();
+  await page.getByRole('button', { name: '随便问', exact: true }).click();
   const main = page.locator('main');
   await expect(main.getByRole('switch').first()).toBeVisible();
   expect(await exerciseVisibleSwitches(main, 'selectionAsk')).toBeGreaterThan(0);
 });
 
-test('stacked switches ripple their neighbours in collapsible groups and channel lists', async ({
-  page,
-}) => {
+test('toggling a switch never moves its neighbours', async ({ page }) => {
   const dialog = await openSettings(page);
   await openMicrophoneSettings(dialog);
-  const neighbourMoves = async (group: Locator) => {
+  // The reported regression: flipping one switch re-animated the whole group and
+  // nudged the sibling next to it. A sibling may never change position.
+  // Section handoffs and the dialog's own entrance keep animating for a few frames.
+  // Wait for every document animation to finish instead of trusting one frame.
+  const settleAnimations = () =>
+    page.evaluate(() =>
+      Promise.race([
+        Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]),
+    );
+  const neighbourShift = async (group: Locator) => {
     const switches = group.locator('[role="switch"]');
     await expect(switches.nth(1)).toBeVisible();
+    // The category handoff starts its entrance a frame or two after the heading mounts,
+    // so let it begin before waiting for it to finish.
+    await page.waitForTimeout(400);
+    await settleAnimations();
+    const before = await switches.nth(1).boundingBox();
     await switches.nth(0).click();
-    return switches.nth(1).evaluate((element) => element.getAnimations().length);
+    await settleAnimations();
+    await page.waitForTimeout(120);
+    const after = await switches.nth(1).boundingBox();
+    return Math.abs(after!.x - before!.x) + Math.abs(after!.y - before!.y);
   };
-  // Startup is no longer a collapsible on the microphone page. The recognition
-  // card still groups its switches, and that group is what ripples.
-  // The inner locator is queried from each group. A dialog-scoped switch looks
-  // for a nested dialog and matches nothing, even when the switch is visible.
   const recognition = dialog
     .locator('[data-ol-toggle-group]')
     .filter({ has: page.getByRole('switch', { name: '录音时静音', exact: true }) });
   await expect(recognition).toBeVisible();
-  expect(await neighbourMoves(recognition)).toBeGreaterThan(0);
-  await openSection(dialog, 'AI 与模型');
-  const channels = dialog.locator('.ol-reorder-list[data-ol-toggle-group]');
-  expect(await neighbourMoves(channels)).toBeGreaterThan(0);
+  expect(await neighbourShift(recognition)).toBe(0);
+  // Channel lists are excluded on purpose: disabling a channel moves it to the end of
+  // the order, so its siblings shift by design.
 });
