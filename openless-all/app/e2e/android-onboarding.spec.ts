@@ -170,3 +170,26 @@ test('Android overlay changes use shared field writes and roll back on failure',
     'set_settings',
   );
 });
+
+test('Android solid size slider commits keyboard edits once and rolls back rejected writes', async ({
+  page,
+}) => {
+  await reachOverlayConfig(page);
+  const size = page.getByRole('slider');
+  await expect(size).toHaveAccessibleName(/悬浮/);
+  await size.press('ArrowRight');
+  await expect(size).toHaveValue('76');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).androidGuideFixture.writes))
+    .toEqual([{ '/androidOverlaySizeDp': 76 }]);
+  await size.press('Tab');
+  // Wait beyond the production debounce to catch a second write from an uncleared timer.
+  await page.waitForTimeout(260);
+  expect(await page.evaluate(() => (window as any).androidGuideFixture.writes)).toEqual([
+    { '/androidOverlaySizeDp': 76 },
+  ]);
+  await page.evaluate(() => (window as any).androidGuideFixture.rejectNextWrite());
+  await size.press('ArrowRight');
+  await expect(page.getByRole('alert')).toHaveText('Fixture rejected the preference write');
+  await expect(size).toHaveValue('76');
+});

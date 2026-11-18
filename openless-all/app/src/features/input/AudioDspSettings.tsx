@@ -193,7 +193,7 @@ export function AudioDspSettings({
                   {frequency} · {draft.equalizerBandsDb[index]} dB
                   <SolidSlider
                     aria-label={`${stageLabels.equalizer} ${frequency}`}
-                              min={-15}
+                    min={-15}
                     max={15}
                     step={1}
                     style={{ width: '100%' }}
