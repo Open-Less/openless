@@ -22,8 +22,7 @@ export function useHistoryEntryActions(
   confirm: Interaction['confirm'],
   notify: Interaction['notify'],
 ) {
-  const { t, i18n } = useTranslation();
-  const isChinese = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh');
+  const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const [actionError, setActionError] = useState<string | null>(null);
   const [audioMissing, setAudioMissing] = useState(false);
@@ -73,9 +72,7 @@ export function useHistoryEntryActions(
     try {
       await confirm({
         title: t('common.delete'),
-        description: t('history.confirmDeleteLocal', {
-          defaultValue: 'Permanently delete this entry and any associated recording on this device? If encrypted sync is enabled, the text deletion can sync to other devices.',
-        }),
+        description: t('history.confirmDeleteLocal'),
         confirmLabel: t('common.delete'),
         icon: 'trash',
         tone: 'danger',
@@ -85,9 +82,7 @@ export function useHistoryEntryActions(
           await deleteHistoryEntry(item.id);
           await historyStore.refreshRecords();
           notify({
-            message: t('history.deleted', {
-              defaultValue: isChinese ? '已删除记录' : 'Entry deleted',
-            }),
+            message: t('history.deleted'),
             state: 'deleted',
           });
         },

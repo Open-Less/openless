@@ -251,11 +251,7 @@ export function ChannelEditor({
     try {
       const confirmed = await interaction.confirm({
         title: t('settings.channels.delete'),
-        description: t('settings.channels.deleteScope', {
-          name: channel.name,
-          defaultValue:
-            'Permanently delete “{{name}}” and its stored credentials from this device? If encrypted sync is enabled, the deletion can sync to other devices.',
-        }),
+        description: t('settings.channels.deleteScope', { name: channel.name }),
         confirmLabel: t('settings.channels.confirmDelete'),
         cancelLabel: t('common.cancel'),
         tone: 'danger',

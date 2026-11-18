@@ -17,7 +17,7 @@ import { errorMessage, styleLabelFor, useModeLabel } from './presentation';
 const emptyHistory: DictationSession[] = [];
 
 export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean } = {}) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { confirm, notify } = useInteraction(quickNotesOnly ? 'quick-note' : 'history');
   const modalActive = useModalActive();
   const { prefs } = useHotkeySettings();
@@ -139,9 +139,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
     try {
       await confirm({
         title: t('common.clear'),
-        description: t('history.confirmClearLocal', {
-          defaultValue: 'Permanently delete all history entries and recordings on this device, except Quick Notes? Cumulative activity is kept. If encrypted sync is enabled, the text deletion can sync to other devices.',
-        }),
+        description: t('history.confirmClearLocal'),
         confirmLabel: t('common.clear'),
         icon: 'trash',
         tone: 'danger',
@@ -152,11 +150,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
             await clearHistory();
             await historyStore.refreshRecords();
             notify({
-              message: t('history.cleared', {
-                defaultValue: (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
-                  ? '已清空历史'
-                  : 'History cleared',
-              }),
+              message: t('history.cleared'),
               state: 'deleted',
             });
           } finally {

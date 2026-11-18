@@ -185,11 +185,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       await confirm({
         title: incomplete ? t('localAsr.cleanupIncomplete') : t('localAsr.delete'),
         description: incomplete
-          ? t('localAsr.cleanupScope', {
-              name,
-              defaultValue:
-                'Permanently delete the incomplete download for {{name}} from this device? Installed models are kept.',
-            })
+          ? t('localAsr.cleanupScope', { name })
           : t('localAsr.deleteConfirm', { name }),
         confirmLabel: t('common.delete'),
         tone: 'danger',

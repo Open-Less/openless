@@ -117,13 +117,14 @@ export function useCorrectionRules() {
       await confirm({
         title: allLearned ? t('vocab.corrections.removeAllLearned') : t('vocab.corrections.removeAria'),
         description: t('vocab.corrections.deleteScope', {
-          target: allLearned ? t('vocab.corrections.onlyLearned', { count: targets.length }) : `${targets[0].pattern} → ${targets[0].replacement}`,
-          defaultValue: '{{target}}. Remove these rules from this device. If encrypted sync is enabled, the deletion can sync to other devices. This cannot be undone.',
+          target: allLearned
+            ? t('vocab.corrections.deleteLearnedTarget', { count: targets.length })
+            : `${targets[0].pattern} → ${targets[0].replacement}`,
         }),
         confirmLabel: t('common.delete'),
         tone: 'danger',
         errorMessage: (error) => error instanceof IncompleteDeletion
-          ? t('vocab.corrections.deleteIncomplete', { count: error.remaining, defaultValue: 'Could not delete {{count}} rules. Retry to delete the remaining rules.' })
+          ? t('vocab.corrections.deleteIncomplete', { count: error.remaining })
           : t('common.operationFailed'),
         onConfirm: async () => {
           if (writing.current) throw new Error('A correction write is in progress');
@@ -133,7 +134,7 @@ export function useCorrectionRules() {
           setError(null);
           try {
             await remove((removed) => setRules((current) => current.filter(({ id }) => !removed.has(id))));
-            notify({ state: 'deleted', message: t('vocab.corrections.deleted', { defaultValue: 'Correction rules deleted' }) });
+            notify({ state: 'deleted', message: t('vocab.corrections.deleted') });
           } finally {
             writing.current = false;
             setBusy(false);

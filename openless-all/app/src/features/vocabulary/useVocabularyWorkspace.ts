@@ -108,16 +108,17 @@ export function useVocabularyWorkspace() {
     const remove = createDeletionBatch(ids, removeVocab);
     try {
       await confirm({
-        title: typeof target !== 'string'
-          ? t('vocab.deleteWord', { phrase: target.phrase, defaultValue: 'Delete “{{phrase}}”?' })
-          : target === 'learned' ? t('vocab.removeAllLearned') : t('vocab.deleteSelected', { count: ids.length }),
-        description: t('vocab.deleteScope', {
-          defaultValue: 'Remove these words from this device’s dictionary. If encrypted sync is enabled, the deletion can sync to other devices. This cannot be undone.',
-        }),
+        title:
+          typeof target !== 'string'
+            ? t('vocab.deleteWord', { phrase: target.phrase })
+            : target === 'learned'
+              ? t('vocab.deleteLearned', { count: ids.length })
+              : t('vocab.deleteSelected', { count: ids.length }),
+        description: t('vocab.deleteScope'),
         confirmLabel: t('common.delete'),
         tone: 'danger',
         errorMessage: (error) => error instanceof IncompleteDeletion
-          ? t('vocab.deleteIncomplete', { count: error.remaining, defaultValue: 'Could not delete {{count}} words. Retry to delete the remaining words.' })
+          ? t('vocab.deleteIncomplete', { count: error.remaining })
           : t('common.operationFailed'),
         onConfirm: async () => {
           deleting.current = true;
@@ -130,7 +131,7 @@ export function useVocabularyWorkspace() {
               setEntries((current) => current.filter((entry) => !removed.has(entry.id)));
               setSelectedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
             });
-            notify({ state: 'deleted', message: t('vocab.deleted', { defaultValue: 'Words deleted' }) });
+            notify({ state: 'deleted', message: t('vocab.deleted') });
           } finally {
             setRemovingIds(new Set());
             deleting.current = false;

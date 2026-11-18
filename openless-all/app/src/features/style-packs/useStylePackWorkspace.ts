@@ -429,11 +429,7 @@ export function useStylePackWorkspace() {
     try {
       await confirm({
         title: t('style.pack.resetBuiltin'),
-        description: t('style.pack.resetBuiltinScope', {
-          name,
-          defaultValue:
-            'Permanently replace the saved customizations for “{{name}}” with its defaults? If encrypted sync is enabled, the reset can sync to other devices.',
-        }),
+        description: t('style.pack.resetBuiltinScope', { name }),
         tone: 'danger',
         confirmLabel: t('style.pack.resetBuiltin'),
         errorMessage: t('style.pack.resetFailed', { err: t('common.operationFailed') }),
@@ -460,11 +456,7 @@ export function useStylePackWorkspace() {
     try {
       await confirm({
         title: t('style.pack.deleteImported'),
-        description: t('style.pack.deleteLocalScope', {
-          name,
-          defaultValue:
-            'Permanently delete “{{name}}” from this device? If encrypted sync is enabled, the deletion can sync to other devices. A marketplace listing is kept.',
-        }),
+        description: t('style.pack.deleteLocalScope', { name }),
         confirmLabel: t('common.delete'),
         tone: 'danger',
         errorMessage: t('style.pack.deleteFailed', { err: t('common.operationFailed') }),

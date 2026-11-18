@@ -95,10 +95,7 @@ export function ExpressionLearningSection() {
           try {
             await confirm({
               title: t('settings.expressionLearning.clear'),
-              description: t('settings.expressionLearning.clearScope', {
-                defaultValue:
-                  'Permanently delete learned expression habits on this device? Dictation history is kept.',
-              }),
+              description: t('settings.expressionLearning.clearScope'),
               confirmLabel: t('common.clear'),
               tone: 'danger',
               icon: 'trash',

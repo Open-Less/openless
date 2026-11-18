@@ -212,6 +212,7 @@ test('style pack deletion asks once, keeps the pack on cancel, and reports a com
 
   await deleteButton.click();
   await expect(dialog).toContainText('创作者口播');
+  await expect(dialog).toContainText('市场上已发布的版本会保留');
   await expect(pack).toHaveCount(1);
   await expect(toast).toHaveCount(0);
   await dialog.getByRole('button', { name: '取消', exact: true }).click();

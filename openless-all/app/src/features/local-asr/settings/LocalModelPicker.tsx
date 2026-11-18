@@ -149,21 +149,13 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
     try {
       await confirm({
         title: t('localAsr.cleanupIncomplete'),
-        description: t('localAsr.cleanupBatchScope', {
-          count: partials.length,
-          defaultValue:
-            'Permanently delete {{count}} incomplete downloads from this device? Installed models are kept.',
-        }),
+        description: t('localAsr.cleanupBatchScope', { count: partials.length }),
         confirmLabel: t('common.delete'),
         tone: 'danger',
         icon: 'trash',
         errorMessage: (error) =>
           error instanceof IncompleteDeletion
-            ? t('localAsr.cleanupIncompleteError', {
-                count: error.remaining,
-                defaultValue:
-                  'Could not remove {{count}} incomplete downloads. Retry to remove the remaining downloads.',
-              })
+            ? t('localAsr.cleanupIncompleteError', { count: error.remaining })
             : t('common.operationFailed'),
         onConfirm: async () => {
           setBusy(true);

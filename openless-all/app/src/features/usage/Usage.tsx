@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { clearServiceUsage, supportsServiceUsage } from '../../api/usage';
 import { historyStore, useHistoryRecords } from '../../data/history';
 import { refreshServiceUsage, useServiceUsage } from '../../data/usage';
@@ -11,6 +12,7 @@ import { UsageOverview, UsageServices, UsageHistory } from './UsageViews';
 import './usage.css';
 
 export function Usage() {
+  const { t } = useTranslation();
   const { text } = useUsageLabels();
   const { confirm, notify } = useInteraction('usage');
   const history = useHistoryRecords();
@@ -38,22 +40,18 @@ export function Usage() {
     clearPending.current = true;
     try {
       await confirm({
-        title: text('清除已记录 Token', 'Clear recorded tokens'),
-        description: text(
-          '永久清除本机用量账本中的记录。历史记录和累计活动不受影响。',
-          'Permanently clear this device’s usage ledger. Recordings and cumulative activity are kept.',
-        ),
-        confirmLabel: text('清除已记录 Token', 'Clear recorded tokens'),
-        cancelLabel: text('取消', 'Cancel'),
+        title: t('usage.clear'),
+        description: t('usage.clearScope'),
+        confirmLabel: t('usage.clear'),
         tone: 'danger',
         icon: 'trash',
-        errorMessage: text('无法确认本机用量账本已清除。', 'Could not confirm that the local usage ledger was cleared.'),
+        errorMessage: t('usage.clearFailed'),
         onConfirm: async () => {
           setClearing(true);
           try {
             await clearServiceUsage();
             await refreshServiceUsage();
-            notify({ message: text('已清除本地账本', 'Local usage ledger cleared'), state: 'deleted' });
+            notify({ message: t('usage.cleared'), state: 'deleted' });
           } finally {
             setClearing(false);
           }
@@ -69,7 +67,7 @@ export function Usage() {
       disabled={clearing}
       onClick={() => void clear()}
     >
-      {text('清除已记录 Token', 'Clear recorded tokens')}
+      {t('usage.clear')}
     </Btn>
   );
   return (

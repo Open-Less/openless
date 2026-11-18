@@ -474,11 +474,7 @@ export function useMarketplaceWorkspace() {
     try {
       await confirm({
         title: t('marketplace.detail.withdrawBtn'),
-        description: t('marketplace.detail.withdrawScope', {
-          name: pack.name,
-          defaultValue:
-            'Permanently withdraw “{{name}}” from the marketplace? Local copies are kept.',
-        }),
+        description: t('marketplace.detail.withdrawScope', { name: pack.name }),
         tone: 'danger',
         confirmLabel: t('marketplace.detail.withdrawBtn'),
         icon: 'trash',

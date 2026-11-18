@@ -506,7 +506,7 @@ function WordCard({
           <button
             type="button"
             className="ol-word-card-action"
-            aria-label={t('vocab.deleteWord', { phrase: entry.phrase, defaultValue: 'Delete “{{phrase}}”?' })}
+            aria-label={t('vocab.deleteWord', { phrase: entry.phrase })}
             disabled={removing}
             onClick={onRemove}
           >
