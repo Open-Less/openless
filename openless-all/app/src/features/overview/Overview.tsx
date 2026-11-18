@@ -13,7 +13,6 @@ import {
 } from '../../lib/activityMetrics';
 import { HarmonyDictation } from '../dictation/HarmonyDictation';
 import { useMobileLayout } from '../../lib/useMobileLayout';
-import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { useModalActive } from '../../ui/layout/AppViewport';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
@@ -92,17 +91,14 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         right={
           services.setup.providers.length > 0 ? (
             <OverviewServiceStatus services={services} onOpenSettings={onOpenSettings} />
-          ) : undefined
+          ) : (
+            <div role="status" className="ol-overview-service-status">
+              {t(services.loading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
+            </div>
+          )
         }
       />
       {runtime.host === 'harmony' && <HarmonyDictation onComplete={historyStore.invalidate} />}
-      {services.setup.providers.length === 0 && (
-        <Card className="ol-overview-service-card" padding={16}>
-          <div role="status" className="ol-overview-service-status">
-            {t(services.loading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
-          </div>
-        </Card>
-      )}
       <TodayMetrics
         mobile={mobile}
         history={history.data ?? emptyHistory}

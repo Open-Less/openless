@@ -72,18 +72,7 @@ export function RecentHistory({
         style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
         {historyError ? (
-          <div
-            style={{
-              padding: 24,
-              textAlign: 'center',
-              fontSize: 12,
-              color: 'var(--ol-ink-4)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 10,
-            }}
-          >
+          <div className="ol-overview-recent-error">
             <span>{t('overview.recentLoadFailed')}</span>
             <Button size="sm" variant="ghost" onClick={onRetry}>
               {t('overview.historyRetry')}
@@ -170,7 +159,11 @@ function RecentRow({
         }}
       >
         <span
-          style={{ fontSize: 12.5, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}
+          style={{
+            fontSize: 12.5,
+            fontFamily: 'var(--ol-font-mono)',
+            color: 'var(--ol-ink-3)',
+          }}
         >
           {formatHistoryTime(session.createdAt, locale)}
         </span>
@@ -195,7 +188,9 @@ function RecentRow({
         {session.finalText.split('\n')[0]}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-        <span style={{ fontSize: 12, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
+        <span
+          style={{ fontSize: 12, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}
+        >
           {formatDuration(session.durationMs ?? 0, t, locale)}
         </span>
         <Button

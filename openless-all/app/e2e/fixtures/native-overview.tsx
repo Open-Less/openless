@@ -3,7 +3,6 @@ import { mockIPC } from '@tauri-apps/api/mocks';
 import { createInstance } from 'i18next';
 import { createRoot } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
-import { mockSettings, mockCredentialsStatus } from '../../src/lib/ipc/mock-data';
 import { previewHistoryEntries } from '../../src/preview/fixtures';
 import { getPreviewProfile } from '../../src/preview/profiles';
 import { applyFontScale, type FontScaleId } from '../../src/lib/fontScale';
@@ -67,7 +66,10 @@ mockIPC(
         if (dashboard) {
           if (state === 'apps-error') throw new Error('App statistics unavailable');
           if (state === 'unsupported') throw new Error('get_activity_apps command not found');
-          return Array.from({ length: 40 }, (_, index) => [`Application ${index + 1}`, 40 - index]);
+          return Array.from({ length: 40 }, (_, index) => [
+            `Application ${index + 1}`,
+            40 - index,
+          ]);
         }
         reads++;
         const rows = [
@@ -86,6 +88,8 @@ mockIPC(
   { shouldMockEvents: true },
 );
 
+// Install the native bridge before imports that can initialize the shared history store.
+const { mockSettings, mockCredentialsStatus } = await import('../../src/lib/ipc/mock-data');
 const { useActivityStats } = await import('../../src/data/history');
 const { ActivityHeatmap } = await import('../../src/features/overview/ActivityHeatmap');
 const i18n = createInstance();
@@ -98,7 +102,10 @@ await i18n.init({
   interpolation: { escapeValue: false },
   resources: {
     en: {
-      translation: { ...en, overview: { ...en.overview, activityCount: '{{count}} dictations' } },
+      translation: {
+        ...en,
+        overview: { ...en.overview, activityCount: '{{count}} dictations' },
+      },
     },
     de: { translation: de },
     'zh-CN': { translation: zhCN },

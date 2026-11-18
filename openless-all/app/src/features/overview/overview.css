@@ -37,9 +37,6 @@
   font-size: 13px;
   color: var(--ol-ink-3);
 }
-.ol-overview-service-card {
-  flex: none;
-}
 
 /* The dashboard radius must not clip card controls or focus rings. */
 .ol-overview-dashboard .ol-card {
@@ -121,6 +118,19 @@
 .ol-overview-recent {
   overscroll-behavior: contain;
   scrollbar-width: none;
+}
+.ol-overview-recent-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--ol-ink-4);
+}
+.ol-overview-recent-error > button {
+  flex: none;
 }
 .ol-overview-recent::-webkit-scrollbar {
   display: none;

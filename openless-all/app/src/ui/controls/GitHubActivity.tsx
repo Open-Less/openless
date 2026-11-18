@@ -166,6 +166,7 @@ const ContributionGrid = ({
   monthNames,
   formatDay,
   reduceMotion,
+  fitToWidth,
 }: {
   contributions: Contribution[];
   scale: LevelStyle[];
@@ -177,6 +178,7 @@ const ContributionGrid = ({
   monthNames: string[];
   formatDay: (day: Contribution) => string;
   reduceMotion: boolean | null;
+  fitToWidth: boolean;
 }) => {
   const weeks = React.useMemo(() => toWeeks(contributions), [contributions]);
   const gap = cellGap;
@@ -189,9 +191,9 @@ const ContributionGrid = ({
 
   React.useLayoutEffect(() => {
     const scroll = ref.current;
-    if (scroll) scroll.scrollLeft = scroll.scrollWidth;
+    if (scroll) scroll.scrollLeft = fitToWidth ? 0 : scroll.scrollWidth;
     setHovered(undefined);
-  }, [weeks]);
+  }, [weeks, fitToWidth, cellSize, cellGap]);
 
   const hover = (day: Contribution) => (event: React.PointerEvent<HTMLElement>) => {
     setHovered({ day, anchor: event.currentTarget });
@@ -201,6 +203,7 @@ const ContributionGrid = ({
     <div
       ref={ref}
       className="ol-gha-grid"
+      data-fit={fitToWidth || undefined}
       tabIndex={0}
       role="img"
       aria-label={label}
@@ -371,16 +374,8 @@ const GitHubActivity = ({
   React.useLayoutEffect(() => {
     const card = cardRef.current;
     if (!card || !fitToWidth) return;
-    const measure = () => {
-      const padding = getComputedStyle(card);
-      setContentWidth(
-        card.clientWidth -
-          Number.parseFloat(padding.paddingLeft) -
-          Number.parseFloat(padding.paddingRight),
-      );
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
+    // ResizeObserver reports fractional design pixels before viewport zoom rounding.
+    const observer = new ResizeObserver(([entry]) => setContentWidth(entry.contentRect.width));
     observer.observe(card);
     return () => observer.disconnect();
   }, [fitToWidth]);
@@ -509,6 +504,7 @@ const GitHubActivity = ({
         monthNames={monthNames}
         formatDay={formatDay ?? ((day) => `${day.count} · ${day.date}`)}
         reduceMotion={reduceMotion}
+        fitToWidth={fitToWidth}
       />
 
       {footer}
