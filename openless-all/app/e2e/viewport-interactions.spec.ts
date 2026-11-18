@@ -68,7 +68,7 @@ test('the top layer owns pointer, keyboard, and focus; a nested combobox closes 
   await expect(parent).toHaveCount(0);
   const cancel = confirm.getByRole('button', { name: 'Keep unchanged' });
   const proceed = confirm.getByRole('button', { name: 'Proceed with change' });
-  const close = confirm.getByRole('button', { name: 'Close', exact: true });
+  const close = confirm.getByRole('button', { name: '关闭', exact: true });
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(close).toBeFocused();
