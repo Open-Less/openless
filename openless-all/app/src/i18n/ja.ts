@@ -242,6 +242,7 @@ export const ja: typeof zhCN = {
       cancelled: '処理をキャンセルしました。',
       network: '同期サービスに接続できません。ネットワークを確認して再試行してください。',
       rateLimited: 'リクエストが多すぎます。しばらく待ってから再試行してください。',
+      deletePendingOperation: '以前のクラウド操作が確認できていません。しばらくしてから状態を更新し、削除を再試行してください。',
       outcomeUnknown:
         'クラウドの結果が未確定です。新しいバックアップを作る前に未確定の結果を確認してください。',
       recovery:

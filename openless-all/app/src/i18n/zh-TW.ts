@@ -221,6 +221,7 @@ export const zhTW: typeof zhCN = {
       cancelled: '工作已取消。',
       network: '暫時無法連線同步服務，請檢查網路後重試。',
       rateLimited: '請求過於頻繁，請稍後重試。',
+      deletePendingOperation: '先前的雲端操作尚未確認，暫不能安全刪除備份。請稍後重新整理狀態並重試。',
       outcomeUnknown: '雲端結果尚未確認。請先核對待確認結果，不要重複建立備份。',
       recovery: '本機同步狀態需要復原。請保留本機資料，不要覆寫雲端備份。',
       rolledBack: '還原失敗，本機變更已回復。請重新整理狀態後重試。',

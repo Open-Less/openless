@@ -334,7 +334,10 @@ struct Remote {
     revision: u64,
     receipt: Option<Value>,
     drop_response: bool,
+    drop_upload_without_commit: bool,
     puts: Vec<Vec<u8>>,
+    put_attempts: usize,
+    deletes: usize,
     requests: usize,
     owner: String,
     delay_upload: bool,
@@ -430,9 +433,15 @@ impl Server {
                     socket.write_all(&body).await.unwrap();
                     continue;
                 }
-                let rejected = if method == "PUT" {
+                let rejected = if method == "PUT" || (method == "DELETE" && path == "/v1/me/vault") {
                     let mut state = shared.lock().unwrap();
-                    std::mem::take(&mut state.reject_upload)
+                    if method == "PUT" {
+                        state.put_attempts += 1;
+                        if std::mem::take(&mut state.drop_upload_without_commit) {
+                            continue;
+                        }
+                    }
+                    (method == "PUT" && std::mem::take(&mut state.reject_upload))
                         || headers.get("if-match")
                             != Some(&format!("\"fixture-{}\"", state.revision))
                 } else {
@@ -475,6 +484,10 @@ impl Server {
                             json!({"protocolVersion":1,"accessToken":"b".repeat(43),"tokenType":"Bearer","expiresIn":900,"account":{"githubId":owner,"login":"fixture-token-user"}})
                         }
                         ("GET", "/v1/me/vault") => match &remote.snapshot {
+                            None if remote.deletes > 0 => {
+                                let receipt = remote.receipt.as_ref().unwrap();
+                                json!({"protocolVersion":1,"state":"deleted","ownerGithubId":owner,"revision":remote.revision.to_string(),"vaultId":receipt["vaultId"],"keyId":null,"updatedAt":receipt["committedAt"],"payloadSchemaVersion":null,"ciphertextBytes":0,"ciphertextSha256":null,"lastOperationId":receipt["operationId"]})
+                            }
                             None => {
                                 json!({"protocolVersion":1,"state":"empty","ownerGithubId":owner,"revision":"0","vaultId":null,"keyId":null,"updatedAt":null,"payloadSchemaVersion":null,"ciphertextBytes":0,"ciphertextSha256":null,"lastOperationId":null})
                             }
@@ -495,6 +508,19 @@ impl Server {
                             remote.puts.push(body.to_vec());
                             let receipt = json!({"operationId":value["operationId"],"status":"committed","kind":value["kind"],"committedRevision":value["revision"],"committedAt":"2026-09-25T12:00:00Z","vaultId":value["vaultId"],"ciphertextSha256":value["ciphertextSha256"]});
                             remote.snapshot = Some(value);
+                            remote.receipt = Some(receipt.clone());
+                            disconnect = std::mem::take(&mut remote.drop_response);
+                            receipt
+                        }
+                        ("DELETE", "/v1/me/vault") => {
+                            let value: Value = serde_json::from_slice(body).unwrap();
+                            assert_eq!(headers["idempotency-key"], value["operationId"]);
+                            assert_eq!(value["baseRevision"], remote.revision.to_string());
+                            assert_eq!(value["expectedVaultId"], remote.snapshot.as_ref().unwrap()["vaultId"]);
+                            remote.revision += 1;
+                            remote.deletes += 1;
+                            remote.snapshot = None;
+                            let receipt = json!({"operationId":value["operationId"],"status":"committed","kind":"delete","committedRevision":remote.revision.to_string(),"committedAt":"2026-09-25T12:00:00Z","vaultId":value["expectedVaultId"],"ciphertextSha256":null});
                             remote.receipt = Some(receipt.clone());
                             disconnect = std::mem::take(&mut remote.drop_response);
                             receipt
@@ -2177,6 +2203,84 @@ async fn outdated_consent_blocks_startup_manual_and_review_pending_replay_until_
         Some(CONSENT_VERSION)
     );
     reopened.shutdown().await;
+}
+
+async fn mark_consent_outdated(local: &LocalStorage) {
+    let mut settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    settings.consent_version = Some("encrypted-full-snapshot-v1".into());
+    local.write("device", "client", settings).await.unwrap();
+}
+
+#[tokio::test]
+async fn confirmed_delete_does_not_require_upgraded_consent_and_reconciles_its_own_receipt() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    let created = fixture.create(true).await.unwrap();
+    let vault = created.vault_id.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let reopened = fixture.reopen(&server);
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "0".into(), true).await.unwrap_err().message,
+        "revision_conflict"
+    );
+    assert_eq!(server.state.lock().unwrap().deletes, 0);
+    let generation = fixture.data.generation().unwrap();
+    server.state.lock().unwrap().drop_response = true;
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "1".into(), true).await.unwrap_err().message,
+        "outcome_unknown"
+    );
+    let removed = reopened.delete_remote(vault, "1".into(), true).await.unwrap();
+    assert!(!removed.enabled);
+    assert_eq!(removed.has_cloud_snapshot, Some(false));
+    assert_eq!(removed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert!(removed.pending_operation_id.is_none());
+    assert_eq!(fixture.data.generation().unwrap(), generation);
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.deletes, 1);
+    assert_eq!(remote.put_attempts, 1);
+}
+
+#[tokio::test]
+async fn confirmed_delete_preserves_an_unresolved_upload_without_resubmitting_it() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    let created = fixture.create(true).await.unwrap();
+    let vault = created.vault_id.unwrap();
+    fixture.data.edit("pending private change");
+    server.state.lock().unwrap().drop_upload_without_commit = true;
+    assert_eq!(fixture.service.sync_now().await.unwrap_err().message, "outcome_unknown");
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    let pending: Value = local.read(&namespace, "pending").await.unwrap().unwrap();
+    server.state.lock().unwrap().hide_receipts = true;
+    let reopened = fixture.reopen(&server);
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "1".into(), true).await.unwrap_err().message,
+        "delete_pending_operation"
+    );
+    assert_eq!(local.read::<Value>(&namespace, "pending").await.unwrap(), Some(pending.clone()));
+    {
+        let mut remote = server.state.lock().unwrap();
+        assert_eq!(remote.put_attempts, 2);
+        assert_eq!(remote.deletes, 0);
+        remote.revision += 1;
+    }
+    // A newer head makes the earlier CAS incapable of committing. Keep its journal
+    // as evidence while deleting only the newer revision the user has reviewed.
+    let removed = reopened.delete_remote(vault, "2".into(), true).await.unwrap();
+    assert_eq!(removed.has_cloud_snapshot, Some(false));
+    let key = format!("reviewed-uncertain:{}", pending["operationId"].as_str().unwrap());
+    assert_eq!(local.read::<Value>(&namespace, &key).await.unwrap(), Some(pending));
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.put_attempts, 2);
+    assert_eq!(remote.deletes, 1);
 }
 
 #[tokio::test]

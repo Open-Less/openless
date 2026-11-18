@@ -242,6 +242,8 @@ export const fr: typeof zhCN = {
       cancelled: 'Tâche annulée.',
       network: 'Service de synchronisation inaccessible. Vérifiez votre connexion et réessayez.',
       rateLimited: 'Trop de demandes. Attendez avant de réessayer.',
+      deletePendingOperation:
+        'Une opération précédente reste à confirmer. Actualisez l’état plus tard, puis réessayez de supprimer la sauvegarde.',
       outcomeUnknown:
         'Résultat cloud non confirmé. Vérifiez l’opération en attente avant une nouvelle sauvegarde.',
       recovery:

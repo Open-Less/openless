@@ -242,6 +242,8 @@ export const en: typeof zhCN = {
       cancelled: 'The task was cancelled.',
       network: 'Could not reach the sync service. Check your connection and try again.',
       rateLimited: 'Too many requests. Wait before retrying.',
+      deletePendingOperation:
+        'An earlier cloud operation is unconfirmed. Refresh the status later and try deleting again.',
       outcomeUnknown:
         'The cloud result is not confirmed. Check the pending result before creating another backup.',
       recovery:

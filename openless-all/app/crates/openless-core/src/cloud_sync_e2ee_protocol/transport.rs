@@ -302,6 +302,12 @@ impl PreparedOperation {
         &self.operation_id
     }
 
+    pub(crate) fn matches_confirmed_delete(&self, vault: &UuidV4, base: Revision) -> bool {
+        self.expected_kind == OperationKind::Delete
+            && &self.expected_vault == vault
+            && base.checked_next().ok() == Some(self.expected_revision)
+    }
+
     /// Export retry material without credentials, filesystem access or network
     /// access. The native coordinator owns durable storage and its lifecycle.
     /// Body bytes are kept verbatim, including JSON whitespace and key ordering.

@@ -238,6 +238,8 @@ export const es: typeof zhCN = {
       cancelled: 'Tarea cancelada.',
       network: 'No se pudo conectar con el servicio. Comprueba la conexión y vuelve a intentarlo.',
       rateLimited: 'Demasiadas solicitudes. Espera antes de reintentar.',
+      deletePendingOperation:
+        'No se ha confirmado una operación anterior en la nube. Actualiza el estado más tarde e intenta eliminar la copia de nuevo.',
       outcomeUnknown:
         'Resultado sin confirmar. Comprueba la operación pendiente antes de crear otra copia.',
       recovery:

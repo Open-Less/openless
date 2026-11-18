@@ -221,6 +221,7 @@ export const zhCN = {
       cancelled: '任务已取消。',
       network: '暂时无法连接同步服务，请检查网络后重试。',
       rateLimited: '请求过于频繁，请稍后重试。',
+      deletePendingOperation: '先前的云端操作尚未确认，暂不能安全删除备份。请稍后刷新状态并重试。',
       outcomeUnknown: '云端结果尚未确认。请先核对待确认结果，不要重复创建备份。',
       recovery: '本机同步状态需要恢复。请保留本机资料，不要覆盖云端备份。',
       rolledBack: '恢复失败，本机更改已回滚。请刷新状态后重试。',

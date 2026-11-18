@@ -247,6 +247,7 @@ const errorKeys = {
   rate_limited: 'rateLimited',
   service_failed: 'network',
   outcome_unknown: 'outcomeUnknown',
+  delete_pending_operation: 'deletePendingOperation',
   recovery_required: 'recovery',
   local_storage_unavailable: 'recovery',
   sync_journal_unavailable: 'recovery',

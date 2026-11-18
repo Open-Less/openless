@@ -116,6 +116,12 @@ struct Pending {
     old_key_id: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ReconcilePolicy<'a> {
+    Sync,
+    ConfirmedDelete { vault: &'a UuidV4, base: Revision },
+}
+
 struct PreviewState {
     public: RestorePreview,
     remote: ValidatedSyncDocuments,
@@ -1445,12 +1451,19 @@ impl EncryptedSyncService {
     }
 
     async fn reconcile(&self, runtime: &mut Runtime) -> SyncResult<()> {
-        // Every caller, including restore/delete review, must preserve the old
-        // journal without querying or resubmitting it until this scope is accepted.
         self.require_consent(runtime).await?;
+        self.reconcile_pending(runtime, ReconcilePolicy::Sync).await?;
+        Ok(())
+    }
+
+    async fn reconcile_pending(
+        &self,
+        runtime: &mut Runtime,
+        policy: ReconcilePolicy<'_>,
+    ) -> SyncResult<bool> {
         let owner = self.storage_owner(runtime)?;
         let Some(pending): Option<Pending> = self.0.local.read(&owner, "pending").await? else {
-            return Ok(());
+            return Ok(false);
         };
         let connection = runtime
             .connection
@@ -1463,6 +1476,12 @@ impl EncryptedSyncService {
         if operation.operation_id().as_str() != pending.operation_id {
             return Err(error("recovery_required"));
         }
+        let confirmed_delete = match policy {
+            ReconcilePolicy::Sync => false,
+            ReconcilePolicy::ConfirmedDelete { vault, base } => {
+                pending.deleted && operation.matches_confirmed_delete(vault, base)
+            }
+        };
         self.current_account(runtime).await?;
         let receipt = match connection
             .transport
@@ -1479,7 +1498,11 @@ impl EncryptedSyncService {
                 return Err(result);
             }
             OperationStatus::NotFound => {
-                // 404 does not prove failure. Only an identical body/op ID can be retried.
+                // Deletion can look up old receipts, but may retry only the exact deletion
+                // the user confirmed. In particular, it cannot trigger an upload replay.
+                if !matches!(policy, ReconcilePolicy::Sync) && !confirmed_delete {
+                    return Err(error("outcome_unknown"));
+                }
                 self.current_account(runtime).await?;
                 match connection
                     .transport
@@ -1497,7 +1520,8 @@ impl EncryptedSyncService {
                 }
             }
         };
-        self.accept_receipt(runtime, &pending, &receipt).await
+        self.accept_receipt(runtime, &pending, &receipt).await?;
+        Ok(confirmed_delete)
     }
 
     async fn accept_receipt(
@@ -2162,9 +2186,22 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result = async {
-            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
-            self.reconcile_for_review(&mut runtime).await?;
+            match self
+                .reconcile_pending(
+                    &mut runtime,
+                    ReconcilePolicy::ConfirmedDelete {
+                        vault: &expected,
+                        base: observed,
+                    },
+                )
+                .await
+            {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) if error.message == "outcome_unknown" => {}
+                Err(error) => return Err(error),
+            }
             self.refresh_metadata(&mut runtime).await?;
             let metadata = self.metadata(&runtime)?;
             if metadata.value().revision != observed
@@ -2173,7 +2210,15 @@ impl EncryptedSyncService {
             {
                 return Err(error("revision_conflict"));
             }
-            self.retire_reviewed_pending(&mut runtime, None).await?;
+            self.retire_reviewed_pending(&mut runtime, None)
+                .await
+                .map_err(|failure| {
+                    if failure.message == "outcome_unknown" {
+                        error("delete_pending_operation")
+                    } else {
+                        failure
+                    }
+                })?;
             let metadata = self.metadata(&runtime)?;
             let connection = runtime
                 .connection

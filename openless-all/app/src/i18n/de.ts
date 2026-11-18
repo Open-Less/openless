@@ -239,6 +239,8 @@ export const de: typeof zhCN = {
       cancelled: 'Vorgang abgebrochen.',
       network: 'Sync-Dienst nicht erreichbar. Verbindung prüfen und erneut versuchen.',
       rateLimited: 'Zu viele Anfragen. Vor erneutem Versuch warten.',
+      deletePendingOperation:
+        'Ein früherer Cloud-Vorgang wurde noch nicht bestätigt. Aktualisiere später den Status und versuche erneut, die Sicherung zu löschen.',
       outcomeUnknown:
         'Cloud-Ergebnis unbestätigt. Ausstehenden Vorgang prüfen, bevor eine neue Sicherung erstellt wird.',
       recovery:

@@ -239,6 +239,7 @@ export const ko: typeof zhCN = {
       cancelled: '작업이 취소되었습니다.',
       network: '동기화 서비스에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.',
       rateLimited: '요청이 너무 많습니다. 잠시 후 다시 시도하세요.',
+      deletePendingOperation: '이전 클라우드 작업의 결과가 확인되지 않았습니다. 나중에 상태를 새로 고친 뒤 다시 삭제하세요.',
       outcomeUnknown:
         '클라우드 결과가 확인되지 않았습니다. 새 백업을 만들기 전에 대기 중인 결과를 확인하세요.',
       recovery:
