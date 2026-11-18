@@ -393,7 +393,7 @@ function FloatingShellBody({
           onOpenSettings={openProviderSettings}
           onRestore={() => {
             rememberProviderPrompt();
-            openSettings('privacy');
+            openSettings('cloudServices');
           }}
         />
       ) : hotkeyPromptMount.mounted ? (
@@ -410,7 +410,7 @@ function FloatingShellBody({
           providerPromptMount.mounted ||
           hotkeyPromptMount.mounted
         }
-        onSetup={() => openSettings('privacy')}
+        onSetup={() => openSettings('cloudServices')}
       />
     </div>
   );

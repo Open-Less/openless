@@ -27,7 +27,7 @@ const jsx = (type, props) =>
   typeof type === 'function' ? type(props) : { type, props: props ?? {} };
 const all = (tree) =>
   Array.isArray(tree) ? tree.flatMap(all) : tree?.props ? [tree, ...all(tree.props.children)] : [];
-function context({ native = true, blocked = false } = {}) {
+function context({ native = true, blocked = false, previewScenario } = {}) {
   const slots = [],
     effects = [],
     listeners = new Map(),
@@ -85,6 +85,7 @@ function context({ native = true, blocked = false } = {}) {
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
     'lucide-react': { CloudIcon: 'cloud', XIcon: 'x' },
     '../../runtime/environment': { isTauriHost: () => native },
+    '../../preview/cloud-sync': { getCloudSyncPreviewScenario: () => previewScenario },
     '../../api/cloud-sync': {
       cloudSyncE2eeStatus: async () => ({ ...status }),
       CLOUD_SYNC_E2EE_CONSENT_VERSION: 'encrypted-full-snapshot-v2',
@@ -309,6 +310,20 @@ for (const change of ['hidden', 'focus', 'recording']) {
   await tick();
   assert.equal(c.render(), null);
   assert.equal(c.preparations(), 2);
+  c.unmount();
+}
+{
+  const c = context({ native: false, previewScenario: 'reconsent' });
+  c.setStatus({ enabled: true, consentVersion: 'encrypted-full-snapshot-v1' });
+  c.document.hasFocus = () => false;
+  c.render();
+  const tree = await c.flush();
+  assert.equal(tree.type, 'terms', 'the explicit preview appears without focus or a native listener');
+  assert.equal(c.listeners.size, 0);
+  assert.equal(c.calls(), 0);
+  tree.props.onClose();
+  assert.equal(c.render(), null);
+  assert.equal(c.preparations(), 0);
   c.unmount();
 }
 console.log('encrypted sync setup prompt lifecycle and reconsent cases passed');

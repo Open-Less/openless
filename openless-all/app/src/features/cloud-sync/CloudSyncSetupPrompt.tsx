@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CloudIcon, XIcon } from 'lucide-react';
 import { isTauriHost } from '../../runtime/environment';
+import { getCloudSyncPreviewScenario } from '../../preview/cloud-sync';
 import {
   cloudSyncE2eeClaimSetupPrompt,
   cloudSyncE2eeStatus,
@@ -49,7 +50,9 @@ export function CloudSyncSetupPrompt({
   const focusRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!isTauriHost() || blocked) {
+    const native = isTauriHost();
+    const previewReview = getCloudSyncPreviewScenario() === 'reconsent';
+    if ((!native && !previewReview) || blocked) {
       setOpen(false);
       setReview(null);
       checkRef.current += 1;
@@ -59,13 +62,14 @@ export function CloudSyncSetupPrompt({
     let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let unlisten: (() => void) | undefined;
+    const foreground = () =>
+      previewReview || (document.visibilityState === 'visible' && document.hasFocus());
     const check = async () => {
       if (
         cancelled ||
         inFlight ||
         busyRef.current ||
-        document.visibilityState !== 'visible' ||
-        !document.hasFocus()
+        !foreground()
       )
         return;
       inFlight = true;
@@ -75,11 +79,7 @@ export function CloudSyncSetupPrompt({
         if (cancelled || checkRef.current !== request) return;
         if (status.enabled && status.consentVersion !== CLOUD_SYNC_E2EE_CONSENT_VERSION) {
           const scope = encryptedSyncScope(status);
-          if (
-            document.visibilityState === 'visible' &&
-            document.hasFocus() &&
-            dismissed.current !== scope
-          ) {
+          if (foreground() && dismissed.current !== scope) {
             setOpen(false);
             if (reviewRef.current && encryptedSyncScope(reviewRef.current) !== scope)
               setError(undefined);
@@ -90,14 +90,9 @@ export function CloudSyncSetupPrompt({
           return;
         }
         setReview(null);
+        if (previewReview) return;
         const claimed = await cloudSyncE2eeClaimSetupPrompt();
-        if (
-          !cancelled &&
-          checkRef.current === request &&
-          claimed &&
-          document.visibilityState === 'visible' &&
-          document.hasFocus()
-        )
+        if (!cancelled && checkRef.current === request && claimed && foreground())
           setOpen(true);
       } catch {
         // Denied credential reads and in-progress saves never consume consent
@@ -123,6 +118,14 @@ export function CloudSyncSetupPrompt({
       if (!reviewRef.current || document.visibilityState !== 'visible') invalidate();
       schedule();
     };
+    if (previewReview) {
+      schedule();
+      return () => {
+        cancelled = true;
+        checkRef.current += 1;
+        if (timer) clearTimeout(timer);
+      };
+    }
     void import('@tauri-apps/api/event')
       .then(async ({ listen }) => {
         const handle = await listen<{ kind: { type: string } }>('backend:event', ({ payload }) => {
