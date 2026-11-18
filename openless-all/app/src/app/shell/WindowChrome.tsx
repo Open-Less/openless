@@ -19,7 +19,7 @@ export function WindowChrome({ os = 'mac', mobile, children, height = 800 }: Win
   // Windows: with decorations:true the shell draws no radius/border/shadow/titlebar,
   // avoiding overlap with the native window.
   const shellRadius =
-    os === 'mac' ? 0 : os === 'win' || os === 'android' || os === 'harmony' ? 0 : 14;
+    os === 'mac' ? 0 : os === 'win' || os === 'linux' || os === 'android' || os === 'harmony' ? 0 : 14;
   const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 0;
   // The compact shell puts live controls in the strip reserved for desktop window drag.
   const hasMacDragStrip = os === 'mac' && !mobile;

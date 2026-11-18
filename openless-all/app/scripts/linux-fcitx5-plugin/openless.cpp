@@ -772,7 +772,11 @@ public:
         }
         if (!copied.empty() && !before.empty()) {
             // best-effort 还原，避免把用户的剪贴板换掉。
+#if OPENLESS_FCITX_CLIPBOARD_V2
             clipboard->call<IClipboard::setClipboardV2>("openless", before, false);
+#else
+            clipboard->call<IClipboard::setClipboard>("openless", before);
+#endif
         }
         copyInFlight_ = false;
         FCITX_LOGC(openless, Debug)

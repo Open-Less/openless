@@ -87,15 +87,14 @@ try {
 // `PlatformCapabilities`（`linuxHost` / `supports*`）与 `detectOS() === 'linux'`。
 // 不允许再出现旧的 Linux 专属实现（自定义标题栏常量、`ol-linux-*` 类名）。
 const ALLOWED_LINUX_FILES = new Set([
-  'lib/platform.ts', // 能力表本身就是 Linux 分支的家
-  'components/WindowChrome.tsx', // detectOS() 返回 'linux'
-  'pages/settings/navigation.ts', // 按平台决定哪些设置页可见
-  'pages/settings/tabs.tsx', // 同上（页面取舍）
-  'pages/settings/PermissionsSection.tsx', // fcitx5 输入法后端状态行
-  'pages/settings/RecordingInputSection.tsx',
-  'pages/settings/SelectionWorkspaceSection.tsx',
-  'pages/settings/ChannelList.test.ts',
-  'components/Capsule.tsx',
+  'runtime/environment.ts', // 宿主检测
+  'runtime/platform.ts', // 平台能力
+  'runtime/transport.ts', // 选择原生传输层
+  'runtime/domain-events.ts', // 选择域事件来源
+  'preview/profiles.ts', // 补全平台类型
+  'app/shell/WindowChrome.tsx', // 使用原生窗口装饰
+  'features/settings/shell/navigation.ts', // 按平台筛选设置页
+  'features/input/RecordingInputSection.tsx', // 按平台筛选录音功能
 ]);
 const reactFiles = await collect(reactSrc, new Set(['.ts', '.tsx']), {
   skip: (path) => /[/\\]i18n[/\\]/.test(path),

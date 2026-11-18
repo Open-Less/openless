@@ -22,7 +22,6 @@ runs:
   using: composite
   steps:
     - name: Install native build and packaging dependencies
-      timeout-minutes: 10
       uses: ./.github/actions/setup-linux-dependencies
 
     - uses: dtolnay/rust-toolchain@stable
@@ -72,13 +71,11 @@ runs:
         appstreamcli validate --no-net openless-all/app/linux-host/packaging/top.openless.OpenLess.metainfo.xml
 
     - name: Build the Rust backend
-      timeout-minutes: 40
       working-directory: openless-all/app
       shell: bash
       run: cargo build --locked --release -p openless-linux-host -p openless-linux-web
 
     - name: Install Qt6 WebEngine toolchain
-      timeout-minutes: 15
       shell: bash
       run: |
         sudo apt-get update
@@ -92,7 +89,6 @@ runs:
     # 只有一条编译路径，也不会再把旧二进制打进包（图标那次就是这么丢的）。
 
     - name: Build the React frontend bundle
-      timeout-minutes: 20
       working-directory: openless-all/app
       shell: bash
       run: |
@@ -103,7 +99,6 @@ runs:
         VITE_OPENLESS_PLATFORM=gtk npx vite build --outDir linux-web/dist --emptyOutDir
 
     - name: Package deb and rpm
-      timeout-minutes: 10
       working-directory: openless-all/app
       shell: bash
       env:

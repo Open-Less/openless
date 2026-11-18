@@ -52,9 +52,13 @@ export function SettingRow({
       </div>
       <div className="ol-setting-row-control ol-flex-row">
         {comingSoon && <span>{t('common.comingSoon')}</span>}
-        <div ref={(element) => { element?.toggleAttribute('inert', comingSoon); }} style={{ display: 'contents' }}>
-          <SettingLabel.Provider value={labelId}>{children}</SettingLabel.Provider>
-        </div>
+        <SettingLabel.Provider value={labelId}>
+          {comingSoon ? (
+            <div ref={(element) => element?.setAttribute('inert', '')} style={{ display: 'contents' }}>
+              {children}
+            </div>
+          ) : children}
+        </SettingLabel.Provider>
       </div>
     </div>
   );
