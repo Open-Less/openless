@@ -60,6 +60,9 @@ test('history writes update every page while recordings, activity and the usage 
   const tools = page.getByRole('button', { name: '工具', exact: true });
   await tools.click();
   await expect(tools).toHaveAttribute('aria-expanded', 'true');
+  await tools.locator('..').locator('.ol-sidebar-nav-group').evaluate(async (group) => {
+    await Promise.all(group.getAnimations().map((animation) => animation.finished));
+  });
   await navigate(page, 'quickNote', '速记');
   await expect(records).toHaveAttribute('data-history-record', 'mock-quick-note');
 
