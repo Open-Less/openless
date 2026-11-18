@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
-import { emitSaved } from '../../../lib/savedEvent';
 import { Button as Btn } from '../../../ui/controls/Button';
 import { Card } from '../../../ui/layout/Card';
 import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 import { SettingRow } from '../../../ui/controls/SettingRow';
+import { useInteraction } from '../../../ui/overlays/InteractionProvider';
+
+function isInteractive(element: HTMLElement | null) {
+  return element?.isConnected && !element.closest('[inert]');
+}
 
 export interface WebSearchConfig {
   provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';
@@ -33,21 +37,54 @@ export function saveSearchConfig(value: WebSearchConfig): Promise<void> {
 export function WebSearchSection() {
   const { t, i18n } = useTranslation();
   const text = (zh: string, en: string) => (i18n.language.startsWith('zh') ? zh : en);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const { notify } = useInteraction();
   const [config, setConfig] = useState<WebSearchConfig | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
+    let disposed = false;
+    let observer: MutationObserver | undefined;
     void loadSearchConfig()
-      .then(setConfig)
-      .catch(() =>
-        emitSaved(
-          'failed',
-          text('读取失败，请重新打开设置。', 'Could not load settings. Please reopen.'),
-        ),
-      );
-  }, []);
+      .then((value) => {
+        if (!disposed) setConfig(value);
+      })
+      .catch(() => {
+        if (disposed) return;
+        const announce = () => {
+          if (!isInteractive(heading.current)) return false;
+          notify({
+            state: 'failed',
+            message: i18n.language.startsWith('zh')
+              ? '读取失败，请重新打开设置。'
+              : 'Could not load settings. Please reopen.',
+          });
+          return true;
+        };
+        if (announce()) return;
+        // An incoming form can finish loading before it becomes interactive.
+        // A retained or exiting form must not publish feedback for the next page.
+        const surface = heading.current?.closest<HTMLElement>('[data-transition-phase]');
+        const entering = () =>
+          surface?.dataset.transitionPhase === 'waiting' ||
+          surface?.dataset.transitionPhase === 'enter';
+        if (surface && entering()) {
+          observer = new MutationObserver(() => {
+            if (announce() || !entering()) observer?.disconnect();
+          });
+          observer.observe(surface, {
+            attributes: true,
+            attributeFilter: ['data-transition-phase'],
+          });
+        }
+      });
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+    };
+  }, [i18n, notify]);
   return (
     <Card>
-      <h3>Web Search</h3>
+      <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
           '划词追问和 FN + 空格随便问可由模型自主搜索。仅在需要时发送搜索词；搜索结果会作为参考资料交给当前模型。',
@@ -124,11 +161,17 @@ export function WebSearchSection() {
               setBusy(true);
               try {
                 await saveSearchConfig(config);
-                emitSaved('saved', t('common.saved'));
+                if (isInteractive(heading.current))
+                  notify({ state: 'saved', message: t('common.saved') });
               } catch {
-                emitSaved('failed', text('保存失败，请重试。', 'Could not save. Please retry.'));
+                if (isInteractive(heading.current)) {
+                  notify({
+                    state: 'failed',
+                    message: text('保存失败，请重试。', 'Could not save. Please retry.'),
+                  });
+                }
               } finally {
-                setBusy(false);
+                if (heading.current) setBusy(false);
               }
             }}
           >

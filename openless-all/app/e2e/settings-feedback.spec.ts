@@ -478,3 +478,108 @@ test('saved status and the sync decision remain usable in a short narrow 110% vi
   await expect(dialog).toHaveCount(0);
   await expect(remove).toBeFocused();
 });
+
+test('Web Search reports failures on its page and completes a departed save quietly', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/settings-status.html?webSearch');
+  await page.getByRole('button', { name: 'Open web search', exact: true }).click();
+  await settleNavigation(page);
+  const provider = page.getByRole('combobox', { name: 'Web Search' });
+  const save = page.getByRole('button', { name: '保存', exact: true });
+  const notice = page.locator('.ol-notification-card');
+  await provider.selectOption('off');
+  await save.click();
+  await finishSettingsOperation(page, 'save', 1, true);
+  await expect(notice.getByRole('alert')).toHaveText('保存失败，请重试。');
+
+  await save.click();
+  await waitForSettingsOperation(page, 'save', 2);
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (frames, options) {
+      const animation = animate.call(this, frames, options);
+      if (this.matches('[data-ol-page="web-search"][data-transition-phase="exit"]')) {
+        animation.pause();
+        Element.prototype.animate = animate;
+      }
+      return animation;
+    };
+  });
+  await page.getByRole('button', { name: 'Leave web search', exact: true }).click();
+  const outgoing = page.locator('[data-ol-page="web-search"][data-transition-phase="exit"]');
+  await expect(outgoing).toHaveAttribute('inert', '');
+  await finishSettingsOperation(page, 'save', 2);
+  await expect
+    .poll(() => page.evaluate(() => JSON.parse(window.settingsStatusFixture.stored()).provider))
+    .toBe('off');
+  // The retained save handler finished while its form was still mounted.
+  await expect(outgoing.locator('button')).not.toHaveAttribute('disabled', '');
+  await expect(notice.filter({ hasText: '已保存' })).toHaveCount(0);
+  await outgoing.evaluate((element) =>
+    element
+      .getAnimations()
+      .find(({ id }) => id === 'ol-page-exit')
+      ?.finish(),
+  );
+  await expect(page.getByRole('heading', { name: 'Next settings page' })).toBeVisible();
+  await expect(notice).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open web search', exact: true }).click();
+  await expect(provider).toHaveValue('off');
+});
+
+test('normal download cancellation is available only outside a modal and before terminal progress', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/settings-status.html?download');
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.hasDownloadListener()))
+    .toBe(true);
+  await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
+  const card = page.locator('.ol-download-card[data-download-id="normal-model"]');
+  const cancel = card.locator('button');
+  await expect(cancel).toBeEnabled();
+  await page.getByRole('button', { name: 'Open download modal', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Download modal' })).toBeVisible();
+  await expect(cancel).toBeDisabled();
+  await expect(card).toHaveCSS('pointer-events', 'none');
+  await page.keyboard.press('Escape');
+  await expect(cancel).toBeEnabled();
+
+  await page.evaluate(() => {
+    const observer = new MutationObserver(() => {
+      const exiting = document.querySelector<HTMLElement>('.ol-download-card[inert]');
+      if (!exiting) return;
+      const button = exiting.querySelector('button')!;
+      document.body.dataset.downloadExit = JSON.stringify({
+        disabled: button.disabled,
+        pointerEvents: getComputedStyle(exiting).pointerEvents,
+      });
+      button.click();
+      observer.disconnect();
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['inert'],
+    });
+    const button = document.querySelector<HTMLButtonElement>('.ol-download-card button')!;
+    const terminal = window.settingsStatusFixture.emitDownload('normal-model', 'finished');
+    // A host event may invalidate the job before React commits its exit.
+    button.click();
+    return terminal;
+  });
+  await expect(page.locator('body')).toHaveAttribute(
+    'data-download-exit',
+    JSON.stringify({ disabled: true, pointerEvents: 'none' }),
+  );
+  await expect(card).toHaveCount(0);
+  expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
+
+  await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
+  await cancel.click();
+  await expect(card).toHaveCount(0);
+  expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([
+    'normal-model',
+  ]);
+});

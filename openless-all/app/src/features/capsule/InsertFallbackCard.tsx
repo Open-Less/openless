@@ -13,6 +13,7 @@ import {
   nextFallbackCardHeightReport,
   type FallbackCardHeightReport,
 } from '../../lib/insertFallbackLayout';
+import { useReducedMotion } from '../../lib/motion';
 import type { InsertFallbackCardPayload } from '../../api/contracts';
 import { isTauriHost } from '../../runtime/environment';
 import { waitForViewportGeometry } from '../../runtime/windows/viewportGeometry';
@@ -36,9 +37,11 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
   const { t } = useTranslation();
   const { boundary } = useAppViewport();
   const native = isTauriHost();
+  const reduced = useReducedMotion();
   const [layout, setLayout] = useState<'waiting' | 'ready' | 'bounded'>(
     native ? 'waiting' : 'ready',
   );
+  const waiting = layout === 'waiting';
   const copyTimer = useRef<number>();
   const copyEpoch = useRef(0);
   const [copied, setCopied] = useState(false);
@@ -53,10 +56,12 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
     if (!native || !element) return;
     const viewport = boundary ?? document.documentElement;
     let disposed = false;
+    let bounded = false;
     let request: AbortController | undefined;
     lastHeightReportRef.current = null;
 
     const reportHeight = () => {
+      if (bounded) return;
       const report = nextFallbackCardHeightReport(
         lastHeightReportRef.current,
         payload.presentationId,
@@ -82,7 +87,9 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
           () => {
             if (!disposed && !current.signal.aborted) {
               // Preserve Copy and Dismiss within the actual space when the host
-              // cannot fit every line. The message owns its internal scroll.
+              // cannot fit every line. A constrained measurement must not
+              // be reported as a new natural height and clear the bound.
+              bounded = true;
               setLayout('bounded');
             }
           },
@@ -110,7 +117,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
 
   // TTL countdown. Paused on hover: the cursor on the card means it's being read.
   useEffect(() => {
-    if (paused || layout === 'waiting') return;
+    if (paused || waiting) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
       void dismissInsertFallbackCard();
@@ -118,7 +125,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [layout, paused, payload.presentationId]);
+  }, [waiting, paused, payload.presentationId]);
 
   const copy = async () => {
     const epoch = ++copyEpoch.current;
@@ -140,7 +147,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
     <div
       ref={cardRootRef}
       data-layout={layout}
-      aria-hidden={layout === 'waiting' || undefined}
+      aria-hidden={waiting || undefined}
       style={{
         width: '100%',
         alignSelf: 'flex-end',
@@ -150,8 +157,8 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
         padding: 12,
         // The card is the only thing taking mouse input — the capsule itself stays
         // pointerEvents:none at all times.
-        pointerEvents: layout === 'waiting' ? 'none' : 'auto',
-        visibility: layout === 'waiting' ? 'hidden' : 'visible',
+        pointerEvents: waiting ? 'none' : 'auto',
+        visibility: waiting ? 'hidden' : 'visible',
         maxHeight: layout === 'bounded' ? '100%' : undefined,
         minHeight: 0,
         boxSizing: 'border-box',
@@ -174,7 +181,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
-          animation: 'capsule-in .28s cubic-bezier(.3,1.1,.4,1) both',
+          animation: waiting || reduced ? 'none' : 'capsule-in .28s cubic-bezier(.3,1.1,.4,1) both',
         }}
       >
         <div
@@ -198,6 +205,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
         <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 8 }}>
           <TextButton
             primary
+            disabled={waiting}
             label={
               copyFailed
                 ? t('insertFallbackCard.copyFailed')
@@ -208,6 +216,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
             onClick={() => void copy()}
           />
           <TextButton
+            disabled={waiting}
             label={t('insertFallbackCard.dismiss')}
             onClick={() => void dismissInsertFallbackCard()}
           />
@@ -222,14 +231,17 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
 function TextButton({
   label,
   primary,
+  disabled,
   onClick,
 }: {
   label: string;
   primary?: boolean;
+  disabled: boolean;
   onClick: () => void;
 }) {
   return (
     <button
+      disabled={disabled}
       onClick={onClick}
       // The card floats over another app; pressing must not steal focus from where the
       // user is typing. That's also why copy goes through the backend

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import { mockSettings } from '../../src/lib/ipc/mock-data';
+import type { LocalAsrDownloadProgress } from '../../src/api/local-asr';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION,
   type cloudSyncE2eeDeleteRemote,
@@ -42,6 +43,7 @@ export type SettingsOperation = 'save' | 'sync' | 'delete';
 type DeleteRequest = Parameters<typeof cloudSyncE2eeDeleteRemote>[0];
 const calls: string[] = [];
 const deleteRequests: DeleteRequest[] = [];
+const cancelledDownloads: string[] = [];
 const attempts = { save: 0, sync: 0, delete: 0 };
 const pending = new Map<SettingsOperation, { attempt: number; finish: (error: boolean) => void }>();
 let stored = JSON.stringify({ apiKey: 'fixture-key', voice: 'stella' });
@@ -68,6 +70,20 @@ function deferOperation<T>(
 const fixture = {
   calls,
   deleteRequests,
+  cancelledDownloads,
+  hasDownloadListener: () => Boolean(listeners.get('local-asr-download-progress')?.size),
+  emitDownload(modelId: string, phase: LocalAsrDownloadProgress['phase']) {
+    return emit('local-asr-download-progress', {
+      modelId,
+      phase,
+      file: 'model.bin',
+      fileIndex: 0,
+      fileCount: 1,
+      bytesDownloaded: phase === 'finished' ? 100 : 1,
+      bytesTotal: 100,
+      error: null,
+    } satisfies LocalAsrDownloadProgress);
+  },
   hide: () => {},
   pendingAttempt: (operation: SettingsOperation) => pending.get(operation)?.attempt ?? null,
   finish: (operation: SettingsOperation, attempt: number, error = false) => {
@@ -143,6 +159,11 @@ mockIPC((command, args) => {
   if (command === 'set_remote_locale' || command === 'plugin:app|set_app_theme') return undefined;
   if (command === 'marketplace_auth_status') return { signedIn: true };
   if (command === 'cloud_sync_e2ee_status') return { ...status };
+  if (command === 'experimental_asr_status') return [];
+  if (command === 'local_asr_cancel_download') {
+    cancelledDownloads.push((args as { modelId: string }).modelId);
+    return undefined;
+  }
   if (command === 'read_credential') return stored;
   if (command === 'set_credential') {
     calls.push(command);
@@ -192,11 +213,15 @@ mockIPC((command, args) => {
 
 const { i18nReady } = await import('../../src/i18n');
 await i18nReady;
-const { AppViewport, PreviewFrame } = await import('../../src/ui/layout');
+const { AppViewport, PreviewFrame, TransitionViewport } = await import('../../src/ui/layout');
 const { InteractionProvider } = await import('../../src/ui/overlays/InteractionProvider');
 const { HotkeySettingsProvider } = await import('../../src/data/preferences');
 const { DeepSeekSuiteSection } = await import('../../src/features/providers/DeepSeekSuiteSection');
 const { CloudSyncSection } = await import('../../src/features/cloud-sync/CloudSyncSection');
+const { PresenceModal } = await import('../../src/ui/overlays/Modal');
+const { WebSearchSection } = await import('../../src/features/settings/sections/WebSearchSection');
+const { GlobalDownloadProgress } =
+  await import('../../src/features/downloads/GlobalDownloadProgress');
 
 function Fixture() {
   const [visible, setVisible] = useState(true);
@@ -212,6 +237,39 @@ function Fixture() {
     </main>
   );
 }
+function WebSearchFixture() {
+  const [active, setActive] = useState(false);
+  return (
+    <main style={{ width: '100%', display: 'flex', flexDirection: 'column' }}>
+      <button onClick={() => setActive(!active)}>
+        {active ? 'Leave web search' : 'Open web search'}
+      </button>
+      <TransitionViewport
+        contentKey={active ? 'web-search' : 'next-page'}
+        page={active ? 'web-search' : 'next-page'}
+        mode="page"
+      >
+        {active ? <WebSearchSection /> : <h3>Next settings page</h3>}
+      </TransitionViewport>
+    </main>
+  );
+}
+
+function DownloadFixture() {
+  const [open, setOpen] = useState(false);
+  return (
+    <main style={{ width: '100%', padding: 16 }}>
+      <button onClick={() => setOpen(true)}>Open download modal</button>
+      <PresenceModal
+        open={open}
+        labelledBy="download-modal-title"
+        onClose={() => setOpen(false)}
+        render={() => <h3 id="download-modal-title">Download modal</h3>}
+      />
+    </main>
+  );
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <PreviewFrame
@@ -219,10 +277,18 @@ createRoot(document.getElementById('root')!).render(
       height={Number(params.get('height') ?? 460)}
     >
       <AppViewport>
-        <InteractionProvider>
-          <HotkeySettingsProvider>
-            <Fixture />
-          </HotkeySettingsProvider>
+        <InteractionProvider
+          notificationAside={params.has('download') ? <GlobalDownloadProgress /> : undefined}
+        >
+          {params.has('download') ? (
+            <DownloadFixture />
+          ) : params.has('webSearch') ? (
+            <WebSearchFixture />
+          ) : (
+            <HotkeySettingsProvider>
+              <Fixture />
+            </HotkeySettingsProvider>
+          )}
         </InteractionProvider>
       </AppViewport>
     </PreviewFrame>

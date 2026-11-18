@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { listenModelProgress } from '../../data/model-progress';
 import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
 import {
@@ -12,8 +12,10 @@ import {
   experimentalAsrModelFromDownloadId,
   experimentalAsrName,
   type ExperimentalAsrModel,
+  type ExperimentalAsrStatus,
 } from '../../lib/experimentalAsr';
 import { useExperimentalAsr } from '../../lib/useExperimentalAsr';
+import { useAppViewport } from '../../ui/layout/AppViewport';
 
 type Engine = 'qwen3' | 'sherpa' | 'foundry' | 'experimental';
 export interface ProgressItem {
@@ -26,15 +28,31 @@ export interface ProgressItem {
   phase?: string;
 }
 const TERMINAL = new Set(['finished', 'cancelled', 'failed']);
+const isExperimentalDownload = (status: ExperimentalAsrStatus) =>
+  status.enabled && (status.phase === 'downloading' || status.phase === 'preparing');
+
+function withoutItem(items: Record<string, ProgressItem>, key: string) {
+  if (!(key in items)) return items;
+  const next = { ...items };
+  delete next[key];
+  return next;
+}
 
 export function useDownloadJobs() {
+  const { modalStack } = useAppViewport();
   const experimental = useExperimentalAsr(getRuntimeOS() === 'mac');
   const [items, setItems] = useState<Record<string, ProgressItem>>({});
+  const activeNative = useRef(items);
+  const activeExperimental = useRef(experimental);
   const [pending, setPending] = useState<string[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const cancelledJobs = useRef(new Set<string>());
   const generations = useRef(new Map<string, number>());
   const cancelling = useRef(new Map<string, symbol>());
+
+  useLayoutEffect(() => {
+    activeExperimental.current = experimental;
+  });
 
   useEffect(() => {
     if (!isTauriHost()) return;
@@ -49,15 +67,12 @@ export function useDownloadJobs() {
         }
       }
       if (phase === 'started' || TERMINAL.has(phase)) cancelledJobs.current.delete(item.key);
-      setItems((previous) => {
-        if (TERMINAL.has(phase)) {
-          const next = { ...previous };
-          delete next[item.key];
-          return next;
-        }
-        if (cancelledJobs.current.has(item.key)) return previous;
-        return { ...previous, [item.key]: item };
-      });
+      // The host can finish before React removes the previous card.
+      if (TERMINAL.has(phase)) activeNative.current = withoutItem(activeNative.current, item.key);
+      else if (!cancelledJobs.current.has(item.key)) {
+        activeNative.current = { ...activeNative.current, [item.key]: item };
+      }
+      setItems(activeNative.current);
     };
     void (async () => {
       const keep = async (registration: Promise<() => void>) => {
@@ -109,7 +124,19 @@ export function useDownloadJobs() {
   }, []);
 
   const handleCancel = async (item: ProgressItem) => {
-    if (cancelling.current.has(item.key)) return;
+    if (modalStack.getActive() || cancelling.current.has(item.key)) return;
+    const currentExperimental = activeExperimental.current;
+    if (item.engine === 'experimental') {
+      if (
+        !item.model ||
+        currentExperimental.pending.includes(item.model) ||
+        !currentExperimental.models.some(
+          (status) => status.model === item.model && isExperimentalDownload(status),
+        )
+      )
+        return;
+    } else if (!activeNative.current[item.key]) return;
+
     const token = Symbol(item.key);
     cancelling.current.set(item.key, token);
     const generation = generations.current.get(item.key);
@@ -133,11 +160,8 @@ export function useDownloadJobs() {
       else if (item.engine === 'sherpa') await cancelSherpaOnnxAsrDownload(item.id);
       else await cancelFoundryLocalAsrPrepare();
       if (isCurrent() && item.engine !== 'foundry') {
-        setItems((previous) => {
-          const next = { ...previous };
-          delete next[item.key];
-          return next;
-        });
+        activeNative.current = withoutItem(activeNative.current, item.key);
+        setItems(activeNative.current);
       }
     } catch (error) {
       if (!isCurrent()) return;
@@ -152,23 +176,18 @@ export function useDownloadJobs() {
   };
   const visible: ProgressItem[] = [
     ...Object.values(items),
-    ...experimental.models
-      .filter(
-        (status) =>
-          status.enabled && (status.phase === 'downloading' || status.phase === 'preparing'),
-      )
-      .map((status): ProgressItem => ({
-        key: `experimental:${status.model}`,
-        id: status.model,
-        model: status.model,
-        name: experimentalAsrName(status.model),
-        engine: 'experimental',
-        phase: status.phase,
-        percent:
-          status.phase === 'downloading' && status.downloadedBytes > 0
-            ? downloadPercent(status)
-            : null,
-      })),
+    ...experimental.models.filter(isExperimentalDownload).map((status): ProgressItem => ({
+      key: `experimental:${status.model}`,
+      id: status.model,
+      model: status.model,
+      name: experimentalAsrName(status.model),
+      engine: 'experimental',
+      phase: status.phase,
+      percent:
+        status.phase === 'downloading' && status.downloadedBytes > 0
+          ? downloadPercent(status)
+          : null,
+    })),
   ];
 
   return {
