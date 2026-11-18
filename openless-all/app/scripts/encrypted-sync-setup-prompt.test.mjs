@@ -3,17 +3,16 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-const source = readFileSync(
-  new URL('../src/features/cloud-sync/CloudSyncSetupPrompt.tsx', import.meta.url),
-  'utf8',
-);
-const code = ts.transpileModule(source, {
-  compilerOptions: {
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.CommonJS,
-    jsx: ts.JsxEmit.ReactJSX,
-  },
-}).outputText;
+const compile = (path) =>
+  ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
+  }).outputText;
+const code = compile('../src/features/cloud-sync/CloudSyncSetupPrompt.tsx');
+const loadCloudSyncApi = new Function('require', 'exports', compile('../src/api/cloud-sync.ts'));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
   let resolve, reject;
@@ -79,6 +78,12 @@ function context({ native = true, blocked = false, previewScenario } = {}) {
     },
   };
   react.useRef = (initial) => react.useState({ current: initial })[0];
+  const api = {};
+  const listenTauriEvent = async (name, fn) => {
+    listeners.set(name, fn);
+    return () => listeners.delete(name);
+  };
+  loadCloudSyncApi((name) => (name === '../runtime/transport' ? { listenTauriEvent } : {}), api);
   const imports = {
     react,
     'react-i18next': { useTranslation: () => ({ t: (k) => k }) },
@@ -87,6 +92,7 @@ function context({ native = true, blocked = false, previewScenario } = {}) {
     '../../runtime/environment': { isTauriHost: () => native },
     '../../preview/cloud-sync': { getCloudSyncPreviewScenario: () => previewScenario },
     '../../api/cloud-sync': {
+      ...api,
       cloudSyncE2eeStatus: async () => ({ ...status }),
       CLOUD_SYNC_E2EE_CONSENT_VERSION: 'encrypted-full-snapshot-v2',
       encryptedSyncScope: (s) =>
@@ -110,12 +116,6 @@ function context({ native = true, blocked = false, previewScenario } = {}) {
       // no interactive content. Browser tests verify its retained inert exit.
       PresenceModal: ({ open, render, ...props }) =>
         open ? jsx('modal', { ...props, children: render() }) : null,
-    },
-    '@tauri-apps/api/event': {
-      listen: async (name, fn) => {
-        listeners.set(name, fn);
-        return () => listeners.delete(name);
-      },
     },
   };
   const exports = {};
@@ -166,7 +166,7 @@ function context({ native = true, blocked = false, previewScenario } = {}) {
     preparations: () => preparations,
     listeners,
     timers,
-    event: (type) => listeners.get('backend:event')?.({ payload: { kind: { type } } }),
+    event: (type) => listeners.get('backend:event')?.({ kind: { type } }),
     async flush() {
       await tick();
       const queued = [...timers.values()];

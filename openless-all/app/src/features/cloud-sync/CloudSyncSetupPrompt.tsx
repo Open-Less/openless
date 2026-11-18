@@ -6,6 +6,7 @@ import { getCloudSyncPreviewScenario } from '../../preview/cloud-sync';
 import {
   cloudSyncE2eeClaimSetupPrompt,
   cloudSyncE2eeStatus,
+  listenCloudSyncEligibilityChanges,
   encryptedSyncScope,
   encryptedSyncErrorKey,
   CLOUD_SYNC_E2EE_CONSENT_VERSION,
@@ -13,21 +14,6 @@ import {
 } from '../../api/cloud-sync';
 import { CloudSyncSection, CloudSyncTermsDialog, prepareEncryptedSync } from './CloudSyncSection';
 import { PresenceModal } from '../../ui/overlays/Modal';
-
-const PROMPT_EVENTS = new Set([
-  'backend_started',
-  'preferences_changed',
-  'credentials_changed',
-  'dictation_completed',
-  'dictation_state_changed',
-  'qa_state',
-  'selection_state_changed',
-  'selection_voice_state_changed',
-  'less_computer_event',
-  'local_asr_engine_changed',
-  'permission_changed',
-  'cloud_sync_state_changed',
-]);
 
 /** Core owns eligibility and the durable once-per-installation claim. */
 export function CloudSyncSetupPrompt({
@@ -126,11 +112,8 @@ export function CloudSyncSetupPrompt({
         if (timer) clearTimeout(timer);
       };
     }
-    void import('@tauri-apps/api/event')
-      .then(async ({ listen }) => {
-        const handle = await listen<{ kind: { type: string } }>('backend:event', ({ payload }) => {
-          if (PROMPT_EVENTS.has(payload.kind.type)) eligibilityChanged();
-        });
+    void listenCloudSyncEligibilityChanges(eligibilityChanged)
+      .then((handle) => {
         if (cancelled) handle();
         else {
           unlisten = handle;
