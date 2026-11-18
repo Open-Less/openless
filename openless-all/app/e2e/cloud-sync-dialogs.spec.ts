@@ -142,8 +142,13 @@ test('cloud deletion focuses cancel and keeps a failed confirmation open', async
   await expect(cancel).toBeFocused();
   await expect(dialog).toHaveCSS('width', '400px');
   await expect(dialog.locator('.ol-confirm-dialog-icon')).toHaveCSS('width', '36px');
-  const cancelBox = (await cancel.boundingBox())!;
-  const removeBox = (await remove.boundingBox())!;
+  await expect(dialog).toHaveCSS('transform', 'none');
+  const [cancelBox, removeBox] = await dialog
+    .locator('.ol-dialog-footer button')
+    .evaluateAll((actions) => actions.map((action) => {
+      const { x, width } = action.getBoundingClientRect();
+      return { x, width };
+    }));
   expect(cancelBox.x).toBeLessThan(removeBox.x);
   expect(Math.abs(cancelBox.width - removeBox.width)).toBeLessThan(1);
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);

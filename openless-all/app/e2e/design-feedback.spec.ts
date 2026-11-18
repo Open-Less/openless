@@ -71,7 +71,7 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await expect(confirm).toHaveCSS('opacity', '1');
   await expect(page.locator('.ol-channel-delete-confirm')).toHaveCount(0);
   await expect(confirm.locator('.ol-channel-delete-button')).toHaveCount(0);
-  await expect(confirm.locator('.ol-confirm-dialog-title')).toHaveCSS('font-size', '15px');
+  await expect(confirm.locator('.ol-confirm-dialog-title')).toHaveCSS('font-size', '18px');
   const description = confirm.locator('.ol-confirm-dialog-description');
   await expect(description).toHaveCSS('font-size', '13.5px');
   const descriptionColor = await description.evaluate((node) => getComputedStyle(node).color);
@@ -97,7 +97,7 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   const [fillRed, fillGreen] = confirmFill.match(/\d+/g)!.map(Number);
   expect(fillRed).toBeGreaterThan(180);
   expect(fillGreen).toBeLessThan(120);
-  expect((await confirmDelete.boundingBox())!.x).toBeLessThan((await cancel.boundingBox())!.x);
+  expect((await cancel.boundingBox())!.x).toBeLessThan((await confirmDelete.boundingBox())!.x);
 
   await cancel.click();
   await expect(confirm).toHaveCount(0);

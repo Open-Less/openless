@@ -66,8 +66,16 @@ test('the top layer owns pointer, keyboard, and focus; a nested combobox closes 
   const confirm = page.getByRole('dialog', { name: 'Nested prompt' });
   await expect(confirm).toBeVisible();
   await expect(parent).toHaveCount(0);
+  const cancel = confirm.getByRole('button', { name: 'Keep unchanged' });
+  const proceed = confirm.getByRole('button', { name: 'Proceed with change' });
+  const close = confirm.getByRole('button', { name: 'Close', exact: true });
+  await expect(cancel).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(confirm.getByRole('button', { name: 'Proceed with change' })).toBeFocused();
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(proceed).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
 
   const viewport = await bounds(page.locator('.ol-app-viewport'));
   const top = await bounds(page.locator('.ol-dialog-overlay:not([inert])'));
