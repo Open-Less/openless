@@ -31,7 +31,9 @@
       "title": "云同步服务告知与协议草案更新",
       "updatedTitle": "协议已修改，请仔细阅读",
       "updatedDescription": "云同步服务告知与协议草案已修改，请仔细阅读。继续同步前需要重新确认，旧版本的确认不会自动沿用。",
-      "intro": "启用后将上传已登记的 API 密钥（在客户端加密后作为密文上传）和私密文本历史。请在继续前阅读同步范围、密码与认证处理、关闭及删除方式。",
+      "apiKeyNotice": "启用后将上传已登记的 API 密钥（在客户端加密后作为密文随快照上传）。OpenLess 云同步服务仅保存和传递含这些密钥的加密快照，不使用这些密钥调用模型、转写或其他服务。同步服务器接收密文，不接收 API 密钥明文或解密密钥。",
+      "apiProviderUse": "使用您配置的转写或模型服务时，OpenLess 客户端使用相应的 API 密钥向您配置的服务端点认证；同步服务另行处理登录认证及必要元数据。",
+      "intro": "请在继续前了解同步资料的范围（包括私密文本历史）、密码与认证，以及关闭和删除方式。",
       "sections": [
         {
           "id": "provider",
@@ -58,18 +60,6 @@
             "F03",
             "F04",
             "F09"
-          ]
-        },
-        {
-          "id": "credential-use",
-          "title": "服务 API 密钥的用途",
-          "body": "OpenLess 云同步服务不使用您登记的服务 API 密钥调用模型、转写或其他服务；同步仅保存和传递包含这些密钥的加密快照。OpenLess 客户端在执行您发起的服务请求时，使用相应凭据向您配置的服务端点认证。同步认证另行处理 GitHub 访问令牌及必要元数据。",
-          "sources": [
-            "F03",
-            "F05",
-            "F06",
-            "F08",
-            "F16"
           ]
         },
         {
@@ -129,7 +119,9 @@
       "title": "Cloud sync disclosure and draft agreement update",
       "updatedTitle": "The cloud sync disclosure has changed",
       "updatedDescription": "The cloud sync disclosure and draft agreement have changed. Please read them carefully and confirm again before continuing. Your previous confirmation will not carry over automatically.",
-      "intro": "When you enable sync, the client will upload registered API keys and private text history as ciphertext after encrypting them on your device. Before continuing, review what sync includes, how passwords and authentication are handled, and how to turn off sync or delete your backup.",
+      "apiKeyNotice": "When you enable sync, it uploads your registered API keys as ciphertext after encrypting them on your device. OpenLess cloud sync stores and transfers the encrypted snapshot containing these keys and does not use them to call models, transcription or other services. The sync server receives ciphertext and does not receive plaintext API keys or the decryption key.",
+      "apiProviderUse": "When you use a transcription or model service you have configured, the OpenLess client uses the corresponding API key to authenticate to your configured service endpoint. The sync service separately handles sign-in and necessary metadata.",
+      "intro": "Before continuing, review what is synced (including private text history), how passwords and authentication are handled, and how to turn off sync or delete your backup.",
       "sections": [
         {
           "id": "provider",
@@ -145,11 +137,6 @@
           "id": "excluded",
           "title": "Audio files and sign-in credentials are excluded from the backup",
           "body": "Snapshots exclude audio files, model weights, caches, programs and system credential-store files. They also exclude your sync password, decryption keys, OpenLess-managed GitHub/OAuth sign-in state and tokens, sync tokens, device private keys, remote-input PINs and system permission grants. The cursor-context switch can sync; actual cursor text is not included in sync documents. Restoring another device's profile does not execute its paths, grant permissions or start an Agent."
-        },
-        {
-          "id": "credential-use",
-          "title": "How service API keys are used",
-          "body": "OpenLess cloud sync does not use your registered service API keys to call models, transcription or other services. It stores and transfers encrypted snapshots containing those keys. When the OpenLess client carries out a service request you initiate, it uses the relevant credentials to authenticate to your configured service endpoint. Sync authentication separately handles a GitHub access token and necessary metadata."
         },
         {
           "id": "encryption",
