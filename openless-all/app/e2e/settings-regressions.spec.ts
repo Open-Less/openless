@@ -1,9 +1,10 @@
+import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 async function openSettings(page: Page) {
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -14,7 +15,7 @@ test('110% is the fresh default; explicit 100% survives reload and the settings 
   page,
 }) => {
   const dialog = await openSettings(page);
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await expect(dialog.getByRole('button', { name: '返回应用', exact: true })).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0);
   expect(
@@ -27,9 +28,9 @@ test('110% is the fresh default; explicit 100% survives reload and the settings 
   await expect(interfaceSize).toContainText('110%');
   await interfaceSize.click();
   await page.getByRole('option', { name: '100%', exact: true }).click();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1');
   await page.reload();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   expect(
     await page.evaluate(
@@ -94,7 +95,6 @@ for (const scale of [1, 1.1]) {
     await page.setViewportSize({ width: 1100, height: 1200 });
     await page.goto(fixture);
     await page.evaluate((scale) => {
-      document.documentElement.style.zoom = String(scale);
       document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
     }, scale);
     const trigger = page.getByRole('combobox', { name: 'Long menu', exact: true });
@@ -139,7 +139,10 @@ test('experimental download cancel and switch-off share state, do not reappear, 
   // Native WebViews retain CSS from previously visited model pages. Load it
   // late, as on device, rather than testing only the first clean browser entry.
   await page.addStyleTag({
-    content: readFileSync(new URL('../src/pages/LocalAsr/local-asr.css', import.meta.url), 'utf8'),
+    content: readFileSync(
+      new URL('../src/features/local-asr/local-asr.css', import.meta.url),
+      'utf8',
+    ),
   });
   await expect(toggle).toBeEnabled();
   const before = (await next.boundingBox())!.y;
@@ -186,7 +189,7 @@ test('shared modal Escape retains an inert exit and restores focus', async ({ pa
             const card = document.querySelector<HTMLElement>('.ol-dialog-card');
             document.body.dataset.modalExit = JSON.stringify({
               present: !!card,
-              inert: card?.inert,
+              inert: !!card?.closest('[inert]'),
             });
           }
         });
@@ -254,7 +257,7 @@ test('voice activation opens model setup without leaving the multimodal pipeline
       get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     });
   });
-  await page.goto('http://127.0.0.1:5326/?os=win');
+  await page.goto(`${fixtureOrigin}/?os=win`);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   const categories = dialog.getByRole('navigation', { name: '设置分类' });

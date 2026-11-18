@@ -303,6 +303,7 @@ export const de: typeof zhCN = {
     copy: 'Kopieren',
     delete: 'Löschen',
     later: 'Später',
+    confirmAction: 'Bestätigen',
     cancel: 'Abbrechen',
     close: 'Schließen',
     show: 'Einblenden',

@@ -1,7 +1,8 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
 test('IME confirmation and the next 500ms do not trigger Enter handlers', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/');
+  await page.goto(`${fixtureOrigin}/`);
   const result = await page.evaluate(async () => {
     const input = document.createElement('input');
     document.body.append(input);
@@ -41,7 +42,7 @@ test('IME confirmation and the next 500ms do not trigger Enter handlers', async 
 });
 
 test('message follow yields to the reader and resumes at the bottom', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/');
+  await page.goto(`${fixtureOrigin}/`);
   await page.evaluate(async () => {
     const root = document.createElement('div');
     root.id = 'follow-fixture';
@@ -88,7 +89,7 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
 test('QA jump control appears only more than 120 pixels from the latest message', async ({
   page,
 }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?qa');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?qa`);
   await page.locator('.ol-default-capsule').waitFor();
   await page.evaluate(() => {
     const fixture = (window as any).fixture;

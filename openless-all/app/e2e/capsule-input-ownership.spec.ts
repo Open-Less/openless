@@ -1,9 +1,10 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
 test('the real Mac capsule keeps controls interactive during continuous animation', async ({
   page,
 }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?full&os=mac');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
   await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
   await page.evaluate(() => {
     const fixture = (window as any).fixture;
@@ -52,10 +53,9 @@ test('the real Mac capsule keeps controls interactive during continuous animatio
     .toBe(true);
   await confirm.click();
   await cancel.click();
-  await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActions)).toEqual([
-    'stop_dictation',
-    'cancel_dictation',
-  ]);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.dictationActions))
+    .toEqual(['stop_dictation', 'cancel_dictation']);
   await page.locator('.ol-classic-translation [role="combobox"]').click();
   await expect(page.getByRole('listbox')).toBeVisible();
   await page

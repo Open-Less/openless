@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 const app = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-const source = readFileSync(app + '/src/pages/SelectionVoiceIntentPicker.tsx', 'utf8');
+const source = readFileSync(
+  app + '/src/features/selection-intent/SelectionVoiceIntentPicker.tsx',
+  'utf8',
+);
 const start = source.indexOf('export function SelectionVoiceIntentPicker()');
 const end = source.indexOf('\n  return (', start);
 assert(start >= 0 && end >= 0);
@@ -15,7 +18,7 @@ const body =
     .slice(start, end)
     .replace('export function', 'function')
     .replace("import('@tauri-apps/api/event')", 'Promise.resolve({listen})') +
-  'return {choose,cancel};\n}';
+  'return {choose,cancel: () => cancel.current?.()};\n}';
 const compiled = ts.transpileModule(body, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
@@ -26,8 +29,10 @@ const factory = new Function(
   'getSelectionVoiceIntentPrompt',
   'confirmSelectionVoiceIntentPrompt',
   'cancelSelectionVoiceIntentPrompt',
-  'listen',
-  'isTauri',
+  'listenTauriEvent',
+  'useRef',
+  'useModalActive',
+  'window',
   compiled + ';return SelectionVoiceIntentPicker();',
 );
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -56,7 +61,9 @@ for (const action of ['choose', 'cancel']) {
       callbacks.set(name, callback);
       return () => {};
     },
-    true,
+    (current) => ({ current }),
+    () => false,
+    { addEventListener() {}, removeEventListener() {} },
   );
   await settle();
   if (action === 'choose') await component.choose('question');

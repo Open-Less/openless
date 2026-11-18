@@ -301,6 +301,7 @@ export const en: typeof zhCN = {
     copy: 'Copy',
     delete: 'Delete',
     later: 'Later',
+    confirmAction: 'Confirm',
     cancel: 'Cancel',
     close: 'Close',
     show: 'Show',

@@ -1,10 +1,11 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 import { openCapsuleStyleSettings, settleNavigation } from './support/navigation';
 
 test('recording capsule retains its size and original pill geometry with translation', async ({
   page,
 }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?full&os=mac');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
   await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
   await page.evaluate(() =>
     (window as any).fixture.emit('capsule:state', {
@@ -167,7 +168,7 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
 });
 
 test('the WebKit fallback preserves capsule, switch and popup exceptions', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/refinements.html');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/refinements.html`);
   const result = await page.evaluate(async () => {
     const css = await (await fetch('/src/styles/continuous-corners.css?direct')).text();
     const source = document.createElement('style');

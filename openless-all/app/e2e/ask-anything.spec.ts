@@ -1,5 +1,6 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/capsule-motion.html`;
 async function emit(page: Page, event: string, payload: unknown) {
   await page.evaluate((v) => (window as any).fixture.emit(v.event, v.payload), { event, payload });
 }

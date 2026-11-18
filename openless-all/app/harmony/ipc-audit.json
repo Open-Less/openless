@@ -1,7 +1,7 @@
 {
-  "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 188,
-  "wired": 103,
+  "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
+  "total": 192,
+  "wired": 107,
   "missing": 85,
   "commands": [
     {
@@ -397,6 +397,13 @@
       "implementation": "arkts"
     },
     {
+      "name": "export_harmony_error_log",
+      "calledFrom": [
+        "src/lib/ipc/utils.ts"
+      ],
+      "implementation": "arkts"
+    },
+    {
       "name": "export_style_pack_to_zip",
       "calledFrom": [
         "src/lib/ipc/style-packs.ts"
@@ -481,6 +488,13 @@
       "implementation": "frontend mobile capability adapter"
     },
     {
+      "name": "get_platform_capabilities",
+      "calledFrom": [
+        "src/runtime/platform.ts"
+      ],
+      "implementation": "rust"
+    },
+    {
       "name": "get_qa_hotkey_label",
       "calledFrom": [
         "src/lib/ipc/qa.ts"
@@ -539,7 +553,7 @@
     {
       "name": "get_startup_snapshot",
       "calledFrom": [
-        "src/lib/ipc/shared.ts"
+        "src/runtime/transport.ts"
       ],
       "implementation": "rust"
     },
@@ -778,6 +792,20 @@
       "name": "open_system_settings",
       "calledFrom": [
         "src/lib/ipc/permissions.ts"
+      ],
+      "implementation": "arkts"
+    },
+    {
+      "name": "pick_style_pack_zip",
+      "calledFrom": [
+        "src/runtime/files.ts"
+      ],
+      "implementation": "arkts"
+    },
+    {
+      "name": "pick_style_pack_zip_target",
+      "calledFrom": [
+        "src/runtime/files.ts"
       ],
       "implementation": "arkts"
     },
@@ -1239,7 +1267,8 @@
     {
       "name": "stop_dictation",
       "calledFrom": [
-        "src/lib/ipc/dictation.ts"
+        "src/lib/ipc/dictation.ts",
+        "src/api/in-app-dictation.ts"
       ],
       "implementation": "arkts"
     },

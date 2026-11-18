@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { usePopupViewport } from '../ui/layout/AppViewport';
+
 import { Icon } from './Icon';
 import { Popover } from '@base-ui/react/popover';
 import { Collapse } from './ui/Disclosure';
@@ -46,6 +48,7 @@ export function ShortcutRecorder({
   /** Windows dictation only; other shortcut consumers cannot install mouse hooks. */
   allowMouseButtons?: boolean;
 }) {
+  const { boundary, container } = usePopupViewport();
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -348,10 +351,11 @@ export function ShortcutRecorder({
             </button>
           )}
         </div>
-        <Popover.Portal className="ol-popup-portal">
+        <Popover.Portal container={container} className="ol-popup-portal">
           <Popover.Positioner
             className="ol-select-positioner"
             positionMethod="fixed"
+            collisionBoundary={boundary}
             side="bottom"
             collisionAvoidance={{ side: 'flip', align: 'shift', fallbackAxisSide: 'none' }}
             align="start"

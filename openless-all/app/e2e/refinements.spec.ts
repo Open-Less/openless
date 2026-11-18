@@ -1,7 +1,8 @@
+import { fixtureOrigin } from './support/server';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
 test('style and dictionary action buttons retain compact corners', async ({ page }) => {
   await page.goto('/');
@@ -13,7 +14,9 @@ test('style and dictionary action buttons retain compact corners', async ({ page
     '8px',
   );
   await page.getByRole('button', { name: '词典', exact: true }).click();
-  await expect(page.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
+  const dictionary = page.locator('[data-ol-page="vocab"]');
+  await expect(dictionary).toHaveAttribute('data-transition-phase', 'settled');
+  await expect(dictionary.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
 });
 
 async function openShortcuts(page: Page) {
@@ -162,7 +165,7 @@ test('compact typography selects persist font, size and reading width without ne
   });
   await page.reload();
   await expect(page.locator('html')).toHaveCSS('--ol-reading-width', '56ch');
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '外观与语言', exact: true }).click();
   await expect(section.getByRole('combobox', { name: '字体系列' })).toHaveText(

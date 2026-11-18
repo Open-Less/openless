@@ -18,8 +18,8 @@ writeFileSync(
   import React from 'react';
   import {createRoot} from 'react-dom/client';
   import {flushSync} from 'react-dom';
-  import {BailianProtocolField} from '/src/pages/settings/BailianProtocolField.tsx';
-  import {ProviderFormContext,useProviderForm} from '/src/pages/settings/ProviderForm.tsx';
+  import {BailianProtocolField} from '/src/features/providers/BailianProtocolField.tsx';
+  import {ProviderFormContext,useProviderForm} from '/src/features/providers/ProviderForm.tsx';
   import {readCredential,setCredential} from '/src/lib/ipc';
   import i18n from '/src/i18n/index.ts';
   await i18n.changeLanguage('zh-CN');

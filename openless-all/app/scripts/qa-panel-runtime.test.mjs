@@ -7,7 +7,7 @@ const app = fileURLToPath(new URL('../', import.meta.url)),
   require = createRequire(resolve(app, 'package.json')),
   ts = require('typescript');
 const helpers = await import(pathToFileURL(resolve(app, 'src/lib/qaMessage.ts')));
-const source = readFileSync(resolve(app, 'src/pages/QaPanel.tsx'), 'utf8');
+const source = readFileSync(resolve(app, 'src/features/qa/QaPanel.tsx'), 'utf8');
 const parsed = ts.createSourceFile(
   'QaPanel.tsx',
   source,
@@ -40,6 +40,30 @@ const factory = new Function(
   'exports',
   'require',
   `${compiled};return {QaPanel,Composer,EmbeddedComposer,MessageRow,ErrorContent};`,
+);
+const layoutSource = readFileSync(resolve(app, 'src/features/qa/useQaWindowLayout.ts'), 'utf8');
+const layoutAst = ts.createSourceFile(
+  'useQaWindowLayout.ts',
+  layoutSource,
+  ts.ScriptTarget.ES2020,
+  true,
+);
+const layoutCompiled = ts.transpileModule(
+  layoutAst.statements
+    .filter((statement) => !ts.isImportDeclaration(statement))
+    .map((statement) => statement.getFullText(layoutAst))
+    .join('\n'),
+  { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } },
+).outputText;
+const makeLayout = new Function(
+  'useEffect',
+  'useRef',
+  'useState',
+  'useAppViewport',
+  'qaWindowSetExpanded',
+  'waitForViewportGeometry',
+  'exports',
+  `${layoutCompiled};return useQaWindowLayout;`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -137,19 +161,43 @@ function context(native = true, embedded = false) {
     },
   };
   const imports = Object.fromEntries(names.map((n) => [n, n]));
+  const boundary = {};
+  const listen = async (name, fn) => {
+    const listeners = events.get(name) ?? new Set();
+    listeners.add(fn);
+    events.set(name, listeners);
+    return () => listeners.delete(fn);
+  };
+  const resize = async (next) => {
+    calls.resize.push(next);
+    return pending.resize?.(next);
+  };
+  const state = (value) => active.state(value);
+  const ref = (value) => active.ref(value);
+  const effect = (fn, deps) => active.effect(fn, deps);
   Object.assign(imports, {
-    useState: (i) => active.state(i),
-    useRef: (i) => active.ref(i),
-    useEffect: (f, d) => active.effect(f, d),
+    useState: state,
+    useRef: ref,
+    useEffect: effect,
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
     useChatPanelLifecycle: () => lifecycle,
-    isTauri: native,
+    useModalActive: () => false,
+    isTauriHost: () => native,
+    listenTauriEvent: listen,
     ...helpers,
-    qaWindowSetExpanded: async (next) => {
-      calls.resize.push(next);
-      return pending.resize?.(next);
-    },
+    useQaWindowLayout: makeLayout(
+      effect,
+      ref,
+      state,
+      () => ({ boundary }),
+      resize,
+      async (_boundary, _fits, signal) => {
+        if (signal.aborted) throw new DOMException('Layout superseded', 'AbortError');
+        return {};
+      },
+      {},
+    ),
     qaSubmitText: async (text, session) => {
       calls.submit.push(text);
       calls.submitArgs.push([text, session]);
@@ -194,22 +242,16 @@ function context(native = true, embedded = false) {
     },
     chatPanelFocusKeyboard: async () => {},
   });
-  const api = factory(
-    ...names.map((n) => imports[n]),
-    async (name, fn) => {
-      const listeners = events.get(name) ?? new Set();
-      listeners.add(fn);
-      events.set(name, listeners);
-      return () => listeners.delete(fn);
-    },
-    {},
-    () => ({ jsx, jsxs: jsx, Fragment: 'fragment' }),
-  );
+  const api = factory(...names.map((n) => imports[n]), listen, {}, () => ({
+    jsx,
+    jsxs: jsx,
+    Fragment: 'fragment',
+  }));
   const hooks = new Hooks(),
     render = () =>
       hooks.render(() => api.QaPanel({ embedded, onRequestClose: () => calls.close++ }));
   const emit = (name, payload) => {
-    for (const fn of events.get(name) ?? []) fn({ payload });
+    for (const fn of events.get(name) ?? []) fn(payload);
   };
   const composer = (tree) => find(tree, (n) => n.type === api.EmbeddedComposer).props;
   return { api, hooks, render, emit, calls, pending, lifecycle, events, keys, composer };
@@ -391,7 +433,7 @@ await test('cancel during resize prevents queued question and late layout failur
   assert.deepEqual(c.calls.submit, []);
   assert.deepEqual(c.calls.resize, [false, false]);
   assert.equal(c.composer(c.render()).status, 'idle');
-  assert(!nodes(c.render()).some((n) => n.props.className === 'qa-layout-error'));
+  assert(!nodes(c.render()).some((n) => n.props.className === 'qa-layout-failure'));
   c.hooks.unmount();
 });
 await test('recording level requires active session; no fake recording before backend phase', async () => {

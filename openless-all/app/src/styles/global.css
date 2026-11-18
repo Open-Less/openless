@@ -1,5 +1,5 @@
-@import '../components/Tooltip.css';
-@import '../components/ui/Select.css';
+@import '../ui/styles/tooltip.css';
+@import '../ui/styles/select.css';
 @import './continuous-corners.css';
 
 html,
@@ -1115,11 +1115,8 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
 }
 .ol-segmented > :is(.ol-segmented-indicator, .ol-segmented-option) {
-  --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 3px);
+  --ol-corner-radius: var(--ol-button-radius);
   border-radius: var(--ol-corner-radius);
-}
-.ol-action-button {
-  --ol-corner-radius: 8px;
 }
 .ol-segmented-indicator,
 .ol-service-view-indicator {
@@ -1134,7 +1131,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-segmented-indicator {
   z-index: 0;
   border-radius: var(--ol-r-sm);
-  background: var(--ol-choice-active-bg);
+  background: var(--ol-accent-solid-bg);
 }
 .ol-service-view-indicator {
   z-index: 1;
@@ -1153,14 +1150,16 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   font-size: 12px;
   font-weight: var(--ol-font-weight-medium);
   line-height: 1.5;
-  white-space: nowrap;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   cursor: pointer;
   transition:
     color var(--ol-choice-motion),
     background-color var(--ol-choice-motion);
 }
 .ol-segmented-option[aria-pressed='true'] {
-  color: var(--ol-choice-active-ink);
+  color: var(--ol-accent-solid-ink);
   font-weight: var(--ol-font-weight-semibold);
 }
 @media (hover: hover) and (pointer: fine) {
