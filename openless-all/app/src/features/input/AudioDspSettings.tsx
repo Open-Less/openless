@@ -6,6 +6,7 @@ import { isAndroid } from '../../runtime/platform';
 import { AndroidAudioEffects } from './AndroidAudioEffects';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { SettingRow, Toggle } from '../../pages/settings/shared';
+import { SolidSlider } from '../../ui/controls/Slider';
 
 export function AudioDspSettings({
   value,
@@ -30,7 +31,8 @@ export function AudioDspSettings({
   const label = (key: string, fallback: string) =>
     t(`settings.recording.dsp.${key}`, { defaultValue: fallback });
   const save = (patch: Partial<AudioDspConfig>) => {
-    const next = { ...draft, ...patch };
+    const next = { ...draftRef.current, ...patch };
+    draftRef.current = next;
     setDraft(next);
     onChange(next);
   };
@@ -43,21 +45,18 @@ export function AudioDspSettings({
   ) => (
     <SettingRow key={field} label={title}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: 'min(280px, 100%)' }}>
-        <input
-          className="ol-range"
+        <SolidSlider
           aria-label={title}
-          type="range"
           min={min}
           max={max}
           step={1}
           value={draft[field] as number}
-          onChange={(event) => {
-            const next = { ...draftRef.current, [field]: Number(event.target.value) };
+          onValueChange={(value) => {
+            const next = { ...draftRef.current, [field]: value };
             draftRef.current = next;
             setDraft(next);
           }}
-          onPointerUp={() => onChange(draftRef.current)}
-          onKeyUp={() => onChange(draftRef.current)}
+          onValueCommitted={() => onChange(draftRef.current)}
         />
         <output style={{ minWidth: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {draft[field] as number}
@@ -192,24 +191,21 @@ export function AudioDspSettings({
               {equalizerFrequencies.map((frequency, index) => (
                 <label key={frequency} style={{ fontSize: 12 }}>
                   {frequency} · {draft.equalizerBandsDb[index]} dB
-                  <input
-                    className="ol-range"
+                  <SolidSlider
                     aria-label={`${stageLabels.equalizer} ${frequency}`}
-                    type="range"
-                    min={-15}
+                              min={-15}
                     max={15}
                     step={1}
                     style={{ width: '100%' }}
                     value={draft.equalizerBandsDb[index]}
-                    onChange={(event) => {
+                    onValueChange={(value) => {
                       const bands = [...draftRef.current.equalizerBandsDb];
-                      bands[index] = Number(event.target.value);
+                      bands[index] = value;
                       const next = { ...draftRef.current, equalizerBandsDb: bands };
                       draftRef.current = next;
                       setDraft(next);
                     }}
-                    onPointerUp={() => onChange(draftRef.current)}
-                    onKeyUp={() => onChange(draftRef.current)}
+                    onValueCommitted={() => onChange(draftRef.current)}
                   />
                 </label>
               ))}

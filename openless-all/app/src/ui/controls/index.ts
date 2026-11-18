@@ -10,3 +10,4 @@ export {
   type ActivityApp,
 } from './GitHubActivity';
 export { SettingRow, Toggle, type SettingRowProps } from './SettingRow';
+export { Slider, SimpleSlider, SquareSlider, SolidSlider, TinySlider, ReferenceSlider, TickSlider, TooltipSlider, RangeSlider, StepperSlider, VerticalSlider, DistributionSlider, type SliderProps, type SliderValue, type SliderVariant, type SliderMark, type DistributionSliderProps } from './Slider';

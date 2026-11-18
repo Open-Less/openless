@@ -7,6 +7,7 @@ import { useInteraction } from '../../../src/ui/overlays/InteractionProvider';
 import type { UserPreferences } from '../../../src/api/contracts';
 import { Btn, Pill } from '../../../src/pages/_atoms';
 import { SettingRow } from '../../../src/pages/settings/shared';
+import { SolidSlider } from '../../../src/ui/controls/Slider';
 import { useLayoutStack, useConservativeLayout } from '../../../src/lib/useMobileLayout';
 import {
   getAndroidAccessibilityStatus,
@@ -665,19 +666,15 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                   maxWidth: '100%',
                 }}
               >
-                <input
-                  type="range"
+                <SolidSlider
+                  aria-label={t('settings.permissions.androidOverlaySizeLabel')}
                   disabled={!androidPrefs}
                   min={48}
                   max={120}
                   step={4}
                   value={sizeDraft ?? androidPrefs?.androidOverlaySizeDp ?? 72}
-                  onChange={(event) => {
-                    handleAndroidOverlaySizeChange(Number(event.target.value));
-                  }}
-                  onPointerUp={flushAndroidOverlaySizeSave}
-                  onTouchEnd={flushAndroidOverlaySizeSave}
-                  onBlur={flushAndroidOverlaySizeSave}
+                  onValueChange={handleAndroidOverlaySizeChange}
+                  onValueCommitted={flushAndroidOverlaySizeSave}
                   style={{ flex: 1, minWidth: 0 }}
                 />
                 <span
