@@ -761,6 +761,7 @@ export function CloudSyncSection() {
   const working = busy || status?.syncState === 'syncing';
   const taskId = status?.taskId ?? null;
   const cancelRequested = taskId !== null && cancelRequestedTask === taskId;
+  const restoreReviewOpen = dialog?.kind === 'restore';
   const progressMessage = t(
     cancelRequested
       ? 'cloudSyncE2ee.cancelRequested'
@@ -775,7 +776,8 @@ export function CloudSyncSection() {
       return;
     }
     if (notificationSettled.current) return;
-    const canCancel = taskId !== null && !cancelRequested;
+    // A restore review owns keyboard focus, so its task action belongs in the dialog.
+    const canCancel = taskId !== null && !cancelRequested && !restoreReviewOpen;
     const options = {
       message: progressMessage,
       state: 'saving' as const,
@@ -785,7 +787,7 @@ export function CloudSyncSection() {
     };
     if (progressNotification.current) progressNotification.current.update(options);
     else progressNotification.current = notify({ ...options, key: 'cloud-sync-operation' });
-  }, [working, taskId, cancelRequested, progressMessage, notify, t]);
+  }, [working, taskId, cancelRequested, restoreReviewOpen, progressMessage, notify, t]);
   useEffect(
     () => () => {
       progressNotification.current?.dismiss();
@@ -837,11 +839,6 @@ export function CloudSyncSection() {
       setNotice(null);
     }
   };
-  const taskControls = taskId ? (
-    <Btn disabled={cancelRequested} onClick={() => void cancelTask(taskId)}>
-      {t('cloudSyncE2ee.cancelTask')}
-    </Btn>
-  ) : null;
 
   return (
     <Card>
@@ -949,13 +946,13 @@ export function CloudSyncSection() {
                 </Btn>
               )}
             </div>
-            {lastSync && Number.isFinite(lastSync.getTime()) && (
-              <small>
-                {t('cloudSyncE2ee.lastSync', {
+            <small>
+              {lastSync &&
+                Number.isFinite(lastSync.getTime()) &&
+                t('cloudSyncE2ee.lastSync', {
                   time: lastSync.toLocaleString(i18n.resolvedLanguage ?? i18n.language),
                 })}
-              </small>
-            )}
+            </small>
           </div>
         )}
         {status?.consentVersion && status.consentVersion !== CONSENT_VERSION && (
@@ -1056,9 +1053,7 @@ export function CloudSyncSection() {
             </button>
           </div>
         )}
-        {working && taskId && !dialog && (
-          <div className="ol-cloud-sync-actions">{taskControls}</div>
-        )}
+        <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.passwordWarning')}</p>
         <Collapse open={!!visibleError}>
           <div className="ol-cloud-sync-status-line">
             <p role="alert" className="ol-cloud-sync-error">
@@ -1097,7 +1092,6 @@ export function CloudSyncSection() {
           status.lastError.retryAfterSeconds <= 86400 && (
             <p>{t('cloudSyncE2ee.retryAfter', { seconds: status.lastError.retryAfterSeconds })}</p>
           )}
-        <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.passwordWarning')}</p>
       </section>
       <ExitPresence
         open={showLogin}
@@ -1134,6 +1128,13 @@ export function CloudSyncSection() {
               }
               busy={working}
               onClose={closeDialog}
+              taskAction={
+                dialog.kind === 'restore' && working && taskId ? (
+                  <Btn size="sm" disabled={cancelRequested} onClick={() => void cancelTask(taskId)}>
+                    {t('cloudSyncE2ee.cancelTask')}
+                  </Btn>
+                ) : undefined
+              }
             >
               {notice?.error && (
                 <p role="alert" className="ol-dialog-error">
@@ -1197,9 +1198,6 @@ export function CloudSyncSection() {
                     </Btn>
                   </DialogFooter>
                 </>
-              )}
-              {working && status?.taskId && dialog.kind === 'restore' && (
-                <div className="ol-cloud-sync-actions">{taskControls}</div>
               )}
             </SyncDialog>
           )
@@ -1484,6 +1482,7 @@ function SyncDialog({
   closing = false,
   busy,
   onClose,
+  taskAction,
   children,
 }: {
   title: string;
@@ -1492,6 +1491,7 @@ function SyncDialog({
   closing?: boolean;
   busy: boolean;
   onClose: () => void;
+  taskAction?: ReactNode;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -1512,16 +1512,18 @@ function SyncDialog({
     >
       <DialogHeader>
         <h3 id={titleId}>{title}</h3>
-        <button
-          type="button"
-          ref={cancelRef}
-          disabled={busy}
-          onClick={onClose}
-          aria-label={t('common.close')}
-          className="ol-dialog-icon-close"
-        >
-          <Icon name="close" size={16} />
-        </button>
+        {taskAction ?? (
+          <button
+            type="button"
+            ref={cancelRef}
+            disabled={busy}
+            onClick={onClose}
+            aria-label={t('common.close')}
+            className="ol-dialog-icon-close"
+          >
+            <Icon name="close" size={16} />
+          </button>
+        )}
       </DialogHeader>
       {children}
     </StructuredDialog>

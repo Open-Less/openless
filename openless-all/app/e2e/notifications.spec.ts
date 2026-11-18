@@ -49,16 +49,18 @@ test('notifications stack above settings, preserve errors and support dismissal'
 test('transient confirmations drop from the window top and replace each other', async ({
   page,
 }) => {
-  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'large'));
   await page.goto('/?os=mac');
   await expect(page.locator('.ol-notification-center')).toHaveCount(1);
   await emitNotifications(page, [
-    { state: 'saved', message: 'First saved', durationMs: 10000 },
-    { state: 'saved', message: 'Second saved', durationMs: 10000 },
+    { state: 'saved', message: '同步设置已更新。', durationMs: 10000 },
+    { state: 'saved', message: 'DeepSeek 配置已保存', durationMs: 10000 },
   ]);
   const cards = page.locator('.ol-notification-card');
   await expect(cards).toHaveCount(1);
-  await expect(cards.first()).toContainText('Second saved');
+  await expect(cards.first()).toContainText('DeepSeek 配置已保存');
+  const message = cards.locator('.ol-notification-message');
+  expect(await message.evaluate((node) => node.clientHeight)).toBe(18);
   const box = (await cards.first().boundingBox())!;
   // The host is flush with the window edge; the card itself keeps only the safe-area inset.
   const bounds = (await page.locator('.ol-app-viewport').boundingBox())!;
@@ -87,6 +89,8 @@ test('transient confirmations drop from the window top and replace each other', 
 
   await emitNotifications(page, [{ state: 'deleted', message: '已删除', durationMs: 10000 }]);
   await expect(cards).toHaveCount(1);
+  await expect(message).toHaveText('已删除');
+  expect(await message.evaluate((node) => node.clientHeight)).toBe(18);
   const deletedIcon = page.locator('.ol-notification-icon--deleted');
   await expect(deletedIcon).toBeVisible();
   const deletedColor = await deletedIcon.evaluate((node) => getComputedStyle(node).backgroundColor);
