@@ -11,23 +11,95 @@ async function settings(page: Page) {
 
 type NavigationProbe = Window & { restoreNavigationClock?: () => void };
 
+test('a slow lazy page shows its own loading surface without keeping Overview on screen', async ({
+  page,
+}) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/\/assets\/Vocab-[^/]+\.js/, async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.goto('/?os=mac');
+  try {
+    await page.getByRole('button', { name: '词典', exact: true }).click();
+    const vocabulary = page.locator('main [data-ol-page="vocab"]');
+    await expect(vocabulary).toHaveAttribute('data-transition-phase', 'settled');
+    await expect(vocabulary).toHaveCSS('opacity', '1');
+    await expect(vocabulary.locator('.ol-page-skeleton')).toBeVisible();
+    await expect(page.locator('main [data-ol-page="overview"]')).toHaveCount(0);
+    release();
+    await expect(vocabulary.getByRole('heading', { name: '词典', exact: true })).toBeVisible();
+    await expect(vocabulary.locator('.ol-page-skeleton')).toHaveCount(0);
+  } finally {
+    release();
+  }
+});
+
+test('the first Overview to History click paints a clear page and its records', async ({
+  page,
+}, testInfo) => {
+  type Measurement = { elapsed: number; largestFrameGap: number };
+  type ProbeWindow = Window & { historyPaint: Promise<Measurement> };
+  await page.goto('/?os=mac');
+  // Overview is already reading the same live snapshot that History will display.
+  await expect(page.locator('main [data-overview-record]').first()).toBeVisible();
+  const openHistory = page.getByRole('button', { name: '全部记录 →', exact: true });
+  await openHistory.evaluate((button) => {
+    (window as ProbeWindow).historyPaint = new Promise((resolve, reject) => {
+      button.addEventListener(
+        'click',
+        () => {
+          const clicked = performance.now();
+          let previous = clicked;
+          let largestFrameGap = 0;
+          const check = () => {
+            const now = performance.now();
+            largestFrameGap = Math.max(largestFrameGap, now - previous);
+            previous = now;
+            const surface = document.querySelector<HTMLElement>(
+              'main [data-ol-page="history"][data-transition-phase="settled"]',
+            );
+            const row = surface?.querySelector('[data-history-record]');
+            if (surface && row && !surface.inert && row.getBoundingClientRect().height > 0) {
+              const pageStyle = getComputedStyle(surface);
+              const rowStyle = getComputedStyle(row);
+              if (
+                pageStyle.opacity === '1' &&
+                pageStyle.filter === 'none' &&
+                rowStyle.opacity === '1' &&
+                rowStyle.transform === 'none'
+              ) {
+                // The frame containing these styles can paint before the next callback.
+                requestAnimationFrame(() => resolve({ elapsed: now - clicked, largestFrameGap }));
+                return;
+              }
+            }
+            if (now - clicked > 5000) reject(new Error('History did not paint a clear record'));
+            else requestAnimationFrame(check);
+          };
+          requestAnimationFrame(check);
+        },
+        { capture: true, once: true },
+      );
+    });
+  });
+  await openHistory.click();
+  const paint = await page.evaluate(() => (window as ProbeWindow).historyPaint);
+  await testInfo.attach('Overview to History paint timing', {
+    body: JSON.stringify(paint),
+    contentType: 'application/json',
+  });
+  // Ignore isolated host stalls; the scrubbed effects below enforce the motion budget.
+  if (paint.largestFrameGap <= 34) expect(paint.elapsed).toBeLessThanOrEqual(300);
+});
+
 for (const theme of ['light', 'dark'] as const) {
-  test(`a pending page leaves its layout in place, then fades through the ${theme} surface`, async ({
+  test(`ready pages fade through the ${theme} surface within the navigation budget`, async ({
     page,
   }, testInfo) => {
-    let release!: () => void;
-    let requested!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const request = new Promise<void>((resolve) => {
-      requested = resolve;
-    });
-    await page.route(/\/assets\/History-[^/]+\.js/, async (route) => {
-      requested();
-      await gate;
-      await route.continue();
-    });
     await page.emulateMedia({ colorScheme: theme });
     await page.goto('/?os=mac');
     await expect(page.locator('html')).toHaveCSS('color-scheme', theme);
@@ -35,15 +107,6 @@ for (const theme of ['light', 'dark'] as const) {
     const overview = viewport.locator('[data-ol-page="overview"]');
     const history = viewport.locator('[data-ol-page="history"]');
     try {
-      await page.getByRole('button', { name: '历史', exact: true }).click();
-      await request;
-      await expect(overview).toHaveAttribute('data-transition-phase', 'retained');
-      await expect(overview.getByText('今日概览', { exact: true })).toBeVisible();
-      await expect(overview).toHaveCSS('opacity', '1');
-      await expect(overview).toHaveCSS('overflow', 'hidden');
-      await expect(overview).toHaveClass(/\bol-page-fixed\b/);
-      await expect(history).toHaveAttribute('data-transition-phase', 'waiting');
-      await expect(history).toHaveCSS('opacity', '0');
       await page.evaluate(() => {
         const animate = Element.prototype.animate;
         (window as NavigationProbe).restoreNavigationClock = () => {
@@ -56,14 +119,17 @@ for (const theme of ['light', 'dark'] as const) {
               'main [data-transition-phase="enter"], main [data-transition-phase="exit"]',
             )
           ) {
-            // Sample the real effect without depending on a busy runner painting every frame.
+            // Sample the real effect without depending on the runner painting every frame.
             animation.pause();
             animation.currentTime = 0;
           }
           return animation;
         };
       });
-      release();
+      await page.getByRole('button', { name: '历史', exact: true }).click();
+      await expect(overview.getByText('今日概览', { exact: true })).toBeVisible();
+      await expect(overview).toHaveCSS('overflow', 'hidden');
+      await expect(overview).toHaveClass(/\bol-page-fixed\b/);
 
       const sample = async (surface: typeof overview, phase: 'exit' | 'enter') => {
         await expect(surface).toHaveAttribute('data-transition-phase', phase);
@@ -71,7 +137,7 @@ for (const theme of ['light', 'dark'] as const) {
           const animation = element.getAnimations().find((candidate) => candidate.id === id)!;
           await animation.ready;
           const duration = Number(animation.effect!.getComputedTiming().activeDuration);
-          return [0, 0.35, 0.7].map((fraction) => {
+          const frames = [0, 0.35, 0.7].map((fraction) => {
             animation.currentTime = duration * fraction;
             const style = getComputedStyle(element);
             return {
@@ -80,9 +146,10 @@ for (const theme of ['light', 'dark'] as const) {
               scale: new DOMMatrixReadOnly(style.transform).m11,
             };
           });
+          return { duration, frames };
         }, `ol-page-${phase}`);
       };
-      const exit = await sample(overview, 'exit');
+      const { duration: exitMs, frames: exit } = await sample(overview, 'exit');
       await page.screenshot({
         path: testInfo.outputPath(`acceptance-transition-${theme}-exit.png`),
       });
@@ -109,7 +176,8 @@ for (const theme of ['light', 'dark'] as const) {
       await page.screenshot({
         path: testInfo.outputPath(`acceptance-transition-${theme}-surface.png`),
       });
-      const enter = await sample(history, 'enter');
+      const { duration: enterMs, frames: enter } = await sample(history, 'enter');
+      expect(exitMs + enterMs).toBeLessThanOrEqual(200);
       await page.screenshot({
         path: testInfo.outputPath(`acceptance-transition-${theme}-enter.png`),
       });
@@ -129,7 +197,6 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(history).toHaveCSS('filter', 'none');
       await expect(overview).toHaveCount(0);
     } finally {
-      release();
       await page.evaluate(() => (window as NavigationProbe).restoreNavigationClock?.());
     }
   });

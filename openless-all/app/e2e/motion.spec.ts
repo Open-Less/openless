@@ -89,7 +89,7 @@ test('settings entrance exposes its starting pose, interpolates and releases its
   await expect
     .poll(() => dialog.evaluate((element) => (element as HTMLElement).style.willChange))
     .toBe('');
-  const { initial, frames } = await page.evaluate(async () => {
+  const { initial, frames, duration } = await page.evaluate(async () => {
     const probe = (window as ProbeWindow).settingsEntranceProbe;
     probe.restore();
     const entry = probe.entries.at(-1)!;
@@ -110,11 +110,12 @@ test('settings entrance exposes its starting pose, interpolates and releases its
         const transform = new DOMMatrixReadOnly(style.transform);
         return { opacity: Number(style.opacity), y: transform.m42, scale: transform.m11 };
       });
-      return { initial: entry.initial, frames };
+      return { initial: entry.initial, frames, duration };
     } finally {
       copy.cancel();
     }
   });
+  expect(duration).toBeLessThanOrEqual(200);
   expect(initial.opacity).toBeLessThan(0.1);
   // Settings enters as a surface, then releases its transform at rest for crisp text.
   expect(initial.y).toBeCloseTo(10, 1);
@@ -123,6 +124,46 @@ test('settings entrance exposes its starting pose, interpolates and releases its
   expect(frames.some((frame) => frame.opacity > 0.1 && frame.opacity < 0.9)).toBe(true);
   expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(3);
   await expect(dialog).toHaveCSS('opacity', '1');
+  await expect(dialog).toHaveCSS('transform', 'none');
+});
+
+test('a vocabulary popup scales to rest without bouncing or sliding from the edge', async ({
+  page,
+}) => {
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  await settleNavigation(page);
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this.matches('.ol-dialog-card')) {
+        Element.prototype.animate = animate;
+        animation.pause();
+        animation.currentTime = 0;
+      }
+      return animation;
+    };
+  });
+  await page.getByRole('button', { name: '新词', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '添加新词', exact: true });
+  const { duration, frames } = await dialog.evaluate(async (element) => {
+    const animation = element.getAnimations().find((entry) => entry.id === 'ol-surface-enter')!;
+    await animation.ready;
+    const duration = Number(animation.effect!.getComputedTiming().activeDuration);
+    const frames = [0, 0.2, 0.4, 0.6, 0.8, 1].map((fraction) => {
+      animation.currentTime = duration * fraction;
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+      return { scale: matrix.m11, y: matrix.m42 };
+    });
+    animation.finish();
+    return { duration, frames };
+  });
+  expect(duration).toBeLessThanOrEqual(200);
+  expect(frames[0].scale).toBeLessThan(1);
+  expect(Math.abs(frames[0].y)).toBeLessThan(12);
+  expect(
+    frames.every(({ scale }, index) => scale <= 1 && (!index || scale >= frames[index - 1].scale)),
+  ).toBe(true);
   await expect(dialog).toHaveCSS('transform', 'none');
 });
 
