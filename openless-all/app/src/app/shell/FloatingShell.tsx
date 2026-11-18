@@ -6,13 +6,13 @@ import { afterPaint } from '../../lib/startupMetrics';
 import { guideFinishedThisSession } from '../../lib/desktopOnboarding';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
-import { Tooltip } from '../../ui/overlays/Tooltip';
 import { WindowChrome } from './WindowChrome';
+import { DesktopSidebar } from './DesktopSidebar';
+import './shell-navigation.css';
 import { getRuntimeOS, getShortcutPlatform, type OS } from '../../runtime/environment';
 import { SettingsModal, type SettingsSectionId } from '../../features/settings/shell/SettingsModal';
 import type { ServiceViewId } from '../../features/settings/shell/navigation';
 import { CloudSyncSetupPrompt } from '../../features/cloud-sync/CloudSyncSetupPrompt';
-import { IS_BETA_BUILD, IS_DEV_BUILD } from '../../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
@@ -32,19 +32,8 @@ import { applyStackedLayoutFromPrefs } from '../../lib/stackedLayout';
 import { applyConservativeLayout } from '../../lib/conservativeLayout';
 import { useMobileLayout, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../data/preferences';
-import {
-  MOBILE_BOTTOM_TABS,
-  MORE_TABS,
-  NAV_TREE,
-  STYLE_TABS,
-  subItemLabelKey,
-  useNavigation,
-  type AppTab,
-} from './navigation';
+import { MOBILE_BOTTOM_TABS, MORE_TABS, STYLE_TABS, useNavigation, type AppTab } from './navigation';
 import { getPage, preloadPage, Overview, SelectionAsk } from './pages';
-
-const MAC_TRAFFIC_LIGHT_CLEARANCE = 44;
-const SIDEBAR_WIDTH = 226;
 
 interface FloatingShellProps {
   os?: OS;
@@ -229,214 +218,17 @@ function FloatingShellBody({
           zIndex: 1,
         }}
       >
-        {/* Sidebar — desktop / wide only. */}
         {!mobile && (
-          <aside
-            className="ol-sidebar-surface"
-            style={{
-              width: SIDEBAR_WIDTH,
-              height: '100%',
-              flexShrink: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              background: 'var(--ol-sidebar-bg)',
-              borderRight: '0.5px solid var(--ol-line)',
-              // mac: clear the traffic-light height at the top so brand/nav sit below it.
-              padding:
-                os === 'mac' ? `${MAC_TRAFFIC_LIGHT_CLEARANCE}px 10px 12px` : '10px 10px 12px',
-            }}
-          >
-            {/* Version row: replaces the old "OpenLess" brand spot, filling the gap
-              above the nav; the BETA badge shares the version number's baseline. */}
-            <button
-              type="button"
-              onClick={() => setCurrentTab('overview')}
-              className="ol-sidebar-brand"
-              aria-label={t('shell.homeLabel')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flexWrap: 'wrap',
-                width: '100%',
-                padding: '0 10px 12px',
-                border: 0,
-                background: 'transparent',
-                cursor: 'pointer',
-                textAlign: 'left',
-                fontFamily: 'var(--ol-font-sans)',
-                fontSize: 12,
-                color: 'var(--ol-ink-4)',
-              }}
-            >
-              <strong style={{ fontSize: 15, color: 'var(--ol-ink)', letterSpacing: '-0.02em' }}>
-                OpenLess
-              </strong>
-              {(IS_BETA_BUILD || IS_DEV_BUILD) && (
-                <span className="ol-version-badge">
-                  {IS_DEV_BUILD ? 'DEV' : t('shell.betaTag')}
-                </span>
-              )}
-            </button>
-
-            {/* Group titles expand and collapse without changing the current page. */}
-            <nav style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {NAV_TREE.map((node) => {
-                if (node.kind === 'item') {
-                  const active = !settingsOpen && currentTab === node.id;
-                  return (
-                    <Tooltip
-                      key={node.id}
-                      content={t(`shell.navHint.${node.id}`)}
-                      placement="right"
-                    >
-                      <button
-                        onClick={() => setCurrentTab(node.id)}
-                        onPointerEnter={() => preloadPage(node.id)}
-                        onFocus={() => preloadPage(node.id)}
-                        aria-current={active ? 'page' : undefined}
-                        className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
-                        style={navBtnStyle}
-                      >
-                        <Icon name={node.icon} size={16} />
-                        <span style={{ flex: 1 }}>{t(`nav.${node.id}`)}</span>
-                      </button>
-                    </Tooltip>
-                  );
-                }
-                const expanded = !!openGroups[node.key];
-                const groupActive = !settingsOpen && node.children.some((c) => c.id === currentTab);
-                return (
-                  <div key={node.key}>
-                    {/* Group title: click only expands/collapses, never navigates. */}
-                    <button
-                      onClick={() => toggleGroup(node.key)}
-                      className={
-                        groupActive && !expanded ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'
-                      }
-                      aria-expanded={expanded}
-                      style={navBtnStyle}
-                    >
-                      <Icon name={node.icon} size={16} />
-                      <span style={{ flex: 1 }}>{t(`nav.group.${node.key}`)}</span>
-                      <Icon
-                        name="chevRight"
-                        size={12}
-                        style={{
-                          flexShrink: 0,
-                          transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                          transition: 'transform 0.20s var(--ol-motion-spring)',
-                        }}
-                      />
-                    </button>
-                    {/* Children: the grid-rows 0fr↔1fr transition gives an expand
-                        animation without hardcoded heights. */}
-                    <div
-                      aria-hidden={!expanded}
-                      ref={(element) => {
-                        if (element) element.inert = !expanded;
-                      }}
-                      style={{
-                        display: 'grid',
-                        gridTemplateRows: expanded ? '1fr' : '0fr',
-                        transition: 'grid-template-rows 0.24s var(--ol-motion-spring)',
-                      }}
-                    >
-                      <div style={{ overflow: 'hidden', minHeight: 0 }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 1,
-                            padding: '1px 0 2px',
-                          }}
-                        >
-                          {node.children.map((child) => {
-                            const active = !settingsOpen && currentTab === child.id;
-                            return (
-                              <button
-                                key={child.id}
-                                onClick={() => setCurrentTab(child.id)}
-                                onPointerEnter={() => preloadPage(child.id)}
-                                onFocus={() => preloadPage(child.id)}
-                                aria-current={active ? 'page' : undefined}
-                                className={
-                                  active
-                                    ? 'ol-nav-btn ol-nav-subitem ol-nav-btn-active'
-                                    : 'ol-nav-btn ol-nav-subitem'
-                                }
-                                tabIndex={expanded ? 0 : -1}
-                                style={{ ...navBtnStyle, paddingLeft: 30 }}
-                              >
-                                <span style={{ flex: 1 }}>{t(subItemLabelKey(child.id))}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </nav>
-
-            <div style={{ flex: 1 }} />
-
-            <div
-              style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, paddingTop: 10 }}
-            >
-              <Tooltip content={t('shell.navHint.settings')} placement="right">
-                <button
-                  onClick={() => openSettings()}
-                  className={settingsOpen ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
-                  style={{
-                    display: 'flex',
-                    width: 'fit-content',
-                    justifySelf: 'start',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 10,
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    border: 0,
-                    fontFamily: 'inherit',
-                    fontSize: 15,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <Icon name="settings" size={16} />
-                  <span>{t('shell.footer.settings')}</span>
-                </button>
-              </Tooltip>
-              <button
-                type="button"
-                className={
-                  !settingsOpen && currentTab === 'usage'
-                    ? 'ol-nav-btn ol-nav-btn-active'
-                    : 'ol-nav-btn'
-                }
-                aria-current={!settingsOpen && currentTab === 'usage' ? 'page' : undefined}
-                onClick={() => setCurrentTab('usage')}
-                style={{
-                  display: 'flex',
-                  width: 'fit-content',
-                  justifySelf: 'end',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 10,
-                  padding: '8px 12px',
-                  border: 0,
-                  borderRadius: 8,
-                  fontFamily: 'inherit',
-                  fontSize: 15,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <Icon name="overview" size={16} />
-                <span>{t('shell.footer.usage', { defaultValue: 'Usage' })}</span>
-              </button>
-            </div>
-          </aside>
+          <DesktopSidebar
+            os={os}
+            currentTab={currentTab}
+            settingsOpen={settingsOpen}
+            openGroups={openGroups}
+            onSelectTab={setCurrentTab}
+            onPreloadTab={preloadPage}
+            onToggleGroup={toggleGroup}
+            onOpenSettings={openSettings}
+          />
         )}
 
         {/* Main content — one flat solid block (feedback: the right side is a single
@@ -620,46 +412,6 @@ function FloatingShellBody({
         }
         onSetup={() => openSettings('privacy')}
       />
-      {/* Enter keyframes shared by tab switching, the provider prompt, and the footer popover */}
-      <style>{`
-        .ol-nav-btn {
-          color: var(--ol-ink-3);
-          font-weight: var(--ol-font-weight-medium);
-        }
-        .ol-nav-btn.ol-nav-btn-active {
-          color: var(--ol-ink);
-          -webkit-text-fill-color: var(--ol-ink);
-          font-weight: var(--ol-font-weight-semibold);
-          background-color: var(--ol-choice-active-bg);
-        }
-        .ol-sidebar-surface .ol-nav-btn {
-          color: var(--ol-choice-idle-ink);
-          -webkit-text-fill-color: var(--ol-choice-idle-ink);
-          background-color: transparent;
-          cursor: pointer;
-          box-shadow: none;
-          transition: none;
-        }
-        /* The inset ring keeps selection visible when the native WebView does not
-           paint the translucent fill or the window clips an outer outline. */
-        .ol-sidebar-surface .ol-nav-btn-active {
-          color: var(--ol-ink);
-          -webkit-text-fill-color: var(--ol-ink);
-          background-color: var(--ol-choice-active-bg);
-          box-shadow: inset 0 0 0 1px var(--ol-ink);
-        }
-        /* Packaged WebViews can deliver hover while reporting limited pointer capabilities. */
-        .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
-          color: var(--ol-choice-hover-ink);
-          -webkit-text-fill-color: var(--ol-choice-hover-ink);
-          background-color: var(--ol-choice-hover-bg);
-          box-shadow: inset 0 0 0 1px var(--ol-line);
-        }
-        .ol-sidebar-surface .ol-nav-btn:focus-visible {
-          outline: 2px solid var(--ol-blue);
-          outline-offset: -2px;
-        }
-      `}</style>
     </div>
   );
 }
@@ -853,22 +605,6 @@ const mobileNavBtnStyle: CSSProperties = {
   background: 'transparent',
   fontFamily: 'inherit',
   cursor: 'default',
-};
-
-/** Base style for sidebar nav buttons (shared by flat items / group titles / children; children override paddingLeft).
- * Layout only: colour, background and cursor come from the .ol-sidebar-surface rules. */
-const navBtnStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  width: '100%',
-  padding: '8px 10px',
-  borderRadius: 8,
-  border: 0,
-  // (After the Codex sidebar): 15px nav text, 16px icons — closer to the reference design.
-  fontFamily: 'inherit',
-  fontSize: 15,
-  textAlign: 'left',
 };
 
 function ProviderSetupPrompt({

@@ -142,6 +142,9 @@
   /* （参考 Codex 侧栏）：侧栏底色与右侧纯白内容区拉开明确层次，
      此前 #fafafa 对白底几乎无区分。 */
   --ol-sidebar-bg: #f0f0f1;
+  /* Opaque equivalents of the choice fills over the sidebar surface. */
+  --ol-sidebar-hover-bg: #e6e6e7;
+  --ol-sidebar-active-bg: #dededf;
   --ol-sidebar-border: #e4e4e7;
   --ol-sidebar-brand-bg: linear-gradient(
     180deg,
@@ -328,6 +331,8 @@
   --ol-card-shadow: 0 18px 42px -30px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
   --ol-sidebar-bg: #141417;
+  --ol-sidebar-hover-bg: #1c1c1f;
+  --ol-sidebar-active-bg: #2c2c2e;
   --ol-sidebar-border: #27272a;
   --ol-sidebar-brand-bg: transparent;
   --ol-sidebar-brand-border: transparent;
