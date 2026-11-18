@@ -70,7 +70,8 @@ test('the first Overview to History click paints a clear page and its records', 
                 pageStyle.opacity === '1' &&
                 pageStyle.filter === 'none' &&
                 rowStyle.opacity === '1' &&
-                rowStyle.transform === 'none'
+                // A filled CSS animation can serialize its resting pose as an identity matrix.
+                new DOMMatrixReadOnly(rowStyle.transform).isIdentity
               ) {
                 // The frame containing these styles can paint before the next callback.
                 requestAnimationFrame(() => resolve({ elapsed: now - clicked, largestFrameGap }));
