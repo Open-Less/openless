@@ -29,20 +29,12 @@ import android.widget.TextView
  */
 internal class StrokeInputController(private val service: OpenLessImeService) {
     private val strokeRepository by lazy { StrokeInputRepository(service) }
-    // internal, not private: Pinyin mode's own post-commit association
-    // (RimePinyinController) reuses this exact instance rather than loading
-    // a second copy of the same ~220k-entry phrase index — association data
-    // is keyed by confirmed on-screen Chinese text, not by how it was
-    // typed, so it's equally valid for either input mode.
-    internal val phraseRepository by lazy { StrokePhraseRepository(service) }
 
     private var strokeCode = ""
     private var strokeQueryEpoch = 0L
     private val wordSegments = mutableListOf<String>()
     private var lastStrokeCandidates: List<String> = emptyList()
     private var confirmedText = ""
-    private val associationLearning = TypedContinuationHistory()
-    private var phraseQueryEpoch = 0L
     private var strokePreview: TextView? = null
     private var clearStrokeButton: TextView? = null
     private var strokeCandidates: LinearLayout? = null
@@ -67,20 +59,12 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         listOf("*", "+", "=", "/", "_"),
     )
 
-    /** Warm the offline stroke index and phrase-association trie while the IME is idle — see OpenLessImeService.onCreate(). */
-    fun preloadAsync() {
-        strokeRepository.preloadAsync()
-        phraseRepository.preloadAsync()
-    }
+    fun preloadAsync() = strokeRepository.preloadAsync()
 
-    fun shutdown() {
-        strokeRepository.shutdown()
-        phraseRepository.shutdown()
-    }
+    fun shutdown() = strokeRepository.shutdown()
 
     /** Matches selectInputMode()'s own old inline reset exactly — mode-switch also resets the number/symbol sub-panel and the punctuation rail's page, which resetForNewInputSession() below does not. */
     fun resetForModeSwitch() {
-        associationLearning.reset()
         strokeNumberMode = false
         numberSymbolMode = false
         symbolPageIndex = 0
@@ -88,17 +72,14 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         strokeCode = ""
         strokeQueryEpoch++
         confirmedText = ""
-        phraseQueryEpoch++
     }
 
     /** Matches onStartInput()'s own old inline reset exactly — a fresh input session also drops any in-progress word segments/candidates, but leaves the punctuation rail's page alone. */
     fun resetForNewInputSession() {
-        associationLearning.reset()
         strokeNumberMode = false
         numberSymbolMode = false
         symbolPageIndex = 0
         confirmedText = ""
-        phraseQueryEpoch++
         strokeCode = ""
         strokeQueryEpoch++
         wordSegments.clear()
@@ -117,13 +98,8 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
      * panel is the one showing.
      */
     fun clearAfterFieldEmptied() {
-        associationLearning.reset()
-        if (service.inputMode == OpenLessImeService.InputMode.STROKE) {
-            abandonComposition()
-        } else {
-            confirmedText = ""
-            phraseQueryEpoch++
-        }
+        confirmedText = ""
+        if (service.inputMode == OpenLessImeService.InputMode.STROKE) abandonComposition()
     }
 
     fun buildStrokeView(): View {
@@ -226,7 +202,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         // Only shown once the candidates actually overflow the visible
         // scroll width — otherwise it sat there whether or not there was
         // anything more to show, which read as an odd stray control.
-        // renderCandidateRow()/refreshAssociations() both just repopulate
+        // renderCandidateRow() repopulates
         // strokeCandidates and let layout happen, so a global layout
         // listener (fires after every layout pass, including the one
         // triggered by add/removeAllViews) is what re-checks this instead
@@ -462,7 +438,6 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
     private fun appendStroke(stroke: String) {
         if (strokeCode.length >= 32) return
         if (strokeCode.isEmpty()) {
-            phraseQueryEpoch++
             lastStrokeCandidates = emptyList()
             renderCandidateRow(emptyList())
         }
@@ -502,7 +477,11 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             renderCandidateRow(emptyList())
             return
         }
-        strokeRepository.searchAsync(code) { result ->
+        val context = if (service.personalizedLearningAllowed() &&
+            OpenLessAndroidPreferences.strokeAssociationEnabled(service)) {
+            RimePrediction.append(confirmedText, wordSegments.joinToString(""))
+        } else ""
+        strokeRepository.searchAsync(code, context) { result ->
             if (query != strokeQueryEpoch || service.inputMode != OpenLessImeService.InputMode.STROKE) return@searchAsync
             lastStrokeCandidates = result
             renderCandidateRow(result)
@@ -597,57 +576,14 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
     private fun commitWord(word: String): Boolean {
         if (word.isEmpty() || service.isSensitiveField(service.currentInputEditorInfo)) return false
         val connection = service.currentInputConnection ?: return false
-        val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         if (!connection.commitText(service.outputScript(word), 1)) return false
-        if (service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service)) {
-            phraseRepository.recordTypedContinuation(associationLearning.advance(contextBeforeCommit, word))
-        } else {
-            associationLearning.reset()
-        }
-        if (service.personalizedLearningAllowed()) confirmedText = (confirmedText + word).takeLast(MAX_ASSOCIATION_CONTEXT)
+        confirmedText = if (service.personalizedLearningAllowed()) RimePrediction.append(confirmedText, word) else ""
         clearStrokes()
-        refreshAssociations()
+        service.candidateOverlayEntries = emptyList()
         return true
     }
 
-    private fun refreshAssociations() {
-        if (!service.personalizedLearningAllowed() || !OpenLessAndroidPreferences.strokeAssociationEnabled(service)) {
-            populateCandidateRow(emptyList())
-            service.candidateOverlayEntries = emptyList()
-            return
-        }
-        val context = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
-        val query = ++phraseQueryEpoch
-        if (context.isEmpty()) return
-        phraseRepository.searchAsync(context) { result ->
-            if (query != phraseQueryEpoch || service.inputMode != OpenLessImeService.InputMode.STROKE || confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT) != context) return@searchAsync
-            val specs = result.mapIndexed { index, candidate ->
-                val matchedPrefix = candidate.matchedPrefix.ifEmpty { context }
-                val displayText = service.outputScript(candidate.text)
-                val candidateWidth = service.dp((displayText.codePointCount(0, displayText.length) * 22 + 16).coerceAtLeast(46))
-                CandidateSpec(displayText, index == 0, candidateWidth) { commitAssociation(candidate.text, matchedPrefix) }
-            }
-            populateCandidateRow(specs)
-            service.candidateOverlayEntries = specs.map { it.label to it.action }
-        }
-    }
-
-    private fun commitAssociation(displayText: String, matchedContext: String) {
-        if (service.isSensitiveField(service.currentInputEditorInfo) || !displayText.startsWith(matchedContext)) return
-        val suffix = displayText.removePrefix(matchedContext)
-        val connection = service.currentInputConnection ?: return
-        if (suffix.isNotEmpty() && !connection.commitText(service.outputScript(suffix), 1)) return
-        if (service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service)) {
-            phraseRepository.recordUsage(matchedContext, displayText)
-        }
-        associationLearning.reset()
-        confirmedText = (confirmedText + suffix).takeLast(MAX_ASSOCIATION_CONTEXT)
-        clearStrokes()
-        refreshAssociations()
-    }
-
     private fun deleteStroke() {
-        associationLearning.reset()
         if (strokeCode.isNotEmpty()) {
             strokeCode = strokeCode.dropLast(1)
             strokeQueryEpoch++
@@ -664,13 +600,8 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             renderCandidateRow(emptyList())
         } else {
             service.deleteBackward()
-            if (confirmedText.isNotEmpty()) {
-                confirmedText = confirmedText.dropLast(1)
-                phraseQueryEpoch++
-                refreshAssociations()
-            } else {
-                strokeCandidates?.removeAllViews()
-            }
+            confirmedText = ""
+            renderCandidateRow(emptyList())
         }
     }
 
@@ -692,10 +623,8 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
      * meaning nothing. Same as pinyin abandoning its encoding on punctuation.
      */
     private fun abandonComposition() {
-        associationLearning.reset()
         clearStrokes()
         confirmedText = ""
-        phraseQueryEpoch++
         service.candidateOverlayEntries = emptyList()
     }
 
@@ -704,10 +633,4 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         service.currentInputConnection?.commitText(text, 1)
     }
 
-    // internal, not private: RimePinyinController's own association context
-    // buffer reuses the same cap for consistency (see phraseRepository's own
-    // doc comment on why the two share one StrokePhraseRepository instance).
-    internal companion object {
-        const val MAX_ASSOCIATION_CONTEXT = 8
-    }
 }

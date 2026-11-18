@@ -15,6 +15,7 @@ APP = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get('OPENLESS_CACHE_ROOT', '/data-win/openless-cache')) / 'mobile-rime'
 SOURCES = {
     'rime': ('rime/librime', '1.17.0'),
+    'predict': ('rime/librime-predict', '920bd41ebf6f9bf6855d14fbe80212e54e749791'),
     'yaml': ('jbeder/yaml-cpp', '0.8.0'),
     'leveldb': ('google/leveldb', '1.23'),
     'opencc': ('BYVoid/OpenCC', 'ver.1.1.9'),
@@ -87,6 +88,51 @@ def fetch(name, url):
 def run(*args):
     subprocess.run([str(x) for x in args], check=True)
 
+def build_prediction_data(src, boost, rime_build, data):
+    # The upstream DB builder is a host executable, not a target binary.
+    root = CACHE / 'build-predict-host'
+    root.mkdir(exist_ok=True)
+    executable = root / ('build_predict.exe' if os.name == 'nt' else 'build_predict')
+    rime = src['rime']
+    predict = src['predict']
+    marisa = src['opencc'] / 'deps/marisa-0.2.6'
+    run(os.environ.get('CXX_FOR_BUILD', 'c++'), '-std=c++17', '-O2', '-pthread',
+        *('-I' + str(path) for path in [boost, rime / 'include', rime / 'src', rime_build / 'src',
+                                       predict / 'src', marisa / 'include', marisa / 'lib']),
+        predict / 'tools/build_predict.cc', predict / 'src/predict_db.cc',
+        rime / 'src/rime/dict/mapped_file.cc', rime / 'src/rime/dict/string_table.cc',
+        *sorted((marisa / 'lib').rglob('*.cc')), '-o', executable)
+    # Use the same simplified corpus as the mobile schemas. Limit the
+    # secondary ranking index to common phrases, not the entire dictionary.
+    counts = {}
+    with (src['ice'] / 'cn_dicts/base.dict.yaml').open(encoding='utf-8') as corpus:
+        for line in corpus:
+            if line.strip() == '...':
+                break
+        for line in corpus:
+            fields = line.rstrip('\r\n').split('\t')
+            if len(fields) != 3 or not fields[2].isascii() or not fields[2].isdigit():
+                continue
+            phrase, weight = fields[0], int(fields[2])
+            if weight < 10_000 or not phrase or any(c.isspace() for c in phrase):
+                continue
+            for i in range(max(1, len(phrase) - 4), min(9, len(phrase))):
+                entries = counts.setdefault(phrase[:i], {})
+                suffix = phrase[i:]
+                entries[suffix] = max(weight, entries.get(suffix, 0))
+    temporary = root / 'predict.db'
+    temporary.unlink(missing_ok=True)
+    with subprocess.Popen([str(executable), str(temporary)], stdin=subprocess.PIPE, encoding='utf-8') as process:
+        with process.stdin as stream:
+            for prefix, entries in sorted(counts.items()):
+                for suffix, weight in sorted(entries.items(), key=lambda item: (-item[1], item[0]))[:32]:
+                    stream.write(f'{prefix}\t{suffix}\t{weight}\n')
+        if process.wait():
+            raise RuntimeError('Failed to build Rime prediction DB')
+    shutil.copy2(temporary, data / 'predict.db')
+    shutil.copy2(predict / 'LICENSE', data / 'librime-predict-LICENSE')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('platform', choices=['harmony', 'android'])
@@ -110,7 +156,7 @@ def main():
     CACHE.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {name: pool.submit(fetch, name + '-' + ref, f'https://codeload.github.com/{repo}/tar.gz/{ref}')
-                   for name, (repo, ref) in SOURCES.items()}
+                   for name, (repo, ref) in SOURCES.items() if name != 'predict' or opts.platform == 'android'}
         boost_future = pool.submit(fetch, 'boost-1.85.0', 'https://archives.boost.io/release/1.85.0/source/boost_1_85_0.tar.bz2')
         src = {name: future.result() for name, future in futures.items()}
         boost = boost_future.result()
@@ -171,8 +217,10 @@ def main():
                              '-DOpencc_INCLUDE_PATH=' + str(prefix / 'include'), '-DOpencc_LIBRARY=' + str(prefix / 'lib/libopencc.a')], 'rime-static', False)
     shutil.copy2(directory / 'lib/librime.a', prefix / 'lib/librime.a')
     shutil.copy2(src['rime'] / 'src/rime_api.h', prefix / 'include/rime_api.h')
-    data = CACHE / 'data'
+    data = CACHE / ('data-android' if opts.platform == 'android' else 'data')
     data.mkdir(exist_ok=True)
+    if opts.platform == 'android':
+        build_prediction_data(src, boost, directory, data)
     for name in ['pinyin', 'prelude']:
         for path in src[name].glob('*.yaml'):
             shutil.copy2(path, data / path.name)
@@ -181,7 +229,15 @@ def main():
                 shutil.copy2(src[name] / filename, data / (name + '-' + filename))
     # The bundled stroke dictionary is already attributed by this repository.
     shutil.copy2(APP / 'third_party/rime-stroke/stroke.dict.yaml', data / 'stroke.dict.yaml')
-    (data / 'stroke.schema.yaml').write_text('schema:\n  schema_id: stroke\n  name: 笔画\nengine:\n  translators: [table_translator]\ntranslator:\n  dictionary: stroke\n', encoding='utf-8')
+    (data / 'stroke.schema.yaml').write_text(
+        'schema:\n  schema_id: stroke\n  name: 笔画\n'
+        'engine:\n  processors: [speller, selector, navigator, express_editor]\n'
+        '  segmentors: [abc_segmentor, fallback_segmentor]\n'
+        '  translators: [table_translator]\n  filters: [uniquifier]\n'
+        'speller:\n  alphabet: hspnz\n'
+        'translator:\n  dictionary: stroke\n  enable_completion: true\n  enable_user_dict: false\n',
+        encoding='utf-8',
+    )
     (data / 'default.custom.yaml').write_text(
         'patch:\n'
         '  schema_list:\n'
@@ -204,9 +260,16 @@ def main():
         (data / ('ice_' + table + '.dict.yaml')).write_text(notice + content)
     (data / 'rime_ice.dict.yaml').write_text(dictionary)
     # English (melt_eng) ships inside rime-ice: schema + dict + en_dicts.
-    for name in ['melt_eng.schema.yaml', 'melt_eng.dict.yaml']:
-        shutil.copy2(ice / name, data / name)
-    shutil.copytree(ice / 'en_dicts', data / 'en_dicts', dirs_exist_ok=True)
+    shutil.copy2(ice / 'melt_eng.schema.yaml', data / 'melt_eng.schema.yaml')
+    # Mobile asset extraction and public-update snapshots copy flat files only.
+    melt = (ice / 'melt_eng.dict.yaml').read_text(encoding='utf-8').replace('en_dicts/', 'melt_')
+    (data / 'melt_eng.dict.yaml').write_text(melt, encoding='utf-8')
+    for path in (ice / 'en_dicts').glob('*.dict.yaml'):
+        table = path.name.removesuffix('.dict.yaml')
+        content = path.read_text(encoding='utf-8').replace(f'name: {table}', f'name: melt_{table}', 1)
+        (data / ('melt_' + path.name)).write_text(content, encoding='utf-8')
+    if opts.platform == 'android':
+        (data / 'openless-mobile-assets-v2').write_text('2\n', encoding='utf-8')
     shutil.copy2(ice / 'LICENSE', data / 'rime-ice-LICENSE')
     shutil.copy2(src['essay'] / 'essay.txt', data / 'essay.txt')
     shutil.copy2(src['essay'] / 'LICENSE', data / 'essay-LICENSE')
@@ -246,7 +309,10 @@ def main():
     if opts.platform == 'android':
         bridge = root / 'build-bridge'
         run(cmake, '-S', APP / 'mobile-ime', '-B', bridge, *common,
-            '-DOPENLESS_RIME_PREFIX=' + str(prefix))
+            '-DOPENLESS_RIME_PREFIX=' + str(prefix),
+            '-DOPENLESS_PREDICT_SOURCE=' + str(src['predict']),
+            '-DOPENLESS_RIME_SOURCE=' + str(src['rime']),
+            '-DOPENLESS_RIME_BUILD=' + str(directory), '-DOPENLESS_BOOST_SOURCE=' + str(boost))
         run(cmake, '--build', bridge, '--parallel', opts.jobs)
         if not opts.stage:
             print('Android JNI: ' + str(bridge / 'libopenless_rime.so'), flush=True)

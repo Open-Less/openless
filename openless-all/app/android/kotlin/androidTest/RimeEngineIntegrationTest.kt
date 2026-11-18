@@ -19,6 +19,12 @@ class RimeEngineIntegrationTest {
             .getSharedPreferences("openless_ime_ui", android.content.Context.MODE_PRIVATE)
             .edit().putBoolean("public_dictionary_updates", false).commit()
     }
+    @Test fun bundledPredictionDbFindsSimplifiedContinuationByContextSuffix() {
+        OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
+        val rows = OpenLessRime.request("predict", "", "今天天气").getJSONArray("candidates")
+        assertTrue((0 until rows.length()).any { rows.getString(it) == "预报" })
+    }
+
     @Test fun externalCandidateUsesRevisionAndPendingCommitContract() {
         OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
         val session = OpenLessRime.request("create", "", "private").getString("session")

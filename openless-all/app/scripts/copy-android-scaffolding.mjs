@@ -77,7 +77,7 @@ const KOTLIN_FILES = [
   'RimeUserDictionaryFile.kt',
   'KeyboardDataFile.kt',
   'OpenLessSettingsExport.kt',
-  'StrokePhraseRepository.kt',
+  'RimePrediction.kt',
   'StrokeUserFrequency.kt',
   'FrequencyStampCache.kt',
   'EnglishCandidateProvider.kt',
@@ -99,7 +99,7 @@ const KOTLIN_TEST_FILES = [
   'DictationSpanTest.kt',
   'ImePrivacyPolicyTest.kt',
   'ImeDraftReplacementTest.kt',
-  'StrokePhraseSuffixTest.kt',
+  'RimePredictionTest.kt',
   'EnglishAutoTextTest.kt',
   'InputLearningRulesTest.kt',
   'FrequencyStampCacheTest.kt',
@@ -469,19 +469,28 @@ function main() {
     copyDirectoryContents(androidAssetsRoot, assetsDest, dryRun);
   }
   // Generated projects survive upgrades. Retire only known obsolete files so
-  // an incremental build cannot keep packaging the removed pinyin engine.
+  // an incremental build cannot keep packaging the retired engines or word lists.
   for (const name of [
     'LitePinyinController.kt',
     'LitePinyinRepository.kt',
     'LitePinyinUserFrequency.kt',
     'LitePinyinLearnedPhrases.kt',
     'LegacyPinyinBackup.kt',
+    'StrokePhraseRepository.kt',
   ]) {
     const path = join(kotlinDest, name);
     if (dryRun) console.log(`[dry-run] Would remove retired source ${path}`);
     else rmSync(path, { force: true });
   }
+  const retiredTests = join(kotlinTestDest, 'StrokePhraseSuffixTest.kt');
+  if (dryRun) console.log(`[dry-run] Would remove retired test ${retiredTests}`);
+  else rmSync(retiredTests, { force: true });
   for (const name of [
+    'stroke.dict.tsv',
+    'stroke-frequency.tsv',
+    'english-frequency.tsv',
+    'english-frequency.LICENSE.txt',
+    'phrases.dict.tsv',
     'pinyin_chars.tsv',
     'pinyin_phrases.tsv',
     'pinyin_chars.LICENSE.txt',

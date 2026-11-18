@@ -20,10 +20,12 @@ internal object OpenLessRime {
         val shared = File(context.filesDir, "rime-shared-1.17.0-ice-da1fbe60-v1").apply { mkdirs() }
         val files = context.assets.list("rime") ?: error("Rime assets unavailable")
         require(files.isNotEmpty())
-        for (name in files) {
+        val assetMarker = "openless-mobile-assets-v2"
+        val upgradeAssets = assetMarker in files && !File(shared, assetMarker).exists()
+        for (name in files.sortedBy { it == assetMarker }) {
             require(!name.contains('/') && !name.contains(".."))
             val target = File(shared, name)
-            if (!target.exists()) {
+            if (!target.exists() || (upgradeAssets && name in setOf("stroke.schema.yaml", "melt_eng.dict.yaml", "default.custom.yaml"))) {
                 val temporary = File(shared, "$name.tmp")
                 context.assets.open("rime/$name").use { input -> temporary.outputStream().use { input.copyTo(it) } }
                 check(temporary.renameTo(target))
@@ -35,7 +37,11 @@ internal object OpenLessRime {
         var ready = false
         repeat(3) {
             if (!ready) {
-                if (selected != shared.absolutePath && !selected.startsWith(shared.absolutePath + "/public-updates-v1/")) selected = shared.absolutePath
+                if (selected != shared.absolutePath &&
+                    (!selected.startsWith(shared.absolutePath + "/public-updates-v1/") ||
+                        (assetMarker in files && !File(selected, assetMarker).isFile))) {
+                    selected = shared.absolutePath
+                }
                 try { request("initialize", selected, profile); ready = true }
                 catch (error: Exception) {
                     if (selected == shared.absolutePath) throw error

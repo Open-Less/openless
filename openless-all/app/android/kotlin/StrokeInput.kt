@@ -47,11 +47,11 @@ internal class StrokeInputRepository(context: Context) {
         executor.execute { runCatching { ensureSession() } }
     }
 
-    fun searchAsync(pattern: String, callback: (List<String>) -> Unit) {
+    fun searchAsync(pattern: String, predictionContext: String, callback: (List<String>) -> Unit) {
         val epoch = queryEpoch.incrementAndGet()
         executor.execute {
             val result = if (pattern.isEmpty()) emptyList() else runCatching {
-                rankWithUserPicks(pattern, queryRime(pattern))
+                rankWithUserPicks(pattern, RimePrediction.rank(queryRime(pattern), predictionContext))
             }.getOrElse { failure ->
                 android.util.Log.w("OpenLessStroke", "rime stroke query failed: ${failure.javaClass.simpleName}")
                 rankWithUserPicks(pattern, fallbackCandidates(pattern))
