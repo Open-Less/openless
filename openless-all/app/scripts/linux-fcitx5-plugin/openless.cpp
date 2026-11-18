@@ -46,7 +46,9 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <tuple>
 #include <unordered_map>
@@ -389,38 +391,9 @@ public:
         // 互相抢答，出现「拿到的是上一次的选区」这种不准确的情况。现在只留一条。
         // 契约用例通过 `setSelectionCacheReader` 注入固定值，替代 clipboard addon；
         // 运行时没有注入，就走 addon 的 PRIMARY 读取。
-        std::string text;
         const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
                                                : fcitx::SurroundingText();
-        // 第一来源：应用自报的选区（surrounding 里 anchor != cursor 就是选中的那一段）。
-        // 键盘选中文本时应用不会把内容写进 PRIMARY（那是鼠标选中的语义），
-        // 以前只读 PRIMARY 会直接拿不到东西，键盘选区因此什么都没发生。
-        if (surrounding.isValid() && surrounding.anchor() != surrounding.cursor()) {
-            const int start = std::min(surrounding.cursor(), surrounding.anchor());
-            const int end = std::max(surrounding.cursor(), surrounding.anchor());
-            const std::string &full = surrounding.text();
-            if (start >= 0 && end <= static_cast<int>(full.size()) && start < end) {
-                text = full.substr(static_cast<size_t>(start), static_cast<size_t>(end - start));
-                FCITX_LOGC(openless, Debug)
-                    << "CaptureSelectionTarget: surrounding selection " << text.size()
-                    << " chars (cursor=" << surrounding.cursor()
-                    << " anchor=" << surrounding.anchor() << ")";
-            }
-        }
-        // 第二来源：PRIMARY（鼠标选中文本时应用会把它导出给剪贴板）。
-        if (text.empty()) {
-            if (selectionCacheReader_) {
-                text = selectionCacheReader_();
-            } else {
-                auto *clipboard = instance_->addonManager().addon("clipboard");
-                if (!clipboard) {
-                    FCITX_LOGC(openless, Warn)
-                        << "CaptureSelectionTarget: clipboard addon not loaded";
-                    return std::string();
-                }
-                text = clipboard->call<IClipboard::primary>(selectionIc_);
-            }
-        }
+        std::string text = readSelectionText(surrounding);
         if (text.empty()) {
             FCITX_LOGC(openless, Debug)
                 << "CaptureSelectionTarget: no selection (surrounding invalid or empty, "
@@ -728,35 +701,84 @@ public:
     /// 探针不可用（X11 会话、合成器不提供 ext-data-control）或数据没读完时，才退回
     /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
-        // 与 `captureSelectionTarget` 同一条路径：先看应用自报的选区
-        // （surrounding 的 anchor != cursor），再退回 PRIMARY。
+        // 与 `captureSelectionTarget` 走同一条读取路径。
         const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
                                                : fcitx::SurroundingText();
-        if (surrounding.isValid() && surrounding.anchor() != surrounding.cursor()) {
-            const int start = std::min(surrounding.cursor(), surrounding.anchor());
-            const int end = std::max(surrounding.cursor(), surrounding.anchor());
-            const std::string &full = surrounding.text();
-            if (start >= 0 && end <= static_cast<int>(full.size()) && start < end) {
-                return full.substr(static_cast<size_t>(start),
-                                   static_cast<size_t>(end - start));
-            }
-        }
-        std::string text;
-        if (selectionCacheReader_) {
-            text = selectionCacheReader_();
-        } else {
-            auto *clipboard = instance_->addonManager().addon("clipboard");
-            if (!clipboard) {
-                FCITX_LOGC(openless, Debug)
-                    << "GetSelectionText: clipboard addon not loaded";
-                return std::string();
-            }
-            // 用热键捕获的那个输入上下文（没有就传 nullptr，addon 内部按全局处理）。
-            text = clipboard->call<IClipboard::primary>(selectionIc_);
-        }
+        const std::string text = readSelectionText(surrounding);
         FCITX_LOGC(openless, Debug)
             << "GetSelectionText: " << text.size() << " chars";
         return text;
+    }
+
+    /// 读取当前选区：**输入法本来就看得见输入框**。
+    ///
+    /// 1. 客户端通过 `text-input-v3` / GTK / Qt 上报的 surrounding text 里，
+    ///    `anchor != cursor` 就是选区（键盘选中也有，且带精确偏移）——
+    ///    Chrome / Electron / VS Code / LibreOffice / GTK-Qt 应用都属这一类。
+    /// 2. 客户端根本不支持 surrounding（XIM 老应用、部分终端）时，用输入法的
+    ///    特权反过来「让应用自己复制」：向焦点客户端转发一次复制快捷键，再读
+    ///    clipboard addon 拿到的内容。终端类程序用 Ctrl+Shift+C，避免 Ctrl+C
+    ///    变成 SIGINT。
+    std::string readSelectionText(const fcitx::SurroundingText &surrounding) {
+        if (surrounding.isValid()) {
+            const std::string selected = surrounding.selectedText();
+            if (!selected.empty()) {
+                return selected;
+            }
+        }
+        if (selectionCacheReader_) {
+            return selectionCacheReader_();
+        }
+        return copySelectionFromClient(selectionIc_ ? selectionIc_->program() : std::string());
+    }
+
+    /// 让焦点应用执行一次「复制」，从剪贴板读回选区内容。
+    ///
+    /// 只在 surrounding text 不可用时调用；读回后尽力恢复原剪贴板（Wayland 下
+    /// 只有拥有键盘焦点的客户端能真正写选区，所以恢复是 best-effort）。
+    std::string copySelectionFromClient(const std::string &program) {
+        if (copyInFlight_ || !selectionIc_) {
+            return std::string();
+        }
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            return std::string();
+        }
+        // 终端里 Ctrl+C 是 SIGINT：改用终端自己的复制键。
+        static const std::set<std::string> terminals = {
+            "konsole",  "alacritty", "kitty",  "gnome-terminal", "kgx",
+            "wezterm",  "foot",      "xterm",  "urxvt",          "tilix",
+            "terminator", "st",      "contour", "rio",
+        };
+        const bool term = terminals.count(program) > 0;
+        fcitx::KeyStates states = fcitx::KeyState::Ctrl;
+        if (term) {
+            states = states | fcitx::KeyState::Shift;
+        }
+        const fcitx::Key key(term ? FcitxKey_C : FcitxKey_c, states);
+
+        const std::string before = clipboard->call<IClipboard::clipboard>(selectionIc_);
+        copyInFlight_ = true;
+        selectionIc_->forwardKey(key, false);
+        selectionIc_->forwardKey(key, true);
+        std::string copied;
+        for (int attempt = 0; attempt < 30; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            const std::string now = clipboard->call<IClipboard::clipboard>(selectionIc_);
+            if (!now.empty() && now != before) {
+                copied = now;
+                break;
+            }
+        }
+        if (!copied.empty() && !before.empty()) {
+            // best-effort 还原，避免把用户的剪贴板换掉。
+            clipboard->call<IClipboard::setClipboardV2>("openless", before, false);
+        }
+        copyInFlight_ = false;
+        FCITX_LOGC(openless, Debug)
+            << "CopySelection: program=" << program << " chars=" << copied.size()
+            << (term ? " (terminal shortcut)" : "");
+        return copied;
     }
 
     /// 焦点输入上下文的 surrounding text。应用不支持时 `valid=false`。
@@ -1182,6 +1204,8 @@ private:
     /// 真实合成器或剪贴板内容。
     std::function<openless_selection::PrimarySelectionSnapshot()>
         primarySelectionReader_;
+    /// 正在执行「让应用自己复制」的兜底，防止重入。
+    bool copyInFlight_ = false;
     /// clipboard addon 的 PRIMARY 缓存读取，**只**作为“探针不可用”时的最后一级
     /// 兜底（边界见 captureSelectionTarget）。契约用例注入固定值。
     std::function<std::string()> selectionCacheReader_;
