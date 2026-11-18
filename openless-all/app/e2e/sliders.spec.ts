@@ -166,7 +166,10 @@ test.describe('touch gestures', () => {
   test('real touch moves a slider and commits once', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'Chromium CDP supplies Android WebView touch gestures');
     await page.goto(url);
-    const target = await control(page.getByRole('slider', { name: 'Solid', exact: true }));
+    const slider = page.getByRole('slider', { name: 'Solid', exact: true });
+    const target = await control(slider);
+    await target.scrollIntoViewIfNeeded();
+    await expect(target).toBeInViewport({ ratio: 1 });
     const bounds = await target.boundingBox();
     if (!bounds) throw new Error('Missing touch target');
     const session = await page.context().newCDPSession(page);
@@ -182,10 +185,13 @@ test.describe('touch gestures', () => {
         });
         await page.waitForTimeout(20);
       }
+      await expect.poll(async () => Number(await slider.inputValue())).toBeGreaterThan(70);
+      const value = Number(await slider.inputValue());
+      const commits = async (): Promise<number[]> =>
+        JSON.parse(await page.getByTestId('events').innerText()).commits;
+      expect(await commits()).toEqual([]);
       await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      await expect
-        .poll(async () => JSON.parse(await page.getByTestId('events').innerText()).commits.length)
-        .toBe(1);
+      await expect.poll(commits).toEqual([value]);
     } finally {
       await session.detach();
     }
