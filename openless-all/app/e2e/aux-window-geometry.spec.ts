@@ -9,6 +9,15 @@ test.use({ reducedMotion: 'reduce' });
 test('QA waits for observed geometry and reopens without the closed transcript', async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    // Some WebKit resizes update layout without reporting the new boundary.
+    const NativeResizeObserver = ResizeObserver;
+    window.ResizeObserver = class extends NativeResizeObserver {
+      observe(target: Element, options?: ResizeObserverOptions) {
+        if (!target.matches('.ol-app-viewport')) super.observe(target, options);
+      }
+    };
+  });
   await page.goto(fixture + '?qa');
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
   const host = page.locator('#native-host');
