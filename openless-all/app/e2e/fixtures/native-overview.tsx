@@ -66,10 +66,7 @@ mockIPC(
         if (dashboard) {
           if (state === 'apps-error') throw new Error('App statistics unavailable');
           if (state === 'unsupported') throw new Error('get_activity_apps command not found');
-          return Array.from({ length: 40 }, (_, index) => [
-            `Application ${index + 1}`,
-            40 - index,
-          ]);
+          return Array.from({ length: 40 }, (_, index) => [`Application ${index + 1}`, 40 - index]);
         }
         reads++;
         const rows = [

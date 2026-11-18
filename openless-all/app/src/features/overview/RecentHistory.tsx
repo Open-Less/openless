@@ -188,9 +188,7 @@ function RecentRow({
         {session.finalText.split('\n')[0]}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-        <span
-          style={{ fontSize: 12, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}
-        >
+        <span style={{ fontSize: 12, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
           {formatDuration(session.durationMs ?? 0, t, locale)}
         </span>
         <Button

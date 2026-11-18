@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectOverviewContained } from './support/overview';
 import { settleNavigation } from './support/navigation';
 import { fixtureOrigin } from './support/server';
 
@@ -327,8 +328,8 @@ test('selected segmented options and the overview heatmap stay visible', async (
   expect(yearBox.x).toBeGreaterThan(gridBox.x + gridBox.width);
   expect(yearBox.x).toBeGreaterThan(footerBox.x + footerBox.width);
   expect(yearBox.x + yearBox.width).toBeLessThan(heatmapBox.x + heatmapBox.width);
-  await expect(yearBoard).toBeInViewport({ ratio: 1 });
-  await expect(activityCard.locator('.ol-gha-panel-header')).toBeInViewport({ ratio: 1 });
+  await expectOverviewContained(yearBoard);
+  await expectOverviewContained(activityCard.locator('.ol-gha-panel-header'));
   await page.screenshot({ path: testInfo.outputPath('acceptance-overview-default-shell.png') });
 });
 

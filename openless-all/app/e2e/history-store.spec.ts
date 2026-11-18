@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectOverviewContained } from './support/overview';
 
 async function navigate(page: Page, key: string, label: string) {
   await page.getByRole('button', { name: label, exact: true }).click();
@@ -95,11 +96,12 @@ for (const [font, scale] of [
     const summary = dashboard.locator('.ol-overview-year');
     const toggle = dashboard.getByRole('button', { name: '展开常用软件' });
     await expect(calendar.locator('.ol-gha-week')).toHaveCount(53);
-    await expect(cells.first()).toBeInViewport({ ratio: 1 });
-    await expect(cells.last()).toBeInViewport({ ratio: 1 });
-    await expect(summary).toBeInViewport({ ratio: 1 });
-    await expect(toggle).toBeInViewport({ ratio: 1 });
-    await expect(dashboard.locator('.ol-overview-period-dates')).toBeInViewport({ ratio: 1 });
+    expect(await calendar.evaluate((node) => node.scrollLeft)).toBe(0);
+    await expectOverviewContained(dashboard.locator('.ol-gha-week').first());
+    await expectOverviewContained(dashboard.locator('.ol-gha-week').last());
+    await expectOverviewContained(summary);
+    await expectOverviewContained(toggle);
+    await expectOverviewContained(dashboard.locator('.ol-overview-period-dates'));
 
     for (const owner of [page.locator('#root'), surface, dashboard, calendar]) {
       const excess = await owner.evaluate((node) => ({
@@ -124,7 +126,7 @@ for (const [font, scale] of [
     expect(await surface.evaluate((node) => node.scrollTop)).toBe(0);
     await toggle.click();
     await expect(dashboard.locator('.ol-gha-app-list')).toBeInViewport();
-    await expect(summary).toBeInViewport({ ratio: 1 });
+    await expectOverviewContained(summary);
     if (scale === 1.1) {
       await page.screenshot({
         path: testInfo.outputPath('acceptance-overview-minimum-shell-110.png'),
@@ -146,7 +148,7 @@ test('a 375px desktop preview keeps one vertical scroll owner', async ({ page })
   await toggle.click();
   await expect(dashboard.locator('.ol-gha-app-list')).toBeVisible();
   await annual.scrollIntoViewIfNeeded();
-  await expect(annual).toBeInViewport({ ratio: 1 });
+  await expectOverviewContained(annual);
   await expect.poll(() => surface.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
   for (const owner of [
     page.locator('#root'),

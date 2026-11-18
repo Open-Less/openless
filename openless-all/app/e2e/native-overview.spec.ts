@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectOverviewContained } from './support/overview';
 import { fixtureOrigin } from './support/server';
 
 test('native overview paints cached activity and discards an app list invalidated by a newer revision', async ({
@@ -23,12 +24,17 @@ test('native overview paints cached activity and discards an app list invalidate
 
   await page.getByRole('button', { name: 'Publish record write' }).click();
   const appReads = page.getByRole('button', { name: /App read count|^\d+$/ });
-  await appReads.click();
-  await expect(appReads).toHaveText('2');
+  await expect
+    .poll(async () => {
+      await appReads.click();
+      return appReads.textContent();
+    })
+    .toBe('2');
   await page.getByRole('button', { name: 'Publish activity write' }).click();
   await expect(heading).toContainText('43 dictations');
   await appReads.click();
   await expect(appReads).toHaveText('2');
+  await expect(chips).toContainText('Editor2');
   await page.getByRole('button', { name: 'Complete old app read' }).click();
   await expect(chips).toContainText('43');
   await appReads.click();
@@ -50,18 +56,21 @@ async function expectDashboardFits(page: Page) {
       1,
     );
   }
-  await expect(dashboard.locator('.ol-overview-period-controls')).toBeInViewport({ ratio: 1 });
-  await expect(
+  await expectOverviewContained(dashboard.locator('.ol-overview-period-controls'));
+  await expectOverviewContained(
     dashboard.locator('.ol-overview-period-summary, .ol-overview-period button').first(),
-  ).toBeInViewport({ ratio: 1 });
+  );
+  const dates = dashboard.locator('.ol-overview-period-dates');
+  if (await dates.count()) await expectOverviewContained(dates);
   const cells = dashboard.locator('.ol-gha-cell');
   if (await cells.count()) {
     await expect(dashboard.locator('.ol-gha-week')).toHaveCount(53);
-    await expect(cells.first()).toBeInViewport({ ratio: 1 });
-    await expect(cells.last()).toBeInViewport({ ratio: 1 });
-    await expect(dashboard.locator('.ol-overview-year')).toBeInViewport({ ratio: 1 });
+    expect(await dashboard.locator('.ol-gha-grid').evaluate((node) => node.scrollLeft)).toBe(0);
+    await expectOverviewContained(dashboard.locator('.ol-gha-week').first());
+    await expectOverviewContained(dashboard.locator('.ol-gha-week').last());
+    await expectOverviewContained(dashboard.locator('.ol-overview-year'));
     for (const value of await dashboard.locator('.ol-overview-year-stat').all()) {
-      await expect(value).toBeInViewport({ ratio: 1 });
+      await expectOverviewContained(value);
     }
     await expect
       .poll(() =>
@@ -69,7 +78,7 @@ async function expectDashboardFits(page: Page) {
       )
       .toBeLessThanOrEqual(1);
     const toggle = dashboard.locator('.ol-gha-toggle');
-    if (await toggle.count()) await expect(toggle).toBeInViewport({ ratio: 1 });
+    if (await toggle.count()) await expectOverviewContained(toggle);
   }
 }
 
@@ -90,11 +99,11 @@ for (const size of [
       await expect(page.locator('[data-overview-record]')).toHaveCount(40);
       await expect(page.locator('.ol-gha-heading')).toContainText('987654321');
       await expectDashboardFits(page);
-      await expect(page.locator('.ol-overview-period-dates')).toBeInViewport({ ratio: 1 });
+      await expectOverviewContained(page.locator('.ol-overview-period-dates'));
       await page.getByRole('button', { name: 'Last 30 days', exact: true }).click();
       await page.getByRole('button', { name: 'Duration', exact: true }).click();
       await expectDashboardFits(page);
-      await expect(page.locator('.ol-overview-period-dates')).toBeInViewport({ ratio: 1 });
+      await expectOverviewContained(page.locator('.ol-overview-period-dates'));
       await page.getByRole('button', { name: 'Last 7 days', exact: true }).click();
       await page.getByRole('button', { name: 'Count', exact: true }).click();
       if ((size.width === 1400 && scale === 'large') || (size.width === 980 && scale === 'large')) {
@@ -161,14 +170,14 @@ for (const state of [
       const card = page.locator(
         state === 'activity-error' ? '.ol-overview-period' : '.ol-overview-recent',
       );
-      await expect(card.getByRole('button', { name: 'Retry' })).toBeInViewport({ ratio: 1 });
+      await expectOverviewContained(card.getByRole('button', { name: 'Retry' }));
     }
     if (state === 'apps-error' || state === 'unsupported') {
-      await expect(page.locator('.ol-overview-apps-status')).toBeInViewport({ ratio: 1 });
+      await expectOverviewContained(page.locator('.ol-overview-apps-status'));
       await expect(page.locator('.ol-gha-toggle')).toHaveCount(0);
     }
     if (state === 'service-error') {
-      await expect(page.locator('.ol-overview-service-status')).toBeInViewport({ ratio: 1 });
+      await expectOverviewContained(page.locator('.ol-overview-service-status'));
     }
     await expectDashboardFits(page);
   });
@@ -185,7 +194,7 @@ for (const locale of ['de', 'zh-CN']) {
     );
     await expect(page.locator('.ol-gha-heading')).toContainText('987654321');
     await expectDashboardFits(page);
-    await expect(page.locator('.ol-overview-period-dates')).toBeInViewport({ ratio: 1 });
+    await expectOverviewContained(page.locator('.ol-overview-period-dates'));
     for (const label of await page.locator('.ol-overview-year-label').all()) {
       expect(
         await label.evaluate((node) => node.scrollWidth - node.clientWidth),

@@ -185,10 +185,13 @@
 /* Density follows the measured unzoomed dashboard height, including host chrome. */
 @container overview (max-height: 599px) {
   .ol-overview-metric {
-    padding: 10px 12px !important;
+    padding: 8px 12px !important;
   }
   .ol-overview-metric > :first-child {
     margin-bottom: 4px !important;
+  }
+  .ol-overview-metric > :first-child > span {
+    line-height: 1.2;
   }
   .ol-overview-metric > :last-child {
     margin-top: 3px !important;
@@ -197,17 +200,17 @@
   }
   .ol-overview-period {
     grid-column: span 7;
-    padding: 12px !important;
+    padding: 8px !important;
   }
   .ol-overview-recent-card {
     grid-column: span 5;
   }
   .ol-overview-period-controls {
     gap: 4px !important;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
   .ol-overview-period .ol-segmented-option {
-    padding: 3px 5px;
+    padding: 2px 5px;
     font-size: 11px;
   }
   .ol-overview-period-summary {
@@ -215,13 +218,16 @@
     align-items: baseline;
     flex-wrap: wrap;
     gap: 4px 10px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
   .ol-overview-period-summary > :first-child {
     font-size: 22px !important;
   }
   .ol-overview-period-summary > :last-child {
     margin-top: 0 !important;
+  }
+  .ol-overview-period-dates {
+    margin-top: 4px !important;
   }
   .ol-overview-activity {
     padding-top: 12px;

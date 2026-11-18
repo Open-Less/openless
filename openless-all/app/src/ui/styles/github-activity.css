@@ -42,7 +42,6 @@
 }
 /* Fitted calendars have no scrollport: integer client sizes can clip fractional cells. */
 .ol-gha-grid[data-fit] {
-  width: 100%;
   overflow: visible;
 }
 .ol-gha-grid[data-fit] .ol-gha-grid-inner {
