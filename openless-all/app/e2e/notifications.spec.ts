@@ -229,3 +229,70 @@ test('long severe notices wrap in a short narrow window and reduced motion dismi
   await notice.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(notice).toHaveCount(0);
 });
+
+test('a notice finishes outside the viewport after reflow during exit', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/notifications.html`);
+  await emitNotifications(page, [
+    {
+      state: 'info',
+      message: '正在同步云端最新内容，请等待当前任务完成。长文案在窗口改变时应继续完整换行。'.repeat(2),
+      durationMs: 0,
+    },
+  ]);
+  const notice = page.locator('.ol-notification-card');
+  await expect(notice).toHaveCSS('transform', 'none');
+  await page.evaluate(() => {
+    const original = Element.prototype.animate;
+    const motion = {
+      latest: undefined as Animation | undefined,
+      attempts: 0,
+      finished: [] as { bottom: number; top: number; connected: boolean }[],
+    };
+    Object.assign(window, { noticeResizeMotion: motion });
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = original.call(this, keyframes, options);
+      if (!this.classList.contains('ol-notification-card')) return animation;
+      motion.latest = animation;
+      motion.attempts++;
+      // Hold each real exit halfway through so the layout changes before it finishes.
+      animation.pause();
+      animation.currentTime = Number(animation.effect!.getTiming().duration) / 2;
+      void animation.finished
+        .then(() => {
+          motion.finished.push({
+            bottom: this.getBoundingClientRect().bottom,
+            top: this.closest('.ol-app-viewport')!.getBoundingClientRect().top,
+            connected: this.isConnected,
+          });
+        })
+        .catch(() => {});
+      return animation;
+    };
+  });
+  await notice.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(notice).toHaveAttribute('aria-hidden', 'true');
+  expect(await notice.evaluate((node) => node.getBoundingClientRect().bottom)).toBeGreaterThan(0);
+  await notice.evaluate(async (node) => {
+    const { applyFontScale } = await import('/src/lib/fontScale.ts');
+    applyFontScale('large');
+    node.closest<HTMLElement>('.ol-app-viewport')!.style.width = '290px';
+    node.querySelector('.ol-notification-message')!.textContent +=
+      '更长的说明使退出中的卡片重新排版。'.repeat(3);
+  });
+  await expect
+    .poll(() => page.evaluate(() => (window as any).noticeResizeMotion.attempts))
+    .toBeGreaterThanOrEqual(2);
+  await expect(notice).toHaveCount(1);
+  await page.evaluate(() => (window as any).noticeResizeMotion.latest.play());
+  await expect(notice).toHaveCount(0);
+  const finished = await page.evaluate(
+    () => (window as any).noticeResizeMotion.finished as {
+      bottom: number;
+      top: number;
+      connected: boolean;
+    }[],
+  );
+  expect(finished).toHaveLength(1);
+  expect(finished[0].connected).toBe(true);
+  expect(finished[0].bottom).toBeLessThanOrEqual(finished[0].top);
+});
