@@ -1,3 +1,4 @@
+import type { VoiceActivationStateSnapshot } from '../voiceActivation';
 import type { StyleSystemPrompts, UserPreferences } from '../types';
 export type { UpdateChannel } from '../types';
 import {
@@ -63,4 +64,12 @@ export function updateSettingFields(edits: Record<string, unknown>): Promise<Set
     if (thinkingChanged) invalidateMockChannelTests('llm');
     return { preferences: prefs, revision: ++mockRevision };
   });
+}
+
+export function getVoiceActivationState(): Promise<VoiceActivationStateSnapshot | null> {
+  return invokeOrMock('get_voice_activation_state', undefined, () =>
+    mockSettings.voiceActivationEnabled && mockSettings.voiceActivationHotkeyLinked
+      ? { phase: 'paused' as const, activationGeneration: 0 }
+      : null,
+  );
 }

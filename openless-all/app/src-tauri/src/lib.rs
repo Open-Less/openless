@@ -275,6 +275,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_capsule_language_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
+            commands::get_voice_activation_state,
             commands::update_setting_fields,
             commands::get_default_style_system_prompts,
             commands::set_settings,
@@ -570,6 +571,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_audio_effects_status,
             $crate::commands::set_android_audio_monitoring,
             $crate::commands::get_settings_snapshot,
+            $crate::commands::get_voice_activation_state,
             $crate::commands::update_setting_fields,
             $crate::commands::get_default_style_system_prompts,
             $crate::commands::set_settings,
@@ -3738,6 +3740,7 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 /// Pure multi-monitor capsule helpers (tests run on every CI host). Window creation
 /// inside the module stays `cfg(windows)`.
 mod capsule_mirrors;
+mod capsule_feedback;
 mod vocab_card_placement;
 
 /// Init and card-return paths use the default stage; the recording display path passes the

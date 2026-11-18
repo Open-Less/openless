@@ -84,6 +84,7 @@ pub mod types;
 pub mod usage_ledger;
 pub mod vocabulary;
 pub mod voice_activation;
+mod voice_activation_hotkey;
 pub mod voice_edit_session;
 mod voice_session;
 

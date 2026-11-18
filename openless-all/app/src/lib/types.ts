@@ -401,6 +401,7 @@ export interface UserPreferences {
   /** Desktop resource policy, applied after restarting the application. */
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
+  voiceActivationHotkeyLinked: boolean;
   voiceActivationWakeEnabled: boolean;
   voiceActivationFinishEnabled: boolean;
   voiceActivationWakePhrase: string;

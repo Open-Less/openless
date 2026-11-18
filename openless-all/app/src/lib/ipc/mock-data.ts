@@ -52,6 +52,7 @@ export let mockSettings: UserPreferences = {
   audioEnhancementEnabled: false,
   echoCancellationEnabled: false,
   voiceActivationEnabled: false,
+  voiceActivationHotkeyLinked: false,
   voiceActivationWakeEnabled: true,
   voiceActivationFinishEnabled: true,
   voiceActivationWakePhrase: '开始语音录入',
