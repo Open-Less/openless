@@ -32,7 +32,14 @@ import { applyStackedLayoutFromPrefs } from '../../lib/stackedLayout';
 import { applyConservativeLayout } from '../../lib/conservativeLayout';
 import { useMobileLayout, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../data/preferences';
-import { MOBILE_BOTTOM_TABS, MORE_TABS, STYLE_TABS, useNavigation, type AppTab } from './navigation';
+import {
+  MOBILE_BOTTOM_TABS,
+  MORE_TABS,
+  STYLE_TABS,
+  subItemLabelKey,
+  useNavigation,
+  type AppTab,
+} from './navigation';
 import { getPage, preloadPage, Overview, SelectionAsk } from './pages';
 
 interface FloatingShellProps {
@@ -284,7 +291,7 @@ function FloatingShellBody({
                   ? '16px var(--ol-grid-margin-compact) calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
                   : `${
                       os === 'mac'
-                        ? `${MAC_TRAFFIC_LIGHT_CLEARANCE - 6}px`
+                        ? 'calc(var(--ol-shell-mac-top-inset) - 6px)'
                         : 'max(8px, calc(var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)))'
                     } var(--ol-grid-margin) ${displayTab === 'overview' ? 'var(--ol-grid-margin)' : '32px'}`,
                 // position:relative lets the page's "saved" toast anchor at absolute

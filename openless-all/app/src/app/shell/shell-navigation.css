@@ -9,6 +9,9 @@
   background-color: var(--ol-choice-active-bg);
 }
 
+.ol-shell-depth {
+  --ol-shell-mac-top-inset: 44px;
+}
 .ol-sidebar-surface {
   display: flex;
   flex-direction: column;
@@ -20,7 +23,7 @@
   border-right: 0.5px solid var(--ol-line);
 }
 .ol-sidebar-surface[data-os='mac'] {
-  padding-top: 44px;
+  padding-top: var(--ol-shell-mac-top-inset);
 }
 .ol-sidebar-brand {
   display: flex;
