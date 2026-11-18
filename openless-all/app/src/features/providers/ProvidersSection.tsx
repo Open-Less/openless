@@ -1472,26 +1472,23 @@ function ProviderTools({
       }}
     />
   );
-  const fetchModels = (
-    <div className="ol-channel-model-fetch">
-      <button
-        className="ol-channel-fetch-models"
-        type="button"
-        onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
-        style={actionStyle}
-        disabled={disabled || status === 'loading'}
-      >
-        <Icon
-          name={modelsUrl ? 'external' : 'refresh'}
-          size={14}
-          className={
-            status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
-          }
-        />
-        {modelsUrl ? t('settings.providers.viewModels') : t('settings.providers.fetchModels')}
-      </button>
-      <div className="ol-provider-status-slot">{operation === 'models' && resultMessage}</div>
-    </div>
+  const fetchButton = (
+    <button
+      className="ol-channel-fetch-models"
+      type="button"
+      onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
+      style={actionStyle}
+      disabled={disabled || status === 'loading'}
+    >
+      <Icon
+        name={modelsUrl ? 'external' : 'refresh'}
+        size={14}
+        className={
+          status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+        }
+      />
+      {modelsUrl ? t('settings.providers.viewModels') : t('settings.providers.fetchModels')}
+    </button>
   );
   const verifyButton = (
     <button
@@ -1534,20 +1531,23 @@ function ProviderTools({
     return (
       <section className="ol-omni-tools" aria-label={t('settings.channels.validationTitle')}>
         <div className="ol-omni-tools-actions">
-          {showFetchModels && fetchModels}
+          {showFetchModels && fetchButton}
           {showFetchModels && !modelsUrl && (
             <div className="ol-omni-model-picker">{modelSelect}</div>
           )}
           {verifyButton}
         </div>
         <div className="ol-omni-tools-hint">
-          {operation === 'validate' && message
-            ? resultMessage
-            : t(
+          {(operation === 'models' || !message) && (
+            <span>
+              {t(
                 audioValidation
                   ? 'settings.channels.validationHint'
                   : 'settings.channels.validationHintOmni',
               )}
+            </span>
+          )}
+          {resultMessage}
         </div>
       </section>
     );
@@ -1558,7 +1558,12 @@ function ProviderTools({
       {showFetchModels && (
         <ChannelFormRow label={t('settings.channels.availableModels')}>
           <div className="ol-channel-model-tools">
-            {fetchModels}
+            <div className="ol-channel-model-fetch">
+              {fetchButton}
+              <div className="ol-provider-status-slot">
+                {operation === 'models' && resultMessage}
+              </div>
+            </div>
             {!modelsUrl && modelSelect}
           </div>
         </ChannelFormRow>

@@ -1400,17 +1400,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-wrap: wrap;
   gap: 8px;
 }
-.ol-omni-tools-actions > .ol-channel-model-fetch {
-  flex: 0 1 auto;
-  max-width: 100%;
-}
-.ol-omni-tools-actions .ol-provider-status-slot:empty {
-  display: none;
-}
-.ol-omni-tools-actions .ol-provider-result-inline > span {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
 .ol-omni-model-picker {
   flex: 1 1 220px;
   min-width: 0;
@@ -1426,12 +1415,25 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   overflow-wrap: anywhere;
 }
 .ol-omni-tools-hint {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   min-height: 20px;
   margin: 6px 0 0;
   color: var(--ol-ink-3);
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+.ol-omni-tools-hint .ol-provider-result.ol-provider-result-inline {
+  align-items: flex-start;
+  font-size: inherit;
+  line-height: inherit;
+}
+.ol-omni-tools-hint .ol-provider-result-inline > span {
+  overflow: visible;
+  white-space: normal;
 }
 .ol-service-inactive-tag,
 .ol-provider-result {
@@ -1448,6 +1450,8 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
 }
 .ol-omni-tools-actions > button {
+  flex: none;
+  white-space: nowrap;
   transition:
     color 140ms var(--ol-motion-quick),
     background 140ms var(--ol-motion-quick),
