@@ -19,6 +19,7 @@ export interface ModalProps {
   style?: CSSProperties;
   closing?: boolean;
   overlayClassName?: string;
+  cardClassName?: string;
   labelledBy?: string;
   describedBy?: string;
   initialFocus?: RefObject<HTMLElement>;
@@ -34,6 +35,7 @@ export function Modal({
   style,
   closing = false,
   overlayClassName,
+  cardClassName,
   labelledBy,
   describedBy,
   initialFocus,
@@ -111,7 +113,7 @@ export function Modal({
         <PopupContainer.Provider value={popupHost}>
           <div
             ref={cardRef}
-            className="ol-dialog-card"
+            className={['ol-dialog-card', cardClassName].filter(Boolean).join(' ')}
             role="dialog"
             aria-labelledby={labelledBy}
             aria-describedby={describedBy}

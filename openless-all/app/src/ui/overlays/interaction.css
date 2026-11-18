@@ -85,3 +85,15 @@
   background: var(--ol-control-solid);
   border: 0.5px solid var(--ol-line-strong);
 }
+
+.ol-structured-dialog .ol-confirm-dialog {
+  align-items: stretch;
+  gap: 0;
+}
+.ol-structured-dialog .ol-confirm-dialog-icon {
+  margin-bottom: 12px;
+}
+.ol-confirm-dialog-error {
+  margin: 12px 0 0;
+  color: var(--ol-err);
+}

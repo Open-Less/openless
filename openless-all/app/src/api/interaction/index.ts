@@ -7,6 +7,10 @@ export interface ConfirmOptions {
   icon?: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Keep the confirmation open until the operation succeeds; rejection permits retry. */
+  onConfirm?: () => void | Promise<void>;
+  /** Supply a safe, localized domain error; raw exception messages are never rendered. */
+  errorMessage?: ReactNode | ((error: unknown) => ReactNode);
 }
 
 export interface WarningOptions {

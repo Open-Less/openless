@@ -1,7 +1,8 @@
-import { useId, useRef, useSyncExternalStore } from 'react';
+import { useId, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
-import { PresenceModal } from './Modal';
+import { Dialog, DialogAction, DialogBody, DialogFooter, DialogHeader } from './Dialog';
+import { ExitPresence } from './Modal';
 import { REQUEST_LAYER } from './modalStack';
 import type { InteractionController } from './interactionController';
 
@@ -15,91 +16,146 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
   const titleId = useId();
   const descriptionId = useId();
   const leastDestructive = useRef<HTMLButtonElement>(null);
+  const pending = useRef<number | null>(null);
+  const [operation, setOperation] = useState<{ id: number; busy: boolean; error?: unknown } | null>(
+    null,
+  );
+  const busy = request != null && operation?.id === request.id && operation.busy;
+  const cancel = () => {
+    if (request && pending.current !== request.id) request.cancel();
+  };
+  const accept = async () => {
+    if (!request || request.kind === 'dialog' || pending.current === request.id) return;
+    if (request.kind !== 'confirm' || !request.options.onConfirm) {
+      request.accept();
+      return;
+    }
+    const active = request;
+    pending.current = active.id;
+    setOperation({ id: active.id, busy: true });
+    try {
+      await active.options.onConfirm!();
+      // A replaced/disposed request resolves false through its controller owner.
+      if (controller.getRequest()?.id === active.id) active.accept();
+    } catch (error) {
+      if (controller.getRequest()?.id === active.id)
+        setOperation({ id: active.id, busy: false, error });
+    } finally {
+      if (pending.current === active.id) pending.current = null;
+    }
+  };
   return (
-    <PresenceModal
+    <ExitPresence
       open={!!request}
-      render={() => {
+      render={(closing) => {
         if (!request) return null;
-        if (request.kind === 'dialog') {
-          return (
-            <div key={request.id} className="ol-interaction-dialog">
-              <h2 id={titleId} className="ol-confirm-dialog-title">
-                {request.options.title}
-              </h2>
-              {request.options.description != null && (
-                <div id={descriptionId} className="ol-confirm-dialog-description">
-                  {request.options.description}
-                </div>
-              )}
-              {request.render()}
-            </div>
-          );
-        }
+        const custom = request.kind === 'dialog';
         const danger = request.kind === 'confirm' && request.options.tone === 'danger';
         const warning = request.kind === 'warning';
-        const icon = request.kind === 'confirm' ? request.options.icon : undefined;
+        const failed = operation?.id === request.id && !operation.busy && 'error' in operation;
+        const error =
+          request.kind === 'confirm' && failed
+            ? typeof request.options.errorMessage === 'function'
+              ? request.options.errorMessage(operation?.error)
+              : (request.options.errorMessage ?? t('common.error'))
+            : null;
         return (
-          <div
-            className="ol-confirm-dialog"
-            data-tone={warning ? 'warning' : danger ? 'danger' : 'default'}
+          <Dialog
+            closing={closing}
+            onClose={cancel}
+            zIndex={REQUEST_LAYER}
+            focusKey={request.id}
+            width={custom ? (request.options.width ?? 'min(560px, 100%)') : 'min(480px, 100%)'}
+            labelledBy={titleId}
+            describedBy={request.options.description != null ? descriptionId : undefined}
+            initialFocus={leastDestructive}
           >
-            <span className="ol-confirm-dialog-icon" aria-hidden="true">
-              <Icon name={icon ?? (danger ? 'trash' : 'info')} size={18} />
-            </span>
-            <h2 id={titleId} className="ol-confirm-dialog-title">
-              {request.options.title}
-            </h2>
-            {request.options.description != null && (
-              <div id={descriptionId} className="ol-confirm-dialog-description">
-                {request.options.description}
+            {custom ? (
+              <>
+                <DialogHeader>
+                  <h2 id={titleId}>{request.options.title}</h2>
+                </DialogHeader>
+                <DialogBody>
+                  {request.options.description != null && (
+                    <div id={descriptionId} className="ol-confirm-dialog-description">
+                      {request.options.description}
+                    </div>
+                  )}
+                  {request.render()}
+                </DialogBody>
+              </>
+            ) : (
+              <div
+                className="ol-confirm-dialog ol-dialog-flow"
+                data-tone={warning ? 'warning' : danger ? 'danger' : 'default'}
+                aria-busy={busy}
+              >
+                <DialogHeader>
+                  <div>
+                    <span className="ol-confirm-dialog-icon" aria-hidden="true">
+                      <Icon
+                        name={
+                          request.kind === 'confirm'
+                            ? (request.options.icon ?? (danger ? 'trash' : 'info'))
+                            : 'info'
+                        }
+                        size={18}
+                      />
+                    </span>
+                    <h2 id={titleId} className="ol-confirm-dialog-title">
+                      {request.options.title}
+                    </h2>
+                  </div>
+                </DialogHeader>
+                <DialogBody>
+                  {request.options.description != null && (
+                    <div id={descriptionId} className="ol-confirm-dialog-description">
+                      {request.options.description}
+                    </div>
+                  )}
+                  {error != null && (
+                    <p role="alert" className="ol-confirm-dialog-error">
+                      {error}
+                    </p>
+                  )}
+                </DialogBody>
+                <DialogFooter>
+                  {request.kind === 'warning' ? (
+                    <button
+                      ref={leastDestructive}
+                      type="button"
+                      className="ol-pressable ol-action-button ol-dialog-action ol-dialog-action--primary"
+                      onClick={() => void accept()}
+                    >
+                      {request.options.dismissLabel ?? t('common.close')}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        ref={leastDestructive}
+                        type="button"
+                        className="ol-pressable ol-action-button ol-dialog-action ol-dialog-action--neutral ol-confirm-cancel"
+                        disabled={busy}
+                        onClick={cancel}
+                      >
+                        {request.options.cancelLabel ?? t('common.cancel')}
+                      </button>
+                      <DialogAction
+                        tone={danger ? 'danger' : 'primary'}
+                        className={danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}
+                        disabled={busy}
+                        onClick={() => void accept()}
+                      >
+                        {request.options.confirmLabel ?? t('common.confirmAction')}
+                      </DialogAction>
+                    </>
+                  )}
+                </DialogFooter>
               </div>
             )}
-            <div className="ol-confirm-dialog-actions">
-              {request.kind === 'warning' ? (
-                <button
-                  ref={leastDestructive}
-                  type="button"
-                  className="ol-pressable ol-action-button ol-confirm-primary"
-                  onClick={request.accept}
-                >
-                  {request.options.dismissLabel ?? t('common.close')}
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className={`ol-pressable ol-action-button ${danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}`}
-                    onClick={request.accept}
-                  >
-                    {request.options.confirmLabel ?? t('common.confirmAction')}
-                  </button>
-                  <button
-                    ref={leastDestructive}
-                    type="button"
-                    className="ol-pressable ol-action-button ol-confirm-cancel"
-                    onClick={request.cancel}
-                  >
-                    {request.options.cancelLabel ?? t('common.cancel')}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
+          </Dialog>
         );
       }}
-      onClose={() => request?.cancel()}
-      zIndex={REQUEST_LAYER}
-      focusKey={request?.id}
-      width={
-        request?.kind === 'dialog'
-          ? (request.options.width ?? 'min(560px, 100%)')
-          : 'min(480px, 100%)'
-      }
-      motionVariant="pop"
-      style={request?.kind === 'dialog' ? undefined : { padding: 'clamp(16px, 5vmin, 30px)' }}
-      labelledBy={titleId}
-      describedBy={request?.options.description != null ? descriptionId : undefined}
-      initialFocus={leastDestructive}
     />
   );
 }
