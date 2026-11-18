@@ -2629,11 +2629,15 @@ mod linux_app {
 
             let operation = match action {
                 CloudSyncAction::Prepare(intent) => {
-                    let Some(status) = status.as_ref() else { return };
+                    let Some(status) = status.as_ref() else {
+                        return;
+                    };
                     if status.consent_version.as_deref() != Some(CONSENT_VERSION)
                         && !matches!(dialog, CloudSyncDialog::Consent { .. })
                     {
-                        self.frontend_vm.cloud_sync.open(CloudSyncDialog::Consent { intent });
+                        self.frontend_vm
+                            .cloud_sync
+                            .open(CloudSyncDialog::Consent { intent });
                         return;
                     }
                     if matches!(dialog, CloudSyncDialog::Consent { .. }) && !state.consent_checked {
@@ -2644,7 +2648,10 @@ mod linux_app {
                         consent_version: CONSENT_VERSION.to_string(),
                         expected_scope: openless_core::cloud_sync_e2ee::ConsentScope {
                             service_origin: status.service_origin.clone(),
-                            account_id: status.account.as_ref().map(|account| account.github_id.clone()),
+                            account_id: status
+                                .account
+                                .as_ref()
+                                .map(|account| account.github_id.clone()),
                             vault_id: status.vault_id.clone(),
                         },
                     }

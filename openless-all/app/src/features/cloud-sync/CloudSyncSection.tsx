@@ -7,7 +7,13 @@ import { matchesRestorePreview } from './restoreContext';
 import { Icon } from '../../components/Icon';
 import { GithubLoginModal } from '../accounts/GithubLoginModal';
 import { ExitPresence } from '../../ui/overlays/Modal';
-import { Dialog as StructuredDialog, DialogHeader, DialogBody, DialogFooter, DialogAction } from '../../ui/overlays/Dialog';
+import {
+  Dialog as StructuredDialog,
+  DialogHeader,
+  DialogBody,
+  DialogFooter,
+  DialogAction,
+} from '../../ui/overlays/Dialog';
 import { syncDisclosure } from './disclosure';
 import { Collapse } from '../../components/ui/Disclosure';
 import { Btn, Card } from '../../pages/_atoms';
@@ -147,8 +153,15 @@ export async function prepareEncryptedSync(scope?: string): Promise<EnablePrepar
   await mirrorEncryptedSyncUiPreferences();
   if (scope && encryptedSyncScope(await cloudSyncE2eeStatus()) !== scope)
     throw localError('account_changed');
-  const [serviceOrigin, accountId, vaultId] = scope ? JSON.parse(scope) as [string, string | null, string | null] : [];
-  return cloudSyncE2eePrepareEnable(CONSENT_VERSION, serviceOrigin ? { serviceOrigin, accountId: accountId ?? null, vaultId: vaultId ?? null } : undefined);
+  const [serviceOrigin, accountId, vaultId] = scope
+    ? (JSON.parse(scope) as [string, string | null, string | null])
+    : [];
+  return cloudSyncE2eePrepareEnable(
+    CONSENT_VERSION,
+    serviceOrigin
+      ? { serviceOrigin, accountId: accountId ?? null, vaultId: vaultId ?? null }
+      : undefined,
+  );
 }
 
 /** Advanced-only configuration; the normal sync flow never loads the server token. */
@@ -578,7 +591,7 @@ export function CloudSyncSection() {
     } else if (intent === 'restore') {
       await previewRestore(false, valid);
     } else {
-      if (intent === 'enable') {
+      if (intent === 'enable' && !prepared.status.enabled) {
         const next = await cloudSyncE2eeSetEnabled(true);
         if (!valid()) return;
         acceptStatus(next);
@@ -597,7 +610,9 @@ export function CloudSyncSection() {
       setDialog({ kind: 'consent', intent });
     } else {
       const scope = current.current ? encryptedSyncScope(current.current) : undefined;
-      void perform(async (valid) => routePreparation(await prepareEncryptedSync(scope), intent, valid));
+      void perform(async (valid) =>
+        routePreparation(await prepareEncryptedSync(scope), intent, valid),
+      );
     }
   };
   const simple = (
@@ -662,7 +677,13 @@ export function CloudSyncSection() {
           rememberKey: value.rememberKey,
         });
         if (!valid() || !acceptStatus(next)) return;
-        await routePreparation(await prepareEncryptedSync(current.current ? encryptedSyncScope(current.current) : undefined), active.intent, valid);
+        await routePreparation(
+          await prepareEncryptedSync(
+            current.current ? encryptedSyncScope(current.current) : undefined,
+          ),
+          active.intent,
+          valid,
+        );
       } else if (active.kind === 'password') {
         const next = await cloudSyncE2eeChangePassword({
           currentPassword: value.currentPassword,
@@ -982,10 +1003,15 @@ export function CloudSyncSection() {
                 const scope = encryptedSyncScope(snapshot);
                 void confirm({
                   title: t('cloudSyncE2ee.deleteTitle'),
-                  description: <CloudBackupDeletionDisclosure backupRetentionDays={snapshot.backupRetentionDays} />,
+                  description: (
+                    <CloudBackupDeletionDisclosure
+                      backupRetentionDays={snapshot.backupRetentionDays}
+                    />
+                  ),
                   tone: 'danger',
                   confirmLabel: t('cloudSyncE2ee.confirmDelete'),
-                  errorMessage: (error) => t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(error)}`),
+                  errorMessage: (error) =>
+                    t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(error)}`),
                   onConfirm: async () => {
                     const latest = await cloudSyncE2eeStatus();
                     if (!alive.current || encryptedSyncScope(latest) !== scope)
@@ -1078,7 +1104,13 @@ export function CloudSyncSection() {
             <SyncDialog
               closing={closing}
               key={dialog.kind}
-              title={dialog.kind === 'consent' ? syncDisclosure(i18n.resolvedLanguage ?? i18n.language)[status?.enabled ? 'updatedTitle' : 'title'] : t(`cloudSyncE2ee.${dialogTitle}`)}
+              title={
+                dialog.kind === 'consent'
+                  ? syncDisclosure(i18n.resolvedLanguage ?? i18n.language)[
+                      status?.enabled ? 'updatedTitle' : 'title'
+                    ]
+                  : t(`cloudSyncE2ee.${dialogTitle}`)
+              }
               busy={working}
               onClose={closeDialog}
             >
@@ -1115,24 +1147,30 @@ export function CloudSyncSection() {
                 />
               )}
               {dialog.kind === 'restore' && (
-                <DialogBody><RestoreReview
-                  key={dialog.preview.previewId}
-                  preview={dialog.preview}
-                  busy={working}
-                  stale={!matchesRestorePreview(dialog.preview, status, dialog.scope)}
-                  onApply={applyRestore}
-                /></DialogBody>
+                <DialogBody>
+                  <RestoreReview
+                    key={dialog.preview.previewId}
+                    preview={dialog.preview}
+                    busy={working}
+                    stale={!matchesRestorePreview(dialog.preview, status, dialog.scope)}
+                    onApply={applyRestore}
+                  />
+                </DialogBody>
               )}
               {dialog.kind === 'disable' && (
                 <>
-                  <DialogBody><p>{t('cloudSyncE2ee.disableDescription')}</p></DialogBody><DialogFooter>
-                  <Btn
-                    variant="primary"
-                    disabled={working}
-                    onClick={() => simple(() => cloudSyncE2eeSetEnabled(false))}
-                  >
-                    {t('cloudSyncE2ee.confirmDisable')}
-                  </Btn></DialogFooter>
+                  <DialogBody>
+                    <p>{t('cloudSyncE2ee.disableDescription')}</p>
+                  </DialogBody>
+                  <DialogFooter>
+                    <Btn
+                      variant="primary"
+                      disabled={working}
+                      onClick={() => simple(() => cloudSyncE2eeSetEnabled(false))}
+                    >
+                      {t('cloudSyncE2ee.confirmDisable')}
+                    </Btn>
+                  </DialogFooter>
                 </>
               )}
               {working && status?.taskId && dialog.kind === 'restore' && (
@@ -1147,17 +1185,31 @@ export function CloudSyncSection() {
 }
 
 export function ConsentForm({
-  busy, updated = false, onConfirm, onCancel,
-}: { busy: boolean; updated?: boolean; onConfirm: () => void; onCancel: () => void }) {
+  busy,
+  updated = false,
+  onConfirm,
+  onCancel,
+}: {
+  busy: boolean;
+  updated?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
   const { i18n } = useTranslation();
   const disclosure = syncDisclosure(i18n.resolvedLanguage ?? i18n.language);
   const [consented, setConsented] = useState(false);
   return (
     <>
       <DialogBody data-testid="sync-terms-body">
-        {updated && <p role="note"><strong>{disclosure.updatedDescription}</strong></p>}
+        {updated && (
+          <p role="note">
+            <strong>{disclosure.updatedDescription}</strong>
+          </p>
+        )}
         <p>{disclosure.intro}</p>
-        <p><code>{CONSENT_VERSION}</code></p>
+        <p>
+          <code>{CONSENT_VERSION}</code>
+        </p>
         <div className="ol-dialog-disclosure">
           {disclosure.sections.map((section) => (
             <section key={section.id}>
@@ -1171,32 +1223,63 @@ export function ConsentForm({
       </DialogBody>
       <DialogFooter>
         <label className="ol-dialog-acknowledgement">
-          <input type="checkbox" checked={consented} disabled={busy}
-            onChange={(event) => setConsented(event.currentTarget.checked)} />
+          <input
+            type="checkbox"
+            checked={consented}
+            disabled={busy}
+            onChange={(event) => setConsented(event.currentTarget.checked)}
+          />
           {disclosure.checkbox}
         </label>
-        <DialogAction tone="neutral" disabled={busy} onClick={onCancel}>{disclosure.cancel}</DialogAction>
-        <DialogAction disabled={!consented || busy} onClick={onConfirm}>{disclosure.confirm}</DialogAction>
+        <DialogAction tone="neutral" disabled={busy} onClick={onCancel}>
+          {disclosure.cancel}
+        </DialogAction>
+        <DialogAction disabled={!consented || busy} onClick={onConfirm}>
+          {disclosure.confirm}
+        </DialogAction>
       </DialogFooter>
     </>
   );
 }
 
 export function CloudSyncTermsDialog({
-  updated = false, busy, error, onClose, onConfirm,
-}: { updated?: boolean; busy: boolean; error?: string; onClose: () => void; onConfirm: () => void }) {
+  updated = false,
+  busy,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  updated?: boolean;
+  busy: boolean;
+  error?: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
   const { i18n } = useTranslation();
   const disclosure = syncDisclosure(i18n.resolvedLanguage ?? i18n.language);
   return (
-    <SyncDialog title={updated ? disclosure.updatedTitle : disclosure.title} busy={busy} onClose={onClose}>
-      {error && <p className="ol-dialog-error" role="alert">{error}</p>}
+    <SyncDialog
+      title={updated ? disclosure.updatedTitle : disclosure.title}
+      busy={busy}
+      onClose={onClose}
+    >
+      {error && (
+        <p className="ol-dialog-error" role="alert">
+          {error}
+        </p>
+      )}
       <ConsentForm updated={updated} busy={busy} onConfirm={onConfirm} onCancel={onClose} />
     </SyncDialog>
   );
 }
 
-export function PasswordForm({ mode, busy, onSubmit }: {
-  mode: 'create' | 'unlock' | 'password'; busy: boolean;
+export function PasswordForm({
+  mode,
+  busy,
+  onSubmit,
+}: {
+  mode: 'create' | 'unlock' | 'password';
+  busy: boolean;
   onSubmit: (value: PasswordSubmission) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -1207,7 +1290,9 @@ export function PasswordForm({ mode, busy, onSubmit }: {
   const [visible, setVisible] = useState(false);
   const composing = useRef(false);
   const submitted = useRef(false);
-  useEffect(() => { if (!busy) submitted.current = false; }, [busy]);
+  useEffect(() => {
+    if (!busy) submitted.current = false;
+  }, [busy]);
   const creating = mode !== 'unlock';
   const valid = creating
     ? syncPasswordMeetsBasicRequirements(password) &&
@@ -1216,24 +1301,43 @@ export function PasswordForm({ mode, busy, onSubmit }: {
     : password.length > 0;
   const chinese = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh');
   const formId = useId();
-  const field = (label: string, value: string, change: (value: string) => void, autocomplete: string) => (
+  const field = (
+    label: string,
+    value: string,
+    change: (value: string) => void,
+    autocomplete: string,
+  ) => (
     <label className="ol-sync-password-field">
       {label}
       <span className="ol-sync-password-input">
-        <input type={visible ? 'text' : 'password'} value={value}
+        <input
+          type={visible ? 'text' : 'password'}
+          value={value}
           onChange={(event) => change(event.currentTarget.value)}
-          autoComplete={autocomplete} maxLength={4096} disabled={busy} />
+          autoComplete={autocomplete}
+          maxLength={4096}
+          disabled={busy}
+        />
       </span>
     </label>
   );
   return (
     <>
       <DialogBody>
-        <form id={formId} className="ol-sync-password-fields"
-          onCompositionStart={() => { composing.current = true; }}
-          onCompositionEnd={() => { composing.current = false; }}
+        <form
+          id={formId}
+          className="ol-sync-password-fields"
+          onCompositionStart={() => {
+            composing.current = true;
+          }}
+          onCompositionEnd={() => {
+            composing.current = false;
+          }}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && (composing.current || event.nativeEvent.isComposing || event.keyCode === 229))
+            if (
+              event.key === 'Enter' &&
+              (composing.current || event.nativeEvent.isComposing || event.keyCode === 229)
+            )
               event.preventDefault();
           }}
           onSubmit={(event) => {
@@ -1241,58 +1345,144 @@ export function PasswordForm({ mode, busy, onSubmit }: {
             if (busy || !valid || composing.current || submitted.current) return;
             submitted.current = true;
             const value = { password, confirmation, currentPassword, rememberKey };
-            setPassword(''); setConfirmation(''); setCurrentPassword('');
+            setPassword('');
+            setConfirmation('');
+            setCurrentPassword('');
             onSubmit(value);
-          }}>
-          {mode === 'password' && field(t('cloudSyncE2ee.currentPassword'), currentPassword, setCurrentPassword, 'current-password')}
-          {field(t(creating ? 'cloudSyncE2ee.newPassword' : 'cloudSyncE2ee.password'), password, setPassword, creating ? 'new-password' : 'current-password')}
-          {creating && field(t('cloudSyncE2ee.confirmPassword'), confirmation, setConfirmation, 'new-password')}
-          <button type="button" className="ol-tool-button" disabled={busy} aria-pressed={visible}
-            onClick={() => setVisible((value) => !value)}>
-            {chinese ? (visible ? '隐藏密码' : '显示密码') : (visible ? 'Hide passwords' : 'Show passwords')}
+          }}
+        >
+          {mode === 'password' &&
+            field(
+              t('cloudSyncE2ee.currentPassword'),
+              currentPassword,
+              setCurrentPassword,
+              'current-password',
+            )}
+          {field(
+            t(creating ? 'cloudSyncE2ee.newPassword' : 'cloudSyncE2ee.password'),
+            password,
+            setPassword,
+            creating ? 'new-password' : 'current-password',
+          )}
+          {creating &&
+            field(
+              t('cloudSyncE2ee.confirmPassword'),
+              confirmation,
+              setConfirmation,
+              'new-password',
+            )}
+          <button
+            type="button"
+            className="ol-tool-button"
+            disabled={busy}
+            aria-pressed={visible}
+            onClick={() => setVisible((value) => !value)}
+          >
+            {chinese
+              ? visible
+                ? '隐藏密码'
+                : '显示密码'
+              : visible
+                ? 'Hide passwords'
+                : 'Show passwords'}
           </button>
-          <p>{t('cloudSyncE2ee.passwordPolicy')} {t('cloudSyncE2ee.passwordWarning')}</p>
+          <p>
+            {t('cloudSyncE2ee.passwordPolicy')} {t('cloudSyncE2ee.passwordWarning')}
+          </p>
           <label className="ol-dialog-acknowledgement">
-            <input type="checkbox" checked={rememberKey} disabled={busy}
-              onChange={(event) => setRememberKey(event.currentTarget.checked)} />
+            <input
+              type="checkbox"
+              checked={rememberKey}
+              disabled={busy}
+              onChange={(event) => setRememberKey(event.currentTarget.checked)}
+            />
             {t('cloudSyncE2ee.rememberKey')}
           </label>
         </form>
       </DialogBody>
       <DialogFooter>
         <DialogAction type="submit" form={formId} disabled={!valid || busy}>
-          {t(mode === 'create' ? 'cloudSyncE2ee.create' : mode === 'unlock' ? 'cloudSyncE2ee.unlock' : 'cloudSyncE2ee.changePassword')}
+          {t(
+            mode === 'create'
+              ? 'cloudSyncE2ee.create'
+              : mode === 'unlock'
+                ? 'cloudSyncE2ee.unlock'
+                : 'cloudSyncE2ee.changePassword',
+          )}
         </DialogAction>
       </DialogFooter>
     </>
   );
 }
 
-export function CloudBackupDeletionDisclosure({ backupRetentionDays }: { backupRetentionDays: number | null }) {
+export function CloudBackupDeletionDisclosure({
+  backupRetentionDays,
+}: {
+  backupRetentionDays: number | null;
+}) {
   const { t, i18n } = useTranslation();
   const chinese = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh');
-  return <>
-    <p>{t('cloudSyncE2ee.deleteDescription')}</p>
-    <p>{chinese ? '本机资料和离线设备上的本机副本会保留。关闭同步或退出账号不会删除云端备份。' : 'Local data and local copies on offline devices are kept. Turning sync off or signing out does not delete the cloud backup.'}</p>
-    {backupRetentionDays !== null && Number.isSafeInteger(backupRetentionDays) && backupRetentionDays >= 0 &&
-      <p>{t('cloudSyncE2ee.backupRetention', { days: backupRetentionDays })}</p>}
-    <p>{chinese ? '服务备份保留期不保证账号信息、日志、操作收据或删除标记同时清除，也不提供任意历史版本恢复。' : 'The service backup retention period does not guarantee simultaneous deletion of account information, logs, operation receipts or deletion markers, or provide selectable historical restores.'}</p>
-  </>;
+  return (
+    <>
+      <p>{t('cloudSyncE2ee.deleteDescription')}</p>
+      <p>
+        {chinese
+          ? '本机资料和离线设备上的本机副本会保留。关闭同步或退出账号不会删除云端备份。'
+          : 'Local data and local copies on offline devices are kept. Turning sync off or signing out does not delete the cloud backup.'}
+      </p>
+      {backupRetentionDays !== null &&
+        Number.isSafeInteger(backupRetentionDays) &&
+        backupRetentionDays >= 0 && (
+          <p>{t('cloudSyncE2ee.backupRetention', { days: backupRetentionDays })}</p>
+        )}
+      <p>
+        {chinese
+          ? '服务备份保留期不保证账号信息、日志、操作收据或删除标记同时清除，也不提供任意历史版本恢复。'
+          : 'The service backup retention period does not guarantee simultaneous deletion of account information, logs, operation receipts or deletion markers, or provide selectable historical restores.'}
+      </p>
+    </>
+  );
 }
 
-function SyncDialog({ title, closing = false, busy, onClose, children }: {
-  title: string; closing?: boolean; busy: boolean; onClose: () => void; children: ReactNode;
+function SyncDialog({
+  title,
+  closing = false,
+  busy,
+  onClose,
+  children,
+}: {
+  title: string;
+  closing?: boolean;
+  busy: boolean;
+  onClose: () => void;
+  children: ReactNode;
 }) {
   const { t } = useTranslation();
   const titleId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
   return (
-    <StructuredDialog zIndex={100} width="min(680px, 100%)" labelledBy={titleId}
-      initialFocus={cancelRef} onClose={() => { if (!busy) onClose(); }} closing={closing}>
+    <StructuredDialog
+      zIndex={100}
+      width="min(680px, 100%)"
+      labelledBy={titleId}
+      initialFocus={cancelRef}
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+      closing={closing}
+    >
       <DialogHeader>
         <h3 id={titleId}>{title}</h3>
-        <button type="button" ref={cancelRef} disabled={busy} onClick={onClose}
-          aria-label={t('common.close')} className="ol-tool-close"><Icon name="close" size={17} /></button>
+        <button
+          type="button"
+          ref={cancelRef}
+          disabled={busy}
+          onClick={onClose}
+          aria-label={t('common.close')}
+          className="ol-tool-close"
+        >
+          <Icon name="close" size={17} />
+        </button>
       </DialogHeader>
       {children}
     </StructuredDialog>

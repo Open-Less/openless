@@ -1,0 +1,161 @@
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { fixtureOrigin } from './support/server';
+
+test.use({ baseURL: fixtureOrigin, locale: 'en-US', colorScheme: 'light' });
+
+function attempts(page: Page) {
+  return page.evaluate(() => (window as any).syncDialogFixture.attempts);
+}
+function finish(page: Page, failed = false) {
+  return page.evaluate((error) => (window as any).syncDialogFixture.finish(error), failed);
+}
+async function dismissWhilePending(page: Page, dialog: Locator) {
+  await page.keyboard.press('Escape');
+  const box = await page.locator('.ol-app-viewport').boundingBox();
+  await page.mouse.click(box!.x + 3, box!.y + 3);
+  await expect(dialog).toBeVisible();
+}
+
+test('renewal appears before settings, stays paused on dismissal, and waits for native confirmation', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=renew');
+  const dialog = page.getByRole('dialog', { name: /disclosure has changed|updated disclosure/i });
+  const confirm = dialog.getByRole('button', { name: 'Agree to the update and continue' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('checkbox')).not.toBeChecked();
+  await expect(confirm).toBeDisabled();
+  await expect(dialog).toContainText('Mivra');
+  await expect(dialog).toContainText('API keys');
+  await expect
+    .poll(() =>
+      dialog
+        .getByTestId('sync-terms-body')
+        .evaluate((body) => body.scrollHeight > body.clientHeight),
+    )
+    .toBe(true);
+  await dialog.getByRole('button', { name: 'Not now' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sync now', exact: true })).toBeDisabled();
+  expect(await attempts(page)).toEqual([]);
+
+  await page.getByRole('button', { name: /disclosure has changed|updated disclosure/i }).click();
+  await expect(dialog.getByRole('checkbox')).not.toBeChecked();
+  await dialog.getByRole('checkbox').check();
+  await confirm.click();
+  await expect
+    .poll(() => attempts(page))
+    .toMatchObject([
+      {
+        command: 'cloud_sync_e2ee_prepare_enable',
+        args: {
+          consentVersion: 'encrypted-full-snapshot-v2',
+          expectedScope: {
+            serviceOrigin: 'https://sync.example',
+            accountId: '42',
+            vaultId: 'old-vault',
+          },
+        },
+      },
+    ]);
+  await expect(confirm).toBeDisabled();
+  await dismissWhilePending(page, dialog);
+  await finish(page, true);
+  await expect(dialog.getByRole('alert')).toContainText('Could not reach the sync service');
+  await confirm.click();
+  await expect.poll(async () => (await attempts(page)).length).toBe(2);
+  await finish(page);
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sync now', exact: true })).toBeEnabled();
+});
+
+test('a new vault waits for matching NFC passwords and confirmed initialization', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=fresh');
+  const enabled = page.getByRole('switch', { name: 'Enable encrypted sync' });
+  await enabled.click();
+  const disclosure = page.getByRole('dialog');
+  await disclosure.getByRole('checkbox').check();
+  await disclosure.getByRole('button', { name: 'Agree to the update and continue' }).click();
+  await expect.poll(async () => (await attempts(page)).length).toBe(1);
+  await finish(page);
+  const password = page.getByRole('dialog', { name: 'Create a sync password' });
+  const create = password.getByRole('button', { name: 'Create encrypted backup' });
+  const newPassword = password.getByLabel('New sync password', { exact: true });
+  const confirmation = password.getByLabel('Confirm new password', { exact: true });
+  await newPassword.fill('Aa1short');
+  await confirmation.fill('Aa1short');
+  await expect(create).toBeDisabled();
+  await newPassword.fill('LongFixture1A' + 'x'.repeat(128));
+  await confirmation.fill('LongFixture1A' + 'x'.repeat(128));
+  await expect(create).toBeDisabled();
+  await newPassword.fill('LongFixture1Ae\u0301');
+  await confirmation.fill('LongFixture1Ae');
+  await expect(create).toBeDisabled();
+  await confirmation.fill('LongFixture1Aé');
+  await create.click();
+  await expect
+    .poll(() => attempts(page))
+    .toMatchObject([
+      { command: 'cloud_sync_e2ee_prepare_enable' },
+      { command: 'cloud_sync_e2ee_create', args: { observedRevision: '7' } },
+    ]);
+  await expect(enabled).not.toBeChecked();
+  await dismissWhilePending(page, password);
+  await finish(page, true);
+  await expect(password.getByRole('alert')).toContainText('Could not reach the sync service');
+  await expect(enabled).not.toBeChecked();
+  await expect(newPassword).toHaveValue('');
+  await newPassword.fill('LongFixture1Ae\u0301');
+  await confirmation.fill('LongFixture1Aé');
+  await create.click();
+  await expect.poll(async () => (await attempts(page)).length).toBe(3);
+  await finish(page);
+  await expect(password).toHaveCount(0);
+  await expect(enabled).toBeChecked();
+});
+
+test('cloud deletion focuses cancel and keeps a failed confirmation open', async ({ page }) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=delete');
+  const trigger = page.getByRole('button', { name: 'Delete cloud backup', exact: true });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Delete the encrypted cloud backup?' });
+  const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
+  const remove = dialog.getByRole('button', { name: 'Delete cloud backup', exact: true });
+  await expect(cancel).toBeFocused();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog).toContainText('Local data is kept.');
+  await expect(dialog).toContainText('up to 7 days');
+  await expect(remove).toHaveClass(/ol-dialog-action--danger/);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  expect(await attempts(page)).toEqual([]);
+
+  await trigger.click();
+  await remove.click();
+  await expect
+    .poll(() => attempts(page))
+    .toEqual([
+      {
+        command: 'cloud_sync_e2ee_delete_remote',
+        args: {
+          expectedVaultId: 'old-vault',
+          observedRevision: '7',
+          confirmed: true,
+        },
+      },
+    ]);
+  await expect(cancel).toBeDisabled();
+  await expect(remove).toBeDisabled();
+  await dismissWhilePending(page, dialog);
+  await finish(page, true);
+  await expect(dialog.getByRole('alert')).toContainText('Could not reach the sync service');
+  await expect(remove).toBeEnabled();
+  await remove.click();
+  await expect.poll(async () => (await attempts(page)).length).toBe(2);
+  await finish(page);
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeDisabled();
+});

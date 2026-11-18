@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CloudIcon, XIcon } from 'lucide-react';
 import { isTauriHost } from '../../runtime/environment';
-import { cloudSyncE2eeClaimSetupPrompt, cloudSyncE2eeStatus, encryptedSyncScope, encryptedSyncErrorKey, CLOUD_SYNC_E2EE_CONSENT_VERSION, type EncryptedSyncStatus } from '../../api/cloud-sync';
+import {
+  cloudSyncE2eeClaimSetupPrompt,
+  cloudSyncE2eeStatus,
+  encryptedSyncScope,
+  encryptedSyncErrorKey,
+  CLOUD_SYNC_E2EE_CONSENT_VERSION,
+  type EncryptedSyncStatus,
+} from '../../api/cloud-sync';
 import { CloudSyncSection, CloudSyncTermsDialog, prepareEncryptedSync } from './CloudSyncSection';
 import { PresenceModal } from '../../ui/overlays/Modal';
 
@@ -53,7 +60,13 @@ export function CloudSyncSetupPrompt({
     let timer: ReturnType<typeof setTimeout> | undefined;
     let unlisten: (() => void) | undefined;
     const check = async () => {
-      if (cancelled || inFlight || busyRef.current || document.visibilityState !== 'visible' || !document.hasFocus())
+      if (
+        cancelled ||
+        inFlight ||
+        busyRef.current ||
+        document.visibilityState !== 'visible' ||
+        !document.hasFocus()
+      )
         return;
       inFlight = true;
       const request = ++checkRef.current;
@@ -62,9 +75,17 @@ export function CloudSyncSetupPrompt({
         if (cancelled || checkRef.current !== request) return;
         if (status.enabled && status.consentVersion !== CLOUD_SYNC_E2EE_CONSENT_VERSION) {
           const scope = encryptedSyncScope(status);
-          if (document.visibilityState === 'visible' && document.hasFocus() && dismissed.current !== scope) {
+          if (
+            document.visibilityState === 'visible' &&
+            document.hasFocus() &&
+            dismissed.current !== scope
+          ) {
             setOpen(false);
+            if (reviewRef.current && encryptedSyncScope(reviewRef.current) !== scope)
+              setError(undefined);
             setReview(status);
+          } else {
+            setReview(null);
           }
           return;
         }
@@ -154,7 +175,8 @@ export function CloudSyncSetupPrompt({
     setError(undefined);
     try {
       const prepared = await prepareEncryptedSync(scope);
-      if (request !== checkRef.current || encryptedSyncScope(reviewRef.current ?? review) !== scope) return;
+      if (request !== checkRef.current || encryptedSyncScope(reviewRef.current ?? review) !== scope)
+        return;
       setReview(null);
       if (prepared.nextStep !== 'ready') onSetup();
     } catch (failure) {
@@ -165,7 +187,17 @@ export function CloudSyncSetupPrompt({
       setBusy(false);
     }
   };
-  if (review && !blocked) return <CloudSyncTermsDialog key={encryptedSyncScope(review)} updated busy={busy} error={error} onClose={closeReview} onConfirm={() => void acceptReview()} />;
+  if (review && !blocked)
+    return (
+      <CloudSyncTermsDialog
+        key={encryptedSyncScope(review)}
+        updated
+        busy={busy}
+        error={error}
+        onClose={closeReview}
+        onConfirm={() => void acceptReview()}
+      />
+    );
   return (
     <PresenceModal
       open={open && !blocked}

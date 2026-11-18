@@ -23,10 +23,16 @@ fn act(action: CloudSyncAction) -> FrontendAction {
 fn sync_disclosure(lang: Lang) -> &'static serde_json::Value {
     static DISCLOSURE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     let value = DISCLOSURE.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../../src/features/cloud-sync/disclosure.json"))
-            .expect("bundled encrypted sync disclosure must be valid JSON")
+        serde_json::from_str(include_str!(
+            "../../../../src/features/cloud-sync/disclosure.json"
+        ))
+        .expect("bundled encrypted sync disclosure must be valid JSON")
     });
-    &value[if matches!(lang, Lang::ZhCn | Lang::ZhTw) { "zh-CN" } else { "en" }]
+    &value[if matches!(lang, Lang::ZhCn | Lang::ZhTw) {
+        "zh-CN"
+    } else {
+        "en"
+    }]
 }
 
 /// The privacy section's cloud sync card.
@@ -135,8 +141,16 @@ pub fn cloud_sync_card(
             }
             note(ui, tr_l10n(lang, state.state_key()), theme::INK_3);
 
-            if status.enabled && status.consent_version.as_deref() != Some(CONSENT_VERSION)
-                && button(ui, sync_disclosure(lang)["updatedTitle"].as_str().unwrap_or_default(), ButtonKind::Blue, !state.working())
+            if status.enabled
+                && status.consent_version.as_deref() != Some(CONSENT_VERSION)
+                && button(
+                    ui,
+                    sync_disclosure(lang)["updatedTitle"]
+                        .as_str()
+                        .unwrap_or_default(),
+                    ButtonKind::Blue,
+                    !state.working(),
+                )
             {
                 actions.push(act(CloudSyncAction::OpenDialog(CloudSyncDialog::Consent {
                     intent: CloudSyncIntent::Enable,
@@ -414,7 +428,11 @@ fn dialog_contents(
             let updated = state.status.as_ref().is_some_and(|status| {
                 status.enabled && status.consent_version.as_deref() != Some(CONSENT_VERSION)
             });
-            ui.label(egui::RichText::new(text(if updated { "updatedTitle" } else { "title" })).size(13.5).strong());
+            ui.label(
+                egui::RichText::new(text(if updated { "updatedTitle" } else { "title" }))
+                    .size(13.5)
+                    .strong(),
+            );
             if updated {
                 note(ui, text("updatedDescription"), theme::INK_2);
             }
@@ -422,21 +440,35 @@ fn dialog_contents(
             note(ui, CONSENT_VERSION, theme::INK_3);
             if let Some(sections) = disclosure["sections"].as_array() {
                 for section in sections {
-                    ui.label(egui::RichText::new(section["title"].as_str().unwrap_or_default()).strong());
-                    note(ui, section["body"].as_str().unwrap_or_default(), theme::INK_2);
+                    ui.label(
+                        egui::RichText::new(section["title"].as_str().unwrap_or_default()).strong(),
+                    );
+                    note(
+                        ui,
+                        section["body"].as_str().unwrap_or_default(),
+                        theme::INK_2,
+                    );
                 }
             }
             note(ui, text("draftBoundary"), theme::INK_2);
             note(ui, text("cancelHint"), theme::INK_2);
             let mut checked = state.consent_checked;
-            if ui.add_enabled(!busy, egui::Checkbox::new(&mut checked, text("checkbox"))).changed() {
+            if ui
+                .add_enabled(!busy, egui::Checkbox::new(&mut checked, text("checkbox")))
+                .changed()
+            {
                 actions.push(act(CloudSyncAction::ConsentChecked(checked)));
             }
             ui.horizontal_wrapped(|ui| {
                 if button(ui, text("cancel"), ButtonKind::Ghost, !busy) {
                     actions.push(act(CloudSyncAction::CloseDialog));
                 }
-                if button(ui, text("confirm"), ButtonKind::Blue, state.consent_checked && !busy) {
+                if button(
+                    ui,
+                    text("confirm"),
+                    ButtonKind::Blue,
+                    state.consent_checked && !busy,
+                ) {
                     actions.push(act(CloudSyncAction::Prepare(intent)));
                 }
             });

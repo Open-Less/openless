@@ -161,7 +161,10 @@ impl CloudSyncOp {
         use openless_core::cloud_sync_e2ee::AuthState;
         let status = |status: EncryptedSyncStatus| SyncOutcome::Status(Box::new(status));
         match operation {
-            Self::Prepare { consent_version, expected_scope } => backend
+            Self::Prepare {
+                consent_version,
+                expected_scope,
+            } => backend
                 .cloud_sync_e2ee_prepare_enable(consent_version, Some(expected_scope))
                 .await
                 .map(|prepared| SyncOutcome::Prepared(Box::new(prepared)))

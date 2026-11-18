@@ -1158,7 +1158,10 @@ impl EncryptedSyncService {
                 return Err(error("account_changed"));
             }
             self.refresh_metadata(&mut runtime).await?;
-            if let Some(expected_vault) = expected_scope.as_ref().and_then(|scope| scope.vault_id.as_deref()) {
+            if let Some(expected_vault) = expected_scope
+                .as_ref()
+                .and_then(|scope| scope.vault_id.as_deref())
+            {
                 if self.status().vault_id.as_deref() != Some(expected_vault) {
                     return Err(error("account_changed"));
                 }
@@ -1285,8 +1288,8 @@ impl EncryptedSyncService {
         }
         log::warn!("[e2ee-token] create: entered, observed_revision={observed_revision}");
         let observed = Revision::parse(&observed_revision).map_err(protocol_error)?;
-        let password = NormalizedPassword::confirmed_new(password, confirmation)
-            .map_err(protocol_error)?;
+        let password =
+            NormalizedPassword::confirmed_new(password, confirmation).map_err(protocol_error)?;
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.0.auto_suspended.store(false, Ordering::Release);
         self.begin();
@@ -1338,7 +1341,10 @@ impl EncryptedSyncService {
             self.check_cancelled()?;
             let mut settings = runtime.settings.clone();
             settings.enabled = true;
-            self.0.local.write("device", "client", settings.clone()).await?;
+            self.0
+                .local
+                .write("device", "client", settings.clone())
+                .await?;
             runtime.settings = settings;
             Ok(())
         }

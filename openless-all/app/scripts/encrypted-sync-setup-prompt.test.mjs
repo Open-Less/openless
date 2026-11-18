@@ -38,7 +38,13 @@ function context({ native = true, blocked = false } = {}) {
     response = false,
     props = { blocked, onSetup: () => {} },
     last,
-    status = { enabled: false, consentVersion: null, serviceOrigin: 'https://sync.example', account: { githubId: 'owner' }, vaultId: 'vault' },
+    status = {
+      enabled: false,
+      consentVersion: null,
+      serviceOrigin: 'https://sync.example',
+      account: { githubId: 'owner' },
+      vaultId: 'vault',
+    },
     preparations = 0,
     prepareResult;
   const document = Object.assign(new EventTarget(), {
@@ -82,7 +88,8 @@ function context({ native = true, blocked = false } = {}) {
     '../../api/cloud-sync': {
       cloudSyncE2eeStatus: async () => ({ ...status }),
       CLOUD_SYNC_E2EE_CONSENT_VERSION: 'encrypted-full-snapshot-v2',
-      encryptedSyncScope: (s) => JSON.stringify([s.serviceOrigin, s.account?.githubId ?? null, s.vaultId]),
+      encryptedSyncScope: (s) =>
+        JSON.stringify([s.serviceOrigin, s.account?.githubId ?? null, s.vaultId]),
       encryptedSyncErrorKey: () => 'unknown',
       cloudSyncE2eeClaimSetupPrompt: async () => {
         calls++;
@@ -90,8 +97,12 @@ function context({ native = true, blocked = false } = {}) {
       },
     },
     './CloudSyncSection': {
-      CloudSyncSection: 'sync-section', CloudSyncTermsDialog: (props) => jsx('terms', props),
-      prepareEncryptedSync: async () => { preparations++; return prepareResult ? prepareResult() : { nextStep: 'ready' }; },
+      CloudSyncSection: 'sync-section',
+      CloudSyncTermsDialog: (props) => jsx('terms', props),
+      prepareEncryptedSync: async () => {
+        preparations++;
+        return prepareResult ? prepareResult() : { nextStep: 'ready' };
+      },
     },
     '../../ui/overlays/Modal': {
       // Eligibility tests do not advance animation clocks; closed presence has
@@ -145,8 +156,12 @@ function context({ native = true, blocked = false } = {}) {
       props = { ...props, blocked: v };
     },
     calls: () => calls,
-    setStatus: (v) => { status = { ...status, ...v }; },
-    setPreparation: (fn) => { prepareResult = fn; },
+    setStatus: (v) => {
+      status = { ...status, ...v };
+    },
+    setPreparation: (fn) => {
+      prepareResult = fn;
+    },
     preparations: () => preparations,
     listeners,
     timers,

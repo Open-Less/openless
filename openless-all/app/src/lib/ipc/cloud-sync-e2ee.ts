@@ -92,8 +92,15 @@ export interface ConsentScope {
   accountId: string | null;
   vaultId: string | null;
 }
-export const cloudSyncE2eePrepareEnable = (consentVersion: string, expectedScope?: ConsentScope): Promise<EnablePreparation> =>
-  invokeOrMock('cloud_sync_e2ee_prepare_enable', { consentVersion, ...(expectedScope ? { expectedScope } : {}) }, unavailable);
+export const cloudSyncE2eePrepareEnable = (
+  consentVersion: string,
+  expectedScope?: ConsentScope,
+): Promise<EnablePreparation> =>
+  invokeOrMock(
+    'cloud_sync_e2ee_prepare_enable',
+    { consentVersion, ...(expectedScope ? { expectedScope } : {}) },
+    unavailable,
+  );
 export const cloudSyncE2eeCreate = (input: {
   password: string;
   passwordConfirmation: string;

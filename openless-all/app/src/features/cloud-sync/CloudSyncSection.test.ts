@@ -131,7 +131,6 @@ const initial: EncryptedSyncStatus = {
   syncState: 'disabled',
   account: { githubId: 'owner', login: 'fixture' },
   vaultId: 'vault',
-  serviceOrigin: 'https://sync.example',
   keyId: 'key',
   localGeneration: '1',
   lastSyncedLocalGeneration: null,
@@ -359,7 +358,10 @@ try {
     components.ConsentForm({ busy: false, onConfirm() {} }),
   );
   assert.equal(find(consent, (node) => node.type === 'input').props.checked, false);
-  assert.equal(find(consent, (node) => node.type === 'button' && node.props.tone !== 'neutral').props.disabled, true);
+  assert.equal(
+    find(consent, (node) => node.type === 'button' && node.props.tone !== 'neutral').props.disabled,
+    true,
+  );
 
   const hooks = new Hooks();
   const render = () => hooks.render(() => components.CloudSyncSection());
