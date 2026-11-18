@@ -1,3 +1,5 @@
+import { FONT_SCALE_VALUES } from '../src/lib/fontScale';
+import type { SettingsOperation, SettingsStatusFixture } from './fixtures/settings-status';
 import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
 import { settleNavigation } from './support/navigation';
@@ -6,6 +8,12 @@ import { expect, test, type Page } from '@playwright/test';
 // Development React is intentional: production builds hide special-prop/ref warnings.
 test.use({ baseURL: fixtureOrigin });
 const messages = new WeakMap<Page, string[]>();
+
+declare global {
+  interface Window {
+    settingsStatusFixture: SettingsStatusFixture;
+  }
+}
 test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
   messages.set(page, errors);
@@ -15,13 +23,13 @@ test.beforeEach(async ({ page }) => {
     if (message.text().includes('GL Driver Message')) return;
     if (message.type() === 'error' || message.type() === 'warning') errors.push(message.text());
   });
-  await page.goto('/');
 });
 test.afterEach(async ({ page }) => {
   expect(messages.get(page)).toEqual([]);
 });
 
 async function settings(page: Page, category: string) {
+  await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page
     .getByRole('navigation', { name: '设置分类' })
@@ -183,6 +191,7 @@ test.describe('touch hints', () => {
 test('style card lists mount and switch without the React 18 PopChild ref warning', async ({
   page,
 }) => {
+  await page.goto('/');
   await page.getByRole('button', { name: '风格', exact: true }).click();
   await page.getByRole('button', { name: '润色模式', exact: true }).click();
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
@@ -235,24 +244,29 @@ test('Gemini Omni exposes the shared thinking setting and hides it for transcrip
   await expect(thinking).toHaveAttribute('aria-checked', 'false');
 });
 
-async function finishSettingsOperation(page: Page, operation: 'Save' | 'Sync', error = false) {
+async function waitForSettingsOperation(page: Page, operation: SettingsOperation, attempt: number) {
+  await expect
+    .poll(() =>
+      page.evaluate((kind) => window.settingsStatusFixture.pendingAttempt(kind), operation),
+    )
+    .toBe(attempt);
+}
+
+async function finishSettingsOperation(
+  page: Page,
+  operation: SettingsOperation,
+  attempt: number,
+  error = false,
+) {
+  await waitForSettingsOperation(page, operation, attempt);
   await page.evaluate(
-    ({ operation, error }) => {
-      const fixture = (
-        window as unknown as {
-          settingsStatusFixture: {
-            finishSave: (error: boolean) => void;
-            finishSync: (error: boolean) => void;
-          };
-        }
-      ).settingsStatusFixture;
-      fixture[`finish${operation}`](error);
-    },
-    { operation, error },
+    ({ operation, attempt, error }) =>
+      window.settingsStatusFixture.finish(operation, attempt, error),
+    { operation, attempt, error },
   );
 }
 
-for (const scale of ['small', 'medium', 'large']) {
+for (const scale of ['small', 'medium', 'large'] as const) {
   for (const theme of ['light', 'dark']) {
     test(`real Save Configuration updates one compact status surface at ${scale}/${theme}`, async ({
       page,
@@ -269,40 +283,38 @@ for (const scale of ['small', 'medium', 'large']) {
       await notice.evaluate((node) => node.setAttribute('data-same-operation', 'save'));
       await expect(save).toBeDisabled();
       await expect(notice).not.toContainText('已保存');
-      await finishSettingsOperation(page, 'Save');
+      await finishSettingsOperation(page, 'save', 1);
       await expect(notice).toHaveAttribute('data-state', 'saved');
       await expect(notice).toHaveAttribute('data-same-operation', 'save');
       await expect(notice).toContainText('DeepSeek 配置已保存');
       await expect(notice).toHaveCSS('border-radius', '8px');
       await expect(save).toBeEnabled();
       expect(
-        await page.evaluate(
-          () => JSON.parse((window as any).settingsStatusFixture.stored()).apiKey,
-        ),
+        await page.evaluate(() => JSON.parse(window.settingsStatusFixture.stored()).apiKey),
       ).toBe('saved-key');
       await expect(notice).toHaveCSS('transform', 'none');
       const box = (await notice.boundingBox())!;
       const viewport = (await page.locator('.ol-app-viewport').boundingBox())!;
-      expect(box.height).toBeLessThan(42);
+      // Font fallback can wrap the label onto two lines in WebKit. Apply the compact
+      // height budget in rendered pixels at each interface scale.
+      expect(box.height).toBeLessThanOrEqual(60 * FONT_SCALE_VALUES[scale]);
       expect(box.x).toBeGreaterThanOrEqual(viewport.x);
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.x + viewport.width);
       await page.screenshot({
         path: test.info().outputPath(`acceptance-save-status-${scale}-${theme}.png`),
       });
       await save.click();
-      await finishSettingsOperation(page, 'Save', true);
+      await finishSettingsOperation(page, 'save', 2, true);
       await expect(notice).toHaveAttribute('data-variant', 'alert');
       await expect(notice).toContainText('操作失败');
       await expect(notice.locator('[role="alert"]')).toBeVisible();
-      await page.evaluate(() => (window as any).settingsStatusFixture.hide());
+      await page.evaluate(() => window.settingsStatusFixture.hide());
       await expect(notice).toHaveCount(0);
     });
   }
 }
 
-test('Sync Now keeps one progress notice until native completion; actual decisions remain modal', async ({
-  page,
-}) => {
+test('Sync Now keeps one progress notice until native completion', async ({ page }) => {
   await page.goto('/e2e/fixtures/settings-status.html?theme=dark');
   const sync = page.getByRole('button', { name: '立即同步', exact: true });
   await expect(sync).toBeEnabled();
@@ -314,10 +326,14 @@ test('Sync Now keeps one progress notice until native completion; actual decisio
   await notice.evaluate((node) => node.setAttribute('data-same-operation', 'sync'));
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(notice).not.toContainText('同步完成');
-  await page.evaluate(() => (window as any).settingsStatusFixture.restoreDuringSync());
+  await waitForSettingsOperation(page, 'sync', 1);
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.canRestoreDuringSync()))
+    .toBe(true);
+  await page.evaluate(() => window.settingsStatusFixture.restoreDuringSync());
   await expect(notice.getByRole('progressbar')).toBeVisible();
   await expect(notice).not.toContainText('已恢复');
-  await finishSettingsOperation(page, 'Sync');
+  await finishSettingsOperation(page, 'sync', 1);
   await expect(notice).toHaveAttribute('data-state', 'saved');
   await expect(notice).toHaveAttribute('data-same-operation', 'sync');
   await expect(notice).toContainText('同步完成');
@@ -328,39 +344,93 @@ test('Sync Now keeps one progress notice until native completion; actual decisio
     path: test.info().outputPath('acceptance-cloud-sync-completed-status.png'),
   });
   await sync.click();
-  await finishSettingsOperation(page, 'Sync', true);
+  await finishSettingsOperation(page, 'sync', 2, true);
   await expect(notice).toHaveAttribute('data-state', 'failed');
   await expect(notice).toHaveAttribute('data-severity', 'error');
   await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await notice.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(notice).toHaveCount(0);
 
-  const remove = page.getByRole('button', { name: '删除云端备份', exact: true });
-  await remove.click();
-  const dialog = page.getByRole('dialog', { name: '删除云端加密备份？', exact: true });
-  await expect(dialog).toBeVisible();
-  await expect(page.locator('[role="dialog"]')).toHaveCount(1);
-  await expect(dialog).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
-  await expect(remove).toBeFocused();
-  expect(await page.evaluate(() => (window as any).settingsStatusFixture.calls)).toEqual([
+  await sync.click();
+  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await waitForSettingsOperation(page, 'sync', 3);
+  await page.evaluate(() => window.settingsStatusFixture.hide());
+  await expect(sync).toHaveCount(0);
+  await finishSettingsOperation(page, 'sync', 3);
+  await expect(notice).toHaveCount(0);
+  expect(await page.evaluate(() => window.settingsStatusFixture.calls)).toEqual([
+    'cloud_sync_e2ee_sync_now',
     'cloud_sync_e2ee_sync_now',
     'cloud_sync_e2ee_sync_now',
   ]);
-  await remove.click();
+});
+
+async function clickDecisionBackdrop(page: Page) {
   const overlay = page.locator('.ol-dialog-overlay:not([inert])');
   const bounds = (await overlay.boundingBox())!;
   await page.mouse.click(bounds.x + 2, bounds.y + 2);
+}
+
+test('cloud backup deletion cancels without IPC and holds the decision until confirmation finishes', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/settings-status.html?theme=dark');
+  const remove = page.getByRole('main').getByRole('button', { name: '删除云端备份', exact: true });
+  const dialog = page.getByRole('dialog', { name: '删除云端加密备份？', exact: true });
+  const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+  const confirm = dialog.getByRole('button', { name: '删除云端备份', exact: true });
+  const requests = () => page.evaluate(() => window.settingsStatusFixture.deleteRequests);
+  const deleteRequest = {
+    expectedVaultId: 'fixture-vault',
+    observedRevision: '7',
+    confirmed: true,
+  };
+
+  for (const dismiss of [
+    () => cancel.click(),
+    () => page.keyboard.press('Escape'),
+    () => clickDecisionBackdrop(page),
+  ]) {
+    await remove.click();
+    await expect(dialog).toBeVisible();
+    await expect(cancel).toBeFocused();
+    await dismiss();
+    await expect(dialog).toHaveCount(0);
+    await expect(remove).toBeFocused();
+    expect(await requests()).toEqual([]);
+  }
+
+  await remove.click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog).toContainText('本机资料保留');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(confirm).toBeFocused();
+  await confirm.click();
+  await waitForSettingsOperation(page, 'delete', 1);
+  await expect(confirm).toBeDisabled();
+  await expect(cancel).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await clickDecisionBackdrop(page);
+  await confirm.dispatchEvent('click');
+  await expect(dialog).toBeVisible();
+  expect(await requests()).toEqual([deleteRequest]);
+  await expect(page.locator('.ol-notification-card')).toHaveCount(0);
+
+  await finishSettingsOperation(page, 'delete', 1, true);
+  await expect(dialog.getByRole('alert')).toContainText('暂时无法连接同步服务');
+  await expect(confirm).toBeEnabled();
+  await expect(cancel).toBeEnabled();
+  await confirm.click();
+  await waitForSettingsOperation(page, 'delete', 2);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  expect(await requests()).toEqual([deleteRequest, deleteRequest]);
+  await finishSettingsOperation(page, 'delete', 2);
   await expect(dialog).toHaveCount(0);
-  await expect(remove).toBeFocused();
-  await sync.click();
-  await expect(notice.getByRole('progressbar')).toBeVisible();
-  await page.evaluate(() => (window as any).settingsStatusFixture.hide());
-  await finishSettingsOperation(page, 'Sync');
-  await expect(notice).toHaveCount(0);
+  await expect(remove).toBeDisabled();
+  await expect(page.locator('.ol-notification-card')).toContainText('同步设置已更新。');
 });
 
 test('saved status and the sync decision remain usable in a short narrow 110% viewport', async ({
@@ -371,7 +441,7 @@ test('saved status and the sync decision remain usable in a short narrow 110% vi
   );
   await expect(page.getByLabel('DeepSeek suite API Key')).toHaveValue('fixture-key');
   await page.getByRole('button', { name: '保存配置', exact: true }).click();
-  await finishSettingsOperation(page, 'Save');
+  await finishSettingsOperation(page, 'save', 1);
   const notice = page.locator('.ol-notification-card');
   await expect(notice).toHaveAttribute('data-state', 'saved');
   await expect(notice).toHaveCSS('transform', 'none');
@@ -384,12 +454,21 @@ test('saved status and the sync decision remain usable in a short narrow 110% vi
   const dialog = page.getByRole('dialog', { name: '删除云端加密备份？', exact: true });
   await expect(dialog).toBeVisible();
   const confirm = dialog.getByRole('button', { name: '删除云端备份', exact: true });
-  await confirm.scrollIntoViewIfNeeded();
-  await expect(confirm).toBeDisabled();
+  const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+  await expect(dialog).toHaveCSS('transform', 'none');
+  await expect(cancel).toBeFocused();
+  for (const action of [confirm, cancel]) {
+    await expect(action).toBeEnabled();
+    const button = (await action.boundingBox())!;
+    expect(button.x).toBeGreaterThanOrEqual(viewport.x);
+    expect(button.y).toBeGreaterThanOrEqual(viewport.y);
+    expect(button.x + button.width).toBeLessThanOrEqual(viewport.x + viewport.width);
+    expect(button.y + button.height).toBeLessThanOrEqual(viewport.y + viewport.height);
+  }
   await page.screenshot({
     path: test.info().outputPath('acceptance-cloud-sync-decision-narrow-light.png'),
   });
-  await page.keyboard.press('Escape');
+  await cancel.click();
   await expect(dialog).toHaveCount(0);
   await expect(remove).toBeFocused();
 });

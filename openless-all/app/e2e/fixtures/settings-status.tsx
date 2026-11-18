@@ -1,9 +1,13 @@
 import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { mockIPC } from '@tauri-apps/api/mocks';
+import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import { mockSettings } from '../../src/lib/ipc/mock-data';
-import type { EncryptedSyncStatus } from '../../src/api/cloud-sync';
+import {
+  CLOUD_SYNC_E2EE_CONSENT_VERSION,
+  type cloudSyncE2eeDeleteRemote,
+  type EncryptedSyncStatus,
+} from '../../src/api/cloud-sync';
 import { applyFontScale, type FontScaleId } from '../../src/lib/fontScale';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
@@ -32,18 +36,48 @@ let status: EncryptedSyncStatus = {
   taskId: null,
   serviceOrigin: 'https://sync.example',
   backupRetentionDays: null,
-  consentVersion: 'encrypted-full-snapshot-v1',
+  consentVersion: CLOUD_SYNC_E2EE_CONSENT_VERSION,
 };
+export type SettingsOperation = 'save' | 'sync' | 'delete';
+type DeleteRequest = Parameters<typeof cloudSyncE2eeDeleteRemote>[0];
 const calls: string[] = [];
-let saveResult: ((error?: boolean) => void) | undefined;
-let syncResult: ((error?: boolean) => void) | undefined;
+const deleteRequests: DeleteRequest[] = [];
+const attempts = { save: 0, sync: 0, delete: 0 };
+const pending = new Map<SettingsOperation, { attempt: number; finish: (error: boolean) => void }>();
 let stored = JSON.stringify({ apiKey: 'fixture-key', voice: 'stella' });
+
+function deferOperation<T>(
+  operation: SettingsOperation,
+  complete: (error: boolean) => T,
+): Promise<T> {
+  if (pending.has(operation)) throw new Error(`Duplicate pending ${operation} operation`);
+  return new Promise((resolve, reject) => {
+    pending.set(operation, {
+      attempt: ++attempts[operation],
+      finish: (error) => {
+        try {
+          resolve(complete(error));
+        } catch (cause) {
+          reject(cause);
+        }
+      },
+    });
+  });
+}
+
 const fixture = {
   calls,
+  deleteRequests,
   hide: () => {},
-  finishSave: (error = false) => saveResult?.(error),
-  finishSync: (error = false) => syncResult?.(error),
+  pendingAttempt: (operation: SettingsOperation) => pending.get(operation)?.attempt ?? null,
+  finish: (operation: SettingsOperation, attempt: number, error = false) => {
+    const active = pending.get(operation);
+    if (active?.attempt !== attempt) throw new Error(`No pending ${operation} attempt ${attempt}`);
+    pending.delete(operation);
+    active.finish(error);
+  },
   stored: () => stored,
+  canRestoreDuringSync: () => Boolean(listeners.get('cloud-sync-e2ee:restored')?.size),
   restoreDuringSync: () => {
     update({ localGeneration: '2' });
     return emit('cloud-sync-e2ee:restored', {
@@ -57,6 +91,7 @@ const fixture = {
     });
   },
 };
+export type SettingsStatusFixture = typeof fixture;
 Object.assign(window, { settingsStatusFixture: fixture });
 const update = (change: Partial<EncryptedSyncStatus>) => {
   status = { ...status, ...change, sequence: String(Number(status.sequence) + 1) };
@@ -71,59 +106,89 @@ const publish = () =>
     taskId: status.taskId,
     status: { ...status },
   });
-mockIPC(
-  (command, args) => {
-    if (command === 'get_startup_snapshot')
-      return { backend: { running: true }, contractVersion: '2.0.0' };
-    if (command === 'get_platform_capabilities')
-      return { platform: 'desktop', supportsDesktopHotkey: false };
-    if (command === 'get_settings_snapshot')
-      return {
-        preferences: { ...mockSettings, themeMode: params.get('theme') ?? 'light' },
-        revision: 1,
-      };
-    if (command === 'set_remote_locale') return undefined;
-    if (command === 'marketplace_auth_status') return { signedIn: true };
-    if (command === 'cloud_sync_e2ee_status') return { ...status };
-    if (command === 'read_credential') return stored;
-    if (command === 'set_credential') {
-      calls.push(command);
-      return new Promise<void>((resolve, reject) => {
-        saveResult = (error) => {
-          if (error) reject({ code: 'secure_storage_denied' });
-          else {
-            stored = (args as { value: string }).value;
-            resolve();
-          }
-        };
+const listeners = new Map<string, Set<number>>();
+mockWindows('main');
+mockIPC((command, args) => {
+  // Tauri's built-in event mock removes listeners by `id`, but unlisten sends `eventId`.
+  // In StrictMode the first effect teardown would otherwise leave dead callbacks in its table.
+  if (command === 'plugin:event|listen') {
+    const { event, handler } = args as { event: string; handler: number };
+    const callbacks = listeners.get(event) ?? new Set<number>();
+    callbacks.add(handler);
+    listeners.set(event, callbacks);
+    return handler;
+  }
+  if (command === 'plugin:event|unlisten') {
+    const { event, eventId } = args as { event: string; eventId: number };
+    listeners.get(event)?.delete(eventId);
+    return undefined;
+  }
+  if (command === 'plugin:event|emit') {
+    const { event, payload } = args as { event: string; payload: unknown };
+    const { runCallback } = window.__TAURI_INTERNALS__ as {
+      runCallback: (id: number, data: unknown) => void;
+    };
+    for (const id of listeners.get(event) ?? []) runCallback(id, { id, event, payload });
+    return undefined;
+  }
+  if (command === 'get_startup_snapshot')
+    return { backend: { running: true }, contractVersion: '2.0.0' };
+  if (command === 'get_platform_capabilities')
+    return { platform: 'desktop', supportsDesktopHotkey: false };
+  if (command === 'get_settings_snapshot')
+    return {
+      preferences: { ...mockSettings, themeMode: params.get('theme') ?? 'light' },
+      revision: 1,
+    };
+  if (command === 'set_remote_locale' || command === 'plugin:app|set_theme') return undefined;
+  if (command === 'marketplace_auth_status') return { signedIn: true };
+  if (command === 'cloud_sync_e2ee_status') return { ...status };
+  if (command === 'read_credential') return stored;
+  if (command === 'set_credential') {
+    calls.push(command);
+    return deferOperation('save', (error) => {
+      if (error) throw { code: 'secure_storage_denied' };
+      stored = (args as { value: string }).value;
+    });
+  }
+  if (command === 'cloud_sync_e2ee_sync_now') {
+    calls.push(command);
+    const result = deferOperation('sync', (error) => {
+      const next = update({
+        syncState: error ? 'failed' : 'ready',
+        taskId: null,
+        lastError: error ? { code: 'transport_failed', retryAfterSeconds: null } : null,
+        lastSuccessfulSyncAt: error ? null : new Date().toISOString(),
       });
-    }
-    if (command === 'cloud_sync_e2ee_sync_now') {
-      calls.push(command);
-      update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
       void publish();
-      return new Promise((resolve, reject) => {
-        syncResult = (error) => {
-          update({
-            syncState: error ? 'failed' : 'ready',
-            taskId: null,
-            lastError: error ? { code: 'transport_failed', retryAfterSeconds: null } : null,
-            lastSuccessfulSyncAt: error ? null : new Date().toISOString(),
-          });
-          void publish();
-          if (error) reject({ code: 'transport_failed' });
-          else resolve({ ...status });
-        };
+      if (error) throw { code: 'transport_failed' };
+      return next;
+    });
+    update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
+    void publish();
+    return result;
+  }
+  if (command === 'cloud_sync_e2ee_delete_remote') {
+    calls.push(command);
+    deleteRequests.push(args as DeleteRequest);
+    return deferOperation('delete', (error) => {
+      if (error) throw { code: 'transport_failed' };
+      return update({
+        enabled: false,
+        hasCloudSnapshot: false,
+        keyState: 'locked',
+        keyId: null,
+        vaultId: null,
+        remoteRevision: '8',
       });
-    }
-    if (command === 'cloud_sync_e2ee_set_enabled') {
-      calls.push(command);
-      return update({ enabled: false });
-    }
-    throw new Error(`Unexpected fixture command: ${command}`);
-  },
-  { shouldMockEvents: true },
-);
+    });
+  }
+  if (command === 'cloud_sync_e2ee_set_enabled') {
+    calls.push(command);
+    return update({ enabled: false });
+  }
+  throw new Error(`Unexpected fixture command: ${command}`);
+});
 
 const { i18nReady } = await import('../../src/i18n');
 await i18nReady;
