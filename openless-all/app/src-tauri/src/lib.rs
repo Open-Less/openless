@@ -317,6 +317,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::delete_history_entry,
             commands::clear_history,
             commands::get_activity_stats,
+            commands::get_activity_apps,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -462,10 +463,14 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
+            commands::qa_cancel_turn,
+            commands::qa_stop_recording,
             commands::qa_window_set_expanded,
             commands::qa_get_snapshot,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
+            commands::deepseek_tts_start,
+            commands::deepseek_tts_stop,
             commands::qa_set_edit_instruction_mode,
             commands::chat_panel_focus_keyboard,
             commands::validate_combo_hotkey,
@@ -620,6 +625,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::delete_history_entry,
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
+            $crate::commands::get_activity_apps,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -695,10 +701,14 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::voice_edit_window_open,
             $crate::commands::voice_edit_window_close,
             $crate::commands::qa_window_dismiss,
+            $crate::commands::qa_cancel_turn,
+            $crate::commands::qa_stop_recording,
             $crate::commands::qa_window_set_expanded,
             $crate::commands::qa_get_snapshot,
             $crate::commands::qa_toggle_recording,
             $crate::commands::qa_submit_text,
+            $crate::commands::deepseek_tts_start,
+            $crate::commands::deepseek_tts_stop,
             $crate::commands::qa_set_edit_instruction_mode,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
@@ -2304,13 +2314,15 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
-/// QA records in a compact bottom-anchored capsule, then reveals a wide result card.
+/// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 760.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 416.0;
-/// Gap between the capsule and the QA window; matches the design spec.
-const QA_WINDOW_BOTTOM_INSET: f64 = 8.0;
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 720.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 380.0;
+/// Reserve room for the independent recording capsule and its context badge.
+const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
+/// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
+const QA_WINDOW_EXPANDED_BOTTOM_INSET: f64 = 132.0;
 const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
@@ -2932,9 +2944,14 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
             frame.x + 16.0,
             (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
         );
+        let bottom_inset = if expanded {
+            QA_WINDOW_EXPANDED_BOTTOM_INSET
+        } else {
+            QA_WINDOW_BOTTOM_INSET
+        };
         y = y.clamp(
             frame.y + 32.0,
-            (frame.y + frame.height - height - QA_WINDOW_BOTTOM_INSET).max(frame.y + 32.0),
+            (frame.y + frame.height - height - bottom_inset).max(frame.y + 32.0),
         );
     }
     window
@@ -3075,6 +3092,9 @@ fn make_chat_window_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow
             // Floating level (NSFloatingWindowLevel): above normal windows, below the
             // menu bar / capsule (25).
             panel.set_level(3);
+            if tag == "qa" {
+                panel.set_hides_on_deactivate(false);
+            }
             panel.set_collection_behaviour(
                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
@@ -4267,14 +4287,14 @@ mod tests {
     #[test]
     fn qa_resize_preserves_centre_baseline_and_user_position() {
         let expanded =
-            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
-        assert_eq!(expanded, (-840.0, 324.0));
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 720.0, 380.0, false, true);
+        assert_eq!(expanded, (-820.0, 360.0));
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true),
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 720.0, 380.0, true, true),
             expanded
         );
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false),
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 480.0, 80.0, true, false),
             (-700.0, 700.0)
         );
     }

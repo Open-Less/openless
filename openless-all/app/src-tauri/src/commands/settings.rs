@@ -806,30 +806,41 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         .await
         .map_err(|_| "GitHub update check timed out".to_string())?
     });
+    // Official CDN (`mirror`) and GitHub are both checked. A newer semver wins
+    // even when the other side is missing or not newer than the installed build.
+    // Equal versions are chosen by estimated download time.
     let update = match (mirror, github) {
         (Ok(Some(mirror)), Ok(Some(github))) => {
-            let mirror_version =
-                semver::Version::parse(&mirror.version).map_err(|e| e.to_string())?;
-            let github_version =
-                semver::Version::parse(&github.version).map_err(|e| e.to_string())?;
-            if github_version != mirror_version {
-                Some(github)
-            } else {
-                let (m, g) = tokio::join!(
+            let equal = semver::Version::parse(&mirror.version)
+                .ok()
+                .zip(semver::Version::parse(&github.version).ok())
+                .is_some_and(|(mirror_version, github_version)| {
+                    mirror_version.cmp_precedence(&github_version).is_eq()
+                });
+            let samples = if equal {
+                tokio::join!(
                     crate::update_source::probe_download(&mirror.download_url),
                     crate::update_source::probe_download(&github.download_url)
-                );
-                if crate::update_source::prefer_mirror(m, g) {
-                    Some(mirror)
-                } else {
-                    Some(github)
-                }
+                )
+            } else {
+                (None, None)
+            };
+            match crate::update_source::choose_release(
+                &mirror.version,
+                &github.version,
+                samples.0,
+                samples.1,
+            )? {
+                crate::update_source::ReleaseSource::Mirror => Some(mirror),
+                crate::update_source::ReleaseSource::Github => Some(github),
             }
         }
-        (_, Ok(Some(update))) => Some(update),
-        (_, Ok(None)) => None,
-        (Ok(update), Err(_)) => update,
-        (Err(mirror), Err(github)) => return Err(format!("Aliyun: {mirror}; GitHub: {github}")),
+        (Ok(Some(update)), Ok(None) | Err(_)) => Some(update),
+        (Ok(None) | Err(_), Ok(Some(update))) => Some(update),
+        (Ok(None), Ok(None) | Err(_)) | (Err(_), Ok(None)) => None,
+        (Err(mirror), Err(github)) => {
+            return Err(format!("official update source: {mirror}; GitHub: {github}"))
+        }
     };
     let Some(mut update) = update else {
         return Ok(None);

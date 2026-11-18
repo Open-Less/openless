@@ -579,7 +579,13 @@ impl DefaultCapsule {
             time(if layer_visible { 0.0 } else { 0.12 }),
             LINEAR,
         );
-        let badge_visible = state.translation_active && recording && !leaving;
+        let badge_visible = (state.translation_active && recording
+            || state.qa
+                && matches!(
+                    state.phase.as_str(),
+                    "recording" | "transcribing" | "polishing"
+                ))
+            && !leaving;
         let (badge_duration, badge_delay) = if badge_visible { (0.2, 0.04) } else { (0.12, 0.0) };
         for (tween, target) in [
             (&mut self.badge_opacity, if badge_visible { 1.0 } else { 0.0 }),
@@ -698,7 +704,7 @@ impl DefaultCapsule {
         }
         let badge_bottom = body_top
             - STACK_GAP
-            - if rail_visible && state.translation_active {
+            - if rail_visible && (state.translation_active || state.qa) {
                 RAIL_HEIGHT + STACK_GAP
             } else {
                 0.0
@@ -884,6 +890,29 @@ fn badge(
     opacity: f32,
     pixels_per_point: f32,
 ) -> Vec<Shape> {
+    if frame.state.qa {
+        let label = painter.layout_job(LayoutJob::single_section(
+            frame.labels.asking.clone(),
+            format(11.0, 500.0, 16.5, tokens.pill.ink),
+        ));
+        let size = label.size();
+        let rect = Rect::from_min_size(
+            pos2(
+                bottom_center.x - size.x / 2.0 - 10.0,
+                bottom_center.y - 26.0,
+            ),
+            vec2(size.x + 20.0, 26.0),
+        );
+        return vec![
+            egui::epaint::RectShape::filled(rect, 8, tokens.pill.fill.gamma_multiply(opacity))
+                .into(),
+            text(
+                pos2(rect.left() + 10.0, rect.center().y - size.y / 2.0),
+                label,
+                opacity,
+            ),
+        ];
+    }
     let fade = |color: Color32| color.gamma_multiply(opacity);
     let label = painter.layout_job(LayoutJob::single_section(
         frame.labels.translate_to.clone(),

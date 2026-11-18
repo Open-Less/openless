@@ -2629,7 +2629,7 @@ pub struct OpenLessBackend {
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
-    local_migration_store: Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>,
+    local_migration_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
@@ -2867,7 +2867,8 @@ impl HistoryProviderAttribution {
         llm_call_label: Option<&crate::polish::LlmCallLabel>,
     ) -> Self {
         match context.pipeline_mode {
-            crate::shared_types::PipelineMode::Traditional => Self {
+            crate::shared_types::PipelineMode::Traditional
+            | crate::shared_types::PipelineMode::Deepseek => Self {
                 asr_provider: Some(
                     asr_call_label
                         .map(|label| label.provider.clone())
@@ -2992,11 +2993,19 @@ impl OpenLessBackend {
     /// Construct an explicitly unavailable Core so the native shell can show
     /// its startup error instead of panicking before any window is visible.
     /// This path never opens the user's files or a credential store.
-    pub fn blocked_startup(mut config: BackendConfig, error: BackendError) -> Self {
-        // A blocked backend must never touch the caller's failed data path. Use
-        // an isolated temporary store solely to satisfy the normal constructor.
-        config.data_dir =
+    pub fn blocked_startup(config: BackendConfig, error: BackendError) -> Self {
+        let isolated_path =
             std::env::temp_dir().join(format!("openless-startup-blocked-{}", uuid::Uuid::new_v4()));
+        Self::blocked_startup_at(config, error, isolated_path)
+    }
+
+    fn blocked_startup_at(
+        mut config: BackendConfig,
+        error: BackendError,
+        isolated_path: std::path::PathBuf,
+    ) -> Self {
+        // A blocked backend must not touch either the failed data path or this placeholder.
+        config.data_dir = isolated_path;
         let repositories = BackendRepositories {
             preferences: Arc::new(PreferencesStore::in_memory()),
             history: Arc::new(HistoryStore::at_path(std::path::PathBuf::new())),
@@ -3027,11 +3036,21 @@ impl OpenLessBackend {
         self.startup_error.clone()
     }
 
+    fn local_migration_store(
+        &self,
+    ) -> Result<&crate::cloud_sync_e2ee_store::CoreSyncStore, BackendError> {
+        self.local_migration_store.as_deref().ok_or_else(|| {
+            self.startup_error.clone().unwrap_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidState, "local migration is unavailable")
+            })
+        })
+    }
+
     pub fn bind_restore_runtime_effects(
         &self,
         effects: Arc<dyn crate::config::RestoreRuntimeEffects>,
     ) -> Result<(), BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .bind_runtime_effects(effects)
             .map_err(|_| {
                 BackendError::new(
@@ -3271,16 +3290,19 @@ impl OpenLessBackend {
         } else {
             None
         };
-        let local_migration_store = if let Some(store) = &encrypted_sync_store {
-            Arc::clone(store)
+        let local_migration_store = if restore_guard.is_some() {
+            // Blocked startup must not depend on filesystem or credential availability.
+            None
+        } else if let Some(store) = &encrypted_sync_store {
+            Some(Arc::clone(store))
         } else {
-            crate::cloud_sync_e2ee::build_local_store(
+            Some(crate::cloud_sync_e2ee::build_local_store(
                 &config.data_dir,
                 repositories.clone(),
                 Arc::clone(&deps.credential_store),
                 env!("CARGO_PKG_VERSION").into(),
                 Arc::clone(&deps.task_spawner),
-            )?
+            )?)
         };
         match (
             deps.selection_runtime.take(),
@@ -3353,9 +3375,16 @@ impl OpenLessBackend {
             .remote_input
             .bind_event_publisher(BackendEventPublisher::new(Arc::clone(&events)));
         {
-            let store = &local_migration_store;
-            let guard: crate::domains::RuntimeRestoreGuard = restore_guard.unwrap_or_else(|| {
-                let weak_store = Arc::downgrade(&local_migration_store);
+            let guard: crate::domains::RuntimeRestoreGuard = if let Some(guard) = restore_guard {
+                guard
+            } else {
+                let store = local_migration_store.as_ref().ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "local migration is unavailable",
+                    )
+                })?;
+                let weak_store = Arc::downgrade(store);
                 Arc::new(move || {
                     let store = weak_store.upgrade().ok_or_else(|| {
                         BackendError::new(
@@ -3370,7 +3399,7 @@ impl OpenLessBackend {
                         )
                     })
                 })
-            });
+            };
             voice_sessions.bind_restore_guard(Arc::clone(&guard))?;
             runtime_start_work.bind(Arc::clone(&guard), Arc::clone(&deps.task_spawner))?;
             deps.services
@@ -3390,30 +3419,32 @@ impl OpenLessBackend {
             // Each probe releases its lock before the next one. Starts check
             // Store's already-raised flag while holding the matching lock.
             // Both directions are weak, so neither binding owns the backend.
-            store
-                .bind_runtime_idle_probe(Arc::new(move || {
-                    voice
-                        .upgrade()
-                        .is_some_and(|gate| gate.runtime_restore_idle())
-                        && starts
+            if let Some(store) = &local_migration_store {
+                store
+                    .bind_runtime_idle_probe(Arc::new(move || {
+                        voice
                             .upgrade()
                             .is_some_and(|gate| gate.runtime_restore_idle())
-                        && qa
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                        && selection
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                        && selection_voice
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                }))
-                .map_err(|_| {
-                    BackendError::new(
-                        BackendErrorCode::InvalidState,
-                        "failed to bind encrypted sync runtime barrier",
-                    )
-                })?;
+                            && starts
+                                .upgrade()
+                                .is_some_and(|gate| gate.runtime_restore_idle())
+                            && qa
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                            && selection
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                            && selection_voice
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                    }))
+                    .map_err(|_| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidState,
+                            "failed to bind encrypted sync runtime barrier",
+                        )
+                    })?;
+            }
         }
         Ok(Self {
             config,
@@ -3479,7 +3510,7 @@ impl OpenLessBackend {
         if let Some(error) = &self.startup_error {
             return Err(error.clone());
         }
-        self.local_migration_store
+        self.local_migration_store()?
             .ensure_runtime_available()
             .map_err(|_| {
                 BackendError::new(
@@ -5219,7 +5250,9 @@ impl OpenLessBackend {
             self.recover_cloud_notes()?;
         }
         let before = self.get_preferences();
-        let warmed = self.deps.credential_store.status(before).await;
+        let warmed =
+            crate::deepseek_suite::credentials_status(self.deps.credential_store.as_ref(), before)
+                .await;
         if let Some(sync) = &self.encrypted_sync {
             // Keep Settings available even after a denied/failed warm read.
             // The service records its own retryable recovery/storage error;
@@ -5228,14 +5261,18 @@ impl OpenLessBackend {
         } else {
             // Local migration has the same crash journal as cloud sync, but it
             // has no service startup hook when the user is signed out.
-            let _ = self.local_migration_store.recover_registered().await;
+            let _ = self.local_migration_store()?.recover_registered().await;
         }
         let preferences = self.get_preferences();
         let status = match warmed {
             // Recovery can replace both preferences and credentials. Recompute
             // from the new in-memory target after it has settled.
             Ok(_) if self.encrypted_sync.is_some() => {
-                self.deps.credential_store.status(preferences.clone()).await
+                crate::deepseek_suite::credentials_status(
+                    self.deps.credential_store.as_ref(),
+                    preferences.clone(),
+                )
+                .await
             }
             Ok(credentials) => Ok(credentials),
             Err(error) => Err(error),
@@ -6048,6 +6085,9 @@ impl OpenLessBackend {
         &self,
         mut status: CredentialsStatus,
     ) -> Result<CredentialsStatus, BackendError> {
+        if status.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            return Ok(status);
+        }
         if let Some(service) = self.deps.credential_store.siwc() {
             let channel_id = self
                 .deps
@@ -6081,11 +6121,11 @@ impl OpenLessBackend {
     }
 
     pub async fn get_credentials_status(&self) -> Result<CredentialsStatus, BackendError> {
-        let status = self
-            .deps
-            .credential_store
-            .status(self.get_preferences())
-            .await?;
+        let status = crate::deepseek_suite::credentials_status(
+            self.deps.credential_store.as_ref(),
+            self.get_preferences(),
+        )
+        .await?;
         let status = self.with_siwc_status(status).await?;
         self.state
             .write()
@@ -6614,6 +6654,9 @@ impl OpenLessBackend {
         &self,
         preferences: &crate::UserPreferences,
     ) -> Result<crate::dictation_context::ProviderInvocation, BackendError> {
+        if preferences.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            return Ok(crate::deepseek_suite::invocation(true));
+        }
         let provider = match self
             .resolve_session_provider(ProviderSlot::Asr, &preferences.active_asr_provider)
             .await
@@ -6813,11 +6856,11 @@ impl OpenLessBackend {
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
-        let status = self
-            .deps
-            .credential_store
-            .status(self.get_preferences())
-            .await?;
+        let status = crate::deepseek_suite::credentials_status(
+            self.deps.credential_store.as_ref(),
+            self.get_preferences(),
+        )
+        .await?;
         let status = self.with_siwc_status(status).await?;
         self.state
             .write()
@@ -7347,6 +7390,10 @@ impl OpenLessBackend {
 
     pub fn list_activity(&self) -> Result<Vec<ActivityDay>, BackendError> {
         self.activity.snapshot()
+    }
+
+    pub fn list_activity_apps(&self, year: u32) -> Result<Vec<(String, u32)>, BackendError> {
+        self.activity.app_counts(&format!("{year:04}-"))
     }
 
     pub fn record_activity(
@@ -8866,6 +8913,7 @@ impl OpenLessBackend {
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let session = DictationSession {
@@ -8999,6 +9047,7 @@ impl OpenLessBackend {
         };
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let llm_used = context.uses_llm_polisher()
@@ -9039,12 +9088,16 @@ impl OpenLessBackend {
             asr_ms: attribution.asr_ms,
             polish_ms: attribution.polish_ms,
         };
+        let activity_app = session.app_name.clone();
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
         ) {
             log::warn!("failed to persist completed dictation history: {error}");
+        }
+        if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
+            log::warn!("failed to persist application activity: {error}");
         }
         if let Err(error) = self.record_activity(
             &self.clock.today_local().format("%Y-%m-%d").to_string(),
@@ -9082,6 +9135,7 @@ impl OpenLessBackend {
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let attribution = HistoryProviderAttribution::from_context(
@@ -9570,7 +9624,7 @@ impl OpenLessBackend {
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
-        let traditional = pipeline_mode == crate::shared_types::PipelineMode::Traditional;
+        let traditional = pipeline_mode != crate::shared_types::PipelineMode::Multimodal;
         let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
             self.resolve_dictation_asr_provider(&preferences).await?
         } else {
@@ -9580,7 +9634,9 @@ impl OpenLessBackend {
         };
         let mut deferred_llm_error = None;
         let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if traditional && !skip_llm_at_capture {
+        let active_llm_provider = if pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            crate::deepseek_suite::invocation(false)
+        } else if traditional && !skip_llm_at_capture {
             match self
                 .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
                 .await
@@ -12479,16 +12535,17 @@ mod tests {
         let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(FakeEngine));
         assert_eq!(backend.asr_usage().unwrap(), AsrUsage::default());
 
+        let start = backend.clock.now_utc() - chrono::Duration::days(1);
         let entries = [
-            ("a", "2026-10-18T10:00:00+00:00", Some("volcengine")),
-            ("b", "2026-10-18T10:01:00+00:00", Some("sherpa-onnx-local")),
-            ("c", "2026-10-18T10:02:00+00:00", None),
-            ("d", "2026-10-18T10:03:00+00:00", Some("volcengine")),
-            ("e", "2026-10-18T10:04:00+00:00", Some("sherpa-onnx-local")),
+            ("a", 0, Some("volcengine")),
+            ("b", 1, Some("sherpa-onnx-local")),
+            ("c", 2, None),
+            ("d", 3, Some("volcengine")),
+            ("e", 4, Some("sherpa-onnx-local")),
         ];
-        for (id, created_at, provider) in entries {
+        for (id, offset_minutes, provider) in entries {
             let mut entry = history_session(id);
-            entry.created_at = created_at.into();
+            entry.created_at = (start + chrono::Duration::minutes(offset_minutes)).to_rfc3339();
             entry.asr_provider = provider.map(Into::into);
             // Fixed timestamps determine ordering. Age-based retention is tested separately.
             backend.append_history(entry, 0, None).unwrap();
@@ -12513,59 +12570,60 @@ mod tests {
         ));
         let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(FakeEngine));
 
+        let start = backend.clock.now_utc() - chrono::Duration::days(1);
         let entries = [
             (
                 "completed-local",
-                "2026-10-18T10:00:00+00:00",
+                0,
                 "sherpa-onnx-local",
                 None,
             ),
             (
                 "recording-draft",
-                "2026-10-18T10:01:00+00:00",
+                1,
                 "volcengine",
                 Some("recording"),
             ),
             (
                 "cancelled",
-                "2026-10-18T10:02:00+00:00",
+                2,
                 "sherpa-onnx-local",
                 Some("cancelled"),
             ),
             (
                 "recording-failed",
-                "2026-10-18T10:03:00+00:00",
+                3,
                 "volcengine",
                 Some("recordingFailed"),
             ),
             (
                 "transcribe-failed",
-                "2026-10-18T10:04:00+00:00",
+                4,
                 "sherpa-onnx-local",
                 Some("transcribeFailed"),
             ),
             (
                 "empty-transcript",
-                "2026-10-18T10:05:00+00:00",
+                5,
                 "volcengine",
                 Some("emptyTranscript"),
             ),
             (
                 "insert-failed-after-asr",
-                "2026-10-18T10:06:00+00:00",
+                6,
                 "volcengine",
                 Some("insertFailed"),
             ),
             (
                 "polish-failed-after-asr",
-                "2026-10-18T10:07:00+00:00",
+                7,
                 "sherpa-onnx-local",
                 Some("polishFailed"),
             ),
         ];
-        for (id, created_at, provider, error_code) in entries {
+        for (id, offset_minutes, provider, error_code) in entries {
             let mut entry = history_session(id);
-            entry.created_at = created_at.into();
+            entry.created_at = (start + chrono::Duration::minutes(offset_minutes)).to_rfc3339();
             entry.asr_provider = Some(provider.into());
             entry.error_code = error_code.map(Into::into);
             backend.append_history(entry, 0, None).unwrap();
@@ -20068,6 +20126,30 @@ mod tests {
         }
         assert!(selection.runtime_restore_idle());
     }
+    #[tokio::test]
+    async fn blocked_startup_does_not_require_a_usable_temporary_directory() {
+        let fixture = TestDataDir::new("blocked-no-temp");
+        std::fs::create_dir_all(fixture.path()).unwrap();
+        let file = fixture.path().join("not-a-directory");
+        std::fs::write(&file, b"untouched").unwrap();
+        let original = fixture.path().join("original-user-data");
+        let error = BackendError::new(BackendErrorCode::Persistence, "storage unavailable");
+        let backend = OpenLessBackend::blocked_startup_at(
+            BackendConfig {
+                data_dir: original.clone(),
+                ..BackendConfig::default()
+            },
+            error.clone(),
+            file.join("unusable-placeholder"),
+        );
+        assert_eq!(backend.startup_error().unwrap().code, error.code);
+        assert_eq!(backend.local_migration_store().err().unwrap().code, error.code);
+        assert_eq!(backend.start().await.unwrap_err().code, error.code);
+        assert_eq!(backend.ensure_runtime_ready().unwrap_err().code, error.code);
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(file).unwrap(), b"untouched");
+    }
+
     #[tokio::test]
     async fn restore_host_blocked_startup_is_visible_and_never_opens_or_mutates_real_stores() {
         struct ForbiddenRuntime;

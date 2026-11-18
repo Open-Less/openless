@@ -1046,7 +1046,7 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
             "foregroundWindowScreen",
             "allScreens",
         ],
-        "pipelineMode" => &["traditional", "multimodal"],
+        "pipelineMode" => &["traditional", "multimodal", "deepseek"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],
         "selectionPolishOutputMode" => &["directReplace", "previewConfirm"],

@@ -1,0 +1,115 @@
+/* The content zooms; floating positioners and backdrop coordinates stay in CSS viewport pixels. */
+.ol-app-viewport {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  overflow: clip;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  --ol-layer-popup: 20;
+  --ol-layer-tooltip: 21;
+  --ol-layer-notification: 1400;
+}
+
+.ol-app-viewport[data-ol-scale='fixed'] {
+  --ol-interface-scale: 1;
+}
+
+/* The page fades through its solid surface; portal feedback keeps its own layer. */
+.ol-transition-viewport[data-ol-transition='page'] {
+  background: var(--ol-surface);
+  isolation: isolate;
+}
+
+.ol-transition-page-with-header {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ol-viewport-content,
+.ol-viewport-portals {
+  position: absolute;
+  inset: 0;
+}
+
+.ol-viewport-content {
+  z-index: 0;
+  display: flex;
+  contain: layout;
+  zoom: var(--ol-interface-scale, 1);
+  outline: none;
+}
+
+.ol-viewport-portals {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.ol-preview-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  background: #111114;
+}
+
+.ol-preview-frame {
+  margin-inline: auto;
+  flex: none;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+.ol-app-viewport .ol-select-positioner {
+  z-index: var(--ol-layer-popup);
+}
+
+.ol-app-viewport .ol-tooltip-positioner {
+  z-index: var(--ol-layer-tooltip);
+}
+
+.ol-app-viewport :is(.ol-select-positioner, .ol-tooltip-positioner) {
+  pointer-events: auto;
+}
+
+.ol-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  place-items: center;
+  padding: clamp(4px, 3.5vmin, 20px);
+  background: var(--ol-dialog-backdrop);
+  pointer-events: auto;
+}
+
+.ol-dialog-overlay[data-ol-contained] {
+  position: absolute;
+}
+
+.ol-dialog-overlay[inert],
+.ol-dialog-overlay.is-closing {
+  pointer-events: none;
+}
+
+.ol-dialog-overlay > .ol-dialog-card {
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  border-radius: var(--ol-dialog-radius);
+  background-color: var(--ol-surface-raised);
+  border: 0;
+  box-shadow: var(--ol-dialog-shadow);
+  padding: 24px;
+  outline: none;
+}
+
+.ol-dialog-overlay[data-ol-contained] > .ol-dialog-card {
+  zoom: var(--ol-interface-scale, 1);
+}

@@ -1,0 +1,29 @@
+.ol-percent-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--ol-ink);
+}
+.ol-percent-loader-label {
+  font-family: ui-monospace, monospace;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.ol-percent-loader-track {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+.ol-percent-loader-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+}
+.ol-percent-loader {
+  max-width: 100%;
+  margin-inline: auto;
+}

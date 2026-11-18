@@ -67,21 +67,43 @@ function subscribe(listener: () => void) {
   };
 }
 
-async function mutate(model: ExperimentalAsrModel, action: () => Promise<void>, enabled?: boolean) {
-  if (requests.has(model)) return;
+async function mutate(
+  model: ExperimentalAsrModel,
+  action: () => Promise<void>,
+  transition: boolean | 'delete',
+) {
+  if (requests.has(model)) {
+    if (transition === 'delete') throw new Error('Model change already in progress');
+    return;
+  }
   requests.add(model);
   ++sequence;
   update({ ...snapshot, pending: [...requests], error: null });
   try {
     await action();
-    if (enabled !== undefined) {
+    if (transition !== 'delete') {
       // The host acknowledged the switch even if the following status read fails.
       // A successfully cancelled job must not linger as a downloading card.
       update({
         ...snapshot,
         models: snapshot.models.map((status) =>
           status.model === model
-            ? { ...status, enabled, phase: enabled ? 'downloading' : 'removing', error: null }
+            ? {
+                ...status,
+                enabled: transition,
+                phase: transition ? 'downloading' : 'removing',
+                error: null,
+              }
+            : status,
+        ),
+      });
+    } else {
+      ++sequence;
+      update({
+        ...snapshot,
+        models: snapshot.models.map((status) =>
+          status.model === model
+            ? { ...status, phase: 'disabled', downloadedBytes: 0, error: null }
             : status,
         ),
       });
@@ -98,7 +120,8 @@ async function mutate(model: ExperimentalAsrModel, action: () => Promise<void>, 
 }
 const toggle = (model: ExperimentalAsrModel, enabled: boolean) =>
   mutate(model, () => setExperimentalAsrEnabled(model, enabled), enabled);
-const remove = (model: ExperimentalAsrModel) => mutate(model, () => deleteExperimentalAsr(model));
+const remove = (model: ExperimentalAsrModel) =>
+  mutate(model, () => deleteExperimentalAsr(model), 'delete');
 const acknowledge = async (ready: ExperimentalAsrStatus[]) => {
   await Promise.all(ready.map((status) => acknowledgeExperimentalAsr(status.model)));
   await refresh();

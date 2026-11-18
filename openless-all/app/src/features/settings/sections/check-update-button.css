@@ -1,0 +1,61 @@
+.ol-check-update-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 160px;
+  max-width: 100%;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ol-ink-2);
+  border: 0.5px solid var(--ol-line-strong);
+  border-radius: var(--ol-r-sm);
+  background: var(--ol-control-solid);
+  cursor: default;
+  transition: background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick);
+}
+.ol-check-update-button[data-variant='flat'] {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+.ol-check-update-button[data-variant='flat']:hover:not(:disabled) {
+  background: var(--ol-choice-hover-bg);
+}
+.ol-check-update-button:disabled {
+  opacity: 0.7;
+}
+.ol-check-update-button[data-variant='flat']:disabled {
+  cursor: not-allowed;
+}
+.ol-check-update-button[data-result='current'] {
+  color: var(--ol-ok);
+}
+.ol-check-update-button[data-result='error'] {
+  color: var(--ol-err);
+}
+.ol-check-update-button[data-compact] {
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  min-height: 32px;
+  padding: 5px;
+}
+.ol-check-update-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+.ol-check-update-label {
+  white-space: nowrap;
+  animation: ol-select-value-in 0.16s var(--ol-motion-quick);
+}
+.ol-check-update-button[data-compact] .ol-check-update-label {
+  display: none;
+}

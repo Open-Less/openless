@@ -8,7 +8,7 @@ const read = (path) => readFileSync(join(appRoot, path), 'utf8').replace(/\r\n/g
 
 // Speech TIPs run alongside the keyboard IME, so this UI must not promise to
 // add or remove an entry in Win+Space, regardless of the insertion mode.
-const recordingInput = read('src/pages/settings/RecordingInputSection.tsx');
+const recordingInput = read('src/features/input/RecordingInputSection.tsx');
 assert.doesNotMatch(recordingInput, /windowsShowOpenlessInKeyboardList/i);
 assert.doesNotMatch(recordingInput, /showWindowsOpenlessKeyboardListToggle/);
 assert.doesNotMatch(recordingInput, /saveKeyboardListAffectingPrefs/);
