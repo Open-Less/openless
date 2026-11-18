@@ -46,5 +46,6 @@ zeroize = { version = "1", features = ["derive"] }
 zip = "9.0.0"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 rsa = "0.9.10"
 rand = "0.8.8"

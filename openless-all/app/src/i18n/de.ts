@@ -2305,6 +2305,12 @@ export const de: typeof zhCN = {
       urlLabel: 'Zugriffs-URL',
       pinLabel: 'Kopplungscode',
       regeneratePin: 'Neu erstellen',
+      refreshPin: 'Code erneuern',
+      revokePairings: 'Alle Kopplungen aufheben',
+      revokeHint:
+        'Trennt alle Telefone und beendet laufende Aufnahmen. Erneute Kopplung erforderlich.',
+      pinRotationHint:
+        'Der Code wechselt alle 10 Minuten und nach einer Kopplung, ohne Verbindungen zu unterbrechen. Wiederverbindungen bleiben bis zum App-Neustart, höchstens 24 Stunden, autorisiert.',
       portInUse: 'Port {{port}} ist belegt. Wähle einen anderen Port',
       startError: 'Der Ferneingabedienst konnte nicht gestartet werden: {{reason}}',
       securityHint:

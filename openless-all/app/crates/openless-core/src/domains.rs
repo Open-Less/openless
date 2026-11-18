@@ -1177,6 +1177,19 @@ pub enum RemoteAuthResult {
     Locked,
 }
 
+/// Credentials for admission only; established audio streams never depend on the PIN.
+pub enum RemoteInputCredential {
+    PairingPin(crate::credentials::SecretValue),
+    ReconnectToken(crate::credentials::SecretValue),
+}
+
+#[derive(Debug)]
+pub struct RemoteInputAuthentication {
+    pub result: RemoteAuthResult,
+    /// Returned only to the phone that just paired, never through public events/status.
+    pub reconnect_token: Option<crate::credentials::SecretValue>,
+}
+
 pub struct RemoteInputServerConfig {
     pub port: u16,
 }
@@ -1192,6 +1205,8 @@ pub struct RemoteInputServerBinding {
 /// Native transport and shared-dictation bridge. TLS, sockets, H5 assets and
 /// local address enumeration stay here; lifecycle/session rules stay in core.
 pub trait RemoteInputRuntimeAdapter: Send + Sync {
+    /// Legacy host storage hooks. Rotating PINs are now process-local and Core no longer
+    /// calls these hooks; they remain for compatibility with existing host adapters.
     fn load_pairing_pin(
         &self,
     ) -> BoxFuture<'static, Result<Option<crate::credentials::SecretValue>, BackendError>>;
@@ -1249,6 +1264,8 @@ pub enum RemoteInputRecovery {
 pub trait RemoteInputApi: Send + Sync {
     #[doc(hidden)]
     fn bind_event_publisher(&self, _publisher: crate::events::BackendEventPublisher) {}
+    #[doc(hidden)]
+    fn bind_task_spawner(&self, _spawner: std::sync::Arc<dyn crate::config::TaskSpawner>) {}
     /// Return the current in-process state without scheduling I/O. Hosts use
     /// this snapshot from synchronous render/menu code; transport operations
     /// remain asynchronous below.
@@ -1257,6 +1274,29 @@ pub trait RemoteInputApi: Send + Sync {
         &self,
     ) -> BoxFuture<'static, Result<crate::credentials::SecretValue, BackendError>>;
     fn regenerate_pairing_pin(&self) -> BoxFuture<'static, Result<(), BackendError>>;
+    /// Refresh admission credentials without revoking phones or touching audio streams.
+    fn rotate_pairing_pin(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported("remote input PIN rotation")
+    }
+    fn authenticate_connection(
+        &self,
+        connection_id: SessionId,
+        peer: String,
+        credential: RemoteInputCredential,
+    ) -> BoxFuture<'static, Result<RemoteInputAuthentication, BackendError>> {
+        match credential {
+            RemoteInputCredential::PairingPin(pin) => {
+                let authentication = self.authenticate(connection_id, peer, pin);
+                Box::pin(async move {
+                    Ok(RemoteInputAuthentication {
+                        result: authentication.await?,
+                        reconnect_token: None,
+                    })
+                })
+            }
+            RemoteInputCredential::ReconnectToken(_) => unsupported("remote input reconnection"),
+        }
+    }
     fn set_locale(&self, locale: String) -> BoxFuture<'static, Result<(), BackendError>>;
     fn list_local_ips(&self) -> BoxFuture<'static, Result<Vec<String>, BackendError>>;
     fn configure(

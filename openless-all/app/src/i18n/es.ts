@@ -2284,6 +2284,12 @@ export const es: typeof zhCN = {
       urlLabel: 'URL de acceso',
       pinLabel: 'Código de vinculación',
       regeneratePin: 'Generar de nuevo',
+      refreshPin: 'Actualizar código',
+      revokePairings: 'Revocar vinculaciones',
+      revokeHint:
+        'Desconecta todos los teléfonos y detiene las grabaciones. Deberán volver a vincularse.',
+      pinRotationHint:
+        'El código cambia cada 10 minutos y tras vincular un teléfono, sin interrumpir conexiones. Las credenciales de reconexión duran hasta 24 horas o hasta reiniciar la aplicación.',
       portInUse: 'El puerto {{port}} está en uso. Elige otro',
       startError: 'No se pudo iniciar el servicio de entrada remota: {{reason}}',
       securityHint:

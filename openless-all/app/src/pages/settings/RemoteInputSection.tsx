@@ -13,6 +13,7 @@ import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 import {
   getRemoteInputStatus,
   regenerateRemotePin,
+  rotateRemotePin,
   setRemoteLocale,
   isTauri,
   type RemoteInputStatus,
@@ -301,10 +302,20 @@ export function RemoteInputSection() {
               <button
                 onClick={async () => {
                   try {
-                    // Update local state directly from the command's returned new PIN; the
-                    // backend restarts the service asynchronously, and querying status then may
-                    // return running:false causing a flicker — refresh is left to the
-                    // remote-input:running event.
+                    // Admission-only refresh keeps the listener and paired phones running.
+                    const pin = await rotateRemotePin();
+                    setStatus((s) => (s ? { ...s, pin } : s));
+                  } catch (e) {
+                    console.warn('rotateRemotePin failed', e);
+                  }
+                }}
+                style={smallBtn}
+              >
+                {t('settings.remoteInput.refreshPin')}
+              </button>
+              <button
+                onClick={async () => {
+                  try {
                     const pin = await regenerateRemotePin();
                     setStatus((s) => (s ? { ...s, pin } : s));
                   } catch (e) {
@@ -312,11 +323,15 @@ export function RemoteInputSection() {
                   }
                 }}
                 style={smallBtn}
+                title={t('settings.remoteInput.revokeHint')}
               >
-                {t('settings.remoteInput.regeneratePin')}
+                {t('settings.remoteInput.revokePairings')}
               </button>
             </div>
           </SettingRow>
+          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 8 }}>
+            {t('settings.remoteInput.pinRotationHint')}
+          </div>
           {viewState === 'stale' && (
             <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 8 }}>
               {t('settings.remoteInput.urlsStale')}

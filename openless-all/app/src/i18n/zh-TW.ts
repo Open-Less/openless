@@ -2114,6 +2114,11 @@ export const zhTW: typeof zhCN = {
       urlLabel: '存取網址',
       pinLabel: '配對碼',
       regeneratePin: '重新產生',
+      refreshPin: '重新整理配對碼',
+      revokePairings: '撤銷所有配對',
+      revokeHint: '中斷所有手機並停止進行中的錄音，下次連線需要重新配對。',
+      pinRotationHint:
+        '配對碼每 10 分鐘或成功配對後自動更新，已連線手機不受影響。重新連線憑證在本次電腦執行期間有效，最長 24 小時。',
       portInUse: '連線埠 {{port}} 被佔用，請更換',
       startError: '遠端輸入服務啟動失敗：{{reason}}',
       securityHint: '僅同一區域網路可存取，需輸入配對碼；不用時建議關閉。',

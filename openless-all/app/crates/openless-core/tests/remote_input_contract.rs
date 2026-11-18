@@ -188,14 +188,158 @@ async fn authenticate(remote: &dyn RemoteInputApi, connection_id: SessionId) {
     );
 }
 
+async fn pair_phone(remote: &dyn RemoteInputApi, connection: SessionId) -> String {
+    let pin = remote.read_pairing_pin().await.unwrap();
+    let hello = serde_json::json!({ "type": "hello", "pin": pin.expose_secret() });
+    let reply = openless_core::authenticate_remote_input_hello(
+        remote,
+        connection,
+        "192.168.1.8".into(),
+        &hello.to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply["ok"], true);
+    let token = reply["reconnectToken"].as_str().unwrap().to_string();
+    assert_eq!(token.len(), 64);
+    token
+}
+
+async fn reconnect_phone(
+    remote: &dyn RemoteInputApi,
+    connection: SessionId,
+    token: &str,
+) -> serde_json::Value {
+    openless_core::authenticate_remote_input_hello(
+        remote,
+        connection,
+        "192.168.1.8".into(),
+        &serde_json::json!({"type": "hello", "reconnectToken": token}).to_string(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn timed_rotation_preserves_connected_phones_audio_and_recovery_credentials() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let recording_phone = SessionId::new();
+    let token = pair_phone(remote.as_ref(), recording_phone).await;
+    let idle_phone = SessionId::new();
+    pair_phone(remote.as_ref(), idle_phone).await;
+    remote.set_insert(recording_phone, false).await.unwrap();
+    let session = remote.start_stream(recording_phone).await.unwrap();
+    let recovery_key = remote.recovery_key(recording_phone, session).unwrap();
+    remote
+        .feed_pcm(recording_phone, session, 0, vec![1, 0])
+        .await
+        .unwrap();
+    let old_pin = remote.read_pairing_pin().await.unwrap();
+    let before_rotation = backend.replay_events_after(0).latest_sequence;
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(601)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        backend
+            .replay_events_after(before_rotation)
+            .events
+            .iter()
+            .any(|event| { matches!(event.kind, BackendEventKind::RemoteInputStatusChanged(_)) }),
+        "the timer must publish the refresh without a status/PIN query"
+    );
+    let status = remote.status().unwrap();
+    assert!(status.running);
+    assert_eq!(status.connection_count, 2);
+    assert_eq!(status.active_session_id, Some(session));
+    assert_ne!(
+        remote.read_pairing_pin().await.unwrap().expose_secret(),
+        old_pin.expose_secret()
+    );
+    assert_eq!(
+        remote.recovery_key(recording_phone, session).unwrap(),
+        recovery_key
+    );
+    assert_eq!(
+        remote
+            .authenticate(SessionId::new(), "192.168.1.9".into(), old_pin)
+            .await
+            .unwrap(),
+        RemoteAuthResult::BadPin
+    );
+    remote
+        .feed_pcm(recording_phone, session, 1, vec![2, 0])
+        .await
+        .unwrap();
+    remote.stop_stream(recording_phone, session).await.unwrap();
+    let next = remote.start_stream(recording_phone).await.unwrap();
+    remote
+        .feed_pcm(recording_phone, next, 0, vec![3, 0])
+        .await
+        .unwrap();
+    assert_eq!(runtime.frames.lock().unwrap().len(), 3);
+    assert_eq!(
+        *runtime.insert_preferences.lock().unwrap(),
+        vec![false, false]
+    );
+    assert_eq!(runtime.start_count.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.stop_count.load(Ordering::Acquire), 0);
+    assert_eq!(runtime.audio_cancel_count.load(Ordering::Acquire), 0);
+    assert_eq!(
+        reconnect_phone(remote.as_ref(), SessionId::new(), &token).await["ok"],
+        true
+    );
+    let public = serde_json::to_string(&backend.replay_events_after(0)).unwrap();
+    assert!(!public.contains(&token));
+    assert!(!public.contains(remote.read_pairing_pin().await.unwrap().expose_secret()));
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test(start_paused = true)]
+async fn delayed_timer_cannot_admit_an_expired_pin() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(runtime);
+    let remote = &backend.services().remote_input;
+    // Suppress the background timer to model host scheduling delays/system sleep.
+    struct NoTimer;
+    impl openless_core::TaskSpawner for NoTimer {
+        fn spawn(&self, _task: BoxFuture<'static, ()>) {}
+    }
+    remote.bind_task_spawner(Arc::new(NoTimer));
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let pin = remote.read_pairing_pin().await.unwrap();
+    tokio::time::advance(std::time::Duration::from_secs(600)).await;
+    assert_eq!(
+        remote
+            .authenticate(SessionId::new(), "192.168.1.8".into(), pin)
+            .await
+            .unwrap(),
+        RemoteAuthResult::BadPin
+    );
+    assert_eq!(remote.status().unwrap().connection_count, 0);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
 #[tokio::test]
-async fn authentication_queued_during_pin_rotation_rejects_the_previous_pin() {
-    let persist_started = Arc::new(tokio::sync::Notify::new());
-    let release_persist = Arc::new(tokio::sync::Notify::new());
+async fn admission_rotation_during_finalization_keeps_the_result_and_connection() {
+    let release = Arc::new(tokio::sync::Notify::new());
     let runtime = Arc::new(FixtureRemoteRuntime {
-        persisted_pin: Mutex::new(Some("123456".into())),
-        persist_started: Some(Arc::clone(&persist_started)),
-        release_persist: Some(Arc::clone(&release_persist)),
+        release_stop: Some(Arc::clone(&release)),
         ..Default::default()
     });
     let (backend, data_dir) = backend(Arc::clone(&runtime));
@@ -207,32 +351,147 @@ async fn authentication_queued_during_pin_rotation_rejects_the_previous_pin() {
         })
         .await
         .unwrap();
-    let previous_pin = remote.read_pairing_pin().await.unwrap();
+    let phone = SessionId::new();
+    pair_phone(remote.as_ref(), phone).await;
+    let session = remote.start_stream(phone).await.unwrap();
+    let mut finishing = remote.stop_stream(phone, session);
+    assert!(futures_util::poll!(finishing.as_mut()).is_pending());
+    remote.rotate_pairing_pin().await.unwrap();
+    let other_phone = SessionId::new();
+    pair_phone(remote.as_ref(), other_phone).await; // successful pairing also rotates the PIN
+    assert_eq!(remote.status().unwrap().active_session_id, Some(session));
+    assert_eq!(remote.status().unwrap().connection_count, 2);
+    assert_eq!(runtime.audio_cancel_count.load(Ordering::Acquire), 0);
+    release.notify_one();
+    finishing.await.unwrap();
+    assert_eq!(remote.status().unwrap().connection_count, 2);
+    remote.start_stream(phone).await.unwrap();
+    assert_eq!(runtime.start_count.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.stop_count.load(Ordering::Acquire), 0);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
 
-    // Hold the native persistence boundary while rotation owns the lifecycle
-    // gate. Polling explicitly queues authentication behind that rotation,
-    // without relying on scheduler timing or a real socket/keychain.
-    let rotation = loop {
-        let mut rotation = remote.regenerate_pairing_pin();
-        assert!(futures_util::poll!(rotation.as_mut()).is_pending());
-        persist_started.notified().await;
-        // The generator can legitimately repeat one of its million values.
-        // Select a changed PIN so this concurrency test never fails by chance.
-        if runtime.persisted_pin.lock().unwrap().as_deref() != Some(previous_pin.expose_secret()) {
-            break rotation;
-        }
-        release_persist.notify_one();
-        rotation.await.unwrap();
-    };
-    let mut authentication =
-        remote.authenticate(SessionId::new(), "192.168.1.8".into(), previous_pin);
-    assert!(futures_util::poll!(authentication.as_mut()).is_pending());
-    release_persist.notify_one();
-    rotation.await.unwrap();
-
-    assert_eq!(authentication.await.unwrap(), RemoteAuthResult::BadPin);
-    authenticate(remote.as_ref(), SessionId::new()).await;
+#[tokio::test(start_paused = true)]
+async fn reconnect_credentials_survive_rotation_but_expire_and_are_revocable() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(runtime);
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let phone = SessionId::new();
+    let token = pair_phone(remote.as_ref(), phone).await;
+    remote.disconnect(phone).await.unwrap();
+    remote.rotate_pairing_pin().await.unwrap();
+    let reconnected = SessionId::new();
+    assert_eq!(
+        reconnect_phone(remote.as_ref(), reconnected, &token).await["ok"],
+        true
+    );
+    assert_eq!(
+        reconnect_phone(remote.as_ref(), SessionId::new(), &"0".repeat(64)).await["reason"],
+        "bad-token"
+    );
+    remote.regenerate_pairing_pin().await.unwrap();
+    assert_eq!(remote.status().unwrap().connection_count, 0);
+    assert_eq!(
+        reconnect_phone(remote.as_ref(), SessionId::new(), &token).await["ok"],
+        false
+    );
+    let phone = SessionId::new();
+    let token = pair_phone(remote.as_ref(), phone).await;
+    let session = remote.start_stream(phone).await.unwrap();
+    tokio::time::advance(std::time::Duration::from_secs(24 * 60 * 60)).await;
+    assert_eq!(
+        reconnect_phone(remote.as_ref(), SessionId::new(), &token).await["ok"],
+        false
+    );
+    // Credential expiration is an admission rule, not cancellation of an active recording.
+    remote
+        .feed_pcm(phone, session, 0, vec![1, 0])
+        .await
+        .unwrap();
+    remote.stop_stream(phone, session).await.unwrap();
     assert_eq!(remote.status().unwrap().connection_count, 1);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn handshake_requires_hello_and_never_falls_back_from_a_bad_token_to_a_pin() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(runtime);
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let pin = remote.read_pairing_pin().await.unwrap();
+    for hello in [
+        serde_json::json!({"type": "other", "pin": pin.expose_secret()}),
+        serde_json::json!({"type": "hello", "pin": pin.expose_secret(), "reconnectToken": "invalid"}),
+        serde_json::json!({"type": "hello", "pin": pin.expose_secret(), "reconnectToken": null}),
+        serde_json::json!({"type": "hello", "pin": pin.expose_secret(), "reconnectToken": 123}),
+    ] {
+        let reply = openless_core::authenticate_remote_input_hello(
+            remote.as_ref(),
+            SessionId::new(),
+            "192.168.1.8".into(),
+            &hello.to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply["ok"], false);
+        assert!(reply.get("reconnectToken").is_none());
+    }
+    assert_eq!(remote.read_pairing_pin().await.unwrap(), pin);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn a_pairing_pin_is_consumed_atomically_by_only_one_phone() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let pin = remote.read_pairing_pin().await.unwrap();
+    let (first, second) = tokio::join!(
+        remote.authenticate(SessionId::new(), "192.168.1.8".into(), pin.clone()),
+        remote.authenticate(SessionId::new(), "192.168.1.9".into(), pin.clone()),
+    );
+    let results = [first.unwrap(), second.unwrap()];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == RemoteAuthResult::Ok)
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == RemoteAuthResult::BadPin)
+            .count(),
+        1
+    );
+    assert_ne!(
+        remote.read_pairing_pin().await.unwrap().expose_secret(),
+        pin.expose_secret()
+    );
+    assert_eq!(remote.status().unwrap().connection_count, 1);
+    assert_eq!(runtime.stop_count.load(Ordering::Acquire), 0);
     let _ = std::fs::remove_dir_all(data_dir);
 }
 
@@ -374,7 +633,7 @@ async fn ca_fingerprint_tracks_the_running_listener_and_clears_on_stop_or_failur
 }
 
 #[tokio::test]
-async fn pairing_pin_is_explicit_persisted_and_absent_from_public_surfaces() {
+async fn pairing_pin_is_ephemeral_and_absent_from_public_surfaces() {
     let runtime = Arc::new(FixtureRemoteRuntime::default());
     let (backend, data_dir) = backend(Arc::clone(&runtime));
     let remote = &backend.services().remote_input;
@@ -385,12 +644,12 @@ async fn pairing_pin_is_explicit_persisted_and_absent_from_public_surfaces() {
         .expose_secret()
         .bytes()
         .all(|byte| byte.is_ascii_digit()));
-    assert_eq!(runtime.persist_count.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.persist_count.load(Ordering::Acquire), 0);
     assert_eq!(
         remote.read_pairing_pin().await.unwrap().expose_secret(),
         pin.expose_secret()
     );
-    assert_eq!(runtime.persist_count.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.persist_count.load(Ordering::Acquire), 0);
 
     let json = format!(
         "{} {}",
@@ -921,8 +1180,12 @@ async fn disconnect_and_pin_rotation_cancel_active_streams_before_transport_rest
 }
 
 #[tokio::test]
-async fn failed_pin_persistence_keeps_the_committed_pin_and_server_state() {
-    let runtime = Arc::new(FixtureRemoteRuntime::default());
+async fn rotation_does_not_read_or_write_legacy_pin_storage() {
+    let runtime = Arc::new(FixtureRemoteRuntime {
+        persisted_pin: Mutex::new(Some("legacy-invalid-value".into())),
+        reject_persist: AtomicBool::new(true),
+        ..Default::default()
+    });
     let (backend, data_dir) = backend(Arc::clone(&runtime));
     let remote = &backend.services().remote_input;
     remote
@@ -932,16 +1195,15 @@ async fn failed_pin_persistence_keeps_the_committed_pin_and_server_state() {
         })
         .await
         .unwrap();
-    let old_pin = remote.read_pairing_pin().await.unwrap().into_exposed();
-    runtime.reject_persist.store(true, Ordering::Release);
-    let error = remote.regenerate_pairing_pin().await.unwrap_err();
-    assert_eq!(error.message, "remote input operation failed");
+    remote.rotate_pairing_pin().await.unwrap();
+    remote.regenerate_pairing_pin().await.unwrap();
+    let pin = remote.read_pairing_pin().await.unwrap();
+    assert_eq!(pin.expose_secret().len(), 6);
+    assert_eq!(runtime.persist_count.load(Ordering::Acquire), 0);
     assert_eq!(
-        remote.read_pairing_pin().await.unwrap().expose_secret(),
-        old_pin
+        runtime.persisted_pin.lock().unwrap().as_deref(),
+        Some("legacy-invalid-value")
     );
-    assert!(remote.status().unwrap().running);
-    assert_eq!(runtime.start_count.load(Ordering::Acquire), 1);
     let _ = std::fs::remove_dir_all(data_dir);
 }
 

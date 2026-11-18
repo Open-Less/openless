@@ -664,7 +664,8 @@
   // ---------- Constants ----------
   var TARGET_SR = 16000; // target sample rate; must match the PC side
   var MODE_KEY = 'ol_remote_mode'; // localStorage key: recording mode
-  var PIN_KEY = 'ol_remote_pin'; // localStorage key: last successful pairing code
+  var PIN_KEY = 'ol_remote_pin'; // legacy PIN storage, removed after pairing
+  var RECONNECT_TOKEN_KEY = 'ol_remote_reconnect_token';
   var INSERT_KEY = 'ol_remote_insert'; // localStorage key: insert-on-PC toggle (default on)
   var WAKE_LOCK_KEY = 'ol_remote_wake_lock';
   var RECOVERY_KEY = 'ol_remote_recovery_session';
@@ -710,7 +711,7 @@
   var startSent = false; // whether {type:'start'} for this recording has actually been sent (only after ensureAudio resolves)
   var busy = false; // PC is busy; disable this session
   var mode = readMode(); // 'toggle' | 'hold'
-  var lastPin = '';
+  var reconnectToken = readReconnectToken();
   var remoteSessionId = '';
   var remoteSequence = 0;
   var finishAfterStarted = ''; // released/cancelled before ACK: 'stop' | 'cancel' | ''
@@ -741,26 +742,38 @@
   var resampleState = { phase: 0, last: 0, hasLast: false };
 
   // ============================================================
-  // Pairing code persistence (localStorage)
+  // Reconnection uses a per-phone credential; never save or replay a consumed PIN.
   // ============================================================
-  function readPin() {
+  function readReconnectToken() {
     try {
-      var p = localStorage.getItem(PIN_KEY);
-      return /^\d{6}$/.test(p || '') ? p : '';
+      var token = localStorage.getItem(RECONNECT_TOKEN_KEY);
+      return /^[a-f0-9]{64}$/.test(token || '') ? token : '';
     } catch (e) {
       return '';
     }
   }
-  function writePin(p) {
+  function rememberReconnectToken(token) {
+    if (!/^[a-f0-9]{64}$/.test(token || '')) return;
+    reconnectToken = token; // still reconnect within this page if storage is unavailable
     try {
-      if (/^\d{6}$/.test(p)) localStorage.setItem(PIN_KEY, p);
-    } catch (e) {}
-  }
-  function clearPin() {
-    try {
+      localStorage.setItem(RECONNECT_TOKEN_KEY, token);
       localStorage.removeItem(PIN_KEY);
     } catch (e) {}
-    saveRecoverySession('');
+  }
+  function clearReconnectToken() {
+    reconnectToken = '';
+    try {
+      localStorage.removeItem(RECONNECT_TOKEN_KEY);
+      localStorage.removeItem(PIN_KEY);
+    } catch (e) {}
+  }
+  function reconnectPhone() {
+    var token = reconnectToken || readReconnectToken();
+    if (token) connect('', token);
+    else {
+      showScreen('pin');
+      resetConnectBtn();
+    }
   }
 
   // Recovery credentials apply to this random session only; they never request the computer's history list.
@@ -803,8 +816,7 @@
     recoveryTimer = setTimeout(function () {
       recoveryTimer = null;
       if (!recording && authed && !document.hidden) {
-        var pin = readPin();
-        if (pin) connect(pin);
+        reconnectPhone();
       }
     }, 8000);
   }
@@ -1101,8 +1113,7 @@
     }
   }
 
-  function connect(pin) {
-    lastPin = pin;
+  function connect(pin, token) {
     closeWS(); // tear down the old connection
     authed = false;
     busy = false;
@@ -1121,7 +1132,10 @@
 
     ws.onopen = function () {
       // Handshake immediately after connecting
-      wsSendJSON({ type: 'hello', pin: pin, prefer: mode });
+      var hello = { type: 'hello', prefer: mode };
+      if (token) hello.reconnectToken = token;
+      else hello.pin = pin;
+      wsSendJSON(hello);
     };
 
     ws.onmessage = function (ev) {
@@ -1203,12 +1217,14 @@
           authed = true;
           busy = false;
           clearConnectTimeout();
-          writePin(lastPin); // pairing succeeded → remember the code so refreshes skip retyping
+          if (msg.reconnectToken) rememberReconnectToken(msg.reconnectToken);
+          pinInput.value = '';
           enterRecScreen();
           requestRecovery();
         } else {
           authed = false;
-          clearPin(); // pairing code invalid (wrong/locked) → clear it so auto-reconnect doesn't fail again
+          // Rate limiting is temporary; do not discard a valid reconnect credential.
+          if (msg.reason === 'bad-token') clearReconnectToken();
           var reason = msg.reason === 'locked' ? L.errPinLocked : L.errPinWrong;
           closeWS();
           showScreen('pin');
@@ -1382,11 +1398,7 @@
     showScreen('pin');
     showPinError('');
     resetConnectBtn();
-    var p = lastPin || readPin();
-    if (p) {
-      pinInput.value = p;
-      doConnect(); // reconnect directly with the saved code, no extra tap
-    }
+    reconnectPhone();
   });
 
   // Copy the certificate download link — handy for opening in another browser or sending to yourself.
@@ -2156,8 +2168,7 @@
       if (recording) acquireWakeLock();
       if (authed) requestRecovery();
       else if (!ws || ws.readyState > 1) {
-        var pin = readPin();
-        if (pin) connect(pin);
+        reconnectPhone();
       }
     }
   });
@@ -2201,11 +2212,9 @@
     initWakeLockSwitch();
     showScreen('pin');
     showPinError('');
-    // Last successful pairing code → autofill and reconnect, so a refresh/reopen skips retyping
-    var saved = readPin();
-    if (saved) {
-      pinInput.value = saved;
-      doConnect();
+    // A saved credential survives page refreshes; an old PIN never grants reconnection.
+    if (reconnectToken) {
+      reconnectPhone();
     } else {
       // Autofocus the PIN field (some mobile browsers block it; ignore failures)
       setTimeout(function () {

@@ -67,19 +67,17 @@ assert.match(
   'Windows CI must at least compile the owning Tauri module tests when native runtime DLLs prevent execution',
 );
 
-const regenerate = coreRemote.match(
-  /async fn regenerate_pairing_pin_inner[\s\S]*?async fn authenticate_inner/,
-)?.[0];
-assert.ok(regenerate, 'Core pairing PIN transaction must be present');
-assert.match(
-  regenerate,
-  /persist_pairing_pin\(pin\.clone\(\)\)[\s\S]*?\.await[\s\S]*?state\.pairing_pin = Some\(pin\);[\s\S]*?if restart[\s\S]*?stop_server_and_sessions\(\)\.await\?;[\s\S]*?start_server\(port\)\.await\?;/,
-  'Core must persist the new PIN before committing memory and restarting the transport',
+// The legacy file helper remains hardened for older host adapters. The current
+// Core keeps short-lived admission PINs in memory and must never await this I/O.
+assert.doesNotMatch(
+  coreRemote,
+  /self\.runtime\.(?:load_pairing_pin|persist_pairing_pin)\(/,
+  'ephemeral PIN rotation must not depend on legacy disk storage',
 );
 assert.match(
   coreContract,
-  /failed_pin_persistence_keeps_the_committed_pin_and_server_state[\s\S]*?reject_persist\.store\(true[\s\S]*?regenerate_pairing_pin\(\)\.await\.unwrap_err\(\)[\s\S]*?old_pin[\s\S]*?status\(\)\.unwrap\(\)\.running[\s\S]*?start_count\.load\(Ordering::Acquire\), 1/,
-  'Core contract tests must prove persistence failure preserves the committed PIN and running server',
+  /rotation_does_not_read_or_write_legacy_pin_storage/,
+  'Core must exercise rotation even when legacy persistence rejects writes',
 );
 assert.match(
   tauriAdapter,

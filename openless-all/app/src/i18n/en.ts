@@ -2242,6 +2242,11 @@ export const en: typeof zhCN = {
       urlLabel: 'Access URL',
       pinLabel: 'Pairing code',
       regeneratePin: 'Regenerate',
+      refreshPin: 'Refresh code',
+      revokePairings: 'Revoke all pairings',
+      revokeHint: 'Disconnect all phones and stop active recordings. Phones must pair again.',
+      pinRotationHint:
+        'Codes refresh every 10 minutes and after pairing. Connected phones stay connected. Reconnection credentials last up to 24 hours, until the computer app restarts.',
       portInUse: 'Port {{port}} is in use, please change it',
       startError: 'Failed to start the remote input service: {{reason}}',
       securityHint:

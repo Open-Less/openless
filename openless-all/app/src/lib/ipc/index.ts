@@ -224,6 +224,7 @@ export {
   getRemoteInputStatus,
   listLocalIps,
   regenerateRemotePin,
+  rotateRemotePin,
   setRemoteLocale,
 } from './remote-server';
 

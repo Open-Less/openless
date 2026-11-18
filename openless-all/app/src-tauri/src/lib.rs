@@ -281,6 +281,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_remote_input_status,
             commands::list_local_ips,
             commands::regenerate_remote_pin,
+            commands::rotate_remote_pin,
             commands::set_remote_locale,
             commands::get_update_channel,
             commands::set_update_channel,
