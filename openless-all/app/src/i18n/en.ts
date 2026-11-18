@@ -146,8 +146,8 @@ export const en: typeof zhCN = {
       'OpenLess uses this password to encrypt data on this device and create a cloud backup. Sync turns on after the backup is created.',
     confirmSyncPassword: 'Confirm sync password',
     confirmAndContinue: 'Confirm and continue',
-    showPasswords: 'Show passwords',
-    hidePasswords: 'Hide passwords',
+    revealPassword: 'Show password ({{field}})',
+    concealPassword: 'Hide password ({{field}})',
     previewNotice:
       'Cloud sync preview. Use a sample password; it will not connect to a server or store any credentials.',
     passwordPolicy:

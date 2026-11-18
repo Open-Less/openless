@@ -3,7 +3,9 @@
     "title": "云同步服务告知与协议草案更新",
     "updatedTitle": "协议已修改，请仔细阅读",
     "updatedDescription": "云同步服务告知与协议草案已修改，请仔细阅读。继续同步前需要重新确认，旧版本的确认不会自动沿用。",
-    "intro": "请了解将同步哪些资料、密码与认证如何处理，以及关闭和删除的区别。同步包含服务 API Key 和私密文本历史；请在继续前阅读以下内容。",
+    "apiKeyNotice": "同步会上传已登记的 API 密钥。OpenLess 云同步服务不会使用这些密钥：它们在本机端到端加密后随快照上传。同步服务不接收解密密钥，无法读取快照中的明文 API 密钥。",
+    "apiProviderUse": "使用您配置的转写或模型服务时，应用会用相应的 API 密钥向该服务提供方认证。这与云同步是独立的流程。",
+    "intro": "请在继续前了解同步资料的范围（包括私密文本历史）、密码与认证，以及关闭和删除的区别。",
     "sections": [
       {
         "id": "provider",
@@ -26,13 +28,13 @@
       {
         "id": "encryption",
         "title": "在本机加密，并妥善保存密码",
-        "body": "快照内容在本机加密后通过 HTTPS 传输；同步密码和派生密钥不发送给同步服务器。密码在本机按 NFC 规范化，当前要求 12–128 个字符并含 ASCII 大写、小写和数字，创建或改密还会检查常见弱密码。“记住密钥”依赖本设备系统安全存储。我们无法找回原密码，当前改密仍要求旧密码；已解锁设备不等于可无旧密码重置。没有密码也没有可取得的本地资料时，云端内容可能永久无法读取。加密不能保证设备失陷或软件漏洞下绝对安全。",
+        "body": "本机先用 XChaCha20-Poly1305 对快照加密，再通过 HTTPS 上传。加密密钥在本机用 Argon2id 从同步密码派生；同步服务器不接收密码或解密密钥。密码在本机按 NFC 规范化，当前要求 12–128 个字符并含 ASCII 大写、小写和数字，创建或改密还会检查常见弱密码。“记住密钥”依赖本设备系统安全存储。我们无法找回原密码。更改密码需要输入当前密码，即使设备已解锁。没有密码也没有可取得的本地资料时，云端内容可能永久无法读取。加密不能保证设备失陷或软件漏洞下绝对安全。",
         "sources": ["F05", "F07", "F10"]
       },
       {
         "id": "authentication",
         "title": "认证和必要元数据仍需处理",
-        "body": "登录凭据不进入备份，但官方同步认证会将 GitHub 访问令牌单独发送给同步服务以换取短期会话。服务端能处理账号标识、登录名、vault／key／操作标识、版本、操作类型、密文大小与摘要、加密参数及同步时间等协议资料。自定义服务器使用其实际认证安排。Mivra 赞助不表示其可获得解密密钥；实际基础设施法律实体、部署地区、日志和处理安排仍须核实，不能把密文一概视为匿名资料。",
+        "body": "登录凭据不进入备份，但官方同步认证会将 GitHub 访问令牌单独发送给同步服务以换取短期会话。服务端能处理账号标识、登录名、vault／key／操作标识、版本、操作类型、密文大小与摘要、加密参数及同步时间等协议资料。自定义服务器使用其实际认证安排。实际基础设施法律实体、部署地区、日志和处理安排仍须核实，不能把密文一概视为匿名资料。",
         "sources": ["F06", "F08", "W1"]
       },
       {
@@ -44,7 +46,7 @@
       {
         "id": "controls",
         "title": "关闭、退出和删除各有不同作用",
-        "body": "关闭、锁定或退出不删除云端快照，删除云端备份需要另行确认。确认删除当前快照后，本机资料保留，离线设备的本机副本不会被远程擦除。官方公开能力接口在本次核对时声明服务备份副本最多保留 7 天；这不是所有账号、日志、收据或删除标记同时清除的保证，也不代表可以选择任意历史版本恢复。实际备份清理机制和其他保留期限仍须运营核实。",
+        "body": "关闭、锁定或退出不删除云端快照，删除云端备份需要另行确认。确认删除当前快照后，本机资料保留，离线设备的本机副本不会被远程擦除。官方公开能力接口在本次核对时声明服务备份副本最多保留 7 天；账号信息、日志、操作收据和删除标记的保留另行处理。目前无法自行选择任意历史时间点恢复。实际备份清理机制和其他保留期限仍须运营核实。",
         "sources": ["F13", "F14", "F15"]
       }
     ],
@@ -62,7 +64,9 @@
     "title": "Cloud sync disclosure and draft agreement update",
     "updatedTitle": "The cloud sync disclosure has changed",
     "updatedDescription": "The cloud sync disclosure and draft agreement have changed. Please read them carefully and confirm again before continuing. Your previous confirmation will not carry over automatically.",
-    "intro": "Review the data included, how passwords and authentication work, and the difference between turning sync off and deleting a backup. Sync includes service API keys and private text history.",
+    "apiKeyNotice": "Sync uploads your registered API keys. The OpenLess cloud sync service does not use these keys. Your device encrypts them as part of the snapshot before upload. The sync service does not receive the decryption key and cannot read the API keys in plaintext.",
+    "apiProviderUse": "When you use a transcription or model service you have configured, the app uses the corresponding API key to authenticate with that provider. This is separate from cloud sync.",
+    "intro": "Before continuing, review what is synced (including private text history), how passwords and authentication work, and what turning off sync or deleting a backup does.",
     "sections": [
       {
         "id": "provider",
@@ -82,12 +86,12 @@
       {
         "id": "encryption",
         "title": "Encrypt locally and keep your password safe",
-        "body": "Snapshot content is encrypted locally before HTTPS transfer. The sync password and derived key are not sent to the sync server. Passwords are normalized locally to NFC. The current policy requires 12–128 characters with ASCII uppercase, lowercase and a digit; creating or changing a password also checks common weak patterns. Remembering the key relies on this device's secure storage. We cannot recover the original password, and changing it still requires the old password. An unlocked device does not provide a password-free reset. Without the password or accessible local data, cloud content may become permanently unreadable. Encryption cannot guarantee safety against a compromised device or software vulnerabilities."
+        "body": "Your device encrypts the snapshot with XChaCha20-Poly1305 before uploading it over HTTPS. It derives the encryption key locally from your sync password with Argon2id. The sync server does not receive the password or decryption key. Passwords are normalized locally to NFC. The current policy requires 12–128 characters with ASCII uppercase, lowercase and a digit; creating or changing a password also checks common weak patterns. Remembering the key relies on this device's secure storage. We cannot recover the original password. Changing it requires your current password even when the device is unlocked. Without the password or accessible local data, cloud content may become permanently unreadable. Encryption cannot guarantee safety against a compromised device or software vulnerabilities."
       },
       {
         "id": "authentication",
         "title": "Authentication and necessary metadata are handled separately",
-        "body": "Sign-in credentials are excluded from snapshots, but official sync authentication separately sends a GitHub access token to the sync service for a short-lived session. The server handles protocol information including account identifiers, login, vault/key/operation identifiers, versions, operation types, ciphertext size and digest, encryption parameters and sync times. Custom servers use their actual authentication arrangements. Mivra sponsorship does not mean it receives decryption keys. Infrastructure legal entities, locations, logs and processing arrangements still require verification; ciphertext must not automatically be treated as anonymous data."
+        "body": "Sign-in credentials are excluded from snapshots, but official sync authentication separately sends a GitHub access token to the sync service for a short-lived session. The server handles protocol information including account identifiers, login, vault/key/operation identifiers, versions, operation types, ciphertext size and digest, encryption parameters and sync times. Custom servers use their actual authentication arrangements. Infrastructure legal entities, locations, logs and processing arrangements still require verification; ciphertext must not automatically be treated as anonymous data."
       },
       {
         "id": "runtime",
@@ -97,7 +101,7 @@
       {
         "id": "controls",
         "title": "Turning off, signing out and deleting have different effects",
-        "body": "Turning sync off, locking or signing out does not delete the cloud snapshot. Deletion requires separate confirmation and keeps local data; it does not remotely erase an offline device's local copy. At this review, the official public capability endpoint declared a maximum of seven days for service backup copies. This does not guarantee simultaneous deletion of all account information, logs, receipts or deletion markers, or provide selectable historical restores. Actual backup cleanup and other retention periods still require operational verification."
+        "body": "Turning sync off, locking or signing out does not delete the cloud snapshot. Deletion requires separate confirmation and keeps local data; it does not remotely erase an offline device's local copy. At this review, the official public capability endpoint declared a maximum of seven days for service backup copies. Account information, logs, operation receipts and deletion markers have separate retention arrangements. You cannot select an arbitrary historical point to restore. Actual backup cleanup and other retention periods still require operational verification."
       }
     ],
     "draftBoundary": "This is the current development build's factual sync disclosure and draft agreement update. The provider's complete identity and contact channels, infrastructure processing arrangements and full legal terms still require confirmation and legal review. This page does not replace a final service agreement or promise absolute security or permanent availability. Free service and sponsorship do not remove the provider's responsibilities under applicable law.",

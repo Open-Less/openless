@@ -15,6 +15,7 @@ import {
   DialogAction,
 } from '../../ui/overlays/Dialog';
 import { syncDisclosure } from './disclosure';
+import { SyncPasswordField } from './SyncPasswordField';
 import { Collapse } from '../../components/ui/Disclosure';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
@@ -1221,7 +1222,11 @@ export function ConsentForm({
             <strong>{disclosure.updatedDescription}</strong>
           </p>
         )}
-        <p id={descriptionId}>{disclosure.intro}</p>
+        <p id={descriptionId}>
+          <strong>{disclosure.apiKeyNotice}</strong>
+        </p>
+        <p>{disclosure.apiProviderUse}</p>
+        <p>{disclosure.intro}</p>
         <p>
           <code>{CONSENT_VERSION}</code>
         </p>
@@ -1316,7 +1321,6 @@ export function PasswordForm({
   const [confirmation, setConfirmation] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [rememberKey, setRememberKey] = useState(true);
-  const [visible, setVisible] = useState(false);
   const composing = useRef(false);
   const submitted = useRef(false);
   useEffect(() => {
@@ -1332,29 +1336,6 @@ export function PasswordForm({
     : password.length > 0;
   const formId = useId();
   const mismatchId = `${formId}-mismatch`;
-  const field = (
-    label: string,
-    value: string,
-    change: (value: string) => void,
-    autocomplete: string,
-    errorId?: string,
-  ) => (
-    <label className="ol-sync-password-field">
-      {label}
-      <span className="ol-sync-password-input">
-        <input
-          type={visible ? 'text' : 'password'}
-          value={value}
-          onChange={(event) => change(event.currentTarget.value)}
-          autoComplete={preview ? 'off' : autocomplete}
-          aria-invalid={errorId ? true : undefined}
-          aria-describedby={errorId}
-          maxLength={4096}
-          disabled={busy}
-        />
-      </span>
-    </label>
-  );
   return (
     <>
       <DialogBody>
@@ -1389,41 +1370,37 @@ export function PasswordForm({
             onSubmit(value);
           }}
         >
-          {mode === 'password' &&
-            field(
-              t('cloudSyncE2ee.currentPassword'),
-              currentPassword,
-              setCurrentPassword,
-              'current-password',
-            )}
-          {field(
-            t(mode === 'password' ? 'cloudSyncE2ee.newPassword' : 'cloudSyncE2ee.password'),
-            password,
-            setPassword,
-            creating ? 'new-password' : 'current-password',
+          {mode === 'password' && (
+            <SyncPasswordField
+              label={t('cloudSyncE2ee.currentPassword')}
+              value={currentPassword}
+              onChange={setCurrentPassword}
+              autoComplete={preview ? 'off' : 'current-password'}
+              disabled={busy}
+            />
           )}
-          {creating &&
-            field(
-              t(mode === 'create' ? 'cloudSyncE2ee.confirmSyncPassword' : 'cloudSyncE2ee.confirmPassword'),
-              confirmation,
-              setConfirmation,
-              'new-password',
-              mismatch ? mismatchId : undefined,
-            )}
+          <SyncPasswordField
+            label={t(mode === 'password' ? 'cloudSyncE2ee.newPassword' : 'cloudSyncE2ee.password')}
+            value={password}
+            onChange={setPassword}
+            autoComplete={preview ? 'off' : creating ? 'new-password' : 'current-password'}
+            disabled={busy}
+          />
+          {creating && (
+            <SyncPasswordField
+              label={t(mode === 'create' ? 'cloudSyncE2ee.confirmSyncPassword' : 'cloudSyncE2ee.confirmPassword')}
+              value={confirmation}
+              onChange={setConfirmation}
+              autoComplete={preview ? 'off' : 'new-password'}
+              errorId={mismatch ? mismatchId : undefined}
+              disabled={busy}
+            />
+          )}
           {mismatch && (
             <p id={mismatchId} className="ol-cloud-sync-error" role="status">
               {t('cloudSyncE2ee.errors.passwordMismatch')}
             </p>
           )}
-          <button
-            type="button"
-            className="ol-tool-button"
-            disabled={busy}
-            aria-pressed={visible}
-            onClick={() => setVisible((value) => !value)}
-          >
-            {t(visible ? 'cloudSyncE2ee.hidePasswords' : 'cloudSyncE2ee.showPasswords')}
-          </button>
           <p>
             {creating && <>{t('cloudSyncE2ee.passwordPolicy')} </>}
             {t('cloudSyncE2ee.passwordWarning')}

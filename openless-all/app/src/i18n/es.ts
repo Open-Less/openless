@@ -142,8 +142,8 @@ export const es: typeof zhCN = {
       'OpenLess usa esta contraseña para cifrar los datos en el dispositivo y crear una copia de seguridad en la nube. La sincronización se activa al terminar.',
     confirmSyncPassword: 'Confirmar contraseña de sincronización',
     confirmAndContinue: 'Confirmar y continuar',
-    showPasswords: 'Mostrar contraseñas',
-    hidePasswords: 'Ocultar contraseñas',
+    revealPassword: 'Mostrar contraseña ({{field}})',
+    concealPassword: 'Ocultar contraseña ({{field}})',
     previewNotice:
       'Vista previa de la sincronización en la nube. Usa una contraseña de ejemplo: no se conecta a un servidor ni guarda credenciales.',
     passwordPolicy:

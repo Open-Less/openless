@@ -26,7 +26,9 @@ test('renewal appears before settings, stays paused on dismissal, and waits for 
   await expect(dialog.getByRole('checkbox')).not.toBeChecked();
   await expect(confirm).toBeDisabled();
   await expect(dialog).toContainText('Mivra');
-  await expect(dialog).toContainText('API keys');
+  await expect(dialog.getByText(/Sync uploads your registered API keys/)).toBeInViewport();
+  await expect(dialog).toContainText('XChaCha20-Poly1305');
+  await expect(dialog).toContainText('Argon2id');
   await expect
     .poll(() =>
       dialog
@@ -84,6 +86,15 @@ test('a new vault waits for matching NFC passwords and confirmed initialization'
   const create = password.getByRole('button', { name: 'Confirm and continue' });
   const newPassword = password.getByLabel('Sync password', { exact: true });
   const confirmation = password.getByLabel('Confirm sync password', { exact: true });
+  await expect(newPassword).toHaveAttribute('type', 'password');
+  await expect(confirmation).toHaveAttribute('type', 'password');
+  await newPassword.focus();
+  await password.getByRole('button', { name: 'Show password (Sync password)' }).click();
+  await expect(newPassword).toHaveAttribute('type', 'text');
+  await expect(newPassword).toBeFocused();
+  await expect(confirmation).toHaveAttribute('type', 'password');
+  await password.getByRole('button', { name: 'Hide password (Sync password)' }).click();
+  await expect(newPassword).toHaveAttribute('type', 'password');
   await newPassword.fill('Aa1short');
   await confirmation.fill('Aa1short');
   await expect(create).toBeDisabled();

@@ -147,8 +147,8 @@ export const ja: typeof zhCN = {
       'OpenLess はこのパスワードで端末上のデータを暗号化し、クラウドバックアップを作成します。同期はバックアップの作成後に有効になります。',
     confirmSyncPassword: '同期パスワードを再入力',
     confirmAndContinue: '確認して続行',
-    showPasswords: 'パスワードを表示',
-    hidePasswords: 'パスワードを非表示',
+    revealPassword: 'パスワードを表示（{{field}}）',
+    concealPassword: 'パスワードを非表示（{{field}}）',
     previewNotice: 'クラウド同期のプレビューです。サンプルのパスワードを使用してください。サーバーへの接続や認証情報の保存は行いません。',
     passwordPolicy:
       '12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。',

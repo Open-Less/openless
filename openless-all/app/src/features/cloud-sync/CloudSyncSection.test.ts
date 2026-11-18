@@ -194,6 +194,7 @@ const dependencies: Record<string, any> = {
     },
   }),
   Icon: 'icon',
+  SyncPasswordField: 'sync-password-field',
   GithubLoginModal: 'login',
   StructuredDialog: 'modal',
   DialogHeader: 'header',
