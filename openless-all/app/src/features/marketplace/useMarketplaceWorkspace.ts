@@ -237,8 +237,10 @@ export function useMarketplaceWorkspace() {
     };
   }, [marketplaceSignedIn, currentLogin]);
 
+  const myPacksSequence = useRef(0);
   const refreshMyPacks = useCallback(
     async (notify = false) => {
+      const sequence = ++myPacksSequence.current;
       if (!marketplaceSignedIn) {
         setMyPacks([]);
         setMyPacksLoading(false);
@@ -249,11 +251,13 @@ export function useMarketplaceWorkspace() {
       setMyPacksError(null);
       try {
         const packs = await marketplaceMyPacks();
+        if (sequence !== myPacksSequence.current) return;
         setMyPacks(packs);
         if (notify) {
           setActionMsg({ kind: 'ok', text: t('common.refreshed') });
         }
       } catch (error) {
+        if (sequence !== myPacksSequence.current) return;
         void refreshAuthStatus();
         console.warn('[marketplace] fetch my-packs failed', error);
         const msg = errorMessage(error);
@@ -261,7 +265,7 @@ export function useMarketplaceWorkspace() {
         // Still toast for behavior compatibility; the inline error lets users retry directly in the dialog.
         setActionMsg({ kind: 'err', text: t('marketplace.myPacks.loadFailed', { err: msg }) });
       } finally {
-        setMyPacksLoading(false);
+        if (sequence === myPacksSequence.current) setMyPacksLoading(false);
       }
     },
     [marketplaceSignedIn, refreshAuthStatus, t],
@@ -463,46 +467,54 @@ export function useMarketplaceWorkspace() {
 
   const currentOwner = useRef(currentLogin);
   currentOwner.current = currentLogin;
-  const withdrawing = useRef(new Set<string>());
+  const withdrawing = useRef(false);
   const withdraw = async (pack: { id: string; name: string; authorLogin: string }) => {
-    if (withdrawing.current.has(pack.id)) return false;
-    withdrawing.current.add(pack.id);
+    if (withdrawing.current || pack.authorLogin !== currentOwner.current) return;
+    withdrawing.current = true;
     try {
-      const accepted = await withdrawListedPack(pack, () => currentOwner.current, confirm, {
-        title: t('common.delete'),
-        description: t('marketplace.detail.withdrawConfirm', { name: pack.name }),
+      await confirm({
+        title: t('marketplace.detail.withdrawBtn'),
+        description: t('marketplace.detail.withdrawScope', {
+          name: pack.name,
+          defaultValue:
+            'Permanently withdraw “{{name}}” from the marketplace? Local copies are kept.',
+        }),
         tone: 'danger',
-        confirmLabel: t('common.delete'),
+        confirmLabel: t('marketplace.detail.withdrawBtn'),
         icon: 'trash',
+        errorMessage: t('marketplace.detail.withdrawFailed', { err: t('common.operationFailed') }),
+        onConfirm: async () => {
+          try {
+            await withdrawListedPack(pack, () => currentOwner.current);
+          } catch (error) {
+            void refreshAuthStatus();
+            throw error;
+          }
+          ++reqSeqRef.current;
+          ++myPacksSequence.current;
+          setItems((current) => current.filter((item) => item.id !== pack.id));
+          setMyPacks((current) => current.filter((item) => item.id !== pack.id));
+          setSelectedId((current) => (current === pack.id ? null : current));
+          cachedEntry.current = false;
+          notify({
+            key: 'marketplace-action',
+            state: 'deleted',
+            message: t('marketplace.detail.withdrawSuccess'),
+          });
+          void refreshRef.current();
+          void refreshMyPacks();
+        },
       });
-      if (!accepted) return false;
-      setActionMsg({ kind: 'ok', text: t('marketplace.detail.withdrawSuccess') });
-      setItems((previous) => previous.filter((item) => item.id !== pack.id));
-      return true;
-    } catch (error) {
-      void refreshAuthStatus();
-      setActionMsg({
-        kind: 'err',
-        text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }),
-      });
-      return false;
     } finally {
-      withdrawing.current.delete(pack.id);
+      withdrawing.current = false;
     }
   };
 
   const onDelete = async () => {
-    if (!detail || !(await withdraw(detail))) return;
-    setSelectedId((current) => (current === detail.id ? null : current));
-    cachedEntry.current = false;
-    void refreshRef.current();
+    if (detail) await withdraw(detail);
   };
 
-  const onDeleteMine = async (pack: MarketplaceMyPackItem) => {
-    if (!(await withdraw(pack))) return;
-    setMyPacks((previous) => previous.filter((item) => item.id !== pack.id));
-    void refreshMyPacks();
-  };
+  const onDeleteMine = withdraw;
 
   const onUpload = async (packId: string) => {
     const localPack = localPacks.find((p) => p.id === packId);

@@ -24,7 +24,6 @@ export function Style() {
     canPublish,
     packs,
     setPacks,
-    cardRefs,
     workflowView,
     setWorkflowView,
     draft,
@@ -332,12 +331,9 @@ export function Style() {
                 return (
                   <DismissibleCard
                     key={pack.id}
-                    dismissible={!isBuiltin}
+                    dismissible={!isBuiltin && busy !== 'deleting'}
+                    resetOnDismiss
                     onDismiss={() => void handleDeleteImportedPack(pack)}
-                    elementRef={(element) => {
-                      if (element) cardRefs.current.set(pack.id, element);
-                      else cardRefs.current.delete(pack.id);
-                    }}
                     data-ol-style-pack={pack.id}
                     data-active={isCurrentForView ? 'true' : undefined}
                     layout={reducedMotion ? false : 'position'}

@@ -251,23 +251,27 @@ export function ChannelEditor({
     try {
       const confirmed = await interaction.confirm({
         title: t('settings.channels.delete'),
-        description: t('settings.channels.deleteConfirm'),
+        description: t('settings.channels.deleteScope', {
+          name: channel.name,
+          defaultValue:
+            'Permanently delete “{{name}}” and its stored credentials from this device? If encrypted sync is enabled, the deletion can sync to other devices.',
+        }),
         confirmLabel: t('settings.channels.confirmDelete'),
         cancelLabel: t('common.cancel'),
         tone: 'danger',
         icon: 'trash',
+        errorMessage: t('common.operationFailed'),
+        onConfirm: async () => {
+          if (lifetime.current !== owner) throw new Error('Channel editor no longer active');
+          const finished = await form.finish(async () => {
+            if (lifetime.current !== owner) return false;
+            await deleteChannel(kind, channel.id);
+            emitSaved('deleted', t('common.deleted'));
+          });
+          if (!finished) throw new Error('Could not finish pending channel changes');
+        },
       });
-      if (!confirmed || lifetime.current !== owner) return;
-      await form.finish(async () => {
-        if (lifetime.current !== owner) return;
-        await deleteChannel(kind, channel.id);
-        if (lifetime.current === owner) {
-          emitSaved('deleted', t('common.deleted'));
-          closeEditor();
-        }
-      });
-    } catch {
-      if (lifetime.current === owner) emitSaved('failed', t('common.operationFailed'));
+      if (confirmed && lifetime.current === owner) closeEditor();
     } finally {
       deleteRequest.current = false;
       if (lifetime.current === owner) setDeleting(false);

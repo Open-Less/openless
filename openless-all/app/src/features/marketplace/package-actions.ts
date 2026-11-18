@@ -1,5 +1,4 @@
 import { logClientError, selectStylePackZipTarget } from '../../api/files';
-import type { Interaction } from '../../api/interaction';
 import {
   downloadMarketplacePack,
   installMarketplacePack,
@@ -29,11 +28,7 @@ export async function downloadListedPack(pack: { id: string; name: string; versi
 export async function withdrawListedPack(
   pack: { id: string; authorLogin: string },
   owner: () => string | null,
-  confirm: Interaction['confirm'],
-  options: Parameters<Interaction['confirm']>[0],
 ) {
-  if (pack.authorLogin !== owner() || !(await confirm(options))) return false;
-  if (pack.authorLogin !== owner()) return false;
+  if (pack.authorLogin !== owner()) throw new Error('Marketplace account changed');
   await marketplaceDelete(pack.id);
-  return true;
 }

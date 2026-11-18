@@ -2,7 +2,7 @@ import { useReducedMotion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { StylePack, StylePackExample, StylePackRuntimeDiagnostics } from '../../api/contracts';
-import type { NotificationHandle, NotificationState } from '../../api/interaction';
+import type { NotificationState } from '../../api/interaction';
 import { marketplaceAuthStatus, uploadMarketplacePack } from '../../api/marketplace';
 import { listenPreferenceChanges } from '../../api/preferences';
 import {
@@ -16,7 +16,6 @@ import {
   setActiveStylePack,
 } from '../../api/style-packs';
 import { useHotkeySettings } from '../../data/preferences';
-import { cardDeparture } from '../../lib/cardDeparture';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 import { useConservativeLayout, useLayoutStack, useMobileLayout } from '../../lib/useMobileLayout';
 import { useModalActive } from '../../ui/layout/AppViewport';
@@ -37,15 +36,6 @@ type BusyAction =
 
 const BUILTIN_RAW_ID = 'builtin.raw';
 const BUILTIN_BODY_ORDER = ['builtin.light', 'builtin.structured', 'builtin.formal'];
-const DELETE_UNDO_MS = 6000;
-
-interface PendingDelete {
-  pack: StylePack;
-  index: number;
-  timer?: number;
-  undo?: NotificationHandle;
-  committing?: boolean;
-}
 
 // Example prompt pre-filled in the editor when creating a new style pack. Design principles:
 // 1) Show the recommended structure (role → task → general constraints → output) for users to edit
@@ -120,7 +110,6 @@ export function useStylePackWorkspace() {
   const canPublish = marketplaceSignedIn;
 
   const [packs, setPacks] = useState<StylePack[]>([]);
-  const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const mounted = useRef(true);
   const [workflowView, setWorkflowView] = useState<'dictation' | 'selection'>('dictation');
 
@@ -132,7 +121,7 @@ export function useStylePackWorkspace() {
   selectedIdRef.current = selectedId;
   const [draft, setDraft] = useState<StylePack | null>(null);
   const [busy, setBusy] = useState<BusyAction>('loading');
-  const pendingDeletes = useRef(new Map<string, PendingDelete>());
+  const deleteRequest = useRef(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorClosing, setEditorClosing] = useState(false);
   const editorCloseTimer = useRef<number | null>(null);
@@ -162,11 +151,6 @@ export function useStylePackWorkspace() {
     return () => {
       mounted.current = false;
       if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
-      for (const [id, pending] of pendingDeletes.current) {
-        window.clearTimeout(pending.timer);
-        if (!pending.committing) void deleteStylePack(id).catch(() => {});
-      }
-      pendingDeletes.current.clear();
     };
   }, []);
 
@@ -186,8 +170,7 @@ export function useStylePackWorkspace() {
     try {
       const listed = await listStylePacks();
       if (sequence !== loadSequence.current) return;
-      // A refresh must not resurrect a row whose undo window or delete is active.
-      const next = listed.filter((pack) => !pendingDeletes.current.has(pack.id));
+      const next = listed;
       packsLoaded.current = true;
       setPacks(next);
       const target = preferredId || selectedIdRef.current;
@@ -456,66 +439,42 @@ export function useStylePackWorkspace() {
     }
   };
 
-  const restoreDeletedPack = (id: string) => {
-    const pending = pendingDeletes.current.get(id);
-    if (!pending || pending.committing) return;
-    window.clearTimeout(pending.timer);
-    pending.undo?.dismiss();
-    pendingDeletes.current.delete(id);
-    reinsertPack(pending);
-  };
-
-  const reinsertPack = ({ pack, index }: PendingDelete) => {
-    setPacks((current) => {
-      if (current.some((item) => item.id === pack.id)) return current;
-      const next = current.slice();
-      next.splice(Math.max(0, Math.min(index, next.length)), 0, pack);
-      return next;
-    });
-  };
-
-  const commitDeletedPack = (id: string) => {
-    const pending = pendingDeletes.current.get(id);
-    if (!pending || pending.committing) return;
-    pending.committing = true;
-    pending.undo?.dismiss();
-    void deleteStylePack(id)
-      .then(() => {
-        pendingDeletes.current.delete(id);
-        if (!mounted.current) return;
-        showSaveStatus(
-          'deleted',
-          t('style.pack.deleteSuccess', { name: getStylePackPresentation(pending.pack, t).name }),
-          true,
-        );
-        return loadPacks();
-      })
-      .catch((deleteError) => {
-        pendingDeletes.current.delete(id);
-        if (!mounted.current) return;
-        reinsertPack(pending);
-        showSaveStatus('failed', t('style.pack.deleteFailed', { err: String(deleteError) }));
-      });
-  };
-
   const handleDeleteImportedPack = async (pack: StylePack) => {
-    if (pack.kind !== 'imported' || pendingDeletes.current.has(pack.id)) return;
-    const pending: PendingDelete = { pack, index: packs.findIndex((item) => item.id === pack.id) };
-    // Register before awaiting motion: navigation/unmount must still finish the user's deletion.
-    pendingDeletes.current.set(pack.id, pending);
-    await cardDeparture(cardRefs.current.get(pack.id));
-    if (!mounted.current || pendingDeletes.current.get(pack.id) !== pending) return;
-    setPacks((current) => current.filter((item) => item.id !== pack.id));
-    if (editorOpen && selectedId === pack.id) startEditorClose();
+    if (pack.kind !== 'imported' || deleteRequest.current) return;
+    deleteRequest.current = true;
     const name = getStylePackPresentation(pack, t).name;
-    pending.undo = notify({
-      state: 'deleting',
-      message: `${t('style.pack.deleteImported')}: ${name}`,
-      actionLabel: t('style.pack.undoDelete'),
-      onAction: () => restoreDeletedPack(pack.id),
-    });
-    // Start the Undo window when its notification is published, after the card's departure.
-    pending.timer = window.setTimeout(() => commitDeletedPack(pack.id), DELETE_UNDO_MS);
+    try {
+      await confirm({
+        title: t('style.pack.deleteImported'),
+        description: t('style.pack.deleteLocalScope', {
+          name,
+          defaultValue:
+            'Permanently delete “{{name}}” from this device? If encrypted sync is enabled, the deletion can sync to other devices. A marketplace listing is kept.',
+        }),
+        confirmLabel: t('common.delete'),
+        tone: 'danger',
+        errorMessage: t('style.pack.deleteFailed', { err: t('common.operationFailed') }),
+        onConfirm: async () => {
+          setBusy('deleting');
+          try {
+            await deleteStylePack(pack.id);
+            if (!mounted.current) return;
+            loadSequence.current++;
+            if (editorOpen && selectedIdRef.current === pack.id) startEditorClose();
+            setPacks((current) => current.filter((item) => item.id !== pack.id));
+            showSaveStatus('deleted', t('style.pack.deleteSuccess', { name }), true);
+            await loadPacks();
+          } catch (error) {
+            if (mounted.current) await loadPacks();
+            throw error;
+          } finally {
+            if (mounted.current) setBusy(null);
+          }
+        },
+      });
+    } finally {
+      deleteRequest.current = false;
+    }
   };
 
   const handleDeleteImported = async () => {
@@ -628,7 +587,6 @@ export function useStylePackWorkspace() {
     canPublish,
     packs,
     setPacks,
-    cardRefs,
     workflowView,
     setWorkflowView,
     selectedId,
