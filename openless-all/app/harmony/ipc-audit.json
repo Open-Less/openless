@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 196,
+  "total": 197,
   "wired": 108,
-  "missing": 88,
+  "missing": 89,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -215,14 +215,14 @@
       "implementation": "unimplemented"
     },
     {
-      "name": "cloud_sync_e2ee_refresh_backup_metadata",
+      "name": "cloud_sync_e2ee_preview_restore",
       "calledFrom": [
         "src/lib/ipc/cloud-sync-e2ee.ts"
       ],
       "implementation": "unimplemented"
     },
     {
-      "name": "cloud_sync_e2ee_preview_restore",
+      "name": "cloud_sync_e2ee_refresh_backup_metadata",
       "calledFrom": [
         "src/lib/ipc/cloud-sync-e2ee.ts"
       ],

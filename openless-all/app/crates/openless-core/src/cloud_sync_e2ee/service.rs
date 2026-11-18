@@ -1137,9 +1137,9 @@ impl EncryptedSyncService {
         self.begin();
         let result = async {
             self.initialize(&mut runtime).await?;
-            if !runtime.settings.enabled
-                || runtime.settings.consent_version.as_deref() == Some(CONSENT_VERSION)
-            {
+            if runtime.settings.consent_version.as_deref().is_none_or(|version| {
+                version.is_empty() || version == CONSENT_VERSION
+            }) {
                 return Err(error("consent_required"));
             }
             let owner = runtime

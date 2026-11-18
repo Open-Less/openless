@@ -2269,6 +2269,66 @@ async fn confirmed_delete_does_not_require_upgraded_consent_and_reconciles_its_o
 }
 
 #[tokio::test]
+async fn disabled_old_consent_can_review_and_delete_backup_after_restart() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    let created = fixture.create(true).await.unwrap();
+    let expected_vault = created.vault_id.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let declining = fixture.reopen(&server);
+    assert!(!declining.set_enabled(false).await.unwrap().enabled);
+    declining.shutdown().await;
+    let disabled: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.owner_id.as_deref(), Some(OWNER));
+    assert_eq!(disabled.service_origin.as_deref(), Some(server.origin.as_str()));
+    assert_eq!(disabled.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    let reopened = fixture.reopen(&server);
+    let reads = server.state.lock().unwrap().snapshot_reads;
+    let generation = fixture.data.generation().unwrap();
+    let reviewed = reopened.refresh_backup_metadata().await.unwrap();
+    assert!(!reviewed.enabled);
+    assert_eq!(reviewed.key_state, KeyState::Locked);
+    assert_eq!(reviewed.vault_id.as_deref(), Some(expected_vault.as_str()));
+    assert_eq!(reviewed.remote_revision.as_deref(), Some("1"));
+    assert_eq!(reviewed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    let stored: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert!(!stored.enabled);
+    assert_eq!(stored.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert_eq!(fixture.data.generation().unwrap(), generation);
+    {
+        let remote = server.state.lock().unwrap();
+        assert_eq!(remote.snapshot_reads, reads);
+        assert_eq!(remote.put_attempts, 1);
+        assert_eq!(remote.deletes, 0);
+    }
+    let removed = reopened.delete_remote(expected_vault, "1".into(), true).await.unwrap();
+    assert!(!removed.enabled);
+    assert_eq!(removed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert_eq!(server.state.lock().unwrap().deletes, 1);
+}
+
+#[tokio::test]
+async fn backup_metadata_requires_a_persisted_old_consent() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    assert_eq!(fixture.service.refresh_backup_metadata().await.unwrap_err().message, "consent_required");
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    let settings = local::ClientSettings {
+        consent_version: Some("encrypted-full-snapshot-v1".into()),
+        ..Default::default()
+    };
+    local.write("device", "client", settings).await.unwrap();
+    let unbound = fixture.reopen(&server);
+    assert_eq!(unbound.refresh_backup_metadata().await.unwrap_err().message, "sign_in_required");
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}
+
+#[tokio::test]
 async fn backup_metadata_rejects_a_changed_account_before_mutating_settings() {
     let server = Server::start().await;
     let fixture = Fixture::new(&server).await;
@@ -2277,11 +2337,14 @@ async fn backup_metadata_rejects_a_changed_account_before_mutating_settings() {
     fixture.service.shutdown().await;
     let local = fixture.local(&server);
     mark_consent_outdated(&local).await;
+    let declining = fixture.reopen(&server);
+    declining.set_enabled(false).await.unwrap();
+    declining.shutdown().await;
     server.state.lock().unwrap().owner = "118527".into();
     let reopened = fixture.reopen(&server);
     assert_eq!(reopened.refresh_backup_metadata().await.unwrap_err().message, "account_changed");
     let settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
-    assert!(settings.enabled);
+    assert!(!settings.enabled);
     assert_eq!(settings.owner_id.as_deref(), Some(OWNER));
     assert_eq!(settings.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
     let remote = server.state.lock().unwrap();

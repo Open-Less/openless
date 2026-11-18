@@ -14,14 +14,15 @@ import '../../src/styles/refinements.css';
 const mode = new URLSearchParams(location.search).get('mode');
 const fresh = mode === 'fresh';
 const cold = mode === 'renew-cold';
-let failRefresh = cold;
+const disabled = cold && sessionStorage.getItem('sync-fixture-disabled') === 'true';
+let failRefresh = cold && !disabled;
 const owner = { githubId: '42', login: 'fixture' };
 let status: EncryptedSyncStatus = {
   sequence: '1',
-  enabled: !fresh,
+  enabled: !fresh && !disabled,
   authState: fresh || cold ? 'signed_out' : 'signed_in',
   keyState: fresh || cold ? 'locked' : 'unlocked',
-  syncState: fresh ? 'disabled' : 'ready',
+  syncState: fresh || disabled ? 'disabled' : 'ready',
   account: fresh || cold ? null : owner,
   vaultId: fresh || cold ? null : 'old-vault',
   keyId: fresh || cold ? null : 'old-key',
@@ -79,13 +80,20 @@ mockIPC(
         return false;
       case 'cloud_sync_e2ee_get_ui_preferences_snapshot':
         return { preferences: { locale: 'en', fontScale: 'medium' }, revision: '1' };
+      case 'cloud_sync_e2ee_set_enabled':
+        attempts.push({ command, args });
+        if (cold && (args as { enabled: boolean }).enabled === false) {
+          sessionStorage.setItem('sync-fixture-disabled', 'true');
+          return update({ enabled: false, syncState: 'disabled' });
+        }
+        throw new Error('Unexpected enabled state');
       case 'cloud_sync_e2ee_refresh_backup_metadata':
         attempts.push({ command, args });
         if (failRefresh) {
           failRefresh = false;
           throw { details: { reason: 'transport_failed' } };
         }
-        return update({ account: owner, authState: 'signed_in', syncState: 'unlock_required', hasCloudSnapshot: true, vaultId: 'old-vault', keyId: 'old-key', remoteRevision: '7' });
+        return update({ account: owner, authState: 'signed_in', syncState: status.enabled ? 'unlock_required' : 'disabled', hasCloudSnapshot: true, vaultId: 'old-vault', keyId: 'old-key', remoteRevision: '7' });
       case 'cloud_sync_e2ee_prepare_enable':
       case 'cloud_sync_e2ee_create':
       case 'cloud_sync_e2ee_delete_remote':

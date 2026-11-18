@@ -209,3 +209,32 @@ test('a declined renewal can inspect and explicitly delete a cold-start backup',
   await finish(page);
   await expect(confirmation).toHaveCount(0);
 });
+
+
+test('a disabled old backup can be reviewed and deleted after restart', async ({ page }) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=renew-cold');
+  const renewal = page.getByRole('dialog', { name: /disclosure has changed|updated disclosure/i });
+  await renewal.getByRole('button', { name: 'Not now' }).click();
+  const toggle = page.getByRole('switch', { name: 'Enable encrypted sync' });
+  await toggle.click();
+  await page.getByRole('button', { name: 'Turn off sync', exact: true }).click();
+  await expect(toggle).not.toBeChecked();
+  expect(await attempts(page)).toMatchObject([{ command: 'cloud_sync_e2ee_set_enabled', args: { enabled: false } }]);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  expect(await attempts(page)).toEqual([]);
+  await page.getByRole('button', { name: 'View or refresh cloud backup' }).click();
+  await expect.poll(() => attempts(page)).toMatchObject([{ command: 'cloud_sync_e2ee_refresh_backup_metadata' }]);
+  await expect(toggle).not.toBeChecked();
+  await page.getByRole('button', { name: 'Delete cloud backup', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Delete the encrypted cloud backup?' });
+  expect(await attempts(page)).toHaveLength(1);
+  await confirmation.getByRole('button', { name: 'Delete cloud backup', exact: true }).click();
+  await expect.poll(() => attempts(page)).toMatchObject([
+    { command: 'cloud_sync_e2ee_refresh_backup_metadata' },
+    { command: 'cloud_sync_e2ee_delete_remote', args: { expectedVaultId: 'old-vault', observedRevision: '7', confirmed: true } },
+  ]);
+  await finish(page);
+  await expect(confirmation).toHaveCount(0);
+  await expect(toggle).not.toBeChecked();
+});

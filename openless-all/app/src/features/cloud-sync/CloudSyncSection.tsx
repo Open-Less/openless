@@ -958,11 +958,13 @@ export function CloudSyncSection() {
             )}
           </div>
         )}
-        {status?.enabled && status.consentVersion !== CONSENT_VERSION && (
+        {status?.consentVersion && status.consentVersion !== CONSENT_VERSION && (
           <div className="ol-cloud-sync-actions">
-            <Btn variant="blue" disabled={working} onClick={() => begin('enable')}>
-              {syncDisclosure(i18n.resolvedLanguage ?? i18n.language).updatedTitle}
-            </Btn>
+            {status.enabled && (
+              <Btn variant="blue" disabled={working} onClick={() => begin('enable')}>
+                {syncDisclosure(i18n.resolvedLanguage ?? i18n.language).updatedTitle}
+              </Btn>
+            )}
             <Btn disabled={working} onClick={() => simple(cloudSyncE2eeRefreshBackupMetadata)}>
               {t('cloudSyncE2ee.refreshBackup')}
             </Btn>
