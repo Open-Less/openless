@@ -13,11 +13,25 @@ import '../../src/styles/refinements.css';
 const params = new URLSearchParams(location.search);
 applyFontScale((params.get('scale') as FontScaleId) ?? 'medium');
 let status: EncryptedSyncStatus = {
-  sequence: '1', enabled: true, authState: 'signed_in', keyState: 'unlocked', syncState: 'ready',
-  account: { githubId: 'fixture-owner', login: 'fixture' }, vaultId: 'fixture-vault', keyId: 'fixture-key',
-  localGeneration: '1', lastSyncedLocalGeneration: '1', remoteRevision: '7',
-  lastSuccessfulSyncAt: null, pendingOperationId: null, lastError: null, recoveryRequired: false,
-  hasCloudSnapshot: true, taskId: null, serviceOrigin: 'https://sync.example', backupRetentionDays: null,
+  sequence: '1',
+  enabled: true,
+  authState: 'signed_in',
+  keyState: 'unlocked',
+  syncState: 'ready',
+  account: { githubId: 'fixture-owner', login: 'fixture' },
+  vaultId: 'fixture-vault',
+  keyId: 'fixture-key',
+  localGeneration: '1',
+  lastSyncedLocalGeneration: '1',
+  remoteRevision: '7',
+  lastSuccessfulSyncAt: null,
+  pendingOperationId: null,
+  lastError: null,
+  recoveryRequired: false,
+  hasCloudSnapshot: true,
+  taskId: null,
+  serviceOrigin: 'https://sync.example',
+  backupRetentionDays: null,
   consentVersion: 'encrypted-full-snapshot-v1',
 };
 const calls: string[] = [];
@@ -33,8 +47,13 @@ const fixture = {
   restoreDuringSync: () => {
     update({ localGeneration: '2' });
     return emit('cloud-sync-e2ee:restored', {
-      sequence: status.sequence, serviceOrigin: status.serviceOrigin, accountId: status.account!.githubId,
-      vaultId: status.vaultId, taskId: status.taskId, localGeneration: '2', uiPreferences: {},
+      sequence: status.sequence,
+      serviceOrigin: status.serviceOrigin,
+      accountId: status.account!.githubId,
+      vaultId: status.vaultId,
+      taskId: status.taskId,
+      localGeneration: '2',
+      uiPreferences: {},
     });
   },
 };
@@ -43,45 +62,68 @@ const update = (change: Partial<EncryptedSyncStatus>) => {
   status = { ...status, ...change, sequence: String(Number(status.sequence) + 1) };
   return { ...status };
 };
-const publish = () => emit('cloud-sync-e2ee:state', {
-  sequence: status.sequence, serviceOrigin: status.serviceOrigin, accountId: status.account!.githubId,
-  vaultId: status.vaultId, taskId: status.taskId, status: { ...status },
-});
-mockIPC((command, args) => {
-  if (command === 'get_startup_snapshot') return { backend: { running: true }, contractVersion: '2.0.0' };
-  if (command === 'get_platform_capabilities') return { platform: 'desktop', supportsDesktopHotkey: false };
-  if (command === 'get_settings_snapshot') return { preferences: { ...mockSettings, themeMode: params.get('theme') ?? 'light' }, revision: 1 };
-  if (command === 'set_remote_locale') return undefined;
-  if (command === 'marketplace_auth_status') return { signedIn: true };
-  if (command === 'cloud_sync_e2ee_status') return { ...status };
-  if (command === 'read_credential') return stored;
-  if (command === 'set_credential') {
-    calls.push(command);
-    return new Promise<void>((resolve, reject) => {
-      saveResult = (error) => {
-        if (error) reject({ code: 'secure_storage_denied' });
-        else { stored = (args as { value: string }).value; resolve(); }
+const publish = () =>
+  emit('cloud-sync-e2ee:state', {
+    sequence: status.sequence,
+    serviceOrigin: status.serviceOrigin,
+    accountId: status.account!.githubId,
+    vaultId: status.vaultId,
+    taskId: status.taskId,
+    status: { ...status },
+  });
+mockIPC(
+  (command, args) => {
+    if (command === 'get_startup_snapshot')
+      return { backend: { running: true }, contractVersion: '2.0.0' };
+    if (command === 'get_platform_capabilities')
+      return { platform: 'desktop', supportsDesktopHotkey: false };
+    if (command === 'get_settings_snapshot')
+      return {
+        preferences: { ...mockSettings, themeMode: params.get('theme') ?? 'light' },
+        revision: 1,
       };
-    });
-  }
-  if (command === 'cloud_sync_e2ee_sync_now') {
-    calls.push(command);
-    update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
-    void publish();
-    return new Promise((resolve, reject) => {
-      syncResult = (error) => {
-        update({ syncState: error ? 'failed' : 'ready', taskId: null,
-          lastError: error ? { code: 'transport_failed', retryAfterSeconds: null } : null,
-          lastSuccessfulSyncAt: error ? null : new Date().toISOString() });
-        void publish();
-        if (error) reject({ code: 'transport_failed' });
-        else resolve({ ...status });
-      };
-    });
-  }
-  if (command === 'cloud_sync_e2ee_set_enabled') { calls.push(command); return update({ enabled: false }); }
-  throw new Error(`Unexpected fixture command: ${command}`);
-}, { shouldMockEvents: true });
+    if (command === 'set_remote_locale') return undefined;
+    if (command === 'marketplace_auth_status') return { signedIn: true };
+    if (command === 'cloud_sync_e2ee_status') return { ...status };
+    if (command === 'read_credential') return stored;
+    if (command === 'set_credential') {
+      calls.push(command);
+      return new Promise<void>((resolve, reject) => {
+        saveResult = (error) => {
+          if (error) reject({ code: 'secure_storage_denied' });
+          else {
+            stored = (args as { value: string }).value;
+            resolve();
+          }
+        };
+      });
+    }
+    if (command === 'cloud_sync_e2ee_sync_now') {
+      calls.push(command);
+      update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
+      void publish();
+      return new Promise((resolve, reject) => {
+        syncResult = (error) => {
+          update({
+            syncState: error ? 'failed' : 'ready',
+            taskId: null,
+            lastError: error ? { code: 'transport_failed', retryAfterSeconds: null } : null,
+            lastSuccessfulSyncAt: error ? null : new Date().toISOString(),
+          });
+          void publish();
+          if (error) reject({ code: 'transport_failed' });
+          else resolve({ ...status });
+        };
+      });
+    }
+    if (command === 'cloud_sync_e2ee_set_enabled') {
+      calls.push(command);
+      return update({ enabled: false });
+    }
+    throw new Error(`Unexpected fixture command: ${command}`);
+  },
+  { shouldMockEvents: true },
+);
 
 const { i18nReady } = await import('../../src/i18n');
 await i18nReady;
@@ -94,12 +136,30 @@ const { CloudSyncSection } = await import('../../src/features/cloud-sync/CloudSy
 function Fixture() {
   const [visible, setVisible] = useState(true);
   fixture.hide = () => setVisible(false);
-  return <main style={{ width: '100%', overflow: 'auto', padding: 16 }}>
-    {visible && <><DeepSeekSuiteSection /><CloudSyncSection /></>}
-  </main>;
+  return (
+    <main style={{ width: '100%', overflow: 'auto', padding: 16 }}>
+      {visible && (
+        <>
+          <DeepSeekSuiteSection />
+          <CloudSyncSection />
+        </>
+      )}
+    </main>
+  );
 }
 createRoot(document.getElementById('root')!).render(
-  <StrictMode><PreviewFrame width={Number(params.get('width') ?? 700)} height={Number(params.get('height') ?? 460)}><AppViewport>
-    <InteractionProvider><HotkeySettingsProvider><Fixture /></HotkeySettingsProvider></InteractionProvider>
-  </AppViewport></PreviewFrame></StrictMode>,
+  <StrictMode>
+    <PreviewFrame
+      width={Number(params.get('width') ?? 700)}
+      height={Number(params.get('height') ?? 460)}
+    >
+      <AppViewport>
+        <InteractionProvider>
+          <HotkeySettingsProvider>
+            <Fixture />
+          </HotkeySettingsProvider>
+        </InteractionProvider>
+      </AppViewport>
+    </PreviewFrame>
+  </StrictMode>,
 );

@@ -236,17 +236,27 @@ test('Gemini Omni exposes the shared thinking setting and hides it for transcrip
 });
 
 async function finishSettingsOperation(page: Page, operation: 'Save' | 'Sync', error = false) {
-  await page.evaluate(({ operation, error }) => {
-    const fixture = (window as unknown as {
-      settingsStatusFixture: { finishSave: (error: boolean) => void; finishSync: (error: boolean) => void };
-    }).settingsStatusFixture;
-    fixture[`finish${operation}`](error);
-  }, { operation, error });
+  await page.evaluate(
+    ({ operation, error }) => {
+      const fixture = (
+        window as unknown as {
+          settingsStatusFixture: {
+            finishSave: (error: boolean) => void;
+            finishSync: (error: boolean) => void;
+          };
+        }
+      ).settingsStatusFixture;
+      fixture[`finish${operation}`](error);
+    },
+    { operation, error },
+  );
 }
 
 for (const scale of ['small', 'medium', 'large']) {
   for (const theme of ['light', 'dark']) {
-    test(`real Save Configuration updates one compact status surface at ${scale}/${theme}`, async ({ page }) => {
+    test(`real Save Configuration updates one compact status surface at ${scale}/${theme}`, async ({
+      page,
+    }) => {
       await page.goto(`/e2e/fixtures/settings-status.html?scale=${scale}&theme=${theme}`);
       const input = page.getByLabel('DeepSeek suite API Key');
       await expect(input).toHaveValue('fixture-key');
@@ -265,14 +275,20 @@ for (const scale of ['small', 'medium', 'large']) {
       await expect(notice).toContainText('DeepSeek 配置已保存');
       await expect(notice).toHaveCSS('border-radius', '8px');
       await expect(save).toBeEnabled();
-      expect(await page.evaluate(() => JSON.parse((window as any).settingsStatusFixture.stored()).apiKey)).toBe('saved-key');
+      expect(
+        await page.evaluate(
+          () => JSON.parse((window as any).settingsStatusFixture.stored()).apiKey,
+        ),
+      ).toBe('saved-key');
       await expect(notice).toHaveCSS('transform', 'none');
       const box = (await notice.boundingBox())!;
       const viewport = (await page.locator('.ol-app-viewport').boundingBox())!;
       expect(box.height).toBeLessThan(42);
       expect(box.x).toBeGreaterThanOrEqual(viewport.x);
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.x + viewport.width);
-      await page.screenshot({ path: test.info().outputPath(`save-status-${scale}-${theme}.png`) });
+      await page.screenshot({
+        path: test.info().outputPath(`acceptance-save-status-${scale}-${theme}.png`),
+      });
       await save.click();
       await finishSettingsOperation(page, 'Save', true);
       await expect(notice).toHaveAttribute('data-variant', 'alert');
@@ -284,7 +300,9 @@ for (const scale of ['small', 'medium', 'large']) {
   }
 }
 
-test('Sync Now keeps one progress notice until native completion; actual decisions remain modal', async ({ page }) => {
+test('Sync Now keeps one progress notice until native completion; actual decisions remain modal', async ({
+  page,
+}) => {
   await page.goto('/e2e/fixtures/settings-status.html?theme=dark');
   const sync = page.getByRole('button', { name: '立即同步', exact: true });
   await expect(sync).toBeEnabled();
@@ -306,7 +324,9 @@ test('Sync Now keeps one progress notice until native completion; actual decisio
   await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await expect(sync).toBeEnabled();
   await expect(notice).toHaveCSS('transform', 'none');
-  await page.screenshot({ path: test.info().outputPath('cloud-sync-completed-status.png') });
+  await page.screenshot({
+    path: test.info().outputPath('acceptance-cloud-sync-completed-status.png'),
+  });
   await sync.click();
   await finishSettingsOperation(page, 'Sync', true);
   await expect(notice).toHaveAttribute('data-state', 'failed');
@@ -327,7 +347,8 @@ test('Sync Now keeps one progress notice until native completion; actual decisio
   await expect(dialog).toHaveCount(0);
   await expect(remove).toBeFocused();
   expect(await page.evaluate(() => (window as any).settingsStatusFixture.calls)).toEqual([
-    'cloud_sync_e2ee_sync_now', 'cloud_sync_e2ee_sync_now',
+    'cloud_sync_e2ee_sync_now',
+    'cloud_sync_e2ee_sync_now',
   ]);
   await remove.click();
   const overlay = page.locator('.ol-dialog-overlay:not([inert])');
@@ -342,8 +363,12 @@ test('Sync Now keeps one progress notice until native completion; actual decisio
   await expect(notice).toHaveCount(0);
 });
 
-test('saved status and the sync decision remain usable in a short narrow 110% viewport', async ({ page }) => {
-  await page.goto('/e2e/fixtures/settings-status.html?scale=large&theme=light&width=330&height=260');
+test('saved status and the sync decision remain usable in a short narrow 110% viewport', async ({
+  page,
+}) => {
+  await page.goto(
+    '/e2e/fixtures/settings-status.html?scale=large&theme=light&width=330&height=260',
+  );
   await expect(page.getByLabel('DeepSeek suite API Key')).toHaveValue('fixture-key');
   await page.getByRole('button', { name: '保存配置', exact: true }).click();
   await finishSettingsOperation(page, 'Save');
@@ -361,7 +386,9 @@ test('saved status and the sync decision remain usable in a short narrow 110% vi
   const confirm = dialog.getByRole('button', { name: '删除云端备份', exact: true });
   await confirm.scrollIntoViewIfNeeded();
   await expect(confirm).toBeDisabled();
-  await page.screenshot({ path: test.info().outputPath('cloud-sync-decision-narrow-light.png') });
+  await page.screenshot({
+    path: test.info().outputPath('acceptance-cloud-sync-decision-narrow-light.png'),
+  });
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(remove).toBeFocused();

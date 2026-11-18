@@ -98,9 +98,7 @@ export function ActivityHeatmap({
               </div>
               <div className="ol-overview-year-stat">
                 <dt className="ol-overview-year-label">{t('overview.activityPeakDay')}</dt>
-                <dd className="ol-overview-year-value">
-                  {formatLocaleNumber(data.peak, locale)}
-                </dd>
+                <dd className="ol-overview-year-value">{formatLocaleNumber(data.peak, locale)}</dd>
               </div>
               <div className="ol-overview-year-stat">
                 <dt className="ol-overview-year-label">{t('overview.activityDailyAverage')}</dt>

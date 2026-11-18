@@ -81,7 +81,9 @@ for (const [font, scale] of [
   ['medium', 1],
   ['large', 1.1],
 ] as const) {
-  test(`overview fits the minimum window at ${Math.round(scale * 100)}%`, async ({ page }, testInfo) => {
+  test(`overview fits the minimum window at ${Math.round(scale * 100)}%`, async ({
+    page,
+  }, testInfo) => {
     await page.setViewportSize({ width: 980, height: 640 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript((value) => localStorage.setItem('ol-font-scale', value), font);
@@ -124,7 +126,9 @@ for (const [font, scale] of [
     await expect(dashboard.locator('.ol-gha-app-list')).toBeInViewport();
     await expect(summary).toBeInViewport({ ratio: 1 });
     if (scale === 1.1) {
-      await page.screenshot({ path: testInfo.outputPath('acceptance-overview-minimum-shell-110.png') });
+      await page.screenshot({
+        path: testInfo.outputPath('acceptance-overview-minimum-shell-110.png'),
+      });
     }
   });
 }
@@ -144,7 +148,14 @@ test('a 375px desktop preview keeps one vertical scroll owner', async ({ page })
   await annual.scrollIntoViewIfNeeded();
   await expect(annual).toBeInViewport({ ratio: 1 });
   await expect.poll(() => surface.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
-  for (const owner of [page.locator('#root'), dashboard, recent, dashboard.locator('.ol-gha-app-list')]) {
-    expect(await owner.evaluate((node) => node.scrollHeight - node.clientHeight)).toBeLessThanOrEqual(1);
+  for (const owner of [
+    page.locator('#root'),
+    dashboard,
+    recent,
+    dashboard.locator('.ol-gha-app-list'),
+  ]) {
+    expect(
+      await owner.evaluate((node) => node.scrollHeight - node.clientHeight),
+    ).toBeLessThanOrEqual(1);
   }
 });

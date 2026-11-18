@@ -231,7 +231,9 @@ test('style pack deletion uses the red trash notification and keeps undo', async
   await expect(pack).toHaveCount(0);
 });
 
-test('selected segmented options and the overview heatmap stay visible', async ({ page }, testInfo) => {
+test('selected segmented options and the overview heatmap stay visible', async ({
+  page,
+}, testInfo) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await page.goto('/?os=mac');

@@ -581,7 +581,11 @@ export function CloudSyncSection() {
       void perform(async (valid) => routePreparation(await prepareEncryptedSync(), intent, valid));
     }
   };
-  const simple = (request: () => Promise<EncryptedSyncStatus>, signOut = false, syncing = false) => {
+  const simple = (
+    request: () => Promise<EncryptedSyncStatus>,
+    signOut = false,
+    syncing = false,
+  ) => {
     syncIntent.current = syncing;
     void perform(async (valid) => {
       const next = await request();

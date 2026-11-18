@@ -97,7 +97,9 @@ await i18n.init({
   fallbackLng: 'en',
   interpolation: { escapeValue: false },
   resources: {
-    en: { translation: { ...en, overview: { ...en.overview, activityCount: '{{count}} dictations' } } },
+    en: {
+      translation: { ...en, overview: { ...en.overview, activityCount: '{{count}} dictations' } },
+    },
     de: { translation: de },
     'zh-CN': { translation: zhCN },
   },
