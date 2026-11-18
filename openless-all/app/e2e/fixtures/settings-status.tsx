@@ -43,6 +43,7 @@ export type SettingsOperation = 'save' | 'sync' | 'delete';
 type DeleteRequest = Parameters<typeof cloudSyncE2eeDeleteRemote>[0];
 const calls: string[] = [];
 const deleteRequests: DeleteRequest[] = [];
+const cancelledSyncTasks: string[] = [];
 const cancelledDownloads: string[] = [];
 const attempts = { save: 0, sync: 0, delete: 0 };
 const pending = new Map<SettingsOperation, { attempt: number; finish: (error: boolean) => void }>();
@@ -70,6 +71,7 @@ function deferOperation<T>(
 const fixture = {
   calls,
   deleteRequests,
+  cancelledSyncTasks,
   cancelledDownloads,
   hasDownloadListener: () => Boolean(listeners.get('local-asr-download-progress')?.size),
   emitDownload(modelId: string, phase: LocalAsrDownloadProgress['phase']) {
@@ -175,19 +177,27 @@ mockIPC((command, args) => {
   if (command === 'cloud_sync_e2ee_sync_now') {
     calls.push(command);
     const result = deferOperation('sync', (error) => {
+      const cancelled = status.taskId !== null && cancelledSyncTasks.includes(status.taskId);
+      const code = cancelled ? 'cancelled' : error ? 'transport_failed' : null;
       const next = update({
-        syncState: error ? 'failed' : 'ready',
+        syncState: cancelled ? 'pending' : error ? 'failed' : 'ready',
         taskId: null,
-        lastError: error ? { code: 'transport_failed', retryAfterSeconds: null } : null,
-        lastSuccessfulSyncAt: error ? null : new Date().toISOString(),
+        lastError: code ? { code, retryAfterSeconds: null } : null,
+        lastSuccessfulSyncAt: code ? status.lastSuccessfulSyncAt : new Date().toISOString(),
       });
       void publish();
-      if (error) throw { code: 'transport_failed' };
+      if (code) throw { code };
       return next;
     });
     update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
     void publish();
     return result;
+  }
+  if (command === 'cloud_sync_e2ee_cancel') {
+    const { taskId } = args as { taskId: string };
+    if (status.taskId !== taskId) throw { code: 'stale_task' };
+    cancelledSyncTasks.push(taskId);
+    return { ...status };
   }
   if (command === 'cloud_sync_e2ee_delete_remote') {
     calls.push(command);
@@ -218,6 +228,7 @@ const { InteractionProvider } = await import('../../src/ui/overlays/InteractionP
 const { HotkeySettingsProvider } = await import('../../src/data/preferences');
 const { DeepSeekSuiteSection } = await import('../../src/features/providers/DeepSeekSuiteSection');
 const { CloudSyncSection } = await import('../../src/features/cloud-sync/CloudSyncSection');
+const { CloudSyncWelcome } = await import('../../src/features/cloud-sync/CloudSyncSetupPrompt');
 const { PresenceModal } = await import('../../src/ui/overlays/Modal');
 const { WebSearchSection } = await import('../../src/features/settings/sections/WebSearchSection');
 const { GlobalDownloadProgress } =
@@ -286,7 +297,7 @@ createRoot(document.getElementById('root')!).render(
             <WebSearchFixture />
           ) : (
             <HotkeySettingsProvider>
-              <Fixture />
+              {params.has('cloudWelcome') ? <CloudSyncWelcome inline /> : <Fixture />}
             </HotkeySettingsProvider>
           )}
         </InteractionProvider>

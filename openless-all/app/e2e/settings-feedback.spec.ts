@@ -317,7 +317,13 @@ for (const scale of ['small', 'medium', 'large'] as const) {
 test('Sync Now keeps one progress notice until native completion', async ({ page }) => {
   await page.goto('/e2e/fixtures/settings-status.html?theme=dark');
   const sync = page.getByRole('button', { name: '立即同步', exact: true });
+  const warningOffset = () =>
+    page.locator('.ol-cloud-sync-scope').evaluate(
+      (node) =>
+        node.getBoundingClientRect().top - node.closest('.ol-cloud-sync')!.getBoundingClientRect().top,
+    );
   await expect(sync).toBeEnabled();
+  const warningTop = await warningOffset();
   await sync.click();
   const notice = page.locator('.ol-notification-card');
   await expect(notice).toHaveCount(1);
@@ -327,6 +333,11 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(notice).not.toContainText('同步完成');
   await waitForSettingsOperation(page, 'sync', 1);
+  const cancel = page.getByRole('button', { name: '取消当前任务', exact: true });
+  const noticeCancel = notice.getByRole('button', { name: '取消当前任务', exact: true });
+  await expect(noticeCancel).toBeEnabled();
+  await expect(cancel).toHaveCount(1);
+  expect(await warningOffset()).toBeCloseTo(warningTop, 0);
   await expect
     .poll(() => page.evaluate(() => window.settingsStatusFixture.canRestoreDuringSync()))
     .toBe(true);
@@ -337,6 +348,9 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await expect(notice).toHaveAttribute('data-state', 'saved');
   await expect(notice).toHaveAttribute('data-same-operation', 'sync');
   await expect(notice).toContainText('同步完成');
+  await expect(cancel).toHaveCount(0);
+  await expect(page.locator('.ol-cloud-sync-backup small')).toContainText('上次同步：');
+  expect(await warningOffset()).toBeCloseTo(warningTop, 0);
   await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await expect(sync).toBeEnabled();
   await expect(notice).toHaveCSS('transform', 'none');
@@ -344,7 +358,16 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
     path: test.info().outputPath('acceptance-cloud-sync-completed-status.png'),
   });
   await sync.click();
-  await finishSettingsOperation(page, 'sync', 2, true);
+  await noticeCancel.click();
+  await expect(notice).toContainText('已请求取消');
+  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(cancel).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
+    .toBe(1);
+  await finishSettingsOperation(page, 'sync', 2);
+  await expect(notice).toContainText('任务已取消。');
+  expect(await warningOffset()).toBeCloseTo(warningTop, 0);
   await expect(notice).toHaveAttribute('data-state', 'failed');
   await expect(notice).toHaveAttribute('data-severity', 'error');
   await expect(notice.getByRole('progressbar')).toHaveCount(0);
@@ -363,6 +386,33 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
     'cloud_sync_e2ee_sync_now',
     'cloud_sync_e2ee_sync_now',
   ]);
+});
+
+test('cloud sync is cancellable from the welcome modal header without a second action', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/settings-status.html?cloudWelcome');
+  await page.getByRole('button', { name: '从云端恢复', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const sync = dialog.getByRole('button', { name: '立即同步', exact: true });
+  const notice = page.locator('.ol-notification-card');
+  const cancel = dialog.getByRole('button', { name: '取消当前任务', exact: true });
+  await sync.click();
+  await waitForSettingsOperation(page, 'sync', 1);
+  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice.locator('.ol-notification-action')).toHaveCount(0);
+  await expect(dialog.locator('header').getByRole('button', { name: '取消当前任务' })).toBeEnabled();
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(cancel).toBeDisabled();
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
+    .toBe(1);
+  await finishSettingsOperation(page, 'sync', 1);
+  await expect(notice).toContainText('任务已取消。');
+  await expect(cancel).toHaveCount(0);
+  await expect(dialog).toBeVisible();
 });
 
 async function clickDecisionBackdrop(page: Page) {
@@ -403,7 +453,7 @@ test('cloud backup deletion cancels without IPC and holds the decision until con
   await remove.click();
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
-  await expect(dialog).toContainText('本机资料保留');
+  await expect(dialog.locator('.ol-confirm-dialog')).toContainText('本机资料保留');
   const close = dialog.getByRole('button', { name: '关闭', exact: true });
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Shift+Tab');

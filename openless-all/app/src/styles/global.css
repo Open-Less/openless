@@ -2232,6 +2232,9 @@ html:lang(de) {
   font-size: 13px;
 }
 .ol-cloud-sync-backup small {
+  /* Keep the actions stationary when the first sync timestamp arrives. */
+  display: block;
+  min-height: 1lh;
   color: var(--ol-ink-2);
 }
 .ol-cloud-sync-status-line {
