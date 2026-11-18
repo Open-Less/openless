@@ -13,11 +13,15 @@ export function getCloudSyncPreviewScenario(): Scenario | undefined {
   const { host, isMobile } = getRuntimeEnvironment();
   if (host !== 'preview' || isMobile) return undefined;
   const location = globalThis.window?.location;
-  const loopback = location && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  const dev = import.meta.env?.DEV;
+  const loopback =
+    location &&
+    (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) ||
+      (dev && location.hostname.endsWith('.orca.localhost')));
   if (!loopback) return undefined;
   const selected = new URLSearchParams(location.search).get('cloudSync');
   if (selected === 'first-time' || selected === 'reconsent') return selected;
-  if (selected === null && import.meta.env?.DEV) return 'first-time';
+  if (selected === null && dev) return 'first-time';
 }
 
 function fail(reason: string): never {
