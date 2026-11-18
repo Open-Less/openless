@@ -217,8 +217,11 @@ assertEqual(
   26,
   'traffic lights should have an equal visual top inset',
 );
-assertEqual(mainWindow.width, 1300, 'main window should use the reviewed default width');
-assertEqual(mainWindow.height, 835, 'main window should use the reviewed default height');
+assertEqual(mainWindow.width, 1400, 'main window should use the reviewed default width');
+assertEqual(mainWindow.height, 900, 'main window should use the reviewed default height');
+assertEqual(mainWindow.minWidth, 980, 'main window should preserve its minimum width');
+assertEqual(mainWindow.minHeight, 640, 'main window should preserve its minimum height');
+assertEqual(mainWindow.preventOverflow, true, 'initial main window should fit the work area');
 assertEqual(mainWindow.resizable, true, 'users should still be able to resize the main window');
 assertMatch(
   libRs,
