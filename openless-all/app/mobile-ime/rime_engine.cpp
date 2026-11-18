@@ -15,7 +15,10 @@
 void rime_require_module_levers();  // C++ linkage, as RIME_REGISTER_MODULE defines it
 
 namespace {
-const char* const kPinyinSchemas[] = {"openless_pinyin_private", "openless_pinyin_learning"};
+// 需要部署的方案：拼音（含 learning 变体）+ 笔画 + 英文。
+// stroke / melt_eng 的词库都来自 rime-ice 与 rime-stroke，不再单独维护。
+const char* const kPinyinSchemas[] = {"openless_pinyin_private", "openless_pinyin_learning",
+                                      "stroke", "melt_eng"};
 const char* const kUserDict = "pinyin_simp";
 std::mutex mutex;
 RimeApi* api = nullptr;
@@ -156,9 +159,15 @@ std::string request(const std::string& op, const std::string& handle, const std:
     if (op == "create") {
         auto id = api->create_session();
         if (!id) throw std::runtime_error("Rime session creation failed");
-        if (!api->select_schema(id, arg == "learning" ? "openless_pinyin_learning" : "openless_pinyin_private")) {
+        // 会话按用途选方案：拼音（默认/learning）、笔画、英文。
+        // 传 "stroke" / "melt_eng" 时直接选对应 schema，共用同一份部署数据。
+        const std::string schema = arg == "learning" ? "openless_pinyin_learning"
+                                 : arg == "stroke"   ? "stroke"
+                                 : arg == "english"  ? "melt_eng"
+                                                     : "openless_pinyin_private";
+        if (!api->select_schema(id, schema.c_str())) {
             api->destroy_session(id);
-            throw std::runtime_error("Rime pinyin_simp schema unavailable");
+            throw std::runtime_error("Rime schema unavailable: " + schema);
         }
         api->set_option(id, "ascii_mode", False);
         // Sessions with learning disabled must not update the user dictionary.

@@ -182,7 +182,15 @@ def main():
     # The bundled stroke dictionary is already attributed by this repository.
     shutil.copy2(APP / 'third_party/rime-stroke/stroke.dict.yaml', data / 'stroke.dict.yaml')
     (data / 'stroke.schema.yaml').write_text('schema:\n  schema_id: stroke\n  name: 笔画\nengine:\n  translators: [table_translator]\ntranslator:\n  dictionary: stroke\n', encoding='utf-8')
-    (data / 'default.custom.yaml').write_text('patch:\n  schema_list:\n    - schema: pinyin_simp\n  menu/page_size: 8\n', encoding='utf-8')
+    (data / 'default.custom.yaml').write_text(
+        'patch:\n'
+        '  schema_list:\n'
+        '    - schema: pinyin_simp\n'
+        '    - schema: stroke\n'
+        '    - schema: melt_eng\n'
+        '  menu/page_size: 8\n',
+        encoding='utf-8',
+    )
     # Native Rime dictionary/spelling from upstream Ice. Lua utility processors
     # are not required for its dictionaries and are intentionally not advertised.
     ice = src['ice']
@@ -195,6 +203,10 @@ def main():
         content = content.replace('name: cn_dicts/' + table, 'name: ice_' + table, 1)
         (data / ('ice_' + table + '.dict.yaml')).write_text(notice + content)
     (data / 'rime_ice.dict.yaml').write_text(dictionary)
+    # English (melt_eng) ships inside rime-ice: schema + dict + en_dicts.
+    for name in ['melt_eng.schema.yaml', 'melt_eng.dict.yaml']:
+        shutil.copy2(ice / name, data / name)
+    shutil.copytree(ice / 'en_dicts', data / 'en_dicts', dirs_exist_ok=True)
     shutil.copy2(ice / 'LICENSE', data / 'rime-ice-LICENSE')
     shutil.copy2(src['essay'] / 'essay.txt', data / 'essay.txt')
     shutil.copy2(src['essay'] / 'LICENSE', data / 'essay-LICENSE')
