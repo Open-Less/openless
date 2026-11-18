@@ -64,6 +64,8 @@ pub struct SelectionContext {
 pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
+    #[cfg(target_os = "windows")]
+    windows_app: Option<String>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -342,9 +344,12 @@ fn capture_selection_source_app_hint() -> Option<String> {
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     {
-        return SelectionInsertionTarget {
-            windows: capture_windows_selection_target(),
-        };
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+        let foreground = unsafe { GetForegroundWindow() };
+        let windows = capture_windows_selection_target_for_window(foreground);
+        let windows_app = windows_app_for_window(foreground);
+        return SelectionInsertionTarget { windows, windows_app };
     }
 
     #[cfg(target_os = "macos")]
@@ -970,12 +975,19 @@ fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
 
 #[cfg(target_os = "windows")]
 fn capture_windows_selection_target() -> Option<WindowsSelectionTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    capture_windows_selection_target_for_window(unsafe { GetForegroundWindow() })
+}
+
+#[cfg(target_os = "windows")]
+fn capture_windows_selection_target_for_window(
+    foreground: windows::Win32::Foundation::HWND,
+) -> Option<WindowsSelectionTarget> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+        GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
     unsafe {
-        let foreground = GetForegroundWindow();
         if foreground.0.is_null() {
             return None;
         }
@@ -1541,32 +1553,8 @@ pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_window_title(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
-
-    unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        (!title.is_empty()).then_some(title)
-    }
-}
-
-#[cfg(target_os = "windows")]
 pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
-    use windows::Win32::Foundation::HWND;
-
-    target
-        .windows
-        .as_ref()
-        .and_then(|captured| windows_window_title(HWND(captured.foreground_window as *mut _)))
+    target.windows_app.clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -1591,17 +1579,21 @@ pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option
 }
 
 #[cfg(target_os = "windows")]
+fn windows_app_for_window(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    crate::activity_app_icons::app_name_for_pid(pid)
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    // Windows has no bundle id concept; the window title is the only identity we get for free.
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return (None, None);
-        }
-        (windows_window_title(hwnd), None)
-    }
+    (windows_app_for_window(unsafe { GetForegroundWindow() }), None)
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -1609,7 +1601,7 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the window title on
+/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the executable name on
 /// Windows). For display / prompt use only; for decisions use [`current_front_app_parts`].
 pub(crate) fn current_front_app() -> Option<String> {
     match current_front_app_parts() {
@@ -1813,11 +1805,12 @@ mod tests {
     #[test]
     fn windows_requires_a_captured_target_before_contacting_the_provider() {
         assert!(!selection_insertion_target_is_captured(
-            &SelectionInsertionTarget { windows: None }
+            &SelectionInsertionTarget::default()
         ));
         assert!(selection_insertion_target_is_captured(
             &SelectionInsertionTarget {
                 windows: Some(windows_target(10)),
+                windows_app: None,
             }
         ));
     }

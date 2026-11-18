@@ -14,6 +14,13 @@ fn main() {
     println!("cargo:warning=OpenLess build target={target}, target_os={target_os}");
     if target_os == "windows" {
         link_windows_common_controls_v6_manifest_dependency();
+        println!("cargo:rerun-if-changed=src/activity_app_icon_windows.c");
+        cc::Build::new()
+            .file("src/activity_app_icon_windows.c")
+            .compile("openless_activity_app_icon");
+        for library in ["windowscodecs", "ole32", "shell32", "user32", "uuid"] {
+            println!("cargo:rustc-link-lib={library}");
+        }
     }
     if target_os == "macos" {
         // Apple system recognition is independent of downloadable model runtimes.
@@ -31,6 +38,12 @@ fn main() {
             .flag("-fobjc-arc")
             .flag("-mmacosx-version-min=14.0")
             .compile("openless_accessibility_guide");
+        println!("cargo:rerun-if-changed=src/activity_app_icon_macos.m");
+        cc::Build::new()
+            .file("src/activity_app_icon_macos.m")
+            .flag("-fobjc-arc")
+            .flag("-mmacosx-version-min=14.0")
+            .compile("openless_activity_app_icon");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=Foundation");

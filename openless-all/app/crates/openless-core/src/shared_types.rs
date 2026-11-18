@@ -187,13 +187,13 @@ pub struct FrontApp {
 /// `FrontApp { name, bundle_id }`.
 ///
 /// macOS composes `"Claude (com.anthropic.claudefordesktop)"`; Windows has
-/// only window titles, no bundle id. History entries have separate
+/// an executable name, not a bundle id. History entries have separate
 /// `app_name` / `app_bundle_id` fields, so splitting lets the detail page
 /// show a readable app name instead of gluing the whole bundle id into the
 /// body text.
 ///
 /// Only macOS labels are `"name (bundle.id)"`; on Windows parentheses are
-/// part of the title. Callers must pass `is_macos` per platform (production
+/// part of the label. Callers must pass `is_macos` per platform (production
 /// goes through `split_front_app_opt`). Non-macOS labels and labels whose
 /// bracket structure doesn't parse stay whole as the app name — better a
 /// verbose display than misreading ordinary parentheses in a window title
@@ -231,7 +231,7 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
 
 /// `Option` convenience wrapper for `split_front_app_label`; keeps the
 /// platform switch in one place: only macOS display strings are
-/// `"name (bundle.id)"`; other platforms (Windows window titles, Linux)
+/// `"name (bundle.id)"`; other platforms (Windows, Linux)
 /// keep the whole string as the name and leave the bundle id empty.
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label

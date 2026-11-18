@@ -41,6 +41,31 @@ test('native overview paints cached activity and discards an app list invalidate
   await expect(appReads).toHaveText('3');
 });
 
+for (const platform of ['MacIntel', 'Win32']) {
+  test(`ranked apps show native images and a fallback on ${platform}`, async ({ page }) => {
+    await page.addInitScript((value) => {
+      Object.defineProperty(navigator, 'platform', { configurable: true, get: () => value });
+    }, platform);
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/native-overview.html?icons`);
+    await page.getByRole('button', { name: 'Complete initial activity read' }).click();
+    const chips = page.locator('.ol-gha-app-chips');
+    const editor = chips.locator('.ol-gha-app-chip[title="Editor"]');
+    await expect(editor).toContainText('Editor2');
+    const icon = editor.locator('img');
+    await expect(icon).toBeVisible();
+    await expect
+      .poll(() => icon.evaluate((image: HTMLImageElement) => image.naturalWidth))
+      .toBe(1);
+    await expect(
+      chips.locator('.ol-gha-app-chip[title="Browser"] .ol-gha-app-icon svg'),
+    ).toBeVisible();
+    await page.locator('.ol-gha-toggle').click();
+    await expect(
+      page.locator('.ol-gha-app-row').filter({ hasText: 'Editor' }).locator('img'),
+    ).toBeVisible();
+  });
+}
+
 async function expectDashboardFits(page: Page) {
   const dashboard = page.locator('.ol-overview-dashboard');
   await expect(dashboard).toBeVisible();
