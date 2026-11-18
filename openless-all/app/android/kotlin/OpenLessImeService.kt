@@ -388,7 +388,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var englishUi = false
     private val simplifiedToTraditional by lazy { Transliterator.getInstance("Hans-Hant") }
     // Packaged as an asset (not a drawable resource) so it survives the
-    // gen/android scaffolding copy step the same way the stroke dictionaries do.
+    // gen/android scaffolding copy step the same way the Rime assets do.
     private val brandLogoBitmap: android.graphics.Bitmap? by lazy {
         try {
             assets.open("openless_wordmark.png").use { android.graphics.BitmapFactory.decodeStream(it) }
@@ -630,11 +630,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         OpenLessOverlayBridge.imeListener = this
         OpenLessOverlayBridge.imeSessionListener = ::onImeSessionEvent
         startRuntimeService()
-        // Load the offline stroke dictionary and the (much larger, ~220k-
-        // phrase) association dictionary while the IME is idle — the latter
-        // used to load lazily on whichever word's commit was the first to
-        // ever need an association, which is exactly the moment a user is
-        // sitting there waiting for the candidate row to update.
+        // Warm Rime's stroke session and the phrase association index while the
+        // IME is idle: both used to load lazily on the first keystroke, which is
+        // exactly the moment a user is sitting there waiting for the row.
         strokeController.preloadAsync()
         clipboardManager.addPrimaryClipChangedListener(clipboardHistoryListener)
         backendHeartbeatHandler.post(backendHeartbeatRunnable)
