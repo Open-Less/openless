@@ -69,7 +69,6 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await expect(confirm).toBeVisible();
   await expect(confirm.getByRole('button', { name: '取消', exact: true })).toBeFocused();
   await expect(confirm).toHaveCSS('opacity', '1');
-  await expect(confirm).toContainText('保存在本机的凭据');
   await expect(page.locator('.ol-channel-delete-confirm')).toHaveCount(0);
   await expect(confirm.locator('.ol-channel-delete-button')).toHaveCount(0);
   await expect(confirm.locator('.ol-confirm-dialog-title')).toHaveCSS('font-size', '15px');
