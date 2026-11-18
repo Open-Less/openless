@@ -27,12 +27,13 @@ test('QA waits for observed geometry and reopens without the closed transcript',
   await expect(host).toHaveCSS('height', '80px');
   await expect(page.locator('.qa-answer-panel')).toBeHidden();
 
-  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 320, 220));
+  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 420, 179));
   const answer = page.locator('.qa-answer-panel');
   await expect(answer).toBeVisible();
   await expect(answer.getByText('Old result', { exact: true })).toBeVisible();
-  await expect(host).toHaveCSS('width', '320px');
-  await expect(host).toHaveCSS('height', '220px');
+  await expect(host).toHaveCSS('width', '420px');
+  await expect(host).toHaveCSS('height', '179px');
+  await expect(answer.locator('textarea')).toBeInViewport();
 
   await page.evaluate(() => {
     const bridge = (window as any).fixture;

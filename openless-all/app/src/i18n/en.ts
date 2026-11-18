@@ -412,6 +412,7 @@ export const en: typeof zhCN = {
     mobileRecordStart: 'Start recording',
     mobileRecordStop: 'Stop and submit',
     composerPlaceholder: 'Type a question. Enter to send',
+    voiceInputPlaceholder: 'You are using voice input',
     composerSend: 'Send',
     statusIdle: 'Press {{recordHotkey}} to ask',
     statusRecording: 'Recording',

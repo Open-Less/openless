@@ -6,6 +6,7 @@ export function installMessageFollow(root: HTMLElement) {
   let following = true;
   let movedAway = false;
   let previousHeight = viewport.scrollHeight;
+  let previousViewportHeight = viewport.clientHeight;
   let firstLayout = true;
   let frame = 0;
   const distance = () =>
@@ -33,8 +34,9 @@ export function installMessageFollow(root: HTMLElement) {
       following = true;
   };
   const resize = new ResizeObserver(() => {
-    const beforeChange = Math.max(0, previousHeight - viewport.clientHeight - viewport.scrollTop);
+    const beforeChange = Math.max(0, previousHeight - previousViewportHeight - viewport.scrollTop);
     previousHeight = viewport.scrollHeight;
+    previousViewportHeight = viewport.clientHeight;
     // Content growth can make the previous-height gap negative while the reader
     // is still above the bottom. Only the current geometry can restore follow.
     if (!following && movedAway && distance() <= 1) following = true;
@@ -51,6 +53,7 @@ export function installMessageFollow(root: HTMLElement) {
     }
   });
   resize.observe(content);
+  resize.observe(viewport);
   viewport.addEventListener('scroll', scrolled, { passive: true });
   viewport.addEventListener('wheel', userScroll, { passive: true });
   viewport.addEventListener('touchmove', userScroll, { passive: true });
