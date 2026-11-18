@@ -1,3 +1,4 @@
+// @ts-nocheck — Node runtime harness; application builds do not include Node types.
 import assert from 'node:assert/strict';
 import { createInteractionController } from './interactionController';
 import { bindNotificationSink } from '../../lib/notifications';
