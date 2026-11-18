@@ -245,13 +245,28 @@ test('the Windows conversation clips and scrolls streamed text, and opens live a
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'search', messages: [question] });
   const response = panel.locator('.qa-assistant-message');
   await response.evaluate((element) => element.setAttribute('data-retained', 'yes'));
-  const body = 'Some streaming text.\n\n'.repeat(28) + '[An inline source](https://example.org/a)';
-  await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'search', chunk: body });
+  const firstChunk = 'Some streaming text.\n\n'.repeat(28);
+  const lastChunk = '\n\n[An inline source](https://example.org/a)';
+  await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'search', chunk: firstChunk });
   const viewport = panel.locator('[data-slot=message-scroller-viewport]');
   await expect
     .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
     .toBeLessThan(2);
   await expect(panel.locator('textarea')).toBeInViewport();
+  await viewport.hover();
+  await page.mouse.wheel(0, -420);
+  const jump = panel.getByRole('button', { name: 'Jump to latest' });
+  await expect(jump).toBeVisible();
+  await expect(jump).toHaveAttribute('data-active', 'true');
+  await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'search', chunk: lastChunk });
+  await expect(response.getByRole('link', { name: 'An inline source' })).toBeAttached();
+  expect(
+    await viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+  ).toBeGreaterThan(200);
+  await jump.click();
+  await expect
+    .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+    .toBeLessThan(2);
   await response.getByRole('link', { name: 'An inline source' }).click();
   await expect
     .poll(() => page.evaluate(() => (window as any).fixture.externalLinks))
@@ -263,7 +278,7 @@ test('the Windows conversation clips and scrolls streamed text, and opens live a
       question,
       {
         role: 'assistant',
-        content: `${body}\n\n[1](<https://example.org/a>) [2](<https://example.com/b>)`,
+        content: `${firstChunk}${lastChunk}\n\n[1](<https://example.org/a>) [2](<https://example.com/b>)`,
       },
     ],
   });

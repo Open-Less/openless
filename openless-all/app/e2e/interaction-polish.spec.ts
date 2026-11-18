@@ -158,7 +158,12 @@ for (const platform of ['mac', 'win'] as const) {
     const header = panel.locator('.qa-answer-header');
     await expect(panel).toHaveAttribute('data-platform', platform);
     await expect(header.locator('h1')).toContainText('Message 0:');
-    await expect(header).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await expect(header).toHaveCSS(
+      'background-color',
+      await panel.evaluate((el) => getComputedStyle(el).backgroundColor),
+    );
+    await expect(panel).toHaveCSS('border-radius', '0px');
+    await expect(panel).toHaveCSS('overflow', 'hidden');
     await expect(header.locator('.qa-symbol')).toHaveCount(0);
     const headerBox = (await header.boundingBox())!;
     const closeBox = (await header.locator('.qa-close').boundingBox())!;
@@ -176,8 +181,6 @@ for (const platform of ['mac', 'win'] as const) {
       el.scrollTop = 0;
     });
     expect(await viewport.evaluate((el) => el.scrollTop)).toBe(0);
-    expect(await header.evaluate((el) => getComputedStyle(el, '::after').backdropFilter)).toContain(
-      'blur',
-    );
+    await expect(panel.locator('.qa-prompt textarea')).toBeInViewport();
   });
 }
