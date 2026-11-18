@@ -718,7 +718,7 @@ jobs:
           evidence="$RUNNER_TEMP/openless-macos-launch-smoke"
           mkdir -p "$evidence"
           [[ "$OPENLESS_BUILD_ID" == "$SMOKE_SHA" && "$(uname -m)" == arm64 ]]
-          lipo -verify_arch arm64 "$app/Contents/MacOS/openless"
+          lipo "$app/Contents/MacOS/openless" -verify_arch arm64
           status=0
           swift scripts/macos-packaged-launch-smoke.swift "$app" "$SMOKE_SHA" "$evidence" || status=$?
           {

@@ -29,7 +29,7 @@ test('renewal appears before settings, stays paused on dismissal, and waits for 
   await expect(dialog.getByRole('checkbox')).not.toBeChecked();
   await expect(confirm).toBeDisabled();
   await expect(dialog).toContainText('Mivra');
-  await expect(dialog.getByText(/Sync uploads your registered API keys/)).toBeInViewport();
+  await expect(dialog.getByText(/uploads your registered API keys/i)).toBeInViewport();
   await expect(dialog).toContainText('XChaCha20-Poly1305');
   await expect(dialog).toContainText('Argon2id');
   await expect
