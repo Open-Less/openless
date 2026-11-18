@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Select } from '../../../components/ui/Select';
+import { Select } from '../../../ui/controls/Select';
 import { Card } from '../../../ui/layout/Card';
 import { SectionTitle } from '../../../ui/layout/SectionTitle';
 import { SettingRow } from '../../../ui/controls/SettingRow';

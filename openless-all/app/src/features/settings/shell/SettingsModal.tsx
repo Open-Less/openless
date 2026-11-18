@@ -269,8 +269,8 @@ export function SettingsModal({
                 }}
               >
                 <aside
+                  className="ol-settings-rail"
                   style={{
-                    width: mobile ? undefined : 226,
                     flexShrink: 0,
                     minHeight: 0,
                     overflow: 'auto',
@@ -319,15 +319,10 @@ export function SettingsModal({
                           style={{
                             ...railButtonStyle,
                             padding: mobile ? '8px 10px' : '10px',
-                            whiteSpace: mobile ? 'nowrap' : 'normal',
                           }}
                         >
                           {!mobile && <Icon name={item.icon} size={16} />}
-                          <span
-                            style={{ minWidth: 0, overflowWrap: mobile ? undefined : 'anywhere' }}
-                          >
-                            {item.title}
-                          </span>
+                          <span className="ol-settings-rail-label">{item.title}</span>
                         </button>
                       );
                     })}
@@ -367,65 +362,42 @@ export function SettingsModal({
                             {/* The toolbar belongs to its page; retained forms keep their matching title. */}
                             {(!mobile || activeAdvancedPage || activeGeneralPage) && (
                               <div
+                                className="ol-settings-page-toolbar"
                                 style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 12,
                                   padding: mobile
                                     ? '18px var(--ol-grid-margin, 24px) 0'
                                     : os === 'mac'
                                       ? '48px var(--ol-grid-margin, 28px) 0'
                                       : '24px var(--ol-grid-margin, 28px) 0',
-                                  flexShrink: 0,
                                 }}
                               >
-                                {(activeAdvancedPage || activeGeneralPage) && (
-                                  <button
-                                    type="button"
-                                    className="ol-settings-back"
-                                    onClick={
-                                      activeAdvancedPage
-                                        ? backToAdvanced
-                                        : () => onGeneralPageChange('root')
-                                    }
-                                    aria-label={t('modal.back')}
-                                    title={t('modal.back')}
-                                  >
-                                    <Icon name="chevLeft" size={19} />
-                                  </button>
-                                )}
-                                <h2
-                                  tabIndex={-1}
-                                  style={{
-                                    margin: 0,
-                                    flex: 1,
-                                    minWidth: 0,
-                                    fontSize: 21,
-                                    fontWeight: 'var(--ol-font-weight-demibold)',
-                                    letterSpacing: '-0.025em',
-                                    outline: 'none',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {contentTitle}
-                                  {activeAdvancedPage &&
-                                    'beta' in activeAdvancedPage &&
-                                    activeAdvancedPage.beta && (
-                                      <span className="ol-beta-tag">Beta</span>
-                                    )}
-                                </h2>
+                                <div className="ol-settings-page-title-group">
+                                  {(activeAdvancedPage || activeGeneralPage) && (
+                                    <button
+                                      type="button"
+                                      className="ol-settings-back"
+                                      onClick={
+                                        activeAdvancedPage
+                                          ? backToAdvanced
+                                          : () => onGeneralPageChange('root')
+                                      }
+                                      aria-label={t('modal.back')}
+                                      title={t('modal.back')}
+                                    >
+                                      <Icon name="chevLeft" size={19} />
+                                    </button>
+                                  )}
+                                  <h2 className="ol-settings-page-title" tabIndex={-1}>
+                                    {contentTitle}
+                                    {activeAdvancedPage &&
+                                      'beta' in activeAdvancedPage &&
+                                      activeAdvancedPage.beta && (
+                                        <span className="ol-beta-tag">Beta</span>
+                                      )}
+                                  </h2>
+                                </div>
                                 {!mobile && (
-                                  <span
-                                    style={{
-                                      color: 'var(--ol-ink-3)',
-                                      fontSize: 12,
-                                      flexShrink: 0,
-                                    }}
-                                  >
-                                    {t('modal.autoSaveHint')}
-                                  </span>
+                                  <span className="ol-settings-auto-save">{t('modal.autoSaveHint')}</span>
                                 )}
                               </div>
                             )}
@@ -437,14 +409,8 @@ export function SettingsModal({
                             >
                               {mobile && !activeAdvancedPage && !activeGeneralPage && (
                                 <h2
+                                  className="ol-settings-page-title ol-settings-page-title--compact"
                                   tabIndex={-1}
-                                  style={{
-                                    margin: 0,
-                                    fontSize: 20,
-                                    fontWeight: 'var(--ol-font-weight-demibold)',
-                                    letterSpacing: '-0.025em',
-                                    outline: 'none',
-                                  }}
                                 >
                                   {contentTitle}
                                 </h2>

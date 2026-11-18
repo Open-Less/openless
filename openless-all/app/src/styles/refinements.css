@@ -483,10 +483,6 @@ button:disabled {
   border-color: var(--ol-blue-ring);
 }
 
-.ol-typography .ol-select-trigger {
-  width: 280px;
-  background: var(--ol-surface-2);
-}
 .ol-advanced-settings-detail > .ol-experimental-models {
   border: 0 !important;
   border-radius: var(--ol-radius);

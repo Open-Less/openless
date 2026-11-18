@@ -8,8 +8,9 @@ import {
   setLocalePreference,
   type SupportedLocale,
 } from '../../../i18n/index';
-import { SelectLite } from '../../../components/ui/SelectLite';
+import { SelectLite } from '../../../ui/controls/SelectLite';
 import { Card } from '../../../ui/layout/Card';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 
 export function LanguageSection() {
@@ -41,9 +42,7 @@ export function LanguageSection() {
 
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)', marginBottom: 6 }}>
-        {t('settings.language.title')}
-      </div>
+      <SectionTitle>{t('settings.language.title')}</SectionTitle>
       <SettingRow label={t('settings.language.label')}>
         <SelectLite
           value={pref}
@@ -52,7 +51,6 @@ export function LanguageSection() {
           ariaLabel={t('settings.language.label')}
           searchable
           searchPlaceholder={t('modal.searchPlaceholder')}
-          style={{ maxWidth: 220, minWidth: 200 }}
         />
       </SettingRow>
     </Card>
