@@ -1,21 +1,23 @@
 // Callers select a release channel explicitly; transport selection stays within that channel.
 
 import { useEffect } from 'react';
-import { btnGhostStyle } from '../../../pages/settings/shared';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { UpdateDialog } from '../../updates/UpdateDialog';
 import { useAutoUpdate } from '../../updates/useAutoUpdate';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 import type { UpdateChannel } from '../../../api/contracts';
+import './check-update-button.css';
 
 export function CheckUpdateButton({
   channel,
   compact = false,
+  variant = 'outlined',
   autoCheckChannel,
 }: {
   channel: UpdateChannel;
   compact?: boolean;
+  variant?: 'outlined' | 'flat';
   autoCheckChannel?: UpdateChannel | null;
 }) {
   const { t } = useTranslation();
@@ -41,7 +43,6 @@ export function CheckUpdateButton({
   const upToDate = status === 'none';
   const failed = status === 'error';
   const iconName = upToDate ? 'check' : 'refresh';
-  const color = upToDate ? 'var(--ol-ok)' : failed ? 'var(--ol-err)' : 'var(--ol-ink-2)';
   const labelKey =
     channel === 'beta'
       ? 'settings.about.checkBetaUpdateBtn'
@@ -55,6 +56,11 @@ export function CheckUpdateButton({
   return (
     <>
       <button
+        type="button"
+        className="ol-check-update-button"
+        data-variant={variant}
+        data-compact={compact || undefined}
+        data-result={upToDate ? 'current' : failed ? 'error' : undefined}
         onClick={() => void updater.checkForUpdates(channel)}
         disabled={checking || busy}
         aria-label={compact ? label : undefined}
@@ -67,34 +73,8 @@ export function CheckUpdateButton({
                 ? label
                 : undefined
         }
-        // Desktop keeps a stable text width; compact layout uses an icon button with an accessible name.
-        style={{
-          ...btnGhostStyle,
-          color,
-          opacity: checking || busy ? 0.7 : 1,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 6,
-          boxSizing: 'border-box',
-          width: compact ? 32 : undefined,
-          minWidth: compact ? 32 : 160,
-          maxWidth: compact ? 32 : '100%',
-          minHeight: compact ? 32 : undefined,
-          padding: compact ? 5 : btnGhostStyle.padding,
-          flexShrink: 0,
-        }}
       >
-        <span
-          style={{
-            display: 'inline-flex',
-            width: 14,
-            height: 14,
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-          }}
-        >
+        <span className="ol-check-update-icon">
           <Icon
             name={iconName}
             size={12}
@@ -107,16 +87,7 @@ export function CheckUpdateButton({
             }}
           />
         </span>
-        <span
-          key={label}
-          style={{
-            display: compact ? 'none' : undefined,
-            whiteSpace: 'nowrap',
-            // Fade-in with a slight slide when the status text ("check" ↔ "checking…" ↔ result)
-            // switches; same animation as SelectLite's value switch (ol-select-value-in, global.css).
-            animation: 'ol-select-value-in .16s var(--ol-motion-quick)',
-          }}
-        >
+        <span key={label} className="ol-check-update-label">
           {label}
         </span>
       </button>

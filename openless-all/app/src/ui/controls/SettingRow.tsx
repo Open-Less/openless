@@ -58,16 +58,19 @@ export function Toggle({
   onToggle,
   disabled = false,
   label,
+  variant = 'default',
 }: {
   on: boolean;
   onToggle?: (next: boolean) => void;
   disabled?: boolean;
   label?: string;
+  variant?: 'default' | 'flat';
 }) {
   const labelId = useContext(SettingLabel);
   return (
     <Switch.Root
       className="ol-switch"
+      data-variant={variant}
       checked={on}
       onCheckedChange={(next) => onToggle?.(next)}
       aria-label={label}

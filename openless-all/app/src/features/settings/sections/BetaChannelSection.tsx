@@ -1,4 +1,4 @@
-// Advanced → Beta channel. The Toggle controls whether the background AutoUpdateGate
+// About → Beta channel. The Toggle controls whether the background AutoUpdateGate
 // follows stable/beta; the "check for Beta updates" button always works regardless of the
 // Toggle state. The About page's "check for stable updates" always checks stable — the two
 // don't interfere with each other.
@@ -7,10 +7,10 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getPlatformCapabilities } from '../../../runtime/platform';
 import { getUpdateChannel, setUpdateChannel } from '../../../api/updates';
-import { type UpdateChannel } from '../../../api/contracts';
-import type { PlatformCapabilities } from '../../../api/contracts';
-import { Card } from '../../../pages/_atoms';
-import { SectionTitle, SettingRow, Toggle } from '../../../pages/settings/shared';
+import type { PlatformCapabilities, UpdateChannel } from '../../../api/contracts';
+import { Card } from '../../../ui/layout/Card';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
+import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
 export function BetaChannelSection() {
@@ -52,16 +52,16 @@ export function BetaChannelSection() {
   if (platformCaps?.supportsAutoUpdate !== true) return null;
 
   return (
-    <Card>
+    <Card className="ol-beta-channel">
       <SectionTitle>{t('settings.about.betaChannelLabel')}</SectionTitle>
       <p style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, margin: '0 0 4px' }}>
         {t('settings.about.betaChannelDesc')}
       </p>
       <SettingRow label={t('settings.about.betaChannelToggleLabel')}>
-        <Toggle on={channel === 'beta'} onToggle={onToggle} />
+        <Toggle variant="flat" on={channel === 'beta'} onToggle={onToggle} />
       </SettingRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
-        <CheckUpdateButton channel="beta" autoCheckChannel={autoCheckChannel} />
+        <CheckUpdateButton channel="beta" variant="flat" autoCheckChannel={autoCheckChannel} />
       </div>
     </Card>
   );

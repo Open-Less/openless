@@ -449,6 +449,10 @@ button:disabled {
     0 0 0 0.5px rgba(0, 0, 0, 0.04);
   transition: transform 180ms var(--ol-motion-spring);
 }
+.ol-switch[data-variant='flat'],
+.ol-switch[data-variant='flat'] .ol-switch-thumb {
+  box-shadow: none;
+}
 .ol-switch[data-checked] .ol-switch-thumb {
   transform: translateX(calc(var(--ol-switch-width) - var(--ol-switch-knob) - 4px));
 }
