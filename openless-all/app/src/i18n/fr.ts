@@ -139,6 +139,15 @@ export const fr: typeof zhCN = {
     newPassword: 'Nouveau mot de passe',
     currentPassword: 'Mot de passe actuel',
     confirmPassword: 'Confirmer le nouveau mot de passe',
+    setSyncPasswordTitle: 'Définir un mot de passe de synchronisation',
+    setSyncPasswordDescription:
+      'OpenLess utilise ce mot de passe pour chiffrer les données sur cet appareil et créer une sauvegarde en ligne. La synchronisation s’active une fois la sauvegarde créée.',
+    confirmSyncPassword: 'Confirmer le mot de passe de synchronisation',
+    confirmAndContinue: 'Confirmer et continuer',
+    showPasswords: 'Afficher les mots de passe',
+    hidePasswords: 'Masquer les mots de passe',
+    previewNotice:
+      'Aperçu de la synchronisation. Utilisez un mot de passe fictif : aucune connexion au serveur ni conservation des identifiants.',
     passwordPolicy:
       '12 à 128 caractères avec majuscule, minuscule et chiffre. Évitez les mots de passe courants.',
     rememberKey: 'Mémoriser la clé dans le stockage sécurisé de cet appareil',

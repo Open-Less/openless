@@ -77,13 +77,13 @@ test('a new vault waits for matching NFC passwords and confirmed initialization'
   await enabled.click();
   const disclosure = page.getByRole('dialog');
   await disclosure.getByRole('checkbox').check();
-  await disclosure.getByRole('button', { name: 'Agree to the update and continue' }).click();
+  await disclosure.getByRole('button', { name: 'Agree and continue' }).click();
   await expect.poll(async () => (await attempts(page)).length).toBe(1);
   await finish(page);
-  const password = page.getByRole('dialog', { name: 'Create a sync password' });
-  const create = password.getByRole('button', { name: 'Create encrypted backup' });
-  const newPassword = password.getByLabel('New sync password', { exact: true });
-  const confirmation = password.getByLabel('Confirm new password', { exact: true });
+  const password = page.getByRole('dialog', { name: 'Set a sync password' });
+  const create = password.getByRole('button', { name: 'Confirm and continue' });
+  const newPassword = password.getByLabel('Sync password', { exact: true });
+  const confirmation = password.getByLabel('Confirm sync password', { exact: true });
   await newPassword.fill('Aa1short');
   await confirmation.fill('Aa1short');
   await expect(create).toBeDisabled();

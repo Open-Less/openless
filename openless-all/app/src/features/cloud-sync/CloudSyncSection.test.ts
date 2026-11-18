@@ -206,6 +206,7 @@ const dependencies: Record<string, any> = {
   Btn: 'button',
   Card: 'card',
   Toggle: 'toggle',
+  getCloudSyncPreviewScenario: () => undefined,
   isTauriHost: () => true,
   matchesRestorePreview,
   marketplaceAuthStatus: async () => ({ signedIn: mockMarketplaceSignedIn }),
