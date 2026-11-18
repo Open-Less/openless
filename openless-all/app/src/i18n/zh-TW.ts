@@ -131,7 +131,7 @@ export const zhTW: typeof zhCN = {
     newPassword: '新同步密碼',
     currentPassword: '目前同步密碼',
     confirmPassword: '再次輸入新密碼',
-    setSyncPasswordTitle: '設定同步密碼',
+    setSyncPasswordTitle: '設定雲端同步密碼',
     setSyncPasswordDescription: 'OpenLess 會用此密碼在本機加密資料並建立雲端備份。建立成功後才會開啟同步。',
     confirmSyncPassword: '再次輸入同步密碼',
     confirmAndContinue: '確認並繼續',

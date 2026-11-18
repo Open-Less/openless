@@ -24,7 +24,7 @@ test('the ordinary Chinese preview uses the real settings flow to set a sync pas
   await enable.click();
   await agreement.getByRole('checkbox').check();
   await agree.click();
-  const form = page.getByRole('dialog', { name: '设置同步密码' });
+  const form = page.getByRole('dialog', { name: '设置云同步密码' });
   await expect(form).toHaveAccessibleDescription(/创建成功后才会开启同步/);
   const submit = form.getByRole('button', { name: '确认并继续' });
   await expect(submit).toBeDisabled();

@@ -80,7 +80,7 @@ test('a new vault waits for matching NFC passwords and confirmed initialization'
   await disclosure.getByRole('button', { name: 'Agree and continue' }).click();
   await expect.poll(async () => (await attempts(page)).length).toBe(1);
   await finish(page);
-  const password = page.getByRole('dialog', { name: 'Set a sync password' });
+  const password = page.getByRole('dialog', { name: 'Set your cloud sync password' });
   const create = password.getByRole('button', { name: 'Confirm and continue' });
   const newPassword = password.getByLabel('Sync password', { exact: true });
   const confirmation = password.getByLabel('Confirm sync password', { exact: true });
@@ -92,6 +92,8 @@ test('a new vault waits for matching NFC passwords and confirmed initialization'
   await expect(create).toBeDisabled();
   await newPassword.fill('LongFixture1Ae\u0301');
   await confirmation.fill('LongFixture1Ae');
+  await expect(confirmation).toHaveAttribute('aria-invalid', 'true');
+  await expect(confirmation).toHaveAccessibleDescription(/passwords .* match/i);
   await expect(create).toBeDisabled();
   await confirmation.fill('LongFixture1Aé');
   await create.click();

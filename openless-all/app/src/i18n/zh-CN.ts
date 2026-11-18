@@ -131,7 +131,7 @@ export const zhCN = {
     newPassword: '新同步密码',
     currentPassword: '当前同步密码',
     confirmPassword: '再次输入新密码',
-    setSyncPasswordTitle: '设置同步密码',
+    setSyncPasswordTitle: '设置云同步密码',
     setSyncPasswordDescription: 'OpenLess 将用此密码在本机加密数据并创建云端备份。创建成功后才会开启同步。',
     confirmSyncPassword: '再次输入同步密码',
     confirmAndContinue: '确认并继续',

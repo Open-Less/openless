@@ -1322,17 +1322,21 @@ export function PasswordForm({
     if (!busy) submitted.current = false;
   }, [busy]);
   const creating = mode !== 'unlock';
+  const passwordsMatch = password.normalize('NFC') === confirmation.normalize('NFC');
+  const mismatch = creating && Boolean(password && confirmation) && !passwordsMatch;
   const valid = creating
     ? syncPasswordMeetsBasicRequirements(password) &&
-      password.normalize('NFC') === confirmation.normalize('NFC') &&
+      passwordsMatch &&
       (mode !== 'password' || currentPassword.length > 0)
     : password.length > 0;
   const formId = useId();
+  const mismatchId = `${formId}-mismatch`;
   const field = (
     label: string,
     value: string,
     change: (value: string) => void,
     autocomplete: string,
+    errorId?: string,
   ) => (
     <label className="ol-sync-password-field">
       {label}
@@ -1342,6 +1346,8 @@ export function PasswordForm({
           value={value}
           onChange={(event) => change(event.currentTarget.value)}
           autoComplete={preview ? 'off' : autocomplete}
+          aria-invalid={errorId ? true : undefined}
+          aria-describedby={errorId}
           maxLength={4096}
           disabled={busy}
         />
@@ -1401,7 +1407,13 @@ export function PasswordForm({
               confirmation,
               setConfirmation,
               'new-password',
+              mismatch ? mismatchId : undefined,
             )}
+          {mismatch && (
+            <p id={mismatchId} className="ol-cloud-sync-error" role="status">
+              {t('cloudSyncE2ee.errors.passwordMismatch')}
+            </p>
+          )}
           <button
             type="button"
             className="ol-tool-button"
