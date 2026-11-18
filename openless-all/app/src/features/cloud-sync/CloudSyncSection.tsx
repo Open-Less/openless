@@ -313,13 +313,36 @@ export function CloudSyncSection() {
   const loginHint = prefs?.marketplaceDevLogin?.trim() ?? '';
   const customServerOrigin = prefs?.syncCustomServerOrigin ?? '';
 
-  const announce = (key: string, state: 'saved' | 'info' = 'saved') =>
-    notify({ key: 'cloud-sync-result', state, message: t(`cloudSyncE2ee.${key}`) });
-  const showError = (error: unknown) => {
+  const progressNotification = useRef<NotificationHandle>();
+  const notificationSettled = useRef(false);
+  const syncIntent = useRef(false);
+  const awaitingSync = useRef(false);
+  const announce = (key: string, state: 'saved' | 'info' | 'failed' = 'saved') => {
+    const options = {
+      state,
+      message: t(`cloudSyncE2ee.${key}`),
+      progress: false,
+      actionLabel: undefined,
+      onAction: undefined,
+      durationMs: state === 'saved' ? 3500 : 0,
+    };
+    if (progressNotification.current) progressNotification.current.update(options);
+    else notify({ ...options, key: 'cloud-sync-operation' });
+    progressNotification.current = undefined;
+    notificationSettled.current = true;
+  };
+  const showError = (error: unknown, settled = false) => {
     if (!alive.current) return;
-    const key = `errors.${encryptedSyncErrorKey(error)}`;
-    if (currentDialog.current) setNotice({ key, error: true });
-    else notify({ key: 'cloud-sync-result', state: 'failed', message: t(`cloudSyncE2ee.${key}`) });
+    const errorKey = encryptedSyncErrorKey(error);
+    const key = `errors.${errorKey}`;
+    if (currentDialog.current && errorKey !== 'outcomeUnknown') setNotice({ key, error: true });
+    else if (settled) announce(key, 'failed');
+    else
+      notify({
+        key: 'cloud-sync-status-error',
+        state: 'failed',
+        message: t(`cloudSyncE2ee.${key}`),
+      });
   };
   const acceptStatus = (next: EncryptedSyncStatus): boolean => {
     if (!alive.current) return false;
@@ -331,7 +354,17 @@ export function CloudSyncSection() {
     current.current = next;
     watermark.current = next.sequence;
     setStatus(next);
-    if (scopeChanged) setDialog(null);
+    if (scopeChanged) {
+      setDialog(null);
+      awaitingSync.current = false;
+      syncIntent.current = false;
+    } else if (awaitingSync.current && next.syncState !== 'syncing') {
+      awaitingSync.current = false;
+      syncIntent.current = false;
+      if (next.lastError) showError(next.lastError, true);
+      else if (next.syncState === 'ready') announce('synced');
+      else if (next.syncState === 'conflict') announce('states.conflict', 'info');
+    }
     return true;
   };
   const load = async () => {
@@ -377,6 +410,8 @@ export function CloudSyncSection() {
         event.taskId !== event.status.taskId
       )
         return;
+      if (event.status.syncState === 'syncing' && event.status.taskId !== snapshot.taskId)
+        notificationSettled.current = false;
       acceptStatus(event.status);
     },
     conflict(event) {
@@ -406,7 +441,7 @@ export function CloudSyncSection() {
         return;
       watermark.current = event.sequence;
       setDialog(null);
-      announce('restored');
+      // Restoring local data can precede a final upload; only the command result announces success.
       // UI-only preferences are applied by the central native restore bridge.
       void refresh().catch(showError);
       void loadRef.current();
@@ -470,6 +505,7 @@ export function CloudSyncSection() {
     if (activeAction.current !== null || current.current?.syncState === 'syncing') return;
     const action = ++actionSequence.current;
     activeAction.current = action;
+    notificationSettled.current = false;
     setBusy(true);
     setNotice(null);
     const valid = () => alive.current && actionSequence.current === action;
@@ -477,7 +513,7 @@ export function CloudSyncSection() {
       await work(valid);
     } catch (error) {
       if (valid()) {
-        showError(error);
+        showError(error, true);
         if (encryptedSyncErrorKey(error) === 'outcomeUnknown') setDialog(null);
         void loadRef.current();
       }
@@ -545,7 +581,8 @@ export function CloudSyncSection() {
       void perform(async (valid) => routePreparation(await prepareEncryptedSync(), intent, valid));
     }
   };
-  const simple = (request: () => Promise<EncryptedSyncStatus>, signOut = false) =>
+  const simple = (request: () => Promise<EncryptedSyncStatus>, signOut = false, syncing = false) => {
+    syncIntent.current = syncing;
     void perform(async (valid) => {
       const next = await request();
       if (!valid() || !acceptStatus(next)) return;
@@ -565,9 +602,21 @@ export function CloudSyncSection() {
       }
       if (valid()) {
         setDialog(null);
-        announce('done');
+        if (next.syncState === 'syncing') {
+          awaitingSync.current = syncing;
+          return;
+        }
+        if (next.lastError) {
+          showError(next.lastError, true);
+          return;
+        }
+        if (!syncing || next.syncState === 'ready') announce(syncing ? 'synced' : 'done');
       }
+    }).finally(() => {
+      if (!awaitingSync.current) syncIntent.current = false;
     });
+  };
+
   const submitPassword = (value: PasswordSubmission) => {
     const active = dialog;
     if (!active || !['create', 'unlock', 'password'].includes(active.kind)) return;
@@ -656,11 +705,14 @@ export function CloudSyncSection() {
     status?.syncState !== 'sign_in_required' &&
     (syncSignedIn || (Boolean(prefs) && !customServerConfigured && authSignedIn));
   const working = busy || status?.syncState === 'syncing';
-  const progressNotification = useRef<NotificationHandle>();
   const taskId = status?.taskId ?? null;
   const cancelRequested = taskId !== null && cancelRequestedTask === taskId;
   const progressMessage = t(
-    cancelRequested ? 'cloudSyncE2ee.cancelRequested' : 'cloudSyncE2ee.working',
+    cancelRequested
+      ? 'cloudSyncE2ee.cancelRequested'
+      : syncIntent.current
+        ? 'cloudSyncE2ee.syncing'
+        : 'cloudSyncE2ee.working',
   );
   useEffect(() => {
     if (!working) {
@@ -668,6 +720,7 @@ export function CloudSyncSection() {
       progressNotification.current = undefined;
       return;
     }
+    if (notificationSettled.current) return;
     const canCancel = taskId !== null && !cancelRequested;
     const options = {
       message: progressMessage,
@@ -677,7 +730,7 @@ export function CloudSyncSection() {
       onAction: canCancel ? () => void cancelTaskRef.current(taskId) : undefined,
     };
     if (progressNotification.current) progressNotification.current.update(options);
-    else progressNotification.current = notify({ ...options, key: 'cloud-sync-working' });
+    else progressNotification.current = notify({ ...options, key: 'cloud-sync-operation' });
   }, [working, taskId, cancelRequested, progressMessage, notify, t]);
   useEffect(
     () => () => {
@@ -857,7 +910,7 @@ export function CloudSyncSection() {
             <Btn
               variant={canSync ? 'blue' : 'soft'}
               disabled={!canSync}
-              onClick={() => simple(cloudSyncE2eeSyncNow)}
+              onClick={() => simple(cloudSyncE2eeSyncNow, false, true)}
             >
               {t(
                 status?.pendingOperationId ? 'cloudSyncE2ee.checkPending' : 'cloudSyncE2ee.syncNow',
@@ -1345,61 +1398,17 @@ function SyncDialog({
 }) {
   const { t } = useTranslation();
   const titleId = useId();
-  const dialog = useRef<HTMLDivElement>(null);
-  const opener = useRef(document.activeElement);
-  useEffect(() => {
-    const previous = opener.current;
-    const background =
-      previous instanceof HTMLElement ? previous.closest<HTMLElement>('[role="dialog"]') : null;
-    const wasInert = background?.inert ?? false;
-    if (background) background.inert = true;
-    return () => {
-      if (background) background.inert = wasInert;
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
-    };
-  }, []);
-  useEffect(() => {
-    dialog.current?.focus();
-  }, [title]);
   return (
-    <Modal zIndex={100} width="min(580px, 100%)" onClose={onClose} closing={closing}>
-      <div
-        ref={dialog}
-        role="dialog"
-        tabIndex={-1}
-        aria-modal="true"
-        aria-labelledby={titleId}
-        style={{ display: 'grid', gap: 18, outline: 'none', fontSize: 13, lineHeight: 1.65 }}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            if (!busy) onClose();
-          }
-          if (event.key !== 'Tab') return;
-          const controls = Array.from(
-            dialog.current?.querySelectorAll<HTMLElement>(
-              'button:not(:disabled), input:not(:disabled), summary, [tabindex="0"]',
-            ) ?? [],
-          );
-          if (controls.length === 0) {
-            event.preventDefault();
-            return;
-          }
-          const first = controls[0];
-          const last = controls[controls.length - 1];
-          if (
-            event.shiftKey &&
-            (document.activeElement === first || document.activeElement === dialog.current)
-          ) {
-            event.preventDefault();
-            last.focus();
-          } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-          }
-        }}
-      >
+    <Modal
+      zIndex={100}
+      width="min(580px, 100%)"
+      labelledBy={titleId}
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+      closing={closing}
+    >
+      <div style={{ display: 'grid', gap: 18, fontSize: 13, lineHeight: 1.65 }}>
         <header
           style={{
             display: 'flex',

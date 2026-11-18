@@ -110,6 +110,8 @@ export const ko: typeof zhCN = {
     noSnapshot: '아직 암호화된 클라우드 백업이 없습니다.',
     snapshotUnknown: '클라우드 백업을 아직 확인하지 않았습니다.',
     lastSync: '마지막 동기화: {{time}}',
+    synced: '동기화 완료',
+    syncing: '최신 클라우드 데이터를 동기화하는 중…',
     syncNow: '지금 동기화',
     checkPending: '확인 대기 결과 조회',
     unlock: '잠금 해제',

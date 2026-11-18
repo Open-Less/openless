@@ -448,7 +448,7 @@ try {
       .map(({ key, state, message, progress }) => ({ key, state, message, progress })),
     [
       {
-        key: 'cloud-sync-working',
+        key: 'cloud-sync-operation',
         state: 'saving',
         message: 'cloudSyncE2ee.working',
         progress: true,
@@ -456,6 +456,7 @@ try {
     ],
     'a pending native restore shows progress without announcing success',
   );
+  const progressId = hooks.notifications.getNotifications()[0].id;
   resolveRestore(update({}));
   await settle();
   deferredRestore = null;
@@ -464,9 +465,10 @@ try {
     hooks.notifications
       .getNotifications()
       .map(({ key, state, message }) => ({ key, state, message })),
-    [{ key: 'cloud-sync-result', state: 'saved', message: 'cloudSyncE2ee.restored' }],
-    'the completed restore dismisses progress and announces its result',
+    [{ key: 'cloud-sync-operation', state: 'saved', message: 'cloudSyncE2ee.restored' }],
+    'the completed restore updates its progress notice with the result',
   );
+  assert.equal(hooks.notifications.getNotifications()[0].id, progressId);
   assert.deepEqual(calls.find(([name]) => name === 'apply')?.[1], {
     previewId: 'review',
     mode: 'merge',

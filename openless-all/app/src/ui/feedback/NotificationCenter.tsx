@@ -1,8 +1,8 @@
-import { AnimatePresence, motion, useIsPresent } from 'framer-motion';
+import { AnimatePresence, usePresence } from 'framer-motion';
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
-import { useReducedMotion } from '../../lib/motion';
+import { StatusNotice } from './StatusNotice';
 import { ViewportPortal, useModalActive } from '../layout/AppViewport';
 import type { InteractionController, NotificationItem } from '../overlays/interactionController';
 
@@ -16,19 +16,16 @@ function NotificationCard({
   modalActive: boolean;
 }) {
   const { t } = useTranslation();
-  const reduced = useReducedMotion();
-  const present = useIsPresent();
+  const [present, remove] = usePresence();
   const state = item.state ?? 'info';
   const iconState = state === 'deleting' ? 'deleted' : state;
   return (
-    <motion.div
-      className={`ol-notification-card${item.progress ? ' ol-notification-card--progress' : ''}`}
-      data-state={state}
-      aria-hidden={!present || undefined}
-      initial={{ opacity: 0, y: reduced ? 0 : '-110%' }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: reduced ? 0 : '-110%' }}
-      transition={reduced ? { duration: 0 } : { type: 'spring', stiffness: 320, damping: 30 }}
+    <StatusNotice
+      state={state}
+      progress={item.progress}
+      severity={item.severity}
+      present={present}
+      onExit={() => remove?.()}
     >
       <span
         className={`ol-notification-icon ol-notification-icon--${iconState}`}
@@ -38,6 +35,8 @@ function NotificationCard({
           <span className="ol-loading-spinner">
             <Icon name="refresh" size={10} />
           </span>
+        ) : item.severity ? (
+          '!'
         ) : iconState === 'deleted' ? (
           <Icon name="trash" size={10} />
         ) : state === 'failed' ? (
@@ -49,8 +48,11 @@ function NotificationCard({
         )}
       </span>
       <span className="ol-notification-body">
-        <span className="ol-notification-message" role={state === 'failed' ? 'alert' : 'status'}>
-          {item.message}
+        <span role={state === 'failed' || item.severity ? 'alert' : 'status'}>
+          <span className="ol-notification-message">{item.message}</span>
+          {item.description && (
+            <span className="ol-notification-description">{item.description}</span>
+          )}
         </span>
         {item.progress && (
           <span className="ol-notification-progress" role="progressbar" aria-label={item.message}>
@@ -87,7 +89,7 @@ function NotificationCard({
           <Icon name="close" size={14} />
         </button>
       )}
-    </motion.div>
+    </StatusNotice>
   );
 }
 

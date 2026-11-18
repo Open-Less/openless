@@ -19,7 +19,9 @@ export type NotificationState = 'info' | 'saved' | 'failed' | 'deleting' | 'dele
 
 export interface NotificationOptions {
   message: string;
+  description?: string;
   state?: NotificationState;
+  severity?: 'warning' | 'error';
   durationMs?: number;
   key?: string;
   progress?: boolean;

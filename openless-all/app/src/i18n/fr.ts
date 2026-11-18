@@ -107,6 +107,8 @@ export const fr: typeof zhCN = {
     noSnapshot: 'Aucune sauvegarde cloud chiffrée pour le moment.',
     snapshotUnknown: 'La sauvegarde cloud n’a pas encore été vérifiée.',
     lastSync: 'Dernière synchronisation : {{time}}',
+    synced: 'Synchronisation terminée',
+    syncing: 'Synchronisation des dernières données du cloud…',
     syncNow: 'Synchroniser maintenant',
     checkPending: 'Vérifier le résultat en attente',
     unlock: 'Déverrouiller',

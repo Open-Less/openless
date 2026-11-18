@@ -110,6 +110,8 @@ export const en: typeof zhCN = {
     noSnapshot: 'No encrypted cloud backup yet.',
     snapshotUnknown: 'Cloud backup has not been checked yet.',
     lastSync: 'Last synced {{time}}',
+    synced: 'Sync complete',
+    syncing: 'Syncing the latest cloud data…',
     syncNow: 'Sync now',
     checkPending: 'Check pending result',
     unlock: 'Unlock',

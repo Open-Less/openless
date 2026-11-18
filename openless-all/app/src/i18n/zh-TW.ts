@@ -101,6 +101,8 @@ export const zhTW: typeof zhCN = {
     noSnapshot: '雲端尚無加密備份。',
     snapshotUnknown: '尚未檢查雲端備份。',
     lastSync: '上次同步：{{time}}',
+    synced: '同步完成',
+    syncing: '正在同步雲端最新內容…',
     syncNow: '立即同步',
     checkPending: '核對待確認結果',
     unlock: '解鎖',

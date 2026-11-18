@@ -9,6 +9,7 @@ async function emitNotifications(
   page: Page,
   items: {
     state: 'saving' | 'saved' | 'deleted' | 'failed' | 'info';
+    severity?: 'warning' | 'error';
     message: string;
     durationMs?: number;
     progress?: boolean;
@@ -149,4 +150,65 @@ test('progress notification paints above a portaled channel editor', async ({ pa
     )
     .toBe(true);
   await expect(page.locator('.ol-channel-dialog')).toBeVisible();
+});
+
+for (const scale of ['small', 'medium', 'large']) {
+  test(`status notice enters and exits completely beyond the content top at ${scale}`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const original = Element.prototype.animate;
+      const samples: { phase: string; start: number; top: number; end?: number }[] = [];
+      Object.assign(window, { noticeMotionSamples: samples });
+      Element.prototype.animate = function (keyframes, options) {
+        const animation = original.call(this, keyframes, options);
+        if (!this.classList.contains('ol-notification-card')) return animation;
+        const frames = Array.isArray(keyframes) ? keyframes : (animation.effect as KeyframeEffect).getKeyframes();
+        const sample = {
+          phase: frames[frames.length - 1].transform === 'none' ? 'enter' : 'exit',
+          start: 0,
+          top: this.closest('.ol-app-viewport')!.getBoundingClientRect().top,
+        } as { phase: string; start: number; top: number; end?: number };
+        animation.pause();
+        animation.currentTime = 0;
+        sample.start = this.getBoundingClientRect().bottom;
+        samples.push(sample);
+        animation.play();
+        // Register before the component's completion handler removes its retained exit frame.
+        void animation.finished.then(() => {
+          sample.end = this.getBoundingClientRect().bottom;
+        }).catch(() => {});
+        return animation;
+      };
+    });
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/viewport-interactions.html?frame&scale=${scale}&theme=dark`);
+    await page.getByRole('button', { name: 'Show feedback', exact: true }).click();
+    const notice = page.locator('.ol-notification-card');
+    await expect(notice).toHaveCSS('transform', 'none');
+    await notice.getByRole('button').click();
+    await expect(notice).toHaveCount(0);
+    const samples = await page.evaluate(() => (window as any).noticeMotionSamples as {
+      phase: string; start: number; top: number; end?: number;
+    }[]);
+    const entries = samples.filter((sample) => sample.phase === 'enter');
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) expect(entry.start).toBeLessThanOrEqual(entry.top);
+    const exit = [...samples].reverse().find((sample) => sample.phase === 'exit');
+    expect(exit?.end).toBeDefined();
+    expect(exit!.end!).toBeLessThanOrEqual(exit!.top);
+  });
+}
+
+test('long severe notices wrap in a short narrow window and reduced motion dismisses immediately', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 330, height: 200 });
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/notifications.html`);
+  const message = '删除提醒：请在继续之前确认云端状态。长文本必须完整显示，关闭按钮仍可操作。'.repeat(3);
+  await emitNotifications(page, [{ state: 'info', severity: 'warning', message }]);
+  const notice = page.locator('.ol-notification-card');
+  await expect(notice).toHaveAttribute('data-variant', 'alert');
+  await expect(notice).toHaveAttribute('data-severity', 'warning');
+  await expect(notice.getByRole('alert')).toHaveText(message);
+  expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await expect(notice).toHaveCSS('transform', 'none');
+  await notice.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(notice).toHaveCount(0);
 });

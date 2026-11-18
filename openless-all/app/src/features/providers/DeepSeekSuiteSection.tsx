@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ensureDeepSeekSuiteConfig,
   saveDeepSeekSuiteConfig,
   type DeepSeekSuiteConfig,
 } from './deepseekSuite';
-import { emitSaved } from '../../lib/savedEvent';
+import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { Btn, Card } from '../../pages/_atoms';
 import { inputStyle, SettingRow } from '../../pages/settings/shared';
 
@@ -14,18 +14,26 @@ export function DeepSeekSuiteSection() {
   const text = (zh: string, en: string) => (i18n.language.startsWith('zh') ? zh : en);
   const [config, setConfig] = useState<DeepSeekSuiteConfig | null>(null);
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
+  const alive = useRef(false);
+  const { notify } = useInteraction('deepseek-suite');
   useEffect(() => {
     let active = true;
+    alive.current = true;
     void ensureDeepSeekSuiteConfig()
       .then((value) => {
         if (active) setConfig(value);
       })
       .catch(() => {
         if (active)
-          emitSaved('failed', text('读取配置失败，请重试。', 'Could not load configuration.'));
+          notify({
+            state: 'failed',
+            message: text('读取配置失败，请重试。', 'Could not load configuration.'),
+          });
       });
     return () => {
       active = false;
+      alive.current = false;
     };
   }, []);
   return (
@@ -74,19 +82,25 @@ export function DeepSeekSuiteSection() {
             variant="primary"
             disabled={busy}
             onClick={async () => {
+              if (saving.current) return;
+              saving.current = true;
               setBusy(true);
-              emitSaved('saving', t('common.saving'), 'deepseek-suite-save');
+              const notice = notify({
+                key: 'deepseek-suite-save',
+                state: 'saving',
+                message: t('common.saving'),
+              });
               try {
                 await saveDeepSeekSuiteConfig({ ...config, apiKey: config.apiKey.trim() });
-                emitSaved(
-                  'saved',
-                  text('DeepSeek 配置已保存', 'DeepSeek configuration saved'),
-                  'deepseek-suite-save',
-                );
+                notice.update({
+                  state: 'saved',
+                  message: text('DeepSeek 配置已保存', 'DeepSeek configuration saved'),
+                });
               } catch {
-                emitSaved('failed', t('common.operationFailed'), 'deepseek-suite-save');
+                notice.update({ state: 'failed', message: t('common.operationFailed') });
               } finally {
-                setBusy(false);
+                saving.current = false;
+                if (alive.current) setBusy(false);
               }
             }}
           >

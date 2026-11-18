@@ -111,6 +111,8 @@ export const ja: typeof zhCN = {
     noSnapshot: '暗号化クラウドバックアップはまだありません。',
     snapshotUnknown: 'クラウドバックアップは未確認です。',
     lastSync: '最終同期：{{time}}',
+    synced: '同期が完了しました',
+    syncing: 'クラウドの最新データを同期しています…',
     syncNow: '今すぐ同期',
     checkPending: '未確定の結果を確認',
     unlock: 'ロック解除',

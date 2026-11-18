@@ -73,7 +73,10 @@ export function createInteractionController() {
 
   function isTransientSuccess(item: NotificationOptions) {
     return (
-      !item.progress && !item.actionLabel && (item.state === 'saved' || item.state === 'deleted')
+      !item.progress &&
+      !item.actionLabel &&
+      !item.severity &&
+      (item.state === 'saved' || item.state === 'deleted')
     );
   }
 
@@ -169,9 +172,17 @@ export function createInteractionController() {
           openDialog,
           notify(options) {
             if (!active) return dismissed;
-            const id = ++sequence;
+            const existing =
+              options.key === undefined
+                ? undefined
+                : notifications.find((entry) => entry.key === options.key && entry.owner === owner);
+            const id = existing?.id ?? ++sequence;
             const item: NotificationItem = { ...options, id, owner };
-            notifyItems([item, ...pruneFor(item)]);
+            notifyItems(
+              existing
+                ? pruneFor(item, true).map((entry) => (entry.id === id ? item : entry))
+                : [item, ...pruneFor(item)],
+            );
             startTimer(item);
             return {
               dismiss: () => dismiss(id),

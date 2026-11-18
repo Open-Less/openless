@@ -106,6 +106,8 @@ export const es: typeof zhCN = {
     noSnapshot: 'Todavía no hay una copia cifrada en la nube.',
     snapshotUnknown: 'La copia en la nube aún no se ha comprobado.',
     lastSync: 'Última sincronización: {{time}}',
+    synced: 'Sincronización completada',
+    syncing: 'Sincronizando los datos más recientes de la nube…',
     syncNow: 'Sincronizar ahora',
     checkPending: 'Comprobar resultado pendiente',
     unlock: 'Desbloquear',

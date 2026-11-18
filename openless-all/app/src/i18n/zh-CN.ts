@@ -101,6 +101,8 @@ export const zhCN = {
     noSnapshot: '云端尚无加密备份。',
     snapshotUnknown: '尚未检查云端备份。',
     lastSync: '上次同步：{{time}}',
+    synced: '同步完成',
+    syncing: '正在同步云端最新内容…',
     syncNow: '立即同步',
     checkPending: '核对待确认结果',
     unlock: '解锁',

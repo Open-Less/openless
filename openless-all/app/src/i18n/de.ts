@@ -106,6 +106,8 @@ export const de: typeof zhCN = {
     noSnapshot: 'Noch keine verschlüsselte Cloud-Sicherung.',
     snapshotUnknown: 'Cloud-Sicherung noch nicht geprüft.',
     lastSync: 'Zuletzt synchronisiert: {{time}}',
+    synced: 'Synchronisierung abgeschlossen',
+    syncing: 'Die neuesten Cloud-Daten werden synchronisiert…',
     syncNow: 'Jetzt synchronisieren',
     checkPending: 'Ausstehendes Ergebnis prüfen',
     unlock: 'Entsperren',
