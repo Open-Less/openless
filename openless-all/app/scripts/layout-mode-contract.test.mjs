@@ -17,6 +17,7 @@ const permissions = read('src/features/input/PermissionsSection.tsx');
 const androidPermissions = read('android/frontend/components/AndroidPermissionsPanel.tsx');
 const about = read('src/features/settings/sections/AboutSection.tsx');
 const updateButton = read('src/features/settings/sections/CheckUpdateButton.tsx');
+const updateButtonCss = read('src/features/settings/sections/check-update-button.css');
 const mobileSheet = read('src/app/shell/MobileNavigationSheet.tsx');
 const mobileSheetCss = read('src/app/shell/navigation.css');
 
@@ -50,9 +51,11 @@ assert.match(androidPermissions, /const rowJustify = layoutStack \? 'flex-start'
 
 assert.match(about, /ol-inline-composite/);
 assert.match(about, /compact=\{compactLayout\}/);
-assert.match(updateButton, /minWidth:\s*compact\s*\?\s*32\s*:\s*160/);
+assert.match(updateButton, /data-compact=\{compact \|\| undefined\}/);
+assert.match(updateButtonCss, /\.ol-check-update-button\s*\{[^}]*\bmin-width:\s*160px/);
+assert.match(updateButtonCss, /\.ol-check-update-button\[data-compact\]\s*\{[^}]*\bmin-width:\s*32px/);
 assert.match(updateButton, /aria-label=\{compact\s*\?\s*label\s*:\s*undefined\}/);
-assert.match(updateButton, /display:\s*compact\s*\?\s*'none'/);
+assert.match(updateButtonCss, /\.ol-check-update-button\[data-compact\] \.ol-check-update-label\s*\{[^}]*\bdisplay:\s*none/);
 assert.match(mobileSheet, /chevRight/);
 assert.match(mobileSheet, /<Modal[^]*?overlayClassName="ol-mobile-navigation-sheet"/);
 assert.match(mobileSheetCss, /align-items: end/);
