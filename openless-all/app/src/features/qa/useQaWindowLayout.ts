@@ -20,8 +20,9 @@ function fitsQa(size: ViewportSize, expanded: boolean) {
   if (size.width < 220) return false;
   // The host clamps dimensions to the monitor work area, so check a usable
   // content region instead of requiring the full window dimensions.
+  // Native physical-pixel rounding can trim a fractional logical pixel.
   return expanded
-    ? size.height >= MIN_EXPANDED_HEIGHT
+    ? size.height >= MIN_EXPANDED_HEIGHT - 1
     : size.height >= 55 && size.height <= COMPACT_HEIGHT + 2;
 }
 

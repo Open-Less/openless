@@ -74,7 +74,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
 }, info) => {
   await page.goto(fixture + '?qa');
   await page.locator('.ol-default-capsule').waitFor();
-  await expect(page.locator('input')).toHaveCount(0);
+  await expect(page.locator('.qa-prompt textarea')).toHaveCount(0);
   await emit(page, 'qa:state', {
     kind: 'recording',
     sessionId: 'ask-a',
