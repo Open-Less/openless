@@ -21,6 +21,7 @@ const lib = await read('src-tauri/src/lib.rs');
 const capabilities = await read('src-tauri/capabilities/default.json');
 const commands = await read('src-tauri/src/commands/selection_polish_preview.rs');
 const qaPanel = await read('src/features/qa/QaPanel.tsx');
+const selectionApi = await read('src/api/selection.ts');
 const appTsx = await read('src/app/windowRoutes.tsx');
 const mainTsx = await read('src/app/bootstrap.tsx');
 
@@ -105,9 +106,12 @@ if (
 }
 
 // 5. 面板侧：认事件、编辑结果、提供「确认并替换」。
-for (const eventName of ['selection-polish-preview:shown', 'selection-polish-preview:hide']) {
-  if (!qaPanel.includes(`'${eventName}'`)) {
-    violations.push(`QaPanel.tsx does not listen for ${eventName}`);
+for (const [eventName, listen] of [
+  ['selection-polish-preview:shown', 'listenSelectionPolishPreviewShown'],
+  ['selection-polish-preview:hide', 'listenSelectionPolishPreviewHidden'],
+]) {
+  if (!selectionApi.includes(`'${eventName}'`) || !qaPanel.includes(`${listen}(`)) {
+    violations.push(`QaPanel.tsx does not subscribe to ${eventName} through the selection API`);
   }
 }
 if (!qaPanel.includes('selectionPolishPreview.confirmReplace')) {

@@ -12,6 +12,24 @@ export interface AndroidAudioSpectrum {
   processed: number[];
 }
 
+export interface RemoteInputStartError {
+  reason: string;
+  port: number;
+}
+
+export function listenRemoteInputStatusChanges(onChange: () => void): Promise<() => void> {
+  // Pairing details belong to the explicit status snapshot, not the broadcast.
+  return listenTauriEvent('remote-input:running', onChange);
+}
+
+export function listenRemoteInputErrors(
+  onError: (error: RemoteInputStartError) => void,
+): Promise<() => void> {
+  return listenTauriEvent<Partial<RemoteInputStartError> | null>('remote-input:error', (error) =>
+    onError({ reason: error?.reason ?? '', port: error?.port ?? 0 }),
+  );
+}
+
 export function getAutostartEnabled(): Promise<boolean> {
   return invokeOrPreview('plugin:autostart|is_enabled', undefined, () => false);
 }
@@ -28,13 +46,17 @@ export function listenMicrophoneDeviceChanges(onChange: () => void): Promise<() 
   return listenTauriEvent('microphone:devices-changed', onChange);
 }
 
-export function listenMicrophoneLevelChanges(onLevel: (level: number) => void): Promise<() => void> {
+export function listenMicrophoneLevelChanges(
+  onLevel: (level: number) => void,
+): Promise<() => void> {
   if (getRuntimeEnvironment().host === 'harmony') {
     const listener = (event: Event) => onLevel((event as CustomEvent<number>).detail);
     window.addEventListener('openless:harmony-level', listener);
     return Promise.resolve(() => window.removeEventListener('openless:harmony-level', listener));
   }
-  return listenTauriEvent<{ level: number }>('microphone:level', ({ level }) => onLevel(level ?? 0));
+  return listenTauriEvent<{ level: number }>('microphone:level', ({ level }) =>
+    onLevel(level ?? 0),
+  );
 }
 
 export function listenAndroidAudioSpectrum(

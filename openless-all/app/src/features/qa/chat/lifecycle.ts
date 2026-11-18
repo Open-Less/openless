@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { listenQaWindowClosing, listenQaWindowShown } from '../../../api/qa';
 import { isTauriHost } from '../../../runtime/environment';
-import { listenTauriEvent } from '../../../runtime/transport';
 
 export function useChatPanelLifecycle(
   nativeWindow: boolean,
@@ -14,8 +14,8 @@ export function useChatPanelLifecycle(
     if (!nativeWindow || !isTauriHost()) return;
     const handles: (() => void)[] = [];
     let stopped = false;
-    function attach<T>(event: string, change: () => void) {
-      return listenTauriEvent<T>(event, () => {
+    function attach(listen: (onEvent: () => void) => Promise<() => void>, change: () => void) {
+      return listen(() => {
         if (!stopped) change();
       }).then((remove) => {
         if (stopped) remove();
@@ -23,11 +23,11 @@ export function useChatPanelLifecycle(
       });
     }
     void Promise.all([
-      attach('chat-panel:shown', () => {
+      attach(listenQaWindowShown, () => {
         onClosingChangeRef.current(false);
         setLifecycle(({ enterEpoch }) => ({ enterEpoch: enterEpoch + 1, closing: false }));
       }),
-      attach('chat-panel:closing', () => {
+      attach(listenQaWindowClosing, () => {
         onClosingChangeRef.current(true);
         setLifecycle(({ enterEpoch }) => ({ enterEpoch, closing: true }));
       }),

@@ -6,6 +6,24 @@ import { fileURLToPath } from 'node:url';
 const app = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
+const selectionApiSource = ts.createSourceFile(
+  'selection.ts',
+  readFileSync(app + '/src/api/selection.ts', 'utf8'),
+  ts.ScriptTarget.ES2022,
+  true,
+);
+const selectionApi = ts.transpileModule(
+  selectionApiSource.statements
+    .filter((node) => !ts.isImportDeclaration(node) && !ts.isExportDeclaration(node))
+    .map((node) => node.getFullText(selectionApiSource))
+    .join('\n'),
+  { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } },
+).outputText;
+const makeListen = new Function(
+  'listenTauriEvent',
+  'exports',
+  `${selectionApi};return listenSelectionVoiceIntentShown;`,
+);
 const source = readFileSync(
   app + '/src/features/selection-intent/SelectionVoiceIntentPicker.tsx',
   'utf8',
@@ -14,10 +32,7 @@ const start = source.indexOf('export function SelectionVoiceIntentPicker()');
 const end = source.indexOf('\n  return (', start);
 assert(start >= 0 && end >= 0);
 const body =
-  source
-    .slice(start, end)
-    .replace('export function', 'function')
-    .replace("import('@tauri-apps/api/event')", 'Promise.resolve({listen})') +
+  source.slice(start, end).replace('export function', 'function') +
   'return {choose,cancel: () => cancel.current?.()};\n}';
 const compiled = ts.transpileModule(body, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
@@ -29,7 +44,7 @@ const factory = new Function(
   'getSelectionVoiceIntentPrompt',
   'confirmSelectionVoiceIntentPrompt',
   'cancelSelectionVoiceIntentPrompt',
-  'listenTauriEvent',
+  'listenSelectionVoiceIntentShown',
   'useRef',
   'useModalActive',
   'window',
@@ -57,10 +72,10 @@ for (const action of ['choose', 'cancel']) {
     async () => ({ instruction: 'Question', sourceText: 'Selected text' }),
     async () => {},
     async () => {},
-    async (name, callback) => {
+    makeListen(async (name, callback) => {
       callbacks.set(name, callback);
       return () => {};
-    },
+    }, {}),
     (current) => ({ current }),
     () => false,
     { addEventListener() {}, removeEventListener() {} },

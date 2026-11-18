@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { qaGetSnapshot, qaWindowDismiss } from '../api/qa';
-import { cancelVoiceEditSession, getVoiceEditState } from '../api/voice-edit';
-import type { QaStatePayload } from '../api/contracts';
-import { listenTauriEvent } from '../runtime/transport';
+import {
+  listenEmbeddedQaShown,
+  listenQaDismissed,
+  qaGetSnapshot,
+  qaWindowDismiss,
+} from '../api/qa';
+import {
+  cancelVoiceEditSession,
+  getVoiceEditState,
+  listenEmbeddedVoiceEditDismissed,
+  listenEmbeddedVoiceEditShown,
+} from '../api/voice-edit';
 import { useAppViewport } from '../ui/layout/AppViewport';
 import { createAndroidPanelState, type AndroidPanelView } from './androidPanelState';
 
@@ -78,9 +86,9 @@ export function useAndroidPanels(enabled: boolean) {
     window.addEventListener('popstate', onBack);
     window.addEventListener('keydown', onKey);
 
-    function subscribe<T>(name: string, handler: (payload: T) => void) {
-      return listenTauriEvent<T>(name, (payload) => {
-        if (!disposed) handler(payload);
+    function subscribe(listen: (onEvent: () => void) => Promise<() => void>, handler: () => void) {
+      return listen(() => {
+        if (!disposed) handler();
       }).then((stop) => {
         if (disposed) stop();
         else unlisten.push(stop);
@@ -90,21 +98,14 @@ export function useAndroidPanels(enabled: boolean) {
     void (async () => {
       const observed = route.generation();
       await Promise.all([
-        subscribe<QaStatePayload>('qa:state', (payload) => {
-          // ShowQa sends a lightweight idle signal. Stream deltas, final
-          // answers and the idle snapshot emitted during dismissal are not opens.
-          if (
-            payload.kind === 'idle' &&
-            payload.sessionId == null &&
-            payload.messages === undefined
-          )
-            void route.switchTo('qa');
+        subscribe(listenEmbeddedQaShown, () => {
+          void route.switchTo('qa');
         }),
-        subscribe('qa:dismiss', () => route.nativeDismiss('qa')),
-        subscribe('voice-edit:show', () => {
+        subscribe(listenQaDismissed, () => route.nativeDismiss('qa')),
+        subscribe(listenEmbeddedVoiceEditShown, () => {
           void route.switchTo('voice-edit');
         }),
-        subscribe('voice-edit:dismiss', () => route.nativeDismiss('voice-edit')),
+        subscribe(listenEmbeddedVoiceEditDismissed, () => route.nativeDismiss('voice-edit')),
       ]);
       if (disposed || observed !== route.generation()) return;
       // Recreated WebViews may have missed their initial show event.

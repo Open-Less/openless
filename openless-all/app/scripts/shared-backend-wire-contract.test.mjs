@@ -5,6 +5,8 @@ const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const [
   types,
   qaPanel,
+  qaApi,
+  inputApi,
   remoteIpc,
   remoteStatusController,
   selectionVoiceIpc,
@@ -47,6 +49,8 @@ const [
 ] = await Promise.all([
   read('src/lib/types.ts'),
   read('src/features/qa/QaPanel.tsx'),
+  read('src/api/qa.ts'),
+  read('src/api/input.ts'),
   read('src/lib/ipc/remote-server.ts'),
   read('src/features/remote-input/useRemoteInputStatus.ts'),
   read('src/lib/ipc/selection-voice-preview.ts'),
@@ -109,10 +113,11 @@ for (const field of [
   assert.match(types, new RegExp(`\\b${field}\\?`), `QaStatePayload is missing ${field}`);
 }
 assert.match(
-  qaPanel,
-  /listen<QaStatePayload>\('qa:state'/,
-  'QA must consume the typed state event',
+  qaApi,
+  /listenTauriEvent<QaStatePayload>\('qa:state'/,
+  'QA API must type the state event',
 );
+assert.match(qaPanel, /listenQaStateChanges\(/, 'QA must subscribe through its domain API');
 
 const remoteStatus = remoteIpc.match(/export interface RemoteInputStatus \{([\s\S]*?)\n\}/)?.[1];
 assert.ok(remoteStatus, 'RemoteInputStatus interface must exist');
@@ -127,14 +132,17 @@ assert.match(
   /invokeOrMock\(\s*['"]get_remote_input_status['"]/,
   'remote status command name drifted',
 );
+for (const event of ['remote-input:running', 'remote-input:error']) {
+  assert.ok(inputApi.includes(`'${event}'`), `input API lost ${event}`);
+}
 assert.match(
   remoteStatusController,
-  /subscribe\('remote-input:running'[^]*?refresh\(\)/,
+  /listenRemoteInputStatusChanges\([^]*?refresh\(\)/,
   'remote running event must refresh status',
 );
 assert.match(
   remoteStatusController,
-  /subscribe<[^>]+>\('remote-input:error'[^]*?setStartError\(/,
+  /listenRemoteInputErrors\([^]*?setStartError\(/,
   'remote errors must remain visible',
 );
 assert.match(

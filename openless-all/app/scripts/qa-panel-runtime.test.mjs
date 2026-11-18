@@ -25,8 +25,7 @@ const names = parsed.statements
 const body = parsed.statements
   .filter((n) => !ts.isImportDeclaration(n))
   .map((n) => n.getFullText(parsed))
-  .join('\n')
-  .replaceAll("import('@tauri-apps/api/event')", 'Promise.resolve({listen: __listen})');
+  .join('\n');
 const compiled = ts.transpileModule(body, {
   compilerOptions: {
     target: ts.ScriptTarget.ES2020,
@@ -36,21 +35,22 @@ const compiled = ts.transpileModule(body, {
 }).outputText;
 const factory = new Function(
   ...names,
-  '__listen',
   'exports',
   'require',
   `${compiled};return {QaPanel,Composer,MessageRow,ErrorContent};`,
 );
-function compileHook(file) {
+function compileModule(file) {
   const ast = ts.createSourceFile(
     file,
-    readFileSync(resolve(app, 'src/features/qa', file), 'utf8'),
+    readFileSync(resolve(app, 'src', file), 'utf8'),
     ts.ScriptTarget.ES2020,
     true,
   );
   return ts.transpileModule(
     ast.statements
-      .filter((statement) => !ts.isImportDeclaration(statement))
+      .filter(
+        (statement) => !ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement),
+      )
       .map((statement) => statement.getFullText(ast))
       .join('\n'),
     { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } },
@@ -64,16 +64,27 @@ const makeLayout = new Function(
   'qaWindowSetExpanded',
   'waitForViewportGeometry',
   'exports',
-  `${compileHook('useQaWindowLayout.ts')};return useQaWindowLayout;`,
+  `${compileModule('features/qa/useQaWindowLayout.ts')};return useQaWindowLayout;`,
 );
 const makeLifecycle = new Function(
   'useEffect',
   'useRef',
   'useState',
   'isTauriHost',
+  'listenQaWindowShown',
+  'listenQaWindowClosing',
+  'exports',
+  `${compileModule('features/qa/chat/lifecycle.ts')};return useChatPanelLifecycle;`,
+);
+const makeQaApi = new Function(
   'listenTauriEvent',
   'exports',
-  `${compileHook('chat/lifecycle.ts')};return useChatPanelLifecycle;`,
+  `${compileModule('api/qa.ts')};return exports;`,
+);
+const makeSelectionApi = new Function(
+  'listenTauriEvent',
+  'exports',
+  `${compileModule('api/selection.ts')};return exports;`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -178,6 +189,8 @@ function context(native = true, embedded = false) {
     const listeners = events.get(name) ?? new Set();
     listeners.add(fn);
     events.set(name, listeners);
+    const ready = pending.listen?.(name);
+    if (ready) await ready;
     return () => listeners.delete(fn);
   };
   const resize = async (next) => {
@@ -187,13 +200,22 @@ function context(native = true, embedded = false) {
   const state = (value) => active.state(value);
   const ref = (value) => active.ref(value);
   const effect = (fn, deps) => active.effect(fn, deps);
-  Object.assign(imports, {
+  const qaApi = makeQaApi(listen, {});
+  Object.assign(imports, qaApi, makeSelectionApi(listen, {}), {
     useState: state,
     useRef: ref,
     useEffect: effect,
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
-    useChatPanelLifecycle: makeLifecycle(effect, ref, state, () => native, listen, {}),
+    useChatPanelLifecycle: makeLifecycle(
+      effect,
+      ref,
+      state,
+      () => native,
+      qaApi.listenQaWindowShown,
+      qaApi.listenQaWindowClosing,
+      {},
+    ),
     useModalActive: () => false,
     useQaPipeline: () => 'deepseek',
     getRuntimeOS: () => 'mac',
@@ -210,7 +232,6 @@ function context(native = true, embedded = false) {
       return pending.stopMic?.promise;
     },
     isTauriHost: () => native,
-    listenTauriEvent: listen,
     ...helpers,
     useQaWindowLayout: makeLayout(
       effect,
@@ -268,7 +289,7 @@ function context(native = true, embedded = false) {
     },
     chatPanelFocusKeyboard: async () => {},
   });
-  const api = factory(...names.map((n) => imports[n]), listen, {}, () => ({
+  const api = factory(...names.map((n) => imports[n]), {}, () => ({
     jsx,
     jsxs: jsx,
     Fragment: 'fragment',
@@ -735,6 +756,20 @@ await test('embedded skip native resize, preserve existing parent close path and
     0,
   );
   assert.equal(c.keys.size, 0);
+});
+await test('unmount during dismiss registration releases the late handle and stops setup', async () => {
+  const c = context();
+  const dismiss = deferred();
+  c.pending.listen = (name) => (name === 'qa:dismiss' ? dismiss.promise : undefined);
+  c.render();
+  await tick();
+  assert.equal(c.events.get('qa:dismiss')?.size, 1);
+  c.hooks.unmount();
+  dismiss.resolve();
+  await tick();
+  assert.equal(c.events.has('selection-polish-preview:shown'), false);
+  assert([...c.events.values()].every((listeners) => listeners.size === 0));
+  assert.equal(c.calls.snapshot, 0);
 });
 await test('composer IME enter, WebKit 229 and form submission guards; genuine enter sends', async () => {
   const c = context();

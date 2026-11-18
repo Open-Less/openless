@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getRemoteInputStatus, setRemoteLocale, type RemoteInputStatus } from '../../api/input';
+import {
+  getRemoteInputStatus,
+  listenRemoteInputErrors,
+  listenRemoteInputStatusChanges,
+  setRemoteLocale,
+  type RemoteInputStartError,
+  type RemoteInputStatus,
+} from '../../api/input';
 import { isTauriHost } from '../../runtime/environment';
-import { listenTauriEvent } from '../../runtime/transport';
 
 export function useRemoteInputStatus(locale: string) {
   const [status, setStatus] = useState<RemoteInputStatus | null>(null);
-  const [startError, setStartError] = useState<{ reason: string; port: number } | null>(null);
+  const [startError, setStartError] = useState<RemoteInputStartError | null>(null);
   const generation = useRef(0);
 
   const acceptStatus = useCallback(
@@ -28,25 +34,30 @@ export function useRemoteInputStatus(locale: string) {
         // An unreadable snapshot must not overwrite a live status or pairing token.
       }
     };
-    async function subscribe<T>(name: string, handler: (payload: T) => void) {
-      const stop = await listenTauriEvent<T>(name, (value) => {
-        if (active) handler(value);
-      });
+    const keep = (stop: () => void) => {
       if (active) off.push(stop);
       else stop();
-    }
+    };
     void (async () => {
       if (isTauriHost()) {
-        await Promise.allSettled([
-          subscribe('remote-input:running', () => {
+        const listeners = await Promise.allSettled([
+          listenRemoteInputStatusChanges(() => {
+            if (!active) return;
             setStartError(null);
             void refresh();
-          }),
-          subscribe<{ reason?: string; port?: number } | null>('remote-input:error', (payload) => {
-            setStartError({ reason: payload?.reason ?? '', port: payload?.port ?? 0 });
+          }).then(keep),
+          listenRemoteInputErrors((error) => {
+            if (!active) return;
+            setStartError(error);
             void refresh();
-          }),
+          }).then(keep),
         ]);
+        if (active) {
+          for (const result of listeners) {
+            if (result.status === 'rejected')
+              console.warn('[remote-input] status listener setup failed', result.reason);
+          }
+        }
       }
       if (active) await refresh();
     })();

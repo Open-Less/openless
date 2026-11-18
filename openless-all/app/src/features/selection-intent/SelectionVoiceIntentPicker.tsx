@@ -6,8 +6,8 @@ import {
   cancelSelectionVoiceIntentPrompt,
   confirmSelectionVoiceIntentPrompt,
   getSelectionVoiceIntentPrompt,
+  listenSelectionVoiceIntentShown,
 } from '../../api/selection';
-import { listenTauriEvent } from '../../runtime/transport';
 import { useModalActive } from '../../ui/layout/AppViewport';
 
 export function SelectionVoiceIntentPicker() {
@@ -45,7 +45,7 @@ export function SelectionVoiceIntentPicker() {
         if (!disposed && request === generation.current) setError(String(reason));
       }
     };
-    void listenTauriEvent('selection-voice-intent:shown', () => {
+    void listenSelectionVoiceIntentShown(() => {
       if (!disposed) void load();
     })
       .then((remove) => {

@@ -34,6 +34,9 @@ import { AssistantMarkdown } from './chat/markdown';
 import { useChatPanelLifecycle } from './chat/lifecycle';
 import {
   chatPanelFocusKeyboard,
+  listenQaDismissed,
+  listenQaLevelChanges,
+  listenQaStateChanges,
   qaSetEditInstructionMode,
   qaSubmitText,
   qaToggleRecording,
@@ -48,10 +51,11 @@ import {
   confirmSelectionVoicePreview,
   getSelectionPolishPreview,
   getSelectionVoicePreview,
+  listenSelectionPolishPreviewHidden,
+  listenSelectionPolishPreviewShown,
   revertSelectionVoicePreview,
 } from '../../api/selection';
 import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
-import { listenTauriEvent } from '../../runtime/transport';
 import { useModalActive } from '../../ui/layout/AppViewport';
 import { useQaWindowLayout } from './useQaWindowLayout';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../../lib/qaMessage';
@@ -70,10 +74,6 @@ export interface QaPanelProps {
   embedded?: boolean;
   onRequestClose?: () => void;
   onRequestDismiss?: () => Promise<boolean>;
-}
-interface QaLevelPayload {
-  sessionId: string;
-  level: number;
 }
 
 export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: QaPanelProps = {}) {
@@ -200,9 +200,17 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     if (!isTauri) return;
     let cancelled = false;
     const handles: (() => void)[] = [];
+    const keep = (stop: () => void) => {
+      if (cancelled) {
+        stop();
+        return false;
+      }
+      handles.push(stop);
+      return true;
+    };
+    const unsubscribe = () => handles.splice(0).forEach((stop) => stop());
     void (async () => {
       try {
-        const listen = listenTauriEvent;
         let stateEpoch = 0;
         const applyState = (payload: QaStatePayload) => {
           if (cancelled || nativeClosingRef.current) return;
@@ -341,16 +349,12 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
               break;
           }
         };
-        const stateHandle = await listen<QaStatePayload>('qa:state', (payload) => {
+        const stateHandle = await listenQaStateChanges((payload) => {
           stateEpoch += 1;
           applyState(payload);
         });
-        handles.push(stateHandle);
-        if (cancelled) {
-          stateHandle();
-          return;
-        }
-        const levelHandle = await listen<QaLevelPayload>('qa:level', (payload) => {
+        if (!keep(stateHandle)) return;
+        const levelHandle = await listenQaLevelChanges((payload) => {
           if (
             cancelled ||
             statusRef.current !== 'recording' ||
@@ -360,12 +364,8 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
             return;
           setLevel(Number.isFinite(payload.level) ? Math.max(0, Math.min(1, payload.level)) : 0);
         });
-        handles.push(levelHandle);
-        if (cancelled) {
-          levelHandle();
-          return;
-        }
-        const dismissHandle = await listen('qa:dismiss', () => {
+        if (!keep(levelHandle)) return;
+        const dismissHandle = await listenQaDismissed(() => {
           if (cancelled) return;
           invalidateRequests();
           activeSessionIdRef.current = null;
@@ -374,18 +374,14 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           setLevel(0);
           if (embeddedRef.current && !delegatedDismiss.current) onRequestCloseRef.current?.();
         });
-        handles.push(dismissHandle);
+        if (!keep(dismissHandle)) return;
         // Native preview events are scoped to the desktop QA surface.
         if (!embeddedRef.current) {
-          const shown = await listen<unknown>('selection-polish-preview:shown', () => {
+          const shown = await listenSelectionPolishPreviewShown(() => {
             if (!cancelled) void loadPolishResultRef.current();
           });
-          if (cancelled) {
-            shown();
-            return;
-          }
-          handles.push(shown);
-          const hidden = await listen<unknown>('selection-polish-preview:hide', () => {
+          if (!keep(shown)) return;
+          const hidden = await listenSelectionPolishPreviewHidden(() => {
             if (cancelled) return;
             polishRevision.current += 1;
             if (!polishActiveRef.current) return;
@@ -393,23 +389,19 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
             setPolishError('');
             void qaWindowDismiss().catch(() => undefined);
           });
-          if (cancelled) {
-            hidden();
-            return;
-          }
-          handles.push(hidden);
+          if (!keep(hidden)) return;
         }
         if (!embeddedRef.current) {
           void loadPolishResultRef.current();
         }
-        if (cancelled) {
-          dismissHandle();
-          return;
-        }
         // A lazily created desktop/embedded view can miss its initial recording
         // event. Subscribe first, then hydrate from the actual Core snapshot.
         // A state transition while the RPC is in flight supersedes that reply.
-        for (let attempt = 0; attempt < 4 && !cancelled && !nativeClosingRef.current; attempt += 1) {
+        for (
+          let attempt = 0;
+          attempt < 4 && !cancelled && !nativeClosingRef.current;
+          attempt += 1
+        ) {
           const observed = stateEpoch;
           const lifecycle = panelEpoch.current;
           let snapshot: QaStatePayload;
@@ -431,15 +423,16 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           applyState(snapshot);
           break;
         }
-      } catch {
-        handles.forEach((handle) => handle());
+      } catch (error) {
+        unsubscribe();
+        if (!cancelled) console.error('[QaPanel] listener setup failed', error);
       }
     })();
     return () => {
       cancelled = true;
       polishRevision.current += 1;
       stopDeepSeekReading();
-      handles.forEach((handle) => handle());
+      unsubscribe();
     };
   }, []);
 
