@@ -143,12 +143,17 @@ test('a 375px desktop preview keeps one vertical scroll owner', async ({ page })
   await expect(dashboard).toHaveAttribute('data-mobile', 'true');
   const recent = dashboard.locator('.ol-overview-recent');
   const annual = dashboard.locator('.ol-overview-year');
+  await expect(annual).toHaveCSS('position', 'static');
   await expect(dashboard.locator('.ol-gha-week')).toHaveCount(53);
   const toggle = dashboard.getByRole('button', { name: '展开常用软件' });
   await toggle.click();
   await expect(dashboard.locator('.ol-gha-app-list')).toBeVisible();
   await annual.scrollIntoViewIfNeeded();
   await expectOverviewContained(annual);
+  const heatmap = dashboard.locator('.ol-gha-grid');
+  await heatmap.scrollIntoViewIfNeeded();
+  await expectOverviewContained(heatmap.locator('.ol-gha-week').first());
+  await expectOverviewContained(heatmap.locator('.ol-gha-week').last());
   await expect.poll(() => surface.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
   for (const owner of [
     page.locator('#root'),

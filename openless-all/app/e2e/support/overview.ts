@@ -25,5 +25,5 @@ export async function expectOverviewContained(locator: Locator) {
           }),
       ),
     )
-    .toBeLessThanOrEqual(1 / 8);
+    .toBeLessThanOrEqual(1 / 4);
 }

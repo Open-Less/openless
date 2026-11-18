@@ -56,17 +56,7 @@ export function PeriodMetricsCard({
         overflow: 'hidden',
       }}
     >
-      <div
-        className="ol-overview-period-controls"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-          flexWrap: 'wrap',
-          flexShrink: 0,
-        }}
-      >
+      <div className="ol-overview-period-controls">
         <Segmented
           value={String(period)}
           options={periodOptions}
