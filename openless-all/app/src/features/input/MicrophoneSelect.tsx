@@ -4,12 +4,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isTauriHost } from '../../runtime/environment';
-import { startMicrophoneLevelMonitor, stopMicrophoneLevelMonitor } from '../../api/input';
+import { isPreviewHost } from '../../runtime/environment';
+import {
+  listenMicrophoneLevelChanges,
+  startMicrophoneLevelMonitor,
+  stopMicrophoneLevelMonitor,
+} from '../../api/input';
 import type { MicrophoneDevice } from '../../api/contracts';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { useMobileLayout } from '../../lib/useMobileLayout';
-import { isHarmonyHost } from '../../lib/harmonyBridge';
 
 interface MicrophoneSelectProps {
   devices: MicrophoneDevice[];
@@ -52,22 +55,10 @@ export function MicrophoneSelect({
     async function start() {
       await enqueueMonitorTask(async () => {
         try {
-          if (isHarmonyHost) {
-            const onLevel = (event: Event) =>
-              setLevel(Math.max(0, Math.min(1, (event as CustomEvent<number>).detail)));
-            window.addEventListener('openless:harmony-level', onLevel);
-            unlisten = () => window.removeEventListener('openless:harmony-level', onLevel);
-            if (!cancelled) await startMicrophoneLevelMonitor(selectedName);
-            if (cancelled) {
-              unlisten();
-              unlisten = undefined;
-              await stopMicrophoneLevelMonitor();
-            }
-          } else if (isTauriHost()) {
-            const { listen } = await import('@tauri-apps/api/event');
-            if (cancelled) return;
-            const stopListening = await listen<{ level: number }>('microphone:level', (event) => {
-              setLevel(Math.max(0, Math.min(1, event.payload.level ?? 0)));
+          if (cancelled) return;
+          if (!isPreviewHost()) {
+            const stopListening = await listenMicrophoneLevelChanges((nextLevel) => {
+              if (!cancelled) setLevel(Math.max(0, Math.min(1, nextLevel)));
             });
             if (cancelled) {
               stopListening();

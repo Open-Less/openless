@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next';
 import type { AudioDspConfig } from '../../api/contracts';
 import {
   getAndroidAudioEffectsStatus,
+  listenAndroidAudioSpectrum,
   setAndroidAudioMonitoring,
   type AndroidAudioEffectsStatus,
+  type AndroidAudioSpectrum,
 } from '../../api/input';
 import { isTauriHost } from '../../runtime/environment';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
-
-type Spectrum = { raw: number[]; processed: number[] };
 
 export function AndroidAudioEffects({
   value,
@@ -23,7 +23,7 @@ export function AndroidAudioEffects({
     t(`settings.recording.dsp.${key}`, { defaultValue: fallback });
   const [status, setStatus] = useState<AndroidAudioEffectsStatus | null>(null);
   const [monitoring, setMonitoring] = useState(false);
-  const [spectrum, setSpectrum] = useState<Spectrum | null>(null);
+  const [spectrum, setSpectrum] = useState<AndroidAudioSpectrum | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
     let disposed = false;
@@ -56,12 +56,11 @@ export function AndroidAudioEffects({
         if (!disposed) setError(String(reason));
       });
     };
-    void import('@tauri-apps/api/event')
-      .then(async ({ listen }) => {
-        const stop = await listen<Spectrum>('android-audio-spectrum', ({ payload }) => {
-          if (disposed || document.hidden) return;
-          if (payload.raw.length === 64 && payload.processed.length === 64) setSpectrum(payload);
-        });
+    void listenAndroidAudioSpectrum((spectrum) => {
+      if (disposed || document.hidden) return;
+      if (spectrum.raw.length === 64 && spectrum.processed.length === 64) setSpectrum(spectrum);
+    })
+      .then((stop) => {
         if (disposed) {
           stop();
           return;

@@ -11,7 +11,6 @@ import { useInteraction } from '../../ui/overlays/InteractionProvider';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { CredentialsStatus } from '../../api/contracts';
 import {
   FOUNDRY_LOCAL_ASR_MODELS,
   LOCAL_ASR_KEEP_LOADED_OPTIONS,
@@ -38,6 +37,7 @@ import {
   getSherpaOnnxAsrStatus,
   isLocalAsrModelSupportedOnOs,
   listLocalAsrModels,
+  listenLocalAsrEngineStatus,
   preloadLocalAsr,
   prepareSherpaOnnxAsr,
   releaseFoundryLocalAsr,
@@ -72,7 +72,7 @@ import {
   type SherpaPrepareProgress,
 } from '../../api/local-asr';
 import { restartApp } from '../../api/permissions';
-import { getCredentials } from '../../api/providers';
+import { getCredentials, listenCredentialStatusChanges } from '../../api/providers';
 import { Icon } from '../../components/Icon';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { listenModelProgress } from '../../data/model-progress';
@@ -236,10 +236,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     };
     void (async () => {
       if (isTauriHost()) {
-        const { listen } = await import('@tauri-apps/api/event');
-        const off = await listen<CredentialsStatus>('credentials:changed', ({ payload }) => {
+        const off = await listenCredentialStatusChanges((status) => {
           revision += 1;
-          if (!cancelled) setResolvedAsrProvider(payload.activeAsrProvider);
+          if (!cancelled) setResolvedAsrProvider(status.activeAsrProvider);
         });
         if (cancelled) {
           off();
@@ -602,17 +601,14 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     void refreshEngineStatus();
     let unlisten: undefined | (() => void);
     let cancelled = false;
-    (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const off = await listen<LocalAsrEngineStatus>('local-asr:engine-changed', (e) => {
-        setEngineStatus(e.payload);
-      });
-      if (cancelled) {
-        off();
-      } else {
-        unlisten = off;
-      }
-    })().catch((err) => console.warn('[localAsr] engine status subscribe failed', err));
+    void listenLocalAsrEngineStatus((status) => {
+      if (!cancelled) setEngineStatus(status);
+    })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch((err) => console.warn('[localAsr] engine status subscribe failed', err));
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
