@@ -24,6 +24,7 @@ interface Props {
   styleLabel: (entry: DictationSession) => string;
   allPacks: StylePack[] | null;
   packsError: string | null;
+  confirm: Interaction['confirm'];
   notify: Interaction['notify'];
 }
 
@@ -35,6 +36,7 @@ export function HistoryDetail({
   styleLabel,
   allPacks,
   packsError,
+  confirm,
   notify,
 }: Props) {
   const { t, i18n } = useTranslation();
@@ -60,7 +62,7 @@ export function HistoryDetail({
     onDelete,
     onChooseExportDirectory,
     onResetExportDirectory,
-  } = useHistoryEntryActions(item, quickNotesOnly, notify);
+  } = useHistoryEntryActions(item, quickNotesOnly, confirm, notify);
 
   return (
     <Card

@@ -470,7 +470,9 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
             let entries = b.list_history().map_err(|e| e.to_string())?;
             b.clear_history().map_err(|e| e.to_string())?;
             for entry in entries {
-                history::remove_audio(host, &entry.id)?;
+                if entry.source != openless_core::HistorySource::QuickNote {
+                    history::remove_audio(host, &entry.id)?;
+                }
             }
             Value::Null
         }

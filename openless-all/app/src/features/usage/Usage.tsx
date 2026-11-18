@@ -18,7 +18,6 @@ export function Usage() {
   const [days, setDays] = useState(30);
   const [view, setView] = useState<'overview' | 'services' | 'history'>('overview');
   const [clearing, setClearing] = useState(false);
-  const [clearError, setClearError] = useState(false);
   const clearPending = useRef(false);
   const rows = useMemo(() => {
     if (!history.data) return null;
@@ -32,36 +31,36 @@ export function Usage() {
 
   const refresh = async () => {
     if (clearing) return;
-    setClearError(false);
     await Promise.all([historyStore.refreshRecords(), refreshServiceUsage()]);
   };
   const clear = async () => {
     if (clearPending.current) return;
     clearPending.current = true;
     try {
-      if (
-        !(await confirm({
-          title: text('清除已记录 Token', 'Clear recorded tokens'),
-          description: text(
-            '清除本地用量账本中的记录。历史记录和累计活动不受影响。',
-            'Clear the local usage ledger. Your recordings and cumulative activity are kept.',
-          ),
-          confirmLabel: text('清除已记录 Token', 'Clear recorded tokens'),
-          cancelLabel: text('取消', 'Cancel'),
-          tone: 'danger',
-          icon: 'trash',
-        }))
-      )
-        return;
-      setClearing(true);
-      setClearError(false);
-      await clearServiceUsage();
-      notify({ message: text('已清除本地账本', 'Local usage ledger cleared'), state: 'deleted' });
-    } catch {
-      setClearError(true);
+      await confirm({
+        title: text('清除已记录 Token', 'Clear recorded tokens'),
+        description: text(
+          '永久清除本机用量账本中的记录。历史记录和累计活动不受影响。',
+          'Permanently clear this device’s usage ledger. Recordings and cumulative activity are kept.',
+        ),
+        confirmLabel: text('清除已记录 Token', 'Clear recorded tokens'),
+        cancelLabel: text('取消', 'Cancel'),
+        tone: 'danger',
+        icon: 'trash',
+        errorMessage: text('无法确认本机用量账本已清除。', 'Could not confirm that the local usage ledger was cleared.'),
+        onConfirm: async () => {
+          setClearing(true);
+          try {
+            await clearServiceUsage();
+            await refreshServiceUsage();
+            notify({ message: text('已清除本地账本', 'Local usage ledger cleared'), state: 'deleted' });
+          } finally {
+            setClearing(false);
+          }
+        },
+      });
     } finally {
       clearPending.current = false;
-      setClearing(false);
     }
   };
   const clearControl = view === 'history' && serviceUsage.data && (
@@ -124,14 +123,6 @@ export function Usage() {
             {text('无法读取本地 Token 账本。', 'Could not read the local token ledger.')}
           </p>
         )
-      )}
-      {clearError && (
-        <p role="alert">
-          {text(
-            '清除结果未确认，请刷新后检查。',
-            'The clear result is unconfirmed. Refresh to check.',
-          )}
-        </p>
       )}
       {serviceUsage.data && serviceUsage.data.droppedOrFailed > 0 && (
         <p role="alert">

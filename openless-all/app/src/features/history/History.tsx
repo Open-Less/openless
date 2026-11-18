@@ -35,7 +35,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   );
   const loading = snapshot.data === null && snapshot.loading;
   const loadError = snapshot.error === null ? null : errorMessage(snapshot.error);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -138,34 +137,35 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
     if (!clearableCount || clearRequest.current) return;
     clearRequest.current = true;
     try {
-      if (
-        !(await confirm({
-          title: t('common.clear'),
-          description: t('history.confirmClear', { count: clearableCount }),
-          confirmLabel: t('common.clear'),
-          cancelLabel: t('common.cancel'),
-          icon: 'trash',
-          tone: 'danger',
-        }))
-      )
-        return;
-      setClearing(true);
-      setActionError(null);
-      await clearHistory();
-      notify({
-        message: t('history.cleared', {
-          defaultValue: (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
-            ? '已清空历史'
-            : 'History cleared',
+      await confirm({
+        title: t('common.clear'),
+        description: t('history.confirmClearLocal', {
+          defaultValue: 'Permanently delete all history entries and recordings on this device, except Quick Notes? Cumulative activity is kept.',
         }),
-        state: 'deleted',
+        confirmLabel: t('common.clear'),
+        icon: 'trash',
+        tone: 'danger',
+        errorMessage: t('history.clearFailed', { err: t('common.operationFailed') }),
+        onConfirm: async () => {
+          setClearing(true);
+          try {
+            await clearHistory();
+            await historyStore.refreshRecords();
+            notify({
+              message: t('history.cleared', {
+                defaultValue: (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
+                  ? '已清空历史'
+                  : 'History cleared',
+              }),
+              state: 'deleted',
+            });
+          } finally {
+            setClearing(false);
+          }
+        },
       });
-    } catch (error) {
-      const message = t('history.clearFailed', { err: errorMessage(error) });
-      setActionError(message);
     } finally {
       clearRequest.current = false;
-      setClearing(false);
     }
   };
 
@@ -194,22 +194,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
           </div>
         }
       />
-      {actionError && (
-        <p
-          role="alert"
-          style={{
-            margin: '0 0 8px',
-            padding: '9px 10px',
-            borderRadius: 'var(--ol-control-radius)',
-            background: 'rgba(239,68,68,0.08)',
-            color: 'var(--ol-red, #ef4444)',
-            fontSize: 12,
-            lineHeight: 1.45,
-          }}
-        >
-          {actionError}
-        </p>
-      )}
       <div ref={grid} className="ol-grid-12 ol-grid-fill" data-columns={mobile ? '1' : undefined}>
         {(!mobile || !mobileDetailOpen) && (
           <HistoryList
@@ -242,6 +226,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
               styleLabel={styleLabel}
               allPacks={allPacks}
               packsError={packsError}
+              confirm={confirm}
               notify={notify}
             />
           ) : (

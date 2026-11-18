@@ -9,22 +9,22 @@ import {
   readAudioRecording,
   retranscribeRecording,
 } from '../../api/history';
+import { historyStore } from '../../data/history';
 import { useHotkeySettings } from '../../data/preferences';
 import { canRetranscribeHistoryEntry } from '../../lib/history-retranscribe';
 import { getRuntimeOS } from '../../runtime/environment';
-import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { audioBytes, recordingFileName } from './audio';
 import { errorMessage, historyTitle, isUserCancelled } from './presentation';
 
 export function useHistoryEntryActions(
   item: DictationSession,
   quickNotesOnly: boolean,
+  confirm: Interaction['confirm'],
   notify: Interaction['notify'],
 ) {
   const { t, i18n } = useTranslation();
   const isChinese = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh');
   const { prefs, updatePrefs } = useHotkeySettings();
-  const { confirm } = useInteraction(item.id);
   const [actionError, setActionError] = useState<string | null>(null);
   const [audioMissing, setAudioMissing] = useState(false);
   const [retranscribing, setRetranscribing] = useState(false);
@@ -71,29 +71,27 @@ export function useHistoryEntryActions(
     if (writing.current) return;
     writing.current = true;
     try {
-      const accepted = await confirm({
+      await confirm({
         title: t('common.delete'),
-        description: t('history.confirmDelete', {
-          defaultValue: isChinese
-            ? '此操作将永久删除该条记录及其录音。'
-            : 'This will permanently delete this entry and its recording.',
+        description: t('history.confirmDeleteLocal', {
+          defaultValue: 'Permanently delete this entry and any associated recording on this device?',
         }),
         confirmLabel: t('common.delete'),
-        cancelLabel: t('common.cancel'),
         icon: 'trash',
         tone: 'danger',
+        errorMessage: t('history.deleteFailed', { err: t('common.operationFailed') }),
+        onConfirm: async () => {
+          setActionError(null);
+          await deleteHistoryEntry(item.id);
+          await historyStore.refreshRecords();
+          notify({
+            message: t('history.deleted', {
+              defaultValue: isChinese ? '已删除记录' : 'Entry deleted',
+            }),
+            state: 'deleted',
+          });
+        },
       });
-      if (!accepted) return;
-      setActionError(null);
-      await deleteHistoryEntry(item.id);
-      notify({
-        message: t('history.deleted', {
-          defaultValue: isChinese ? '已删除记录' : 'Recording deleted',
-        }),
-        state: 'deleted',
-      });
-    } catch (error) {
-      setActionError(t('history.deleteFailed', { err: errorMessage(error) }));
     } finally {
       writing.current = false;
     }
