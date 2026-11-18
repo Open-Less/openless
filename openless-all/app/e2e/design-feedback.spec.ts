@@ -69,7 +69,7 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await expect(confirm).toBeVisible();
   await expect(confirm.getByRole('button', { name: '取消', exact: true })).toBeFocused();
   await expect(confirm).toHaveCSS('opacity', '1');
-  await expect(confirm).toContainText('删除后该渠道保存的密钥也会一并清除。');
+  await expect(confirm).toContainText('保存在本机的凭据');
   await expect(page.locator('.ol-channel-delete-confirm')).toHaveCount(0);
   await expect(confirm.locator('.ol-channel-delete-button')).toHaveCount(0);
   await expect(confirm.locator('.ol-confirm-dialog-title')).toHaveCSS('font-size', '15px');
@@ -198,7 +198,9 @@ test('usage tabs and footer stay compact without an extra active box', async ({ 
   await expect(usage).toHaveCSS('justify-self', 'end');
 });
 
-test('style pack deletion uses the red trash notification and keeps undo', async ({ page }) => {
+test('style pack deletion asks once, keeps the pack on cancel, and reports a committed deletion', async ({
+  page,
+}) => {
   await page.goto('/?os=mac');
   const sidebar = page.locator('.ol-sidebar-surface');
   await sidebar.getByRole('button', { name: '风格', exact: true }).click();
@@ -206,30 +208,29 @@ test('style pack deletion uses the red trash notification and keeps undo', async
   await expect(page.getByRole('heading', { name: '风格包', exact: true })).toBeVisible();
   const pack = page.locator('[data-ol-style-pack="imported.creator-note"]');
   const deleteButton = pack.getByRole('button', { name: '删除', exact: true });
-  const toast = page.locator('.ol-notification-card[data-state="deleting"]');
-  const deleted = page.locator('.ol-notification-card').filter({ hasText: '已删除' });
+  const dialog = page.getByRole('dialog', { name: '删除', exact: true });
+  const toast = page.locator('.ol-notification-card[data-state="deleted"]');
+
   await deleteButton.click();
-  await expect(toast).toBeVisible();
+  await expect(dialog).toContainText('创作者口播');
+  await expect(pack).toHaveCount(1);
+  await expect(toast).toHaveCount(0);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(pack).toBeVisible();
+
+  await deleteButton.click();
+  await dialog.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(pack).toHaveCount(0);
   await expect(toast).toContainText('创作者口播');
-  await expect(deleted).toHaveCount(0);
   const icon = toast.locator('.ol-notification-icon--deleted');
   await expect(icon).toBeVisible();
   const iconColor = await icon.evaluate((node) => getComputedStyle(node).backgroundColor);
   const [red, green] = iconColor.match(/\d+/g)!.map(Number);
   expect(red).toBeGreaterThan(200);
   expect(green).toBeLessThan(160);
-  const undo = toast.getByRole('button', { name: '撤销', exact: true });
-  await expect(undo).toBeVisible();
-  await expect(pack).toHaveCount(0);
-  await undo.click();
-  await expect(pack).toBeVisible();
-  await expect(toast).toHaveCount(0);
-
-  await deleteButton.click();
-  await expect(toast).toBeVisible();
-  await expect(deleted).toBeVisible({ timeout: 8000 });
-  await expect(toast).toHaveCount(0);
-  await expect(pack).toHaveCount(0);
+  await expect(toast.getByRole('button', { name: '撤销', exact: true })).toHaveCount(0);
 });
 
 test('selected segmented options and the overview heatmap stay visible', async ({

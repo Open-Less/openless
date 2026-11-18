@@ -66,7 +66,16 @@ test('Mac retires the legacy manager and exposes lazy experiments first with mem
   await experiments(page);
   await sense.getByRole('switch').click();
   await expect(sense.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
-  await expect(sense.getByRole('button', { name: '删除', exact: true })).toBeVisible();
+  const remove = sense.getByRole('button', { name: '删除', exact: true });
+  await remove.click();
+  const deletion = page.getByRole('dialog', { name: '删除', exact: true });
+  await expect(deletion).toContainText('SenseVoice Small 的本地模型文件');
+  await deletion.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(remove).toBeVisible();
+  await remove.click();
+  await deletion.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(deletion).toHaveCount(0);
+  await expect(remove).toHaveCount(0);
   await expect(gemma.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   expect(errors).toEqual([]);
 });
