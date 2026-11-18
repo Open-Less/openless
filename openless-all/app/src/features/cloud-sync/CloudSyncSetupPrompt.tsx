@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CloudIcon, XIcon } from 'lucide-react';
 import { isTauriHost } from '../../runtime/environment';
-import { cloudSyncE2eeClaimSetupPrompt } from '../../api/cloud-sync';
-import { CloudSyncSection } from './CloudSyncSection';
+import { cloudSyncE2eeClaimSetupPrompt, cloudSyncE2eeStatus, encryptedSyncScope, encryptedSyncErrorKey, CLOUD_SYNC_E2EE_CONSENT_VERSION, type EncryptedSyncStatus } from '../../api/cloud-sync';
+import { CloudSyncSection, CloudSyncTermsDialog, prepareEncryptedSync } from './CloudSyncSection';
 import { PresenceModal } from '../../ui/overlays/Modal';
 
 const PROMPT_EVENTS = new Set([
@@ -30,21 +30,44 @@ export function CloudSyncSetupPrompt({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [review, setReview] = useState<EncryptedSyncStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const busyRef = useRef(false);
+  const dismissed = useRef<string | null>(null);
+  const reviewRef = useRef(review);
+  reviewRef.current = review;
   const checkRef = useRef(0);
   const focusRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!isTauriHost() || blocked) return;
+    if (!isTauriHost() || blocked) {
+      setOpen(false);
+      setReview(null);
+      checkRef.current += 1;
+      return;
+    }
     let cancelled = false;
     let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let unlisten: (() => void) | undefined;
     const check = async () => {
-      if (cancelled || inFlight || document.visibilityState !== 'visible' || !document.hasFocus())
+      if (cancelled || inFlight || busyRef.current || document.visibilityState !== 'visible' || !document.hasFocus())
         return;
       inFlight = true;
       const request = ++checkRef.current;
       try {
+        const status = await cloudSyncE2eeStatus();
+        if (cancelled || checkRef.current !== request) return;
+        if (status.enabled && status.consentVersion !== CLOUD_SYNC_E2EE_CONSENT_VERSION) {
+          const scope = encryptedSyncScope(status);
+          if (document.visibilityState === 'visible' && document.hasFocus() && dismissed.current !== scope) {
+            setOpen(false);
+            setReview(status);
+          }
+          return;
+        }
+        setReview(null);
         const claimed = await cloudSyncE2eeClaimSetupPrompt();
         if (
           !cancelled &&
@@ -68,11 +91,14 @@ export function CloudSyncSetupPrompt({
       }, 300);
     };
     const invalidate = () => {
+      if (busyRef.current) return;
       checkRef.current += 1;
       setOpen(false);
+      setReview(null);
     };
     const eligibilityChanged = () => {
-      invalidate();
+      // A preference event alone does not revoke the displayed account scope.
+      // The next read validates it without resetting an acknowledgement.
       schedule();
     };
     void import('@tauri-apps/api/event')
@@ -112,7 +138,35 @@ export function CloudSyncSetupPrompt({
 
   // The eligibility gate revokes interaction immediately; keep only the inert
   // last frame long enough to fade rather than flashing away.
+  const closeReview = () => {
+    if (busyRef.current) return;
+    dismissed.current = review ? encryptedSyncScope(review) : null;
+    setReview(null);
+    setError(undefined);
+  };
+  const acceptReview = async () => {
+    if (!review || busyRef.current) return;
+    const scope = encryptedSyncScope(review);
+    const request = checkRef.current;
+    busyRef.current = true;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const prepared = await prepareEncryptedSync(scope);
+      if (request !== checkRef.current || encryptedSyncScope(reviewRef.current ?? review) !== scope) return;
+      setReview(null);
+      if (prepared.nextStep !== 'ready') onSetup();
+    } catch (failure) {
+      if (request === checkRef.current)
+        setError(t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(failure)}`));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
   return (
+    <>
+      {review && !blocked && <CloudSyncTermsDialog key={encryptedSyncScope(review)} updated busy={busy} error={error} onClose={closeReview} onConfirm={() => void acceptReview()} />}
     <PresenceModal
       open={open && !blocked}
       onClose={() => setOpen(false)}
@@ -184,6 +238,7 @@ export function CloudSyncSetupPrompt({
         </section>
       )}
     />
+    </>
   );
 }
 

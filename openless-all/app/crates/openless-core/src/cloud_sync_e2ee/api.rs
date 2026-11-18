@@ -122,9 +122,10 @@ impl OpenLessBackend {
     pub async fn cloud_sync_e2ee_prepare_enable(
         &self,
         consent_version: String,
+        expected_scope: Option<ConsentScope>,
     ) -> Result<EnablePreparation, BackendError> {
         self.encrypted_sync_service()?
-            .prepare_enable(consent_version)
+            .prepare_enable_scoped(consent_version, expected_scope)
             .await
     }
 

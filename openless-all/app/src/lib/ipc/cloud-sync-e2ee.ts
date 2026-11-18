@@ -1,6 +1,6 @@
 import { invokeOrMock, isTauriNow } from './shared';
 
-export const CLOUD_SYNC_E2EE_CONSENT_VERSION = 'encrypted-full-snapshot-v1';
+export const CLOUD_SYNC_E2EE_CONSENT_VERSION = 'encrypted-full-snapshot-v2';
 
 export type EncryptedSyncState =
   | 'disabled'
@@ -87,8 +87,13 @@ export const cloudSyncE2eeStatus = (): Promise<EncryptedSyncStatus> =>
   invokeOrMock('cloud_sync_e2ee_status', undefined, unavailable);
 export const cloudSyncE2eeClaimSetupPrompt = (): Promise<boolean> =>
   invokeOrMock('cloud_sync_e2ee_claim_setup_prompt', undefined, unavailable);
-export const cloudSyncE2eePrepareEnable = (consentVersion: string): Promise<EnablePreparation> =>
-  invokeOrMock('cloud_sync_e2ee_prepare_enable', { consentVersion }, unavailable);
+export interface ConsentScope {
+  serviceOrigin: string;
+  accountId: string | null;
+  vaultId: string | null;
+}
+export const cloudSyncE2eePrepareEnable = (consentVersion: string, expectedScope?: ConsentScope): Promise<EnablePreparation> =>
+  invokeOrMock('cloud_sync_e2ee_prepare_enable', { consentVersion, ...(expectedScope ? { expectedScope } : {}) }, unavailable);
 export const cloudSyncE2eeCreate = (input: {
   password: string;
   passwordConfirmation: string;

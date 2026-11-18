@@ -1116,9 +1116,18 @@ impl EncryptedSyncService {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn prepare_enable(
         &self,
         consent_version: String,
+    ) -> SyncResult<EnablePreparation> {
+        self.prepare_enable_scoped(consent_version, None).await
+    }
+
+    pub(crate) async fn prepare_enable_scoped(
+        &self,
+        consent_version: String,
+        expected_scope: Option<ConsentScope>,
     ) -> SyncResult<EnablePreparation> {
         if consent_version != CONSENT_VERSION {
             return Err(error("consent_required"));
@@ -1126,11 +1135,29 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result: SyncResult<EnableStep> = async {
+            self.initialize(&mut runtime).await?;
+            let expected_owner = expected_scope
+                .as_ref()
+                .and_then(|scope| scope.account_id.clone())
+                .or_else(|| runtime.settings.owner_id.clone());
+            if let Some(scope) = &expected_scope {
+                let status = self.status();
+                if scope.service_origin != self.remote_origin()
+                    || scope.account_id != status.account.map(|account| account.github_id)
+                    || scope.vault_id != status.vault_id
+                {
+                    return Err(error("account_changed"));
+                }
+            }
             self.connect(&mut runtime).await?;
+            if expected_scope.is_some()
+                && expected_owner
+                    .as_deref()
+                    .is_some_and(|owner| runtime.settings.owner_id.as_deref() != Some(owner))
+            {
+                return Err(error("account_changed"));
+            }
             self.refresh_metadata(&mut runtime).await?;
-            runtime.settings.consent_version = Some(consent_version);
-            runtime.settings.prompted = true;
-            self.save_settings(&runtime).await?;
             self.try_remembered(&mut runtime).await?;
             let step = if self.metadata(&runtime)?.value().state != VaultState::Active {
                 EnableStep::Create
@@ -1147,6 +1174,15 @@ impl EncryptedSyncService {
             } else {
                 EnableStep::RestoreReview
             };
+            self.current_account(&runtime).await?;
+            let mut settings = runtime.settings.clone();
+            settings.consent_version = Some(consent_version);
+            settings.prompted = true;
+            self.0
+                .local
+                .write("device", "client", settings.clone())
+                .await?;
+            runtime.settings = settings;
             Ok(step)
         }
         .await;
@@ -1243,6 +1279,7 @@ impl EncryptedSyncService {
         self.0.auto_suspended.store(false, Ordering::Release);
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
@@ -1391,6 +1428,9 @@ impl EncryptedSyncService {
     }
 
     async fn reconcile(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        // Every caller, including restore/delete review, must preserve the old
+        // journal without querying or resubmitting it until this scope is accepted.
+        self.require_consent(runtime).await?;
         let owner = self.storage_owner(runtime)?;
         let Some(pending): Option<Pending> = self.0.local.read(&owner, "pending").await? else {
             return Ok(());
@@ -1760,6 +1800,7 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
@@ -1909,7 +1950,16 @@ impl EncryptedSyncService {
         result.map(|()| self.status())
     }
 
+    async fn require_consent(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        self.initialize(runtime).await?;
+        if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
+            return Err(error("consent_required"));
+        }
+        Ok(())
+    }
+
     async fn run_once(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        self.require_consent(runtime).await?;
         self.connect(runtime).await?;
         self.reconcile(runtime).await?;
         if !runtime.settings.enabled {
@@ -2094,6 +2144,7 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
