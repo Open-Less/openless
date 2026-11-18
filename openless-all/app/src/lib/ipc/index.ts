@@ -169,6 +169,8 @@ export {
   getQaHotkeyLabel,
   setQaHotkey,
   qaWindowDismiss,
+  qaCancelTurn,
+  qaStopRecording,
   qaWindowSetExpanded,
   qaGetSnapshot,
   qaToggleRecording,

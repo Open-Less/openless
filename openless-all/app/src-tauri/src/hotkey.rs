@@ -777,7 +777,13 @@ mod platform {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
                 if !ctx.shared.recording_active.load(Ordering::SeqCst)
-                    && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {
+                    && crate::side_aware_combo::platform::dispatch_keycode(
+                        keycode,
+                        false,
+                        unsafe { CGEventGetFlags(event) },
+                        true,
+                    )
+                {
                     crate::side_aware_combo::handle_companion_key_down();
                     note_companion_key_down(ctx);
                     return std::ptr::null_mut();
@@ -792,7 +798,12 @@ mod platform {
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false) {
+                if crate::side_aware_combo::platform::dispatch_keycode(
+                    keycode,
+                    false,
+                    unsafe { CGEventGetFlags(event) },
+                    false,
+                ) {
                     return std::ptr::null_mut();
                 }
             }

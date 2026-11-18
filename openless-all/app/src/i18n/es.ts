@@ -317,6 +317,7 @@ export const es: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    asking: 'Pregunta lo que quieras',
     thinking: 'pensando',
     using: 'actuando',
     cancelled: 'Cancelado',
@@ -1202,6 +1203,8 @@ export const es: typeof zhCN = {
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Inserción de texto',
       experiments: 'Configura funciones experimentales y extensiones.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
@@ -1687,10 +1690,11 @@ export const es: typeof zhCN = {
       pipelineModeLabel: 'Modo de procesamiento',
       pipelineModeHint:
         'Tradicional: dos etapas, ASR + LLM. Multimodal: una sola pasada con un modelo que admite audio.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Tradicional',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Cada modo conserva sus propias credenciales. Al cambiar, las del otro modo se guardan sin usarse y se restauran cuando vuelves.',
+        'Las tres canalizaciones guardan su configuración por separado. La selección se conserva al cerrar los ajustes o la ventana y al reiniciar la aplicación. Al volver se recupera la configuración anterior.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
@@ -2404,6 +2408,7 @@ export const es: typeof zhCN = {
     experimentsTitle: 'Experimentos y extensiones',
     experimentsDescription: 'Configura funciones experimentales y extensiones.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Ajustes de servicios',
       llm: 'Modelos de lenguaje',
       asr: 'Reconocimiento de voz',
@@ -2427,6 +2432,8 @@ export const es: typeof zhCN = {
     backToAdvanced: 'Volver a funciones avanzadas',
     back: 'Atrás',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configurar la transcripción en directo en el campo.',
       experiments: 'Configura funciones experimentales y extensiones.',
       customSyncServer:

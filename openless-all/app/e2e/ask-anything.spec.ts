@@ -120,7 +120,7 @@ test('overview is restored and the Ask page remains without the added three-row 
   await page.screenshot({ path: info.outputPath('overview-restored.png') });
   const nav = page.locator('.ol-sidebar-surface nav');
   await nav.getByRole('button', { name: '工具', exact: true }).click();
-  await nav.getByRole('button', { name: '问任何问题', exact: true }).click();
+  await nav.getByRole('button', { name: '随便问', exact: true }).click();
   await expect(page.getByText('提问附加键', { exact: true })).toBeVisible();
   await expect(page.locator('.ol-recording-key-guide')).toHaveCount(0);
   await expect(page.getByText('保存历史', { exact: true })).toBeVisible();

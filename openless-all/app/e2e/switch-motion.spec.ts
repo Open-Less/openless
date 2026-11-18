@@ -301,7 +301,7 @@ test('channel sorting waits for a slow knob transition to finish', async ({ page
 
 test('the Selection Ask history switch slides', async ({ page }) => {
   await page.getByRole('button', { name: '工具', exact: true }).click();
-  await page.getByRole('button', { name: '问任何问题', exact: true }).click();
+  await page.getByRole('button', { name: '随便问', exact: true }).click();
   const main = page.locator('main');
   await expect(main.getByRole('switch').first()).toBeVisible();
   expect(await exerciseVisibleSwitches(main, 'selectionAsk')).toBeGreaterThan(0);

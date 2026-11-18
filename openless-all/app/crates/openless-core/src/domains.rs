@@ -1060,7 +1060,7 @@ pub trait QaApi: Send + Sync {
     fn show(&self) -> BoxFuture<'static, Result<(), BackendError>>;
     fn snapshot(&self) -> BoxFuture<'static, Result<QaSnapshot, BackendError>>;
     fn toggle_recording(&self) -> BoxFuture<'static, Result<(), BackendError>>;
-    /// Start an independent, single-question voice session without a composer.
+    /// Start a voice turn in the current conversation. Dismissal ends the conversation.
     fn start_question(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         self.toggle_recording()
     }

@@ -249,7 +249,7 @@ impl SelectionServiceInner {
                     ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
                     text,
                 ),
-                PipelineMode::Traditional => (
+                PipelineMode::Traditional | PipelineMode::Deepseek => (
                     text,
                     ProviderInvocation::for_provider(preferences.active_omni_provider.clone()),
                 ),
@@ -472,7 +472,7 @@ impl SelectionServiceInner {
             PipelineMode::Multimodal => {
                 (context.omni.provider_id.clone(), context.omni.model.clone())
             }
-            PipelineMode::Traditional => {
+            PipelineMode::Traditional | PipelineMode::Deepseek => {
                 (context.llm.provider_id.clone(), context.llm.model.clone())
             }
         };
@@ -501,6 +501,7 @@ impl SelectionServiceInner {
             pipeline_mode: Some(
                 match context.pipeline_mode {
                     PipelineMode::Traditional => "traditional",
+                    PipelineMode::Deepseek => "deepseek",
                     PipelineMode::Multimodal => "multimodal",
                 }
                 .to_string(),

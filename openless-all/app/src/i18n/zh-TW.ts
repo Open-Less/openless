@@ -290,6 +290,7 @@ export const zhTW: typeof zhCN = {
     durationMinutes: '{{value}} 分鐘',
   },
   capsule: {
+    asking: '隨便問',
     thinking: 'thinking',
     using: 'using',
     cancelled: '已取消',
@@ -344,7 +345,7 @@ export const zhTW: typeof zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '視窗展開失敗，請關閉後重新開啟。',
     },
-    title: '問任何問題',
+    title: '隨便問',
     headerHint: '隨時提問',
     thinking: '思考中…',
     error: '出錯了，請稍後再試。',
@@ -381,7 +382,7 @@ export const zhTW: typeof zhCN = {
     style: '風格',
     marketplace: '風格市場',
     translation: '翻譯',
-    selectionAsk: '問任何問題',
+    selectionAsk: '隨便問',
     quickNote: '速記',
     corrections: '糾正規則',
     polishMode: '潤色模式',
@@ -1069,17 +1070,17 @@ export const zhTW: typeof zhCN = {
   askAnything: {
     dictation: '口述',
     translation: '翻譯',
-    question: '問任何問題',
+    question: '隨便問',
     dictationHint: '說出想法，直接輸入文字',
     translationHint: '錄音時切換目標語言',
     questionHint: '選取文字，或直接說出問題',
     description: '按組合鍵開始提問，再按一次送出。回答會顯示在螢幕下方。',
     auxiliaryKey: '提問附加鍵',
     auxiliaryHint: '與錄音鍵 {{key}} 一起按下；修改錄音鍵後會自動跟隨。',
-    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。每次組合鍵開始新問題。',
+    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。關閉對話視窗後開始新對話。',
   },
   selectionAsk: {
-    title: '問任何問題',
+    title: '隨便問',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
     guide: {
@@ -1136,6 +1137,8 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
@@ -1577,10 +1580,11 @@ export const zhTW: typeof zhCN = {
       omniDesc: '一個模型直接接收「提示詞 + 音訊」一步輸出最終文字（實驗性管線）。',
       pipelineModeLabel: '識別管線',
       pipelineModeHint: '傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。',
+      pipelineModeDeepseek: 'DeepSeek 大统一',
       pipelineModeTraditional: '傳統模式',
       pipelineModeMultimodal: '多模態模式',
       pipelineIsolationNotice:
-        '兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即還原。',
+        '三種管線分別儲存設定。所選管線在關閉設定、關閉視窗和重新啟動應用程式後保持不變；切回即可還原原設定。',
       presets: {
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
@@ -2226,6 +2230,7 @@ export const zhTW: typeof zhCN = {
     experimentsTitle: '實驗與擴充',
     experimentsDescription: '設定實驗功能與擴充選項。',
     serviceViews: {
+      deepseek: 'DeepSeek 大统一',
       label: '服務設定分類',
       llm: '語言模型',
       asr: '語音辨識',
@@ -2247,6 +2252,8 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInput: '設定即時原文在輸入框中的顯示。',
       experiments: '設定實驗功能與擴充選項。',
       customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',

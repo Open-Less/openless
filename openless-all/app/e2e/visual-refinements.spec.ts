@@ -44,7 +44,7 @@ for (const theme of ['dark', 'light'] as const) {
         const rows = dialog.locator('.ol-shortcut-row');
         await expect(rows.first()).toBeVisible();
         expect(await rows.count()).toBeGreaterThanOrEqual(9);
-        await expect(dialog.getByText('问任何问题', { exact: true })).toBeVisible();
+        await expect(dialog.getByText('随便问', { exact: true })).toBeVisible();
         const bounds = await rows.evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();

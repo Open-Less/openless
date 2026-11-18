@@ -290,6 +290,7 @@ export const zhCN = {
     durationMinutes: '{{value}} 分钟',
   },
   capsule: {
+    asking: '随便问',
     thinking: 'thinking',
     using: 'using',
     cancelled: '已取消',
@@ -344,7 +345,7 @@ export const zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '窗口展开失败，请关闭后重新打开。',
     },
-    title: '问任何问题',
+    title: '随便问',
     headerHint: '随时提问',
     thinking: '思考中…',
     error: '出错了，请稍后再试。',
@@ -381,7 +382,7 @@ export const zhCN = {
     style: '风格',
     marketplace: '风格市场',
     translation: '翻译',
-    selectionAsk: '问任何问题',
+    selectionAsk: '随便问',
     quickNote: '速记',
     corrections: '纠正规则',
     polishMode: '润色模式',
@@ -507,7 +508,7 @@ export const zhCN = {
       vocab: '词典：自定义热词，提升专有名词识别率',
       style: '润色风格：管理输出风格与自定义提示词',
       translation: '翻译：按住 Shift 说话，译成目标语言插入',
-      selectionAsk: '问任何问题：录音键配合附加键，选中文字可作为上下文',
+      selectionAsk: '随便问：录音键配合附加键，选中文字可作为上下文',
       quickNote: '速记：保存录音并整理为可回看的记录',
       settings: '偏好设置：快捷键、提供商、隐私与更新',
     },
@@ -1068,17 +1069,17 @@ export const zhCN = {
   askAnything: {
     dictation: '口述',
     translation: '翻译',
-    question: '问任何问题',
+    question: '随便问',
     dictationHint: '说出想法，直接输入文字',
     translationHint: '录音时切换目标语言',
     questionHint: '选中文字，或直接说出问题',
     description: '按组合键开始提问，再按一次提交。回答会显示在屏幕下方。',
     auxiliaryKey: '提问附加键',
     auxiliaryHint: '与录音键 {{key}} 一起按下；修改录音键后会自动跟随。',
-    selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。每次组合键开启一个新问题。',
+    selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。关闭对话窗口后开始新会话。',
   },
   selectionAsk: {
-    title: '问任何问题',
+    title: '随便问',
     desc: '选中文字后语音提问，支持多轮追问。',
     shortcutSettings: '快捷键设置',
     guide: {
@@ -1191,6 +1192,8 @@ export const zhCN = {
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
       experiments: '配置实验功能与扩展选项。',
       voiceEnhancementTitle: '语音增强与播放抑制',
@@ -1575,11 +1578,13 @@ export const zhCN = {
       omniTitle: '多模态模型',
       omniDesc: '一个模型直接接收「提示词 + 音频」一步输出最终文本（实验性管线）。',
       pipelineModeLabel: '识别管线',
-      pipelineModeHint: '传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。',
+      pipelineModeHint:
+        '传统使用 ASR + LLM；多模态使用单个音频模型；DeepSeek 大统一组合自家的语音、语言和搜索服务。',
+      pipelineModeDeepseek: 'DeepSeek 大统一',
       pipelineModeTraditional: '传统模式',
       pipelineModeMultimodal: '多模态模式',
       pipelineIsolationNotice:
-        '两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。',
+        '三种管线分别保存配置。所选管线在关闭设置、关闭窗口和重启应用后保持不变；切回即可恢复原配置。',
       presets: {
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
@@ -2226,6 +2231,7 @@ export const zhCN = {
     experimentsTitle: '实验与扩展',
     experimentsDescription: '配置实验功能与扩展选项。',
     serviceViews: {
+      deepseek: 'DeepSeek 大统一',
       label: '服务设置分类',
       llm: '语言模型',
       asr: '语音识别',
@@ -2247,6 +2253,8 @@ export const zhCN = {
     backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInput: '配置实时原文在输入框中的显示。',
       experiments: '配置实验功能与扩展选项。',
       customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',
