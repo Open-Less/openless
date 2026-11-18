@@ -55,6 +55,7 @@ try {
   };
   const cases: Array<[string, unknown, () => Promise<unknown>]> = [
     ['status', undefined, api.cloudSyncE2eeStatus],
+    ['refresh_backup_metadata', undefined, api.cloudSyncE2eeRefreshBackupMetadata],
     ['claim_setup_prompt', undefined, api.cloudSyncE2eeClaimSetupPrompt],
     [
       'prepare_enable',

@@ -119,6 +119,12 @@ impl OpenLessBackend {
             .await
     }
 
+    pub async fn cloud_sync_e2ee_refresh_backup_metadata(
+        &self,
+    ) -> Result<EncryptedSyncStatus, BackendError> {
+        self.encrypted_sync_service()?.refresh_backup_metadata().await
+    }
+
     pub async fn cloud_sync_e2ee_prepare_enable(
         &self,
         consent_version: String,

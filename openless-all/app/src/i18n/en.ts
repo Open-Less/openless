@@ -157,6 +157,7 @@ export const en: typeof zhCN = {
     disableDescription:
       'This stops further sync. Your cloud backup and local data are kept. Deleting the cloud backup is a separate action.',
     confirmDisable: 'Turn off sync',
+    refreshBackup: 'View or refresh cloud backup',
     deleteTitle: 'Delete the encrypted cloud backup?',
     deleteDescription:
       'Only this account’s cloud backup is deleted. Local data is kept. You will need a new backup to restore on another device.',

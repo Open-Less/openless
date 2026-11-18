@@ -153,6 +153,7 @@ export const es: typeof zhCN = {
     disableDescription:
       'Se detiene la sincronización. Se conservan la copia en la nube y los datos locales. Eliminar la copia es una acción separada.',
     confirmDisable: 'Desactivar sincronización',
+    refreshBackup: 'Ver o actualizar copia en la nube',
     deleteTitle: '¿Eliminar la copia cifrada en la nube?',
     deleteDescription:
       'Solo se elimina la copia en la nube de esta cuenta. Los datos locales permanecen. Necesitarás una nueva copia para restaurar en otro dispositivo.',

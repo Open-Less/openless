@@ -752,7 +752,7 @@ impl EncryptedSyncService {
             return Err(error("sign_in_required"));
         }
         let policy = ProxyPolicy::for_origin(&origin, use_system_proxy);
-        self.connect_with_proxy_policy(runtime, policy, origin, custom_token)
+        self.connect_with_proxy_policy(runtime, policy, origin, custom_token, None)
             .await
     }
 
@@ -762,6 +762,7 @@ impl EncryptedSyncService {
         proxy_policy: ProxyPolicy,
         origin: String,
         custom_token: Option<SecretValue>,
+        expected_owner: Option<&str>,
     ) -> SyncResult<()> {
         let valid = if let Some(connection) = &runtime.connection {
             let credential_unchanged = match (&connection.credential, &custom_token) {
@@ -782,6 +783,12 @@ impl EncryptedSyncService {
             false
         };
         if valid {
+            if expected_owner.is_some_and(|owner| {
+                runtime.settings.owner_id.as_deref() != Some(owner)
+                    || self.status().account.as_ref().map(|a| a.github_id.as_str()) != Some(owner)
+            }) {
+                return Err(error("account_changed"));
+            }
             return Ok(());
         }
         #[cfg(not(test))]
@@ -861,6 +868,9 @@ impl EncryptedSyncService {
         if canonical_origin(&self.remote_origin()).map_err(protocol_error)? != origin
             || !self.credential_is_current(&credential).await?
         {
+            return Err(error("account_changed"));
+        }
+        if expected_owner.is_some_and(|owner| account.github_id.as_str() != owner) {
             return Err(error("account_changed"));
         }
         let backup_retention_days = transport.capabilities().max_backup_retention_days;
@@ -1120,6 +1130,42 @@ impl EncryptedSyncService {
             runtime.key = Some(key);
         }
         Ok(())
+    }
+
+    pub(crate) async fn refresh_backup_metadata(&self) -> SyncResult<EncryptedSyncStatus> {
+        let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
+        self.begin();
+        let result = async {
+            self.initialize(&mut runtime).await?;
+            if !runtime.settings.enabled
+                || runtime.settings.consent_version.as_deref() == Some(CONSENT_VERSION)
+            {
+                return Err(error("consent_required"));
+            }
+            let owner = runtime
+                .settings
+                .owner_id
+                .clone()
+                .ok_or_else(|| error("sign_in_required"))?;
+            let origin = canonical_origin(&self.remote_origin()).map_err(protocol_error)?;
+            if runtime.settings.service_origin.as_deref() != Some(origin.as_str()) {
+                return Err(error("account_changed"));
+            }
+            if runtime.retry_at.is_some_and(|at| at > Instant::now()) {
+                return Err(error("rate_limited"));
+            }
+            let custom_token = self.read_custom_token().await?;
+            if custom_token.is_none() && self.0.data.custom_server_origin().is_some() {
+                return Err(error("sign_in_required"));
+            }
+            let policy = ProxyPolicy::for_origin(&origin, crate::net::use_system_proxy());
+            self.connect_with_proxy_policy(&mut runtime, policy, origin, custom_token, Some(&owner))
+                .await?;
+            self.refresh_metadata(&mut runtime).await
+        }
+        .await;
+        self.finish(&mut runtime, &result);
+        result.map(|()| self.status())
     }
 
     #[cfg(test)]

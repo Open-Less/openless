@@ -155,6 +155,7 @@ export const fr: typeof zhCN = {
     disableDescription:
       'Les synchronisations cessent. La sauvegarde cloud et les données locales sont conservées. La suppression est une action distincte.',
     confirmDisable: 'Désactiver la synchronisation',
+    refreshBackup: 'Afficher ou actualiser la sauvegarde cloud',
     deleteTitle: 'Supprimer la sauvegarde cloud chiffrée ?',
     deleteDescription:
       'Seule la sauvegarde cloud de ce compte sera supprimée. Les données locales restent. Une nouvelle sauvegarde sera nécessaire pour un autre appareil.',

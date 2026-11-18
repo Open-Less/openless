@@ -89,6 +89,10 @@ function previewCloudSync() {
 
 export const cloudSyncE2eeStatus = (): Promise<EncryptedSyncStatus> =>
   invokeOrMock('cloud_sync_e2ee_status', undefined, () => previewCloudSync()?.status() ?? unavailable());
+export const cloudSyncE2eeRefreshBackupMetadata = (): Promise<EncryptedSyncStatus> =>
+  invokeOrMock('cloud_sync_e2ee_refresh_backup_metadata', undefined, () =>
+    previewCloudSync()?.refreshBackupMetadata() ?? unavailable(),
+  );
 export const cloudSyncE2eeClaimSetupPrompt = (): Promise<boolean> =>
   invokeOrMock('cloud_sync_e2ee_claim_setup_prompt', undefined, () =>
     previewCloudSync() ? false : unavailable(),

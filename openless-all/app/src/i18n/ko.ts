@@ -155,6 +155,7 @@ export const ko: typeof zhCN = {
     disableDescription:
       '이후 동기화를 중지합니다. 클라우드 백업과 로컬 데이터는 유지됩니다. 백업 삭제는 별도 작업입니다.',
     confirmDisable: '동기화 끄기',
+    refreshBackup: '클라우드 백업 보기 또는 새로고침',
     deleteTitle: '암호화된 클라우드 백업을 삭제할까요?',
     deleteDescription:
       '이 계정의 클라우드 백업만 삭제합니다. 로컬 데이터는 유지됩니다. 다른 기기에서 복원하려면 새 백업이 필요합니다.',

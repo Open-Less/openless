@@ -29,6 +29,7 @@ import { getCloudSyncPreviewScenario } from '../../preview/cloud-sync';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION as CONSENT_VERSION,
   cloudSyncE2eeStatus,
+  cloudSyncE2eeRefreshBackupMetadata,
   cloudSyncE2eePrepareEnable,
   cloudSyncE2eeCreate,
   cloudSyncE2eeUnlock,
@@ -961,6 +962,9 @@ export function CloudSyncSection() {
           <div className="ol-cloud-sync-actions">
             <Btn variant="blue" disabled={working} onClick={() => begin('enable')}>
               {syncDisclosure(i18n.resolvedLanguage ?? i18n.language).updatedTitle}
+            </Btn>
+            <Btn disabled={working} onClick={() => simple(cloudSyncE2eeRefreshBackupMetadata)}>
+              {t('cloudSyncE2ee.refreshBackup')}
             </Btn>
           </div>
         )}

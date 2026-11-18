@@ -215,6 +215,13 @@
       "implementation": "unimplemented"
     },
     {
+      "name": "cloud_sync_e2ee_refresh_backup_metadata",
+      "calledFrom": [
+        "src/lib/ipc/cloud-sync-e2ee.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "cloud_sync_e2ee_preview_restore",
       "calledFrom": [
         "src/lib/ipc/cloud-sync-e2ee.ts"

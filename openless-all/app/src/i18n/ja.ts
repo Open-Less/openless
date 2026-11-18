@@ -157,6 +157,7 @@ export const ja: typeof zhCN = {
     disableDescription:
       '以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。',
     confirmDisable: '同期をオフにする',
+    refreshBackup: 'クラウドバックアップを表示・更新',
     deleteTitle: '暗号化クラウドバックアップを削除しますか？',
     deleteDescription:
       'このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。',

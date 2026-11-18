@@ -144,6 +144,7 @@ export const zhTW: typeof zhCN = {
     disableDescription:
       '關閉後停止後續同步，雲端備份和本機資料都會保留。刪除雲端備份是另一項獨立操作。',
     confirmDisable: '關閉同步',
+    refreshBackup: '查看或重新整理雲端備份',
     deleteTitle: '刪除雲端加密備份？',
     deleteDescription:
       '僅刪除目前帳號的雲端備份，本機資料保留。之後在其他裝置還原前，需要重新建立備份。',

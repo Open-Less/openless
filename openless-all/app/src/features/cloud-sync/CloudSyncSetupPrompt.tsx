@@ -29,7 +29,7 @@ export function CloudSyncSetupPrompt({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const busyRef = useRef(false);
-  const dismissed = useRef<string | null>(null);
+  const dismissed = useRef<EncryptedSyncStatus | null>(null);
   const reviewRef = useRef(review);
   reviewRef.current = review;
   const checkRef = useRef(0);
@@ -65,7 +65,15 @@ export function CloudSyncSetupPrompt({
         if (cancelled || checkRef.current !== request) return;
         if (status.enabled && status.consentVersion !== CLOUD_SYNC_E2EE_CONSENT_VERSION) {
           const scope = encryptedSyncScope(status);
-          if (foreground() && dismissed.current !== scope) {
+          const prior = dismissed.current;
+          const remainsDismissed = Boolean(
+            prior &&
+              prior.serviceOrigin === status.serviceOrigin &&
+              (!prior.account || prior.account.githubId === status.account?.githubId) &&
+              (!prior.vaultId || prior.vaultId === status.vaultId),
+          );
+          if (remainsDismissed) dismissed.current = status;
+          if (foreground() && !remainsDismissed) {
             setOpen(false);
             if (reviewRef.current && encryptedSyncScope(reviewRef.current) !== scope)
               setError(undefined);
@@ -148,7 +156,7 @@ export function CloudSyncSetupPrompt({
   // last frame long enough to fade rather than flashing away.
   const closeReview = () => {
     if (busyRef.current) return;
-    dismissed.current = review ? encryptedSyncScope(review) : null;
+    dismissed.current = review;
     setReview(null);
     setError(undefined);
   };

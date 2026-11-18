@@ -13,30 +13,32 @@ import '../../src/styles/refinements.css';
 
 const mode = new URLSearchParams(location.search).get('mode');
 const fresh = mode === 'fresh';
+const cold = mode === 'renew-cold';
+let failRefresh = cold;
 const owner = { githubId: '42', login: 'fixture' };
 let status: EncryptedSyncStatus = {
   sequence: '1',
   enabled: !fresh,
-  authState: fresh ? 'signed_out' : 'signed_in',
-  keyState: fresh ? 'locked' : 'unlocked',
+  authState: fresh || cold ? 'signed_out' : 'signed_in',
+  keyState: fresh || cold ? 'locked' : 'unlocked',
   syncState: fresh ? 'disabled' : 'ready',
-  account: fresh ? null : owner,
-  vaultId: fresh ? null : 'old-vault',
-  keyId: fresh ? null : 'old-key',
+  account: fresh || cold ? null : owner,
+  vaultId: fresh || cold ? null : 'old-vault',
+  keyId: fresh || cold ? null : 'old-key',
   localGeneration: '1',
   lastSyncedLocalGeneration: fresh ? null : '1',
-  remoteRevision: fresh ? null : '7',
+  remoteRevision: fresh || cold ? null : '7',
   lastSuccessfulSyncAt: null,
   pendingOperationId: null,
   lastError: null,
   recoveryRequired: false,
-  hasCloudSnapshot: fresh ? null : true,
+  hasCloudSnapshot: fresh || cold ? null : true,
   taskId: null,
   serviceOrigin: 'https://sync.example',
   backupRetentionDays: 7,
   consentVersion: fresh
     ? null
-    : mode === 'renew'
+    : mode === 'renew' || cold
       ? 'encrypted-full-snapshot-v1'
       : CLOUD_SYNC_E2EE_CONSENT_VERSION,
 };
@@ -47,6 +49,7 @@ Object.assign(window, {
 });
 function update(change: Partial<EncryptedSyncStatus>) {
   status = { ...status, ...change, sequence: String(Number(status.sequence) + 1) };
+  if (cold) void emit('backend:event', { kind: { type: 'cloud_sync_state_changed' } });
   void emit('cloud-sync-e2ee:state', {
     sequence: status.sequence,
     serviceOrigin: status.serviceOrigin,
@@ -76,6 +79,13 @@ mockIPC(
         return false;
       case 'cloud_sync_e2ee_get_ui_preferences_snapshot':
         return { preferences: { locale: 'en', fontScale: 'medium' }, revision: '1' };
+      case 'cloud_sync_e2ee_refresh_backup_metadata':
+        attempts.push({ command, args });
+        if (failRefresh) {
+          failRefresh = false;
+          throw { details: { reason: 'transport_failed' } };
+        }
+        return update({ account: owner, authState: 'signed_in', syncState: 'unlock_required', hasCloudSnapshot: true, vaultId: 'old-vault', keyId: 'old-key', remoteRevision: '7' });
       case 'cloud_sync_e2ee_prepare_enable':
       case 'cloud_sync_e2ee_create':
       case 'cloud_sync_e2ee_delete_remote':
@@ -163,7 +173,7 @@ createRoot(document.getElementById('root')!).render(
         <HotkeySettingsProvider>
           <main style={{ height: '100%', overflow: 'auto', padding: 16 }}>
             <CloudSyncSection />
-            {mode === 'renew' && <CloudSyncSetupPrompt blocked={false} onSetup={() => {}} />}
+            {(mode === 'renew' || cold) && <CloudSyncSetupPrompt blocked={false} onSetup={() => {}} />}
           </main>
         </HotkeySettingsProvider>
       </InteractionProvider>

@@ -144,6 +144,7 @@ export const zhCN = {
     disableDescription:
       '关闭后停止后续同步，云端备份和本机资料都会保留。删除云端备份是另一项独立操作。',
     confirmDisable: '关闭同步',
+    refreshBackup: '查看或刷新云端备份',
     deleteTitle: '删除云端加密备份？',
     deleteDescription:
       '仅删除当前账号的云端备份，本机资料保留。以后在其他设备恢复前，需要重新创建备份。',

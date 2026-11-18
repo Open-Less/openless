@@ -154,6 +154,7 @@ export const de: typeof zhCN = {
     disableDescription:
       'Weitere Synchronisierung wird gestoppt. Cloud-Sicherung und lokale Daten bleiben erhalten. Löschen ist eine separate Aktion.',
     confirmDisable: 'Synchronisierung ausschalten',
+    refreshBackup: 'Cloud-Sicherung anzeigen oder aktualisieren',
     deleteTitle: 'Verschlüsselte Cloud-Sicherung löschen?',
     deleteDescription:
       'Nur die Cloud-Sicherung dieses Kontos wird gelöscht. Lokale Daten bleiben. Für ein anderes Gerät wird danach eine neue Sicherung benötigt.',

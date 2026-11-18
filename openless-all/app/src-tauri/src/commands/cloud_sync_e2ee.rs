@@ -44,6 +44,15 @@ pub async fn cloud_sync_e2ee_status(
 }
 
 #[tauri::command]
+pub async fn cloud_sync_e2ee_refresh_backup_metadata(
+    window: tauri::WebviewWindow,
+    core: CoreState<'_>,
+) -> Result<EncryptedSyncStatus, BackendError> {
+    require_settings_window(&window)?;
+    core.cloud_sync_e2ee_refresh_backup_metadata().await
+}
+
+#[tauri::command]
 pub async fn cloud_sync_e2ee_prepare_enable(
     window: tauri::WebviewWindow,
     core: CoreState<'_>,

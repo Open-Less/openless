@@ -107,6 +107,11 @@ function createCloudSyncPreview(
 
   return {
     status,
+    refreshBackupMetadata: () => {
+      checkAuth();
+      if (!state.enabled || state.consentVersion === consentVersion) fail('consent_required');
+      return status();
+    },
     signOut: () =>
       update({
         account: null,
