@@ -140,7 +140,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
       await confirm({
         title: t('common.clear'),
         description: t('history.confirmClearLocal', {
-          defaultValue: 'Permanently delete all history entries and recordings on this device, except Quick Notes? Cumulative activity is kept.',
+          defaultValue: 'Permanently delete all history entries and recordings on this device, except Quick Notes? Cumulative activity is kept. If encrypted sync is enabled, the text deletion can sync to other devices.',
         }),
         confirmLabel: t('common.clear'),
         icon: 'trash',

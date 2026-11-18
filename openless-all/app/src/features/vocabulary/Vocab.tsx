@@ -196,7 +196,7 @@ export function Vocab() {
           <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
             {t('vocab.learnedSection', { count: learnedEntries.length })}
           </span>
-          <Btn size="sm" onClick={() => void onRemoveAllLearnedEntries()}>
+          <Btn size="sm" disabled={batchBusy} onClick={() => void onRemoveAllLearnedEntries()}>
             {t('vocab.removeAllLearned')}
           </Btn>
         </div>
@@ -240,6 +240,7 @@ export function Vocab() {
               }}
               onToggle={() => void onToggle(entry)}
               onEdit={() => openEdit(entry)}
+              onRemove={() => void removeEntries([entry.id], entry)}
             />
           ))}
         </div>
@@ -450,6 +451,7 @@ interface WordCardProps {
   cardRef: (element: HTMLDivElement | null) => void;
   onToggle: () => void;
   onEdit: () => void;
+  onRemove: () => void;
   selected: boolean;
   selecting: boolean;
   onSelect: () => void;
@@ -466,6 +468,7 @@ function WordCard({
   cardRef,
   onToggle,
   onEdit,
+  onRemove,
   onSelect,
 }: WordCardProps) {
   const { t } = useTranslation();
@@ -493,9 +496,21 @@ function WordCard({
             type="button"
             className="ol-word-card-action"
             aria-label={t('vocab.edit')}
+            disabled={removing}
             onClick={onEdit}
           >
             <Icon name="pencil" size={14} />
+          </button>
+        </Tooltip>
+        <Tooltip content={t('common.delete')} placement="top">
+          <button
+            type="button"
+            className="ol-word-card-action"
+            aria-label={t('vocab.deleteWord', { phrase: entry.phrase, defaultValue: 'Delete “{{phrase}}”?' })}
+            disabled={removing}
+            onClick={onRemove}
+          >
+            <Icon name="trash" size={14} />
           </button>
         </Tooltip>
       </span>

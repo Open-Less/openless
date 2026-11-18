@@ -74,7 +74,7 @@ export function useHistoryEntryActions(
       await confirm({
         title: t('common.delete'),
         description: t('history.confirmDeleteLocal', {
-          defaultValue: 'Permanently delete this entry and any associated recording on this device?',
+          defaultValue: 'Permanently delete this entry and any associated recording on this device? If encrypted sync is enabled, the text deletion can sync to other devices.',
         }),
         confirmLabel: t('common.delete'),
         icon: 'trash',

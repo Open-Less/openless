@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictionaryEntry, VocabPreset } from '../../api/contracts';
+import { createDeletionBatch, IncompleteDeletion } from '../../api/deletion-batch';
 import {
   addVocab,
   listVocab,
@@ -41,12 +42,13 @@ export function useVocabularyWorkspace() {
   const { confirm, notify } = useInteraction('vocabulary');
   const readRequest = useRef(0);
   const deleting = useRef(false);
+  const deleteRequest = useRef(false);
   const editMount = useExitMount(editingEntry !== null);
   const newWordMount = useExitMount(newWordOpen);
 
   // Word-grid FLIP: when add/remove/filter shifts rows, slide cards from their old
   // position to the new one; new cards enter via the .ol-word-card CSS animation and
-  // deletes use the exit animation in onRemove.
+  // confirmed deletes use a card exit animation.
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const prevCardTops = useRef(new Map<string, number>());
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
@@ -100,43 +102,45 @@ export function useVocabularyWorkspace() {
 
   const flashSaved = () => notify({ state: 'saved', message: t('common.saved') });
 
-  const removeEntries = async (ids: string[]) => {
-    if (deleting.current || ids.length === 0) return;
-    if (
-      !(await confirm({
-        title: t('vocab.deleteSelected', { count: ids.length }),
+  const removeEntries = async (ids: string[], target: 'selected' | 'learned' | DictionaryEntry = 'selected') => {
+    if (deleteRequest.current || ids.length === 0) return;
+    deleteRequest.current = true;
+    const remove = createDeletionBatch(ids, removeVocab);
+    try {
+      await confirm({
+        title: typeof target !== 'string'
+          ? t('vocab.deleteWord', { phrase: target.phrase, defaultValue: 'Delete “{{phrase}}”?' })
+          : target === 'learned' ? t('vocab.removeAllLearned') : t('vocab.deleteSelected', { count: ids.length }),
+        description: t('vocab.deleteScope', {
+          defaultValue: 'Remove these words from this device’s dictionary. If encrypted sync is enabled, the deletion can sync to other devices. This cannot be undone.',
+        }),
         confirmLabel: t('common.delete'),
         tone: 'danger',
-      }))
-    )
-      return;
-    if (deleting.current) return;
-    deleting.current = true;
-    setBatchBusy(true);
-    readRequest.current++;
-    setError(null);
-    const removed = new Set<string>();
-    let failures = 0;
-    try {
-      // Bound IPC concurrency and retain unsuccessful selections for retry.
-      for (let start = 0; start < ids.length; start += 8) {
-        const batch = ids.slice(start, start + 8);
-        const results = await Promise.allSettled(batch.map((id) => removeVocab(id)));
-        results.forEach((result, index) => {
-          if (result.status === 'fulfilled') removed.add(batch[index]);
-          else failures += 1;
-        });
-      }
-      await Promise.all([...removed].map((id) => fadeOutCard(id)));
-      setEntries((current) => current.filter((entry) => !removed.has(entry.id)));
-      setSelectedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
-      if (failures) setError(t('vocab.batchDeleteFailed', { count: failures }));
-      else flashSaved();
+        errorMessage: (error) => error instanceof IncompleteDeletion
+          ? t('vocab.deleteIncomplete', { count: error.remaining, defaultValue: 'Could not delete {{count}} words. Retry to delete the remaining words.' })
+          : t('common.operationFailed'),
+        onConfirm: async () => {
+          deleting.current = true;
+          setBatchBusy(true);
+          readRequest.current++;
+          setError(null);
+          try {
+            await remove(async (removed) => {
+              await Promise.all([...removed].map(fadeOutCard));
+              setEntries((current) => current.filter((entry) => !removed.has(entry.id)));
+              setSelectedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
+            });
+            notify({ state: 'deleted', message: t('vocab.deleted', { defaultValue: 'Words deleted' }) });
+          } finally {
+            setRemovingIds(new Set());
+            deleting.current = false;
+            setBatchBusy(false);
+            await refresh();
+          }
+        },
+      });
     } finally {
-      setRemovingIds(new Set());
-      setBatchBusy(false);
-      deleting.current = false;
-      void refresh();
+      deleteRequest.current = false;
     }
   };
 
@@ -271,8 +275,7 @@ export function useVocabularyWorkspace() {
     entry.note === LEARNED_NOTE ? 'auto' : 'manual';
   const learnedEntries = entries.filter((e) => sourceOf(e) === 'auto');
 
-  /** Delete exit animation (reverse of entry): fade out and shrink first, delete for real
-      once the animation finishes. */
+  /** Fade a card out after its deletion has been acknowledged. */
   const fadeOutCard = async (id: string) => {
     const element = cardRefs.current.get(id);
     if (!element) return;
@@ -286,11 +289,11 @@ export function useVocabularyWorkspace() {
         { duration: 140, easing: 'ease-out', fill: 'forwards' },
       ).finished;
     } catch {
-      /* Animation interrupted (filter switch/unmount) must not block deletion */
+      /* Reconcile the view even if the card animation is interrupted. */
     }
   };
 
-  const onRemoveAllLearnedEntries = () => removeEntries(learnedEntries.map((entry) => entry.id));
+  const onRemoveAllLearnedEntries = () => removeEntries(learnedEntries.map((entry) => entry.id), 'learned');
 
   const needle = query.trim().toLowerCase();
   const visibleEntries = entries.filter(

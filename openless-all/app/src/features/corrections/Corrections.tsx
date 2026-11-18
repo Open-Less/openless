@@ -129,7 +129,7 @@ export function Corrections() {
                 key={rule.id}
                 rule={rule}
                 onToggle={() => void onToggleCorrectionRule(rule)}
-                onRemove={() => void onRemoveCorrectionRule(rule.id)}
+                onRemove={() => void onRemoveCorrectionRule(rule)}
               />
             ))}
           </div>

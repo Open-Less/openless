@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CorrectionRule } from '../../api/contracts';
+import { createDeletionBatch, IncompleteDeletion } from '../../api/deletion-batch';
 import {
   addCorrectionRule,
   listCorrectionRules,
@@ -30,6 +31,7 @@ export function useCorrectionRules() {
   const [rulePatternDraft, setRulePatternDraft] = useState('');
   const [ruleReplacementDraft, setRuleReplacementDraft] = useState('');
   const writing = useRef(false);
+  const deleteRequest = useRef(false);
   const request = useRef(0);
   const refresh = useCallback(
     async (withNotice = false) => {
@@ -107,35 +109,50 @@ export function useCorrectionRules() {
     });
   };
 
-  const onRemoveCorrectionRule = (id: string) => write(() => removeCorrectionRule(id));
+  const removeRules = async (targets: CorrectionRule[], allLearned: boolean) => {
+    if (!targets.length || writing.current || deleteRequest.current) return;
+    deleteRequest.current = true;
+    const remove = createDeletionBatch(targets.map(({ id }) => id), removeCorrectionRule);
+    try {
+      await confirm({
+        title: allLearned ? t('vocab.corrections.removeAllLearned') : t('vocab.corrections.removeAria'),
+        description: t('vocab.corrections.deleteScope', {
+          target: allLearned ? t('vocab.corrections.onlyLearned', { count: targets.length }) : `${targets[0].pattern} → ${targets[0].replacement}`,
+          defaultValue: '{{target}}. Remove these rules from this device. If encrypted sync is enabled, the deletion can sync to other devices. This cannot be undone.',
+        }),
+        confirmLabel: t('common.delete'),
+        tone: 'danger',
+        errorMessage: (error) => error instanceof IncompleteDeletion
+          ? t('vocab.corrections.deleteIncomplete', { count: error.remaining, defaultValue: 'Could not delete {{count}} rules. Retry to delete the remaining rules.' })
+          : t('common.operationFailed'),
+        onConfirm: async () => {
+          if (writing.current) throw new Error('A correction write is in progress');
+          writing.current = true;
+          request.current++;
+          setBusy(true);
+          setError(null);
+          try {
+            await remove((removed) => setRules((current) => current.filter(({ id }) => !removed.has(id))));
+            notify({ state: 'deleted', message: t('vocab.corrections.deleted', { defaultValue: 'Correction rules deleted' }) });
+          } finally {
+            writing.current = false;
+            setBusy(false);
+            await refresh();
+          }
+        },
+      });
+    } finally {
+      deleteRequest.current = false;
+    }
+  };
+
+  const onRemoveCorrectionRule = (rule: CorrectionRule) => removeRules([rule], false);
 
   const onToggleCorrectionRule = (rule: CorrectionRule) =>
     write(() => setCorrectionRuleEnabled(rule.id, !rule.enabled));
 
   const learned = rules.filter((rule) => rule.source === 'learned');
-  const onRemoveAllLearnedRules = async () => {
-    if (!learned.length || writing.current) return;
-    if (
-      !(await confirm({
-        title: t('vocab.corrections.removeAllLearned'),
-        description: t('vocab.corrections.onlyLearned', { count: learned.length }),
-        confirmLabel: t('common.delete'),
-        tone: 'danger',
-      }))
-    )
-      return;
-    await write(async () => {
-      const errors: unknown[] = [];
-      for (const { id } of learned) {
-        try {
-          await removeCorrectionRule(id);
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length) throw errors[0];
-    });
-  };
+  const onRemoveAllLearnedRules = () => removeRules(learned, true);
   return {
     busy,
     error,
