@@ -1,10 +1,9 @@
 import { lazy, type ComponentType } from 'react';
+import { History } from '../../features/history/History';
 import { Overview } from '../../features/overview/Overview';
 import type { AppTab } from './navigation';
 
 const loaders = {
-  history: () =>
-    import('../../features/history/History').then((module) => ({ default: module.History })),
   usage: () => import('../../features/usage/Usage').then((module) => ({ default: module.Usage })),
   vocab: () =>
     import('../../features/vocabulary/Vocab').then((module) => ({ default: module.Vocab })),
@@ -34,7 +33,8 @@ export { Overview };
 export const SelectionAsk = lazy(loaders.selectionAsk);
 
 const pages: Partial<Record<AppTab, ComponentType>> = {
-  history: lazy(loaders.history),
+  // History is a primary destination on both desktop and mobile.
+  history: History,
   usage: lazy(loaders.usage),
   vocab: lazy(loaders.vocab),
   style: lazy(loaders.style),

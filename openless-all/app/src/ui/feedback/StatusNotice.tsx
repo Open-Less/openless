@@ -64,7 +64,7 @@ export function StatusNotice({
           { transform: present ? 'none' : hidden },
         ],
         {
-          duration: present ? 300 : 220,
+          duration: present ? 220 : 180,
           easing: present ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.55, 0, 1, 0.45)',
           fill: 'both',
         },

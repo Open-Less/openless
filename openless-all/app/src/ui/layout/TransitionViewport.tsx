@@ -14,7 +14,10 @@ import { PageSkeleton } from '../../components/ui/PageSkeleton';
 import './viewport.css';
 
 const crossfadeEasing = 'cubic-bezier(0.22, 1, 0.36, 1)';
-const pageEasing = 'cubic-bezier(0.4, 0, 0.2, 1)';
+const pageExitEasing = 'cubic-bezier(0.4, 0, 0.73, 0.55)';
+const PAGE_EXIT_MS = 72;
+const PAGE_ENTER_MS = 116;
+const PAGE_READY_WAIT_MS = 48;
 const settled = { opacity: 1, transform: 'none', filter: 'none' };
 const hidden = { ...settled, opacity: 0 };
 const blurred = { ...hidden, filter: 'blur(3px)' };
@@ -37,9 +40,8 @@ type Surface = Pick<Props, 'children' | 'header' | 'className' | 'style' | 'page
 type Phase = 'settled' | 'retained' | 'waiting' | 'enter' | 'exit' | 'restore';
 type Handoff = { requestId: number; stage: 'exit' | 'enter' };
 
-/** Retain the live outgoing page until the next module and its first useful frame
- * are ready. Both surfaces share one fixed viewport, so navigation never changes
- * document height. New requests supersede the pending destination immediately. */
+/** Both surfaces share one fixed viewport. A pending destination may show its own
+ * loading surface after a brief wait; only the latest request can take over. */
 export function TransitionViewport({
   contentKey,
   children,
@@ -235,8 +237,14 @@ function TransitionSurface({
     // Filter only this bounded page, never the window or its portal layers.
     node.style.willChange = pageMotion ? 'opacity, filter' : 'opacity';
     const animation = node.animate([from, pageMotion && phase === 'exit' ? blurred : target], {
-      duration: pace === 'gentle' || (pageMotion && phase === 'enter') ? 160 : 120,
-      easing: pageMotion ? pageEasing : crossfadeEasing,
+      duration: pageMotion
+        ? phase === 'exit'
+          ? PAGE_EXIT_MS
+          : PAGE_ENTER_MS
+        : pace === 'gentle'
+          ? 160
+          : 120,
+      easing: pageMotion && phase === 'exit' ? pageExitEasing : crossfadeEasing,
       fill: 'both',
     });
     animation.id = `ol-page-${phase}`;
@@ -290,6 +298,18 @@ function TransitionSurface({
       }
     };
   }, [interactive, scrollRef, contentRef]);
+  const ready = phase === 'waiting' && (
+    <ReadyFrame container={contentRef} onReady={onReady} pageMotion={mode === 'page'} />
+  );
+  const content = (
+    <>
+      <Suspense fallback={interactive || mode === 'page' ? <PageSkeleton /> : null}>
+        {children}
+        {mode === 'crossfade' && ready}
+      </Suspense>
+      {mode === 'page' && ready}
+    </>
+  );
   return (
     <div
       ref={ref}
@@ -316,16 +336,10 @@ function TransitionSurface({
           data-transition-phase={phase}
           style={{ ...style, flex: 1, minHeight: 0, boxSizing: 'border-box' }}
         >
-          <Suspense fallback={interactive ? <PageSkeleton /> : null}>
-            {children}
-            {phase === 'waiting' && <ReadyFrame container={contentRef} onReady={onReady} />}
-          </Suspense>
+          {content}
         </div>
       ) : (
-        <Suspense fallback={interactive ? <PageSkeleton /> : null}>
-          {children}
-          {phase === 'waiting' && <ReadyFrame container={contentRef} onReady={onReady} />}
-        </Suspense>
+        content
       )}
     </div>
   );
@@ -334,9 +348,11 @@ function TransitionSurface({
 function ReadyFrame({
   container,
   onReady,
+  pageMotion,
 }: {
   container: RefObject<HTMLDivElement>;
   onReady: () => void;
+  pageMotion: boolean;
 }) {
   const callback = useRef(onReady);
   callback.current = onReady;
@@ -349,35 +365,36 @@ function ReadyFrame({
       if (finished) return;
       finished = true;
       observer.disconnect();
+      cancelAnimationFrame(frame);
       window.clearTimeout(deadline);
       callback.current();
     };
-    const check = () => {
-      cancelAnimationFrame(frame);
+    const scheduleCheck = () => {
+      if (frame) return;
       frame = requestAnimationFrame(() => {
-        if (
-          node.childElementCount > 0 &&
-          !node.querySelector('[aria-busy="true"], .ol-page-skeleton, .ol-loading-spinner')
-        )
-          finish();
+        frame = 0;
+        const loading = pageMotion
+          ? '.ol-page-skeleton'
+          : '[aria-busy="true"], .ol-page-skeleton, .ol-loading-spinner';
+        if (node.childElementCount > 0 && !node.querySelector(loading)) finish();
       });
     };
-    const observer = new MutationObserver(check);
+    const observer = new MutationObserver(scheduleCheck);
     observer.observe(node, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['aria-busy', 'class'],
     });
-    // Long network operations keep their local loading UI instead of freezing navigation.
-    const deadline = window.setTimeout(finish, 1200);
-    frame = requestAnimationFrame(check);
+    // A slow module or local request can show its loading state on the new page.
+    const deadline = window.setTimeout(finish, pageMotion ? PAGE_READY_WAIT_MS : 1200);
+    scheduleCheck();
     return () => {
       finished = true;
       observer.disconnect();
       clearTimeout(deadline);
       cancelAnimationFrame(frame);
     };
-  }, [container]);
+  }, [container, pageMotion]);
   return null;
 }
