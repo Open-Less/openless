@@ -29,9 +29,9 @@ assert.ok(
 );
 assert.ok(
   workflows.tauriRelease.includes(
-    "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}', github.ref, inputs.platform, inputs.windows_hang_diagnostics) || format('{0}-{1}', github.ref, github.run_id) }}",
+    "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}-{3}', github.ref, inputs.platform, inputs.windows_hang_diagnostics, inputs.macos_smoke_sha) || format('{0}-{1}', github.ref, github.run_id) }}",
   ),
-  'equivalent Tauri branch builds share a group; different platform/diagnostic requests are independent',
+  'equivalent Tauri branch builds share a group; different platform, diagnostic, and exact-SHA smoke requests are independent',
 );
 assert.ok(
   workflows.tauriRelease.includes(
@@ -46,9 +46,9 @@ assert.ok(
 
 assert.ok(
   workflows.ci.includes(
-    "group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}",
+    "group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}",
   ),
-  'CI must group equivalent requests without mixing event, platform or runner selections',
+  'CI must group equivalent requests without mixing event, platform, runner or compiler parallelism selections',
 );
 assert.ok(
   workflows.ci.includes(
@@ -78,7 +78,12 @@ for (const [name, source] of [
     `${name} workflow must not rebuild on every branch push`,
   );
   assert.match(source, /schedule:/, `${name} workflow needs a warm-up schedule`);
-  assert.match(source, /tags:[\s\S]{0,40}v\*-tauri/, `${name} workflow must still ship tags`);
+  if (name === 'Tauri release') {
+    assert.match(source, /tags:[\s\S]{0,40}v\*-tauri/, 'the unified workflow owns tag releases');
+  } else {
+    assert.match(source, /workflow_call:/, 'Android is called inside the unified release');
+    assert.doesNotMatch(source, /^  push:/m, 'avoid duplicate tag builds');
+  }
 }
 
 console.log('workflow-concurrency-contract.test.mjs passed');

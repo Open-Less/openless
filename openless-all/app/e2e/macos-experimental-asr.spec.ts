@@ -1,27 +1,9 @@
 import { openExperiments } from './support/experiments';
 import { expect, test, type Page } from '@playwright/test';
+import { fixtureOrigin } from './support/server';
 
 async function settings(page: Page, os: 'mac' | 'win' = 'mac') {
-  // The product OS is an explicit test input, independent of the CI runner.
-  await page.addInitScript((os) => {
-    const mac = os === 'mac';
-    Object.defineProperty(navigator, 'platform', {
-      configurable: true,
-      get: () => (mac ? 'MacIntel' : 'Win32'),
-    });
-    Object.defineProperty(navigator, 'userAgent', {
-      configurable: true,
-      get: () =>
-        mac
-          ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)'
-          : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    });
-    Object.defineProperty(navigator, 'userAgentData', {
-      configurable: true,
-      get: () => ({ platform: mac ? 'macOS' : 'Windows' }),
-    });
-  }, os);
-  await page.goto('/');
+  await page.goto(`/?os=${os}`);
   await page.getByRole('button', { name: '设置', exact: true }).click();
 }
 async function experiments(page: Page) {
@@ -31,7 +13,7 @@ async function experiments(page: Page) {
   await entries.first().click();
 }
 
-test('Mac removes legacy manager and exposes lazy experiments first with memory warning', async ({
+test('Mac retires the legacy manager and exposes lazy experiments first with memory warning', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -40,10 +22,10 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
   await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   const retired = page
     .locator('.ol-service-views')
-    .getByRole('button', { name: '本地模型', exact: true });
+    .getByRole('button', { name: '本地模型。无法使用', exact: true });
+  await expect(retired).toBeVisible();
   await expect(retired).toBeDisabled();
-  await retired.locator('..').hover();
-  await expect(page.getByRole('tooltip')).toHaveText('该功能已下架，请去实验性与扩展里面');
+  await expect(retired).toHaveAttribute('data-retired-local-models', 'true');
   await experiments(page);
   const stream = page.locator('[data-experimental-model="text-stream"]');
   await expect(page.locator('[data-experimental-model]').first()).toHaveAttribute(
@@ -84,7 +66,16 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
   await experiments(page);
   await sense.getByRole('switch').click();
   await expect(sense.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
-  await expect(sense.getByRole('button', { name: '删除', exact: true })).toBeVisible();
+  const remove = sense.getByRole('button', { name: '删除', exact: true });
+  await remove.click();
+  const deletion = page.getByRole('dialog', { name: '删除', exact: true });
+  await expect(deletion).toContainText('SenseVoice Small 的本地模型文件');
+  await deletion.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(remove).toBeVisible();
+  await remove.click();
+  await deletion.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(deletion).toHaveCount(0);
+  await expect(remove).toHaveCount(0);
   await expect(gemma.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   expect(errors).toEqual([]);
 });
@@ -92,21 +83,31 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
 test('Apple system recognition remains selectable without local-model controls', async ({
   page,
 }) => {
-  await settings(page);
+  await page.goto(`${fixtureOrigin}/?os=mac`);
+  await page.evaluate(async () => {
+    const { createChannel } = await import('/src/api/providers.ts');
+    // Simulate a previously enabled channel from before macOS local models were retired.
+    await createChannel('asr', 'local-whisper', '旧版 Whisper');
+  });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
-  await page.getByRole('button', { name: /^语音识别。/ }).click();
+  await page.getByRole('button', { name: '语音识别', exact: true }).click();
   await page.getByRole('button', { name: '添加渠道', exact: true }).click();
   const form = page.getByRole('dialog', { name: '添加渠道', exact: true });
   await form.getByRole('combobox', { name: '供应商', exact: true }).click();
+  await expect(page.getByRole('option', { name: /^本地 (?:Qwen3-ASR|Whisper)/ })).toHaveCount(0);
   await page.getByRole('option', { name: '苹果识别（macOS）', exact: true }).click();
   await expect(form).toContainText('Apple 语音识别使用系统内置引擎，无需选择模型。');
-  await expect(form.locator('.ol-channel-local-hint')).toHaveCount(0);
   await expect(form.locator('.ol-local-model-picker')).toHaveCount(0);
-  await expect(form.getByRole('textbox', { name: /API Key|Base URL/ })).toHaveCount(0);
+  await expect(form.getByLabel(/API Key|Base URL/)).toHaveCount(0);
   await form
     .locator('.ol-channel-dialog-footer')
     .getByRole('button', { name: '关闭', exact: true })
     .click();
+  const retired = page.locator('[data-channel-provider="local-whisper"]');
+  await expect(retired).toHaveAttribute('data-retired-local-asr', 'true');
+  await expect(retired.getByRole('switch')).toBeDisabled();
+  await expect(retired.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   const card = page.locator('[data-channel-provider="apple-speech"]');
   await expect(card).toHaveCount(1);
   await expect(card).not.toHaveAttribute('data-retired-local-asr', 'true');
@@ -117,6 +118,12 @@ test('Apple system recognition remains selectable without local-model controls',
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  for (const provider of ['volcengine', 'groq']) {
+    const other = page.locator(`[data-channel-provider="${provider}"]`).getByRole('switch');
+    await other.click();
+    await expect(other).toHaveAttribute('aria-checked', 'false');
+  }
+  await expect(card).toHaveAttribute('data-channel-active', 'true');
 });
 
 test('closing settings does not auto-enable a channel or lose completion guidance', async ({

@@ -29,6 +29,11 @@ pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
 }
 
 #[tauri::command]
+pub fn get_voice_activation_state(core: CoreState<'_>) -> Option<openless_core::VoiceActivationStateSnapshot> {
+    core.latest_voice_activation_state()
+}
+
+#[tauri::command]
 pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
     StyleSystemPrompts::default()
 }
@@ -264,6 +269,7 @@ fn voice_activation_preferences_changed(
     next: &UserPreferences,
 ) -> bool {
     previous.voice_activation_enabled != next.voice_activation_enabled
+        || previous.voice_activation_hotkey_linked != next.voice_activation_hotkey_linked
         || previous.voice_activation_wake_enabled != next.voice_activation_wake_enabled
         || previous.voice_activation_finish_enabled != next.voice_activation_finish_enabled
         || previous.voice_activation_wake_phrase != next.voice_activation_wake_phrase
@@ -800,34 +806,58 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         .await
         .map_err(|_| "GitHub update check timed out".to_string())?
     });
+    // Official CDN (`mirror`) and GitHub are both checked. A newer semver wins
+    // even when the other side is missing or not newer than the installed build.
+    // Equal versions are chosen by estimated download time.
     let update = match (mirror, github) {
         (Ok(Some(mirror)), Ok(Some(github))) => {
-            let mirror_version =
-                semver::Version::parse(&mirror.version).map_err(|e| e.to_string())?;
-            let github_version =
-                semver::Version::parse(&github.version).map_err(|e| e.to_string())?;
-            if github_version != mirror_version {
-                Some(github)
-            } else {
-                let (m, g) = tokio::join!(
+            let equal = semver::Version::parse(&mirror.version)
+                .ok()
+                .zip(semver::Version::parse(&github.version).ok())
+                .is_some_and(|(mirror_version, github_version)| {
+                    mirror_version.cmp_precedence(&github_version).is_eq()
+                });
+            let samples = if equal {
+                tokio::join!(
                     crate::update_source::probe_download(&mirror.download_url),
                     crate::update_source::probe_download(&github.download_url)
-                );
-                if crate::update_source::prefer_mirror(m, g) {
-                    Some(mirror)
-                } else {
-                    Some(github)
-                }
+                )
+            } else {
+                (None, None)
+            };
+            match crate::update_source::choose_release(
+                &mirror.version,
+                &github.version,
+                samples.0,
+                samples.1,
+            )? {
+                crate::update_source::ReleaseSource::Mirror => Some(mirror),
+                crate::update_source::ReleaseSource::Github => Some(github),
             }
         }
-        (_, Ok(Some(update))) => Some(update),
-        (_, Ok(None)) => None,
-        (Ok(update), Err(_)) => update,
-        (Err(mirror), Err(github)) => return Err(format!("Aliyun: {mirror}; GitHub: {github}")),
+        (Ok(Some(update)), Ok(None) | Err(_)) => Some(update),
+        (Ok(None) | Err(_), Ok(Some(update))) => Some(update),
+        (Ok(None), Ok(None) | Err(_)) | (Err(_), Ok(None)) => None,
+        (Err(mirror), Err(github)) => {
+            return Err(format!("official update source: {mirror}; GitHub: {github}"))
+        }
     };
-    let Some(update) = update else {
+    let Some(mut update) = update else {
         return Ok(None);
     };
+    // PR #1399's source policy, without giving up independent GitHub discovery.
+    // Preserve the same version/signature even if the rolling CDN manifest lags.
+    let chosen =
+        crate::update_source::resolve_artifact_download_url(update.download_url.as_str()).await;
+    update.download_url = url::Url::parse(&chosen).map_err(|e| e.to_string())?;
+    update.raw_json["url"] = serde_json::Value::String(chosen);
+    update.timeout = Some(std::time::Duration::from_secs(
+        if update.download_url.host_str() == Some("dl.aeoform.com") {
+            120
+        } else {
+            600
+        },
+    ));
     // Passing through the date field would require the time crate; the frontend
     // AutoUpdate.tsx never uses date, so set it to None here and avoid pulling a new dep
     // into src-tauri/Cargo.toml.
@@ -840,6 +870,41 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         rid: webview.resources_table().add(update),
     };
     Ok(Some(metadata))
+}
+
+/// Retry only the exact stored signed artifact, never re-discover a different version.
+#[tauri::command]
+#[cfg(not(mobile))]
+pub async fn app_update_github_fallback<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    rid: tauri::ResourceId,
+) -> Result<AppUpdateMetadata, String> {
+    let resource = webview
+        .resources_table()
+        .get::<tauri_plugin_updater::Update>(rid)
+        .map_err(|e| e.to_string())?;
+    let mut update = (*resource).clone();
+    let fallback =
+        crate::update_source::github_fallback_for_cdn_artifact(update.download_url.as_str())
+            .ok_or("No GitHub fallback for this update source")?;
+    update.download_url = url::Url::parse(&fallback).map_err(|e| e.to_string())?;
+    update.raw_json["url"] = serde_json::Value::String(fallback);
+    update.timeout = Some(std::time::Duration::from_secs(600));
+    Ok(AppUpdateMetadata {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date: None,
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    })
+}
+
+#[tauri::command]
+#[cfg(mobile)]
+pub async fn app_update_github_fallback(rid: u32) -> Result<AppUpdateMetadata, String> {
+    let _ = rid;
+    Err("Desktop-only update retry".into())
 }
 
 /// The Beta manifest endpoint, with `{{target}}` / `{{arch}}` left in place for

@@ -1,8 +1,16 @@
 //! Concurrent release discovery and bounded transport sampling for the updater.
-//! GitHub owns release freshness; the rolling CDN is an independent backup and accelerator.
-//! Tauri still verifies the signed artifact and version before installation.
+//! The official CDN manifest and the GitHub release are checked together. The
+//! newer semver wins; equal versions use the faster measured path. Tauri still
+//! verifies the signed artifact and version before installation.
 
 use crate::types::UpdateChannel;
+#[path = "update_source/artifact_fallback.rs"]
+mod artifact_fallback;
+#[path = "update_source/signature_index.rs"]
+mod signature_index;
+pub(crate) use artifact_fallback::{
+    github_fallback_for_cdn_artifact, resolve_artifact_download_url,
+};
 
 /// CDN that serves both the update manifests and the mirrored release artifacts.
 pub(crate) const CDN_BASE: &str = "https://dl.aeoform.com";
@@ -107,6 +115,58 @@ mod tests {
 #[cfg(not(mobile))]
 pub(crate) fn mirror_is_faster(mirror: (f64, f64), github: (f64, f64)) -> bool {
     mirror.0 <= github.0 * 1.2 && mirror.1 >= github.1 * 0.8
+}
+
+#[cfg(not(mobile))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleaseSource {
+    Mirror,
+    Github,
+}
+
+/// The newer semver wins. Equal releases use estimated finish time
+/// (first-byte latency plus a shared byte budget divided by throughput).
+/// A source that could not be timed loses to one that could. If neither
+/// sample is usable, GitHub is the tie.
+#[cfg(not(mobile))]
+pub(crate) fn choose_release(
+    mirror_version: &str,
+    github_version: &str,
+    mirror_sample: Option<(f64, f64)>,
+    github_sample: Option<(f64, f64)>,
+) -> Result<ReleaseSource, String> {
+    let mirror = semver::Version::parse(mirror_version).map_err(|e| e.to_string())?;
+    let github = semver::Version::parse(github_version).map_err(|e| e.to_string())?;
+    Ok(match mirror.cmp_precedence(&github) {
+        std::cmp::Ordering::Greater => ReleaseSource::Mirror,
+        std::cmp::Ordering::Less => ReleaseSource::Github,
+        std::cmp::Ordering::Equal => faster_release(mirror_sample, github_sample),
+    })
+}
+
+#[cfg(not(mobile))]
+fn finish_seconds(sample: Option<(f64, f64)>) -> f64 {
+    const REFERENCE_BYTES: f64 = 100.0 * 1024.0 * 1024.0;
+    match sample {
+        Some((latency, throughput))
+            if latency.is_finite()
+                && latency >= 0.0
+                && throughput.is_finite()
+                && throughput > 0.0 =>
+        {
+            latency + REFERENCE_BYTES / throughput
+        }
+        _ => f64::INFINITY,
+    }
+}
+
+#[cfg(not(mobile))]
+fn faster_release(mirror: Option<(f64, f64)>, github: Option<(f64, f64)>) -> ReleaseSource {
+    if finish_seconds(mirror) < finish_seconds(github) {
+        ReleaseSource::Mirror
+    } else {
+        ReleaseSource::Github
+    }
 }
 
 #[cfg(not(mobile))]
@@ -216,9 +276,15 @@ async fn github_api_manifest(channel: UpdateChannel) -> Result<serde_json::Value
     let name = artifact["name"].as_str().ok_or("missing artifact name")?;
     let signature = assets
         .iter()
-        .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))
+        .find(|a| a["name"].as_str() == Some(signature_index::NAME))
+        .or_else(|| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))
+        })
         .and_then(|a| a["browser_download_url"].as_str())
         .ok_or("missing GitHub signature")?;
+    let indexed = signature.ends_with(signature_index::NAME);
     let signature = client
         .get(signature)
         .timeout(std::time::Duration::from_secs(8))
@@ -230,6 +296,7 @@ async fn github_api_manifest(channel: UpdateChannel) -> Result<serde_json::Value
         .text()
         .await
         .map_err(|e| e.to_string())?;
+    let signature = signature_index::extract(&signature, tag, name, indexed)?;
     let version = github_signed_version(signature.trim(), version)?;
     Ok(
         serde_json::json!({"version": version, "url": artifact["browser_download_url"],
@@ -249,6 +316,33 @@ mod routing_tests {
         assert!(mirror_is_faster((0.04, 30_000_000.), (0.2, 10_000_000.)));
         assert!(!mirror_is_faster((0.2, 30_000_000.), (0.1, 10_000_000.)));
         assert!(!mirror_is_faster((0.1, 2_000_000.), (0.1, 10_000_000.)));
+    }
+
+    #[test]
+    fn newer_release_wins_and_equal_releases_follow_the_faster_path() {
+        assert_eq!(
+            choose_release("2.0.3", "2.0.2", None, None).unwrap(),
+            ReleaseSource::Mirror
+        );
+        assert_eq!(
+            choose_release("2.0.2-Beta.7", "2.0.2-Beta.8", None, None).unwrap(),
+            ReleaseSource::Github
+        );
+        assert_eq!(
+            choose_release("2.0.2", "2.0.2", Some((0.05, 8_000_000.)), Some((0.4, 1_000_000.)))
+                .unwrap(),
+            ReleaseSource::Mirror
+        );
+        assert_eq!(
+            choose_release("2.0.2", "2.0.2", Some((0.4, 1_000_000.)), Some((0.05, 8_000_000.)))
+                .unwrap(),
+            ReleaseSource::Github
+        );
+        assert_eq!(
+            choose_release("2.0.2+build.1", "2.0.2+build.2", None, Some((0.2, 1_000_000.)))
+                .unwrap(),
+            ReleaseSource::Github
+        );
     }
 }
 
@@ -367,7 +461,15 @@ async fn github_web_manifest(channel: UpdateChannel) -> Result<serde_json::Value
     let (artifact, signature) =
         github_page_assets(&assets, tag, std::env::consts::OS, std::env::consts::ARCH)
             .ok_or("no matching signed updater assets on GitHub release page")?;
-    let signature = text(&signature).await?;
+    let indexed = signature.ends_with(signature_index::NAME);
+    let body = text(&signature).await?;
+    let name = artifact
+        .rsplit('/')
+        .next()
+        .ok_or("missing artifact filename")?;
+    // GitHub HTML encodes '+' in names; decode before looking up the exact index key.
+    let name = android::decode_asset_name(name).ok_or("invalid artifact filename")?;
+    let signature = signature_index::extract(&body, tag, &name, indexed)?;
     let version = github_signed_version(signature.trim(), version)?;
     Ok(
         serde_json::json!({"version": version, "url": artifact, "signature": signature.trim(),
@@ -437,7 +539,12 @@ fn github_page_assets(page: &str, tag: &str, os: &str, arch: &str) -> Option<(St
     })?;
     let (signature, _) = paths
         .iter()
-        .find(|(_, candidate)| *candidate == format!("{name}.sig"))?;
+        .find(|(_, candidate)| *candidate == signature_index::NAME)
+        .or_else(|| {
+            paths
+                .iter()
+                .find(|(_, candidate)| *candidate == format!("{name}.sig"))
+        })?;
     Some((
         format!("https://github.com{artifact}"),
         format!("https://github.com{signature}"),
@@ -479,6 +586,13 @@ mod public_release_tests {
             .0
             .ends_with("_x64-setup.exe"));
         assert!(github_page_assets(page, tag, "macos", "x86_64").is_none());
+        let indexed_page = page.replace("OpenLess_aarch64.app.tar.gz.sig", signature_index::NAME);
+        for (os, arch) in [("macos", "aarch64"), ("windows", "x86_64")] {
+            assert!(github_page_assets(&indexed_page, tag, os, arch)
+                .unwrap()
+                .1
+                .ends_with(signature_index::NAME));
+        }
         assert!(github_page_assets(page, "v2.0.2-Beta.3-tauri", "macos", "aarch64").is_none());
         assert!(github_page_assets(
             &page.replace(".tar.gz.sig", ".tar.gz.unsigned"),
@@ -490,7 +604,8 @@ mod public_release_tests {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[path = "update_source/android.rs"]
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
 mod android;
 #[cfg(any(target_os = "android", test))]
 #[allow(unused_imports)]

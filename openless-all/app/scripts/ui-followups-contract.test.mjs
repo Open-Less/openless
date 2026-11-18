@@ -3,26 +3,29 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
-const floatingShell = readFileSync(resolve(root, 'src/components/FloatingShell.tsx'), 'utf8');
+const floatingShell = readFileSync(resolve(root, 'src/app/shell/FloatingShell.tsx'), 'utf8');
 const transitionViewport = readFileSync(
-  resolve(root, 'src/components/ui/TransitionViewport.tsx'),
+  resolve(root, 'src/ui/layout/TransitionViewport.tsx'),
   'utf8',
 );
-const capsuleStyles = readFileSync(resolve(root, 'src/components/CapsuleStyles.css'), 'utf8');
+const capsuleStyles = readFileSync(resolve(root, 'src/features/capsule/CapsuleStyles.css'), 'utf8');
 const insertMotion = readFileSync(resolve(root, 'src/lib/insertTextAnimation.ts'), 'utf8');
-const themeSection = readFileSync(resolve(root, 'src/pages/settings/ThemeSection.tsx'), 'utf8');
+const themeSection = readFileSync(
+  resolve(root, 'src/features/settings/sections/ThemeSection.tsx'),
+  'utf8',
+);
 const languageSection = readFileSync(
-  resolve(root, 'src/pages/settings/LanguageSection.tsx'),
+  resolve(root, 'src/features/settings/sections/LanguageSection.tsx'),
   'utf8',
 );
 const recordingSection = readFileSync(
-  resolve(root, 'src/pages/settings/RecordingInputSection.tsx'),
+  resolve(root, 'src/features/input/RecordingInputSection.tsx'),
   'utf8',
 );
 
 assert.match(
   floatingShell,
-  /import \{ SettingsModal, type SettingsSectionId \} from '\.\/SettingsModal';/,
+  /import \{ SettingsModal, type SettingsSectionId \} from '\.\.\/\.\.\/features\/settings\/shell\/SettingsModal';/,
   'settings must be ready before the first open instead of lazy-loading a flash placeholder',
 );
 assert.doesNotMatch(
@@ -30,10 +33,10 @@ assert.doesNotMatch(
   /const SettingsModal = lazy\(/,
   'settings must not be a first-open lazy chunk',
 );
-assert.match(
+assert.doesNotMatch(
   transitionViewport,
-  /className="ol-transition-mask"/,
-  'page transitions must render a pointer-transparent cover during handoff',
+  /PercentLoader|ol-transition-mask/,
+  'an already visible page must not be covered by a loading mask',
 );
 assert.match(
   capsuleStyles,

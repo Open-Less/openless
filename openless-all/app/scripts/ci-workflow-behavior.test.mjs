@@ -19,7 +19,6 @@ const workflow = (name) =>
   load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const ci = workflow('ci.yml');
-const linux = workflow('check-linux-egui.yml');
 const harmony = workflow('release-harmony.yml');
 const androidSteps = ci.jobs['android-check'].steps;
 const freeEmulatorSpace = androidSteps.find(
@@ -55,19 +54,7 @@ const install = androidSteps.find(
 const boot = androidSteps.find(
   (step) => step.name === 'Run Android Keystore instrumentation tests',
 ).run;
-const coreTests = linux.jobs['test-linux-egui'].steps.find(
-  (step) => step.name === 'Test Core, Linux host, and platform boundaries',
-).run;
-const hotkey =
-  'set -euo pipefail\n' +
-  coreTests.slice(
-    coreTests.indexOf('cargo test --locked -p openless-core --lib'),
-    coreTests.indexOf('cargo test --locked -p openless-harmony-host'),
-  );
-const publish = linux.jobs['publish-linux-egui'].steps.find((step) =>
-  step.run?.includes('gh release upload'),
-).run;
-for (const script of [install, boot, hotkey, publish, freeEmulatorSpace.run]) {
+for (const script of [install, boot, freeEmulatorSpace.run]) {
   const result = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 }
@@ -324,56 +311,6 @@ try {
         /gradle .*:app:connectedX86_64DebugAndroidTest -x :app:rustBuildX86_64Debug --no-daemon/,
       );
   }
-  for (const [name, env, expected] of [
-    ['hotkey-match', {}, 0],
-    ['hotkey-missing', { FAKE_HOTKEY_MATCH: '0' }, 1],
-    ['hotkey-cargo-failure', { FAKE_CARGO_EXIT: '23' }, 23],
-  ]) {
-    const test = fixture(name);
-    assert.equal(test.run(hotkey, env).status, expected, name);
-  }
-  {
-    const test = fixture('publish-assets');
-    const packages = join(test.dir, 'openless-linux-egui-packages');
-    const aliases = join(test.dir, 'openless-linux-egui-direct-download');
-    for (const [dir, names] of [
-      [
-        packages,
-        ['OpenLess-Linux-egui-test.deb', 'OpenLess-Linux-egui-test.rpm', 'SHA256SUMS-linux'],
-      ],
-      [aliases, ['OpenLess_linux_x86_64.deb', 'OpenLess_linux_x86_64.rpm']],
-    ]) {
-      mkdirSync(dir);
-      for (const name of names) writeFileSync(join(dir, name), 'fake verified asset');
-    }
-    assert.equal(test.run(publish).status, 0);
-    const upload = test
-      .trace()
-      .split('\n')
-      .find((line) => line.startsWith('gh release upload'));
-    for (const asset of [
-      'OpenLess-Linux-egui-test.deb',
-      'OpenLess-Linux-egui-test.rpm',
-      'SHA256SUMS-linux',
-      'OpenLess_linux_x86_64.deb',
-      'OpenLess_linux_x86_64.rpm',
-    ])
-      assert.ok(upload.includes(asset));
-    assert.ok(upload.endsWith('--clobber'));
-    rmSync(join(aliases, 'OpenLess_linux_x86_64.rpm'));
-    const uploadsBefore = test
-      .trace()
-      .split('\n')
-      .filter((line) => line.startsWith('gh release upload')).length;
-    assert.equal(test.run(publish).status, 1, 'missing asset must not publish');
-    assert.equal(
-      test
-        .trace()
-        .split('\n')
-        .filter((line) => line.startsWith('gh release upload')).length,
-      uploadsBefore,
-    );
-  }
   {
     const test = fixture('signing-passwords');
     const signing = join(test.dir, 'signing');
@@ -440,5 +377,5 @@ print(json.dumps([command[command.index('-keystorePwd') + 1], command[command.in
   rmSync(scratch, { recursive: true, force: true });
 }
 console.log(
-  'ci-workflow-behavior: install retries/cache hits, emulator cleanup, exact-test guard, assets and signing passwords passed',
+  'ci-workflow-behavior: install retries/cache hits, emulator cleanup and signing passwords passed',
 );

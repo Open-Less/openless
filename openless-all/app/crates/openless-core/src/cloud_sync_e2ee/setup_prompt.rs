@@ -10,7 +10,8 @@ fn configured(preferences: &UserPreferences, status: &CredentialsStatus) -> bool
         preferences.multimodal_pipeline_enabled,
         preferences.pipeline_mode,
     ) {
-        crate::shared_types::PipelineMode::Traditional => {
+        crate::shared_types::PipelineMode::Traditional
+        | crate::shared_types::PipelineMode::Deepseek => {
             status.asr_configured && status.llm_configured
         }
         crate::shared_types::PipelineMode::Multimodal => status.omni_configured,
@@ -37,7 +38,9 @@ impl EncryptedSyncService {
         if runtime.settings.enabled || runtime.settings.prompted {
             return Ok(false);
         }
-        let status = credentials.status(preferences.clone()).await?;
+        let status =
+            crate::deepseek_suite::credentials_status(credentials.as_ref(), preferences.clone())
+                .await?;
         if !configured(&preferences, &status) {
             return Ok(false);
         }

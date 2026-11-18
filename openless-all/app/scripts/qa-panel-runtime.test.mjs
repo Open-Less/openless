@@ -7,7 +7,7 @@ const app = fileURLToPath(new URL('../', import.meta.url)),
   require = createRequire(resolve(app, 'package.json')),
   ts = require('typescript');
 const helpers = await import(pathToFileURL(resolve(app, 'src/lib/qaMessage.ts')));
-const source = readFileSync(resolve(app, 'src/pages/QaPanel.tsx'), 'utf8');
+const source = readFileSync(resolve(app, 'src/features/qa/QaPanel.tsx'), 'utf8');
 const parsed = ts.createSourceFile(
   'QaPanel.tsx',
   source,
@@ -25,8 +25,7 @@ const names = parsed.statements
 const body = parsed.statements
   .filter((n) => !ts.isImportDeclaration(n))
   .map((n) => n.getFullText(parsed))
-  .join('\n')
-  .replaceAll("import('@tauri-apps/api/event')", 'Promise.resolve({listen: __listen})');
+  .join('\n');
 const compiled = ts.transpileModule(body, {
   compilerOptions: {
     target: ts.ScriptTarget.ES2020,
@@ -36,10 +35,56 @@ const compiled = ts.transpileModule(body, {
 }).outputText;
 const factory = new Function(
   ...names,
-  '__listen',
   'exports',
   'require',
-  `${compiled};return {QaPanel,Composer,EmbeddedComposer,MessageRow,ErrorContent};`,
+  `${compiled};return {QaPanel,Composer,MessageRow,ErrorContent};`,
+);
+function compileModule(file) {
+  const ast = ts.createSourceFile(
+    file,
+    readFileSync(resolve(app, 'src', file), 'utf8'),
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  return ts.transpileModule(
+    ast.statements
+      .filter(
+        (statement) => !ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement),
+      )
+      .map((statement) => statement.getFullText(ast))
+      .join('\n'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } },
+  ).outputText;
+}
+const makeLayout = new Function(
+  'useEffect',
+  'useRef',
+  'useState',
+  'useAppViewport',
+  'qaWindowSetExpanded',
+  'waitForViewportGeometry',
+  'exports',
+  `${compileModule('features/qa/useQaWindowLayout.ts')};return useQaWindowLayout;`,
+);
+const makeLifecycle = new Function(
+  'useEffect',
+  'useRef',
+  'useState',
+  'isTauriHost',
+  'listenQaWindowShown',
+  'listenQaWindowClosing',
+  'exports',
+  `${compileModule('features/qa/chat/lifecycle.ts')};return useChatPanelLifecycle;`,
+);
+const makeQaApi = new Function(
+  'listenTauriEvent',
+  'exports',
+  `${compileModule('api/qa.ts')};return exports;`,
+);
+const makeSelectionApi = new Function(
+  'listenTauriEvent',
+  'exports',
+  `${compileModule('api/selection.ts')};return exports;`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -116,6 +161,9 @@ function context(native = true, embedded = false) {
       submitArgs: [],
       snapshot: 0,
       mic: 0,
+      stopMic: 0,
+      cancelTurn: 0,
+      stopReading: 0,
       mode: [],
       preview: [],
       polishPreview: 0,
@@ -126,7 +174,6 @@ function context(native = true, embedded = false) {
       close: 0,
     };
   const pending = {};
-  const lifecycle = { enterEpoch: 0, closing: false };
   globalThis.window = {
     location: { search: '?window=qa&demo=1' },
     addEventListener: (name, fn) => {
@@ -137,19 +184,67 @@ function context(native = true, embedded = false) {
     },
   };
   const imports = Object.fromEntries(names.map((n) => [n, n]));
-  Object.assign(imports, {
-    useState: (i) => active.state(i),
-    useRef: (i) => active.ref(i),
-    useEffect: (f, d) => active.effect(f, d),
+  const boundary = {};
+  const listen = async (name, fn) => {
+    const listeners = events.get(name) ?? new Set();
+    listeners.add(fn);
+    events.set(name, listeners);
+    const ready = pending.listen?.(name);
+    if (ready) await ready;
+    return () => listeners.delete(fn);
+  };
+  const resize = async (next) => {
+    calls.resize.push(next);
+    return pending.resize?.(next);
+  };
+  const state = (value) => active.state(value);
+  const ref = (value) => active.ref(value);
+  const effect = (fn, deps) => active.effect(fn, deps);
+  const qaApi = makeQaApi(listen, {});
+  Object.assign(imports, qaApi, makeSelectionApi(listen, {}), {
+    useState: state,
+    useRef: ref,
+    useEffect: effect,
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
-    useChatPanelLifecycle: () => lifecycle,
-    isTauri: native,
-    ...helpers,
-    qaWindowSetExpanded: async (next) => {
-      calls.resize.push(next);
-      return pending.resize?.(next);
+    useChatPanelLifecycle: makeLifecycle(
+      effect,
+      ref,
+      state,
+      () => native,
+      qaApi.listenQaWindowShown,
+      qaApi.listenQaWindowClosing,
+      {},
+    ),
+    useModalActive: () => false,
+    useQaPipeline: () => 'deepseek',
+    getRuntimeOS: () => 'mac',
+    stopDeepSeekReading: () => {
+      calls.stopReading++;
     },
+    qaSources: (body) => ({ body, sources: [] }),
+    qaCancelTurn: async () => {
+      calls.cancelTurn++;
+      return pending.cancelTurn?.promise;
+    },
+    qaStopRecording: async () => {
+      calls.stopMic++;
+      return pending.stopMic?.promise;
+    },
+    isTauriHost: () => native,
+    ...helpers,
+    useQaWindowLayout: makeLayout(
+      effect,
+      ref,
+      state,
+      () => ({ boundary }),
+      resize,
+      async (_boundary, _fits, signal) => {
+        if (signal.aborted) throw new DOMException('Layout superseded', 'AbortError');
+        return {};
+      },
+      {},
+    ),
     qaSubmitText: async (text, session) => {
       calls.submit.push(text);
       calls.submitArgs.push([text, session]);
@@ -194,25 +289,47 @@ function context(native = true, embedded = false) {
     },
     chatPanelFocusKeyboard: async () => {},
   });
-  const api = factory(
-    ...names.map((n) => imports[n]),
-    async (name, fn) => {
-      const listeners = events.get(name) ?? new Set();
-      listeners.add(fn);
-      events.set(name, listeners);
-      return () => listeners.delete(fn);
-    },
-    {},
-    () => ({ jsx, jsxs: jsx, Fragment: 'fragment' }),
-  );
+  const api = factory(...names.map((n) => imports[n]), {}, () => ({
+    jsx,
+    jsxs: jsx,
+    Fragment: 'fragment',
+  }));
   const hooks = new Hooks(),
     render = () =>
       hooks.render(() => api.QaPanel({ embedded, onRequestClose: () => calls.close++ }));
   const emit = (name, payload) => {
-    for (const fn of events.get(name) ?? []) fn({ payload });
+    for (const fn of events.get(name) ?? []) fn(payload);
   };
-  const composer = (tree) => find(tree, (n) => n.type === api.EmbeddedComposer).props;
-  return { api, hooks, render, emit, calls, pending, lifecycle, events, keys, composer };
+  const composer = (tree) => find(tree, (n) => n.type === api.Composer).props;
+  const closePanel = () =>
+    find(
+      render(),
+      (n) => n.type === 'button' && n.props['aria-label'] === 'common.close',
+    ).props.onClick();
+  const beginConversation = (sessionId = 'open') => {
+    emit('qa:state', {
+      kind: 'answer',
+      sessionId,
+      messages: [
+        { role: 'user', content: 'First question' },
+        { role: 'assistant', content: 'First answer' },
+      ],
+    });
+    render();
+  };
+  return {
+    api,
+    hooks,
+    render,
+    emit,
+    calls,
+    pending,
+    events,
+    keys,
+    composer,
+    closePanel,
+    beginConversation,
+  };
 }
 let passed = 0,
   failed = 0;
@@ -227,11 +344,15 @@ async function test(name, fn) {
   }
 }
 await test('browser compact has no demo conversations and cannot execute native actions', async () => {
-  const c = context(false);
-  let tree = c.render();
+  const compact = context(false);
+  const tree = compact.render();
   assert(!tree.props.className.includes('is-expanded'));
-  assert(!nodes(tree).some((n) => n.type === c.api.MessageRow));
-  let p = c.composer(tree);
+  assert(
+    !nodes(tree).some((n) => n.type === compact.api.Composer || n.type === compact.api.MessageRow),
+  );
+  compact.hooks.unmount();
+  const c = context(false, true);
+  let p = c.composer(c.render());
   p.onChange('fixture');
   p = c.composer(c.render());
   await p.onSubmit();
@@ -317,9 +438,11 @@ await test('polish confirmation submits edited text and retains it after a faile
   assert.equal(c.calls.dismiss, 1);
   c.hooks.unmount();
 });
-await test('text submission stays compact until a result, excludes repeats and keeps a newer draft', async () => {
+await test('an open conversation supports follow-up text, excludes repeats and preserves a new draft', async () => {
   const c = context();
   c.render();
+  await tick();
+  c.beginConversation('answer');
   await tick();
   c.composer(c.render()).onChange('question');
   const p = c.composer(c.render()),
@@ -329,7 +452,7 @@ await test('text submission stays compact until a result, excludes repeats and k
   void p.onSubmit();
   c.render();
   await tick();
-  assert.deepEqual(c.calls.resize, [false]);
+  assert.deepEqual(c.calls.resize, [false, true]);
   assert.deepEqual(c.calls.submit, ['question']);
   c.composer(c.render()).onChange('next draft');
   send.resolve();
@@ -349,7 +472,7 @@ await test('text submission stays compact until a result, excludes repeats and k
   c.hooks.unmount();
 });
 await test('send failure preserves draft and exposes error without a fake user message', async () => {
-  const c = context();
+  const c = context(true, true);
   c.render();
   await tick();
   c.composer(c.render()).onChange('keep this');
@@ -368,20 +491,20 @@ await test('send failure preserves draft and exposes error without a fake user m
 await test('cancel during resize prevents queued question and late layout failures do not overwrite reopened compact state', async () => {
   const c = context();
   const d = deferred();
-  c.pending.resize = () => d.promise;
   c.render();
   await tick();
+  c.pending.resize = (expanded) => (expanded ? d.promise : Promise.resolve());
+  c.beginConversation();
   c.composer(c.render()).onChange('do not send');
   const submission = c.composer(c.render()).onSubmit();
   c.render();
   await tick();
-  await c.composer(c.render()).onClose();
-  c.lifecycle.closing = true;
+  await c.closePanel();
+  c.emit('chat-panel:closing', {});
   c.render();
-  c.lifecycle.closing = false;
-  c.lifecycle.enterEpoch++;
+  c.emit('chat-panel:shown', {});
   c.render();
-  assert.deepEqual(c.calls.resize, [false]);
+  assert.deepEqual(c.calls.resize, [false, true]);
   c.pending.resize = undefined;
   d.reject(new Error('old geometry'));
   await submission;
@@ -389,13 +512,13 @@ await test('cancel during resize prevents queued question and late layout failur
   c.render();
   await tick();
   assert.deepEqual(c.calls.submit, []);
-  assert.deepEqual(c.calls.resize, [false, false]);
-  assert.equal(c.composer(c.render()).status, 'idle');
-  assert(!nodes(c.render()).some((n) => n.props.className === 'qa-layout-error'));
+  assert.deepEqual(c.calls.resize, [false, true, false]);
+  assert(!c.render().props.className.includes('is-expanded'));
+  assert(!nodes(c.render()).some((n) => n.props.className === 'qa-layout-failure'));
   c.hooks.unmount();
 });
 await test('recording level requires active session; no fake recording before backend phase', async () => {
-  const c = context();
+  const c = context(true, true);
   c.render();
   await tick();
   const d = deferred();
@@ -460,6 +583,48 @@ await test('stale answer is ignored and final answer replaces streaming buffer e
   tree = c.render();
   assert(!nodes(tree).some((n) => n.type === 'AssistantMarkdown'));
   assert.equal(nodes(tree).filter((n) => n.type === c.api.MessageRow).length, 2);
+  c.hooks.unmount();
+});
+await test('Stop belongs to the presented turn, and repeated clicks cannot cancel a later turn', async () => {
+  const c = context(true, true);
+  c.render();
+  await tick();
+  c.beginConversation('first');
+  const firstTurn = [
+    { role: 'user', content: 'First question' },
+    { role: 'assistant', content: 'First answer' },
+  ];
+  c.emit('qa:state', { kind: 'thinking', sessionId: 'second', messages: firstTurn });
+  const stop = c.composer(c.render()).onCancelTurn;
+  const request = deferred();
+  c.pending.cancelTurn = request;
+  const stopped = c.calls.stopReading;
+  stop();
+  stop();
+  assert.equal(c.calls.cancelTurn, 1);
+  assert.equal(c.calls.stopReading, stopped + 1);
+  assert.equal(c.composer(c.render()).cancelBusy, true);
+  c.emit('qa:state', { kind: 'cancelled', sessionId: 'second', messages: firstTurn });
+  c.emit('qa:state', { kind: 'thinking', sessionId: 'third', messages: firstTurn });
+  stop();
+  assert.equal(c.calls.cancelTurn, 1);
+  request.reject(new Error('a superseded cancel failed'));
+  await tick();
+  const next = c.composer(c.render());
+  assert.equal(next.status, 'thinking');
+  assert.equal(next.cancelBusy, false);
+  assert.equal(nodes(c.render()).filter((n) => n.type === c.api.MessageRow).length, 2);
+  c.hooks.unmount();
+});
+await test('recording stop commits the recorded question without issuing a turn cancellation', async () => {
+  const c = context(true, true);
+  c.render();
+  await tick();
+  c.emit('qa:state', { kind: 'recording', sessionId: 'recording', messages: [] });
+  await c.composer(c.render()).onToggleRecording();
+  assert.equal(c.calls.stopMic, 1);
+  assert.equal(c.calls.mic, 0);
+  assert.equal(c.calls.cancelTurn, 0);
   c.hooks.unmount();
 });
 await test('edit preview captured in old session cannot be applied after a new recording starts', async () => {
@@ -556,7 +721,7 @@ await test('edit apply/revert are single-flight and send exact text plus capture
   c.hooks.unmount();
 });
 await test('mode update waits for backend and repeated click cannot flip twice', async () => {
-  const c = context();
+  const c = context(true, true);
   c.render();
   await tick();
   const d = deferred();
@@ -591,6 +756,20 @@ await test('embedded skip native resize, preserve existing parent close path and
     0,
   );
   assert.equal(c.keys.size, 0);
+});
+await test('unmount during dismiss registration releases the late handle and stops setup', async () => {
+  const c = context();
+  const dismiss = deferred();
+  c.pending.listen = (name) => (name === 'qa:dismiss' ? dismiss.promise : undefined);
+  c.render();
+  await tick();
+  assert.equal(c.events.get('qa:dismiss')?.size, 1);
+  c.hooks.unmount();
+  dismiss.resolve();
+  await tick();
+  assert.equal(c.events.has('selection-polish-preview:shown'), false);
+  assert([...c.events.values()].every((listeners) => listeners.size === 0));
+  assert.equal(c.calls.snapshot, 0);
 });
 await test('composer IME enter, WebKit 229 and form submission guards; genuine enter sends', async () => {
   const c = context();
@@ -641,7 +820,7 @@ await test('session drift during delayed native resize cancels old draft', async
   c.pending.resize = () => d.promise;
   c.render();
   await tick();
-  c.emit('qa:state', { kind: 'idle', sessionId: 'a', messages: [] });
+  c.beginConversation('a');
   c.composer(c.render()).onChange('belongs to a');
 
   const result = c.composer(c.render()).onSubmit();
@@ -657,7 +836,7 @@ await test('text always carries the exact session captured before resize', async
   const c = context();
   c.render();
   await tick();
-  c.emit('qa:state', { kind: 'idle', sessionId: 'a', messages: [] });
+  c.beginConversation('a');
   c.composer(c.render()).onChange('question a');
   await c.composer(c.render()).onSubmit();
   assert.deepEqual(c.calls.submitArgs, [['question a', 'a']]);
@@ -712,12 +891,17 @@ await test('snapshot completion after dismiss cannot reopen old recording state'
   c.pending.snapshot = () => first.promise;
   c.render();
   await tick();
-  c.emit('qa:dismiss', {});
-  c.lifecycle.closing = true;
-  c.render();
+  c.emit('chat-panel:closing', {});
+  c.emit('chat-panel:shown', {});
+  c.emit('qa:state', {
+    kind: 'recording',
+    sessionId: 'new',
+    messages: [],
+    selectionPreview: 'new',
+  });
   first.resolve({ kind: 'recording', sessionId: 'old', messages: [], selectionPreview: 'old' });
   await tick();
-  assert.equal(c.composer(c.render()).status, 'idle');
+  assert.equal(c.composer(c.render()).selectionPreview, 'new');
   c.hooks.unmount();
 });
 await test('a snapshot read failure does not silently remove all established live subscriptions', async () => {
@@ -733,7 +917,7 @@ await test('a snapshot read failure does not silently remove all established liv
   c.hooks.unmount();
 });
 await test('old microphone RPC failure cannot overwrite a newer native recording session', async () => {
-  const c = context();
+  const c = context(true, true);
   c.render();
   await tick();
   c.emit('qa:state', { kind: 'idle', sessionId: 'before', messages: [] });

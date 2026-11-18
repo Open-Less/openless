@@ -45,6 +45,12 @@ pub(crate) fn resolve_selection_workspace_capture(
     (capture_selection(), SelectionInsertionTarget)
 }
 
+/// Android already reads an explicit accessibility range; other mobile hosts
+/// return no selection. This path never consults the clipboard.
+pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, SelectionInsertionTarget) {
+    (capture_selection(), SelectionInsertionTarget)
+}
+
 pub(crate) fn selection_insertion_target_is_captured(_target: &SelectionInsertionTarget) -> bool {
     false
 }

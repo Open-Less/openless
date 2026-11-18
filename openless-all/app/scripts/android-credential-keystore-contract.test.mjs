@@ -17,7 +17,7 @@ const paths = {
   credentialCommands: new URL('../src-tauri/src/commands/credentials.rs', import.meta.url),
   coreApi: new URL('../crates/openless-core/src/api.rs', import.meta.url),
   mobileRuntime: new URL('../src-tauri/src/mobile_runtime.rs', import.meta.url),
-  channelList: new URL('../src/pages/settings/ChannelList.tsx', import.meta.url),
+  channelList: new URL('../src/features/providers/ChannelList.tsx', import.meta.url),
   copyScript: new URL('./copy-android-scaffolding.mjs', import.meta.url),
   ci: new URL('../../../.github/workflows/ci.yml', import.meta.url),
 };

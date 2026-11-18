@@ -1,4 +1,6 @@
-export const isHarmonyHost = import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony';
+import { isHarmonyRuntime } from '../runtime/environment';
+
+export const isHarmonyHost = isHarmonyRuntime();
 
 declare global {
   interface Window {
