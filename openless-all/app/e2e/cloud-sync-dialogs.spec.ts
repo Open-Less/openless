@@ -23,6 +23,9 @@ test('renewal appears before settings, stays paused on dismissal, and waits for 
   const dialog = page.getByRole('dialog', { name: /disclosure has changed|updated disclosure/i });
   const confirm = dialog.getByRole('button', { name: 'Agree to the update and continue' });
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveCSS('width', '512px');
+  await expect(dialog.locator('.ol-dialog-header')).toHaveCSS('border-bottom-width', '1px');
+  await expect(dialog.locator('.ol-dialog-footer')).toHaveCSS('border-top-width', '1px');
   await expect(dialog.getByRole('checkbox')).not.toBeChecked();
   await expect(confirm).toBeDisabled();
   await expect(dialog).toContainText('Mivra');
@@ -137,6 +140,12 @@ test('cloud deletion focuses cancel and keeps a failed confirmation open', async
   const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
   const remove = dialog.getByRole('button', { name: 'Delete cloud backup', exact: true });
   await expect(cancel).toBeFocused();
+  await expect(dialog).toHaveCSS('width', '400px');
+  await expect(dialog.locator('.ol-confirm-dialog-icon')).toHaveCSS('width', '36px');
+  const cancelBox = (await cancel.boundingBox())!;
+  const removeBox = (await remove.boundingBox())!;
+  expect(cancelBox.x).toBeLessThan(removeBox.x);
+  expect(Math.abs(cancelBox.width - removeBox.width)).toBeLessThan(1);
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
   await expect(dialog).toContainText('Local data is kept.');
   await expect(dialog).toContainText('up to 7 days');
