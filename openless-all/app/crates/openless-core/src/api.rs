@@ -12490,7 +12490,7 @@ mod tests {
             let mut entry = history_session(id);
             entry.created_at = created_at.into();
             entry.asr_provider = provider.map(Into::into);
-            // Keep fixed timestamps for ordering without expiring the fixtures.
+            // Fixed timestamps determine ordering. Age-based retention is tested separately.
             backend.append_history(entry, 0, None).unwrap();
         }
 
@@ -12568,7 +12568,6 @@ mod tests {
             entry.created_at = created_at.into();
             entry.asr_provider = Some(provider.into());
             entry.error_code = error_code.map(Into::into);
-            // Keep fixed timestamps for ordering without expiring the fixtures.
             backend.append_history(entry, 0, None).unwrap();
         }
 

@@ -1480,8 +1480,8 @@ mod platform {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
-        WH_KEYBOARD_LL, WM_QUIT,
+        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+        MSG, WH_KEYBOARD_LL, WM_QUIT,
     };
 
     use super::{
@@ -1679,7 +1679,12 @@ mod platform {
                 // dispatch path. As long as the event's virtual key matches the current
                 // configuration, the existing edge dedup and combo-abort logic still decide
                 // whether OpenLess fires; no filtering by synthetic-input source here.
-                if dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0) {
+                let vk_code = crate::side_aware_combo::normalize_windows_vk(
+                    keyboard.vkCode,
+                    keyboard.scanCode,
+                    keyboard.flags.0 & LLKHF_EXTENDED.0 != 0,
+                );
+                if dispatch_keyboard_event(ctx, vk_code, wparam.0) {
                     return LRESULT(1);
                 }
             }

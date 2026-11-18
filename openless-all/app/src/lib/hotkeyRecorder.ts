@@ -126,6 +126,7 @@ export function functionKeyPrimaryFromEvent(event: { code: string; key: string }
  * be trimmed to empty by backend validate_primary/parse_primary (#1109).
  */
 export function primaryFromKeyboardEvent(event: { code: string; key: string }): string {
+  if (event.code === 'ScrollLock') return 'ScrollLock';
   const functionKey = functionKeyPrimaryFromEvent(event);
   if (functionKey) return functionKey;
   const printable = primaryFromPrintableCode(event.code);
