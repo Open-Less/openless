@@ -1131,9 +1131,60 @@ pub fn whisper_uses_hotwords(provider_id: &str) -> bool {
     provider_id == "stepfun"
 }
 
-pub fn whisper_supports_verbose_json(provider_id: &str, advanced: AdvancedAsrConfig) -> bool {
+/// OpenAI's current transcription model (`gpt-transcribe`) takes the dictionary as
+/// first-class `keywords[]` instead of a free-form prompt.
+pub fn openai_transcribe_uses_keywords(provider_id: &str, model: &str) -> bool {
+    provider_id == "whisper" && model.trim().starts_with("gpt-transcribe")
+}
+
+/// ISO 639-1 codes the OpenAI transcription endpoint is known to accept. OpenAI publishes
+/// no complete `gpt-transcribe` language list and rejects the whole request for an
+/// unsupported code, so only the Whisper language set is sent; anything else is left to
+/// automatic detection (and a rejected hint is retried without `languages`).
+const OPENAI_TRANSCRIBE_LANGUAGE_CODES: &[&str] = &[
+    "af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr", "cs", "da", "nl", "en", "et", "fi",
+    "fr", "gl", "de", "el", "he", "hi", "hu", "is", "id", "it", "ja", "kn", "kk", "ko", "lv", "lt",
+    "mk", "ms", "mi", "mr", "ne", "no", "fa", "pl", "pt", "ro", "ru", "sr", "sk", "sl", "es", "sw",
+    "sv", "tl", "ta", "th", "tr", "uk", "ur", "vi", "cy",
+];
+
+/// Expected input languages for `gpt-transcribe`: the explicit ASR language when set,
+/// otherwise every working language, mapped to ISO 639-1, de-duplicated and limited to
+/// codes the endpoint is known to accept.
+pub fn openai_transcribe_languages(
+    asr_language: Option<&str>,
+    working_languages: &[String],
+) -> Vec<String> {
+    let explicit = asr_language
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let candidates: Vec<&str> = match explicit {
+        Some(language) => vec![language],
+        None => working_languages.iter().map(String::as_str).collect(),
+    };
+    let mut codes: Vec<String> = Vec::new();
+    for candidate in candidates {
+        let Some(code) = crate::language_catalog::asr_language_code(candidate) else {
+            continue;
+        };
+        let code = code.to_ascii_lowercase();
+        if OPENAI_TRANSCRIBE_LANGUAGE_CODES.contains(&code.as_str()) && !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    codes
+}
+
+pub fn whisper_supports_verbose_json(
+    provider_id: &str,
+    model: &str,
+    advanced: AdvancedAsrConfig,
+) -> bool {
     match provider_id {
-        "whisper" | "groq" => true,
+        // On OpenAI only `whisper-1` returns `verbose_json`; the gpt-*-transcribe models
+        // answer plain `json`, so asking for segment metadata would be rejected.
+        "whisper" => model.trim().starts_with("whisper"),
+        "groq" => true,
         "zenmux" => false,
         _ => advanced.verbose_json,
     }
@@ -1309,6 +1360,64 @@ mod tests {
             advanced_asr_config_for("whisper", Some(r#"{"verboseJson":true}"#)),
             AdvancedAsrConfig::default()
         );
+    }
+
+    #[test]
+    fn openai_verbose_json_and_keywords_follow_the_transcription_model() {
+        let advanced = AdvancedAsrConfig::default();
+        assert!(whisper_supports_verbose_json(
+            "whisper",
+            "whisper-1",
+            advanced
+        ));
+        for model in [
+            "gpt-transcribe",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+        ] {
+            assert!(!whisper_supports_verbose_json("whisper", model, advanced));
+        }
+        assert!(whisper_supports_verbose_json(
+            "groq",
+            "whisper-large-v3-turbo",
+            advanced
+        ));
+
+        assert!(openai_transcribe_uses_keywords("whisper", "gpt-transcribe"));
+        assert!(!openai_transcribe_uses_keywords("whisper", "whisper-1"));
+        assert!(!openai_transcribe_uses_keywords(
+            "whisper",
+            "gpt-4o-transcribe"
+        ));
+        assert!(!openai_transcribe_uses_keywords(
+            "openai-compatible",
+            "gpt-transcribe"
+        ));
+    }
+
+    #[test]
+    fn openai_transcribe_languages_map_working_languages_to_known_codes() {
+        let working = vec![
+            "简体中文".to_string(),
+            "繁体中文".to_string(),
+            "English".to_string(),
+            "తెలుగు".to_string(),
+            "unknown".to_string(),
+        ];
+        // Telugu is not in the known-accepted set; both Chinese scripts collapse to `zh`.
+        assert_eq!(
+            openai_transcribe_languages(None, &working),
+            vec!["zh", "en"]
+        );
+        assert_eq!(
+            openai_transcribe_languages(Some("ja"), &working),
+            vec!["ja"]
+        );
+        assert_eq!(
+            openai_transcribe_languages(Some("  "), &working),
+            vec!["zh", "en"]
+        );
+        assert!(openai_transcribe_languages(None, &[]).is_empty());
     }
 
     #[test]
