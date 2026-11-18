@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { addLearnedVocab } from '../../api/vocabulary';
 import { Button as Btn } from '../../ui/controls/Button';
-import { inputStyle } from '../../pages/settings/shared';
+import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 
 /** An explicit, cross-platform alternative when a host editor cannot be read. */

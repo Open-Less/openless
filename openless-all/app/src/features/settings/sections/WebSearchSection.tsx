@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
 import { emitSaved } from '../../../lib/savedEvent';
-import { Btn, Card } from '../../../pages/_atoms';
-import { inputStyle, SettingRow } from '../../../pages/settings/shared';
+import { Button as Btn } from '../../../ui/controls/Button';
+import { Card } from '../../../ui/layout/Card';
+import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
+import { SettingRow } from '../../../ui/controls/SettingRow';
 
 export interface WebSearchConfig {
   provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';

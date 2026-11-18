@@ -4,7 +4,8 @@ import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { setQuickNoteHotkey } from '../../api/hotkeys';
 import { isDesktop } from '../../runtime/platform';
 import { useHotkeySettings } from '../../data/preferences';
-import { Btn, Card } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
 import { History } from '../history/History';
 
 const QUICK_NOTE_SHORTCUT_HIDDEN_KEY = 'openless.quick-note.shortcut-hidden';

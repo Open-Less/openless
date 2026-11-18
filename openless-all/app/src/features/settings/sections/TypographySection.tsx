@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Select } from '../../../components/ui/Select';
-import { Card } from '../../../pages/_atoms';
-import { SectionTitle, SettingRow } from '../../../pages/settings/shared';
+import { Card } from '../../../ui/layout/Card';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
+import { SettingRow } from '../../../ui/controls/SettingRow';
 import {
   FONT_CATALOG,
   readTypography,

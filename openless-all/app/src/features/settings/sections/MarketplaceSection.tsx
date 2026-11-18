@@ -12,8 +12,9 @@ import { useHotkeySettings } from '../../../data/preferences';
 import { Icon } from '../../../components/Icon';
 import { GithubLoginModal } from '../../accounts/GithubLoginModal';
 import { ExitPresence } from '../../../components/ui/Modal';
-import { Btn, Card } from '../../../pages/_atoms';
-import { SectionTitle } from '../../../pages/settings/shared';
+import { Button as Btn } from '../../../ui/controls/Button';
+import { Card } from '../../../ui/layout/Card';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
 import { marketplaceAuthStatus, marketplaceLogout } from '../../../api/marketplace';
 
 export function MarketplaceSection() {

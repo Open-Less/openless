@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { RestorePreview, SyncConflictChoice } from '../../api/cloud-sync';
-import { Btn } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
 
 const categoryKeys = [
   'preferences',

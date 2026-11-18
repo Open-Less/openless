@@ -12,7 +12,9 @@ import {
   type LocalAsrModelStatus,
   type LocalAsrTestResult,
 } from '../../api/local-asr';
-import { Btn, Card, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { Pill } from '../../ui/controls/Pill';
 import { Icon } from '../../components/Icon';
 import { formatBytes } from './helpers';
 import type { RemoteSize } from './types';

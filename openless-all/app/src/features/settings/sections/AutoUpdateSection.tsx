@@ -6,8 +6,9 @@ import { useTranslation } from 'react-i18next';
 import { getPlatformCapabilities, isAndroid } from '../../../runtime/platform';
 import type { PlatformCapabilities } from '../../../api/contracts';
 import { useHotkeySettings } from '../../../data/preferences';
-import { Card } from '../../../pages/_atoms';
-import { SectionTitle, SettingRow, Toggle } from '../../../pages/settings/shared';
+import { Card } from '../../../ui/layout/Card';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
+import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 
 export function AutoUpdateSection() {
   const { t } = useTranslation();

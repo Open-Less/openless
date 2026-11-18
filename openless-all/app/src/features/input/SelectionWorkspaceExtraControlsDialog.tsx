@@ -5,7 +5,8 @@ import type { EditPlanFormat, UserPreferences } from '../../api/contracts';
 import { PresenceModal } from '../../components/ui/Modal';
 import { Segmented } from '../../components/ui/Segmented';
 import { useMobileLayout } from '../../lib/useMobileLayout';
-import { Toggle, inputStyle } from '../../pages/settings/shared';
+import { Toggle } from '../../ui/controls/SettingRow';
+import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 
 const editPlanFormatOptions: Array<{ value: EditPlanFormat }> = [
   { value: 'xml' },

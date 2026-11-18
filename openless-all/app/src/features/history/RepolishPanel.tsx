@@ -7,7 +7,8 @@ import { copyTextToClipboard } from '../../api/files';
 import { AssistantMarkdown } from '../../components/chat/markdown';
 import { Hint } from '../../components/Tooltip';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Btn, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Pill } from '../../ui/controls/Pill';
 import {
   defaultPackId,
   packDisplayName,

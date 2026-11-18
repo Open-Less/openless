@@ -1,7 +1,9 @@
 import { useTranslation } from 'react-i18next';
 import type { CorrectionRule } from '../../api/contracts';
 import { useMobileLayout } from '../../lib/useMobileLayout';
-import { Btn, Card, PageHeader } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { PageHeader } from '../../ui/layout/PageHeader';
 import { useCorrectionRules } from './useCorrectionRules';
 
 export function Corrections() {

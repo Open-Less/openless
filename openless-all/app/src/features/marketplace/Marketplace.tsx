@@ -10,7 +10,10 @@ import {
   isMarketplaceInstallActive,
   isMarketplaceInstallErrorForPack,
 } from '../../lib/marketplaceInstall';
-import { Btn, Card, PageHeader, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { PageHeader } from '../../ui/layout/PageHeader';
+import { Pill } from '../../ui/controls/Pill';
 import { useMarketplaceWorkspace } from './useMarketplaceWorkspace';
 
 export function Marketplace() {

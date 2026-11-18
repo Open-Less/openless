@@ -2,8 +2,8 @@ import { useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../../data/preferences';
 import { Segmented } from '../../../components/ui/Segmented';
-import { Card } from '../../../pages/_atoms';
-import { SettingRow, Toggle } from '../../../pages/settings/shared';
+import { Card } from '../../../ui/layout/Card';
+import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import {
   readThemePreference,
   setThemePreference,

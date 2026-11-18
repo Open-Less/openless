@@ -45,14 +45,11 @@ import type { PipelineMode, PlatformCapabilities, PlatformKind } from '../../../
 import { type OS } from '../../../runtime/environment';
 import { useHotkeySettings } from '../../../data/preferences';
 import { emitSaved } from '../../../lib/savedEvent';
-import {
-  SettingRow,
-  Toggle,
-  ExperimentalSectionTitle,
-  inputStyle,
-} from '../../../pages/settings/shared';
+import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
+import { ExperimentalSectionTitle } from '../../../ui/layout/ExperimentalSectionTitle';
+import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 import { Segmented } from '../../../components/ui/Segmented';
-import { Card } from '../../../pages/_atoms';
+import { Card } from '../../../ui/layout/Card';
 import { TransitionViewport } from '../../../components/ui/TransitionViewport';
 import {
   availableServiceViews,

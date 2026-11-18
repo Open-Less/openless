@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PermissionStatus, PlatformCapabilities } from '../../api/contracts';
 import { openSystemSettings } from '../../api/permissions';
-import { ProvidersSection } from '../../pages/settings/ChannelList';
+import { ProvidersSection } from '../providers/ChannelList';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { DesktopOnboarding } from './DesktopOnboarding';
 

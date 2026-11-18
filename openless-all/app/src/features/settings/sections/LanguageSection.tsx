@@ -9,8 +9,8 @@ import {
   type SupportedLocale,
 } from '../../../i18n/index';
 import { SelectLite } from '../../../components/ui/SelectLite';
-import { Card } from '../../../pages/_atoms';
-import { SettingRow } from '../../../pages/settings/shared';
+import { Card } from '../../../ui/layout/Card';
+import { SettingRow } from '../../../ui/controls/SettingRow';
 
 export function LanguageSection() {
   const { t, i18n } = useTranslation();

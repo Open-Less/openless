@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../../components/ui/Modal';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Btn } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
 import {
   siwcAction,
   siwcStatus,

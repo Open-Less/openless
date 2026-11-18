@@ -16,7 +16,7 @@ import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { RevealText } from '../../components/ui/RevealText';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import { setLocalePreference, SUPPORTED_LOCALES, type SupportedLocale } from '../../i18n';
-import { ProviderLeaveContext } from '../../pages/settings/ProviderForm';
+import { ProviderLeaveContext } from '../providers/ProviderForm';
 import './desktop-onboarding.css';
 import { granted, useDesktopGuide } from './useDesktopGuide';
 

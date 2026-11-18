@@ -78,7 +78,11 @@ import { SelectLite } from '../../components/ui/SelectLite';
 import { listenModelProgress } from '../../data/model-progress';
 import { useHotkeySettings } from '../../data/preferences';
 import { useLayoutStack } from '../../lib/useMobileLayout';
-import { Btn, Card, Collapsible, PageHeader, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { Collapsible } from '../../ui/controls/Collapsible';
+import { PageHeader } from '../../ui/layout/PageHeader';
+import { Pill } from '../../ui/controls/Pill';
 import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import {

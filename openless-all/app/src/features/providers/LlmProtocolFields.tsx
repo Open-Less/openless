@@ -4,8 +4,9 @@ import { SelectLite } from '../../components/ui/SelectLite';
 import { readCredential, setCredential } from '../../api/providers';
 import type { LlmRequestFormat } from '../../api/providers';
 import { emitSaved } from '../../lib/savedEvent';
-import { Btn } from '../../pages/_atoms';
-import { SettingRow, Toggle, inputStyle } from '../../pages/settings/shared';
+import { Button as Btn } from '../../ui/controls/Button';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
+import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { ProviderFormContext } from './ProviderForm';
 
 import {

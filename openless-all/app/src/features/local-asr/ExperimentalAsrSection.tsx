@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { PresenceModal } from '../../components/ui/Modal';
 import { Collapse } from '../../components/ui/Disclosure';
 import { Icon } from '../../components/Icon';
-import { Btn, Card } from '../../pages/_atoms';
-import { SettingRow, Toggle } from '../../pages/settings/shared';
-import { ExperimentalSectionTitle } from './ExperimentalSectionTitle';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
+import { ExperimentalSectionTitle } from '../../ui/layout/ExperimentalSectionTitle';
 import {
   downloadPercent,
   EXPERIMENTAL_ASR_MODELS,

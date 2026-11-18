@@ -10,8 +10,10 @@ import { debugReadCursorContext, exportErrorLog } from '../../../api/files';
 import { useMobileLayout } from '../../../lib/useMobileLayout';
 import type { HostDocumentReadResult } from '../../../api/contracts';
 import { useHotkeySettings } from '../../../data/preferences';
-import { Btn, Card } from '../../../pages/_atoms';
-import { SettingRow, Toggle, inputStyle } from '../../../pages/settings/shared';
+import { Button as Btn } from '../../../ui/controls/Button';
+import { Card } from '../../../ui/layout/Card';
+import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
+import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 

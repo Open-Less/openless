@@ -2,14 +2,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { createInteractionController } from '../ui/overlays/interactionController';
+import { createInteractionController } from '../../ui/overlays/interactionController';
 
 const source = ts.createSourceFile(
   'useStylePackWorkspace.ts',
-  readFileSync(
-    new URL('../features/style-packs/useStylePackWorkspace.ts', import.meta.url),
-    'utf8',
-  ),
+  readFileSync(new URL('./useStylePackWorkspace.ts', import.meta.url), 'utf8'),
   ts.ScriptTarget.ES2022,
   true,
   ts.ScriptKind.TS,

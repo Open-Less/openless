@@ -2,8 +2,10 @@
 
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../../data/preferences';
-import { Card } from '../../../pages/_atoms';
-import { SettingRow, SectionTitle, inputStyle } from '../../../pages/settings/shared';
+import { Card } from '../../../ui/layout/Card';
+import { SettingRow } from '../../../ui/controls/SettingRow';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
+import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 
 // Range limits: retention 0-365 days, context window 0-60 minutes (larger values are meaningless
 // for real conversation scenarios and just burn tokens).

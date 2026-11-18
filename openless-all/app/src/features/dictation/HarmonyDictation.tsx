@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
-import { Btn, Card } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
 import { useInAppDictation } from './useInAppDictation';
 
 export function HarmonyDictation({ onComplete }: { onComplete: () => void }) {

@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { SectionTitle } from '../../ui/layout/SectionTitle';
+import { SectionTitle } from './SectionTitle';
 import { ExperimentalSectionLabel } from './ExperimentalSectionLabel';
 
 export function ExperimentalSectionTitle({

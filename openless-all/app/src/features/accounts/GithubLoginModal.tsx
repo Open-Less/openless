@@ -16,7 +16,7 @@ import {
   githubSlowDownIntervalMs,
 } from '../../api/marketplace';
 import { openExternal } from '../../api/files';
-import { Btn } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
 import { Modal } from '../../ui/overlays/Modal';
 
 type Phase =

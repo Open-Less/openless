@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getPlatformCapabilities, type PlatformCapabilities } from '../../../runtime/platform';
 import { openAndroidLocalMigration } from '../../../api/files';
-import { Btn, Card } from '../../../pages/_atoms';
-import { SectionTitle } from '../../../pages/settings/shared';
+import { Button as Btn } from '../../../ui/controls/Button';
+import { Card } from '../../../ui/layout/Card';
+import { SectionTitle } from '../../../ui/layout/SectionTitle';
 
 /** Application-level Android entry point for the native local migration flow. */
 export function LocalMigrationSection() {

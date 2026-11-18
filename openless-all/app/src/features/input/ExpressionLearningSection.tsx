@@ -7,13 +7,10 @@ import {
 } from '../../api/input';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { useHotkeySettings } from '../../data/preferences';
-import { Card } from '../../pages/_atoms';
-import {
-  btnGhostStyle,
-  ExperimentalSectionTitle,
-  SettingRow,
-  Toggle,
-} from '../../pages/settings/shared';
+import { Card } from '../../ui/layout/Card';
+import { btnGhostStyle } from '../../ui/controls/settingsFieldStyles';
+import { ExperimentalSectionTitle } from '../../ui/layout/ExperimentalSectionTitle';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 
 export function ExpressionLearningSection() {
   const { t } = useTranslation();

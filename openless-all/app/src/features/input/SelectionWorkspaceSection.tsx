@@ -10,8 +10,9 @@ import { setSelectionPolishHotkey } from '../../api/hotkeys';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { useHotkeySettings } from '../../data/preferences';
 import { Segmented } from '../../components/ui/Segmented';
-import { Card } from '../../pages/_atoms';
-import { SectionTitle, SettingRow, Toggle } from '../../pages/settings/shared';
+import { Card } from '../../ui/layout/Card';
+import { SectionTitle } from '../../ui/layout/SectionTitle';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { SelectionWorkspaceExtraControlsDialog } from './SelectionWorkspaceExtraControlsDialog';
 
 const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [

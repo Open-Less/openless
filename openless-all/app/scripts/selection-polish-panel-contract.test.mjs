@@ -43,12 +43,17 @@ for (const [name, source] of [
     violations.push(`${name}: still imports the deleted SelectionPolishPreview page`);
   }
 }
-const previewPageExists = await stat(`${appRoot}/src/pages/SelectionPolishPreview.tsx`).then(
-  () => true,
-  () => false,
-);
-if (previewPageExists) {
-  violations.push('src/pages/SelectionPolishPreview.tsx still exists');
+for (const source of [
+  'src/pages/SelectionPolishPreview.tsx',
+  'src/features/qa/SelectionPolishPreview.tsx',
+]) {
+  const previewPageExists = await stat(`${appRoot}/${source}`).then(
+    () => true,
+    () => false,
+  );
+  if (previewPageExists) {
+    violations.push(`${source} still exists`);
+  }
 }
 
 // 2. 后端把「润色结果」交给 qa 面板，而不是新窗口。

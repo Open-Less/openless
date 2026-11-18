@@ -5,8 +5,9 @@ import { Icon } from '../../../src/components/Icon';
 import { useHotkeySettings } from '../../../src/data/preferences';
 import { useInteraction } from '../../../src/ui/overlays/InteractionProvider';
 import type { UserPreferences } from '../../../src/api/contracts';
-import { Btn, Pill } from '../../../src/pages/_atoms';
-import { SettingRow } from '../../../src/pages/settings/shared';
+import { Button as Btn } from '../../../src/ui/controls/Button';
+import { Pill } from '../../../src/ui/controls/Pill';
+import { SettingRow } from '../../../src/ui/controls/SettingRow';
 import { SolidSlider } from '../../../src/ui/controls/Slider';
 import { useLayoutStack, useConservativeLayout } from '../../../src/lib/useMobileLayout';
 import {

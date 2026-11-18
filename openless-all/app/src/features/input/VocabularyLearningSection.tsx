@@ -4,13 +4,10 @@ import { SelectLite } from '../../components/ui/SelectLite';
 import { getRuntimeOS } from '../../runtime/environment';
 import type { UserPreferences } from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
-import { Card } from '../../pages/_atoms';
-import {
-  btnGhostStyle,
-  ExperimentalSectionTitle,
-  SettingRow,
-  Toggle,
-} from '../../pages/settings/shared';
+import { Card } from '../../ui/layout/Card';
+import { btnGhostStyle } from '../../ui/controls/settingsFieldStyles';
+import { ExperimentalSectionTitle } from '../../ui/layout/ExperimentalSectionTitle';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 
 const defaults: UserPreferences['vocabularyLearningSettings'] = {
   observationSeconds: 60,

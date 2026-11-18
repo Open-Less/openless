@@ -6,8 +6,10 @@ import {
   type DeepSeekSuiteConfig,
 } from './deepseekSuite';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
-import { Btn, Card } from '../../pages/_atoms';
-import { inputStyle, SettingRow } from '../../pages/settings/shared';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { inputStyle } from '../../ui/controls/settingsFieldStyles';
+import { SettingRow } from '../../ui/controls/SettingRow';
 
 export function DeepSeekSuiteSection() {
   const { t, i18n } = useTranslation();

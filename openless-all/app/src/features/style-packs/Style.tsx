@@ -7,7 +7,10 @@ import { ChoiceChips } from '../../components/ui/ChoiceChips';
 import { ExpandableText } from '../../components/ui/Disclosure';
 import { DismissibleCard } from '../../components/ui/DismissibleCard';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
-import { Btn, Card, PageHeader, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { PageHeader } from '../../ui/layout/PageHeader';
+import { Pill } from '../../ui/controls/Pill';
 import { useStylePackWorkspace } from './useStylePackWorkspace';
 
 function modeTone(mode: PolishMode): 'default' | 'blue' | 'ok' | 'outline' | 'dark' {

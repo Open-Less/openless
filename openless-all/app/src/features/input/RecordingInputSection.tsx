@@ -44,9 +44,12 @@ import type {
 import { useHotkeySettings } from '../../data/preferences';
 import { SelectLite } from '../../components/ui/SelectLite';
 
-import { Card, Btn } from '../../pages/_atoms';
+import { Card } from '../../ui/layout/Card';
+import { Button as Btn } from '../../ui/controls/Button';
 import { Segmented } from '../../components/ui/Segmented';
-import { SectionTitle, SettingRow, Toggle, inputStyle } from '../../pages/settings/shared';
+import { SectionTitle } from '../../ui/layout/SectionTitle';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
+import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { getRuntimeOS, type OS } from '../../runtime/environment';
 

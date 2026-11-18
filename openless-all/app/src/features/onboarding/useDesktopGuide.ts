@@ -22,7 +22,7 @@ import {
 } from '../../api/permissions';
 import { getCredentials } from '../../api/providers';
 import { useHotkeySettings } from '../../data/preferences';
-import { useProviderForm } from '../../pages/settings/ProviderForm';
+import { useProviderForm } from '../providers/ProviderForm';
 import { getRuntimeOS, isPreviewHost, isTauriHost } from '../../runtime/environment';
 
 export const granted = (status: PermissionStatus | null) =>

@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next';
 import type { DictationSession } from '../../api/contracts';
 import { Icon } from '../../components/Icon';
 import { formatHistoryTime } from '../../lib/localeFormat';
-import { Btn, Card, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { Pill } from '../../ui/controls/Pill';
 import { formatDuration, historyTitle, TRUNCATED_PILL_STYLE } from './presentation';
 
 interface Props {

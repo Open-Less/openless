@@ -31,8 +31,10 @@ import type {
 } from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
 import { REOPEN_ONBOARDING_EVENT } from '../../lib/desktopOnboarding';
-import { Btn, Card, Pill } from '../../pages/_atoms';
-import { SettingRow } from '../../pages/settings/shared';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { Pill } from '../../ui/controls/Pill';
+import { SettingRow } from '../../ui/controls/SettingRow';
 
 const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 

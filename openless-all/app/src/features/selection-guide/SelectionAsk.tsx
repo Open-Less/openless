@@ -4,8 +4,8 @@ import { formatComboLabel } from '../../api/hotkeys';
 import { setQaHotkey } from '../../api/qa';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { useHotkeySettings } from '../../data/preferences';
-import { PageHeader } from '../../pages/_atoms';
-import { Toggle } from '../../pages/settings/shared';
+import { PageHeader } from '../../ui/layout/PageHeader';
+import { Toggle } from '../../ui/controls/SettingRow';
 import './SelectionAsk.css';
 
 export function SelectionAsk({ onOpenShortcuts }: { onOpenShortcuts?: () => void }) {

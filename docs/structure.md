@@ -38,8 +38,9 @@ openless-src/                     Git 仓库、分支与发布边界
 | 任务 | 入口 | 相关边界 |
 | --- | --- | --- |
 | 启动与窗口分支 | `src/app/bootstrap.tsx`、`src/app/windowRoutes.tsx`、`src/app/startup.ts` | `src/runtime/` 识别宿主并完成启动握手，Android 嵌入面板由 `src/app/useAndroidPanels.ts` 管理 |
-| 主界面、页面与设置 | `src/app/shell/`、`src/features/` | 导航和窗口布局在 app，业务界面按领域组织（设置、渠道、历史、模型、胶囊、更新等）；兼容入口位于 `src/pages/` 和 `src/components/` |
-| 多语言、主题、组件 | `src/i18n/`、`src/ui/`、`src/styles/` | 每窗一个 AppViewport；内容与浮层共享可见边界 |
+| 主界面、页面与设置 | `src/app/shell/`、`src/features/` | 导航和窗口布局在 `app`，直接加载 `features` 下的业务界面（设置、渠道、历史、模型、胶囊、更新等） |
+| 共享界面组件 | `src/ui/controls/`、`src/ui/layout/`、`src/ui/overlays/` | 控件和布局通过参数与回调复用；每窗一个 AppViewport，内容与浮层共享可见边界 |
+| 多语言与主题 | `src/i18n/`、`src/styles/` | 文案、语种与主题样式 |
 | 共享快照、偏好和预览 | `src/data/`、`src/preview/` | data 管理读写次序；preview 提供浏览器的设备预设、模拟数据和事件 |
 | 新增或调整 IPC | `src/api/`、`src/runtime/`、`src-tauri/src/commands/` | React 通过分域 API 读写；Rust/TypeScript 类型、注册、事件与 `contract/` 同步 |
 | 共享业务入口 | `crates/openless-core/src/api.rs` | `events.rs`、`ports.rs`、`domains.rs`、`config.rs` |

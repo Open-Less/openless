@@ -16,7 +16,7 @@ import { readCredential, setCredential } from '../../api/providers';
 import { Icon } from '../../components/Icon';
 import { emitSaved } from '../../lib/savedEvent';
 import { dismissNotification } from '../../lib/notifications';
-import { inputStyle } from '../../pages/settings/shared';
+import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { SelectLite, type SelectOption } from '../../ui/controls/SelectLite';
 import {
   ChannelFormRow,

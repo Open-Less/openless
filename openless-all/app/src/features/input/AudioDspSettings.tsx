@@ -5,7 +5,7 @@ import { audioEqualizerPresets, defaultAudioDsp, equalizerFrequencies } from '..
 import { isAndroid } from '../../runtime/platform';
 import { AndroidAudioEffects } from './AndroidAudioEffects';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { SettingRow, Toggle } from '../../pages/settings/shared';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { SolidSlider } from '../../ui/controls/Slider';
 
 export function AudioDspSettings({

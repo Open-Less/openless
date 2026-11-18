@@ -4,7 +4,8 @@ import type { DictionaryEntry } from '../../api/contracts';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../components/Tooltip';
-import { Btn, PageHeader } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { PageHeader } from '../../ui/layout/PageHeader';
 import { Modal } from '../../ui/overlays/Modal';
 import { useVocabularyWorkspace } from './useVocabularyWorkspace';
 

@@ -16,8 +16,9 @@ import {
 } from '../../ui/overlays/Dialog';
 import { syncDisclosure } from './disclosure';
 import { Collapse } from '../../components/ui/Disclosure';
-import { Btn, Card } from '../../pages/_atoms';
-import { Toggle } from '../../pages/settings/shared';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { Toggle } from '../../ui/controls/SettingRow';
 import { useHotkeySettings } from '../../data/preferences';
 import { marketplaceAuthStatus } from '../../api/marketplace';
 import { readCredential } from '../../api/providers';

@@ -32,7 +32,8 @@ import {
   useReadableLayout,
 } from '../../lib/useMobileLayout';
 import { useSpringReorder } from '../../lib/useSpringReorder';
-import { Btn, Pill } from '../../pages/_atoms';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Pill } from '../../ui/controls/Pill';
 import { getRuntimeOS } from '../../runtime/environment';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { OmniChannelSection } from './ProvidersSection';

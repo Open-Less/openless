@@ -7,7 +7,7 @@ import {
   type AndroidAudioEffectsStatus,
 } from '../../api/input';
 import { isTauriHost } from '../../runtime/environment';
-import { SettingRow, Toggle } from '../../pages/settings/shared';
+import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 
 type Spectrum = { raw: number[]; processed: number[] };
 

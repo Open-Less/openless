@@ -8,8 +8,9 @@ import { useTranslation } from 'react-i18next';
 import { createDeletionBatch, IncompleteDeletion } from '../../../api/deletion-batch';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 import { SelectLite } from '../../../components/ui/SelectLite';
-import { Btn } from '../../../pages/_atoms';
-import { SettingRow, inputStyle } from '../../../pages/settings/shared';
+import { Button as Btn } from '../../../ui/controls/Button';
+import { SettingRow } from '../../../ui/controls/SettingRow';
+import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 import {
   cleanupIncompleteLocalAsrModel,
   getFoundryLocalAsrCatalog,
