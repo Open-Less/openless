@@ -20,6 +20,7 @@ import { SyncPasswordField } from './SyncPasswordField';
 import { Collapse } from '../../components/ui/Disclosure';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
+import { useModalActive } from '../../ui/layout/AppViewport';
 import { Toggle } from '../../ui/controls/SettingRow';
 import { useHotkeySettings } from '../../data/preferences';
 import { marketplaceAuthStatus } from '../../api/marketplace';
@@ -323,6 +324,7 @@ export function CustomSyncServerSection() {
 export function CloudSyncSection() {
   const { t, i18n } = useTranslation();
   const { notify, confirm } = useInteraction('cloud-sync');
+  const modalActive = useModalActive();
   const dialogDescriptionId = useId();
   const previewScenario = getCloudSyncPreviewScenario();
   const { prefs, updatePrefs, refresh } = useHotkeySettings();
@@ -761,7 +763,11 @@ export function CloudSyncSection() {
   const working = busy || status?.syncState === 'syncing';
   const taskId = status?.taskId ?? null;
   const cancelRequested = taskId !== null && cancelRequestedTask === taskId;
-  const restoreReviewOpen = dialog?.kind === 'restore';
+  const sectionHeaderTask = modalActive && !dialog && working ? taskId : null;
+  const dialogHeaderTask = dialog && working ? taskId : null;
+  const sectionHeaderAction = t(
+    sectionHeaderTask ? 'cloudSyncE2ee.cancelTask' : 'cloudSyncE2ee.refresh',
+  );
   const progressMessage = t(
     cancelRequested
       ? 'cloudSyncE2ee.cancelRequested'
@@ -776,8 +782,8 @@ export function CloudSyncSection() {
       return;
     }
     if (notificationSettled.current) return;
-    // A restore review owns keyboard focus, so its task action belongs in the dialog.
-    const canCancel = taskId !== null && !cancelRequested && !restoreReviewOpen;
+    // Global notification actions are outside the modal focus scope.
+    const canCancel = taskId !== null && !cancelRequested && !modalActive;
     const options = {
       message: progressMessage,
       state: 'saving' as const,
@@ -787,7 +793,7 @@ export function CloudSyncSection() {
     };
     if (progressNotification.current) progressNotification.current.update(options);
     else progressNotification.current = notify({ ...options, key: 'cloud-sync-operation' });
-  }, [working, taskId, cancelRequested, restoreReviewOpen, progressMessage, notify, t]);
+  }, [working, taskId, cancelRequested, modalActive, progressMessage, notify, t]);
   useEffect(
     () => () => {
       progressNotification.current?.dismiss();
@@ -854,12 +860,12 @@ export function CloudSyncSection() {
           <button
             type="button"
             className="ol-settings-back"
-            onClick={() => void load()}
-            disabled={loading}
-            aria-label={t('cloudSyncE2ee.refresh')}
-            title={t('cloudSyncE2ee.refresh')}
+            onClick={() => void (sectionHeaderTask ? cancelTask(sectionHeaderTask) : load())}
+            disabled={sectionHeaderTask ? cancelRequested : loading}
+            aria-label={sectionHeaderAction}
+            title={sectionHeaderAction}
           >
-            <Icon name="refresh" size={16} />
+            <Icon name={sectionHeaderTask ? 'close' : 'refresh'} size={16} />
           </button>
         </header>
         {previewScenario && <p role="note">{t('cloudSyncE2ee.previewNotice')}</p>}
@@ -1129,8 +1135,12 @@ export function CloudSyncSection() {
               busy={working}
               onClose={closeDialog}
               taskAction={
-                dialog.kind === 'restore' && working && taskId ? (
-                  <Btn size="sm" disabled={cancelRequested} onClick={() => void cancelTask(taskId)}>
+                dialogHeaderTask ? (
+                  <Btn
+                    size="sm"
+                    disabled={cancelRequested}
+                    onClick={() => void cancelTask(dialogHeaderTask)}
+                  >
                     {t('cloudSyncE2ee.cancelTask')}
                   </Btn>
                 ) : undefined

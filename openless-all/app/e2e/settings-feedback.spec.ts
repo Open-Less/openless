@@ -388,6 +388,33 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   ]);
 });
 
+test('cloud sync is cancellable from the welcome modal header without a second action', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/settings-status.html?cloudWelcome');
+  await page.getByRole('button', { name: '从云端恢复', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const sync = dialog.getByRole('button', { name: '立即同步', exact: true });
+  const notice = page.locator('.ol-notification-card');
+  const cancel = dialog.getByRole('button', { name: '取消当前任务', exact: true });
+  await sync.click();
+  await waitForSettingsOperation(page, 'sync', 1);
+  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice.locator('.ol-notification-action')).toHaveCount(0);
+  await expect(dialog.locator('header').getByRole('button', { name: '取消当前任务' })).toBeEnabled();
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(cancel).toBeDisabled();
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
+    .toBe(1);
+  await finishSettingsOperation(page, 'sync', 1);
+  await expect(notice).toContainText('任务已取消。');
+  await expect(cancel).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+});
+
 async function clickDecisionBackdrop(page: Page) {
   const overlay = page.locator('.ol-dialog-overlay:not([inert])');
   const bounds = (await overlay.boundingBox())!;

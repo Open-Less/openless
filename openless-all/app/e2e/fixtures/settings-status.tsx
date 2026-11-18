@@ -228,6 +228,7 @@ const { InteractionProvider } = await import('../../src/ui/overlays/InteractionP
 const { HotkeySettingsProvider } = await import('../../src/data/preferences');
 const { DeepSeekSuiteSection } = await import('../../src/features/providers/DeepSeekSuiteSection');
 const { CloudSyncSection } = await import('../../src/features/cloud-sync/CloudSyncSection');
+const { CloudSyncWelcome } = await import('../../src/features/cloud-sync/CloudSyncSetupPrompt');
 const { PresenceModal } = await import('../../src/ui/overlays/Modal');
 const { WebSearchSection } = await import('../../src/features/settings/sections/WebSearchSection');
 const { GlobalDownloadProgress } =
@@ -296,7 +297,7 @@ createRoot(document.getElementById('root')!).render(
             <WebSearchFixture />
           ) : (
             <HotkeySettingsProvider>
-              <Fixture />
+              {params.has('cloudWelcome') ? <CloudSyncWelcome inline /> : <Fixture />}
             </HotkeySettingsProvider>
           )}
         </InteractionProvider>

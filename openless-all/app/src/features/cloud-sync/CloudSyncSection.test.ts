@@ -180,6 +180,7 @@ const dependencies: Record<string, any> = {
   useId: () => 'fixture-id',
   useTranslation: () => translation,
   useInteraction: () => active.scope.interaction,
+  useModalActive: () => false,
   useHotkeySettings: () => ({
     prefs: { marketplaceDevLogin: 'fixture', syncCustomServerOrigin: savedOrigin },
     refresh: async () => {
