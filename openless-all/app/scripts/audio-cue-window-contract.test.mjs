@@ -11,5 +11,7 @@ const listener = await readFile(new URL('../src/components/AudioCue.tsx', import
 assert.match(app, /if \(isCapsule\)[\s\S]*?<AudioCueListener \/>/);
 assert.doesNotMatch(shell, /AudioCueListener/);
 assert.match(listener, /currentWindow\.label !== 'capsule'/);
+assert.doesNotMatch(listener, /primeAudioCue/);
+assert.match(listener, /if \(!audioCueEnabledRef\.current\) disposeAudioCue\(\);/);
 assert.match(listener, /stopAudioCue\(\);/);
 console.log('audio cue is scoped to the resident capsule window');

@@ -570,6 +570,7 @@ for (const overlay of [false, true]) {
   const bus = eventBus();
   let plays = 0;
   let stops = 0;
+  let disposals = 0;
   const scope = {
     isTauri: true,
     audioCueRuntimeEnabled: true,
@@ -577,6 +578,7 @@ for (const overlay of [false, true]) {
     audioCueEnabledRef: { current: true },
     playRecordStartCue: () => plays++,
     stopAudioCue: () => stops++,
+    disposeAudioCue: () => disposals++,
     require(name) {
       if (name === '@tauri-apps/api/webviewWindow')
         return { getCurrentWebviewWindow: () => ({ label: 'main' }) };
@@ -593,6 +595,7 @@ for (const overlay of [false, true]) {
   assert.equal(plays, 0, 'opening the main window must not play the recording cue');
   assert.equal(stops, 0);
   cleanup();
+  assert.equal(disposals, 1, 'unmount must dispose pending audio work');
   assert.equal(bus.size, 0);
 }
 console.log(
