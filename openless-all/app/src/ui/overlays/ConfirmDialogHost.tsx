@@ -131,6 +131,14 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
                     </button>
                   ) : (
                     <>
+                      <DialogAction
+                        tone={danger ? 'danger' : 'primary'}
+                        className={danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}
+                        disabled={busy}
+                        onClick={() => void accept()}
+                      >
+                        {request.options.confirmLabel ?? t('common.confirmAction')}
+                      </DialogAction>
                       <button
                         ref={leastDestructive}
                         type="button"
@@ -140,14 +148,6 @@ export function ConfirmDialogHost({ controller }: { controller: InteractionContr
                       >
                         {request.options.cancelLabel ?? t('common.cancel')}
                       </button>
-                      <DialogAction
-                        tone={danger ? 'danger' : 'primary'}
-                        className={danger ? 'ol-confirm-danger' : 'ol-confirm-primary'}
-                        disabled={busy}
-                        onClick={() => void accept()}
-                      >
-                        {request.options.confirmLabel ?? t('common.confirmAction')}
-                      </DialogAction>
                     </>
                   )}
                 </DialogFooter>

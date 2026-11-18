@@ -15,7 +15,7 @@
   padding: 24px 24px 18px;
   flex-shrink: 0;
 }
-.ol-dialog-header :is(h2, h3) {
+.ol-dialog-header :where(h2, h3) {
   margin: 0;
   font-size: 17px;
   line-height: 1.4;

@@ -1265,6 +1265,8 @@ impl EncryptedSyncService {
                         .and_then(|m| m.value().vault_id.as_ref())
             }) {
                 self.make_preview(&mut runtime, documents).await?;
+            } else if runtime.settings.enabled {
+                self.0.wake.notify_one();
             }
             Ok(())
         }
