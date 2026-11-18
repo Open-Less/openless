@@ -14,12 +14,14 @@ test('the ordinary Chinese preview uses the real settings flow to set a sync pas
   const settings = await openCloudSettings(page, '设置', '云服务');
   await expect(settings.getByText('云同步演示。', { exact: false })).toBeVisible();
   const enable = settings.getByRole('switch', { name: '启用加密同步' });
+  const enableState = page.locator('.ol-cloud-sync [role="switch"]');
   await expect(enable).not.toBeChecked();
   await enable.click();
   const agreement = page.getByRole('dialog', { name: '云同步服务告知与协议草案' });
   const agree = agreement.getByRole('button', { name: '同意并继续' });
   await expect(agree).toBeDisabled();
   await agreement.getByRole('button', { name: '暂不同意' }).click();
+  await expect(agreement).toHaveCount(0);
   await expect(enable).not.toBeChecked();
   await enable.click();
   await agreement.getByRole('checkbox').check();
@@ -37,7 +39,7 @@ test('the ordinary Chinese preview uses the real settings flow to set a sync pas
     if (attempt === 0) {
       await expect(form.getByRole('alert')).toBeVisible();
       await expect(password).toHaveValue('');
-      await expect(enable).not.toBeChecked();
+      await expect(enableState).toHaveAttribute('aria-checked', 'false');
     }
   }
   await expect(form).toHaveCount(0);
