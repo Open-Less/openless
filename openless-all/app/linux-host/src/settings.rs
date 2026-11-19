@@ -469,7 +469,7 @@ fn normalize_fcitx_primary(primary: &str) -> String {
     }
 }
 
-pub(crate) fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
+pub fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
     if binding.is_unassigned() {
         return Ok((0, 0));
     }

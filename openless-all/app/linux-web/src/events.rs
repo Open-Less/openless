@@ -80,6 +80,12 @@ pub fn map_event(event: &BackendEvent) -> Option<(&'static str, serde_json::Valu
             "cloud-sync-e2ee:restored",
             serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
         ),
+        BackendEventKind::RemoteInputStatusChanged(status) => {
+            ("remote-input:running", serde_json::json!(status))
+        }
+        BackendEventKind::RemoteInputFailed(error) => {
+            ("remote-input:error", serde_json::json!(error))
+        }
         _ => return None,
     })
 }

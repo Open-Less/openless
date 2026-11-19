@@ -34,6 +34,7 @@ struct Host {
     /// core 处在「润色预览」模式时为 true；`get_selection_polish_preview` 用它做门禁。
     selection_preview_pending: std::sync::atomic::AtomicBool,
     voice_edit: std::sync::Arc<voice_edit::VoiceEdit>,
+    mic_monitor: hotkeys::MicMonitorSlot,
     /// core 的 host action 队列（窗口显隐、打开外链、重启…）。
     host_actions: Option<std::sync::Arc<openless_linux_host::LinuxHostActions>>,
     /// action pump 的唤醒端：core 推一个 action 就 send 一次，线程立刻 drain。
@@ -116,6 +117,8 @@ fn main() {
             println!("[linux-web] 宿主桥 socket: {socket}");
         }
     }
+    let start_minimized = host.backend.as_ref().is_some_and(|b| b.get_preferences().start_minimized);
+    println!("OPENLESS_READY={} {}", port, u8::from(start_minimized));
     println!("[linux-web] serving {} at {}", dist.display(), url);
 
     // 再无头 GUI 分支：窗口渲染由 Qt 宿主负责，这里只提供 /api 与静态资源。
@@ -123,11 +126,32 @@ fn main() {
     // 无头模式仍要挂热键监听：快捷键 → 听写/QA → 事件推给渲染宿主。
     // 之前漏了这步，所以「按快捷键没反应」。
     if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) {
-        hotkeys::spawn_headless(backend, runtime, host.voice_edit.clone(), host.host_events.clone());
+        hotkeys::spawn_headless(backend, runtime, host.voice_edit.clone(), host.host_events.clone(), host.mic_monitor.clone());
     }
     // 托盘由这里负责（StatusNotifierItem），而不是渲染宿主：菜单项、本地化
     // （8 种语言）与命令语义因此与 macOS/Windows 完全一致。
     spawn_tray(host.clone());
+    if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.as_ref()) {
+        runtime.spawn(async move {
+            let prefs = backend.get_preferences();
+            if !prefs.auto_update_check { return; }
+            let beta = if prefs.update_channel_explicit {
+                prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta
+            } else {
+                openless_linux_host::update_check::app_version().to_ascii_lowercase().contains("beta")
+            };
+            use openless_linux_host::update_check::UpdateChannel;
+            if let Ok(Some(update)) = fetch_update_manifest(if beta { UpdateChannel::Beta } else { UpdateChannel::Stable }).await {
+                if update["newer"] == true {
+                    if let Some(version) = update["version"].as_str() {
+                        let _ = openless_linux_host::notify(openless_linux_host::Notification {
+                            summary: "OpenLess", body: &format!("OpenLess {version}"), icon: "openless", timeout_ms: 0,
+                        });
+                    }
+                }
+            }
+        });
+    }
     let wake_rx = host
         .action_wake_rx
         .lock()
@@ -465,6 +489,7 @@ fn init_host() -> Host {
         host_events,
         selection_preview_pending: std::sync::atomic::AtomicBool::new(false),
         voice_edit: Default::default(),
+        mic_monitor: Default::default(),
         host_actions: None,
         action_wake_rx: std::sync::Mutex::new(None),
     };
@@ -523,20 +548,26 @@ fn init_host() -> Host {
                 Err(error) => eprintln!("[linux-web] 运行时就绪检查未通过：{error}"),
             }
             {
-                let preferences = runtime_parts.backend.get_preferences();
-                let remote = std::sync::Arc::clone(&runtime_parts.backend);
+                let backend = runtime_parts.backend.clone();
+                let mut events = backend.subscribe();
                 runtime.spawn(async move {
-                    if let Err(error) = remote
-                        .services()
-                        .remote_input
-                        .configure(openless_core::RemoteInputConfig {
-                            enabled: preferences.remote_input_enabled,
-                            port: preferences.remote_input_port,
-                        })
-                        .await
-                    {
-                        if error.code != openless_core::BackendErrorCode::Unsupported {
-                            eprintln!("[linux-web] 远程输入启动失败：{error}");
+                    let mut last = None;
+                    loop {
+                        let prefs = backend.get_preferences();
+                        let config = openless_core::RemoteInputConfig { enabled: prefs.remote_input_enabled, port: prefs.remote_input_port };
+                        if last.as_ref() != Some(&config) {
+                            last = Some(config.clone());
+                            if let Err(error) = backend.services().remote_input.configure(config).await {
+                                log::warn!("[linux-web] remote input configuration failed: {error}");
+                            }
+                        }
+                        loop {
+                            match events.recv().await {
+                                Ok(event) if matches!(event.kind, openless_core::BackendEventKind::PreferencesChanged(_)) => break,
+                                Err(openless_core::EventRecvError::Closed) => return,
+                                Err(openless_core::EventRecvError::Lagged(_)) => break,
+                                _ => {}
+                            }
                         }
                     }
                 });
@@ -708,7 +739,16 @@ async fn fetch_update_manifest(
     .await
     .map_err(|error| error.to_string())?;
     if response.status().as_u16() == 404 {
-        return Ok(None);
+        // deb/rpm builds may not have an updater manifest. Report the public
+        // release version without promising an installable package.
+        return openless_linux_host::update_check::check(channel).await.map(|result| {
+            result.map(|release| json!({
+                "version": release.latest.version,
+                "url": release.latest.url,
+                "currentVersion": release.current,
+                "newer": release.newer,
+            }))
+        });
     }
     if !response.status().is_success() {
         return Err(format!("更新清单: HTTP {}", response.status()));
@@ -1213,6 +1253,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         }
         // ── 听写 / 录音 ────────────────────────────────────────────────
         "start_dictation" => {
+            hotkeys::stop_monitor(&host.mic_monitor);
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
             runtime
@@ -2184,6 +2225,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 }
                 return Err("Missing voice edit session ID".into());
             };
+            if command == "start_voice_edit_instruction" { hotkeys::stop_monitor(&host.mic_monitor); }
             runtime.block_on(host.voice_edit.action(backend, command, id)).map(json_value)
         }
         "get_selection_polish_preview" => {
@@ -2273,11 +2315,23 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             Ok(Value::Null)
         }
         "start_microphone_level_monitor" => {
-            // Tauri 这条是空实现（电平由录音链自己推）；这里同样不额外起采集，
-            // 免得和录音抢设备。前端拿到的电平来自 `dictation:level` 事件。
-            Ok(json!({ "started": false }))
+            let backend = backend.ok_or("Backend unavailable")?;
+            let mut slot = host.mic_monitor.lock().unwrap();
+            if backend.snapshot().dictation.session_id.is_some() {
+                return Err("Microphone is already recording".into());
+            }
+            drop(slot.take());
+            let device = _args.get("deviceName").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_owned);
+            let events = host.host_events.clone();
+            *slot = Some(openless_linux_host::MicrophoneMonitor::start(device, move |level| {
+                let _ = events.send(("microphone:level".into(), json!({ "level": level }).to_string()));
+            }).map_err(|error| error.to_string())?);
+            Ok(Value::Null)
         }
-        "stop_microphone_level_monitor" => Ok(json!({ "stopped": true })),
+        "stop_microphone_level_monitor" => {
+            hotkeys::stop_monitor(&host.mic_monitor);
+            Ok(Value::Null)
+        },
         "get_hotkey_status" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
@@ -2311,6 +2365,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             ))
         }
         "qa_toggle_recording" => {
+            hotkeys::stop_monitor(&host.mic_monitor);
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
             runtime

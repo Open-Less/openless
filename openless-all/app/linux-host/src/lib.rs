@@ -41,7 +41,7 @@ pub mod update_check;
 
 pub use audio::LinuxCpalRecorder;
 #[cfg(target_os = "linux")]
-pub use audio::{list_loopback_devices, start_reference_capture, ReferenceCapture};
+pub use audio::{list_loopback_devices, start_reference_capture, MicrophoneMonitor, ReferenceCapture};
 pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
 pub use audio_mute::AudioMuteGuard;
 pub use audio_player::ClipPlayer;
@@ -103,7 +103,7 @@ pub use resources::{
 pub use runtime::{LinuxNativeRuntime, LinuxRuntimePumpResult};
 pub use selection::LinuxSelectionRuntime;
 pub use settings::{
-    is_bare_modifier_binding, shortcut_display_label, LinuxSettingsEffects, LinuxSettingsRuntime,
+    is_bare_modifier_binding, shortcut_display_label, shortcut_to_raw, LinuxSettingsEffects, LinuxSettingsRuntime,
 };
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,

@@ -580,6 +580,7 @@ int main(int argc, char **argv) {
     }
     // ── 1. 拉起 Rust 后端（无头），从 stdout 里读端口 ────────────────────────
     QString baseUrl = qEnvironmentVariable("OPENLESS_HOST_URL");
+    bool preferMinimized = false;
     QProcess *backend = nullptr;
     if (baseUrl.isEmpty()) {
         backend = new QProcess(&app);
@@ -654,13 +655,17 @@ int main(int argc, char **argv) {
                 return 1;
             }
             backend->waitForReadyRead(200);
-            const QString output = QString::fromUtf8(backend->readAll());
-            for (const QString &line : output.split('\n')) {
-                const int index = line.indexOf("127.0.0.1:");
-                if (index < 0) continue;
-                QString rest = line.mid(index + 10);
-                rest = rest.left(rest.indexOf('/'));
-                if (!rest.isEmpty()) baseUrl = QString("http://127.0.0.1:%1").arg(rest);
+            while (backend->canReadLine()) {
+                const auto line = backend->readLine().trimmed();
+                if (!line.startsWith("OPENLESS_READY=")) continue;
+                const auto fields = line.mid(15).split(' ');
+                if (fields.size() != 2) continue;
+                bool ok = false;
+                const auto port = fields[0].toUShort(&ok);
+                if (!ok || port == 0) continue;
+                preferMinimized = fields[1] == "1";
+                baseUrl = QString("http://127.0.0.1:%1").arg(port);
+                break;
             }
         }
         if (baseUrl.isEmpty()) {
@@ -689,7 +694,7 @@ int main(int argc, char **argv) {
     capsule.load();
     qa.load();
     mainWindow.setVisible(qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_MAIN") ||
-                          (!minimized && !qEnvironmentVariableIsSet("OPENLESS_QT_HIDE_MAIN")));
+                          (!minimized && !preferMinimized && !qEnvironmentVariableIsSet("OPENLESS_QT_HIDE_MAIN")));
     if (qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_CAPSULE")) capsule.setVisible(true);
     if (qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_QA")) qa.setVisible(true);
 

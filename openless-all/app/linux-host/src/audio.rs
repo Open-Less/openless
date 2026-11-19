@@ -365,6 +365,112 @@ impl LinuxPendingCapture {
     }
 }
 
+/// A local-only level meter; dropping the handle stops native capture.
+#[cfg(target_os = "linux")]
+pub struct MicrophoneMonitor {
+    capture: LinuxPendingCapture,
+    meter: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl MicrophoneMonitor {
+    pub fn start(
+        device: Option<String>,
+        publish: impl Fn(f32) + Send + 'static,
+    ) -> Result<Self, BackendError> {
+        let mut capture = LinuxPendingCapture::arm(
+            LinuxCpalRecorder::default(),
+            openless_core::CaptureStartRequest {
+                press_id: 0,
+                pressed_at: std::time::Instant::now(),
+                microphone_device_name: device,
+                low_latency: false,
+                pre_roll_ms: 0,
+                audio_processing: Default::default(),
+            },
+        )?;
+        capture
+            .startup
+            .take()
+            .expect("monitor startup channel")
+            .recv_timeout(std::time::Duration::from_secs(4))
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    format!("open microphone monitor: {error}"),
+                )
+            })??;
+        let frames = capture.frames.take().expect("monitor frame channel");
+        let stop = capture.stop.clone();
+        let capture_thread = capture
+            .thread
+            .as_ref()
+            .expect("monitor capture thread")
+            .thread()
+            .clone();
+        let meter = std::thread::Builder::new()
+            .name("openless-mic-meter".into())
+            .spawn(move || {
+                let mut last = None::<std::time::Instant>;
+                // Bound capture even if the renderer crashes without sending stop.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                while let Ok(frame) = frames
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    if frame.samples.is_empty()
+                        || last.is_some_and(|at| {
+                            now.duration_since(at) < std::time::Duration::from_millis(33)
+                        })
+                    {
+                        continue;
+                    }
+                    let rms = (frame
+                        .samples
+                        .iter()
+                        .map(|sample| sample * sample)
+                        .sum::<f32>()
+                        / frame.samples.len() as f32)
+                        .sqrt();
+                    publish(if rms.is_finite() {
+                        rms.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    });
+                    last = Some(now);
+                }
+                stop.store(true, std::sync::atomic::Ordering::Release);
+                capture_thread.unpark();
+            })
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    format!("start microphone meter: {error}"),
+                )
+            })?;
+        Ok(Self {
+            capture,
+            meter: Some(meter),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for MicrophoneMonitor {
+    fn drop(&mut self) {
+        self.capture.signal_stop();
+        if let Some(thread) = self.capture.thread.take() {
+            let _ = thread.join();
+        }
+        if let Some(thread) = self.meter.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl Drop for LinuxPendingCapture {
     fn drop(&mut self) {
