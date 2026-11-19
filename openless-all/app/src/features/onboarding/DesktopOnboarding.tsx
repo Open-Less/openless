@@ -15,21 +15,12 @@ import { ModelSetupDialog } from './ModelSetupDialog';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { RevealText } from '../../components/ui/RevealText';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';
-import { setLocalePreference, SUPPORTED_LOCALES, type SupportedLocale } from '../../i18n';
+import { setLocalePreference } from '../../i18n';
+import { InterfaceLanguagePicker } from '../../ui/controls/InterfaceLanguagePicker';
 import { ProviderLeaveContext } from '../providers/ProviderForm';
 import './desktop-onboarding.css';
 import { granted, useDesktopGuide } from './useDesktopGuide';
 
-const localeLabels = [
-  '简体中文',
-  '繁體中文',
-  'English',
-  '日本語',
-  '한국어',
-  'Español',
-  'Français',
-  'Deutsch',
-];
 export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Promise<void> }) {
   const {
     t,
@@ -378,24 +369,20 @@ export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Pro
         />
         <footer className="ol-guide-footer">
           <span>{preview ? t('desktopGuide.preview') : ''}</span>
-          <label>
-            <span className="ol-sr-only">{t('desktopGuide.language')}</span>
-            <select
-              aria-label={t('desktopGuide.language')}
-              value={i18n.resolvedLanguage}
-              onChange={(event) =>
-                void run(() =>
-                  setLocalePreference(event.target.value as SupportedLocale).then(() => undefined),
-                )
+          <div className="ol-guide-language">
+            <span aria-hidden="true">Language:</span>
+            <InterfaceLanguagePicker
+              ariaLabel="Language"
+              value={i18n.resolvedLanguage ?? i18n.language}
+              onChange={(next) =>
+                void run(async () => {
+                  await setLocalePreference(next);
+                })
               }
-            >
-              {SUPPORTED_LOCALES.map((locale, i) => (
-                <option key={locale} value={locale}>
-                  {localeLabels[i]}
-                </option>
-              ))}
-            </select>
-          </label>
+              includeSystem={false}
+              side="top"
+            />
+          </div>
         </footer>
       </div>
     </ProviderLeaveContext.Provider>
