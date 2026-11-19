@@ -27,6 +27,12 @@ fi
 
 TARGET_DIR=${CARGO_TARGET_DIR:-$APP_ROOT/target}/release
 HOST_BIN=${OPENLESS_HOST_BINARY:-$TARGET_DIR/openless-linux-web}
+# Rebuild here as well as in CI: a cached release binary must never be packaged
+# after Linux host changes. Providing a binary skips only this explicit override.
+if [ -z "${OPENLESS_HOST_BINARY:-}" ]; then
+  echo "Building the Rust backend"
+  cargo build --locked --release -p openless-linux-host -p openless-linux-web
+fi
 QT_BIN=${OPENLESS_QT_BINARY:-$APP_ROOT/linux-qt/openless-qt}
 DIST_DIR=${OPENLESS_WEB_DIST:-$APP_ROOT/linux-web/dist}
 PLUGIN_ROOT="$APP_ROOT/scripts/linux-fcitx5-plugin/build"
@@ -137,6 +143,12 @@ stage_common() {
   local root=$1
   install -Dm755 "$QT_BIN" "$root/usr/lib/openless/openless-qt"
   install -Dm755 "$HOST_BIN" "$root/usr/lib/openless/openless-linux-web"
+  # Do not silently regress to the legacy 127.0.0.1:PORT handshake: it leaves
+  # the Qt host waiting forever (and can therefore hide a stale binary in a new deb).
+  grep -aq 'OPENLESS_READY=' "$HOST_BIN" || {
+    echo "The packaged backend does not implement the OPENLESS_READY handshake" >&2
+    exit 1
+  }
   mkdir -p "$root/usr/lib/openless/web/dist"
   cp -a "$DIST_DIR/." "$root/usr/lib/openless/web/dist/"
   # 启动器：Qt 宿主自己会拉起无头后端，所以这里只 exec 它。

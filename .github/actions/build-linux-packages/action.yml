@@ -99,6 +99,7 @@ runs:
         VITE_OPENLESS_PLATFORM=gtk npx vite build --outDir linux-web/dist --emptyOutDir
 
     - name: Package deb and rpm
+      # This also rebuilds Rust so local packaging cannot reuse a stale cache.
       working-directory: openless-all/app
       shell: bash
       env:
