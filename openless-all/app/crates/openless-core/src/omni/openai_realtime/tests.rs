@@ -156,6 +156,10 @@ fn endpoint_uses_api_root_and_preserves_gateway_prefix_without_query_credentials
             "wss://example.com/custom/socket?tenant=a&token=synthetic&apiKey=synthetic&client_secret=synthetic&api%2Dkey=synthetic",
             "https://example.com/custom/socket?tenant=a&model=gpt-realtime-2.1",
         ),
+        (
+            "wss://example.com/custom/socket/?tenant=a&model=old&key=synthetic",
+            "https://example.com/custom/socket/?tenant=a&model=gpt-realtime-2.1",
+        ),
     ] {
         assert_eq!(
             transport::endpoint(root, DEFAULT_MODEL).unwrap().as_str(),

@@ -392,7 +392,7 @@ async fn all_auth_modes_reach_the_socket_and_header_only_allows_an_empty_main_ke
             QWEN_MODEL
         };
         let (endpoint, server) = serve(
-            "/custom/auth-socket",
+            "/custom/auth-socket/",
             model,
             auth,
             |mut socket| async move {

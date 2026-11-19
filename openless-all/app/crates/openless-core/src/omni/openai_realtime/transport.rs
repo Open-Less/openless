@@ -70,10 +70,10 @@ pub(crate) fn api_root(base: &str) -> Result<url::Url, LLMError> {
 pub(crate) fn endpoint(base: &str, model: &str) -> Result<url::Url, LLMError> {
     let mut url = api_root(base)?;
     let explicit = url::Url::parse(base.trim()).ok().filter(|source| {
-        matches!(source.scheme(), "ws" | "wss") && source.path().trim_matches('/').len() > 0
+        matches!(source.scheme(), "ws" | "wss") && !source.path().trim_matches('/').is_empty()
     });
     if let Some(source) = explicit {
-        url.set_path(source.path().trim_end_matches('/'));
+        url.set_path(source.path());
     } else {
         let root = url.path().trim_end_matches('/');
         url.set_path(&format!("{root}/realtime"));
