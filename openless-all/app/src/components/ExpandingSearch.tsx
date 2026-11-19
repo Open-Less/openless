@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
+import { FieldFrame } from '../ui/controls/TextField';
 
 interface ExpandingSearchProps {
   value: string;
@@ -18,10 +19,10 @@ export function ExpandingSearch({ value, onChange, placeholder, label }: Expandi
   }, [value]);
 
   return (
-    <div className={open ? 'ol-search ol-search-open' : 'ol-search'}>
+    <FieldFrame className={open ? 'ol-search ol-search-open' : 'ol-search'}>
       <input
         ref={inputRef}
-        className="ol-search-field"
+        className="ol-field-control ol-search-field"
         type="text"
         value={value}
         placeholder={placeholder}
@@ -61,6 +62,6 @@ export function ExpandingSearch({ value, onChange, placeholder, label }: Expandi
       >
         <Icon name="search" size={15} />
       </button>
-    </div>
+    </FieldFrame>
   );
 }

@@ -1,3 +1,4 @@
+import { TextField } from '../../../ui/controls/TextField';
 // Advanced → Debug tools: troubleshooting entries such as keeping raw recordings and exporting
 // the error log.
 // The recordAudioForDebug row was split out of RecordingSection in Settings.tsx;
@@ -13,7 +14,6 @@ import { useHotkeySettings } from '../../../data/preferences';
 import { Button as Btn } from '../../../ui/controls/Button';
 import { Card } from '../../../ui/layout/Card';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
@@ -158,14 +158,14 @@ export function DebugToolsSection() {
             width: '100%',
           }}
         >
-          <input
+          <TextField
             type="number"
             min={1}
             max={200}
             placeholder="200"
             value={prefs.audioRecordingMaxEntries ?? ''}
             onChange={(e) => onAudioRecordingMaxEntriesChange(e.target.value)}
-            style={{ ...inputStyle, width: mobile ? '100%' : 80, textAlign: 'right' }}
+            style={{ width: mobile ? '100%' : 80, textAlign: 'right' }}
             disabled={!prefs.recordAudioForDebug}
           />
           {mobile && (

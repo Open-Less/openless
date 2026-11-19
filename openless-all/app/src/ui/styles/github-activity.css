@@ -1,6 +1,5 @@
-/* GitHub Activity — ported from Rare UI (https://rareui.com/components/githubactivity).
-   MIT + Commons Clause; attribution required. Geometry mirrors the upstream card:
-   11px cells, 3px gap, 16px padding, 28px radius, top-apps panel overlaid at the bottom. */
+/* Card and expandable-panel layout adapted from Rare UI (https://rareui.com/components/githubactivity).
+   Copyright (c) 2026 Swami Malode. MIT + Commons Clause + Attribution. */
 
 .ol-gha {
   position: relative;
@@ -113,6 +112,7 @@
 }
 
 .ol-gha-panel {
+  --ol-gha-panel-surface: var(--ol-surface);
   position: absolute;
   left: 12px;
   right: 12px;
@@ -127,11 +127,11 @@
   /* Opaque on purpose: over a 53-week grid the upstream 90% glass ghosted the cells
      and the card heading through the panel text. Light mode matches the
      segmented track (plain surface). Dark mode stays a step under the card. */
-  background: var(--ol-surface);
+  background: var(--ol-gha-panel-surface);
   box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
 }
 [data-ol-theme='dark'] .ol-gha-panel {
-  background: color-mix(
+  --ol-gha-panel-surface: color-mix(
     in srgb,
     color-mix(in srgb, var(--ol-surface-raised) 97%, black 3%) 92%,
     black 8%
@@ -161,36 +161,48 @@
   max-width: 65%;
 }
 
-.ol-gha-app-chips {
+.ol-gha-app-preview {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  overflow: hidden;
 }
-.ol-gha-app-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 150px;
-  padding: 3px 9px;
-  border-radius: 999px !important;
-  corner-shape: round !important;
-  clip-path: none !important;
+.ol-gha-app-avatar {
+  box-sizing: border-box;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--ol-gha-panel-surface);
+  border-radius: 50%;
   background: var(--ol-surface-2);
-  font-size: 11.5px;
+  object-fit: contain;
+}
+.ol-gha-app-avatar + .ol-gha-app-avatar {
+  margin-inline-start: -12px;
+}
+.ol-gha-app-preview-name {
+  min-width: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
   color: var(--ol-ink-2);
   white-space: nowrap;
 }
-.ol-gha-app-chip-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ol-gha-app-chip-count {
+.ol-gha-app-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
   color: var(--ol-ink-4);
-  font-variant-numeric: tabular-nums;
 }
-
+.ol-gha-app-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 .ol-gha-toggle {
   display: grid;
   place-items: center;
@@ -257,12 +269,6 @@
   font-size: 14px;
   color: var(--ol-ink-3);
   font-variant-numeric: tabular-nums;
-}
-
-@container (max-width: 400px) {
-  .ol-gha-app-chips {
-    display: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

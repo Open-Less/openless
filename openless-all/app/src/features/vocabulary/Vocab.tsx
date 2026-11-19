@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictionaryEntry } from '../../api/contracts';
@@ -8,6 +9,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Modal } from '../../ui/overlays/Modal';
 import { useVocabularyWorkspace } from './useVocabularyWorkspace';
+import './vocabulary.css';
 
 export function Vocab() {
   const {
@@ -53,6 +55,13 @@ export function Vocab() {
     needle,
     visibleEntries,
   } = useVocabularyWorkspace();
+  const selectedCount = selectedIds.size;
+  const visibleSelectedCount = visibleEntries.filter((entry) => selectedIds.has(entry.id)).length;
+  const allVisibleSelected =
+    visibleEntries.length > 0 && visibleSelectedCount === visibleEntries.length;
+  // Reserve for every visible entry plus selections retained by other filters.
+  const layoutCount = selectedCount - visibleSelectedCount + visibleEntries.length;
+  const selectAllLabel = t('vocab.selectAllVisible');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <PageHeader
@@ -60,18 +69,23 @@ export function Vocab() {
         title={t('vocab.title')}
         desc={t('vocab.desc')}
         right={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-            {selectedIds.size > 0 && (
-              <button
-                type="button"
-                className="ol-vocab-delete-selected"
-                disabled={batchBusy}
-                onClick={() => void removeEntries([...selectedIds])}
-              >
-                <Icon name="trash" size={15} />
-                {t('vocab.deleteSelected', { count: selectedIds.size })}
-              </button>
-            )}
+          <div className="ol-vocab-header-actions">
+            <button
+              type="button"
+              className="ol-vocab-delete-selected"
+              data-empty={selectedCount === 0 ? '' : undefined}
+              disabled={batchBusy || selectedCount === 0}
+              onClick={() => void removeEntries([...selectedIds])}
+            >
+              <span className="ol-vocab-action-content" aria-hidden="true">
+                <Icon name="trash" size={13} />
+                <span>{t('vocab.deleteSelected', { count: layoutCount })}</span>
+              </span>
+              <span className="ol-vocab-action-content">
+                <Icon name="trash" size={13} />
+                <span>{t('vocab.deleteSelected', { count: selectedCount })}</span>
+              </span>
+            </button>
             <Btn
               variant="primary"
               icon="plus"
@@ -81,7 +95,7 @@ export function Vocab() {
                 setNewWordTemplateIds([]);
               }}
             >
-              {t('vocab.newWord')}
+              <span>{t('vocab.newWord')}</span>
             </Btn>
           </div>
         }
@@ -98,7 +112,7 @@ export function Vocab() {
           flexShrink: 0,
         }}
       >
-        <div className="ol-seg" role="tablist" aria-label={t('vocab.title')}>
+        <div className="ol-seg ol-vocab-filters" role="tablist" aria-label={t('vocab.title')}>
           {(
             [
               { id: 'all', icon: null },
@@ -134,15 +148,9 @@ export function Vocab() {
           <input
             type="checkbox"
             disabled={batchBusy || visibleEntries.length === 0}
-            checked={
-              visibleEntries.length > 0 &&
-              visibleEntries.every((entry) => selectedIds.has(entry.id))
-            }
+            checked={allVisibleSelected}
             ref={(element) => {
-              if (element)
-                element.indeterminate =
-                  visibleEntries.some((entry) => selectedIds.has(entry.id)) &&
-                  !visibleEntries.every((entry) => selectedIds.has(entry.id));
+              if (element) element.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected;
             }}
             onChange={(event) => {
               const checked = event.target.checked;
@@ -155,9 +163,13 @@ export function Vocab() {
               });
             }}
           />
-          {selectedIds.size
-            ? t('vocab.selectedCount', { count: selectedIds.size })
-            : t('vocab.selectAllVisible')}
+          <span className="ol-vocab-reserved-label">
+            <span aria-hidden="true">{selectAllLabel}</span>
+            <span aria-hidden="true">{t('vocab.selectedCount', { count: layoutCount })}</span>
+            <span>
+              {selectedCount ? t('vocab.selectedCount', { count: selectedCount }) : selectAllLabel}
+            </span>
+          </span>
         </label>
         <div style={{ flex: 1 }} />
         <ExpandingSearch
@@ -254,7 +266,7 @@ export function Vocab() {
           closing={editMount.closing}
           onClose={() => setEditingEntry(null)}
         >
-          <input
+          <TextField
             autoFocus
             value={editDraft}
             onChange={(e) => {
@@ -267,19 +279,7 @@ export function Vocab() {
                 void saveEdit();
               }
             }}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              height: 40,
-              padding: '0 12px',
-              border: '1.5px solid var(--ol-ink)',
-              borderRadius: 'var(--ol-r-md)',
-              fontSize: 14,
-              fontFamily: 'inherit',
-              outline: 'none',
-              background: 'var(--ol-surface)',
-              color: 'var(--ol-ink)',
-            }}
+            style={{ height: 40 }}
           />
           {editError && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-red, #ef4444)' }}>
@@ -306,7 +306,7 @@ export function Vocab() {
           onClose={() => setNewWordOpen(false)}
         >
           <div style={{ display: 'flex', gap: 8 }}>
-            <input
+            <TextField
               autoFocus
               value={newWordDraft}
               onChange={(e) => setNewWordDraft(e.target.value)}
@@ -317,19 +317,7 @@ export function Vocab() {
                 }
               }}
               placeholder={t('vocab.newWordInputPlaceholder')}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: 38,
-                padding: '0 12px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 'var(--ol-radius)',
-                fontSize: 13.5,
-                fontFamily: 'inherit',
-                outline: 'none',
-                background: 'var(--ol-surface-2)',
-                color: 'var(--ol-ink)',
-              }}
+              style={{ height: 38, flex: 1 }}
             />
             <Btn
               variant="primary"
@@ -548,6 +536,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
       width="min(440px, 100%)"
       style={{ padding: 20 }}
       motionVariant="pop"
+      cardClassName="ol-vocab-dialog"
       labelledBy={titleId}
       describedBy={desc ? descId : undefined}
     >

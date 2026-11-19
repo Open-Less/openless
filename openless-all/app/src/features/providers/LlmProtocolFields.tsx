@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SelectLite } from '../../components/ui/SelectLite';
@@ -6,7 +7,6 @@ import type { LlmRequestFormat } from '../../api/providers';
 import { emitSaved } from '../../lib/savedEvent';
 import { Button as Btn } from '../../ui/controls/Button';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
-import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { ProviderFormContext } from './ProviderForm';
 
 import {
@@ -128,7 +128,7 @@ export function LlmProtocolFields({
   const disabled = !loaded || saving || form?.leaving;
   const numberField = (account: Account, label: string, placeholder: string) => (
     <SettingRow label={label}>
-      <input
+      <TextField
         type="number"
         min={account === 'ark.thinking_budget' ? 1024 : 1}
         step={1}
@@ -140,7 +140,7 @@ export function LlmProtocolFields({
         onBlur={() => {
           if (dirty) void save(values);
         }}
-        style={{ ...inputStyle, width: '100%', maxWidth: 420 }}
+        style={{ maxWidth: 420 }}
       />
     </SettingRow>
   );

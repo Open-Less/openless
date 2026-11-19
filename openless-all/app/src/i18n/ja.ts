@@ -122,6 +122,7 @@ export const ja: typeof zhCN = {
     delete: 'クラウドバックアップを削除',
     working: '処理中…',
     cancelTask: '現在の処理をキャンセル',
+    cancelSync: '同期をキャンセル',
     cancelRequested: 'キャンセルを要求しました。処理の終了を待っています。',
     done: '同期設定を更新しました。',
     restored: 'クラウドのデータを復元しました。この端末固有の設定を確認してください。',
@@ -149,7 +150,8 @@ export const ja: typeof zhCN = {
     confirmAndContinue: '確認して続行',
     revealPassword: 'パスワードを表示（{{field}}）',
     concealPassword: 'パスワードを非表示（{{field}}）',
-    previewNotice: 'クラウド同期のプレビューです。サンプルのパスワードを使用してください。サーバーへの接続や認証情報の保存は行いません。',
+    previewNotice:
+      'クラウド同期のプレビューです。サンプルのパスワードを使用してください。サーバーへの接続や認証情報の保存は行いません。',
     passwordPolicy:
       '12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。',
     rememberKey: 'この端末の安全なストレージに解除キーを記憶する',
@@ -243,7 +245,8 @@ export const ja: typeof zhCN = {
       cancelled: '処理をキャンセルしました。',
       network: '同期サービスに接続できません。ネットワークを確認して再試行してください。',
       rateLimited: 'リクエストが多すぎます。しばらく待ってから再試行してください。',
-      deletePendingOperation: '以前のクラウド操作が確認できていません。しばらくしてから状態を更新し、削除を再試行してください。',
+      deletePendingOperation:
+        '以前のクラウド操作が確認できていません。しばらくしてから状態を更新し、削除を再試行してください。',
       outcomeUnknown:
         'クラウドの結果が未確定です。新しいバックアップを作る前に未確定の結果を確認してください。',
       recovery:
@@ -401,6 +404,7 @@ export const ja: typeof zhCN = {
     mobileRecordStart: '録音を開始',
     mobileRecordStop: '終了して送信',
     composerPlaceholder: '質問を入力。Enter で送信',
+    voiceInputPlaceholder: '音声入力中です',
     composerSend: '送信',
     statusIdle: '{{recordHotkey}} で質問',
     statusRecording: '録音中',
@@ -1139,6 +1143,14 @@ export const ja: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '質問ショートカットの動作',
+      desc: '録音ショートカットと追加キーを使用します。録音ショートカット単体ではカーソル位置に文字を入力します。',
+      record: '開いてすぐに録音',
+      open: '開くだけ（再度押して録音）',
+      draft: '開いて入力欄にフォーカス',
+      failed: 'ショートカットの動作を保存できませんでした。',
+    },
     dictation: '音声入力',
     translation: '翻訳',
     question: '何でも質問',
@@ -1570,15 +1582,17 @@ export const ja: typeof zhCN = {
       voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
       voiceActivationLocalOnly:
         '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
-      voiceActivationHotkeyLinked: "録音ショートカットと連動",
-      voiceActivationHotkeyLinkedDesc: "録音操作の代わりに、1回押すとウェイク監視を開始・一時停止します。起動直後は一時停止します。停止中はマイクの待機予熱を無効にしますが、他の録音は中断しません。監視はローカルで、音声入力は現在のサービスを使用します。",
-      voiceActivationDisabled: "音声起動は無効です",
-      voiceActivationPaused: "ウェイク監視を一時停止中",
-      voiceActivationPausing: "ウェイク監視を停止しています…",
-      voiceActivationStarting: "ウェイク監視を開始しています…",
-      voiceActivationListening: "開始フレーズを待機中",
-      voiceActivationDictating: "音声入力または終了処理中",
-      voiceActivationError: "監視を開始できません。モデル、マイク権限、デバイスを確認してください。",
+      voiceActivationHotkeyLinked: '録音ショートカットと連動',
+      voiceActivationHotkeyLinkedDesc:
+        '録音操作の代わりに、1回押すとウェイク監視を開始・一時停止します。起動直後は一時停止します。停止中はマイクの待機予熱を無効にしますが、他の録音は中断しません。監視はローカルで、音声入力は現在のサービスを使用します。',
+      voiceActivationDisabled: '音声起動は無効です',
+      voiceActivationPaused: 'ウェイク監視を一時停止中',
+      voiceActivationPausing: 'ウェイク監視を停止しています…',
+      voiceActivationStarting: 'ウェイク監視を開始しています…',
+      voiceActivationListening: '開始フレーズを待機中',
+      voiceActivationDictating: '音声入力または終了処理中',
+      voiceActivationError:
+        '監視を開始できません。モデル、マイク権限、デバイスを確認してください。',
       voiceActivationMultimodalModels:
         'ここで音声起動用モデルを準備します。音声入力には引き続き現在のマルチモーダルサービスを使用します。',
       voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',
@@ -1634,7 +1648,8 @@ export const ja: typeof zhCN = {
       validationTitle: '接続の確認',
       validationHint:
         '実際にリクエストを送信して設定を確認します。サービスの利用枠を消費する場合があります。設定の保存だけでは確認を実行しません。',
-      validationHintOmni: 'テキストによる接続確認を手動で送信します。サーバーの利用枠を消費する場合があります。',
+      validationHintOmni:
+        'テキストによる接続確認を手動で送信します。サーバーの利用枠を消費する場合があります。',
       autoSaveHint: '変更は自動保存されます。設定が終わったら、手動で接続を確認できます。',
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
@@ -2690,6 +2705,10 @@ export const ja: typeof zhCN = {
     activePill: '使用中',
     setDefault: 'デフォルトに設定',
     downloading: 'ダウンロード中',
+    cancelDownload: 'ダウンロードをキャンセル',
+    cancelDownloadTitle: '{{name}} のダウンロードをキャンセル',
+    cancellingDownload: 'ダウンロードをキャンセルしています…',
+    downloadFailed: 'モデルをダウンロードできませんでした',
     startDownload: 'ダウンロード開始',
     downloadNewModel: '新しいモデルをダウンロード',
     activeModelLabel: '使用中のモデル',

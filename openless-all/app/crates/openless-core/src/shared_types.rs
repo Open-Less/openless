@@ -187,13 +187,13 @@ pub struct FrontApp {
 /// `FrontApp { name, bundle_id }`.
 ///
 /// macOS composes `"Claude (com.anthropic.claudefordesktop)"`; Windows has
-/// only window titles, no bundle id. History entries have separate
+/// an executable name, not a bundle id. History entries have separate
 /// `app_name` / `app_bundle_id` fields, so splitting lets the detail page
 /// show a readable app name instead of gluing the whole bundle id into the
 /// body text.
 ///
 /// Only macOS labels are `"name (bundle.id)"`; on Windows parentheses are
-/// part of the title. Callers must pass `is_macos` per platform (production
+/// part of the label. Callers must pass `is_macos` per platform (production
 /// goes through `split_front_app_opt`). Non-macOS labels and labels whose
 /// bracket structure doesn't parse stay whole as the app name — better a
 /// verbose display than misreading ordinary parentheses in a window title
@@ -231,7 +231,7 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
 
 /// `Option` convenience wrapper for `split_front_app_label`; keeps the
 /// platform switch in one place: only macOS display strings are
-/// `"name (bundle.id)"`; other platforms (Windows window titles, Linux)
+/// `"name (bundle.id)"`; other platforms (Windows, Linux)
 /// keep the whole string as the name and leave the bundle id empty.
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label
@@ -596,6 +596,8 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
+    #[serde(default)]
+    pub qa_shortcut_behavior: QaShortcutBehavior,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -1138,6 +1140,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_qa_companion_key")]
     qa_companion_key: String,
     #[serde(default)]
+    qa_shortcut_behavior: QaShortcutBehavior,
+    #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
     /// `Some(None)` means the user explicitly disabled it.
@@ -1399,6 +1403,7 @@ impl Default for UserPreferencesWire {
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
             qa_companion_key: prefs.qa_companion_key,
+            qa_shortcut_behavior: prefs.qa_shortcut_behavior,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1635,6 +1640,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             output_language_preference: wire.output_language_preference,
             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
+            qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1861,6 +1867,16 @@ fn default_qa_hotkey() -> Option<ShortcutBinding> {
     if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
 }
 
+/// Initial action of the recording shortcut plus the Ask companion key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QaShortcutBehavior {
+    #[default]
+    Record,
+    Open,
+    Draft,
+}
+
 fn default_qa_companion_key() -> String { "Space".into() }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
@@ -2031,6 +2047,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
+            qa_shortcut_behavior: QaShortcutBehavior::default(),
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),

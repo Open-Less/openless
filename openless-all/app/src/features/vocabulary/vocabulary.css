@@ -1,0 +1,70 @@
+.ol-vocab-header-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-inline-size: 100%;
+}
+
+.ol-vocab-header-actions > button {
+  min-inline-size: 0;
+  min-block-size: 36px;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ol-vocab-header-actions > .ol-vocab-delete-selected {
+  display: grid;
+  place-items: center;
+  justify-content: stretch;
+  padding: 7px 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ol-font-weight-medium);
+  font-size: 13.5px;
+}
+
+/* Keep the action grid in the header when nothing is selected. */
+.ol-vocab-header-actions > [data-empty] {
+  visibility: hidden;
+}
+
+/* Reserve space for localized labels without adding to the control's accessible name. */
+.ol-vocab-reserved-label {
+  display: grid;
+  min-inline-size: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ol-vocab-action-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-inline-size: 0;
+}
+
+.ol-vocab-action-content,
+.ol-vocab-reserved-label > span {
+  grid-area: 1 / 1;
+}
+
+.ol-vocab-action-content[aria-hidden='true'],
+.ol-vocab-reserved-label > [aria-hidden='true'] {
+  visibility: hidden;
+}
+
+.ol-vocab-filters {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+}
+
+.ol-vocab-filters > button {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-ol-theme='dark'] .ol-vocab-dialog {
+  --ol-dialog-shadow: var(--ol-shadow-lg);
+}

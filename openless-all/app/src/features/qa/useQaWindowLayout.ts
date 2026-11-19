@@ -11,16 +11,21 @@ interface LayoutKey {
 interface LayoutResult extends LayoutKey {
   ready: boolean;
   failed: boolean;
+  contentScale?: number;
 }
 
 const COMPACT_HEIGHT = 80;
+const MIN_USABLE_WIDTH = 220;
+const MIN_EXPANDED_HEIGHT = 144;
+const EXPANDED_BASE_WIDTH = 920;
+const EXPANDED_BASE_HEIGHT = 800;
 
 function fitsQa(size: ViewportSize, expanded: boolean) {
-  if (size.width < 220) return false;
-  // The host clamps dimensions to the monitor work area, so check a usable
-  // content region instead of requiring the full window dimensions.
+  // The host clamps dimensions to the work area, and physical-pixel rounding
+  // can trim a fractional logical pixel from either dimension.
+  if (size.width < MIN_USABLE_WIDTH - 1) return false;
   return expanded
-    ? size.height >= COMPACT_HEIGHT + 44
+    ? size.height >= MIN_EXPANDED_HEIGHT - 1
     : size.height >= 55 && size.height <= COMPACT_HEIGHT + 2;
 }
 
@@ -50,9 +55,15 @@ export function useQaWindowLayout({
     );
     pending.current = { expanded, enterEpoch, promise };
     void promise.then(
-      () => {
-        if (!request.signal.aborted)
-          setOutcome({ expanded, enterEpoch, ready: true, failed: false });
+      ({ width, height }) => {
+        if (!request.signal.aborted) {
+          // Only upscale the UI. On small work areas the responsive layout
+          // preserves minimum text and control sizes inside the smaller frame.
+          const contentScale = expanded
+            ? Math.max(1, Math.min(width / EXPANDED_BASE_WIDTH, height / EXPANDED_BASE_HEIGHT))
+            : 1;
+          setOutcome({ expanded, enterEpoch, ready: true, failed: false, contentScale });
+        }
       },
       () => {
         if (!request.signal.aborted)
@@ -64,6 +75,7 @@ export function useQaWindowLayout({
 
   const current = outcome?.expanded === expanded && outcome.enterEpoch === enterEpoch;
   return {
+    contentScale: nativeWindow && current ? (outcome.contentScale ?? 1) : 1,
     ready: !nativeWindow || !!(current && outcome.ready),
     failed: nativeWindow && !!(current && outcome.failed),
     waitForReady() {

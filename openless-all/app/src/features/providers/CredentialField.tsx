@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import {
   useContext,
   useEffect,
@@ -75,15 +76,14 @@ export function CredentialField({
     [account, provider],
   );
   const { value, loaded, dirty, status } = useSyncExternalStore(draft.subscribe, draft.snapshot);
-  const [revealed, setRevealed] = useState(false);
   const [customModelMode, setCustomModelMode] = useState(false);
   const onValueChangeRef = useRef(onValueChange);
   onValueChangeRef.current = onValueChange;
   const track = form?.track;
   const register = form?.register;
+  const isBusy = form?.isBusy;
 
   useEffect(() => {
-    setRevealed(false);
     setCustomModelMode(false);
     void draft.load();
     return () => draft.dispose();
@@ -94,7 +94,7 @@ export function CredentialField({
     // A fetched model uses the same draft and queue as a manually typed model.
     const save = (next: string) => {
       const { loaded, dirty } = draft.snapshot();
-      if (!loaded || dirty) return Promise.resolve(false);
+      if (!loaded || dirty || isBusy?.()) return Promise.resolve(false);
       draft.edit(next);
       onValueChangeRef.current?.(next);
       return draft.flush();
@@ -103,7 +103,7 @@ export function CredentialField({
     return () => {
       if (pickerSaveRef.current === save) pickerSaveRef.current = null;
     };
-  }, [draft, pickerSaveRef]);
+  }, [draft, isBusy, pickerSaveRef]);
   useLayoutEffect(() => register?.(account, draft.flush), [draft, account, register]);
   useEffect(() => {
     const blocked = !loaded || dirty;
@@ -112,21 +112,31 @@ export function CredentialField({
   }, [track, onBlockedChange, account, loaded, dirty]);
   useEffect(() => {
     const notice = `credential:${fieldId}`;
-    if (status === 'saving') {
-      emitSaved('saving', t('common.saving'), notice);
-      return () => dismissNotification(notice);
-    }
-    if (status === 'saved')
-      emitSaved(
-        'saved',
-        t(account.endsWith('api_key') ? 'common.apiKeySaved' : 'common.saved'),
-        notice,
-      );
-    if (status === 'saveError') emitSaved('failed', t('common.operationFailed'), notice);
-  }, [account, fieldId, status, t]);
+    let previous = draft.snapshot().status;
+    if (previous === 'saving') emitSaved('saving', t('common.saving'), notice);
+    // Publish field feedback before flush settles so it cannot replace a later form receipt.
+    const unsubscribe = draft.subscribe(() => {
+      const next = draft.snapshot().status;
+      if (next === previous) return;
+      if (next === 'saving') emitSaved('saving', t('common.saving'), notice);
+      else if (next === 'saved')
+        emitSaved(
+          'saved',
+          t(account.endsWith('api_key') ? 'common.apiKeySaved' : 'common.saved'),
+          notice,
+        );
+      else if (next === 'saveError') emitSaved('failed', t('common.operationFailed'), notice);
+      else if (previous === 'saving') dismissNotification(notice);
+      previous = next;
+    });
+    return () => {
+      unsubscribe();
+      if (previous === 'saving') dismissNotification(notice);
+    };
+  }, [account, draft, fieldId, t]);
 
   const edit = (next: string, immediate = false) => {
-    if (!loaded || form?.leaving) return;
+    if (!loaded || isBusy?.()) return;
     onUserMutation?.();
     draft.edit(next);
     onValueChangeRef.current?.(next);
@@ -143,7 +153,6 @@ export function CredentialField({
     }
   };
 
-  const inputType = mask && !revealed ? 'password' : 'text';
   const disabled = !loaded || form?.leaving;
   const showInsecureEndpointWarning =
     (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint') &&
@@ -215,9 +224,10 @@ export function CredentialField({
                 }}
               />
             ) : (
-              <input
+              <TextField
+                key={JSON.stringify([provider, account])}
                 id={fieldId}
-                type={inputType}
+                type={mask ? 'password' : 'text'}
                 value={value}
                 placeholder={loaded ? placeholder : t('common.loading')}
                 onChange={(event) => edit(event.target.value)}
@@ -225,11 +235,8 @@ export function CredentialField({
                 disabled={disabled}
                 readOnly={!!endpointPresets && !!presetValue}
                 style={{
-                  ...inputStyle,
                   flex: 1,
                   height: 38,
-                  minWidth: 0,
-                  maxWidth: '100%',
                   fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit',
                 }}
               />
@@ -256,22 +263,14 @@ export function CredentialField({
             )}
             {mask && (
               <button
-                onClick={() => setRevealed((r) => !r)}
-                title={revealed ? t('common.hide') : t('common.show')}
+                onClick={onCopy}
+                title={t('common.copy')}
                 style={iconBtnStyle}
-                disabled={disabled}
+                disabled={!value || disabled}
               >
-                <Icon name="eye" size={14} />
+                <Icon name="copy" size={14} />
               </button>
             )}
-            <button
-              onClick={onCopy}
-              title={t('common.copy')}
-              style={iconBtnStyle}
-              disabled={!value || disabled}
-            >
-              <Icon name="copy" size={14} />
-            </button>
             {/* readError is a persistent "field unreadable" error and stays in place to tell the
               user the field is unavailable; other transient states (saving / saved / saveError /
               copied / copyError) go through emitSaved to the window notification host instead of
