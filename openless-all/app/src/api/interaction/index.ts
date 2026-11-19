@@ -21,16 +21,26 @@ export interface WarningOptions {
 
 export type NotificationState = 'info' | 'saved' | 'failed' | 'deleting' | 'deleted' | 'saving';
 
+export type ToastVariant = 'default' | 'success' | 'error' | 'warning' | 'info' | 'loading';
+
 export interface NotificationOptions {
   message: string;
   description?: string;
   state?: NotificationState;
+  variant?: ToastVariant;
   severity?: 'warning' | 'error';
   durationMs?: number;
   key?: string;
   progress?: boolean;
+  /** Percent complete when known; absent means indeterminate. */
+  progressValue?: number;
   actionLabel?: string;
   onAction?: () => void;
+  actionStyle?: 'cancel-icon' | 'below';
+  actionDisabled?: boolean;
+  actionTitle?: string;
+  /** A modal may allow a pointer action only when it owns this anchor. */
+  actionOwner?: () => HTMLElement | null;
 }
 
 export interface NotificationHandle {

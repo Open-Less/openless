@@ -11,6 +11,7 @@ import { createInteractionController } from './interactionController';
 import { ConfirmDialogHost } from './ConfirmDialogHost';
 import { bindNotificationSink } from '../../lib/notifications';
 import { NotificationCenter } from '../feedback/NotificationCenter';
+import { createToast } from '../feedback/toast';
 import './interaction.css';
 
 const Controller = createContext<ReturnType<typeof createInteractionController> | null>(null);
@@ -45,7 +46,8 @@ export function InteractionProvider({
     <Controller.Provider value={controller}>
       {children}
       <ConfirmDialogHost controller={controller} />
-      <NotificationCenter controller={controller} aside={notificationAside} />
+      {notificationAside}
+      <NotificationCenter controller={controller} />
     </Controller.Provider>
   );
 }
@@ -60,4 +62,10 @@ export function useInteraction(scopeKey?: string | number) {
     return scope.dispose;
   }, [scope]);
   return scope.interaction;
+}
+
+/** Non-blocking feedback; confirm, warn and openDialog remain modal APIs. */
+export function useToast(scopeKey?: string | number) {
+  const { notify } = useInteraction(scopeKey);
+  return useMemo(() => createToast(notify), [notify]);
 }

@@ -22,6 +22,16 @@ export function listenQaLevelChanges(
   return listenTauriEvent<QaRecordingLevel>('qa:level', onLevel);
 }
 
+export function listenQaDictationDraft(
+  onText: (payload: { token: string; text: string }) => void,
+): Promise<() => void> {
+  return listenTauriEvent('qa:dictation-draft', onText);
+}
+
+export function setQaDraftFocus(token: string, focused: boolean): Promise<void> {
+  return invokeOrPreview('qa_set_draft_focus', { token, focused }, () => undefined);
+}
+
 export function listenQaDismissed(onDismissed: () => void): Promise<() => void> {
   return listenTauriEvent('qa:dismiss', onDismissed);
 }

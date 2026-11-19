@@ -1,0 +1,316 @@
+.qa-conversation .qa-prompt {
+  --qa-prompt-muted: #868593;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--qa-prompt-line);
+  border-radius: 24px;
+  background: var(--qa-paper);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+.qa-conversation .qa-prompt:focus-within {
+  border-color: var(--qa-strong);
+}
+.qa-input-stage {
+  position: relative;
+  min-width: 0;
+  margin: 16px 16px 0;
+  font-size: 15px;
+  line-height: 24px;
+}
+/* A hidden replica measures wrapping without mutating the active textarea or its caret. */
+.qa-input-measure,
+.qa-input-stage textarea,
+.qa-input-flight {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  letter-spacing: inherit;
+}
+.qa-input-measure {
+  position: absolute;
+  inset: 0 0 auto;
+  min-height: 24px;
+  max-height: 96px;
+  max-height: clamp(24px, 25cqh, 192px);
+  overflow: hidden;
+  visibility: hidden;
+}
+.qa-input-field {
+  position: relative;
+  overflow: hidden;
+}
+.qa-input-stage textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--qa-ink);
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: thin;
+}
+.qa-input-stage textarea::placeholder {
+  color: transparent;
+}
+.qa-input-placeholder {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--qa-prompt-muted);
+  pointer-events: none;
+}
+.qa-input-flight {
+  position: absolute;
+  z-index: 1;
+  inset: -24px 0 auto;
+  padding-top: 24px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.qa-input-flight span {
+  display: inline-block;
+  max-width: 100%;
+}
+.qa-prompt-tools,
+.qa-prompt-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.qa-prompt-tools {
+  gap: 8px;
+  padding: 12px;
+}
+.qa-prompt-actions {
+  gap: 4px;
+  margin-inline-end: auto;
+}
+.qa-prompt button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--qa-prompt-muted);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 160ms ease;
+}
+.qa-prompt button:not(:disabled):hover {
+  background: var(--qa-wash);
+  color: var(--qa-ink);
+}
+.qa-prompt button:not(:disabled):active {
+  transform: scale(0.9);
+}
+.qa-prompt button:focus-visible {
+  outline-offset: 1px;
+}
+.qa-prompt button svg {
+  width: 18px;
+  height: 18px;
+}
+.qa-prompt-actions button {
+  color: var(--qa-prompt-muted);
+}
+.qa-prompt :is(.qa-mode, .qa-mic):disabled {
+  opacity: 0.5;
+}
+.qa-prompt .qa-mode.is-on,
+.qa-prompt .qa-mic.is-recording {
+  background: var(--qa-wash);
+  color: var(--qa-accent);
+}
+.qa-prompt .qa-send,
+.qa-prompt .qa-send:not(:disabled):hover {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  background: var(--qa-ink);
+  color: var(--qa-paper);
+}
+.qa-prompt .qa-send:disabled {
+  background: var(--qa-wash);
+  color: var(--qa-prompt-muted);
+}
+.qa-prompt .qa-send.is-stop {
+  box-shadow: 0 0 0 2px var(--qa-wash);
+}
+.qa-prompt :is(.qa-send.is-stop, .qa-mic.is-recording) svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+.qa-browser-note,
+.qa-voice-feedback,
+.qa-voice-feedback .voice-waveform {
+  min-width: 0;
+}
+.qa-browser-note,
+.qa-voice-feedback .voice-waveform-label,
+.qa-recording-selection > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-browser-note,
+.qa-voice-feedback {
+  font-size: 13px;
+  color: var(--qa-prompt-muted);
+}
+.qa-voice-feedback {
+  animation: qa-voice-feedback-in 160ms ease-out;
+}
+.qa-voice-feedback .voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qa-voice-feedback .voice-waveform-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.qa-voice-feedback .voice-waveform-bars span {
+  width: 2px;
+  border-radius: 2px;
+  background: var(--qa-accent);
+  transition: height 90ms linear;
+}
+.qa-voice-feedback .voice-waveform.is-processing .voice-waveform-bars span {
+  animation: qa-processing-pulse 1.2s ease-in-out var(--wave-delay) infinite;
+}
+.qa-recording-selection {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+.qa-recording-selection svg {
+  width: 10px;
+  height: 10px;
+}
+@keyframes qa-voice-feedback-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@container (max-width: 350px) {
+  .qa-voice-feedback .voice-waveform-bars {
+    display: none;
+  }
+}
+@container (max-height: 260px) {
+  .qa-input-stage {
+    margin-top: 8px;
+  }
+  .qa-prompt-tools {
+    padding: 5px 9px;
+  }
+}
+
+.qa-voice-strip {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid rgb(59 130 246 / 24%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--qa-paper) 84%, #3b82f6);
+  color: var(--qa-accent);
+}
+.qa-send-morph-strip .qa-voice-strip {
+  min-height: 56px;
+  padding-inline: 8px 16px;
+}
+.qa-voice-strip-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--qa-paper);
+}
+.qa-voice-strip-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.qa-voice-strip-bars {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  width: clamp(24px, 18cqw, 104px);
+  min-width: 16px;
+  height: 21px;
+}
+.qa-voice-strip-bars i {
+  flex: 1;
+  min-width: 1px;
+  border-radius: 20px;
+  background: currentColor;
+  transition: height 90ms linear;
+}
+.qa-voice-strip-time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.qa-voice-strip-label {
+  min-width: 0;
+  font-size: 11px;
+}
+
+/* The draft stays mounted through capture; the strip is the visible input surface. */
+.qa-prompt[data-recording] {
+  position: relative;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.qa-prompt[data-recording] .qa-input-stage {
+  position: absolute;
+  inset: 0 12px auto;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.qa-prompt[data-recording] .qa-prompt-tools {
+  padding: 0;
+}
+.qa-prompt[data-recording] .qa-voice-feedback {
+  flex: 1;
+}
+.qa-prompt[data-recording] .qa-prompt-actions {
+  order: 2;
+  margin: 0;
+}
+.qa-prompt[data-recording] :is(.qa-mode, .qa-send) {
+  display: none;
+}

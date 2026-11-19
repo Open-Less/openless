@@ -703,15 +703,18 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 /* 圆形搜索：同一个胶囊容器原地变形 —— 收起 36px 圆钮，
    展开 220px 搜索框；放大镜图标始终贴右缘不动，输入文字在左侧淡入。
    展开/收起共用同一条 width 过渡，两个方向都有动画（从哪来回到哪去）。 */
-.ol-search {
-  display: flex;
-  align-items: center;
+.ol-field.ol-search {
   width: 36px;
   height: 36px;
   overflow: hidden;
-  border-radius: var(--ol-radius);
-  border: 0.5px solid var(--ol-line);
-  background: var(--ol-surface-2);
+  --ol-corner-radius: 18px;
+  cursor: default;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  box-shadow:
+    inset 0 0 0 1px transparent,
+    var(--ol-field-shadow, 0 0 #0000);
   transform-origin: right center;
   transition:
     width 0.34s cubic-bezier(0.34, 1.35, 0.64, 1),
@@ -719,8 +722,8 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     background 0.16s var(--ol-motion-quick),
     border-color 0.16s var(--ol-motion-quick);
 }
-.ol-search:hover {
-  border-color: var(--ol-line-strong);
+.ol-field.ol-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--ol-blue);
 }
 .ol-search:not(.ol-search-open):hover {
   transform: scale(1.045);
@@ -733,24 +736,15 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     background 0.16s var(--ol-motion-quick),
     border-color 0.16s var(--ol-motion-quick);
 }
-.ol-search-open {
+.ol-field.ol-search-open {
   width: 220px;
-  /* Same plate as the closed magnifier: one color, two widths. */
-  background: var(--ol-surface-2);
-  border-color: var(--ol-line);
 }
-.ol-search-field {
+.ol-field.ol-search > .ol-search-field {
   flex: 1;
   min-width: 0;
   height: 100%;
   box-sizing: border-box;
   border: 0;
-  outline: none;
-  background: transparent;
-  background-color: transparent;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--ol-ink);
   /* 收起态 padding 必须为 0：否则输入框虽然宽度塌成 0，左右 padding 仍占位，
      会把 36px 的放大镜按钮顶出圆形容器、被 overflow 裁掉。 */
   padding: 0;
@@ -759,12 +753,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     opacity 0.16s var(--ol-motion-quick),
     padding 0.28s var(--ol-motion-spring);
 }
-.ol-search-open .ol-search-field {
+.ol-field.ol-search-open > .ol-search-field {
   opacity: 1;
   padding: 0 4px 0 12px;
-}
-.ol-search-field::placeholder {
-  color: var(--ol-ink-4);
 }
 .ol-search-icon {
   flex-shrink: 0;
@@ -2440,7 +2431,7 @@ body {
   corner-shape: round;
 }
 
-input:not([type='checkbox']):not([type='radio']),
+input:not([type='checkbox']):not([type='radio']):not(.ol-field-control),
 textarea,
 select {
   border-color: transparent !important;

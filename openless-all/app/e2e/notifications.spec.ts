@@ -60,43 +60,22 @@ test('transient confirmations drop from the window top and replace each other', 
   await expect(cards).toHaveCount(1);
   await expect(cards.first()).toContainText('DeepSeek 配置已保存');
   const message = cards.locator('.ol-notification-message');
-  expect(await message.evaluate((node) => node.clientHeight)).toBe(18);
+  expect(await message.evaluate((node) => node.clientHeight)).toBe(20);
   const box = (await cards.first().boundingBox())!;
-  // The host is flush with the window edge; the card itself keeps only the safe-area inset.
   const bounds = (await page.locator('.ol-app-viewport').boundingBox())!;
   expect(box.y - bounds.y).toBeLessThan(12);
-
-  // Success uses the standard theme blue and the same raised surface as content cards.
-  const savedIcon = page.locator('.ol-notification-icon--saved');
-  const savedBg = await savedIcon.evaluate((node) => getComputedStyle(node).backgroundColor);
-  const themeBlue = await page.evaluate(() => {
-    const probe = document.createElement('div');
-    probe.style.background = 'var(--ol-accent-solid-bg)';
-    document.body.appendChild(probe);
-    const value = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    return value;
-  });
-  expect(savedBg).toBe(themeBlue);
-  const cardBackground = await cards
-    .first()
-    .evaluate((node) => getComputedStyle(node).backgroundColor);
-  const contentCardBackground = await page
-    .locator('.ol-overview-dashboard .ol-card')
-    .first()
-    .evaluate((node) => getComputedStyle(node).backgroundColor);
-  expect(cardBackground).toBe(contentCardBackground);
+  expect(
+    await cards.first().evaluate((node: HTMLElement) => [node.offsetWidth, node.offsetHeight]),
+  ).toEqual([356, 56]);
+  const savedIcon = cards.locator('[data-slot="toast-icon"]');
+  await expect(savedIcon).toHaveAttribute('data-tone', 'success');
+  expect(await savedIcon.evaluate((node: HTMLElement) => node.offsetWidth)).toBe(36);
 
   await emitNotifications(page, [{ state: 'deleted', message: '已删除', durationMs: 10000 }]);
   await expect(cards).toHaveCount(1);
   await expect(message).toHaveText('已删除');
-  expect(await message.evaluate((node) => node.clientHeight)).toBe(18);
-  const deletedIcon = page.locator('.ol-notification-icon--deleted');
-  await expect(deletedIcon).toBeVisible();
-  const deletedColor = await deletedIcon.evaluate((node) => getComputedStyle(node).backgroundColor);
-  const [deletedRed, deletedGreen] = deletedColor.match(/\d+/g)!.map(Number);
-  expect(deletedRed).toBeGreaterThan(200);
-  expect(deletedGreen).toBeLessThan(160);
+  expect(await message.evaluate((node) => node.clientHeight)).toBe(20);
+  await expect(savedIcon).toHaveAttribute('data-tone', 'success');
 });
 
 test('save bridge and independent in-flight saves keep their own lifecycle', async ({ page }) => {

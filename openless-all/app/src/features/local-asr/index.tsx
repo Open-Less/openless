@@ -1805,10 +1805,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         />
       )}
 
-      {/* ─── The top-right download progress overlay is now global (mounted at the App root,
-                 present on every page) and no longer rendered here; in-page progress still drives
-                 the board's detail bar via progress / sherpaDownloadProgress. ─── */}
-
       {!embedded && (
         /* Performance/quality expectation warning — in embedded mode AdvancedSection renders it itself to avoid duplication. */
         <Card

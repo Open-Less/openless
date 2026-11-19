@@ -46,6 +46,8 @@ pub struct QaService {
     // Hosts may inspect snapshot() during a window action, so this is distinct
     // from the state mutex and is always released before native async cleanup.
     presentation: Arc<Mutex<()>>,
+    // The UI can stop immediately after it sees Recording, before native startup returns.
+    recording_start: Arc<tokio::sync::Mutex<()>>,
     persistence: Option<Arc<QaPersistence>>,
     selection_voice: Option<Arc<dyn SelectionVoiceApi>>,
     voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
@@ -91,6 +93,7 @@ impl QaService {
             state: Arc::new(Mutex::new(QaState::default())),
             runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             presentation: Arc::new(Mutex::new(())),
+            recording_start: Arc::new(tokio::sync::Mutex::new(())),
             persistence: None,
             selection_voice: None,
             voice_sessions: Arc::new(crate::voice_session::VoiceSessionGate::default()),
@@ -111,6 +114,7 @@ impl QaService {
             state: Arc::new(Mutex::new(QaState::default())),
             runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             presentation: Arc::new(Mutex::new(())),
+            recording_start: Arc::new(tokio::sync::Mutex::new(())),
             persistence: Some(Arc::new(persistence)),
             selection_voice: Some(selection_voice),
             voice_sessions,
@@ -203,6 +207,7 @@ impl QaService {
     }
 
     async fn begin_recording(&self) -> Result<(), BackendError> {
+        let _startup = self.recording_start.lock().await;
         let _runtime = self.begin_runtime_work()?;
         let session_id = SessionId::new();
         {
@@ -210,11 +215,13 @@ impl QaService {
                 .presentation
                 .lock()
                 .expect("QA presentation lock poisoned");
-            {
+            let previous = {
                 let mut state = self.state.lock().expect("QA state lock poisoned");
                 ensure_qa_idle(&state.snapshot)?;
                 self.voice_sessions
                     .acquire(session_id, crate::voice_session::VoiceSessionKind::Qa)?;
+                let previous = state.snapshot.clone();
+                state.snapshot.panel_open = true;
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
                 state.snapshot.phase = QaPhase::Recording;
                 state.snapshot.activity = None;
@@ -225,6 +232,12 @@ impl QaService {
                 state.snapshot.selection_preview = None;
                 state.snapshot.edit_apply_available = false;
                 state.snapshot.edit_revert_available = false;
+                previous
+            };
+            if let Err(error) = self.host_actions.request(HostAction::ShowQa) {
+                self.state.lock().expect("QA state lock poisoned").snapshot = previous;
+                self.voice_sessions.release(session_id);
+                return Err(error);
             }
             self.publish_snapshot(
                 QaStateKind::Recording,
@@ -245,6 +258,7 @@ impl QaService {
     }
 
     async fn finish_recording(&self, session_id: SessionId) -> Result<(), BackendError> {
+        let startup = self.recording_start.lock().await;
         let _runtime = {
             let mut state = self.state.lock().expect("QA state lock poisoned");
             // Validate the callback's generation and claim the finish under
@@ -255,6 +269,7 @@ impl QaService {
             state.snapshot.activity = Some(crate::domains::QaActivity { kind: crate::domains::QaActivityKind::Thinking, tool_name: None });
             self.runtime_work.existing_work()
         };
+        drop(startup);
         self.publish_snapshot(QaStateKind::Loading, Some((session_id, QaPhase::Thinking)));
 
         let input = match self.runtime.finish_recording(session_id).await {
@@ -325,6 +340,7 @@ impl QaService {
                 }
                 let previous = state.snapshot.clone();
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
+                state.snapshot.panel_open = true;
                 state.snapshot.phase = QaPhase::Thinking;
             state.snapshot.activity = Some(crate::domains::QaActivity { kind: crate::domains::QaActivityKind::Thinking, tool_name: None });
                 state.snapshot.session_id = Some(session_id);
@@ -783,7 +799,12 @@ impl QaApi for QaService {
                 .lock()
                 .expect("QA presentation lock poisoned");
             service.host_actions.request(HostAction::ShowQa)?;
-            service.publish_snapshot(QaStateKind::Idle, None);
+            let mut state = service.state.lock().expect("QA state lock poisoned");
+            state.snapshot.panel_open = true;
+            service.event_publisher().publish(
+                state.snapshot.session_id,
+                BackendEventKind::QaState(QaStateEvent::from_snapshot(&state.snapshot)),
+            );
             Ok(())
         })
     }

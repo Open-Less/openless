@@ -410,7 +410,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
+pub(crate) fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     show: bool,
 ) -> bool {

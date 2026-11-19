@@ -99,6 +99,16 @@ pub async fn qa_get_snapshot(
     Ok(event)
 }
 
+/// Register only the local Ask textarea as a dictation destination.
+#[tauri::command]
+pub fn qa_set_draft_focus(window: Window, token: String, focused: bool) -> Result<(), String> {
+    if window.label() != "qa" || uuid::Uuid::parse_str(&token).is_err() {
+        return Err("qa_window_required".into());
+    }
+    crate::qa_draft::set_focus(token, focused);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn qa_window_set_expanded(window: Window, expanded: bool) -> Result<(), String> {
     use tauri::Manager;
@@ -110,7 +120,12 @@ pub async fn qa_window_set_expanded(window: Window, expanded: bool) -> Result<()
     window
         .app_handle()
         .run_on_main_thread(move || {
-            let _ = sender.send(crate::set_qa_window_expanded(&app, expanded));
+            let result = crate::set_qa_window_expanded(&app, expanded);
+            if expanded {
+                // If sizing fails, the webview still needs to show its close/error affordance.
+                crate::present_pending_qa_window(&app);
+            }
+            let _ = sender.send(result);
         })
         .map_err(|_| "qa_main_thread_unavailable".to_string())?;
     receiver
