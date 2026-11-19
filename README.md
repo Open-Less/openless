@@ -101,13 +101,6 @@
       <sub>Contributor / Linux Maintainer</sub>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="170">
-      <img src="assets/people/jimmy54.png" width="80" height="80" alt="jimmy54" /><br/>
-      <strong><a href="https://github.com/jimmy54" target="_blank" rel="noopener">jimmy54</a></strong><br/>
-      <sub>macOS packaging &amp; developer account</sub>
-    </td>
-  </tr>
 </table>
 
 OpenLess is a cross-platform (macOS, Windows, Linux, Android, iOS, and HarmonyOS) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
