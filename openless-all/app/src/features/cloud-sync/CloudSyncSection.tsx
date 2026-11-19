@@ -319,6 +319,7 @@ export function CustomSyncServerSection() {
 export function CloudSyncSection() {
   const { t, i18n } = useTranslation();
   const { notify, confirm } = useInteraction('cloud-sync');
+  const section = useRef<HTMLElement>(null);
   const modalActive = useModalActive();
   const dialogDescriptionId = useId();
   const previewScenario = getCloudSyncPreviewScenario();
@@ -780,18 +781,23 @@ export function CloudSyncSection() {
       return;
     }
     if (notificationSettled.current) return;
-    // Global notification actions are outside the modal focus scope.
-    const canCancel = taskId !== null && !cancelRequested && !modalActive;
+    const canCancel = taskId !== null && !dialog;
+    const cancelLabel = t(
+      syncIntent.current ? 'cloudSyncE2ee.cancelSync' : 'cloudSyncE2ee.cancelTask',
+    );
     const options = {
       message: progressMessage,
       state: 'saving' as const,
       progress: true,
-      actionLabel: canCancel ? t('cloudSyncE2ee.cancelTask') : undefined,
+      actionLabel: canCancel ? cancelLabel : undefined,
+      actionStyle: 'cancel-icon' as const,
+      actionDisabled: cancelRequested,
+      actionOwner: () => section.current,
       onAction: canCancel ? () => void cancelTaskRef.current(taskId) : undefined,
     };
     if (progressNotification.current) progressNotification.current.update(options);
     else progressNotification.current = notify({ ...options, key: 'cloud-sync-operation' });
-  }, [working, taskId, cancelRequested, modalActive, progressMessage, notify, t]);
+  }, [working, taskId, cancelRequested, dialog, progressMessage, notify, t]);
   useEffect(
     () => () => {
       progressNotification.current?.dismiss();
@@ -846,7 +852,7 @@ export function CloudSyncSection() {
 
   return (
     <Card>
-      <section className="ol-cloud-sync" aria-labelledby="cloud-sync-e2ee-title">
+      <section ref={section} className="ol-cloud-sync" aria-labelledby="cloud-sync-e2ee-title">
         <header>
           <span className="ol-cloud-sync-icon">
             <Icon name="cloud" size={21} />

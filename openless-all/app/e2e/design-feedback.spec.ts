@@ -57,7 +57,7 @@ test('sidebar items highlight on hover without a transition, and the brand retur
   await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
 });
 
-test('channel deletion uses a blocking centered confirmation and a red trash toast', async ({
+test('channel deletion uses a blocking centered confirmation and a success toast', async ({
   page,
 }) => {
   await openAiSettings(page);
@@ -108,12 +108,7 @@ test('channel deletion uses a blocking centered confirmation and a red trash toa
   await expect(page.locator('.ol-channel-dialog')).toHaveCount(0);
   const toast = page.locator('.ol-notification-card').filter({ hasText: '已删除' });
   await expect(toast).toBeVisible();
-  const icon = toast.locator('.ol-notification-icon--deleted');
-  await expect(icon).toBeVisible();
-  const iconColor = await icon.evaluate((node) => getComputedStyle(node).backgroundColor);
-  const [red, green] = iconColor.match(/\d+/g)!.map(Number);
-  expect(red).toBeGreaterThan(200);
-  expect(green).toBeLessThan(160);
+  await expect(toast.locator('[data-slot="toast-icon"]')).toHaveAttribute('data-tone', 'success');
 });
 
 test('noise reduction uses one slider track', async ({ page }) => {
@@ -228,12 +223,7 @@ test('style pack deletion asks once, keeps the pack on cancel, and reports a com
   await expect(dialog).toHaveCount(0);
   await expect(pack).toHaveCount(0);
   await expect(toast).toContainText('创作者口播');
-  const icon = toast.locator('.ol-notification-icon--deleted');
-  await expect(icon).toBeVisible();
-  const iconColor = await icon.evaluate((node) => getComputedStyle(node).backgroundColor);
-  const [red, green] = iconColor.match(/\d+/g)!.map(Number);
-  expect(red).toBeGreaterThan(200);
-  expect(green).toBeLessThan(160);
+  await expect(toast.locator('[data-slot="toast-icon"]')).toHaveAttribute('data-tone', 'success');
   await expect(toast.getByRole('button', { name: '撤销', exact: true })).toHaveCount(0);
 });
 

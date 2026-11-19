@@ -121,6 +121,7 @@ export const en: typeof zhCN = {
     delete: 'Delete cloud backup',
     working: 'Working securely…',
     cancelTask: 'Cancel current task',
+    cancelSync: 'Cancel sync',
     cancelRequested: 'Cancellation requested. Waiting for the task to settle.',
     done: 'Sync settings updated.',
     restored: 'Cloud data restored. Review settings specific to this device.',
@@ -1588,15 +1589,17 @@ export const en: typeof zhCN = {
       voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
       voiceActivationLocalOnly:
         'Recognition stays on this device; standby audio is not uploaded or archived.',
-      voiceActivationHotkeyLinked: "Link recording shortcut",
-      voiceActivationHotkeyLinkedDesc: "Click the recording shortcut to toggle wake listening instead of the usual recording gesture. Starts paused after launch. Pausing disables idle microphone prewarming, not other recordings. Wake listening is local; dictation still uses your current service.",
-      voiceActivationDisabled: "Voice activation disabled",
-      voiceActivationPaused: "Wake listening temporarily paused",
-      voiceActivationPausing: "Stopping wake listening…",
-      voiceActivationStarting: "Starting wake listening…",
-      voiceActivationListening: "Listening for the wake phrase",
-      voiceActivationDictating: "Dictating or finishing",
-      voiceActivationError: "Unable to start wake listening. Check the model, microphone permissions and device.",
+      voiceActivationHotkeyLinked: 'Link recording shortcut',
+      voiceActivationHotkeyLinkedDesc:
+        'Click the recording shortcut to toggle wake listening instead of the usual recording gesture. Starts paused after launch. Pausing disables idle microphone prewarming, not other recordings. Wake listening is local; dictation still uses your current service.',
+      voiceActivationDisabled: 'Voice activation disabled',
+      voiceActivationPaused: 'Wake listening temporarily paused',
+      voiceActivationPausing: 'Stopping wake listening…',
+      voiceActivationStarting: 'Starting wake listening…',
+      voiceActivationListening: 'Listening for the wake phrase',
+      voiceActivationDictating: 'Dictating or finishing',
+      voiceActivationError:
+        'Unable to start wake listening. Check the model, microphone permissions and device.',
       voiceActivationMultimodalModels:
         'Prepare the voice activation model here. Dictation still uses your current multimodal service.',
       voiceActivationModelMissing: 'The local Zipformer model is not installed.',
@@ -1651,7 +1654,8 @@ export const en: typeof zhCN = {
       validationTitle: 'Connection check',
       validationHint:
         'Manually send a real request to check this configuration. It may use service credits. Saving settings does not run a check.',
-      validationHintOmni: 'Manually send a text-only connection request. It may use server credits.',
+      validationHintOmni:
+        'Manually send a text-only connection request. It may use server credits.',
       autoSaveHint:
         'Changes save automatically. Once configured, you can check the connection manually.',
       nameHint:
@@ -2727,6 +2731,10 @@ export const en: typeof zhCN = {
     activePill: 'Active',
     setDefault: 'Set as default',
     downloading: 'Downloading',
+    cancelDownload: 'Cancel download',
+    cancelDownloadTitle: 'Cancel the download of {{name}}',
+    cancellingDownload: 'Cancelling download…',
+    downloadFailed: 'Model download failed',
     startDownload: 'Start download',
     downloadNewModel: 'Download new model',
     activeModelLabel: 'Model in use',

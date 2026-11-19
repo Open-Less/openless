@@ -1,111 +1,123 @@
 import { AnimatePresence, usePresence } from 'framer-motion';
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { StatusNotice } from './StatusNotice';
-import { ViewportPortal, useModalActive } from '../layout/AppViewport';
+import { ToastIcon, ToastPanel } from './ToastPanel';
+import { toastVariant } from './toast';
+import { ViewportPortal, useAppViewport } from '../layout/AppViewport';
 import type { InteractionController, NotificationItem } from '../overlays/interactionController';
 
-function NotificationCard({
-  item,
-  dismiss,
-  modalActive,
-}: {
-  item: NotificationItem;
-  dismiss: () => void;
-  modalActive: boolean;
-}) {
+function NotificationCard({ item, dismiss }: { item: NotificationItem; dismiss: () => void }) {
   const { t } = useTranslation();
   const [present, remove] = usePresence();
-  const state = item.state ?? 'info';
-  const iconState = state === 'deleting' ? 'deleted' : state;
+  const { modalStack } = useAppViewport();
+  const top = useSyncExternalStore(modalStack.subscribe, modalStack.getTopOverlay);
+  const variant = toastVariant(item);
+  const state =
+    item.state ?? (variant === 'loading' ? 'saving' : variant === 'error' ? 'failed' : 'info');
+  const percent = item.progressValue;
+  const value =
+    percent != null && Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : undefined;
+  const actionAllowed = (overlay: HTMLElement | null) => {
+    const anchor = item.actionOwner?.();
+    return !overlay || Boolean(anchor && overlay.contains(anchor));
+  };
+  const usesIcon = item.actionStyle === 'cancel-icon';
+  const below = item.actionStyle === 'below';
+  const action = item.actionLabel && item.onAction && (
+    <button
+      type="button"
+      data-slot="toast-action"
+      className="ol-notification-action"
+      data-action-style={item.actionStyle}
+      aria-label={item.actionLabel}
+      title={item.actionTitle ?? item.actionLabel}
+      disabled={!present || item.actionDisabled || !actionAllowed(top)}
+      tabIndex={top ? -1 : undefined}
+      onPointerDown={(event) => {
+        if (top) event.preventDefault();
+      }}
+      onClick={() => {
+        if (!present || !actionAllowed(modalStack.getTopOverlay())) return;
+        if (variant !== 'loading' && !item.progress) dismiss();
+        item.onAction?.();
+      }}
+    >
+      {usesIcon ? <Icon name="close" size={16} /> : item.actionLabel}
+    </button>
+  );
+
   return (
     <StatusNotice
       state={state}
+      variant={variant}
+      notificationKey={item.key}
       progress={item.progress}
       severity={item.severity}
       present={present}
-      onExit={() => remove?.()}
+      onExit={remove ?? undefined}
     >
-      <span
-        className={`ol-notification-icon ol-notification-icon--${iconState}`}
-        aria-hidden="true"
+      <ToastPanel>
+        <div className="ol-toast-row">
+          {variant !== 'default' && <ToastIcon type={variant} />}
+          <div className="ol-notification-body">
+            <div role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}>
+              <span className="ol-notification-message" data-slot="toast-title">
+                {item.message}
+              </span>
+              {item.description && (
+                <span className="ol-notification-description" data-slot="toast-description">
+                  {item.description}
+                </span>
+              )}
+            </div>
+            {item.progress && (
+              <span
+                className="ol-notification-progress"
+                role="progressbar"
+                aria-label={item.message}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={value}
+              >
+                <span
+                  className="ol-notification-progress-value"
+                  data-determinate={value !== undefined}
+                  style={value === undefined ? undefined : { width: `${value}%` }}
+                />
+              </span>
+            )}
+          </div>
+          {!below && action}
+        </div>
+        {below && action && <div className="ol-toast-footer">{action}</div>}
+      </ToastPanel>
+      <button
+        type="button"
+        className="ol-notification-close"
+        data-slot="toast-close"
+        aria-label={t('common.close')}
+        title={t('common.close')}
+        disabled={!present}
+        tabIndex={top ? -1 : undefined}
+        onPointerDown={(event) => {
+          if (top) event.preventDefault();
+        }}
+        onClick={dismiss}
       >
-        {state === 'saving' ? (
-          <span className="ol-loading-spinner">
-            <Icon name="refresh" size={10} />
-          </span>
-        ) : item.severity ? (
-          '!'
-        ) : iconState === 'deleted' ? (
-          <Icon name="trash" size={10} />
-        ) : state === 'failed' ? (
-          '!'
-        ) : state === 'info' ? (
-          'i'
-        ) : (
-          '✓'
-        )}
-      </span>
-      <span className="ol-notification-body">
-        <span role={state === 'failed' || item.severity ? 'alert' : 'status'}>
-          <span className="ol-notification-message">{item.message}</span>
-          {item.description && (
-            <span className="ol-notification-description">{item.description}</span>
-          )}
-        </span>
-        {item.progress && (
-          <span className="ol-notification-progress" role="progressbar" aria-label={item.message}>
-            <span className="ol-notification-progress-value" />
-          </span>
-        )}
-      </span>
-      {item.actionLabel && item.onAction && (
-        <button
-          type="button"
-          className="ol-notification-action"
-          disabled={modalActive || !present}
-          onClick={() => {
-            if (!item.progress) dismiss();
-            item.onAction?.();
-          }}
-        >
-          {item.actionLabel}
-        </button>
-      )}
-      {!item.progress && (
-        <button
-          type="button"
-          className="ol-notification-close"
-          aria-label={t('common.close')}
-          disabled={!present}
-          tabIndex={modalActive ? -1 : undefined}
-          onPointerDown={(event) => {
-            // The notification can close without taking focus away from a dialog.
-            if (modalActive) event.preventDefault();
-          }}
-          onClick={dismiss}
-        >
-          <Icon name="close" size={14} />
-        </button>
-      )}
+        <Icon name="close" size={10} />
+      </button>
     </StatusNotice>
   );
 }
 
-export function NotificationCenter({
-  controller,
-  aside,
-}: {
-  controller: InteractionController;
-  aside?: ReactNode;
-}) {
+export function NotificationCenter({ controller }: { controller: InteractionController }) {
   const items = useSyncExternalStore(
     controller.subscribe,
     controller.getNotifications,
     controller.getNotifications,
   );
-  const modalActive = useModalActive();
   return (
     <ViewportPortal>
       <div className="ol-notification-center">
@@ -116,11 +128,9 @@ export function NotificationCenter({
                 key={item.id}
                 item={item}
                 dismiss={() => controller.dismiss(item.id)}
-                modalActive={modalActive}
               />
             ))}
           </AnimatePresence>
-          {aside}
         </div>
       </div>
     </ViewportPortal>

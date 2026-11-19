@@ -318,10 +318,13 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await page.goto('/e2e/fixtures/settings-status.html?theme=dark');
   const sync = page.getByRole('button', { name: '立即同步', exact: true });
   const warningOffset = () =>
-    page.locator('.ol-cloud-sync-scope').evaluate(
-      (node) =>
-        node.getBoundingClientRect().top - node.closest('.ol-cloud-sync')!.getBoundingClientRect().top,
-    );
+    page
+      .locator('.ol-cloud-sync-scope')
+      .evaluate(
+        (node) =>
+          node.getBoundingClientRect().top -
+          node.closest('.ol-cloud-sync')!.getBoundingClientRect().top,
+      );
   await expect(sync).toBeEnabled();
   const warningTop = await warningOffset();
   await sync.click();
@@ -334,9 +337,10 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await expect(notice).not.toContainText('同步完成');
   await waitForSettingsOperation(page, 'sync', 1);
   const cancel = page.getByRole('button', { name: '取消当前任务', exact: true });
-  const noticeCancel = notice.getByRole('button', { name: '取消当前任务', exact: true });
+  const noticeCancel = notice.getByRole('button', { name: '取消同步', exact: true });
   await expect(noticeCancel).toBeEnabled();
-  await expect(cancel).toHaveCount(1);
+  await expect(cancel).toHaveCount(0);
+  await expect(noticeCancel).toHaveAttribute('data-action-style', 'cancel-icon');
   expect(await warningOffset()).toBeCloseTo(warningTop, 0);
   await expect
     .poll(() => page.evaluate(() => window.settingsStatusFixture.canRestoreDuringSync()))
@@ -360,6 +364,7 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await sync.click();
   await noticeCancel.click();
   await expect(notice).toContainText('已请求取消');
+  await expect(noticeCancel).toBeDisabled();
   await expect(notice.getByRole('progressbar')).toBeVisible();
   await expect(cancel).toHaveCount(0);
   await expect
@@ -388,9 +393,7 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   ]);
 });
 
-test('cloud sync is cancellable from the welcome modal header without a second action', async ({
-  page,
-}) => {
+test('cloud sync keeps keyboard cancellation inside the welcome modal', async ({ page }) => {
   await page.goto('/e2e/fixtures/settings-status.html?cloudWelcome');
   await page.getByRole('button', { name: '从云端恢复', exact: true }).click();
   const dialog = page.getByRole('dialog');
@@ -400,11 +403,13 @@ test('cloud sync is cancellable from the welcome modal header without a second a
   await sync.click();
   await waitForSettingsOperation(page, 'sync', 1);
   await expect(notice.getByRole('progressbar')).toBeVisible();
-  await expect(notice.locator('.ol-notification-action')).toHaveCount(0);
-  await expect(dialog.locator('header').getByRole('button', { name: '取消当前任务' })).toBeEnabled();
-  await cancel.focus();
-  await expect(cancel).toBeFocused();
-  await page.keyboard.press('Enter');
+  const toastCancel = notice.getByRole('button', { name: '取消同步', exact: true });
+  await expect(toastCancel).toBeEnabled();
+  await expect(toastCancel).toHaveAttribute('tabindex', '-1');
+  await expect(
+    dialog.locator('header').getByRole('button', { name: '取消当前任务' }),
+  ).toBeEnabled();
+  await toastCancel.click();
   await expect(cancel).toBeDisabled();
   await expect
     .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
@@ -413,6 +418,20 @@ test('cloud sync is cancellable from the welcome modal header without a second a
   await expect(notice).toContainText('任务已取消。');
   await expect(cancel).toHaveCount(0);
   await expect(dialog).toBeVisible();
+
+  await sync.click();
+  await waitForSettingsOperation(page, 'sync', 2);
+  const loading = notice.and(page.locator('[data-type="loading"]'));
+  await loading.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(loading).toHaveCount(0);
+  expect(await page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length)).toBe(1);
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
+    .toBe(2);
+  await finishSettingsOperation(page, 'sync', 2);
 });
 
 async function clickDecisionBackdrop(page: Page) {
@@ -586,21 +605,26 @@ test('normal download cancellation is available only outside a modal and before 
     .poll(() => page.evaluate(() => window.settingsStatusFixture.hasDownloadListener()))
     .toBe(true);
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
-  const card = page.locator('.ol-download-card[data-download-id="normal-model"]');
-  const cancel = card.locator('button');
+  const card = page.locator('[data-notification-key="download:qwen3:normal-model"]');
+  const cancel = card.getByRole('button', { name: '取消下载', exact: true });
   await expect(cancel).toBeEnabled();
+  await expect(cancel).toHaveAttribute('title', '取消下载 normal-model');
+  await expect(card.locator('.ol-toast-footer')).toHaveCSS('opacity', '0');
+  await card.hover();
+  await expect(card.locator('.ol-toast-footer')).toHaveCSS('opacity', '1');
   await page.getByRole('button', { name: 'Open download modal', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Download modal' })).toBeVisible();
   await expect(cancel).toBeDisabled();
-  await expect(card).toHaveCSS('pointer-events', 'none');
   await page.keyboard.press('Escape');
   await expect(cancel).toBeEnabled();
 
   await page.evaluate(() => {
     const observer = new MutationObserver(() => {
-      const exiting = document.querySelector<HTMLElement>('.ol-download-card[inert]');
+      const exiting = document.querySelector<HTMLElement>(
+        '[data-notification-key="download:qwen3:normal-model"][inert]',
+      );
       if (!exiting) return;
-      const button = exiting.querySelector('button')!;
+      const button = exiting.querySelector<HTMLButtonElement>('[data-slot="toast-action"]')!;
       document.body.dataset.downloadExit = JSON.stringify({
         disabled: button.disabled,
         pointerEvents: getComputedStyle(exiting).pointerEvents,
@@ -613,7 +637,9 @@ test('normal download cancellation is available only outside a modal and before 
       attributes: true,
       attributeFilter: ['inert'],
     });
-    const button = document.querySelector<HTMLButtonElement>('.ol-download-card button')!;
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-notification-key="download:qwen3:normal-model"] [data-slot="toast-action"]',
+    )!;
     const terminal = window.settingsStatusFixture.emitDownload('normal-model', 'finished');
     // A host event may invalidate the job before React commits its exit.
     button.click();
@@ -627,9 +653,28 @@ test('normal download cancellation is available only outside a modal and before 
   expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
+  await card.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
+  await page.evaluate(() =>
+    window.settingsStatusFixture.emitDownload('normal-model', 'downloading'),
+  );
+  await expect(card).toHaveCount(0);
+
+  await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
+  await card.hover();
   await cancel.click();
   await expect(card).toHaveCount(0);
   expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([
     'normal-model',
   ]);
+
+  await page.evaluate(() => window.settingsStatusFixture.emitDownload('broken-model', 'started'));
+  await page.evaluate(() => window.settingsStatusFixture.emitDownload('broken-model', 'failed'));
+  await expect(page.locator('[data-notification-key="download:qwen3:broken-model"]')).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole('alert').filter({ hasText: '模型下载失败' })).toContainText(
+    'broken-model',
+  );
 });

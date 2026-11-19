@@ -15,6 +15,10 @@ The adapted component lives in `openless-all/app/src/ui/controls/GitHubActivity.
 
 [Password Input](https://www.rareui.com/components/passwordinput) is the visual reference for OpenLess's shared input fields. `openless-all/app/src/ui/controls/PasswordEye.tsx` adapts the animated eye geometry from [password-input.tsx](https://github.com/swamimalode07/rare-ui/blob/main/components/ui/password-input.tsx) (Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt)). OpenLess uses native text rendering and masking, not the demo's per-character overlay or password strength meter. The credit appears in Settings → About and updates → Component credits.
 
+## Rare UI Toast
+
+The shared toast surface adapts Rare UI's [Toast](https://www.rareui.com/components/toast) panel, glyphs, and tile transitions from [toast.tsx](https://github.com/swamimalode07/rare-ui/blob/main/components/ui/toast.tsx) (Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt)). OpenLess uses its existing per-window notification controller and viewport instead of Sonner's global store. `useToast()` exposes non-modal variants and task updates; `confirm`, `warn`, and `openDialog` remain separate modal APIs. The credit appears in Settings → About and updates → Component credits.
+
 ## Rare UI AI Prompt Box and Streaming Response
 
 [AI Prompt Box](https://www.rareui.com/components/promptbox) and
