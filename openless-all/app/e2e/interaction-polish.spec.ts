@@ -104,7 +104,7 @@ test('QA jump control appears only more than 120 pixels from the latest message'
     fixture.emit('qa:state', {
       kind: 'answer',
       sessionId: 'follow-test',
-      messages: Array.from({ length: 12 }, (_, index) => ({
+      messages: Array.from({ length: 18 }, (_, index) => ({
         role: index % 2 ? 'assistant' : 'user',
         content: `Message ${index}: ${'content '.repeat(30)}`,
       })),
@@ -155,7 +155,7 @@ for (const platform of ['mac', 'win'] as const) {
       fixture.emit('qa:state', {
         kind: 'answer',
         sessionId: 'chrome',
-        messages: Array.from({ length: 12 }, (_, index) => ({
+        messages: Array.from({ length: 18 }, (_, index) => ({
           role: index % 2 ? 'assistant' : 'user',
           content: `Message ${index}: ${'content '.repeat(30)}`,
         })),
@@ -169,7 +169,7 @@ for (const platform of ['mac', 'win'] as const) {
       'background-color',
       await panel.evaluate((el) => getComputedStyle(el).backgroundColor),
     );
-    await expect(panel).toHaveCSS('border-radius', '0px');
+    await expect(panel).toHaveCSS('border-radius', '26px');
     await expect(panel).toHaveCSS('overflow', 'hidden');
     await expect(header.locator('.qa-symbol')).toHaveCount(0);
     const headerBox = (await header.boundingBox())!;

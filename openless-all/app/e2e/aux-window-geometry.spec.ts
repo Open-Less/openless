@@ -57,6 +57,60 @@ test('QA waits for observed geometry and reopens without the closed transcript',
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
 });
 
+test('QA scales the frame and composer together on a large display', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.setViewportSize({ width: 1600, height: 1300 });
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.holdQaGeometry = true;
+    bridge.emit('qa:state', { kind: 'thinking', sessionId: 'large', messages: [] });
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.sizes.at(-1))).toBe(true);
+  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 1380, 1200));
+  const panel = page.locator('.qa-conversation');
+  await expect(panel.locator('.qa-thought')).toBeVisible();
+  await page.evaluate(() => {
+    (window as any).fixture.emit('qa:state', { kind: 'answer', sessionId: 'large', messages: [] });
+  });
+  await expect(panel.locator('.qa-welcome-title')).toBeVisible();
+  await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
+  await expect(panel.locator('.qa-composer-position')).toHaveCSS('transform', 'none');
+  const prompt = panel.locator('.qa-prompt');
+  const frame = (await panel.boundingBox())!;
+  expect(frame.width).toBe(1380);
+  expect(frame.height).toBe(1200);
+  expect((await prompt.boundingBox())!.width).toBe(840);
+  await expect(panel.getByRole('button', { name: '关闭' })).toBeInViewport();
+
+  await prompt.locator('textarea').fill('Large display question');
+  const positions = await prompt.evaluate(async (el) => {
+    const top = () => el.getBoundingClientRect().y;
+    const start = top();
+    el.querySelector('textarea')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    (window as any).fixture.emit('qa:state', {
+      kind: 'thinking',
+      sessionId: 'large',
+      messages: [{ role: 'user', content: 'Large display question' }],
+    });
+    const frames: number[] = [];
+    const until = performance.now() + 320;
+    do {
+      await new Promise<void>((done) => requestAnimationFrame(() => done()));
+      frames.push(top());
+    } while (performance.now() < until);
+    return { start, frames };
+  });
+  // The spring must travel down from the welcome position, not jump upward at 1.5×.
+  expect(Math.min(...positions.frames)).toBeGreaterThan(positions.start - 16);
+  await expect
+    .poll(async () => (await prompt.boundingBox())!.y)
+    .toBeGreaterThan(positions.start + 180);
+});
+
 test('QA keeps a reachable close action when the host rejects expansion', async ({ page }) => {
   await page.goto(fixture + '?qa');
   await expect(page.locator('.ol-default-capsule')).toBeVisible();

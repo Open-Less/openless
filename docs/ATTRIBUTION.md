@@ -10,3 +10,10 @@ The Overview annual activity card adapts the calendar and expandable-panel code 
 - License: [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt)
 
 The adapted component lives in `openless-all/app/src/ui/controls/GitHubActivity.tsx`, with styles in `openless-all/app/src/ui/styles/github-activity.css`. The in-app credit is Settings → About and updates → Component credits.
+
+## Rare UI AI Prompt Box and Streaming Response
+
+[AI Prompt Box](https://www.rareui.com/components/promptbox) and
+[Streaming Response](https://www.rareui.com/components/streamingresponse) are the
+interaction references for OpenLess Ask Anything. The OpenLess implementation uses
+its own native shortcut, voice, and streaming contracts rather than the demo's mock backend.

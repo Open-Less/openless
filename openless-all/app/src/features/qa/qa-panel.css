@@ -201,12 +201,6 @@
   background: var(--qa-accent);
   animation: qa-processing-pulse 1.3s ease-in-out infinite;
 }
-.qa-empty-answer {
-  padding: 22px 3px;
-  color: var(--qa-muted);
-  font-size: 11px;
-  text-align: center;
-}
 .qa-jump {
   z-index: 2;
   width: auto;
@@ -708,16 +702,21 @@
   padding: 0;
 }
 .qa-conversation.qa-answer-panel {
-  --qa-content-width: 640px;
+  --qa-content-width: 560px;
   --qa-content-gutter: 16px;
   --qa-prompt-line: rgb(0 0 0 / 8%);
+  position: relative;
   container-type: size;
   border: 1px solid var(--qa-line);
-  border-radius: 0;
+  border-radius: 26px;
   background: var(--qa-bg);
-  box-shadow: none;
+  box-shadow:
+    inset 0 1px rgb(255 255 255 / 9%),
+    0 8px 28px rgb(0 0 0 / 15%);
 }
 .qa-conversation .qa-answer-header {
+  flex: 0 0 auto;
+  border-bottom: 0;
   background: var(--qa-bg);
 }
 .qa-conversation .qa-answer-header::after {
@@ -739,6 +738,8 @@
   right: auto;
 }
 .qa-conversation .qa-window-actions .qa-close {
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--qa-wash);
 }
@@ -781,6 +782,23 @@
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .qa-conversation .qa-user-turn {
+    animation: qa-turn-arrive 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+@keyframes qa-turn-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
 }
 .qa-conversation .qa-user-turn p {
   margin: 0;
@@ -827,17 +845,28 @@
   width: 16px;
   height: 16px;
 }
-.qa-conversation .qa-empty-answer {
+.qa-conversation[data-welcome='true'] .qa-answer-header {
+  position: absolute;
+  inset: 0 0 auto;
+}
+.qa-conversation[data-welcome='true'] .qa-answer-scroll {
+  display: none;
+}
+.qa-capsule-shell.is-expanded .qa-conversation[data-welcome='true'] .qa-composer-dock {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 48px 24px 16px;
-  font-size: 13px;
+  flex: 1;
+  justify-content: center;
+  gap: 24px;
+  padding-block: 45px max(45px, 10cqh);
 }
-.qa-conversation .qa-empty-answer p {
+.qa-welcome-title {
   color: var(--qa-ink);
-  font-size: 16px;
+  text-align: center;
+  font-size: clamp(16px, 5.2cqw, 24px);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
 }
 .qa-capsule-shell.is-embedded .qa-conversation .qa-assistant-message {
   min-height: 0;
@@ -845,7 +874,8 @@
 .qa-conversation .qa-composer-dock {
   padding: 0 var(--qa-content-gutter) 16px;
 }
-.qa-conversation .qa-prompt {
+.qa-composer-position {
+  width: 100%;
   max-width: var(--qa-content-width);
   margin-inline: auto;
 }
@@ -855,6 +885,10 @@
   }
 }
 @container (max-height: 260px) {
+  .qa-capsule-shell.is-expanded .qa-conversation[data-welcome='true'] .qa-composer-dock {
+    gap: 8px;
+    padding-block: 32px 8px;
+  }
   .qa-conversation .qa-composer-dock {
     padding-bottom: 8px;
   }
@@ -864,7 +898,7 @@
 }
 html[data-ol-theme='dark'] .qa-capsule-shell:has(.qa-conversation) {
   color-scheme: dark;
-  --qa-bg: #171717;
+  --qa-bg: #131313;
   --qa-paper: #0f0f0f;
   --qa-wash: rgb(255 255 255 / 8%);
   --qa-ink: var(--ol-ink);

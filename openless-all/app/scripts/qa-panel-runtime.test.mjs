@@ -215,6 +215,12 @@ function context(native = true, embedded = false) {
     useState: state,
     useRef: ref,
     useEffect: effect,
+    useLayoutEffect: effect,
+    useReducedMotion: () => true,
+    useCallback: (callback) => callback,
+    MotionConfig: 'motion-config',
+    motion: { div: 'motion-div', span: 'motion-span' },
+    AnimatePresence: 'animate-presence',
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
     useChatPanelLifecycle: makeLifecycle(
@@ -250,7 +256,7 @@ function context(native = true, embedded = false) {
       resize,
       async (_boundary, _fits, signal) => {
         if (signal.aborted) throw new DOMException('Layout superseded', 'AbortError');
-        return {};
+        return { width: 920, height: 800 };
       },
       {},
     ),
