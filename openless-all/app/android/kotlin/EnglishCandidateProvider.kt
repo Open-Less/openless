@@ -134,7 +134,7 @@ internal class EnglishCandidateProvider(context: Context) {
         ensureSession()
         OpenLessRime.request("clear", session)
         for (letter in word) {
-            if (letter !in 'a'..'z') return emptyList()
+            if (letter !in 'a'..'z') return@run emptyList()
             OpenLessRime.request("key", session, letter.code.toString())
         }
         var state = OpenLessRime.request("candidates", session)
