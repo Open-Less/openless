@@ -1113,6 +1113,11 @@ export const zhCN = {
     selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。关闭对话窗口后开始新会话。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: '向「随便问」提供应用名称',
+      description: '唤起「随便问」时，记录前台和已打开应用的名称，并在发送问题时提供给模型。不读取窗口内容。',
+      saveFailed: '无法更新「随便问」的桌面上下文权限。',
+    },
     title: '随便问',
     desc: '选中文字后语音提问，支持多轮追问。',
     shortcutSettings: '快捷键设置',

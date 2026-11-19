@@ -120,7 +120,7 @@ fn ensure_dir(dir: &Path) -> Result<()> {
 /// Atomic write: write to a unique `*.tmp-<uuid>` first, then rename onto the
 /// target path. The unique suffix lets concurrent writers each own their own
 /// tmp file, so a parallel rename never finds its source already taken.
-fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     #[cfg(any(target_os = "android", test))]
     if is_memory_only_path(path) {
         bail!("atomic write refused: empty path (memory-only store; Android data_dir unavailable)");

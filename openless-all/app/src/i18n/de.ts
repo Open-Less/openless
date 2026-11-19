@@ -1189,6 +1189,11 @@ export const de: typeof zhCN = {
       'Ausgewählter Text dient als Kontext. Eine Auswahl ist optional. Jede Kombination beginnt eine neue Frage.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'App-Namen mit Ask teilen',
+      description: 'Beim Öffnen von Ask die Namen der aktiven und geöffneten Apps erfassen und beim Senden einer Frage an das Modell weitergeben. Fensterinhalte werden nicht gelesen.',
+      saveFailed: 'Die Berechtigung zum Teilen des Desktop-Kontexts konnte nicht geändert werden.',
+    },
     title: 'Alles fragen',
     desc: 'Text auswählen und Fragen dazu sprechen, auch mit mehreren Rückfragen.',
     shortcutSettings: 'Kurzbefehlseinstellungen',

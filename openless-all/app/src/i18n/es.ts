@@ -1182,6 +1182,11 @@ export const es: typeof zhCN = {
       'El texto seleccionado sirve de contexto. La selección es opcional. Cada combinación inicia una pregunta nueva.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Compartir los nombres de las aplicaciones con Ask',
+      description: 'Al abrir Ask, registra los nombres de la aplicación activa y de las abiertas para enviarlos al modelo junto con la pregunta. No se lee el contenido de las ventanas.',
+      saveFailed: 'No se pudo actualizar el permiso para compartir el contexto del escritorio.',
+    },
     title: 'Pregunta lo que quieras',
     desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
     shortcutSettings: 'Ajustes de atajos',

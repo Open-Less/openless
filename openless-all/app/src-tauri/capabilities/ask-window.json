@@ -4,5 +4,9 @@
   "description": "Title-bar controls for the standalone Ask window",
   "platforms": ["macOS", "windows", "linux"],
   "windows": ["ask-anything"],
-  "permissions": ["core:window:allow-close", "core:window:allow-start-dragging"]
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
 }

@@ -1197,6 +1197,11 @@ export const fr: typeof zhCN = {
       'Le texte sélectionné sert de contexte. La sélection est facultative. Chaque combinaison commence une nouvelle question.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Partager les noms des applications avec Ask',
+      description: 'À l’ouverture d’Ask, relever le nom de l’application active et des applications ouvertes, puis les transmettre au modèle avec la question. Le contenu des fenêtres n’est pas lu.',
+      saveFailed: 'Impossible de mettre à jour l’autorisation de partage du contexte du bureau.',
+    },
     title: 'Poser une question',
     desc: 'Sélectionnez du texte et posez des questions à voix haute, puis poursuivez la conversation.',
     shortcutSettings: 'Réglages des raccourcis',

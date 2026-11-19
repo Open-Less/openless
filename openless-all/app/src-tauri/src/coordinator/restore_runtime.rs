@@ -194,6 +194,8 @@ fn reconcile_hotkeys(
     coord
         .update_coding_agent_hotkey_binding()
         .map_err(|_| failure("restore_agent_hotkey_failed"))?;
+    let target = hotkey_runtime_target(&coord.inner);
+    crate::ask_window::hotkey::set_binding(&target.dictation, target.dictation_mode);
     Ok(())
 }
 

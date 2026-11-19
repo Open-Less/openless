@@ -44,7 +44,7 @@ pub(crate) fn less_computer_event_replay_after(
     }
 }
 
-async fn dispatch(
+pub(super) async fn dispatch(
     inner: &Arc<Inner>,
     edge: openless_core::DictationHotkeyEdge,
 ) -> Result<openless_core::CliDispatchOutcome, openless_core::BackendError> {

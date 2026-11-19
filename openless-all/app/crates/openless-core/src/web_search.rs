@@ -125,7 +125,44 @@ pub async fn search(config: &WebSearchConfig, query: &str) -> Result<Vec<SearchR
     .map_err(|_| "Web Search timed out".to_string())?
 }
 async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<SearchResult>, String> {
-    let client = crate::net::http();
+    let mut results = query_sources(config, query, RequestPolicy::Legacy, || true).await?;
+    if matches!(config.provider, SearchProvider::Auto | SearchProvider::Free) {
+        let pages = futures_util::future::join_all(
+            results
+                .iter()
+                .take(3)
+                .map(|item| fetch_public_page(&item.url, RequestPolicy::Legacy, || true)),
+        )
+        .await;
+        for (item, page) in results.iter_mut().zip(pages) {
+            if let Ok(page) = page {
+                item.snippet.push_str("\nPage excerpt: ");
+                item.snippet.push_str(&page);
+            }
+        }
+    }
+    Ok(results)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RequestPolicy {
+    Legacy,
+    Ask,
+}
+
+pub(crate) async fn query_sources(
+    config: &WebSearchConfig,
+    query: &str,
+    policy: RequestPolicy,
+    on_request: impl FnOnce() -> bool,
+) -> Result<Vec<SearchResult>, String> {
+    let client = match policy {
+        RequestPolicy::Legacy => crate::net::http(),
+        RequestPolicy::Ask => crate::net::credential_http_for_url(match config.provider {
+            SearchProvider::Searxng => &config.endpoint,
+            _ => "",
+        }),
+    };
     let request = match config.provider {
         SearchProvider::Auto | SearchProvider::Free => client
             .get("https://www.bing.com/search")
@@ -155,8 +192,14 @@ async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<Searc
         }
         SearchProvider::Off => return Ok(vec![]),
     };
-    let mut response = request
-        .send()
+    let request = request
+        .build()
+        .map_err(|_| "Web Search connection failed")?;
+    if !on_request() {
+        return Err("Web Search cancelled".into());
+    }
+    let mut response = client
+        .execute(request)
         .await
         .map_err(|_| "Web Search connection failed")?;
     if !response.status().is_success() {
@@ -174,19 +217,10 @@ async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<Searc
         bytes.extend_from_slice(&chunk);
     }
     if matches!(config.provider, SearchProvider::Auto | SearchProvider::Free) {
-        let mut results =
-            parse_rss(std::str::from_utf8(&bytes).map_err(|_| "Invalid search response")?)?;
-        let pages = futures_util::future::join_all(
-            results.iter().take(3).map(|r| fetch_public_page(&r.url)),
-        )
-        .await;
-        for (item, page) in results.iter_mut().zip(pages) {
-            if let Some(page) = page {
-                item.snippet.push_str("\nPage excerpt: ");
-                item.snippet.push_str(&page);
-            }
-        }
-        return Ok(results);
+        return parse_rss(
+            std::str::from_utf8(&bytes).map_err(|_| "Invalid search response")?,
+            policy,
+        );
     }
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid search response")?;
     let rows = if config.provider == SearchProvider::Brave {
@@ -236,23 +270,46 @@ fn public_address(ip: std::net::IpAddr) -> bool {
     }
 }
 
-async fn fetch_public_page(raw: &str) -> Option<String> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PageReadError {
+    Blocked,
+    Failed,
+}
+
+pub(crate) async fn fetch_public_page(
+    raw: &str,
+    policy: RequestPolicy,
+    on_request: impl FnOnce() -> bool,
+) -> Result<String, PageReadError> {
+    use PageReadError::{Blocked, Failed};
+
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let url = url::Url::parse(raw).ok()?;
+        let url = url::Url::parse(raw).map_err(|_| Blocked)?;
         if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
             || url.password().is_some()
         {
-            return None;
+            return Err(Blocked);
         }
-        let host = url.host_str()?;
-        let port = url.port_or_known_default()?;
+        let host = url.host_str().ok_or(Blocked)?;
+        let port = url.port_or_known_default().ok_or(Blocked)?;
         if !matches!(port, 80 | 443) {
-            return None;
+            return Err(Blocked);
         }
-        let addrs: Vec<_> = tokio::net::lookup_host((host, port)).await.ok()?.collect();
+        let literal_ip = match url.host() {
+            Some(url::Host::Ipv4(address)) => Some(address.into()),
+            Some(url::Host::Ipv6(address)) => Some(address.into()),
+            _ => None,
+        };
+        if literal_ip.is_some_and(|address| !public_address(address)) {
+            return Err(Blocked);
+        }
+        let addrs: Vec<_> = tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|_| Failed)?
+            .collect();
         if addrs.is_empty() || addrs.iter().any(|a| !public_address(a.ip())) {
-            return None;
+            return Err(Blocked);
         }
         // Search results are untrusted: pin public DNS results, disable proxy DNS
         // and redirects, and never attach credentials or ambient cookies.
@@ -261,31 +318,60 @@ async fn fetch_public_page(raw: &str) -> Option<String> {
             .redirect(reqwest::redirect::Policy::none())
             .resolve_to_addrs(host, &addrs)
             .build()
-            .ok()?;
-        let mut response = client.get(url).send().await.ok()?;
+            .map_err(|_| Failed)?;
+        let request = client.get(url).build().map_err(|_| Failed)?;
+        if !on_request() {
+            return Err(Failed);
+        }
+        let mut response = client.execute(request).await.map_err(|_| Failed)?;
         if !response.status().is_success() {
-            return None;
+            return Err(Failed);
         }
         let kind = response
             .headers()
-            .get(reqwest::header::CONTENT_TYPE)?
+            .get(reqwest::header::CONTENT_TYPE)
+            .ok_or(Failed)?
             .to_str()
-            .ok()?;
-        if !kind.contains("text/html") && !kind.contains("text/plain") {
-            return None;
-        }
+            .map_err(|_| Failed)?;
+        let plain_text = match policy {
+            RequestPolicy::Legacy if kind.contains("text/html") || kind.contains("text/plain") => {
+                false
+            }
+            RequestPolicy::Ask => match kind.split(';').next().unwrap_or("").trim() {
+                mime if mime.eq_ignore_ascii_case("text/html") => false,
+                mime if mime.eq_ignore_ascii_case("text/plain") => true,
+                _ => return Err(Failed),
+            },
+            _ => return Err(Failed),
+        };
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.ok()? {
+        while let Some(chunk) = response.chunk().await.map_err(|_| Failed)? {
             if bytes.len() + chunk.len() > 512 * 1024 {
-                return None;
+                return Err(Failed);
             }
             bytes.extend_from_slice(&chunk);
         }
-        Some(page_excerpt(&String::from_utf8_lossy(&bytes)))
+        match policy {
+            RequestPolicy::Legacy => Ok(page_excerpt(&String::from_utf8_lossy(&bytes))),
+            RequestPolicy::Ask => {
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|_| Failed)?
+                    .trim_start_matches('\u{feff}');
+                let text = if plain_text {
+                    bounded_excerpt(text)
+                } else {
+                    page_excerpt(text)
+                };
+                if text.is_empty() {
+                    Err(Failed)
+                } else {
+                    Ok(text)
+                }
+            }
+        }
     })
     .await
-    .ok()
-    .flatten()
+    .map_err(|_| Failed)?
 }
 fn page_excerpt(html: &str) -> String {
     static HIDDEN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -295,9 +381,11 @@ fn page_excerpt(html: &str) -> String {
         std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]+>").unwrap());
     let visible = HIDDEN.replace_all(html, " ");
     let text = TAGS.replace_all(&visible, " ");
-    text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .split_whitespace()
+    bounded_excerpt(&text.replace("&nbsp;", " ").replace("&amp;", "&"))
+}
+
+fn bounded_excerpt(text: &str) -> String {
+    text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
@@ -305,10 +393,19 @@ fn page_excerpt(html: &str) -> String {
         .collect()
 }
 
-fn parse_rss(text: &str) -> Result<Vec<SearchResult>, String> {
-    let doc = roxmltree::Document::parse(text).map_err(|_| {
-        "Free search is unavailable; choose another provider in Web Search settings"
-    })?;
+fn parse_rss(text: &str, policy: RequestPolicy) -> Result<Vec<SearchResult>, String> {
+    const INVALID_RSS: &str =
+        "Free search is unavailable; choose another provider in Web Search settings";
+    let doc = roxmltree::Document::parse(text).map_err(|_| INVALID_RSS)?;
+    if matches!(policy, RequestPolicy::Ask)
+        && (!doc.root_element().has_tag_name("rss")
+            || !doc
+                .root_element()
+                .children()
+                .any(|node| node.has_tag_name("channel")))
+    {
+        return Err(INVALID_RSS.into());
+    }
     Ok(doc
         .descendants()
         .filter(|n| n.has_tag_name("item"))
@@ -397,10 +494,14 @@ mod tests {
     }
     #[test]
     fn rss_decodes_entities_and_rejects_unsafe_links() {
-        let rows = parse_rss("<rss><channel><item><title>A &amp; B</title><link>https://example.com/</link><description>current</description></item><item><link>javascript:alert(1)</link></item></channel></rss>").unwrap();
+        let rows = parse_rss("<rss><channel><item><title>A &amp; B</title><link>https://example.com/</link><description>current</description></item><item><link>javascript:alert(1)</link></item></channel></rss>", RequestPolicy::Legacy).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "A & B");
-        assert!(parse_rss("<html>blocked").is_err());
+        assert!(parse_rss("<html>blocked", RequestPolicy::Legacy).is_err());
+        assert!(parse_rss("<html>blocked</html>", RequestPolicy::Ask).is_err());
+        assert!(parse_rss("<rss><channel/></rss>", RequestPolicy::Ask)
+            .unwrap()
+            .is_empty());
     }
     #[test]
     fn planner_only_accepts_explicit_query_json() {

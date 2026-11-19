@@ -86,6 +86,9 @@ export type PromptBoxProps = Omit<React.ComponentProps<'div'>, 'onSubmit' | 'chi
     placeholder?: string | string[]
     hint?: React.ReactNode
     actions?: React.ReactNode
+    beforeInput?: React.ReactNode
+    canSubmitEmpty?: boolean
+    submitDisabled?: boolean
     disabled?: boolean
     inputRef?: React.Ref<HTMLTextAreaElement>
     inputProps?: Omit<React.ComponentProps<'textarea'>, 'ref' | 'value' | 'defaultValue' | 'onChange' | 'disabled' | 'rows'>
@@ -107,6 +110,9 @@ function PromptBox({
     placeholder = 'Ask anything',
     hint = 'Hold to think harder',
     actions,
+    beforeInput,
+    canSubmitEmpty = false,
+    submitDisabled = false,
     disabled = false,
     inputRef,
     inputProps,
@@ -122,7 +128,7 @@ function PromptBox({
     const [inner, setInner] = useState(defaultValue)
     const value = valueProp ?? inner
     const streaming = status === 'streaming'
-    const canSend = !disabled && !streaming && value.trim().length > 0
+    const canSend = !disabled && !submitDisabled && !streaming && (canSubmitEmpty || value.trim().length > 0)
 
     const fieldRef = useRef<HTMLDivElement>(null)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -264,10 +270,10 @@ function PromptBox({
 
     const submit = (effort: PromptEffort) => {
         const prompt = value.trim()
-        if (!prompt || disabled || streaming) {
+        if (!canSend) {
             return
         }
-        if (!reduced) {
+        if (!reduced && prompt) {
             ghostCount.current += 1
             const el = textareaRef.current
             setGhost({
@@ -338,7 +344,13 @@ function PromptBox({
 
     const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
         inputProps?.onKeyDown?.(event)
-        if (event.defaultPrevented || event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+        if (
+            event.defaultPrevented ||
+            event.key !== 'Enter' ||
+            event.shiftKey ||
+            event.nativeEvent.isComposing ||
+            event.nativeEvent.keyCode === 229
+        ) {
             return
         }
         event.preventDefault()
@@ -367,6 +379,7 @@ function PromptBox({
             )}
             {...props}
         >
+            {beforeInput}
             <div className="relative px-4 pt-4">
                 <motion.div ref={fieldRef} className="relative overflow-hidden" style={{ height: LINE }}>
                     <AnimatePresence initial={false}>

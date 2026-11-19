@@ -184,6 +184,10 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(not(mobile))]
+    if let Some(code) = ask_window::attachment_files::run_pdf_worker_if_requested() {
+        std::process::exit(code);
+    }
     issue1266_debug::initialize();
     tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
@@ -358,6 +362,23 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_voice_edit_state,
             commands::voice_edit_window_open,
             ask_window::ask_window_open,
+            ask_window::chat::ask_current,
+            ask_window::chat::ask_new_conversation,
+            ask_window::chat::ask_end_conversation,
+            ask_window::chat::ask_snapshot,
+            ask_window::chat::ask_events,
+            ask_window::chat::ask_submit,
+            ask_window::chat::ask_cancel,
+            ask_window::chat::ask_add_attachment,
+            ask_window::chat::ask_add_dropped_image,
+            ask_window::chat::ask_remove_attachment,
+            ask_window::chat::ask_get_attachment_preview,
+            ask_window::chat::ask_open_source,
+            ask_window::chat::ask_window_hide,
+            ask_window::chat::ask_sync_editor,
+            ask_window::chat::ask_ack_voice,
+            ask_window::chat::ask_get_context_permission,
+            ask_window::chat::ask_set_context_permission,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
             #[cfg(target_os = "macos")]
@@ -854,6 +875,19 @@ fn run_desktop() {
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
             log::info!("=== OpenLess 启动 ===");
+            let ask = Arc::new(ask_window::chat::AskHost::new(core_backend.clone()));
+            let desktop = ask_window::Desktop::install(
+                app.handle().clone(),
+                core_backend.clone(),
+                Arc::new(ask_window::chat::DesktopPorts {
+                    app: app.handle().clone(),
+                    ask: ask.clone(),
+                    coordinator: coordinator.clone(),
+                }),
+            );
+            app.manage(ask);
+            app.manage(desktop);
+            ask_window::chat::AskHost::bind_feed(app.handle().clone());
 
             // Position the capsule at the bottom-center of the screen and hide it at
             // startup; the coordinator shows it on demand. Same semantics as Swift
@@ -1047,7 +1081,18 @@ fn run_desktop() {
 
             Ok(())
         })
-        .invoke_handler(app_invoke_handler_desktop!())
+        .invoke_handler({
+            let dispatch: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = app_invoke_handler_desktop!();
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                if invoke.message.webview().label() == ask_window::LABEL
+                    && !invoke.message.command().starts_with("ask_")
+                {
+                    invoke.resolver.reject("This command is not available in Ask.");
+                    return true;
+                }
+                dispatch(invoke)
+            }
+        })
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
@@ -1086,6 +1131,12 @@ fn run_desktop() {
                 }
             }
             RunEvent::Exit => {
+                if let Some(desktop) = app.try_state::<Arc<ask_window::Desktop>>() {
+                    desktop.shutdown();
+                }
+                if let Some(ask) = app.try_state::<Arc<ask_window::chat::AskHost>>() {
+                    ask.stop();
+                }
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
@@ -2178,7 +2229,14 @@ fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
 #[cfg(target_os = "macos")]
 pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) {
     let main = app.get_webview_window("main");
+    let app_handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        if app_handle
+            .try_state::<Arc<ask_window::Desktop>>()
+            .is_some_and(|desktop| desktop.is_focused())
+        {
+            return;
+        }
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject, Bool};
         unsafe {

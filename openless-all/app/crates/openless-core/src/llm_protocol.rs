@@ -397,6 +397,7 @@ fn append_blocks(output: &mut String, blocks: &Value, kind: &str) {
 
 pub(crate) enum StreamEvent {
     Text(String),
+    Thinking,
     Done,
     Ignore,
 }
@@ -407,6 +408,9 @@ pub(crate) struct TextEventStream {
     buffer: String,
     pending: Vec<u8>,
     messages_complete: bool,
+    ask: bool,
+    ask_gemini: bool,
+    ask_stop: bool,
     pub done: bool,
     siwc: bool,
     request_id: Option<String>,
@@ -420,6 +424,9 @@ impl TextEventStream {
             buffer: String::new(),
             pending: Vec::new(),
             messages_complete: false,
+            ask: false,
+            ask_gemini: false,
+            ask_stop: false,
             done: false,
             siwc: false,
             request_id: None,
@@ -430,6 +437,12 @@ impl TextEventStream {
     pub(crate) fn for_siwc(mut self, request_id: Option<String>) -> Self {
         self.siwc = true;
         self.request_id = request_id;
+        self
+    }
+
+    pub(crate) fn for_ask(mut self, gemini: bool) -> Self {
+        self.ask = true;
+        self.ask_gemini = gemini;
         self
     }
 
@@ -458,19 +471,30 @@ impl TextEventStream {
         if data.is_empty() {
             return Ok(Some(StreamEvent::Ignore));
         }
-        if self.format == LlmRequestFormat::ChatCompletions && data.trim() == "[DONE]" {
+        if !self.ask_gemini
+            && self.format == LlmRequestFormat::ChatCompletions
+            && data.trim() == "[DONE]"
+        {
+            if self.ask && !self.ask_stop {
+                return Err(response_error("llmResponseIncomplete"));
+            }
             self.done = true;
             return Ok(Some(StreamEvent::Done));
         }
         let value: Value = match serde_json::from_str(&data) {
             Ok(value) => value,
-            Err(_) if self.format == LlmRequestFormat::ChatCompletions => {
+            Err(_) if !self.ask && self.format == LlmRequestFormat::ChatCompletions => {
                 return Ok(Some(StreamEvent::Ignore))
             }
             Err(_) => return Err(response_error("invalid LLM SSE JSON")),
         };
         if let Some(reported) = crate::usage_ledger::ReportedTokens::from_response(&value) {
             self.reported_tokens.merge_report(reported);
+        }
+        if self.ask_gemini {
+            if let Some(thoughts) = value["usageMetadata"]["thoughtsTokenCount"].as_u64() {
+                self.reported_tokens.reasoning = Some(thoughts);
+            }
         }
         let kind = value["type"]
             .as_str()
@@ -496,11 +520,27 @@ impl TextEventStream {
         if kind == "error" || !value["error"].is_null() {
             return Err(response_error("llmStreamError"));
         }
+        if self.ask_gemini {
+            return self.next_ask_gemini(&value).map(Some);
+        }
+        let mut thinking = false;
         if self.format == LlmRequestFormat::ChatCompletions {
             if value["choices"][0]["finish_reason"] == "content_filter" {
                 return Err(response_error("llmContentFiltered"));
             }
-            if let Some(annotations) = value["choices"][0]["delta"]["annotations"].as_array() {
+            if self.ask {
+                let choice = &value["choices"][0];
+                if let Some(reason) = choice["finish_reason"].as_str() {
+                    if reason != "stop" {
+                        return Err(response_error("llmResponseIncomplete"));
+                    }
+                    self.ask_stop = true;
+                }
+                thinking = ["reasoning_content", "reasoning"].iter().any(|key| {
+                    choice["delta"][*key].as_str().is_some_and(|text| !text.is_empty())
+                });
+            } else if let Some(annotations) = value["choices"][0]["delta"]["annotations"].as_array()
+            {
                 let mut urls = std::collections::BTreeSet::new();
                 for annotation in annotations {
                     if let Some(raw) = annotation["url_citation"]["url"].as_str() {
@@ -535,6 +575,9 @@ impl TextEventStream {
             LlmRequestFormat::Responses => match kind {
                 "response.output_text.delta" => value["delta"].as_str(),
                 "response.completed" => {
+                    if self.ask && value["response"]["status"] != "completed" {
+                        return Err(response_error("llmResponseIncomplete"));
+                    }
                     if value["response"]["status"]
                         .as_str()
                         .is_some_and(|s| s != "completed")
@@ -549,6 +592,10 @@ impl TextEventStream {
                         return Err(LLMError::Siwc(crate::siwc::error("response_incomplete")));
                     }
                     return Err(response_error("llmResponseIncomplete"));
+                }
+                "response.output_item.added" if self.ask => {
+                    thinking = value["item"]["type"] == "reasoning";
+                    None
                 }
                 _ => None,
             },
@@ -572,6 +619,12 @@ impl TextEventStream {
                     self.done = true;
                     None
                 }
+                "content_block_start"
+                    if self.ask && value["content_block"]["type"] == "thinking" =>
+                {
+                    thinking = true;
+                    None
+                }
                 _ => None,
             },
         };
@@ -580,6 +633,8 @@ impl TextEventStream {
                 StreamEvent::Text(text.to_string())
             } else if self.done {
                 StreamEvent::Done
+            } else if thinking {
+                StreamEvent::Thinking
             } else {
                 StreamEvent::Ignore
             },
@@ -587,11 +642,55 @@ impl TextEventStream {
     }
 
     pub fn finish(&mut self) -> Result<(), LLMError> {
+        if self.ask && self.done {
+            return Ok(());
+        }
         crate::polish::finish_utf8_sse_chunks(&mut self.buffer, &mut self.pending)?;
+        if self.ask {
+            let completed = if self.ask_gemini { self.ask_stop } else { self.done };
+            if !completed || !self.buffer.trim().is_empty() {
+                return Err(response_error("llmResponseIncomplete"));
+            }
+            return Ok(());
+        }
         if self.format != LlmRequestFormat::ChatCompletions && !self.done {
             return Err(response_error("llmResponseIncomplete"));
         }
         Ok(())
+    }
+
+    fn next_ask_gemini(&mut self, value: &Value) -> Result<StreamEvent, LLMError> {
+        let candidate = &value["candidates"][0];
+        if let Some(reason) = candidate["finishReason"].as_str() {
+            if reason != "STOP" {
+                return Err(response_error("llmResponseIncomplete"));
+            }
+            self.ask_stop = true;
+        }
+        if value["promptFeedback"]["blockReason"].as_str().is_some() {
+            return Err(response_error("llmContentFiltered"));
+        }
+        self.done = self.ask_stop && self.reported_tokens.input.is_some();
+        let mut text = String::new();
+        let mut thinking = false;
+        if let Some(parts) = candidate["content"]["parts"].as_array() {
+            for part in parts {
+                if part["thought"] == true {
+                    thinking = true;
+                } else if let Some(delta) = part["text"].as_str() {
+                    text.push_str(delta);
+                }
+            }
+        }
+        if !text.is_empty() {
+            Ok(StreamEvent::Text(text))
+        } else if thinking {
+            Ok(StreamEvent::Thinking)
+        } else if self.done {
+            Ok(StreamEvent::Done)
+        } else {
+            Ok(StreamEvent::Ignore)
+        }
     }
 }
 

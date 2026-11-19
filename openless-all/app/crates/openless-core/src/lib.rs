@@ -7,6 +7,10 @@
 pub mod activity;
 pub mod android_types;
 pub mod api;
+#[cfg(feature = "ask-attachments")]
+pub mod ask_attachment;
+pub mod ask_context;
+pub mod ask_search;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
@@ -340,6 +344,7 @@ pub use providers::{
     OpenAiTranscriptionConfig,
 };
 pub use qa_service::QaService;
+pub use qa_service::standalone as ask;
 pub use remote_input_service::{
     constant_time_eq, finish_remote_input_connection, validate_pairing_pin, RemoteFrameCodec,
     RemoteInputService, RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES,

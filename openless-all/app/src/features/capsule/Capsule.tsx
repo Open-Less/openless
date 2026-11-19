@@ -184,6 +184,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
 
 interface ClassicCapsuleProps {
   os: OS;
+  sessionId?: string;
   state: CapsuleState;
   level: number;
   insertedChars: number;
@@ -205,6 +206,7 @@ interface ClassicCapsuleProps {
  */
 function ClassicCapsule({
   os,
+  sessionId,
   state,
   level,
   insertedChars,
@@ -220,11 +222,11 @@ function ClassicCapsule({
 }: ClassicCapsuleProps) {
   const hostMetrics = getCapsuleHostMetrics(os, translation, 'classic');
   const onCancel = useCallback(() => {
-    void cancelDictation();
-  }, []);
+    void cancelDictation(sessionId);
+  }, [sessionId]);
   const onConfirm = useCallback(() => {
-    void stopDictation();
-  }, []);
+    void stopDictation(sessionId);
+  }, [sessionId]);
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
@@ -869,6 +871,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         (isClassic ? (
           <ClassicCapsule
             os={os}
+            sessionId={transcriptViewRef.current.sessionId ?? undefined}
             state={renderedState}
             level={leaving ? 0 : level}
             insertedChars={insertedCharsRef.current}

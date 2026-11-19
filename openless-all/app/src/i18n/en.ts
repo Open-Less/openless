@@ -1167,6 +1167,11 @@ export const en: typeof zhCN = {
       'Selected text becomes context. A selection is optional. Each shortcut starts a fresh question.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Share desktop app names with Ask',
+      description: 'When you open Ask, include the focused app and the names of open apps in the answer request. Window contents are not included.',
+      saveFailed: 'Could not update Ask’s desktop context permission.',
+    },
     title: 'Ask anything',
     desc: 'Select text and ask questions by voice, with multi-turn follow-ups.',
     shortcutSettings: 'Shortcut settings',

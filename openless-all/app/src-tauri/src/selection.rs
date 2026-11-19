@@ -650,6 +650,11 @@ pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, Sele
     (selection, target)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn read_native_ask_selection_for_pid(pid: u32) -> Result<Option<String>, ()> {
+    macos_ax::read_explicit_text(Some(pid as i32))
+}
+
 /// 捕获当前前台应用的选区；失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     capture_selection_with_status_diag().0
@@ -1060,9 +1065,18 @@ mod macos_ax {
 
     const AX_ERROR_SUCCESS: AxError = 0;
 
+    #[repr(C)]
+    struct CfRange {
+        location: isize,
+        length: isize,
+    }
+
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+        fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+        fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
+        fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
         fn AXUIElementCopyAttributeValue(
             element: AxUiElementRef,
             attribute: CFStringRef,
@@ -1078,6 +1092,8 @@ mod macos_ax {
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
+        fn CFEqual(left: CFTypeRef, right: CFTypeRef) -> u8;
+        fn CFRetain(value: CFTypeRef) -> CFTypeRef;
         fn CFGetTypeID(value: CFTypeRef) -> usize;
         fn CFStringGetTypeID() -> usize;
         fn CFRelease(cf: CFTypeRef);
@@ -1094,6 +1110,7 @@ mod macos_ax {
             encoding: u32,
         ) -> u8;
         fn CFStringGetLength(s: CFStringRef) -> isize;
+        fn CFStringGetCharacters(s: CFStringRef, range: CfRange, buffer: *mut u16);
         fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
     }
 
@@ -1181,27 +1198,79 @@ mod macos_ax {
     /// Web content may expose its selection through text markers on an ancestor.
     /// This path reads selected ranges only and never falls back to document text or Copy.
     pub fn read_explicit_qa_text() -> Option<String> {
+        read_explicit_text(None).ok().flatten()
+    }
+
+    unsafe fn selected_string(value: CFTypeRef, bounded: bool) -> Result<Option<String>, ()> {
+        if CFGetTypeID(value) != CFStringGetTypeID() {
+            return Ok(None);
+        }
+        if !bounded {
+            return Ok(cfstring_to_rust(value));
+        }
+        let length = CFStringGetLength(value);
+        if length > 8_000 {
+            return Err(());
+        }
+        if length <= 0 {
+            return Ok(None);
+        }
+        let mut units = vec![0u16; length as usize];
+        CFStringGetCharacters(value, CfRange { location: 0, length }, units.as_mut_ptr());
+        Ok(String::from_utf16(&units).ok())
+    }
+
+    pub fn read_explicit_text(expected_pid: Option<i32>) -> Result<Option<String>, ()> {
         unsafe {
-            let system = AXUIElementCreateSystemWide();
+            let system = match expected_pid {
+                Some(pid) => AXUIElementCreateApplication(pid),
+                None => AXUIElementCreateSystemWide(),
+            };
             if system.is_null() {
-                return None;
+                return Ok(None);
             }
+            let _timeout = expected_pid.map(|_| AXUIElementSetMessagingTimeout(system, 0.12));
             let focused = attribute(system, b"AXFocusedUIElement\0");
-            CFRelease(system as CFTypeRef);
-            let mut current = focused?;
-            if string_attribute(current as AxUiElementRef, b"AXSubrole\0").as_deref()
+            let Some(focused) = focused else {
+                CFRelease(system as CFTypeRef);
+                return Ok(None);
+            };
+            let mut pid = 0;
+            if expected_pid.is_some_and(|expected| {
+                AXUIElementGetPid(focused as AxUiElementRef, &mut pid) != AX_ERROR_SUCCESS
+                    || pid != expected
+            }) || string_attribute(focused as AxUiElementRef, b"AXSubrole\0").as_deref()
                 == Some("AXSecureTextField")
+                || (expected_pid.is_some()
+                    && string_attribute(focused as AxUiElementRef, b"AXRole\0").as_deref()
+                        == Some("AXSecureTextField"))
             {
-                CFRelease(current);
-                return None;
+                CFRelease(focused);
+                CFRelease(system as CFTypeRef);
+                return Ok(None);
             }
-            let mut result = None;
+            if expected_pid.is_some() {
+                CFRetain(focused);
+            }
+            let mut current = focused;
+            let mut result = Ok(None);
             for _ in 0..8 {
-                if let Some(text) = string_attribute(current as AxUiElementRef, b"AXSelectedText\0")
-                    .filter(|s| !s.trim().is_empty())
-                {
-                    result = Some(text);
+                if expected_pid.is_some_and(|expected| {
+                    AXUIElementGetPid(current as AxUiElementRef, &mut pid) != AX_ERROR_SUCCESS
+                        || pid != expected
+                }) {
                     break;
+                }
+                if expected_pid.is_some() {
+                    let _ = AXUIElementSetMessagingTimeout(current as AxUiElementRef, 0.12);
+                }
+                if let Some(value) = attribute(current as AxUiElementRef, b"AXSelectedText\0") {
+                    result = selected_string(value, expected_pid.is_some())
+                        .map(|text| text.filter(|text| !text.trim().is_empty()));
+                    CFRelease(value);
+                    if !matches!(result, Ok(None)) {
+                        break;
+                    }
                 }
                 if let Some(range) =
                     attribute(current as AxUiElementRef, b"AXSelectedTextMarkerRange\0")
@@ -1216,15 +1285,14 @@ mod macos_ax {
                         ) == AX_ERROR_SUCCESS
                             && !value.is_null()
                         {
-                            if CFGetTypeID(value) == CFStringGetTypeID() {
-                                result = cfstring_to_rust(value).filter(|s| !s.trim().is_empty());
-                            }
+                            result = selected_string(value, expected_pid.is_some())
+                                .map(|text| text.filter(|text| !text.trim().is_empty()));
                             CFRelease(value);
                         }
                         CFRelease(key);
                     }
                     CFRelease(range);
-                    if result.is_some() {
+                    if !matches!(result, Ok(None)) {
                         break;
                     }
                 }
@@ -1239,6 +1307,18 @@ mod macos_ax {
                 current = parent;
             }
             CFRelease(current);
+            if expected_pid.is_some() {
+                let same = attribute(system, b"AXFocusedUIElement\0").is_some_and(|now| {
+                    let same = CFEqual(focused, now) != 0;
+                    CFRelease(now);
+                    same
+                });
+                CFRelease(focused);
+                if !same {
+                    result = Ok(None);
+                }
+            }
+            CFRelease(system as CFTypeRef);
             result
         }
     }

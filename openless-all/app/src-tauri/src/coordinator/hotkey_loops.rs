@@ -128,6 +128,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
+                #[cfg(not(mobile))]
+                crate::ask_window::hotkey::set_binding(&target.dictation, target.dictation_mode);
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
                     let (qa_trigger, selection_polish_trigger, translation_trigger) =
                         modifier_shortcut_triggers(&inner);

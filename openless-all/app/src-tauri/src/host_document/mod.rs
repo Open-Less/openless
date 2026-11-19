@@ -807,3 +807,8 @@ mod tests {
 pub(crate) fn read_qa_selection() -> Option<String> {
     windows::read_qa_selection()
 }
+
+#[cfg(target_os = "windows")]
+pub(crate) fn read_native_ask_selection_for_pid(pid: u32) -> Option<String> {
+    windows::read_ask_selection(pid)
+}

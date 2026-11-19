@@ -1023,6 +1023,10 @@ impl Coordinator {
     }
 
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
+        #[cfg(not(mobile))]
+        if self.inner.host.ask_owns_capsule() {
+            return;
+        }
         let captured_revision = self.inner.host.capsule_revision();
         let _ = self.present_core_capsule_at_revision(payload, None, captured_revision);
     }
@@ -1104,8 +1108,26 @@ impl Coordinator {
         payload: CapsulePayload,
         expected_epoch: Option<u64>,
     ) -> Option<u64> {
+        #[cfg(not(mobile))]
+        if self.inner.host.ask_owns_capsule() {
+            return None;
+        }
         let captured_revision = self.inner.host.capsule_revision();
         self.present_core_capsule_at_revision(payload, expected_epoch, captured_revision)
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn present_ask_capsule(&self, payload: CapsulePayload) {
+        let Some(id) = &payload.session_id else { return };
+        let revision = self.inner.host.claim_ask_capsule(id);
+        let _ = self.present_core_capsule_at_revision(payload, None, revision);
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) async fn dispatch_ask_passthrough(&self, edge: openless_core::DictationHotkeyEdge) {
+        if let Err(error) = dictation::dispatch(&self.inner, edge).await {
+            log::warn!("[ask] ordinary shortcut dispatch failed: {error}");
+        }
     }
 
     fn present_core_capsule_at_revision(
@@ -1773,6 +1795,8 @@ impl Coordinator {
     }
 
     pub fn set_shortcut_recording_active(&self, active: bool) {
+        #[cfg(not(mobile))]
+        crate::ask_window::hotkey::set_suspended(active);
         self.inner
             .shortcut_recording_active
             .store(active, Ordering::SeqCst);

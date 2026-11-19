@@ -393,7 +393,7 @@ pub mod platform {
         }
     }
 
-    fn primary_from_vk(vk_code: u32) -> Option<String> {
+    pub(crate) fn primary_from_vk(vk_code: u32) -> Option<String> {
         if (0x41..=0x5A).contains(&vk_code) {
             return Some(((vk_code as u8) as char).to_string());
         }
@@ -547,7 +547,7 @@ pub mod platform {
 }
 
 /// macOS virtual keycode → ShortcutBinding.primary (US ANSI layout).
-fn macos_keycode_to_primary(keycode: i64) -> Option<&'static str> {
+pub(crate) fn macos_keycode_to_primary(keycode: i64) -> Option<&'static str> {
     match keycode {
         // A-Z (non-contiguous on macOS)
         0 => Some("A"),
@@ -712,7 +712,7 @@ pub mod platform {
         }
     }
 
-    fn keycode_is_down(keycode: i64) -> bool {
+    pub(crate) fn keycode_is_down(keycode: i64) -> bool {
         unsafe { CGEventSourceKeyState(COMBINED_SESSION, keycode as u16) }
     }
 
