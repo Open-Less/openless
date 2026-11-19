@@ -15,6 +15,7 @@ interface QaComposerProps {
   busy: boolean;
   micBusy: boolean;
   available: boolean;
+  draftDictationEnabled: boolean;
   editInstructionMode: boolean;
   onEditInstructionModeChange: (enabled: boolean) => void;
   onChange: (value: string) => void;
@@ -34,6 +35,7 @@ export function QaComposer({
   busy,
   micBusy,
   available,
+  draftDictationEnabled,
   editInstructionMode,
   onEditInstructionModeChange,
   onChange,
@@ -52,7 +54,7 @@ export function QaComposer({
       ? t('common.loading')
       : t('overview.inAppDictation.processing');
   const inputLabel = t('qa.composerPlaceholder');
-  const editor = useQaDraftDictation(available && !embedded, onChange);
+  const editor = useQaDraftDictation(draftDictationEnabled, onChange);
 
   return (
     <QaPromptBox

@@ -1071,6 +1071,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
                   onCancelTurn={() => void cancelTurnForSession(currentSession)}
                   cancelBusy={cancelBusy}
                   available={isTauri}
+                  draftDictationEnabled={isTauri && !embedded}
                 />
               </motion.div>
             </MotionConfig>
