@@ -101,6 +101,7 @@ const KOTLIN_TEST_FILES = [
   'ImePrivacyPolicyTest.kt',
   'ImeDraftReplacementTest.kt',
   'RimePredictionTest.kt',
+  'StrokePatternExpansionTest.kt',
   'EnglishAutoTextTest.kt',
   'InputLearningRulesTest.kt',
   'FrequencyStampCacheTest.kt',

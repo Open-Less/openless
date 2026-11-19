@@ -76,7 +76,11 @@ internal class StrokeInputRepository(context: Context) {
     fun shutdown() {
         queryEpoch.incrementAndGet()
         executor.execute {
-            if (session.isNotEmpty()) runCatching { OpenLessRime.request("destroy", session) }
+            if (session.isNotEmpty()) {
+                // Same queue as maintenance: never destroy while a redeploy or
+                // dictionary import is already closing sessions.
+                runCatching { RimeTaskQueue.run { OpenLessRime.request("destroy", session) } }
+            }
             session = ""
         }
         executor.shutdown()
@@ -87,39 +91,26 @@ internal class StrokeInputRepository(context: Context) {
         synchronized(loading) {
             if (session.isNotEmpty() && sessionGeneration == OpenLessRime.sessionGeneration) return
             OpenLessRime.initialize(appContext)
-            // Dictionary maintenance closes every native session; start a new one.
-            session = OpenLessRime.request("create", "", "stroke").getString("session")
-            sessionGeneration = OpenLessRime.sessionGeneration
+            // Dictionary maintenance closes every native session. Creating ours
+            // on the maintenance queue keeps the handle and the generation it
+            // was created in one atomic step: otherwise a redeploy landing
+            // between the two made a destroyed handle look current forever.
+            val created = OpenLessRime.createSession("stroke")
+            session = created.first
+            sessionGeneration = created.second
         }
     }
 
-    /**
-     * Every concrete code a wildcard pattern can stand for. Rime has no wildcard
-     * input, so `h*s` becomes `hhs`, `hss`, …; the expansion is capped because
-     * each code costs one Rime round trip and codes are short in practice.
-     */
-    private fun expandWildcards(pattern: String): List<String> {
-        if ('*' !in pattern) return listOf(pattern)
-        var codes = listOf("")
-        for (stroke in pattern) {
-            codes = if (stroke == '*') {
-                codes.flatMap { prefix -> STROKE_KEYS.map { prefix + it } }.take(MAX_EXPANSIONS)
-            } else {
-                codes.map { it + stroke }
-            }
-            if (codes.size > MAX_EXPANSIONS) codes = codes.take(MAX_EXPANSIONS)
-        }
-        return codes
-    }
-
-    private fun queryRime(pattern: String): List<String> {
+    private fun queryRime(pattern: String): List<String> = RimeTaskQueue.run {
+        // Serialized with maintenance for the same reason as session creation:
+        // a redeploy landing mid-query would close the session under us.
         ensureSession()
         val merged = LinkedHashSet<String>()
-        for (code in expandWildcards(pattern)) {
+        for (code in expandStrokePattern(pattern)) {
             if (merged.size >= MAX_CANDIDATES) break
             merged += queryCode(code)
         }
-        return merged.toList()
+        merged.toList()
     }
 
     /** Types one concrete code into the stroke session and reads its candidates. */
@@ -157,9 +148,58 @@ internal class StrokeInputRepository(context: Context) {
 
     private companion object {
         const val MAX_CANDIDATES = 36
-        const val MAX_EXPANSIONS = 25
-        val STROKE_KEYS = listOf('h', 's', 'p', 'n', 'z')
     }
+}
+
+/** The five stroke keys, in Rime's table order. */
+private val STROKE_KEYS = listOf('h', 's', 'p', 'n', 'z')
+
+/** Four wildcards = 625 codes, which covers every realistic pattern. */
+private const val MAX_EXHAUSTIVE_WILDCARDS = 4
+
+/**
+ * Every concrete code a wildcard pattern can stand for. Rime has no wildcard
+ * input, so `h*s` becomes `hhs`, `hss`, … Up to [MAX_EXHAUSTIVE_WILDCARDS]
+ * wildcards are enumerated completely. A longer pattern would need 5^k codes, and
+ * keeping only the first N of those pins the leading wildcards to `h` and hides
+ * real matches — a fresh `***phhspnpphs` must still reach `nhnphhspnpphs` (its
+ * six-entry code). Beyond four, the first four still vary independently and every
+ * later wildcard follows the combination index, so no position becomes literal.
+ */
+internal fun expandStrokePattern(pattern: String): List<String> {
+    val wildcards = pattern.count { it == '*' }
+    if (wildcards == 0) return listOf(pattern)
+    val expanded = minOf(wildcards, MAX_EXHAUSTIVE_WILDCARDS)
+    var combinations = 1
+    repeat(expanded) { combinations *= STROKE_KEYS.size }
+    return List(combinations) { combination -> concreteStrokeCode(pattern, expanded, combination) }
+}
+
+/**
+ * One combination of [pattern]: its first [expanded] wildcards count up in mixed
+ * radix, and any further wildcard follows the combination index so it is never
+ * pinned to a single stroke.
+ */
+private fun concreteStrokeCode(pattern: String, expanded: Int, combination: Int): String {
+    val code = StringBuilder(pattern.length)
+    var remaining = combination
+    var seen = 0
+    for (stroke in pattern) {
+        if (stroke != '*') {
+            code.append(stroke)
+            continue
+        }
+        if (seen < expanded) {
+            var divisor = 1
+            repeat(expanded - seen - 1) { divisor *= STROKE_KEYS.size }
+            code.append(STROKE_KEYS[(remaining / divisor) % STROKE_KEYS.size])
+            remaining %= divisor
+        } else {
+            code.append(STROKE_KEYS[combination % STROKE_KEYS.size])
+        }
+        seen++
+    }
+    return code.toString()
 }
 
 /** A stroke code matches a typed pattern when it starts with it, '*' standing for any one stroke. */

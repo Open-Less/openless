@@ -99,7 +99,9 @@ internal class EnglishCandidateProvider(context: Context) {
 
     fun shutdown() {
         executor.execute {
-            if (session.isNotEmpty()) runCatching { OpenLessRime.request("destroy", session) }
+            if (session.isNotEmpty()) {
+                runCatching { RimeTaskQueue.run { OpenLessRime.request("destroy", session) } }
+            }
             session = ""
         }
         executor.shutdown()
@@ -118,12 +120,17 @@ internal class EnglishCandidateProvider(context: Context) {
     private fun ensureSession() {
         if (session.isNotEmpty() && sessionGeneration == OpenLessRime.sessionGeneration) return
         OpenLessRime.initialize(appContext)
-        session = OpenLessRime.request("create", "", "english").getString("session")
-        sessionGeneration = OpenLessRime.sessionGeneration
+        // Same reasoning as StrokeInputRepository: creation and the generation
+        // stamp must be one step on the maintenance queue, otherwise a redeploy
+        // that closes sessions in between leaves a dead handle marked current
+        // and this provider answers nothing until the service restarts.
+        val created = OpenLessRime.createSession("english")
+        session = created.first
+        sessionGeneration = created.second
     }
 
     /** Types [word] into the English session and returns its candidates in Rime's order. */
-    private fun queryRime(word: String): List<String> {
+    private fun queryRime(word: String): List<String> = RimeTaskQueue.run {
         ensureSession()
         OpenLessRime.request("clear", session)
         for (letter in word) {
@@ -138,7 +145,7 @@ internal class EnglishCandidateProvider(context: Context) {
             state = OpenLessRime.request("candidates", session, "8@$revision")
             rows += strings(state)
         }
-        return rows
+        rows
     }
 
     /** True when Rime itself offers [word] for its own prefix (i.e. it is in a dictionary). */

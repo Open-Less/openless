@@ -72,6 +72,19 @@ internal object OpenLessRime {
         return response
     }
 
+    /**
+     * Creates a schema session on the maintenance queue and returns it together
+     * with the generation it belongs to. Auxiliary providers (stroke, English)
+     * use this so a dictionary import/export or redeploy cannot destroy the
+     * fresh handle between `create` and the generation they record for it —
+     * that stale stamp used to keep a dead handle "current" until restart.
+     */
+    fun createSession(schema: String): Pair<String, Long> = RimeTaskQueue.run {
+        val generation = sessionGeneration
+        val created = request("create", "", schema).getString("session")
+        created to generation
+    }
+
     private fun closingSessions(operation: String, argument: String): JSONObject =
         try { request(operation, "", argument) } finally { sessionGeneration++ }
 
