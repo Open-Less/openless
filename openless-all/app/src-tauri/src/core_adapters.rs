@@ -4227,11 +4227,14 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
-    fn capture_target(&self) -> Option<CapturedTextTarget> {
+    fn capture_target_for_session(&self, session_id: SessionId) -> Option<CapturedTextTarget> {
         let app = self.app.lock().clone();
-        if let Some(target) = app.as_ref().and_then(crate::qa_draft::capture) {
-            return Some(target);
-        }
+        app.as_ref()
+            .and_then(|app| crate::qa_draft::capture(app, session_id))
+            .or_else(|| self.capture_target())
+    }
+
+    fn capture_target(&self) -> Option<CapturedTextTarget> {
         let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
         let ime_target = crate::windows_ime_target::capture_ime_submit_target();

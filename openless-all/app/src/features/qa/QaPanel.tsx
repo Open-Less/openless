@@ -17,7 +17,6 @@ import {
 import { OpenLessPill } from '../capsule/OpenLessCapsule';
 import { QaSurface } from './QaSurface';
 import { QaComposer, type QaStatus } from './QaComposer';
-import { QaVoiceStrip } from './QaVoiceStrip';
 import { QaStreamingResponse } from './QaStreamingResponse';
 import { useChatPanelLifecycle } from './chat/lifecycle';
 import {
@@ -73,7 +72,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   const [selectionPreview, setSelectionPreview] = useState('');
   const [composerText, setComposerText] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
-  const [sendMorph, setSendMorph] = useState(false);
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [editApplyAvailable, setEditApplyAvailable] = useState(false);
   const [editRevertAvailable, setEditRevertAvailable] = useState(false);
@@ -152,7 +150,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     setThoughtSeconds(0);
     setActivity(undefined);
     setSubmitBusy(false);
-    setSendMorph(false);
     setMicBusy(false);
     setEditApplyBusy(false);
     setModeBusy(false);
@@ -219,7 +216,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
             if (payload.kind === 'idle' || payload.kind === 'recording') {
               submissionRef.current = null;
               setSubmitBusy(false);
-              setSendMorph(false);
               if (!payload.messages?.length) setSubmitted(false);
             }
             // Apply/revert belongs to the captured QA session. A new turn must
@@ -534,20 +530,17 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     const originSession = activeSessionIdRef.current;
     submissionRef.current = request;
     setSubmitBusy(true);
-    setSendMorph(!reduced);
     setSubmitted(true);
     setComposerText('');
     setErrorMsg('');
     try {
       await layout.waitForReady();
-      if (!reduced) await new Promise((resolve) => setTimeout(resolve, 245));
       if (
         panelEpoch.current !== epoch ||
         submissionRef.current !== request ||
         activeSessionIdRef.current !== originSession
       )
         return;
-      setSendMorph(false);
       await qaSubmitText(text, originSession);
     } catch {
       if (
@@ -562,7 +555,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     } finally {
       if (submissionRef.current === request) {
         submissionRef.current = null;
-        setSendMorph(false);
         setSubmitBusy(false);
       }
     }
@@ -780,22 +772,14 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   }, [embedded, modalActive, onRequestDismiss]);
 
   const showWelcome =
-    (sendMorph || !submitBusy) &&
-    messages.length === 0 &&
-    status !== 'thinking' &&
-    status !== 'error';
-  const lastRole = messages[messages.length - 1]?.role;
-  const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
+    !submitBusy && messages.length === 0 && status !== 'thinking' && status !== 'error';
   const firstQuestion = messages.find((message) => message.role === 'user');
   const heading = firstQuestion
     ? truncate(splitQaUserMessage(firstQuestion).question, 42)
     : t('qa.title');
   const liveActivity =
     status === 'thinking' && activity && !streamingAnswer ? activityLabel : undefined;
-  const voiceActive =
-    status === 'recording' ||
-    (status === 'thinking' && !questionLanded && !submitBusy) ||
-    (micBusy && status !== 'thinking');
+  const voiceActive = status === 'recording';
   const inputBusy =
     status === 'thinking' ||
     status === 'recording' ||
@@ -966,7 +950,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           className="qa-answer-panel qa-conversation"
           style={scaledStyle}
           data-welcome={showWelcome ? 'true' : undefined}
-          data-send-morph={sendMorph ? 'true' : undefined}
           data-platform={getRuntimeOS()}
           aria-label={t('capsule.asking')}
         >
@@ -1039,11 +1022,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
               </button>
             </div>
           )}
-          {sendMorph && (
-            <div className="qa-send-morph-strip" aria-hidden="true">
-              <QaVoiceStrip level={0} recording={false} />
-            </div>
-          )}
           <div className="qa-composer-dock" ref={composerRegion}>
             {showWelcome && <h1 className="qa-welcome-title">{t('qa.emptyTitle')}</h1>}
             <MotionConfig transformPagePoint={composerPoint}>
@@ -1072,6 +1050,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
                   cancelBusy={cancelBusy}
                   available={isTauri}
                   draftDictationEnabled={isTauri && !embedded}
+                  contentScale={layout.contentScale}
                 />
               </motion.div>
             </MotionConfig>

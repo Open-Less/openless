@@ -136,6 +136,7 @@ test('Stop cancels the current turn and retains the open conversation for a foll
   await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'ask-b', chunk: 'draft answer' });
   const stop = page.locator('.qa-send.is-stop');
   await expect(stop).toBeVisible();
+  await expect(stop.locator('span').last()).toHaveCSS('pointer-events', 'none');
   await stop.click();
   await expect
     .poll(() =>
@@ -351,12 +352,85 @@ test('the waiting composer opens without a recording and voice dictation only ed
   await expect
     .poll(() => page.evaluate(() => (window as any).fixture.qaDraftFocus?.focused))
     .toBe(true);
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBe(920);
+  const frame = await panel.boundingBox();
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'dictation',
+      phase: 'recording',
+      level: 0.8,
+      elapsedMs: 3000,
+    });
+  });
+  const strip = panel.locator('.qa-voice-strip');
+  await expect(strip).toHaveCSS('width', '340px');
+  await expect(strip).toHaveCSS('height', '52px');
+  await expect(strip.locator('.qa-voice-strip-control')).toHaveCSS('width', '40px');
+  await expect(strip.locator('.qa-voice-strip-bars i')).toHaveCount(40);
+  await expect(strip.locator('time')).toHaveText('0:03');
+  await expect
+    .poll(() =>
+      strip
+        .locator('i')
+        .last()
+        .evaluate((bar) => parseFloat(bar.style.height)),
+    )
+    .toBeGreaterThan(20);
+  await expect(editor).toBeFocused();
+  await expect(editor).toBeEditable();
+  expect(await panel.boundingBox()).toEqual(frame);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'dictation',
+      phase: 'recording',
+      level: 0,
+      elapsedMs: 3500,
+    });
+  });
+  await expect
+    .poll(() =>
+      strip
+        .locator('i')
+        .last()
+        .evaluate((bar) => parseFloat(bar.style.height)),
+    )
+    .toBe(5);
+  expect(
+    await strip
+      .locator('i')
+      .evaluateAll((bars) =>
+        bars.slice(0, -1).some((bar) => parseFloat((bar as HTMLElement).style.height) > 20),
+      ),
+  ).toBe(true);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'dictation',
+      phase: 'processing',
+    });
+  });
+  await expect(strip).toHaveCount(0);
+  await editor.press('Enter');
+  expect(await page.evaluate(() => (window as any).fixture.qaActions)).toEqual([]);
   await page.evaluate(() => {
     const bridge = (window as any).fixture;
     bridge.emit('qa:dictation-draft', { token: 'old-window', text: 'stale' });
     bridge.emit('qa:dictation-draft', { token: bridge.qaDraftFocus.token, text: 'spoken ' });
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'dictation',
+      phase: 'idle',
+    });
   });
+  await expect(strip).toHaveCount(0);
+  await expect(editor).toBeFocused();
   await expect(editor).toHaveValue('Before spoken after');
+  await expect(panel.locator('.qa-send')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).fixture.qaActions)).toEqual([]);
   await editor.press('Enter');
   await expect
@@ -367,28 +441,60 @@ test('the waiting composer opens without a recording and voice dictation only ed
     });
 });
 
-test('typed send morphs into the voice-note strip before submitting', async ({ page }) => {
+test('draft dictation failure is shown without moving focus or losing text', async ({ page }) => {
   await page.goto(fixture + '?qa');
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
   await emit(page, 'qa:state', { kind: 'idle', panelOpen: true, messages: [] });
   const panel = page.locator('.qa-conversation');
   const editor = panel.locator('textarea');
-  await editor.fill('Wait until the strip appears');
-  const before = await editor.evaluate((el) => {
-    el.dispatchEvent(
+  await editor.fill('Keep this');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.qaDraftFocus?.focused))
+    .toBe(true);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'failed',
+      phase: 'failed',
+      error: 'PermissionDenied',
+    });
+  });
+  await expect(panel.getByRole('alert')).toBeVisible();
+  await expect(editor).toHaveValue('Keep this');
+  await expect(editor).toBeFocused();
+  await expect(panel.locator('.qa-voice-strip')).toHaveCount(0);
+});
+
+test('typed send never clips the conversation or displays recording feedback', async ({ page }) => {
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'idle', panelOpen: true, messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const editor = panel.locator('textarea');
+  await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBe(920);
+  const frame = await panel.boundingBox();
+  await editor.fill('A typed question');
+  const frames = await panel.evaluate(async (el) => {
+    el.querySelector('textarea')!.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
     );
-    return new Promise((done) =>
-      requestAnimationFrame(() => {
-        const bridge = (window as any).fixture;
-        done({
-          strip: !!document.querySelector('.qa-send-morph-strip'),
-          sent: bridge.qaActions.length,
-        });
-      }),
-    );
+    const observations = [];
+    for (let frame = 0; frame < 8; frame++) {
+      await new Promise<void>((done) => requestAnimationFrame(() => done()));
+      observations.push({
+        clip: getComputedStyle(el).clipPath,
+        recording: !!el.querySelector('.qa-voice-strip'),
+      });
+    }
+    return observations;
   });
-  expect(before).toEqual({ strip: true, sent: 0 });
+  expect(frames.every(({ clip, recording }) => clip === 'none' && !recording)).toBe(true);
   await expect.poll(() => page.evaluate(() => (window as any).fixture.qaActions.length)).toBe(1);
-  await expect(panel.locator('.qa-send-morph-strip')).toHaveCount(0);
+  await emit(page, 'qa:state', { kind: 'loading', sessionId: 'typed', messages: [] });
+  expect(await panel.boundingBox()).toEqual(frame);
+  await expect(panel.locator('.qa-voice-strip')).toHaveCount(0);
+  await expect(editor).toBeFocused();
+  await expect(editor).toBeEditable();
 });

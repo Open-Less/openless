@@ -1,52 +1,70 @@
 import { MicIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface Props {
   level: number;
-  recording: boolean;
-  label?: string;
+  elapsedMs?: number;
+  contentScale: number;
+  label: string;
+  stopLabel: string;
+  disabled: boolean;
+  onStop: () => void;
 }
 
-const BAR_SHAPE = [
-  0.25, 0.5, 0.65, 0.9, 0.55, 1, 0.72, 0.43, 0.81, 0.62, 0.94, 0.49, 0.31, 0.57, 0.75, 0.32,
-];
+const BAR_COUNT = 40;
+const SAMPLE_MS = 75;
 
-export function QaVoiceStrip({ level, recording, label }: Props) {
+export function QaVoiceStrip({
+  level,
+  elapsedMs,
+  contentScale,
+  label,
+  stopLabel,
+  disabled,
+  onStop,
+}: Props) {
+  const [samples, setSamples] = useState<number[]>(() => Array(BAR_COUNT).fill(0));
   const [seconds, setSeconds] = useState(0);
+  const microphone = useRef(0);
+  microphone.current = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
   useEffect(() => {
-    if (!recording) {
-      setSeconds(0);
-      return;
-    }
     const start = performance.now();
-    const timer = setInterval(
-      () => setSeconds(Math.floor((performance.now() - start) / 1000)),
-      250,
-    );
+    const timer = setInterval(() => {
+      // One new microphone sample enters on the right. Older samples keep their own volume.
+      setSamples((history) => [...history.slice(1), microphone.current]);
+      setSeconds(Math.floor((performance.now() - start) / 1000));
+    }, SAMPLE_MS);
     return () => clearInterval(timer);
-  }, [recording]);
-  const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  }, []);
+  const totalSeconds = elapsedMs == null ? seconds : Math.max(0, Math.floor(elapsedMs / 1000));
+  const elapsed = `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`;
   return (
-    <div className="qa-voice-strip" data-recording={recording || undefined}>
-      <span className="qa-voice-strip-icon" aria-hidden="true">
+    <div
+      className="qa-voice-strip"
+      style={contentScale > 1 ? { zoom: 1 / contentScale } : undefined}
+    >
+      <button
+        type="button"
+        className="qa-voice-strip-control"
+        disabled={disabled}
+        aria-label={stopLabel}
+        title={stopLabel}
+        onMouseDown={(event) => {
+          if (event.button === 0) event.preventDefault();
+        }}
+        onClick={onStop}
+      >
         <MicIcon />
-      </span>
+      </button>
       <span className="qa-voice-strip-bars" aria-hidden="true">
-        {BAR_SHAPE.map((weight, i) => (
-          <i
-            key={i}
-            style={{
-              height: `${recording ? 3 + 17 * weight * Math.max(0, Math.min(1, level)) : 3}px`,
-            }}
-          />
+        {samples.map((sample, index) => (
+          <i key={index} style={{ height: `${5 + 26 * Math.sqrt(sample)}px` }} />
         ))}
       </span>
-      {recording && <time className="qa-voice-strip-time">{elapsed}</time>}
-      {label && (
-        <span className="voice-waveform-label qa-voice-strip-label" role="status">
-          {label}
-        </span>
-      )}
+      <time className="qa-voice-strip-time">{elapsed}</time>
+      <span className="voice-waveform-label sr-only" role="status">
+        {label}
+      </span>
     </div>
   );
 }

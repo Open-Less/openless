@@ -7999,7 +7999,7 @@ impl OpenLessBackend {
         // Freeze the destination and its matching host-context reader before context/credential
         // awaits or feedback can change foreground focus. No native preparation happens yet.
         let (inserter, host_context) = if insert_text {
-            match self.deps.text_inserter.capture_target() {
+            match self.deps.text_inserter.capture_target_for_session(session_id) {
                 Some(captured) => (captured.inserter, captured.host_context),
                 None => (
                     Arc::clone(&self.deps.text_inserter),

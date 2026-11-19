@@ -26,5 +26,5 @@ The shared toast surface adapts Rare UI's [Toast](https://www.rareui.com/compone
 interaction references for OpenLess Ask Anything. The OpenLess implementation uses
 its own native shortcut, voice, and streaming contracts rather than the demo's mock backend.
 
-The blue Ask recording and sending strip also uses [Rare UI Voice Note](https://www.rareui.com/components/voicenote)
-as its visual reference, with live microphone levels and elapsed time instead of the demo's audio player.
+The blue Ask recording strip also uses [Rare UI Voice Note](https://www.rareui.com/components/voicenote)
+as its visual reference, retaining the medium 340×52 layout with 40 bars while replacing playback with live microphone levels and elapsed time.

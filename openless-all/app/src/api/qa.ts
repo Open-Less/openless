@@ -28,6 +28,25 @@ export function listenQaDictationDraft(
   return listenTauriEvent('qa:dictation-draft', onText);
 }
 
+export interface QaDraftRecording {
+  token: string;
+  sessionId: string;
+  phase: 'recording' | 'processing' | 'failed' | 'idle';
+  error?: string | null;
+  level: number;
+  elapsedMs: number;
+}
+
+export function listenQaDraftRecording(
+  onState: (state: QaDraftRecording) => void,
+): Promise<() => void> {
+  return listenTauriEvent('qa:draft-recording', onState);
+}
+
+export function stopQaDraftRecording(sessionId: string): Promise<void> {
+  return invokeOrPreview('qa_stop_draft_recording', { sessionId }, () => undefined);
+}
+
 export function setQaDraftFocus(token: string, focused: boolean): Promise<void> {
   return invokeOrPreview('qa_set_draft_focus', { token, focused }, () => undefined);
 }

@@ -1,5 +1,6 @@
-import { MicIcon, PencilLineIcon, QuoteIcon, SquareIcon } from 'lucide-react';
+import { MicIcon, PencilLineIcon, QuoteIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { stopQaDraftRecording } from '../../api/qa';
 import { QaPromptBox } from './QaPromptBox';
 import { useQaDraftDictation } from './useQaDraftDictation';
 import { QaVoiceStrip } from './QaVoiceStrip';
@@ -16,6 +17,7 @@ interface QaComposerProps {
   micBusy: boolean;
   available: boolean;
   draftDictationEnabled: boolean;
+  contentScale: number;
   editInstructionMode: boolean;
   onEditInstructionModeChange: (enabled: boolean) => void;
   onChange: (value: string) => void;
@@ -36,6 +38,7 @@ export function QaComposer({
   micBusy,
   available,
   draftDictationEnabled,
+  contentScale,
   editInstructionMode,
   onEditInstructionModeChange,
   onChange,
@@ -48,13 +51,12 @@ export function QaComposer({
   const { t } = useTranslation();
   const recording = status === 'recording';
   const generating = status === 'thinking';
-  const voiceLabel = recording
-    ? t('qa.voiceInputPlaceholder')
-    : micBusy
-      ? t('common.loading')
-      : t('overview.inAppDictation.processing');
+  const voiceLabel = t('qa.voiceInputPlaceholder');
   const inputLabel = t('qa.composerPlaceholder');
   const editor = useQaDraftDictation(draftDictationEnabled, onChange);
+  const draft = editor.recording;
+  const draftRecording = draft?.phase === 'recording';
+  const stopLabel = t('qa.micStop');
 
   return (
     <QaPromptBox
@@ -63,18 +65,48 @@ export function QaComposer({
       placeholder={voiceActive ? voiceLabel : inputLabel}
       disabled={!available}
       readOnly={voiceActive}
-      recording={recording}
-      sendDisabled={busy}
+      recording={recording ? 'question' : draftRecording ? 'draft' : undefined}
+      recordingControl={
+        recording || draftRecording ? (
+          <>
+            <QaVoiceStrip
+              level={recording ? level : (draft?.level ?? 0)}
+              elapsedMs={recording ? undefined : draft?.elapsedMs}
+              contentScale={contentScale}
+              label={voiceLabel}
+              stopLabel={stopLabel}
+              disabled={!available || (recording && micBusy)}
+              onStop={() => {
+                if (recording) onToggleRecording();
+                else if (draft) void stopQaDraftRecording(draft.sessionId).catch(() => undefined);
+              }}
+            />
+            {recording && selectionPreview && (
+              <span className="qa-recording-selection" title={selectionPreview}>
+                <QuoteIcon />
+                <span>{selectionPreview}</span>
+              </span>
+            )}
+          </>
+        ) : undefined
+      }
+      sendDisabled={busy || !!draft}
       sendLabel={t('qa.composerSend')}
       stop={
         generating
           ? { label: t('qa.stop'), disabled: !available || cancelBusy, onClick: onCancelTurn }
           : undefined
       }
-      onChange={onChange}
+      onChange={(text) => {
+        editor.clearError();
+        onChange(text);
+      }}
       editorRef={editor.input}
       onEditorFocusChange={editor.setFocused}
-      onSubmit={onSubmit}
+      onSubmit={() => {
+        editor.clearError();
+        onSubmit();
+      }}
       onRequestKeyboard={onRequestKeyboard}
       actions={
         <>
@@ -90,29 +122,30 @@ export function QaComposer({
             <PencilLineIcon />
           </button>
           <button
-            className={`qa-mic${recording ? ' is-recording' : ''}`}
+            className="qa-mic"
             type="button"
-            disabled={!available || generating || micBusy || (busy && !recording)}
+            disabled={!available || generating || micBusy || busy || !!draft}
             onClick={onToggleRecording}
-            aria-pressed={recording}
-            aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
-            title={recording ? t('qa.micStop') : t('qa.micLabel')}
+            aria-label={t('qa.micLabel')}
+            title={t('qa.micLabel')}
           >
-            {recording ? <SquareIcon /> : <MicIcon />}
+            <MicIcon />
           </button>
         </>
       }
       feedback={
-        voiceActive ? (
-          <div className="qa-voice-feedback">
-            <QaVoiceStrip level={level} recording={recording} label={voiceLabel} />
-            {selectionPreview && (
-              <span className="qa-recording-selection" title={selectionPreview}>
-                <QuoteIcon />
-                <span>{selectionPreview}</span>
-              </span>
+        editor.error ? (
+          <span className="qa-browser-note" role="alert">
+            {t(
+              editor.error === 'PermissionDenied'
+                ? 'overview.androidMicBanner.title'
+                : 'qa.compact.microphoneError',
             )}
-          </div>
+          </span>
+        ) : draft?.phase === 'processing' ? (
+          <span className="qa-browser-note" role="status">
+            {t('overview.inAppDictation.processing')}
+          </span>
         ) : !available ? (
           <span className="qa-browser-note">{t('qa.compact.browserUnavailable')}</span>
         ) : undefined
