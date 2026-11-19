@@ -401,6 +401,7 @@ export const ja: typeof zhCN = {
     mobileRecordStart: '録音を開始',
     mobileRecordStop: '終了して送信',
     composerPlaceholder: '質問を入力。Enter で送信',
+    voiceInputPlaceholder: '音声入力中です',
     composerSend: '送信',
     statusIdle: '{{recordHotkey}} で質問',
     statusRecording: '録音中',

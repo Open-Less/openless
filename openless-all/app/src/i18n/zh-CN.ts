@@ -381,6 +381,7 @@ export const zhCN = {
     mobileRecordStart: '开始录音',
     mobileRecordStop: '结束并提交',
     composerPlaceholder: '输入问题，Enter 发送',
+    voiceInputPlaceholder: '你正在进行语音输入',
     composerSend: '发送',
     statusIdle: '按 {{recordHotkey}} 提问',
     statusRecording: '录音中',
