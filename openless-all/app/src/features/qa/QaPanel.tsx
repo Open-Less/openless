@@ -1,10 +1,8 @@
 // The recording shortcut plus the Ask companion key opens this conversation.
-// Closing dismisses the native
-// session, so the next press starts a new one; an open panel keeps it and can
-// take the next voice turn or a typed message.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+// Closing dismisses the native session; an open panel retains it across turns.
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { motion } from 'framer-motion';
+import { motion, MotionConfig } from 'framer-motion';
 import { useReducedMotion } from '../../lib/motion';
 import { CheckIcon, CopyIcon, XIcon } from 'lucide-react';
 import {
@@ -456,6 +454,15 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   });
 
   const scaledStyle = layout.contentScale > 1 ? { zoom: layout.contentScale } : undefined;
+  // Motion measures projected bounds in viewport pixels but writes transforms
+  // in local CSS pixels. Do not apply the window's zoom to that delta twice.
+  const composerPoint = useCallback(
+    ({ x, y }: { x: number; y: number }) => ({
+      x: x / layout.contentScale,
+      y: y / layout.contentScale,
+    }),
+    [layout.contentScale],
+  );
 
   const onClose = async () => {
     if (dismissRef.current) return;
@@ -999,30 +1006,32 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           )}
           <div className="qa-composer-dock">
             {showWelcome && <h1 className="qa-welcome-title">{t('qa.emptyTitle')}</h1>}
-            <motion.div
-              className="qa-composer-position"
-              layout={reduced ? false : 'position'}
-              transition={{ type: 'spring', duration: 0.5, bounce: 0.15 }}
-            >
-              <QaComposer
-                value={composerText}
-                status={status}
-                level={level}
-                voiceActive={voiceActive}
-                selectionPreview={selectionPreview}
-                busy={inputBusy}
-                micBusy={micBusy}
-                embedded={embedded}
-                editInstructionMode={editInstructionMode}
-                onEditInstructionModeChange={onEditInstructionModeChange}
-                onChange={setComposerText}
-                onSubmit={onSubmitText}
-                onToggleRecording={onToggleRecording}
-                onCancelTurn={() => void cancelTurnForSession(currentSession)}
-                cancelBusy={cancelBusy}
-                available={isTauri}
-              />
-            </motion.div>
+            <MotionConfig transformPagePoint={composerPoint}>
+              <motion.div
+                className="qa-composer-position"
+                layout={reduced ? false : 'position'}
+                transition={{ type: 'spring', duration: 0.5, bounce: 0.15 }}
+              >
+                <QaComposer
+                  value={composerText}
+                  status={status}
+                  level={level}
+                  voiceActive={voiceActive}
+                  selectionPreview={selectionPreview}
+                  busy={inputBusy}
+                  micBusy={micBusy}
+                  embedded={embedded}
+                  editInstructionMode={editInstructionMode}
+                  onEditInstructionModeChange={onEditInstructionModeChange}
+                  onChange={setComposerText}
+                  onSubmit={onSubmitText}
+                  onToggleRecording={onToggleRecording}
+                  onCancelTurn={() => void cancelTurnForSession(currentSession)}
+                  cancelBusy={cancelBusy}
+                  available={isTauri}
+                />
+              </motion.div>
+            </MotionConfig>
           </div>
         </section>
       )}

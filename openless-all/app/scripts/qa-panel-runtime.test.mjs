@@ -217,6 +217,8 @@ function context(native = true, embedded = false) {
     useEffect: effect,
     useLayoutEffect: effect,
     useReducedMotion: () => true,
+    useCallback: (callback) => callback,
+    MotionConfig: 'motion-config',
     motion: { div: 'motion-div', span: 'motion-span' },
     AnimatePresence: 'animate-presence',
     useTranslation: () => ({ t: (k) => k }),
