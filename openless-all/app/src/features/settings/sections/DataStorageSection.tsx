@@ -1,3 +1,4 @@
+import { TextField } from '../../../ui/controls/TextField';
 // Retention, cleanup, and storage settings for history and context data.
 
 import { useTranslation } from 'react-i18next';
@@ -5,7 +6,6 @@ import { useHotkeySettings } from '../../../data/preferences';
 import { Card } from '../../../ui/layout/Card';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 import { SectionTitle } from '../../../ui/layout/SectionTitle';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 
 // Range limits: retention 0-365 days, context window 0-60 minutes (larger values are meaningless
 // for real conversation scenarios and just burn tokens).
@@ -52,34 +52,34 @@ export function DataStorageSection() {
     <Card>
       <SectionTitle>{t('settings.dataStorage.title')}</SectionTitle>
       <SettingRow label={t('settings.recording.historyRetentionLabel')}>
-        <input
+        <TextField
           type="number"
           min={0}
           max={365}
           value={prefs.historyRetentionDays}
           onChange={(e) => onHistoryRetentionChange(e.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+          style={{ width: 80, textAlign: 'right' }}
         />
       </SettingRow>
       <SettingRow label={t('settings.recording.historyMaxEntriesLabel')}>
-        <input
+        <TextField
           type="number"
           min={5}
           max={200}
           placeholder="200"
           value={prefs.historyMaxEntries ?? ''}
           onChange={(e) => onHistoryMaxEntriesChange(e.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+          style={{ width: 80, textAlign: 'right' }}
         />
       </SettingRow>
       <SettingRow label={t('settings.recording.polishContextWindowLabel')}>
-        <input
+        <TextField
           type="number"
           min={0}
           max={60}
           value={prefs.polishContextWindowMinutes}
           onChange={(e) => onPolishContextWindowChange(e.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+          style={{ width: 80, textAlign: 'right' }}
         />
       </SettingRow>
     </Card>

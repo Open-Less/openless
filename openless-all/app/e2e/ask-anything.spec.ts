@@ -74,7 +74,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
 }, info) => {
   await page.goto(fixture + '?qa');
   await page.locator('.ol-default-capsule').waitFor();
-  await expect(page.locator('input')).toHaveCount(0);
+  await expect(page.locator('.qa-prompt textarea')).toHaveCount(0);
   await emit(page, 'qa:state', {
     kind: 'recording',
     sessionId: 'ask-a',
@@ -83,7 +83,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
   });
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-recording-selection')).toContainText('selected source');
-  await expect(page.locator('#native-host')).toHaveCSS('width', '720px');
+  await expect(page.locator('#native-host')).toHaveCSS('width', '920px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'ask-a', messages: [] });
   await emit(page, 'qa:state', {
     kind: 'activity',
@@ -112,7 +112,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
   await expect(page.locator('.qa-assistant-message')).toContainText('最终回答');
   await expect(page.locator('.qa-thought')).toContainText('已思考');
   await expect(page.locator('.qa-follow-up')).toHaveCount(0);
-  await expect(page.locator('.qa-prompt input')).toBeVisible();
+  await expect(page.locator('.qa-prompt textarea')).toBeVisible();
   await expect(page.locator('.qa-prompt .qa-close')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('ask-result.png') });
 });
@@ -148,7 +148,7 @@ test('Stop cancels the current turn and retains the open conversation for a foll
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-assistant-message')).toContainText('first answer');
   await expect(page.getByText('draft answer')).toHaveCount(0);
-  await expect(page.locator('.qa-prompt input')).toBeEnabled();
+  await expect(page.locator('.qa-prompt textarea')).toBeEnabled();
   await expect(stop).toHaveCount(0);
 });
 
@@ -165,4 +165,172 @@ test('overview is restored and the Ask page remains without the added three-row 
   await expect(page.getByText('提问附加键', { exact: true })).toBeVisible();
   await expect(page.locator('.ol-recording-key-guide')).toHaveCount(0);
   await expect(page.getByText('保存历史', { exact: true })).toBeVisible();
+});
+
+test('the macOS prompt box preserves the draft through the voice chord and allows multiline text', async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' }),
+  );
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  const firstTurn = [
+    { role: 'user', content: 'First question' },
+    { role: 'assistant', content: 'First answer' },
+  ];
+  await emit(page, 'qa:state', { kind: 'answer', sessionId: 'first', messages: firstTurn });
+  const panel = page.locator('.qa-conversation');
+  await expect(panel).toHaveCSS('border-radius', '26px');
+  const close = panel.locator('.qa-close');
+  await expect(close).toHaveCSS('border-radius', '50%');
+  await expect(panel.locator('.qa-window-actions')).toHaveCSS('left', '10px');
+  const draft = panel.locator('textarea');
+  await draft.fill('typed');
+  await draft.press('Space');
+  await draft.press('Shift+Enter');
+  await draft.press('a');
+  const typed = 'typed \na';
+  await expect(draft).toHaveValue(typed);
+  await expect.poll(async () => (await draft.boundingBox())?.height ?? 0).toBeGreaterThan(40);
+
+  // WKWebView does not always expose Fn; the native hook consumes the chord first.
+  // When a browser reports it, the editor must also not insert a space.
+  const leakedChordPrevented = await draft.evaluate((editor) => {
+    const key = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+    Object.defineProperty(key, 'getModifierState', { value: (name: string) => name === 'Fn' });
+    return !editor.dispatchEvent(key);
+  });
+  expect(leakedChordPrevented).toBe(true);
+  await emit(page, 'qa:state', { kind: 'recording', sessionId: 'voice', messages: firstTurn });
+  await expect(draft).toHaveAttribute('readonly', '');
+  await expect(draft).toHaveAttribute('placeholder', '你正在进行语音输入');
+  await expect(panel.locator('.voice-waveform-label')).toHaveText('你正在进行语音输入');
+  await expect(draft).toHaveValue(typed);
+  await emit(page, 'qa:state', { kind: 'cancelled', sessionId: 'voice', messages: firstTurn });
+  await expect(draft).toBeEditable();
+  await expect(draft).toHaveValue(typed);
+  await draft.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.qaActions.at(-1)))
+    .toMatchObject({
+      command: 'qa_submit_text',
+      args: { text: typed, expectedSessionId: 'voice' },
+    });
+});
+
+test('the Windows conversation clips and scrolls streamed text, and opens live and final source links', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('ol.locale', 'en');
+    Object.defineProperty(navigator, 'platform', { value: 'Win32' });
+  });
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'recording', sessionId: 'search', messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const close = panel.locator('.qa-close');
+  await expect(panel).toHaveAttribute('data-platform', 'win');
+  await expect(panel.locator('.qa-window-actions')).toHaveCSS('right', '10px');
+  await expect(close).toHaveCSS('border-radius', '50%');
+  await expect(panel.locator('textarea')).toHaveAttribute(
+    'placeholder',
+    'You are using voice input',
+  );
+  await expect(panel).toHaveCSS('overflow', 'hidden');
+  await expect(panel).toHaveCSS('width', '920px');
+  await expect(panel).toHaveCSS('height', '800px');
+  const question = { role: 'user', content: 'What are the sources?' };
+  await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'search', messages: [question] });
+  const response = panel.locator('.qa-assistant-message');
+  await response.evaluate((element) => element.setAttribute('data-retained', 'yes'));
+  const firstChunk = 'Some streaming text.\n\n'.repeat(28);
+  const lastChunk = '\n\n[An inline source](https://example.org/a)';
+  await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'search', chunk: firstChunk });
+  const viewport = panel.locator('[data-slot=message-scroller-viewport]');
+  await expect
+    .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+    .toBeLessThan(2);
+  await expect(panel.locator('textarea')).toBeInViewport();
+  await viewport.hover();
+  await page.mouse.wheel(0, -420);
+  const jump = panel.getByRole('button', { name: 'Jump to latest' });
+  await expect(jump).toBeVisible();
+  await expect(jump).toHaveAttribute('data-active', 'true');
+  await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'search', chunk: lastChunk });
+  await expect(response.getByRole('link', { name: 'An inline source' })).toBeAttached();
+  expect(
+    await viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+  ).toBeGreaterThan(200);
+  await jump.click();
+  await expect
+    .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+    .toBeLessThan(2);
+  await response.getByRole('link', { name: 'An inline source' }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.externalLinks))
+    .toEqual(['https://example.org/a']);
+  await emit(page, 'qa:state', {
+    kind: 'answer',
+    sessionId: 'search',
+    messages: [
+      question,
+      {
+        role: 'assistant',
+        content: `${firstChunk}${lastChunk}\n\n[1](<https://example.org/a>) [2](<https://example.com/b>)`,
+      },
+    ],
+  });
+  await expect(response).toHaveAttribute('data-retained', 'yes');
+  const source = response.getByRole('link', { name: '2. example.com (example.com)' });
+  await source.click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.externalLinks))
+    .toEqual(['https://example.org/a', 'https://example.com/b']);
+});
+
+test('the welcome box docks on first send without remounting the editor', async ({ page }) => {
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'welcome', messages: [] });
+  await expect(page.locator('.qa-thought')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'answer', sessionId: 'welcome', messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const prompt = panel.locator('.qa-prompt');
+  const editor = prompt.locator('textarea');
+  await expect(panel.locator('.qa-welcome-title')).toBeVisible();
+  await expect(prompt).toHaveCSS('width', '560px');
+  await expect(prompt).toHaveCSS('height', '102px');
+  await expect
+    .poll(async () => {
+      const frame = (await panel.boundingBox())!;
+      const box = (await prompt.boundingBox())!;
+      return Math.abs(box.y + box.height / 2 - frame.y - frame.height / 2);
+    })
+    .toBeLessThan(40);
+  await editor.fill(Array(10).fill('Long draft').join('\n'));
+  await expect(editor).toHaveCSS('height', '192px');
+  await editor.fill('A first question');
+  await editor.evaluate((el) => el.setAttribute('data-original-editor', 'yes'));
+  await editor.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.qaActions.length)).toBe(1);
+  await emit(page, 'qa:state', {
+    kind: 'thinking',
+    sessionId: 'welcome',
+    messages: [{ role: 'user', content: 'A first question' }],
+  });
+  await expect(panel.locator('.qa-welcome-title')).toHaveCount(0);
+  await expect(editor).toHaveAttribute('data-original-editor', 'yes');
+  await expect(editor).toBeFocused();
+  await expect(editor).toBeEditable();
+  await editor.fill('Another draft');
+  await expect(editor).toHaveValue('Another draft');
+  await expect
+    .poll(async () => {
+      const frame = (await panel.boundingBox())!;
+      const box = (await prompt.boundingBox())!;
+      return Math.abs(frame.y + frame.height - box.y - box.height);
+    })
+    .toBeLessThan(30);
 });

@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictionaryEntry } from '../../api/contracts';
@@ -254,7 +255,7 @@ export function Vocab() {
           closing={editMount.closing}
           onClose={() => setEditingEntry(null)}
         >
-          <input
+          <TextField
             autoFocus
             value={editDraft}
             onChange={(e) => {
@@ -267,19 +268,7 @@ export function Vocab() {
                 void saveEdit();
               }
             }}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              height: 40,
-              padding: '0 12px',
-              border: '1.5px solid var(--ol-ink)',
-              borderRadius: 'var(--ol-r-md)',
-              fontSize: 14,
-              fontFamily: 'inherit',
-              outline: 'none',
-              background: 'var(--ol-surface)',
-              color: 'var(--ol-ink)',
-            }}
+            style={{ height: 40 }}
           />
           {editError && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-red, #ef4444)' }}>
@@ -306,7 +295,7 @@ export function Vocab() {
           onClose={() => setNewWordOpen(false)}
         >
           <div style={{ display: 'flex', gap: 8 }}>
-            <input
+            <TextField
               autoFocus
               value={newWordDraft}
               onChange={(e) => setNewWordDraft(e.target.value)}
@@ -317,19 +306,7 @@ export function Vocab() {
                 }
               }}
               placeholder={t('vocab.newWordInputPlaceholder')}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: 38,
-                padding: '0 12px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 'var(--ol-radius)',
-                fontSize: 13.5,
-                fontFamily: 'inherit',
-                outline: 'none',
-                background: 'var(--ol-surface-2)',
-                color: 'var(--ol-ink)',
-              }}
+              style={{ height: 38, flex: 1 }}
             />
             <Btn
               variant="primary"

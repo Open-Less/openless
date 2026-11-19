@@ -1,3 +1,4 @@
+import { TextField } from '../../../ui/controls/TextField';
 // Content page for each sidebar tab in the settings dialog. Each tab is a vertical stack of section cards;
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
@@ -47,7 +48,6 @@ import { useHotkeySettings } from '../../../data/preferences';
 import { emitSaved } from '../../../lib/savedEvent';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { ExperimentalSectionTitle } from '../../../ui/layout/ExperimentalSectionTitle';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 import { Segmented } from '../../../components/ui/Segmented';
 import { Card } from '../../../ui/layout/Card';
 import { TransitionViewport } from '../../../components/ui/TransitionViewport';
@@ -597,13 +597,13 @@ function CursorContextSection() {
         label={t('settings.recording.polishSkipMaxCharsLabel')}
         desc={t('settings.recording.polishSkipMaxCharsDesc')}
       >
-        <input
+        <TextField
           type="number"
           min={0}
           max={50}
           value={prefs.polishSkipMaxChars}
           onChange={(event) => onPolishSkipMaxCharsChange(event.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+          style={{ width: 80, textAlign: 'right' }}
         />
       </SettingRow>
     </Card>

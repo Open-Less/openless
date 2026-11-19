@@ -52,6 +52,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { Segmented } from '../../components/ui/Segmented';
 import { SectionTitle } from '../../ui/layout/SectionTitle';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
+import { TextField } from '../../ui/controls/TextField';
 import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { getRuntimeOS, type OS } from '../../runtime/environment';
@@ -672,7 +673,7 @@ export function RecordingInputSection({
                     />
                   </SettingRow>
                   {prefs.voiceActivationWakeEnabled && (
-                    <input
+                    <TextField
                       aria-label={t('settings.recording.voiceActivationWakePhrase')}
                       defaultValue={prefs.voiceActivationWakePhrase ?? '开始语音录入'}
                       onBlur={(event) =>
@@ -681,7 +682,7 @@ export function RecordingInputSection({
                           voiceActivationWakePhrase: event.currentTarget.value,
                         })
                       }
-                      style={{ ...inputStyle, width: '100%', margin: '2px 0 8px' }}
+                      style={{ margin: '2px 0 8px' }}
                     />
                   )}
                   <SettingRow label={t('settings.recording.voiceActivationFinishEnabled')}>
@@ -693,7 +694,7 @@ export function RecordingInputSection({
                     />
                   </SettingRow>
                   {prefs.voiceActivationFinishEnabled && (
-                    <input
+                    <TextField
                       aria-label={t('settings.recording.voiceActivationFinishPhrase')}
                       defaultValue={prefs.voiceActivationFinishPhrase ?? '完成语音录入'}
                       onBlur={(event) =>
@@ -702,7 +703,7 @@ export function RecordingInputSection({
                           voiceActivationFinishPhrase: event.currentTarget.value,
                         })
                       }
-                      style={{ ...inputStyle, width: '100%', margin: '2px 0 8px' }}
+                      style={{ margin: '2px 0 8px' }}
                     />
                   )}
                   <SettingRow label={t('settings.recording.voiceActivationTimeoutEnabled')}>
@@ -714,7 +715,7 @@ export function RecordingInputSection({
                     />
                   </SettingRow>
                   {prefs.voiceActivationTimeoutEnabled && (
-                    <input
+                    <TextField
                       type="number"
                       min={5}
                       max={300}
@@ -729,7 +730,7 @@ export function RecordingInputSection({
                           ),
                         })
                       }
-                      style={{ ...inputStyle, width: 90, marginTop: 2 }}
+                      style={{ width: 90, marginTop: 2 }}
                     />
                   )}
                 </div>

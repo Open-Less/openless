@@ -24,6 +24,8 @@ compile_error!(
 );
 
 mod android;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod activity_app_icons;
 mod asr;
 mod audio_mute;
 #[cfg(test)]
@@ -49,6 +51,8 @@ mod native_audio_cue;
 #[cfg(not(mobile))]
 mod native_capsule;
 mod qa_adapter;
+mod qa_window_geometry;
+use qa_window_geometry::{resize_qa_frame, QA_WINDOW_BOTTOM_INSET, QA_WINDOW_HEIGHT, QA_WINDOW_WIDTH};
 mod recording_companion;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
@@ -318,6 +322,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::clear_history,
             commands::get_activity_stats,
             commands::get_activity_apps,
+            commands::get_activity_app_icons,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -627,6 +632,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
             $crate::commands::get_activity_apps,
+            $crate::commands::get_activity_app_icons,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -2316,18 +2322,6 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
-/// QA records through the shared capsule and keeps its separate answer card open.
-const QA_WINDOW_WIDTH: f64 = 480.0;
-const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 720.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 380.0;
-/// Reserve room for the independent recording capsule and its context badge.
-const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
-/// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
-const QA_WINDOW_EXPANDED_BOTTOM_INSET: f64 = 132.0;
-const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
-/// Bottom margin reserved for the macOS Dock (same source as the capsule).
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct LogicalMonitorFrame {
     x: f64,
@@ -2870,29 +2864,6 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     Ok(())
 }
 
-// Preserve a dragged window's centre and baseline; repeated result events must not drift.
-fn qa_resize_origin(
-    x: f64,
-    y: f64,
-    old_width: f64,
-    old_height: f64,
-    width: f64,
-    height: f64,
-    was_expanded: bool,
-    expanded: bool,
-) -> (f64, f64) {
-    let lift = if expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 }
-        - if was_expanded {
-            QA_RESULT_BOTTOM_LIFT
-        } else {
-            0.0
-        };
-    (
-        x + (old_width - width) / 2.0,
-        y + old_height - height - lift,
-    )
-}
-
 /// Called on the native main thread by the restricted QA command. The compact
 /// state has a genuinely small native frame, so hidden content cannot eat clicks.
 pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
@@ -2903,11 +2874,10 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .get_webview_window("qa")
         .ok_or_else(|| "qa_window_unavailable".to_string())?;
     let area = chat_window_work_area(&window, false).map_err(|_| "qa_geometry_unavailable")?;
-    let scale = area.map(|(_, scale)| scale).unwrap_or(
-        window
-            .scale_factor()
-            .map_err(|_| "qa_geometry_unavailable")?,
-    );
+    let scale = match area {
+        Some((_, scale)) => scale,
+        None => window.scale_factor().map_err(|_| "qa_geometry_unavailable")?,
+    };
     let position = window
         .inner_position()
         .map_err(|_| "qa_geometry_unavailable")?
@@ -2916,56 +2886,26 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .inner_size()
         .map_err(|_| "qa_geometry_unavailable")?
         .to_logical::<f64>(scale);
-    let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
-    let mut width = if expanded {
-        QA_WINDOW_EXPANDED_WIDTH
-    } else {
-        QA_WINDOW_WIDTH
-    };
-    let mut height = if expanded {
-        QA_WINDOW_EXPANDED_HEIGHT
-    } else {
-        QA_WINDOW_HEIGHT
-    };
-    if let Some((frame, _)) = area {
-        width = width.min((frame.width - 32.0).max(240.0));
-        height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
-    }
-    let (mut x, mut y) = qa_resize_origin(
-        position.x,
-        position.y,
-        current_size.width,
-        current_size.height,
-        width,
-        height,
-        was_expanded,
+    let frame = resize_qa_frame(
+        LogicalMonitorFrame {
+            x: position.x,
+            y: position.y,
+            width: current_size.width,
+            height: current_size.height,
+        },
+        area.map(|(frame, _)| frame),
         expanded,
-    );
-    if let Some((frame, _)) = area {
-        x = x.clamp(
-            frame.x + 16.0,
-            (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
-        );
-        let bottom_inset = if expanded {
-            QA_WINDOW_EXPANDED_BOTTOM_INSET
-        } else {
-            QA_WINDOW_BOTTOM_INSET
-        };
-        y = y.clamp(
-            frame.y + 32.0,
-            (frame.y + frame.height - height - bottom_inset).max(frame.y + 32.0),
-        );
-    }
+    )?;
     window
         .set_position(tauri::PhysicalPosition::new(
-            (x * scale).round() as i32,
-            (y * scale).round() as i32,
+            (frame.x * scale).round() as i32,
+            (frame.y * scale).round() as i32,
         ))
         .map_err(|_| "qa_position_failed")?;
     window
         .set_size(tauri::PhysicalSize::new(
-            (width * scale).round() as u32,
-            (height * scale).round() as u32,
+            (frame.width * scale).round() as u32,
+            (frame.height * scale).round() as u32,
         ))
         .map_err(|_| "qa_resize_failed")?;
     Ok(())
@@ -4284,21 +4224,6 @@ mod tests {
     #[test]
     fn capsule_visual_height_keeps_the_qa_anchor_reference() {
         assert_eq!(capsule_visual_height(true), 140.0);
-    }
-
-    #[test]
-    fn qa_resize_preserves_centre_baseline_and_user_position() {
-        let expanded =
-            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 720.0, 380.0, false, true);
-        assert_eq!(expanded, (-820.0, 360.0));
-        assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 720.0, 380.0, true, true),
-            expanded
-        );
-        assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 480.0, 80.0, true, false),
-            (-700.0, 700.0)
-        );
     }
 
     #[test]

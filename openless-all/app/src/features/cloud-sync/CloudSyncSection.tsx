@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { NotificationHandle } from '../../api/interaction';
@@ -242,6 +243,8 @@ export function CustomSyncServerSection() {
       window.clearInterval(timer);
     };
   }, [status?.syncState]);
+  const tokenId = useId();
+  const originId = useId();
   const working = busy || loading || status?.syncState === 'syncing';
   const save = () => {
     if (saving.current || working || !prefs) return;
@@ -274,15 +277,6 @@ export function CustomSyncServerSection() {
         if (alive.current) setBusy(false);
       });
   };
-  const inputStyle = {
-    width: '100%',
-    boxSizing: 'border-box' as const,
-    border: '1px solid var(--ol-line-strong)',
-    borderRadius: 'var(--ol-r-md)',
-    background: 'var(--ol-control-solid)',
-    color: 'var(--ol-ink)',
-    padding: '10px 12px',
-  };
   return (
     <Card>
       <div
@@ -291,28 +285,29 @@ export function CustomSyncServerSection() {
       >
         <strong>{t('cloudSyncE2ee.customServerTitle')}</strong>
         <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.customServerHint')}</p>
-        <label>
-          {t('cloudSyncE2ee.customServerOrigin')}
-          <input
+        <div className="ol-sync-form-field">
+          <label htmlFor={originId}>{t('cloudSyncE2ee.customServerOrigin')}</label>
+          <TextField
+            id={originId}
             type="text"
+
             value={origin}
             onChange={(event) => setOrigin(event.currentTarget.value)}
             placeholder="https://sync.example.com/"
             disabled={working}
-            style={inputStyle}
           />
-        </label>
-        <label>
-          {t('cloudSyncE2ee.customServerToken')}
-          <input
+        </div>
+        <div className="ol-sync-form-field">
+          <label htmlFor={tokenId}>{t('cloudSyncE2ee.customServerToken')}</label>
+          <TextField
+            id={tokenId}
             type="password"
             value={token}
             onChange={(event) => setToken(event.currentTarget.value)}
             autoComplete="off"
             disabled={working}
-            style={inputStyle}
           />
-        </label>
+        </div>
         <Btn size="sm" variant="blue" disabled={working || !prefs || !status} onClick={save}>
           {t('cloudSyncE2ee.customServerSave')}
         </Btn>
@@ -503,15 +498,18 @@ export function CloudSyncSection() {
       try {
         if (isTauriHost()) {
           const subscriptions = [
-            () => listenEncryptedSyncStateChanges((event) => {
-              if (!disposed) eventsRef.current.state(event);
-            }),
-            () => listenEncryptedSyncConflicts((event) => {
-              if (!disposed) eventsRef.current.conflict(event);
-            }),
-            () => listenEncryptedSyncRestores((event) => {
-              if (!disposed) eventsRef.current.restored(event);
-            }),
+            () =>
+              listenEncryptedSyncStateChanges((event) => {
+                if (!disposed) eventsRef.current.state(event);
+              }),
+            () =>
+              listenEncryptedSyncConflicts((event) => {
+                if (!disposed) eventsRef.current.conflict(event);
+              }),
+            () =>
+              listenEncryptedSyncRestores((event) => {
+                if (!disposed) eventsRef.current.restored(event);
+              }),
           ];
           for (const subscribe of subscriptions) {
             const stop = await subscribe();
@@ -1130,7 +1128,9 @@ export function CloudSyncSection() {
                   : t(`cloudSyncE2ee.${dialogTitle}`)
               }
               descriptionId={
-                dialog.kind === 'consent' || dialog.kind === 'create' ? dialogDescriptionId : undefined
+                dialog.kind === 'consent' || dialog.kind === 'create'
+                  ? dialogDescriptionId
+                  : undefined
               }
               busy={working}
               onClose={closeDialog}
@@ -1408,7 +1408,11 @@ export function PasswordForm({
           />
           {creating && (
             <SyncPasswordField
-              label={t(mode === 'create' ? 'cloudSyncE2ee.confirmSyncPassword' : 'cloudSyncE2ee.confirmPassword')}
+              label={t(
+                mode === 'create'
+                  ? 'cloudSyncE2ee.confirmSyncPassword'
+                  : 'cloudSyncE2ee.confirmPassword',
+              )}
               value={confirmation}
               onChange={setConfirmation}
               autoComplete={preview ? 'off' : 'new-password'}
