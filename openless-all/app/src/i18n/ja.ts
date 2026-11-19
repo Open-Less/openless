@@ -1174,7 +1174,7 @@ export const ja: typeof zhCN = {
     },
     history: {
       title: '履歴を保存',
-      desc: '有効時、Q&A 記録をローカルに保存。デフォルト OFF。',
+      desc: '「何でも質問」の履歴をこの端末に保存します。既定ではオフです。',
     },
     howto: {
       title: '使い方',

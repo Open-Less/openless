@@ -4,8 +4,6 @@ import { readFile } from 'node:fs/promises';
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const [
   types,
-  qaPanel,
-  qaApi,
   inputApi,
   remoteIpc,
   remoteStatusController,
@@ -48,8 +46,6 @@ const [
   mobileSelection,
 ] = await Promise.all([
   read('src/lib/types.ts'),
-  read('src/features/qa/QaPanel.tsx'),
-  read('src/api/qa.ts'),
   read('src/api/input.ts'),
   read('src/lib/ipc/remote-server.ts'),
   read('src/features/remote-input/useRemoteInputStatus.ts'),
@@ -97,7 +93,6 @@ const [
 
 for (const kind of ['awaiting_approval', 'cancelled', 'error']) {
   assert.match(types, new RegExp(`\\| '${kind}'`), `QaStateKind must retain ${kind}`);
-  assert.match(qaPanel, new RegExp(`case '${kind}':`), `QaPanel must handle ${kind}`);
 }
 for (const field of [
   'sessionId',
@@ -112,13 +107,6 @@ for (const field of [
 ]) {
   assert.match(types, new RegExp(`\\b${field}\\?`), `QaStatePayload is missing ${field}`);
 }
-assert.match(
-  qaApi,
-  /listenTauriEvent<QaStatePayload>\('qa:state'/,
-  'QA API must type the state event',
-);
-assert.match(qaPanel, /listenQaStateChanges\(/, 'QA must subscribe through its domain API');
-
 const remoteStatus = remoteIpc.match(/export interface RemoteInputStatus \{([\s\S]*?)\n\}/)?.[1];
 assert.ok(remoteStatus, 'RemoteInputStatus interface must exist');
 const remoteFields = [...remoteStatus.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]);

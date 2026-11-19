@@ -1136,7 +1136,7 @@ export const zhTW: typeof zhCN = {
     },
     history: {
       title: '儲存歷史',
-      desc: '開啟後在本地儲存問答記錄，預設關閉。',
+      desc: '開啟後在此裝置上儲存「隨便問」的歷史記錄，預設關閉。',
     },
     howto: {
       title: '使用方法',

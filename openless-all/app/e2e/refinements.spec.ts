@@ -215,7 +215,6 @@ const styleDestinations = [
 ] as const;
 const toolDestinations = [
   ['纠正规则', 'corrections'],
-  ['随便问', 'selectionAsk'],
   ['翻译', 'translation'],
   ['速记', 'quickNote'],
 ] as const;
@@ -265,7 +264,7 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const tools = nav.getByRole('button', { name: '工具', exact: true });
       await tools.click();
       await expect(tools).toHaveAttribute('aria-expanded', 'true');
-      await expect(nav.getByRole('button', { name: /^(纠正规则|随便问|翻译|速记)$/ })).toHaveText(
+      await expect(nav.getByRole('button', { name: /^(纠正规则|翻译|速记)$/ })).toHaveText(
         toolDestinations.map(([name]) => name),
       );
       for (const [name, id] of toolDestinations) await visit(nav, name, id);

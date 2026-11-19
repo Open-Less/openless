@@ -1188,7 +1188,7 @@ export const en: typeof zhCN = {
     },
     history: {
       title: 'Save history',
-      desc: 'Save Q&A records locally when enabled. Off by default.',
+      desc: 'Save Ask Anything history on this device. Off by default.',
     },
     howto: {
       title: 'How to use',

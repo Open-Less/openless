@@ -39,6 +39,7 @@ import { BetaChannelSection } from '../sections/BetaChannelSection';
 import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
+import { AskHistorySection } from '../sections/AskHistorySection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
 import type { PipelineMode, PlatformCapabilities, PlatformKind } from '../../../api/contracts';
@@ -102,6 +103,7 @@ export function GeneralTab({
             surface="microphone"
           />
         )}
+        {activePage === 'askHistory' && <AskHistorySection />}
         {activePage === 'capsule' && <RecordingInputSection forcedOs={os} surface="capsule" />}
         {activePage === 'textInput' && (
           <>

@@ -163,26 +163,6 @@ export {
   isWaylandCliMode,
 } from './devices';
 
-// qa
-export {
-  getQaHotkeyLabel,
-  setQaHotkey,
-  qaWindowDismiss,
-  qaWindowSetExpanded,
-  qaGetSnapshot,
-  qaToggleRecording,
-  qaSubmitText,
-  qaSetEditInstructionMode,
-  qaCancelTurn,
-  qaStopRecording,
-} from './qa';
-
-export {
-  getSelectionPolishPreview,
-  confirmSelectionPolishPreview,
-  cancelSelectionPolishPreview,
-} from './selection-polish-preview';
-
 export {
   getSelectionVoiceIntentPrompt,
   confirmSelectionVoiceIntentPrompt,

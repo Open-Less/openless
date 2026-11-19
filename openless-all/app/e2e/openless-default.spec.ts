@@ -200,18 +200,3 @@ test('rapid page choices settle immediately and reduced motion leaves no animati
     })),
   ).toEqual({ inert: false, animations: 0 });
 });
-
-test('quick follow-up uses white surfaces and blue accents even in dark mode', async ({
-  page,
-}, info) => {
-  await page.goto('/?window=qa');
-  const shell = page.locator('.qa-capsule-shell');
-  await expect(shell).toBeVisible();
-  expect(
-    await shell.evaluate((el) => ({
-      paper: getComputedStyle(el).getPropertyValue('--qa-paper').trim(),
-      accent: getComputedStyle(el).getPropertyValue('--qa-accent').trim(),
-    })),
-  ).toEqual({ paper: '#fff', accent: '#2563eb' });
-  await page.screenshot({ path: info.outputPath('quick-followup.png'), animations: 'disabled' });
-});

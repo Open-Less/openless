@@ -1204,7 +1204,7 @@ export const es: typeof zhCN = {
     },
     history: {
       title: 'Guardar historial',
-      desc: 'Guarda las conversaciones en este dispositivo. Desactivado de forma predeterminada.',
+      desc: 'Guarda el historial de Preguntar en este dispositivo. Desactivado de forma predeterminada.',
     },
     howto: {
       title: 'Cómo usarlo',

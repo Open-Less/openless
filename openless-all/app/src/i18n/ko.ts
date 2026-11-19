@@ -1166,7 +1166,7 @@ export const ko: typeof zhCN = {
     },
     history: {
       title: '기록 저장',
-      desc: '활성화 시 Q&A 기록을 로컬에 저장. 기본 OFF.',
+      desc: '이 기기에 ‘무엇이든 질문’ 기록을 저장합니다. 기본값은 꺼짐입니다.',
     },
     howto: {
       title: '사용 방법',

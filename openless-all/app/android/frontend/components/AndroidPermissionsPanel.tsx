@@ -621,7 +621,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                           up: 'cancel',
                           down: 'none',
                           left: 'translation',
-                          right: 'qa',
+                          right: 'none',
                         }),
                         [direction]: action,
                       }));
@@ -635,7 +635,6 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                         'translation',
                         'style_pack',
                         'cancel',
-                        'qa',
                         'voice_edit',
                       ] as const
                     ).map((action) => (

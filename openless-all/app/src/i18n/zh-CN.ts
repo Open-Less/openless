@@ -1134,7 +1134,7 @@ export const zhCN = {
     },
     history: {
       title: '保存历史',
-      desc: '开启后在本地保存问答记录，默认关闭。',
+      desc: '开启后在此设备上保存「随便问」的历史记录，默认关闭。',
     },
     howto: {
       title: '使用方法',

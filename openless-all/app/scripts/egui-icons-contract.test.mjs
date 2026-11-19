@@ -141,12 +141,12 @@ const desktopEntries = propertyValue(desktopTools, 'children');
 assert.ok(desktopEntries && ts.isArrayLiteralExpression(desktopEntries), 'Tauri desktop tools');
 assert.deepEqual(
   desktopEntries.elements.map((item) => stringProperty(item, 'id')),
-  ['corrections', 'selectionAsk', 'translation', 'quickNote'],
+  ['corrections', 'translation', 'quickNote'],
   'Tauri sidebar tools order',
 );
 assert.deepEqual(
   navArray('MORE_TABS').map((item) => stringProperty(item, 'id')),
-  ['vocab', 'translation', 'selectionAsk', 'quickNote', 'corrections'],
+  ['vocab', 'translation', 'quickNote', 'corrections'],
   'Tauri compact More sheet order',
 );
 console.log('egui SVG outlines match Tauri; sidebar and compact navigation orders verified');

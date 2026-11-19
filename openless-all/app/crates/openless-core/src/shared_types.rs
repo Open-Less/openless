@@ -170,7 +170,9 @@ pub use crate::types::HistoryInsertStatus as InsertStatus;
 #[serde(rename_all = "camelCase")]
 pub enum SelectionPolishOutputMode {
     #[default]
+    #[serde(alias = "previewConfirm")]
     DirectReplace,
+    #[serde(skip_deserializing)]
     PreviewConfirm,
 }
 
@@ -1560,7 +1562,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                             AndroidOverlayGestureAction::StylePack
                         }
                     },
-                    right: AndroidOverlayGestureAction::Qa,
+                    right: AndroidOverlayGestureAction::None,
                 });
 
         Ok(Self {

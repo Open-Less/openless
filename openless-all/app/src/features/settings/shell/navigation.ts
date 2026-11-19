@@ -53,6 +53,12 @@ export const GENERAL_PAGES = [
     descriptionKey: 'settings.generalPages.recordingDesc',
   },
   {
+    id: 'askHistory',
+    icon: 'history',
+    titleKey: 'selectionAsk.history.title',
+    descriptionKey: 'selectionAsk.history.desc',
+  },
+  {
     id: 'capsule',
     icon: 'layout',
     titleKey: 'settings.generalPages.capsuleTitle',

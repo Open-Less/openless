@@ -1212,7 +1212,7 @@ export const de: typeof zhCN = {
     },
     history: {
       title: 'Verlauf speichern',
-      desc: 'Speichert Fragen und Antworten lokal. Standardmäßig deaktiviert.',
+      desc: 'Den Verlauf von Nachfragen auf diesem Gerät speichern. Standardmäßig deaktiviert.',
     },
     howto: {
       title: 'So funktioniert es',

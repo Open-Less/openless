@@ -5705,23 +5705,16 @@ impl HostActions for TauriHostActions {
         match action {
             HostAction::ShowMain | HostAction::FocusMain => crate::show_main_window(&app),
             HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
-            HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
-            HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
+            HostAction::ShowSelectionPreview => {
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "Selection polish preview is unavailable"));
+            }
+            HostAction::HideSelectionPreview => {}
             HostAction::ShowQa => {
-                let was_visible = self.qa_context.is_panel_visible()
-                    && app
-                        .get_webview_window("qa")
-                        .is_some_and(|window| window.is_visible().unwrap_or(false));
-                self.qa_context.set_voice_surface_active(true);
-                self.qa_context.prepare_show();
-                if !was_visible {
-                    crate::show_qa_window(&app, "idle");
-                }
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "Ask is unavailable"));
             }
             HostAction::HideQa => {
                 self.qa_context.set_voice_surface_active(false);
                 self.qa_context.clear();
-                crate::hide_qa_window(&app);
             }
             HostAction::ShowLessComputer => {
                 crate::show_less_computer_window(&app).map_err(map_tauri_error)?;

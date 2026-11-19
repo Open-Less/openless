@@ -658,7 +658,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             "quick_note",
             "translation",
             "style_pack" -> applyVisualState(OverlayVisualState.Processing)
-            "qa",
             "voice_edit" -> applyVisualState(OverlayVisualState.Processing)
             "cancel" -> applyVisualState(OverlayVisualState.Error)
             else -> Unit
@@ -674,7 +673,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 switchStylePackFromOverlay()
                 if (recording) stopRecordingFromOverlay()
             }
-            "qa" -> finalizeQaFromOverlay()
             "voice_edit" -> finalizeVoiceEditFromOverlay()
             "cancel" -> cancelRecordingFromOverlay(direction)
             else -> Unit
@@ -708,22 +706,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             Log.w(TAG, "switch style pack bridge unavailable", error)
             applyVisualState(OverlayVisualState.Error)
             showToast("语音服务未就绪，请打开 OpenLess 后重试")
-        }
-    }
-
-    private fun finalizeQaFromOverlay() {
-        try {
-            Log.i(TAG, "finalize QA from overlay")
-            OpenLessNative.nativeFinalizeQaFromOverlay()
-            recording = false
-            processing = true
-            setArmed(false)
-            applyVisualState(OverlayVisualState.Processing)
-        } catch (error: Throwable) {
-            Log.w(TAG, "finalize QA bridge unavailable", error)
-            processing = false
-            applyVisualState(OverlayVisualState.Error)
-            showToast("问答服务未就绪，请打开 OpenLess 后重试")
         }
     }
 

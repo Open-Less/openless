@@ -1,4 +1,4 @@
-export type AndroidPanelKind = 'qa' | 'voice-edit';
+export type AndroidPanelKind = 'voice-edit';
 export interface AndroidPanelView {
   kind: AndroidPanelKind | null;
   epoch: number;

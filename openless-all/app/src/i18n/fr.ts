@@ -1221,7 +1221,7 @@ export const fr: typeof zhCN = {
     },
     history: {
       title: 'Conserver l’historique',
-      desc: 'Enregistre les conversations sur cet appareil. Désactivé par défaut.',
+      desc: 'Enregistre l’historique des questions sur cet appareil. Désactivé par défaut.',
     },
     howto: {
       title: 'Mode d’emploi',
