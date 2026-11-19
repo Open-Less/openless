@@ -16,26 +16,33 @@
 .qa-input-stage {
   position: relative;
   min-width: 0;
-  margin: 15px 16px 0;
+  margin: 16px 16px 0;
   font-size: 15px;
   line-height: 24px;
 }
-/* Size the editor from its draft without a frame of collapsed height or a layout read. */
-.qa-input-stage::after,
-.qa-input-stage textarea {
-  display: block;
-  min-height: 24px;
-  max-height: 72px;
-  max-height: clamp(24px, 19cqh, 96px);
+/* A hidden replica measures wrapping without mutating the active textarea or its caret. */
+.qa-input-measure,
+.qa-input-stage textarea,
+.qa-input-flight {
+  margin: 0;
   padding: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
+  letter-spacing: inherit;
 }
-.qa-input-stage::after {
-  content: attr(data-value) ' ';
+.qa-input-measure {
+  position: absolute;
+  inset: 0 0 auto;
+  min-height: 24px;
+  max-height: 72px;
+  max-height: clamp(24px, 19cqh, 96px);
   overflow: hidden;
   visibility: hidden;
+}
+.qa-input-field {
+  position: relative;
+  overflow: hidden;
 }
 .qa-input-stage textarea {
   position: absolute;
@@ -52,8 +59,28 @@
   scrollbar-width: thin;
 }
 .qa-input-stage textarea::placeholder {
+  color: transparent;
+}
+.qa-input-placeholder {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--qa-prompt-muted);
-  opacity: 1;
+  pointer-events: none;
+}
+.qa-input-flight {
+  position: absolute;
+  z-index: 1;
+  inset: -24px 0 auto;
+  padding-top: 24px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.qa-input-flight span {
+  display: inline-block;
+  max-width: 100%;
 }
 .qa-prompt-tools,
 .qa-prompt-actions {
@@ -112,6 +139,7 @@
 }
 .qa-prompt .qa-send,
 .qa-prompt .qa-send:not(:disabled):hover {
+  position: relative;
   width: 36px;
   height: 36px;
   background: var(--qa-ink);
@@ -120,6 +148,9 @@
 .qa-prompt .qa-send:disabled {
   background: var(--qa-wash);
   color: var(--qa-prompt-muted);
+}
+.qa-prompt .qa-send.is-stop {
+  box-shadow: 0 0 0 2px var(--qa-wash);
 }
 .qa-prompt :is(.qa-send.is-stop, .qa-mic.is-recording) svg {
   width: 12px;

@@ -3,6 +3,8 @@
 // take the next voice turn or a typed message.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { motion } from 'framer-motion';
+import { useReducedMotion } from '../../lib/motion';
 import { CheckIcon, CopyIcon, XIcon } from 'lucide-react';
 import {
   MessageScroller,
@@ -60,6 +62,7 @@ export interface QaPanelProps {
 export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: QaPanelProps = {}) {
   const { t } = useTranslation();
   const modalActive = useModalActive();
+  const reduced = useReducedMotion();
   const pipelineMode = useQaPipeline();
   const isTauri = isTauriHost();
   const [messages, setMessages] = useState<QaChatMessage[]>([]);
@@ -735,6 +738,8 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     return () => window.removeEventListener('keydown', onKey);
   }, [embedded, modalActive, onRequestDismiss]);
 
+  const showWelcome =
+    !submitBusy && messages.length === 0 && status !== 'thinking' && status !== 'error';
   const lastRole = messages[messages.length - 1]?.role;
   const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
   const firstQuestion = messages.find((message) => message.role === 'user');
@@ -914,11 +919,14 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
       {expanded && (
         <section
           className="qa-answer-panel qa-conversation"
+          data-welcome={showWelcome ? 'true' : undefined}
           data-platform={getRuntimeOS()}
           aria-label={t('capsule.asking')}
         >
           <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
-            <h1 data-tauri-drag-region={embedded ? undefined : true}>{heading}</h1>
+            {!showWelcome && (
+              <h1 data-tauri-drag-region={embedded ? undefined : true}>{heading}</h1>
+            )}
             <div className="qa-window-actions">
               <button
                 type="button"
@@ -954,17 +962,6 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
                         <ErrorContent error={errorMsg} t={t} />
                       </MessageScrollerItem>
                     )}
-                    {messages.length === 0 &&
-                      !streamingAnswer &&
-                      status !== 'error' &&
-                      status !== 'thinking' && (
-                        <div className="qa-empty-answer">
-                          <p>{t('qa.emptyTitle')}</p>
-                          {status === 'idle' && (
-                            <span>{submitBusy ? t('qa.compact.sending') : t('qa.emptyDesc')}</span>
-                          )}
-                        </div>
-                      )}
                   </MessageScrollerContent>
                 </MessageScrollerViewport>
                 <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')}>
@@ -996,24 +993,31 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
             </div>
           )}
           <div className="qa-composer-dock">
-            <QaComposer
-              value={composerText}
-              status={status}
-              level={level}
-              voiceActive={voiceActive}
-              selectionPreview={selectionPreview}
-              busy={inputBusy}
-              micBusy={micBusy}
-              embedded={embedded}
-              editInstructionMode={editInstructionMode}
-              onEditInstructionModeChange={onEditInstructionModeChange}
-              onChange={setComposerText}
-              onSubmit={onSubmitText}
-              onToggleRecording={onToggleRecording}
-              onCancelTurn={() => void cancelTurnForSession(currentSession)}
-              cancelBusy={cancelBusy}
-              available={isTauri}
-            />
+            {showWelcome && <h1 className="qa-welcome-title">{t('qa.emptyTitle')}</h1>}
+            <motion.div
+              className="qa-composer-position"
+              layout={reduced ? false : 'position'}
+              transition={{ type: 'spring', duration: 0.5, bounce: 0.15 }}
+            >
+              <QaComposer
+                value={composerText}
+                status={status}
+                level={level}
+                voiceActive={voiceActive}
+                selectionPreview={selectionPreview}
+                busy={inputBusy}
+                micBusy={micBusy}
+                embedded={embedded}
+                editInstructionMode={editInstructionMode}
+                onEditInstructionModeChange={onEditInstructionModeChange}
+                onChange={setComposerText}
+                onSubmit={onSubmitText}
+                onToggleRecording={onToggleRecording}
+                onCancelTurn={() => void cancelTurnForSession(currentSession)}
+                cancelBusy={cancelBusy}
+                available={isTauri}
+              />
+            </motion.div>
           </div>
         </section>
       )}

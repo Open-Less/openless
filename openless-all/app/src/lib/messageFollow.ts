@@ -5,10 +5,14 @@ export function installMessageFollow(root: HTMLElement) {
   if (!viewport || !content) return () => {};
   let following = true;
   let touchY: number | undefined;
+  let scrollbarPress = false;
+  let lastScrollTop = viewport.scrollTop;
   let frame = 0;
   const distance = () => viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
   const scrollAway = () => {
-    if (viewport.scrollTop > 1) following = false;
+    // WebKit can apply an accelerated wheel gesture before the listener runs.
+    // Treat an upward gesture at the top of an overflowing thread as reading too.
+    if (viewport.scrollHeight - viewport.clientHeight > 1) following = false;
   };
   const wheel = (event: WheelEvent) => {
     if (event.deltaY < 0) scrollAway();
@@ -26,8 +30,20 @@ export function installMessageFollow(root: HTMLElement) {
     if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey))
       scrollAway();
   };
+  const pointerdown = (event: PointerEvent) => {
+    if (event.target !== viewport || event.button !== 0 || event.pointerType !== 'mouse') return;
+    const x = event.clientX - viewport.getBoundingClientRect().left;
+    scrollbarPress = x < viewport.clientLeft || x >= viewport.clientLeft + viewport.clientWidth;
+    lastScrollTop = viewport.scrollTop;
+  };
+  const release = () => {
+    scrollbarPress = false;
+  };
   const scrolled = () => {
+    const current = viewport.scrollTop;
     if (distance() <= 1) following = true;
+    else if (scrollbarPress && current < lastScrollTop) scrollAway();
+    lastScrollTop = current;
   };
   const clicked = (event: MouseEvent) => {
     if (
@@ -52,6 +68,9 @@ export function installMessageFollow(root: HTMLElement) {
   viewport.addEventListener('touchstart', touchStart, { passive: true });
   viewport.addEventListener('touchmove', touchMove, { passive: true });
   viewport.addEventListener('keydown', keydown);
+  viewport.addEventListener('pointerdown', pointerdown);
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
   root.addEventListener('click', clicked, true);
   return () => {
     resize.disconnect();
@@ -61,6 +80,9 @@ export function installMessageFollow(root: HTMLElement) {
     viewport.removeEventListener('touchstart', touchStart);
     viewport.removeEventListener('touchmove', touchMove);
     viewport.removeEventListener('keydown', keydown);
+    viewport.removeEventListener('pointerdown', pointerdown);
+    window.removeEventListener('pointerup', release);
+    window.removeEventListener('pointercancel', release);
     root.removeEventListener('click', clicked, true);
   };
 }

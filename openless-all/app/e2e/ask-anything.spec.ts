@@ -83,7 +83,7 @@ test('Ask opens a conversation on record, streams activity, and keeps a composer
   });
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-recording-selection')).toContainText('selected source');
-  await expect(page.locator('#native-host')).toHaveCSS('width', '975px');
+  await expect(page.locator('#native-host')).toHaveCSS('width', '920px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'ask-a', messages: [] });
   await emit(page, 'qa:state', {
     kind: 'activity',
@@ -181,7 +181,7 @@ test('the macOS prompt box preserves the draft through the voice chord and allow
   ];
   await emit(page, 'qa:state', { kind: 'answer', sessionId: 'first', messages: firstTurn });
   const panel = page.locator('.qa-conversation');
-  await expect(panel).toHaveCSS('border-radius', '0px');
+  await expect(panel).toHaveCSS('border-radius', '26px');
   const close = panel.locator('.qa-close');
   await expect(close).toHaveCSS('border-radius', '50%');
   await expect(panel.locator('.qa-window-actions')).toHaveCSS('left', '10px');
@@ -192,7 +192,7 @@ test('the macOS prompt box preserves the draft through the voice chord and allow
   await draft.press('a');
   const typed = 'typed \na';
   await expect(draft).toHaveValue(typed);
-  expect((await draft.boundingBox())!.height).toBeGreaterThan(24);
+  await expect.poll(async () => (await draft.boundingBox())?.height ?? 0).toBeGreaterThan(40);
 
   // WKWebView does not always expose Fn; the native hook consumes the chord first.
   // When a browser reports it, the editor must also not insert a space.
@@ -239,8 +239,8 @@ test('the Windows conversation clips and scrolls streamed text, and opens live a
     'You are using voice input',
   );
   await expect(panel).toHaveCSS('overflow', 'hidden');
-  await expect(panel).toHaveCSS('width', '975px');
-  await expect(panel).toHaveCSS('height', '415px');
+  await expect(panel).toHaveCSS('width', '920px');
+  await expect(panel).toHaveCSS('height', '800px');
   const question = { role: 'user', content: 'What are the sources?' };
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'search', messages: [question] });
   const response = panel.locator('.qa-assistant-message');
@@ -288,4 +288,47 @@ test('the Windows conversation clips and scrolls streamed text, and opens live a
   await expect
     .poll(() => page.evaluate(() => (window as any).fixture.externalLinks))
     .toEqual(['https://example.org/a', 'https://example.com/b']);
+});
+
+test('the welcome box docks on first send without remounting the editor', async ({ page }) => {
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'welcome', messages: [] });
+  await expect(page.locator('.qa-thought')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'answer', sessionId: 'welcome', messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const prompt = panel.locator('.qa-prompt');
+  const editor = prompt.locator('textarea');
+  await expect(panel.locator('.qa-welcome-title')).toBeVisible();
+  await expect(prompt).toHaveCSS('width', '560px');
+  await expect(prompt).toHaveCSS('height', '102px');
+  await expect
+    .poll(async () => {
+      const frame = (await panel.boundingBox())!;
+      const box = (await prompt.boundingBox())!;
+      return Math.abs(box.y + box.height / 2 - frame.y - frame.height / 2);
+    })
+    .toBeLessThan(40);
+  await editor.fill('A first question');
+  await editor.evaluate((el) => el.setAttribute('data-original-editor', 'yes'));
+  await editor.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.qaActions.length)).toBe(1);
+  await emit(page, 'qa:state', {
+    kind: 'thinking',
+    sessionId: 'welcome',
+    messages: [{ role: 'user', content: 'A first question' }],
+  });
+  await expect(panel.locator('.qa-welcome-title')).toHaveCount(0);
+  await expect(editor).toHaveAttribute('data-original-editor', 'yes');
+  await expect(editor).toBeFocused();
+  await expect(editor).toBeEditable();
+  await editor.fill('Another draft');
+  await expect(editor).toHaveValue('Another draft');
+  await expect
+    .poll(async () => {
+      const frame = (await panel.boundingBox())!;
+      const box = (await prompt.boundingBox())!;
+      return Math.abs(frame.y + frame.height - box.y - box.height);
+    })
+    .toBeLessThan(30);
 });

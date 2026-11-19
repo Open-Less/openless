@@ -66,9 +66,9 @@ const bridge = {
     const host = document.querySelector<HTMLElement>('#native-host');
     if (!host) return;
     // Match the native window's nominal dimensions; tests can deliver a work-area clamp.
-    host.style.width = `${width ?? (expanded ? 975 : 480)}px`;
-    host.style.height = `${height ?? (expanded ? 415 : 80)}px`;
-    host.style.bottom = expanded ? '48px' : '8px';
+    host.style.width = `${width ?? (expanded ? 920 : 480)}px`;
+    host.style.height = `${height ?? (expanded ? 800 : 80)}px`;
+    host.style.bottom = expanded ? '16px' : '8px';
   },
   target: {
     sessionId: 'recording-a',

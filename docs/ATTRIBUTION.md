@@ -12,3 +12,11 @@ The overview yearly activity card is a port of Rare UI's GitHub Activity compone
 The port keeps the original geometry: 11px cells, 3px gap, 28px corner radius, 16px padding, week and month layout, the hover tooltip, and the expandable bottom panel. Local dictation counts replace GitHub contributions. The software with the most voice input (name and count) replaces repositories. Cells are not redrawn or resized to fit a narrow column.
 
 The in-app credit is Settings → About and updates → Component credits. The repository READMEs (`openless-all/README.md` and `openless-all/README.zh.md`) carry the same credit.
+
+
+## Rare UI AI Prompt Box and Streaming Response
+
+[AI Prompt Box](https://www.rareui.com/components/promptbox) and
+[Streaming Response](https://www.rareui.com/components/streamingresponse) are the
+interaction references for OpenLess Ask Anything. The OpenLess implementation uses
+its own native shortcut, voice, and streaming contracts rather than the demo's mock backend.

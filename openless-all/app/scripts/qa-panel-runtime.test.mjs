@@ -215,6 +215,10 @@ function context(native = true, embedded = false) {
     useState: state,
     useRef: ref,
     useEffect: effect,
+    useLayoutEffect: effect,
+    useReducedMotion: () => true,
+    motion: { div: 'motion-div', span: 'motion-span' },
+    AnimatePresence: 'animate-presence',
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
     useChatPanelLifecycle: makeLifecycle(

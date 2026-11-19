@@ -2319,14 +2319,14 @@ fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 /// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-// 1950 × 830 at 2× display scale. Keep a shared scale when fitting smaller work areas.
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 975.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 415.0;
+// Use logical pixels and a single scale when fitting smaller work areas.
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 920.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 800.0;
 const QA_WINDOW_MIN_EXPANDED_HEIGHT: f64 = 144.0;
 /// Reserve room for the independent recording capsule and its context badge.
 const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
-/// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
-const QA_WINDOW_EXPANDED_BOTTOM_INSET: f64 = 132.0;
+/// Keep the expanded QA panel clear of the edges of the work area.
+const QA_WINDOW_EXPANDED_INSET: f64 = 16.0;
 const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
@@ -2897,8 +2897,8 @@ fn qa_resize_origin(
 
 fn qa_expanded_size(area: Option<LogicalMonitorFrame>) -> (f64, f64) {
     let fit = area.map_or(1.0, |frame| {
-        let available_width = (frame.width - 32.0).max(1.0);
-        let available_height = (frame.height - 32.0 - QA_WINDOW_EXPANDED_BOTTOM_INSET).max(1.0);
+        let available_width = (frame.width - 2.0 * QA_WINDOW_EXPANDED_INSET).max(1.0);
+        let available_height = (frame.height - 2.0 * QA_WINDOW_EXPANDED_INSET).max(1.0);
         (available_width / QA_WINDOW_EXPANDED_WIDTH)
             .min(available_height / QA_WINDOW_EXPANDED_HEIGHT)
             .min(1.0)
@@ -2958,14 +2958,14 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
             frame.x + 16.0,
             (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
         );
-        let bottom_inset = if expanded {
-            QA_WINDOW_EXPANDED_BOTTOM_INSET
+        let (top_inset, bottom_inset) = if expanded {
+            (QA_WINDOW_EXPANDED_INSET, QA_WINDOW_EXPANDED_INSET)
         } else {
-            QA_WINDOW_BOTTOM_INSET
+            (32.0, QA_WINDOW_BOTTOM_INSET)
         };
         y = y.clamp(
-            frame.y + 32.0,
-            (frame.y + frame.height - height - bottom_inset).max(frame.y + 32.0),
+            frame.y + top_inset,
+            (frame.y + frame.height - height - bottom_inset).max(frame.y + top_inset),
         );
     }
     window
@@ -4308,26 +4308,26 @@ mod tests {
                 height,
             }))
         };
-        assert_eq!(fit(1440.0, 900.0), (975.0, 415.0));
+        assert_eq!(fit(1440.0, 900.0), (920.0, 800.0));
         for (width, height) in [(800.0, 700.0), (1280.0, 480.0)] {
             let (w, h) = fit(width, height);
             assert!(w <= width - 32.0 + 1e-6);
-            assert!(h <= height - 164.0 + 1e-6);
-            assert!((w / h - 1950.0 / 830.0).abs() < 1e-6);
+            assert!(h <= height - 32.0 + 1e-6);
+            assert!((w / h - 920.0 / 800.0).abs() < 1e-6);
         }
     }
 
     #[test]
     fn qa_resize_preserves_centre_baseline_and_user_position() {
         let expanded =
-            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 975.0, 415.0, false, true);
-        assert_eq!(expanded, (-947.5, 325.0));
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 920.0, 800.0, false, true);
+        assert_eq!(expanded, (-920.0, -60.0));
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 975.0, 415.0, 975.0, 415.0, true, true),
+            super::qa_resize_origin(expanded.0, expanded.1, 920.0, 800.0, 920.0, 800.0, true, true),
             expanded
         );
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 975.0, 415.0, 480.0, 80.0, true, false),
+            super::qa_resize_origin(expanded.0, expanded.1, 920.0, 800.0, 480.0, 80.0, true, false),
             (-700.0, 700.0)
         );
     }
