@@ -76,7 +76,7 @@ Linux 原生界面的显示与录音也需要在 Linux 上实际验收。
   remain. Leaves are valid for at most 366 days including clock-skew allowance;
   a continuously running service must restart before its leaf expires.
 - Serves the public CA as a `.cer` file or iOS configuration profile on both
-  Tauri desktop and Linux egui hosts. The private keys are never downloaded.
+  Tauri desktop and Linux host hosts. The private keys are never downloaded.
 - Refuses to start with a damaged, unreadable, mismatched, or expiring CA rather
   than silently replacing the phone's trust anchor.
 
@@ -92,7 +92,7 @@ Old files are left intact for rollback; they are not promoted to a CA.
 Keep `remote-tls-identity-v1.json` with the application's user configuration
 when backing up or reinstalling. On Windows it is in
 `%APPDATA%\com.openless.app`; on Tauri macOS it is in the application's config
-directory; on Linux egui it is in the host data directory's `remote-input`
+directory; on Linux host it is in the host data directory's `remote-input`
 subdirectory. This file contains private keys: do not publish it, send it to a
 phone, or copy it to another computer. Unix files are owner-readable/writable
 only; Windows files inherit the user's application-data ACL.

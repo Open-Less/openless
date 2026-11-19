@@ -84,7 +84,7 @@ const [
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),
   read('src-tauri/src/host_document/macos.rs'),
-  read('linux-egui/src/fcitx5.rs'),
+  read('linux-host/src/fcitx5.rs'),
   Promise.all([
     read('src/features/local-asr/index.tsx'),
     read('src/features/local-asr/useLocalModelTrial.ts'),

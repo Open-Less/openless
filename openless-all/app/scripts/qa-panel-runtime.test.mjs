@@ -231,6 +231,7 @@ function context(native = true, embedded = false) {
       calls.stopMic++;
       return pending.stopMic?.promise;
     },
+    isNativeDesktopHost: () => native,
     isTauriHost: () => native,
     ...helpers,
     useQaWindowLayout: makeLayout(

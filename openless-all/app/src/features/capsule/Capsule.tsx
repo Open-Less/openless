@@ -1,7 +1,7 @@
 import { collectCapsuleInputRegions } from '../../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getRuntimeOS, isTauriHost, type OS } from '../../runtime/environment';
+import { getRuntimeOS, isNativeDesktopHost, type OS } from '../../runtime/environment';
 import { createCapsuleRegionPublisher } from '../../runtime/windows/capsuleInput';
 import { warmUpSiriShaders } from './SiriGL';
 import { useReducedMotion } from '../../lib/motion';
@@ -338,7 +338,7 @@ const INSERT_DEMO_CHUNKS = [
 const INSERT_DEMO_GAPS_MS = [420, 560, 640, 540, 280];
 
 function getPreviewCapsulePayload() {
-  if (isTauriHost() || typeof window === 'undefined') {
+  if (isNativeDesktopHost() || typeof window === 'undefined') {
     return {
       state: 'idle' as CapsuleState,
       level: 0,
@@ -379,7 +379,7 @@ interface CapsuleProps {
 export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
   const os = forcedOs ?? getRuntimeOS();
-  const isTauri = isTauriHost();
+  const isTauri = isNativeDesktopHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const reducedMotion = useReducedMotion();

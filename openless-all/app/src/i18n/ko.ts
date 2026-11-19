@@ -15,6 +15,8 @@ export const ko: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '선택한 텍스트 편집',
+  voiceEditLinuxHint: '30초 안에 대상 앱으로 전환해 텍스트를 선택하고 선택 영역 다듬기 단축키를 누르세요.',
   voiceEdit: {
     title: '음성 편집 세션',
     description:
@@ -290,6 +292,8 @@ export const ko: typeof zhCN = {
     tagline: '자연스럽게 말하고, 정확하게 작성하세요',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: '곧 지원',
     loading: '로딩 중…',
     retry: '다시 시도',
     settingsLoadFailed: '설정 로드 실패',
@@ -638,6 +642,8 @@ export const ko: typeof zhCN = {
     actions: {
       refresh: '다시 불러오기',
       services: 'AI와 모델',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '음성 인식과 텍스트 처리 서비스를 선택하고 채널과 네트워크 프록시를 관리합니다.',
       general: '일반',
       shortcuts: '단축키',
       privacy: '권한 및 데이터',
@@ -1227,6 +1233,13 @@ export const ko: typeof zhCN = {
       title: '선택 영역 도우미',
       hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
       polishHotkey: '선택 영역 도우미 단축키',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '음성 편집 창은 아직 Linux에서 구현되지 않았습니다. 지원되면 단축키를 누른 채 지시를 말해 모델이 선택 영역을 다시 씁니다.',
+      polishDeliveryComingSoonDesc:
+        'Linux는 현재 선택 영역을 바로 교체합니다(미리보기 확인에는 확인 UI가 필요해 준비 중입니다).',
+      previewConfirmComingSoonHint:
+        '미리보기 확인은 아직 Linux에서 지원되지 않습니다. 확인 UI가 없어 지금은 바로 교체합니다.',
       polishHotkeyDesc:
         '음성 편집 끄면 바로 다듬기, 켜면 누른 채 말하기(녹음 방식은 전역 설정 따름).',
       polishDelivery: '결과 처리',
@@ -1409,6 +1422,7 @@ export const ko: typeof zhCN = {
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
       lowLatencyDictationLabel: '저지연 캡처',
+      linuxEarlyCaptureDesc: '단축키를 누르는 즉시 마이크를 켭니다. 녹음이 시작되기 전에는 오디오를 메모리에만 보관하며, 취소하면 삭제됩니다. 대기 중에는 마이크를 사용하지 않습니다.',
       lowLatencyDictationDesc:
         '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
       dsp: {
@@ -1583,6 +1597,8 @@ export const ko: typeof zhCN = {
       startMinimizedLabel: '시작 시 메인 창 숨기기',
       startMinimizedDesc:
         '모든 시작 경로에서 메인 창을 열지 않고 메뉴 막대 / 트레이에서만 실행합니다.',
+      startMinimizedDescLinux:
+        '로그인 시 자동 실행에만 적용됩니다. 직접 실행하면 기본 창이 표시됩니다.',
       autoUpdateCheckLabel: '자동 업데이트 확인',
       autoUpdateCheckDesc: '시작 시 및 60 분마다 자동 확인.',
       marketplaceGroupTitle: '스타일 팩 마켓플레이스',
@@ -1984,6 +2000,12 @@ export const ko: typeof zhCN = {
       hotkeyStarting: '설치 중…',
       hotkeyFailed: '감지 실패',
       windowsImeLabel: 'Windows 입력기 백엔드',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: '입력기 백엔드',
+      imeBackendChecking: '확인 중…',
+      imeBackendReady: '준비됨(fcitx5 애드온 로드됨)',
+      imeBackendDaemonDown: 'fcitx5가 실행되지 않음(로그인 시 자동 시작)',
+      imeBackendPluginMissing: '애드온이 설치되지 않았습니다. OpenLess를 다시 설치하세요',
       windowsImeDesc:
         '입력기와 함께 동작하는 OpenLess TSF 텍스트 서비스로 텍스트를 삽입하여, 입력기를 전환하지 않고 클립보드 입력 제한을 회피합니다.',
       windowsImeInstalled: '설치됨',
@@ -2171,12 +2193,16 @@ export const ko: typeof zhCN = {
       macosCompositionInputDesc:
         '녹음 중 인식한 원문을 원래 입력란에 표시하고 완료 후 정리하거나 번역한 결과로 바꿉니다. 손쉬운 사용 권한과 지원되는 편집기가 필요합니다. 커서를 이동하거나 직접 편집하면 실시간 교체를 중지합니다.',
       windowsCompositionInputLabel: '실시간 원문을 입력창에 표시',
+      liveInputComingSoonDesc:
+        'Linux 버전은 실시간 입력(말하는 동안 입력란에 글자가 들어가는 기능)을 준비 중입니다. 완료되면 여기에 Windows 컴포지션 입력에 해당하는 스위치가 표시됩니다.',
       windowsCompositionInputDesc:
         '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
       streamingInsertSaveClipboardHint:
         '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',
       localAsrTitle: '로컬 ASR 모델 ',
+      localAsrComingSoonDesc:
+        'Linux 버전의 로컬 음성 인식(sherpa-onnx / Whisper)은 준비 중입니다. 모델 다운로드와 추론 런타임을 연결하고 있으며, 완료되면 여기서 모델을 선택해 오프라인으로 인식할 수 있습니다.',
       localAsrDesc:
         '전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.',
       localAsrWarningShort: '로컬 추론은 느리며, 사양 부족 시 글자 누락이 발생할 수 있습니다.',

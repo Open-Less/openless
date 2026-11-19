@@ -42,6 +42,27 @@ export function getHotkeyCapability(): Promise<HotkeyCapability> {
   });
 }
 
+/** Linux 输入法后端（fcitx5 插件）状态：插件是否安装、守护进程是否运行。 */
+export interface ImeBackendStatus {
+  backend: 'fcitx5';
+  pluginInstalled: boolean;
+  daemonRunning: boolean;
+  ready: boolean;
+}
+
+export function getImeBackendStatus(): Promise<ImeBackendStatus> {
+  return platformCapabilities().then((caps) =>
+    caps.linuxHost
+      ? invokeOrMock<ImeBackendStatus>('get_ime_backend_status', undefined, () => ({
+          backend: 'fcitx5',
+          pluginInstalled: true,
+          daemonRunning: true,
+          ready: true,
+        }))
+      : { backend: 'fcitx5', pluginInstalled: false, daemonRunning: false, ready: false },
+  );
+}
+
 export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
   return platformCapabilities().then((caps) => {
     if (caps.platform !== 'desktop') {

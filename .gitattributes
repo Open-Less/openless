@@ -6,8 +6,8 @@
 *.yml text eol=lf
 *.desktop text eol=lf
 *.xml text eol=lf
-openless-all/app/linux-egui/packaging/AppRun text eol=lf
-openless-all/app/linux-egui/packaging/openless-desktop-integration text eol=lf
+openless-all/app/linux-host/packaging/openless.desktop text eol=lf
+openless-all/app/linux-host/packaging/top.openless.OpenLess.metainfo.xml text eol=lf
 # Keep imported model bytes and unified-diff context markers intact.
 *.mcy binary
 openless-all/app/scripts/micyou-dsp.patch text eol=lf whitespace=-blank-at-eol

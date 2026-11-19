@@ -63,6 +63,15 @@ struct PrimarySelectionSnapshot {
     std::string detail;
 };
 
+/// 便于在没有探针结果时构造「缓存命中」的快照（缓存来自 fcitx5 clipboard addon）。
+inline PrimarySelectionSnapshot cachedSnapshot(std::string text) {
+    PrimarySelectionSnapshot snapshot;
+    snapshot.status = PrimarySelectionStatus::Text;
+    snapshot.text = std::move(text);
+    snapshot.detail = "clipboard-addon-primary";
+    return snapshot;
+}
+
 /// 一次选区文本捕获的最终来源判定。
 struct SelectionSource {
     /// 交给 Core 的选区文本；空表示"没有可用的文本选区"。

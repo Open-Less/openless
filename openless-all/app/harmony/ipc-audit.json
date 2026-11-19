@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 197,
+  "total": 198,
   "wired": 108,
-  "missing": 89,
+  "missing": 90,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -500,6 +500,13 @@
         "src/lib/ipc/hotkeys.ts"
       ],
       "implementation": "frontend mobile capability adapter"
+    },
+    {
+      "name": "get_ime_backend_status",
+      "calledFrom": [
+        "src/lib/ipc/hotkeys.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "get_platform_capabilities",

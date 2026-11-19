@@ -10,17 +10,15 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
-// ── Linux 桌面不再由 Tauri 提供 ───────────────────────────────────────────────
-// 用户在 Linux 上已使用 egui 前端（`openless-all/app/linux-egui`），Tauri 版的 Linux
-// 桌面实现（fcitx5 插件桥 `linux_fcitx.rs`、Linux 热键/插入/选区路径、平台覆盖配置
-// `tauri.linux.conf.json`）已随本次一并删除。这里显式拦住误在 Linux 上构建 Tauri 版
-// 的情况，给出可操作的提示，而不是让人面对一堆“找不到模块”的零散错误。
-//
-// 不受影响的平台：macOS / Windows（桌面）与 Android（`target_os = "android"`）。
+// ── Linux 桌面不走 Tauri ────────────────────────────────────────────────────
+// Linux 版是 Qt6 WebEngine 窗口层（`linux-qt`）+ `linux-web` 后端。
+// Tauri v3 的 CEF runtime 在 Linux 上会强制 X11，做不出透明/不抢焦点的 layer-shell
+// 胶囊，所以这里直接把 Linux 构建挡掉：误在 Linux 上 `cargo build -p openless` 会
+// 得到一个能看懂的报错，而不是一大堆 winit/WebKitGTK 的编译错误。
 #[cfg(target_os = "linux")]
 compile_error!(
-    "Tauri 版已不再支持 Linux 桌面：请使用 egui 前端 openless-all/app/linux-egui，\
-     打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
+    "Tauri 版已不再支持 Linux 桌面：Linux 构建是 openless-all/app/linux-qt（Qt6 WebEngine \
+     窗口层）+ openless-linux-web（后端与 HTTP 命令桥）。"
 );
 
 mod android;
@@ -46,8 +44,6 @@ mod macos_dictation_key;
 mod macos_streaming_input;
 #[cfg(not(mobile))]
 mod native_audio_cue;
-#[cfg(not(mobile))]
-mod native_capsule;
 mod qa_adapter;
 mod recording_companion;
 mod tauri_coordinator_host;
@@ -883,8 +879,7 @@ fn run_desktop() {
     let core_backend = coordinator.backend();
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
-    let mut context = tauri::generate_context!();
-    desktop_resources::configure(&mut context, false);
+    let context = tauri::generate_context!();
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
     // non-activating NSPanel (a plain NSWindow cannot do this even with collectionBehavior —
@@ -1017,7 +1012,7 @@ fn run_desktop() {
                 }
             }
 
-            if desktop_resources::active() {
+            {
                 let force_show = std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
                 if force_show || coordinator.startup_error().is_some() || !coordinator.backend().get_preferences().start_minimized {
                     show_main_window(app.handle());
@@ -1125,7 +1120,6 @@ fn run_desktop() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
-            RunEvent::ExitRequested { code: None, api, .. } if desktop_resources::active() => api.prevent_exit(),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
                     if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
@@ -1154,7 +1148,6 @@ fn run_desktop() {
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
-                coordinator.tauri_host().stop_native_capsule();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
@@ -1859,13 +1852,9 @@ fn set_windows_caption_theme(app: AppHandle, dark: bool) {
 
 #[tauri::command]
 fn restart_app(app: AppHandle) {
-    // The main-thread restart path skips the RunEvent::Exit handlers; stop the
-    // disposable capsule explicitly. The child also self-closes when the
-    // inherited pipe hits EOF, so an exit here can never orphan it.
-    #[cfg(not(mobile))]
-    if let Some(coordinator) = app.try_state::<Arc<coordinator::Coordinator>>() {
-        coordinator.tauri_host().stop_native_capsule();
-    }
+    // 原生胶囊（旧的低内存渲染器）已删除：胶囊始终是 Tauri 的 webview 窗口，
+    // 重启时随主进程一起退出，这里不需要再单独回收。
+    let _ = &app;
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_for_beta_restart();
@@ -3353,7 +3342,7 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 /// 退出「润色结果」模式。是否顺带关掉面板交给前端：面板可能正处在提问对话中，
-/// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
+/// 不能被润色流程的收尾动作一起关掉（与 Linux 宿主侧 `HideSelectionPreview` 一致）。
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
     clear_selection_polish_preview_pending();
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -3545,7 +3534,7 @@ pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHa
 // Windows/macOS both provide the entry point, hotkey, and chat window, sharing Core
 // sessions and events; native window manipulation stays per-platform — macOS
 // NSWindow/AppKit adjustments must not leak into the Windows build.
-// On Linux the product window is owned by the egui Host, not created in Tauri;
+// On Linux the product window is owned by the Linux Host, not created in Tauri;
 // unsupported platforms keep a no-op.
 
 /// Less Computer defaults to a desktop workspace; users can resize it afterwards.

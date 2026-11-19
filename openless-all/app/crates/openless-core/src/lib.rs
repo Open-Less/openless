@@ -1,6 +1,6 @@
 //! Framework-independent OpenLess application core.
 //!
-//! This crate deliberately has no dependency on Tauri, WebView, egui, or eframe.
+//! This crate deliberately has no dependency on Tauri, WebView, or any UI toolkit.
 //! Host applications provide platform integrations through [`ports`] and consume
 //! semantic state changes through [`events`].
 
@@ -28,6 +28,7 @@ mod correction_observation;
 pub mod coding_agent_guard;
 pub mod config;
 pub mod correction;
+pub mod credential_accounts;
 pub mod credentials;
 pub mod credentials_legacy;
 pub mod deepseek_suite;
@@ -99,7 +100,7 @@ mod shortcut_types;
 ///
 /// This is independent from the application release version.  Increment the
 /// major component for a breaking host contract change and document the
-/// migration in `docs/linux-egui-backend-contract.md`.
+/// migration in the shared `contract/backend-2.0.json` surface.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{

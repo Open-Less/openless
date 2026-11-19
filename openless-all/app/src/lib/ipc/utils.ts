@@ -1,5 +1,5 @@
 import { isTauri, invokeOrMock, requireBackendReady } from './shared';
-import { isHarmonyRuntime, isPreviewHost } from '../../runtime/environment';
+import { isHarmonyRuntime, isLinuxHost, isPreviewHost } from '../../runtime/environment';
 import { isAndroid } from '../../runtime/platform';
 
 export { isTauri };
@@ -9,7 +9,7 @@ export async function openExternal(url: string): Promise<void> {
     await invokeOrMock<void>('open_external_url', { url }, () => undefined);
     return;
   }
-  if (isPreviewHost()) {
+  if (isPreviewHost() || isLinuxHost()) {
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
   }
@@ -45,6 +45,10 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
       { fileName: suggestedFileName },
       () => null,
     );
+  if (isLinuxHost()) {
+    const result = await invokeOrMock<{ written: string }>('export_error_log', { fileName: suggestedFileName }, () => { throw new Error('Linux bridge unavailable'); });
+    return result.written;
+  }
   if (isPreviewHost()) {
     return `~/Downloads/${suggestedFileName}`;
   }

@@ -37,7 +37,7 @@ inline bool shouldNotifyAction(bool isPress, uint32_t originalStates) {
 inline bool isModifierSym(uint32_t sym) { return sym >= 0xffe1 && sym <= 0xffee; }
 
 /// US-layout base <-> shifted symbol pairs. Mirrors the host's table in
-/// `linux-egui/src/settings.rs::primary_keysym`; keep both in sync.
+/// `linux-host/src/settings.rs::primary_keysym`; keep both in sync.
 inline bool isShiftPair(uint32_t left, uint32_t right) {
     if (left == right) {
         return false;

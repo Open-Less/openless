@@ -2,7 +2,7 @@
 //!
 //! Hosts own file selection and optional foreground-application capture. The
 //! core owns style selection, immutable provider snapshots, cancellation and
-//! attribution so Tauri and egui cannot drift in their business behaviour.
+//! attribution so the desktop host and the Linux host cannot drift in their business behaviour.
 
 use std::sync::Arc;
 

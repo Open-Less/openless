@@ -189,8 +189,12 @@ assertMatch(
 
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
+// 自己画框的平台（win / linux / android / harmony）都不该加圆角；
+// Linux 宿主由合成器画窗口，和 Windows 一样走原生装饰。
 if (
-  !/os === 'win' \|\| os === 'android'(?: \|\| os === 'harmony')? \? 0 : 14/.test(windowChromeTsx)
+  !/os === 'win' \|\| os === 'linux' \|\| os === 'android' \|\| os === 'harmony' \? 0 : 14/.test(
+    windowChromeTsx,
+  )
 ) {
   throw new Error(
     'windows main shell should rely on native decorations instead of a frameless chrome shell',

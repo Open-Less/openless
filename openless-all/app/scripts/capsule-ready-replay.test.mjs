@@ -52,6 +52,7 @@ function bindNativeAdapter(scope, tauri = true) {
   const runtime = {
     exports: {},
     isTauriHost: () => tauri,
+    isLinuxHost: () => false,
     requireBackendReady: async () => undefined,
     require: scope.require,
   };
@@ -182,6 +183,7 @@ function mount({
   const scope = {
     ...backend.exports,
     isTauri: true,
+    isNativeDesktopHost: () => true,
     isTauriHost: () => true,
     capsuleStateFirstLogged: true,
     capsuleStateRef: { current: 'idle' },

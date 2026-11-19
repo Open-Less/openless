@@ -55,7 +55,7 @@ import {
   listenSelectionPolishPreviewShown,
   revertSelectionVoicePreview,
 } from '../../api/selection';
-import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
+import { getRuntimeOS, isNativeDesktopHost } from '../../runtime/environment';
 import { useModalActive } from '../../ui/layout/AppViewport';
 import { useQaWindowLayout } from './useQaWindowLayout';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../../lib/qaMessage';
@@ -80,7 +80,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   const { t } = useTranslation();
   const modalActive = useModalActive();
   const pipelineMode = useQaPipeline();
-  const isTauri = isTauriHost();
+  const isTauri = isNativeDesktopHost();
   const [messages, setMessages] = useState<QaChatMessage[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -1070,7 +1070,7 @@ function Composer({
   cancelBusy: boolean;
   t: Translate;
 }) {
-  const isTauri = isTauriHost();
+  const isTauri = isNativeDesktopHost();
   const composingRef = useRef(false);
   const recording = status === 'recording';
   const generating = status === 'thinking';

@@ -57,6 +57,16 @@ target_link_libraries(openless PRIVATE
     Fcitx5::Module::Clipboard
     ${WAYLAND_CLIENT_LIBRARIES})
 
+
+# setClipboardV2 是 fcitx5 5.1.16 才加的。发行版仓库里还躺着更老的版本
+# （Ubuntu 24.04 就是 5.1.7），插件必须按版本挑签名，否则在老发行版上编不过。
+if(Fcitx5Core_VERSION VERSION_GREATER_EQUAL 5.1.16)
+    target_compile_definitions(openless PRIVATE OPENLESS_FCITX_CLIPBOARD_V2=1)
+    message(STATUS "fcitx5 ${Fcitx5Core_VERSION}: using setClipboardV2")
+else()
+    message(STATUS "fcitx5 ${Fcitx5Core_VERSION}: using legacy setClipboard")
+endif()
+
 # Locate fcitx5 module headers (e.g. fcitx-module/dbus/dbus_public.h)
 find_path(FCITX5_MODULE_INCLUDE_DIR
     NAMES "fcitx-module/dbus/dbus_public.h"

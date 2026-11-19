@@ -11,6 +11,8 @@ export const zhTW: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '編輯選取的文字',
+  voiceEditLinuxHint: '請在 30 秒內切換到目標應用程式，選取文字，再按選取範圍潤飾快速鍵。',
   voiceEdit: {
     title: '語音編輯工作階段',
     description: '口述草稿或讀取目標文字，再以多輪語音指令修改，確認後寫回輸入欄位。',
@@ -277,6 +279,8 @@ export const zhTW: typeof zhCN = {
     tagline: '自然說話，完美書寫',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: '即將支援',
     loading: '載入中…',
     retry: '重試',
     settingsLoadFailed: '設定載入失敗',
@@ -619,6 +623,8 @@ export const zhTW: typeof zhCN = {
     actions: {
       refresh: '重新讀取',
       services: 'AI 與模型',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '選擇語音辨識與文字處理服務，管理渠道與網路代理。',
       general: '通用',
       shortcuts: '快捷鍵',
       privacy: '權限與資料',
@@ -1195,6 +1201,13 @@ export const zhTW: typeof zhCN = {
       title: '選區助手',
       hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
       polishHotkey: '選區助手快捷鍵',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '語音編輯視窗還沒在 Linux 上實作：接入後可以按住快捷鍵口述指令，讓模型按指令改寫選取範圍。',
+      polishDeliveryComingSoonDesc:
+        'Linux 目前直接取代選取範圍（預覽確認需要確認介面，還在進行）。',
+      previewConfirmComingSoonHint:
+        '預覽確認在 Linux 上還沒做：缺少確認介面，暫時只能直接取代。',
       polishHotkeyDesc:
         '關閉語音編輯時直接潤色；開啟語音編輯時按住口述指令（錄音方式跟隨全域設定）。',
       polishDelivery: '結果處理',
@@ -1370,6 +1383,7 @@ export const zhTW: typeof zhCN = {
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
       lowLatencyDictationLabel: '低延遲錄音',
+      linuxEarlyCaptureDesc: '按下快速鍵時立即啟用麥克風。正式錄音前，音訊只暫存在記憶體；取消時會捨棄。待機時不使用麥克風。',
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       dsp: {
@@ -1529,6 +1543,7 @@ export const zhTW: typeof zhCN = {
       startupGroupTitle: '啟動',
       startMinimizedLabel: '啟動時靜默執行',
       startMinimizedDesc: '所有啟動路徑都不彈主視窗，僅選單欄 / 託盤執行。',
+      startMinimizedDescLinux: '只影響開機自啟：自啟時在背景執行，手動開啟仍會顯示主視窗。',
       autoUpdateCheckLabel: '自動檢查更新',
       autoUpdateCheckDesc: '啟動時及每 60 分鐘自動檢查更新。',
       marketplaceGroupTitle: '風格市場',
@@ -1902,6 +1917,12 @@ export const zhTW: typeof zhCN = {
       hotkeyStarting: '安裝中…',
       hotkeyFailed: '監聽失敗',
       windowsImeLabel: 'Windows 輸入法後端',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: '輸入法後端',
+      imeBackendChecking: '正在檢查…',
+      imeBackendReady: '已就緒（fcitx5 外掛已載入）',
+      imeBackendDaemonDown: 'fcitx5 未執行（登入後自動啟動）',
+      imeBackendPluginMissing: '外掛未安裝，請重新安裝 OpenLess',
       windowsImeDesc:
         '透過與輸入法並存的 OpenLess TSF 文字服務插入文字，不切換輸入法，避免剪貼簿插入限制。',
       windowsImeInstalled: '已安裝',
@@ -2091,12 +2112,16 @@ export const zhTW: typeof zhCN = {
       macosCompositionInputDesc:
         '錄音時在原輸入框顯示辨識文字，完成後整段取代為整理或翻譯結果。需要輔助使用授權及編輯器支援；移動游標或手動編輯會停止即時取代。',
       windowsCompositionInputLabel: '即時原文顯示在輸入框',
+      liveInputComingSoonDesc:
+        'Linux 版正在補即時上屏（邊聽邊把文字寫進輸入框）。接入後這裡會出現與 Windows 組合輸入等價的開關。',
       windowsCompositionInputDesc:
         '錄音時把辨識到的文字以帶底線的組合文字顯示在輸入框中，結束後替換為最終結果。需要啟用 OpenLess 的 TSF 輸入法元件，且目標應用支援文字服務框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪貼簿',
       streamingInsertSaveClipboardHint:
         '插入成功後把最終文字寫入剪貼簿，方便 Cmd+V 再次貼上；關閉後流式過程不動剪貼簿。',
       localAsrTitle: '本地 ASR 模型',
+      localAsrComingSoonDesc:
+        'Linux 版把本地語音辨識（sherpa-onnx / Whisper）排在後面：模型下載與推論執行時正在接入，接入後這裡可以直接選模型、離線辨識。',
       localAsrDesc: '把轉寫從雲端切到本機推理。僅推薦離線 / 隱私敏感場景。',
       localAsrWarningShort: '本地推理較慢，配置不足時可能吞字。',
       localAsrFallbackLabel: '雲端辨識失敗時改用本機模型',

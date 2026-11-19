@@ -10,6 +10,8 @@ export const es: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Editar selección',
+  voiceEditLinuxHint: 'En los próximos 30 segundos, cambia a la app de destino, selecciona texto y pulsa el atajo para pulir la selección.',
   voiceEdit: {
     title: 'Sesión de edición por voz',
     description:
@@ -307,6 +309,8 @@ export const es: typeof zhCN = {
     tagline: 'Habla con naturalidad, escribe con precisión',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Próximamente',
     loading: 'Cargando…',
     retry: 'Reintentar',
     settingsLoadFailed: 'No se pudieron cargar los ajustes',
@@ -407,7 +411,7 @@ export const es: typeof zhCN = {
     selectionPreview: 'A partir del texto seleccionado:',
     emptyTitle: '¿En qué puedo ayudarte?',
     emptyDesc:
-      'Selecciona un texto para preguntar sobre él o escribe tu pregunta abajo. Las respuestas aparecerán aquí y podrás seguir preguntando.',
+      'Selecciona un texto para preguntar sobre él o escribe tu pregunta abajo. Las respuestas aparecerán aquí y podrás shostr preguntando.',
     recordingHint: 'Grabando… pulsa {{recordHotkey}} de nuevo para enviar',
     mobileRecordLabel: 'botón de grabación',
     mobileRecordStart: 'Iniciar grabación',
@@ -666,6 +670,8 @@ export const es: typeof zhCN = {
     actions: {
       refresh: 'Reintentar',
       services: 'IA y modelos',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: 'Elige los servicios de voz y texto; gestiona los canales y el proxy de red.',
       general: 'General',
       shortcuts: 'Atajos',
       privacy: 'Permisos y datos',
@@ -1183,7 +1189,7 @@ export const es: typeof zhCN = {
   },
   selectionAsk: {
     title: 'Pregunta lo que quieras',
-    desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
+    desc: 'Selecciona texto y pregunta por voz, con preguntas de shostmiento.',
     shortcutSettings: 'Ajustes de atajos',
     guide: {
       openTitle: 'Abre el panel',
@@ -1266,6 +1272,13 @@ export const es: typeof zhCN = {
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
       polishHotkey: 'Atajo del asistente de selección',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        'La ventana de edición por voz aún no está disponible en Linux. Cuando llegue, podrás mantener el atajo, dictar una instrucción y el modelo reescribirá la selección.',
+      polishDeliveryComingSoonDesc:
+        'Por ahora Linux sustituye la selección directamente (la vista previa necesita una interfaz de confirmación, en curso).',
+      previewConfirmComingSoonHint:
+        'La vista previa con confirmación aún no está disponible en Linux: no hay interfaz de confirmación, así que el resultado se sustituye directamente.',
       polishHotkeyDesc:
         'Mejora el texto directamente sin edición por voz; con ella activada, mantén pulsado para hablar. La grabación sigue los ajustes generales.',
       polishDelivery: 'Tratamiento del resultado',
@@ -1316,7 +1329,7 @@ export const es: typeof zhCN = {
     },
     expressionLearning: {
       clearHint:
-        'Tras borrar, un dictado en curso puede seguir usando las preferencias capturadas al comenzar.',
+        'Tras borrar, un dictado en curso puede shostr usando las preferencias capturadas al comenzar.',
       lineBreaksMore: 'Más saltos de línea',
       lineBreaksLess: 'Menos saltos de línea',
       exclamationsMore: 'Más signos de exclamación',
@@ -1327,7 +1340,7 @@ export const es: typeof zhCN = {
       title: 'Hábitos de expresión',
       enabled: 'Aprender hábitos de expresión',
       description:
-        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede seguir usando las preferencias ya capturadas.',
+        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede shostr usando las preferencias ya capturadas.',
       status: '{{count}} preferencias estables',
       clear: 'Borrar hábitos',
       error: 'No se pudieron leer o guardar los hábitos.',
@@ -1415,7 +1428,7 @@ export const es: typeof zhCN = {
       modeAuto: 'Automático',
       silenceAutoStopLabel: 'Detener tras un silencio',
       silenceAutoStopDesc:
-        'Solo en modo Alternar. Después de detectar voz, detiene y envía la grabación cuando el silencio dura el tiempo elegido. Desactivado de forma predeterminada; puedes seguir pulsando el atajo o Esc.',
+        'Solo en modo Alternar. Después de detectar voz, detiene y envía la grabación cuando el silencio dura el tiempo elegido. Desactivado de forma predeterminada; puedes shostr pulsando el atajo o Esc.',
       silenceAutoStopSecondsLabel: 'Duración del silencio',
       silenceAutoStopSecondsValue: '{{value}}s',
       migrationNoticeTitle: 'El modo de grabación predeterminado ahora es Alternar',
@@ -1455,6 +1468,7 @@ export const es: typeof zhCN = {
       stableTranscriptionDesc:
         'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',
       lowLatencyDictationLabel: 'Captura de baja latencia',
+      linuxEarlyCaptureDesc: 'Abre el micrófono al pulsar el atajo. Hasta que comienza la grabación, el audio se guarda solo en memoria y se descarta si cancelas. El micrófono permanece apagado en reposo.',
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
       dsp: {
@@ -1634,6 +1648,8 @@ export const es: typeof zhCN = {
       startMinimizedLabel: 'Iniciar minimizado (sin ventana principal)',
       startMinimizedDesc:
         'Al iniciar, solo se muestra la barra de menús o la bandeja del sistema, nunca la ventana principal.',
+      startMinimizedDescLinux:
+        'Solo afecta al inicio de sesión: el arranque automático queda en segundo plano, pero abrir la app manualmente sigue mostrando la ventana principal.',
       autoUpdateCheckLabel: 'Buscar actualizaciones automáticamente',
       autoUpdateCheckDesc: 'Busca actualizaciones al iniciar y cada 60 minutos.',
       marketplaceGroupTitle: 'Catálogo de paquetes de estilos',
@@ -2050,6 +2066,12 @@ export const es: typeof zhCN = {
       hotkeyStarting: 'Instalando…',
       hotkeyFailed: 'El detector falló',
       windowsImeLabel: 'Motor del método de entrada de Windows',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: 'Backend del método de entrada',
+      imeBackendChecking: 'Comprobando…',
+      imeBackendReady: 'Listo (complemento fcitx5 cargado)',
+      imeBackendDaemonDown: 'fcitx5 no está en ejecución (arranca al iniciar sesión)',
+      imeBackendPluginMissing: 'Falta el complemento: reinstala OpenLess',
       windowsImeDesc:
         'Inserta el texto dictado mediante el servicio de texto TSF de OpenLess, que permanece activo junto a tu método de entrada, para evitar las limitaciones del portapapeles.',
       windowsImeInstalled: 'Instalado',
@@ -2260,12 +2282,16 @@ export const es: typeof zhCN = {
       macosCompositionInputDesc:
         'Muestra el reconocimiento en el campo original y después lo sustituye por el texto corregido o traducido. Requiere permiso de Accesibilidad y un editor compatible. Mover el cursor o editar el texto detiene la sustitución.',
       windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo',
+      liveInputComingSoonDesc:
+        'La composición en vivo (el texto aparece en el campo mientras hablas) se está implementando en Linux. Cuando esté listo, aquí aparecerá el equivalente al interruptor de composición de Windows.',
       windowsCompositionInputDesc:
         'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
       streamingInsertSaveClipboardHint:
         'Después de insertar correctamente, copia el texto final al portapapeles para poder pegarlo otra vez con Cmd+V. Desactivado: no se modifica el portapapeles.',
       localAsrTitle: 'Modelos ASR locales (experimental)',
+      localAsrComingSoonDesc:
+        'El reconocimiento de voz local (sherpa-onnx / Whisper) está en la hoja de ruta de Linux: se está integrando la descarga de modelos y el motor de inferencia. Cuando esté listo podrás elegir un modelo y transcribir sin conexión aquí mismo.',
       localAsrDesc:
         'Sustituye el ASR en la nube por inferencia en el dispositivo. Para uso sin conexión o con datos sensibles.',
       localAsrWarningShort:
@@ -2296,8 +2322,8 @@ export const es: typeof zhCN = {
       title: 'Idioma de la interfaz',
       desc: 'Cambia el idioma de la interfaz. Se aplica de inmediato y se conserva al volver a iniciar la aplicación.',
       label: 'Idioma',
-      labelDesc: 'Elige «Seguir al sistema» para usar el idioma del sistema operativo al iniciar.',
-      followSystem: 'Seguir al sistema',
+      labelDesc: 'Elige «Shostr al sistema» para usar el idioma del sistema operativo al iniciar.',
+      followSystem: 'Shostr al sistema',
       zh: '简体中文',
       zhTW: '繁體中文',
       en: 'English',
@@ -2319,7 +2345,7 @@ export const es: typeof zhCN = {
       conservativeLayoutLabel: 'Diseño conservador',
       conservativeLayoutDesc:
         'Las páginas de ajustes y funciones usan una columna a todo el ancho para reducir los desbordamientos. No afecta a la página de inicio ni a las barras superior e inferior.',
-      system: 'Seguir al sistema',
+      system: 'Shostr al sistema',
       light: 'Claro',
       dark: 'Oscuro',
     },

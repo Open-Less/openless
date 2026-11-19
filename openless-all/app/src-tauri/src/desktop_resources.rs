@@ -4,23 +4,8 @@
 #[path = "macos_card_panel.rs"]
 mod macos_card_panel;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-static LOW_MEMORY_ACTIVE: AtomicBool = AtomicBool::new(false);
-pub(crate) fn active() -> bool {
-    LOW_MEMORY_ACTIVE.load(Ordering::Relaxed)
-}
-
-#[cfg(not(mobile))]
-pub(crate) fn configure(context: &mut tauri::Context<tauri::Wry>, enabled: bool) {
-    LOW_MEMORY_ACTIVE.store(enabled, Ordering::Relaxed);
-    if enabled {
-        for window in &mut context.config_mut().app.windows {
-            if matches!(window.label.as_str(), "main" | "capsule" | "capsule-rail") {
-                window.create = false;
-            }
-        }
-    }
-}
+// 低内存模式（不创建 Tauri 窗口、改用自己的原生渲染器画胶囊）已删除：
+// 胶囊始终是 Tauri 的 webview 窗口，窗口生命周期只按下面的策略走。
 
 #[cfg(not(mobile))]
 #[derive(Default)]
@@ -256,8 +241,5 @@ pub(crate) fn hide_capsule_window<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> tauri::Result<()> {
     window.hide()?;
-    if active() {
-        window.destroy()?;
-    }
     Ok(())
 }

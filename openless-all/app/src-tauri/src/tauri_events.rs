@@ -594,12 +594,10 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
             }
         });
     }
-    // Cloud restore also changes preferences directly through Core. Keep native
-    // capsule geometry and hit testing current for every source of a preference change.
+    // Cloud restore also changes preferences directly through Core. Keep capsule
+    // geometry and hit testing current for every source of a preference change.
     if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
         coordinator.sync_capsule_style_from_preferences();
-        #[cfg(not(mobile))]
-        coordinator.tauri_host().refresh_native_capsule_theme();
     }
     let _ = app.emit("prefs:changed", &preferences);
 }

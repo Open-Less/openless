@@ -15,6 +15,7 @@ export function listenHistoryChanges(onChange: (revision?: number) => void): Pro
       return Promise.resolve(listenPreviewChange('history', onChange));
     case 'harmony':
       return listenHarmonyChanges(onChange);
+    case 'linux':
     case 'tauri':
       return listenTauriEvent<BackendEvent>('backend:event', (event) => {
         if (event.kind.type === 'history_changed') {
@@ -37,6 +38,7 @@ export function listenPreferenceChanges(onChange: () => void): Promise<() => voi
       return Promise.resolve(listenPreviewChange('preferences', onChange));
     case 'harmony':
       return listenHarmonyChanges(onChange);
+    case 'linux':
     case 'tauri':
       return listenTauriEvent('prefs:changed', onChange);
   }
@@ -48,6 +50,7 @@ export function listenStylePackChanges(onChange: () => void): Promise<() => void
       return Promise.resolve(listenPreviewChange('style-packs', onChange));
     case 'harmony':
       return listenHarmonyChanges(onChange);
+    case 'linux':
     case 'tauri':
       return listenTauriEvent<BackendEvent>('backend:event', (event) => {
         if (event.kind.type === 'style_packs_changed') onChange();

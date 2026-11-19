@@ -10,6 +10,8 @@ export const de: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Auswahl bearbeiten',
+  voiceEditLinuxHint: 'Wechseln Sie innerhalb von 30 Sekunden zur Ziel-App, markieren Sie Text und drücken Sie das Kürzel zum Überarbeiten der Auswahl.',
   voiceEdit: {
     title: 'Sprachbearbeitung',
     description:
@@ -309,6 +311,8 @@ export const de: typeof zhCN = {
     tagline: 'Natürlich sprechen, klar schreiben',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Demnächst',
     loading: 'Wird geladen…',
     retry: 'Erneut versuchen',
     settingsLoadFailed: 'Einstellungen konnten nicht geladen werden',
@@ -668,6 +672,8 @@ export const de: typeof zhCN = {
     actions: {
       refresh: 'Erneut versuchen',
       services: 'KI & Modelle',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: 'Sprach- und Textdienste wählen; Kanäle und Netzwerk-Proxy verwalten.',
       general: 'Allgemein',
       shortcuts: 'Kurzbefehle',
       privacy: 'Berechtigungen und Daten',
@@ -1273,6 +1279,13 @@ export const de: typeof zhCN = {
       title: 'Assistent für Textauswahl',
       hint: 'Wähle Text aus und verwende einen Kurzbefehl: Ohne Sprachbearbeitung wird der Text direkt überarbeitet. Mit Sprachbearbeitung hältst du die Taste gedrückt und sprichst; danach wählst du „Fragen“ oder „Bearbeiten“.',
       polishHotkey: 'Kurzbefehl für den Auswahlassistenten',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        'Das Sprachbearbeitungsfenster gibt es unter Linux noch nicht. Danach lässt sich die Tastenkombination halten, eine Anweisung sprechen und das Modell schreibt die Auswahl um.',
+      polishDeliveryComingSoonDesc:
+        'Linux ersetzt die Auswahl derzeit direkt (die Vorschau braucht eine Bestätigungsoberfläche, daran wird gearbeitet).',
+      previewConfirmComingSoonHint:
+        'Vorschau mit Bestätigung gibt es unter Linux noch nicht: ohne Bestätigungsoberfläche wird das Ergebnis direkt ersetzt.',
       polishHotkeyDesc:
         'Überarbeitet direkt, wenn Sprachbearbeitung aus ist. Andernfalls zum Sprechen gedrückt halten. Für die Aufnahme gelten die globalen Einstellungen.',
       polishDelivery: 'Ergebnis anwenden',
@@ -1463,6 +1476,7 @@ export const de: typeof zhCN = {
       stableTranscriptionDesc:
         'Wenn aktiviert, verbindet sich ASR erst nach dem Aufnahmestopp und erhält die gesamte Aufnahme. Das Ergebnis erscheint später, aber Verbindungsaufbau und Netzwerkschwankungen während der Aufnahme stören die Aufzeichnung nicht.',
       lowLatencyDictationLabel: 'Aufnahme mit niedriger Latenz',
+      linuxEarlyCaptureDesc: 'Öffnet das Mikrofon beim Drücken des Tastenkürzels. Bis zum Aufnahmestart bleiben Audiodaten nur im Arbeitsspeicher und werden beim Abbruch verworfen. Im Leerlauf bleibt das Mikrofon aus.',
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
       dsp: {
@@ -1641,6 +1655,8 @@ export const de: typeof zhCN = {
       startMinimizedLabel: 'Minimiert starten (ohne Hauptfenster)',
       startMinimizedDesc:
         'Zeigt bei keinem Startweg das Hauptfenster an. Nur Menüleiste / Infobereich.',
+      startMinimizedDescLinux:
+        'Gilt nur für den Autostart: Beim Anmelden läuft die App im Hintergrund, ein manueller Start zeigt weiterhin das Hauptfenster.',
       autoUpdateCheckLabel: 'Automatisch nach Updates suchen',
       autoUpdateCheckDesc: 'Sucht beim Start und alle 60 Minuten nach Updates.',
       marketplaceGroupTitle: 'Stilpaket-Marktplatz',
@@ -2062,6 +2078,12 @@ export const de: typeof zhCN = {
       hotkeyStarting: 'Wird installiert…',
       hotkeyFailed: 'Kurzbefehlüberwachung fehlgeschlagen',
       windowsImeLabel: 'Windows-Eingabemethode',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: 'Eingabemethoden-Backend',
+      imeBackendChecking: 'Wird geprüft…',
+      imeBackendReady: 'Bereit (fcitx5-Addon geladen)',
+      imeBackendDaemonDown: 'fcitx5 läuft nicht (startet bei der Anmeldung)',
+      imeBackendPluginMissing: 'Addon fehlt — OpenLess neu installieren',
       windowsImeDesc:
         'Fügt diktierten Text über den OpenLess-TSF-Textdienst ein, der neben Ihrer Eingabemethode aktiv bleibt, um Einschränkungen der Zwischenablage zu umgehen.',
       windowsImeInstalled: 'Installiert',
@@ -2281,12 +2303,16 @@ export const de: typeof zhCN = {
       macosCompositionInputDesc:
         'Zeigt die Erkennung im ursprünglichen Eingabefeld und ersetzt sie anschließend durch den überarbeiteten oder übersetzten Text. Erfordert Bedienungshilfen und einen kompatiblen Editor. Cursorbewegungen oder manuelle Änderungen stoppen die Ersetzung.',
       windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen',
+      liveInputComingSoonDesc:
+        'Live-Komposition (Text erscheint beim Sprechen direkt im Feld) wird für Linux umgesetzt. Danach steht hier das Gegenstück zum Windows-Kompositionsschalter.',
       windowsCompositionInputDesc:
         'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
       streamingInsertSaveClipboardHint:
         'Kopiert nach erfolgreichem Einfügen den fertigen Text in die Zwischenablage, damit du ihn mit Cmd+V erneut einfügen kannst. Bei „Aus“ bleibt die Zwischenablage unberührt.',
       localAsrTitle: 'Lokale ASR-Modelle (experimentell)',
+      localAsrComingSoonDesc:
+        'Lokale Spracherkennung (sherpa-onnx / Whisper) ist für Linux geplant: Modell-Download und Inferenz-Runtime werden gerade angebunden. Danach lässt sich hier ein Modell wählen und offline transkribieren.',
       localAsrDesc:
         'Verlagert die Transkription von Cloud-ASR auf das Gerät. Für Offline-Nutzung oder sensible Daten.',
       localAsrWarningShort:

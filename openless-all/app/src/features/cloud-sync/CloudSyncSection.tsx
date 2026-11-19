@@ -25,7 +25,7 @@ import { Toggle } from '../../ui/controls/SettingRow';
 import { useHotkeySettings } from '../../data/preferences';
 import { marketplaceAuthStatus } from '../../api/marketplace';
 import { readCredential } from '../../api/providers';
-import { isTauriHost } from '../../runtime/environment';
+import { isNativeDesktopHost } from '../../runtime/environment';
 import { getCloudSyncPreviewScenario } from '../../preview/cloud-sync';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION as CONSENT_VERSION,
@@ -501,7 +501,7 @@ export function CloudSyncSection() {
     window.addEventListener('openless:sync-ui-persistence-failed', uiPersistenceFailed);
     void (async () => {
       try {
-        if (isTauriHost()) {
+        if (isNativeDesktopHost()) {
           const subscriptions = [
             () => listenEncryptedSyncStateChanges((event) => {
               if (!disposed) eventsRef.current.state(event);
@@ -885,7 +885,7 @@ export function CloudSyncSection() {
           <Btn
             variant="primary"
             icon="user"
-            disabled={!isTauriHost() || !available || working}
+            disabled={!isNativeDesktopHost() || !available || working}
             onClick={() => setShowLogin(true)}
           >
             {t('cloudSyncE2ee.signIn')}

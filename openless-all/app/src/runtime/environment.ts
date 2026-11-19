@@ -1,5 +1,5 @@
-export type OS = 'mac' | 'win' | 'android' | 'harmony';
-export type RuntimeHost = 'preview' | 'tauri' | 'harmony';
+export type OS = 'mac' | 'win' | 'android' | 'harmony' | 'linux';
+export type RuntimeHost = 'preview' | 'tauri' | 'harmony' | 'linux';
 export interface ShortcutPlatform {
   isMac: boolean;
   isWindows: boolean;
@@ -51,6 +51,10 @@ export function resolveRuntimeEnvironment(hints: EnvironmentHints): RuntimeEnvir
     return { host: 'harmony', os: 'harmony', isMobile: true };
   }
 
+  if (buildPlatform === 'gtk' || new URLSearchParams(hints.search).get('bridge') === 'http') {
+    return { host: 'linux', os: 'linux', isMobile: false };
+  }
+
   // The origin or native Vite build identifies a WebView before Wry installs its bridge.
   const nativeOrigin =
     protocol === 'tauri:' ||
@@ -96,6 +100,15 @@ export function isPreviewHost(): boolean {
 
 export function isTauriHost(): boolean {
   return getRuntimeEnvironment().host === 'tauri';
+}
+
+export function isLinuxHost(): boolean {
+  return getRuntimeEnvironment().host === 'linux';
+}
+
+export function isNativeDesktopHost(): boolean {
+  const { host } = getRuntimeEnvironment();
+  return host === 'tauri' || host === 'linux';
 }
 
 export function isHarmonyRuntime(): boolean {

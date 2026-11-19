@@ -15,6 +15,8 @@ export const ja: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '選択したテキストを編集',
+  voiceEditLinuxHint: '30 秒以内に対象アプリに切り替え、テキストを選択して選択範囲の推敲ショートカットを押してください。',
   voiceEdit: {
     title: '音声編集セッション',
     description:
@@ -296,6 +298,8 @@ export const ja: typeof zhCN = {
     tagline: '自然に話し、きれいに書く',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: '近日対応',
     loading: '読み込み中…',
     retry: '再試行',
     settingsLoadFailed: '設定の読み込みに失敗しました',
@@ -645,6 +649,8 @@ export const ja: typeof zhCN = {
     actions: {
       refresh: '再読み込み',
       services: 'AI とモデル',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: '音声認識とテキスト処理のサービスを選び、チャネルとネットワークプロキシを管理します。',
       general: '一般',
       shortcuts: 'ショートカット',
       privacy: '権限とデータ',
@@ -1234,6 +1240,13 @@ export const ja: typeof zhCN = {
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
       polishHotkey: '選択範囲アシスタントのショートカット',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        '音声編集ウィンドウは Linux ではまだ実装されていません。対応後はショートカットを押しながら指示を話すと、モデルが選択範囲を書き換えます。',
+      polishDeliveryComingSoonDesc:
+        'Linux では今のところ選択範囲を直接置き換えます（プレビュー確認には確認 UI が必要で、対応中です）。',
+      previewConfirmComingSoonHint:
+        'プレビュー確認は Linux では未対応です。確認 UI がないため、当面は直接置き換えます。',
       polishHotkeyDesc:
         '音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。',
       polishDelivery: '結果の処理',
@@ -1418,6 +1431,7 @@ export const ja: typeof zhCN = {
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
       lowLatencyDictationLabel: '低遅延キャプチャ',
+      linuxEarlyCaptureDesc: 'ショートカットを押すとすぐにマイクを起動します。録音が始まるまでは音声をメモリ内だけに保持し、キャンセル時は破棄します。待機中はマイクを使用しません。',
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       dsp: {
@@ -1593,6 +1607,8 @@ export const ja: typeof zhCN = {
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',
+      startMinimizedDescLinux:
+        'ログイン時の自動起動のみに適用されます。手動で起動した場合はメインウィンドウが表示されます。',
       autoUpdateCheckLabel: 'アップデートを自動チェック',
       autoUpdateCheckDesc: '起動時および 60 分ごとに自動チェック。',
       marketplaceGroupTitle: 'スタイルパックマーケット',
@@ -1996,6 +2012,12 @@ export const ja: typeof zhCN = {
       hotkeyStarting: 'インストール中…',
       hotkeyFailed: '監視失敗',
       windowsImeLabel: 'Windows 入力メソッドバックエンド',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: '入力メソッドのバックエンド',
+      imeBackendChecking: '確認中…',
+      imeBackendReady: '準備完了（fcitx5 アドオン読み込み済み）',
+      imeBackendDaemonDown: 'fcitx5 が起動していません（ログイン時に自動起動）',
+      imeBackendPluginMissing: 'アドオン未インストール。OpenLess を再インストールしてください',
       windowsImeDesc:
         '入力方式と併存する OpenLess TSF テキストサービス経由で文字を挿入し、IME を切り替えずにクリップボード入力の制限を回避します。',
       windowsImeInstalled: 'インストール済み',
@@ -2186,12 +2208,16 @@ export const ja: typeof zhCN = {
       macosCompositionInputDesc:
         '録音中の認識結果を元の入力欄に表示し、終了後に整形または翻訳した文章へ置き換えます。アクセシビリティ権限と対応エディタが必要です。カーソル移動や手動編集で置き換えを停止します。',
       windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示',
+      liveInputComingSoonDesc:
+        'Linux 版はリアルタイム入力（話しながら入力欄へ文字を書き込む）を準備中です。対応後、ここに Windows のコンポジション入力に相当するスイッチが表示されます。',
       windowsCompositionInputDesc:
         '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',
       localAsrTitle: 'ローカル ASR モデル',
+      localAsrComingSoonDesc:
+        'Linux 版のローカル音声認識（sherpa-onnx / Whisper）は対応準備中です。モデルのダウンロードと推論ランタイムを接続しています。完了するとここでモデルを選び、オフラインで認識できます。',
       localAsrDesc: '転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。',
       localAsrWarningShort: 'ローカル推論は遅く、スペック不足では欠字の可能性があります。',
       localAsrFallbackLabel: 'クラウド認識に失敗したらローカルモデルを使う',

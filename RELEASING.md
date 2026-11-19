@@ -61,7 +61,7 @@ release entry point have been removed, and desktop releases no longer dispatch L
 Linux source, local build/package/verification scripts, and device acceptance
 requirements remain available. No Linux artifacts or aliases are automatically
 built or attached. Before manually distributing packages, complete the L01-L12
-acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
+acceptance on real Ubuntu hardware
 for that exact candidate. Compilation alone is not device acceptance. Desktop and
 Android delivery remain independent; Linux has no in-app updater or AppImage.
 
@@ -114,7 +114,7 @@ A local machine without store certificates can still produce a package:
 `OPENLESS_HARMONY_CHANNEL=none` builds and ships the unsigned HAP only, and
 `scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned`
 checks its contents without a device.
-For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
+For each new Linux package candidate, increment `openless-all/app/linux-host/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Local packaging uses this explicit revision (Linux CI/tag builds are paused); never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
@@ -127,7 +127,7 @@ Existing releases and their download aliases are not migrated or deleted. The al
 
 Website/CDN download resolution must use the actual asset names from the selected release API (or an external redirect to those assets), rather than assume the old fixed alias exists in a new release. This change does not implement a website redirect. Stable selection may use the latest stable release; beta selection must explicitly select its prerelease tag because GitHub `latest` excludes prereleases. Historical fixed-name links remain valid for historical releases. Updater manifest generation and its CDN artifact handoff are unchanged.
 
-Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
+Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The Linux host work (Qt6 WebEngine host + `linux-web`) owns Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
 ## Version-sync gate
 
@@ -203,7 +203,7 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 
 Linux workflow dispatch is paused. Before manually distributing Linux packages (or restoring automation), require all of the following:
 
-1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
+1. Linux device acceptance (audio, input, install, upgrade, rollback) is complete. A green package build alone does not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
 3. Run the local package verifier for ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
 4. Check out the reviewed immutable tag and verify the package version matches `package.json`, so the packages provably come from the reviewed commit.
@@ -313,7 +313,7 @@ and reports that the store upload was skipped.
 `versionName`/`versionCode` in `openless-all/app/harmony/AppScope/app.json5` are a
 development placeholder; the packaging script rewrites them for the build
 (`versionName` from `package.json`, `versionCode` from
-`linux-egui/package-revision`, which only increases) and restores the file
+`linux-host/package-revision`, which only increases) and restores the file
 afterwards.
 
 ## Release notes and contributor attribution

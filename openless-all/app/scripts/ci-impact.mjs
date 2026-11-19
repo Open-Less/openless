@@ -22,7 +22,7 @@
 //   tauri        macOS / Windows desktop shells and the Android build that
 //                shares their dependency graph.
 //   msrv         The pinned Rust 1.99 compile.
-//   linux        The Linux egui host, its tests and the deb/rpm chain.
+//   linux        The Linux host host, its tests and the deb/rpm chain.
 //   harmony      The HarmonyOS host (ArkTS contracts, Rust host, HAP).
 //   frontend     Browser-rendered surface: the Chromium/WebKit motion suite.
 //   ios-device   The Xcode/Rime project layer and the shared Rust crates that
@@ -39,7 +39,7 @@ const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
 /** Everything runs. */
 const ALL = Symbol('all');
 
-const AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'capsule', 'ios-device'];
+const AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'ios-device'];
 
 /** Cargo workspaces that describe this repository's own packages. */
 const WORKSPACES = ['openless-all/app/Cargo.toml', 'openless-all/app/src-tauri/Cargo.toml'];
@@ -48,26 +48,19 @@ const WORKSPACES = ['openless-all/app/Cargo.toml', 'openless-all/app/src-tauri/C
  * Platform roots: the package each platform actually builds. The closure is
  * walked from here, so a crate only counts if the platform really links it.
  *
- * `openless-native-capsule` is not linked by the app binary — it is compiled
- * into the desktop shells — so it is listed explicitly, on desktop only.
  * iOS copies `openless-core` into its own tree (see ios/scripts/prepare-core.py)
  * and never sees the Tauri crate.
  */
 const PLATFORM_ROOTS = {
-  macos: ['openless', 'openless-native-capsule'],
-  windows: ['openless', 'openless-native-capsule'],
+  macos: ['openless'],
+  windows: ['openless'],
   android: ['openless'],
   // The Linux reusable workflow also owns Harmony Rust unit tests.
-  linux: ['openless-linux-egui', 'openless-harmony-host'],
+  linux: ['openless-linux-host', 'openless-harmony-host'],
   harmony: ['openless-harmony-host'],
   ios: ['openless-core'],
 };
 
-/**
- * Capsule crates: compiled into the desktop shells and covered by their own
- * macOS + Windows runners, which only earn their keep when these change.
- */
-const CAPSULE_PACKAGES = new Set(['openless-capsule', 'openless-native-capsule']);
 
 /** Rust target_os names used when evaluating `cfg(...)` guards. */
 const PLATFORM_TARGET_OS = {
@@ -262,7 +255,7 @@ function classify(file, context) {
   const tags = new Set();
   if (motionSurface(file)) {
     // The bundle is embedded in every shell that renders it. The Linux host uses
-    // a native egui UI and does not consume `dist/` at all, and the Android job
+    // a native host UI and does not consume `dist/` at all, and the Android job
     // only compiles the Rust crate (`npm run build` there just satisfies
     // `generate_context!`), so neither is in scope for a bundle-only change.
     for (const tag of ['frontend', 'macos', 'windows', 'harmony']) tags.add(tag);
@@ -270,7 +263,6 @@ function classify(file, context) {
 
   const owner = ownerPackage(file, context);
   if (owner) {
-    if (CAPSULE_PACKAGES.has(owner)) tags.add('capsule');
     for (const [platform, packages] of context.closures) {
       if (packages.has(owner)) {
         tags.add(platform);
@@ -282,7 +274,7 @@ function classify(file, context) {
   // embed them (assets, fixtures, icons).
   if (tags.size === 0) {
     if (file.startsWith('openless-all/app/harmony/')) return new Set(['harmony']);
-    if (file.startsWith('openless-all/app/linux-egui/')) return new Set(['linux']);
+    if (file.startsWith('openless-all/app/linux-host/')) return new Set(['linux']);
     return ALL;
   }
   return tags;
@@ -322,8 +314,6 @@ function decide(area, context, files) {
       return reached.has('frontend');
     case 'android':
       return reached.has('android');
-    case 'capsule':
-      return reached.has('capsule');
     case 'ios-device':
       return reached.has('ios-device');
     default:

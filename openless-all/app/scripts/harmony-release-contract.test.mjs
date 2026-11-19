@@ -165,11 +165,18 @@ assert.match(harmonyCall, /tag: \$\{\{ github\.ref_name \}\}/);
 assert.match(harmonyCall, /publish: true/);
 assert.match(harmonyCall, /secrets: inherit/);
 assert.doesNotMatch(tauriRelease, /gh workflow run|dispatch-platform-releases/);
-assert.doesNotMatch(
+// Linux 包走自己的可复用工作流，并且只有真机验收记录过这个 tag 才发。
+assert.match(
   tauriRelease,
-  /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/,
-  'Linux automation is paused',
+  /^  linux:$/m,
+  'release-tauri.yml must call the Linux release workflow',
 );
+assert.match(
+  tauriRelease,
+  /vars\.LINUX_ACCEPTED_RELEASE_TAG == github\.ref_name/,
+  'Linux publication must be gated on the recorded device acceptance',
+);
+assert.doesNotMatch(tauriRelease, /release-linux-host-legacy|release-linux-legacy/);
 assert.match(
   tauriRelease,
   /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,

@@ -877,9 +877,13 @@ export interface PlatformCapabilities {
   supportsTray: boolean;
   supportsOverlay: boolean;
   supportsImeInput: boolean;
+  /** 插入方式是否包含「写剪贴板 → 模拟粘贴」。Linux 走 fcitx5 commitString，不经过剪贴板。 */
+  supportsClipboardPasteInsertion?: boolean;
   supportsLocalAsr: boolean;
   supportsLocalQwen3Mlx: boolean;
   supportsInAppDictation: boolean;
   supportsAutoUpdate: boolean;
   supportsVoiceEdit: boolean;
+  /** 我们自己的 Linux 宿主（GTK+WebKit / Qt+CEF）。用于「Linux 版本」专属裁剪。 */
+  linuxHost?: boolean;
 }

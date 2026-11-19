@@ -14,6 +14,8 @@ import {
 } from '../../api/voice-edit';
 import { ToolWindowHeader } from '../../components/ui/ToolWindowHeader';
 import { useModalActive } from '../../ui/layout/AppViewport';
+import { isLinuxHost } from '../../runtime/environment';
+import { listenHostEvent } from '../../lib/hostEventBus';
 import './voice-edit-panel.css';
 
 const isTerminal = (phase: VoiceEditSnapshot['phase']) =>
@@ -38,6 +40,7 @@ export function VoiceEditPanel({
 }: VoiceEditPanelProps) {
   const { t } = useTranslation();
   const modalActive = useModalActive();
+  const selectionOnly = isLinuxHost();
   const [snapshot, setSnapshot] = useState<VoiceEditSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -66,15 +69,17 @@ export function VoiceEditPanel({
     setBusy(false);
     if (!active) return;
     setSnapshot(null);
+    const unlisten = selectionOnly ? listenHostEvent('voice-edit:show', () => void refresh()) : undefined;
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 500);
+    const timer = selectionOnly ? undefined : window.setInterval(() => void refresh(), 500);
     return () => {
       generation.current += 1;
       runningAction.current = undefined;
       closingRef.current = false;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearInterval(timer);
+      unlisten?.();
     };
-  }, [active, refresh]);
+  }, [active, refresh, selectionOnly]);
 
   useEffect(() => {
     if (closeError) setError(closeError);
@@ -165,7 +170,7 @@ export function VoiceEditPanel({
         {!snapshot || isTerminal(snapshot.phase) ? (
           <div className="ol-voice-edit-empty">
             <p>{t(embedded ? 'voiceEdit.androidTargetHint' : 'voiceEdit.targetHint')}</p>
-            {!embedded && (
+            {!embedded && !selectionOnly && (
               <button
                 className="ol-tool-button is-primary"
                 disabled={busy || closing}
@@ -275,7 +280,7 @@ export function VoiceEditPanel({
             {t(`voiceEdit.errors.${error.split(':')[0]}`, { defaultValue: error })}
           </div>
         ) : null}
-        {!embedded && snapshot && isTerminal(snapshot.phase) ? (
+        {!embedded && !selectionOnly && snapshot && isTerminal(snapshot.phase) ? (
           <button
             className="ol-tool-button"
             disabled={busy || closing}

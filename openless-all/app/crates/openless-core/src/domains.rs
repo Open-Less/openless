@@ -2,7 +2,7 @@
 //! transport implementations.
 //!
 //! The traits in this module are deliberately grouped by use-case instead of
-//! mirroring Tauri command names.  Linux/egui code only depends on these DTOs
+//! mirroring Tauri command names.  Linux host code only depends on these DTOs
 //! and traits; Tauri remains a compatibility adapter for the legacy IPC names.
 
 use std::path::PathBuf;

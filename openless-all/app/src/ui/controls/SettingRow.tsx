@@ -1,4 +1,5 @@
 import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Switch } from '@base-ui/react/switch';
 import { Hint } from '../overlays/Tooltip';
 import './setting-row.css';
@@ -11,6 +12,7 @@ export interface SettingRowProps {
   children: ReactNode;
   controlWidth?: number | string;
   className?: string;
+  comingSoon?: boolean;
   descriptionPlacement?: 'hint' | 'inline';
 }
 
@@ -20,9 +22,11 @@ export function SettingRow({
   children,
   controlWidth,
   className,
+  comingSoon = false,
   descriptionPlacement = 'hint',
 }: SettingRowProps) {
   const labelId = useId();
+  const { t } = useTranslation();
   return (
     <div
       className={['ol-setting-row', className].filter(Boolean).join(' ')}
@@ -47,7 +51,14 @@ export function SettingRow({
         )}
       </div>
       <div className="ol-setting-row-control ol-flex-row">
-        <SettingLabel.Provider value={labelId}>{children}</SettingLabel.Provider>
+        {comingSoon && <span>{t('common.comingSoon')}</span>}
+        <SettingLabel.Provider value={labelId}>
+          {comingSoon ? (
+            <div ref={(element) => element?.setAttribute('inert', '')} style={{ display: 'contents' }}>
+              {children}
+            </div>
+          ) : children}
+        </SettingLabel.Provider>
       </div>
     </div>
   );

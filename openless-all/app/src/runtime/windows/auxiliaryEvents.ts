@@ -1,5 +1,5 @@
-import { isTauriHost } from '../environment';
-import { requireBackendReady } from '../transport';
+import { isLinuxHost, isTauriHost } from '../environment';
+import { listenTauriEvent, requireBackendReady } from '../transport';
 
 type EventScope = 'window' | 'app';
 
@@ -27,6 +27,12 @@ export function createAuxiliaryWindowSubscriptions() {
     },
     async listen<T>(name: string, onPayload: (payload: T) => void, scope: EventScope) {
       if (closed) return false;
+      if (isLinuxHost()) {
+        const unsubscribe = await listenTauriEvent<T>(name, onPayload);
+        if (closed) { unsubscribe(); return false; }
+        listeners.push(unsubscribe);
+        return true;
+      }
       const connection = await getSource();
       if (closed || !connection) return false;
       // A mirror's targeted lifecycle events never change the primary window.

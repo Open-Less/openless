@@ -67,7 +67,6 @@ try {
     'harmony',
     'frontend',
     'android',
-    'capsule',
     'ios-device',
   ];
   const every = (verdict) => Object.fromEntries(ALL_AREAS.map((area) => [area, verdict]));
@@ -83,7 +82,7 @@ try {
   reset();
 
   // The Linux host is a separate crate in its own target graph.
-  commit({ 'openless-all/app/linux-egui/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
+  commit({ 'openless-all/app/linux-host/src/i18n.rs': 'fn x() {}\n' }, 'linux host source');
   expect('linux host source', {
     tauri: 'false',
     msrv: 'true',
@@ -109,7 +108,7 @@ try {
   });
   reset();
 
-  // The Linux workflow owns Harmony Rust unit tests as well as the egui host.
+  // The Linux workflow owns Harmony Rust unit tests as well as the Linux host.
   commit({ 'openless-all/app/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
   expect('harmony rust', {
     tauri: 'false',
@@ -136,7 +135,7 @@ try {
 
   // ...but its manifest moves the workspace dependency graph for everyone.
   commit(
-    { 'openless-all/app/linux-egui/Cargo.toml': '[package]\nname = "x"\n' },
+    { 'openless-all/app/linux-host/Cargo.toml': '[package]\nname = "x"\n' },
     'linux host manifest',
   );
   expect('linux host manifest', { tauri: 'true', msrv: 'true', linux: 'true', harmony: 'true' });
@@ -150,23 +149,13 @@ try {
     linux: 'false',
     harmony: 'false',
     android: 'true',
-    capsule: 'false',
     'ios-device': 'false',
   });
   reset();
 
-  commit({ 'openless-all/app/native-capsule/src/lib.rs': 'pub fn x() {}\n' }, 'capsule source');
-  expect('capsule source', {
-    tauri: 'true',
-    msrv: 'true',
-    capsule: 'true',
-    linux: 'false',
-    harmony: 'false',
-  });
-  reset();
 
   // The rendered bundle is embedded by every shell that paints it; the Linux
-  // host draws a native egui UI and never reads `dist/`, and the Android job only
+  // host serves its own UI bundle and never reads the Tauri `dist/`, and the Android job only
   // compiles Rust, so neither is in scope.
   commit(
     { 'openless-all/app/src/features/style-packs/Style.tsx': 'export const x = 1;\n' },
@@ -211,7 +200,6 @@ try {
     harmony: 'true',
     frontend: 'true',
     android: 'true',
-    capsule: 'false',
     'ios-device': 'false',
   });
   reset();
@@ -256,7 +244,7 @@ const workflow = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.github/workflows/ci.yml'),
   'utf8',
 );
-const areas = ['tauri', 'msrv', 'harmony', 'frontend', 'android', 'capsule'];
+const areas = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android'];
 check(
   'workflow publishes every area',
   areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
@@ -264,7 +252,7 @@ check(
 );
 check(
   'workflow computes every area in the detect step',
-  /for area in tauri msrv harmony frontend android capsule ios-device; do/.test(workflow),
+  /for area in tauri msrv linux harmony frontend android ios-device; do/.test(workflow),
   true,
 );
 check(
@@ -311,11 +299,6 @@ check(
   true,
 );
 check(
-  'capsule gate is fail-open',
-  workflow.includes("needs.changes.outputs.capsule != 'false'"),
-  true,
-);
-check(
   'ui motion gate follows the rendered surface',
   /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.frontend != 'false'/.test(workflow),
   true,
@@ -325,7 +308,16 @@ check(
   workflow.includes("needs.changes.outputs.harmony != 'false'"),
   true,
 );
-check('Linux CI is paused', workflow.includes('\n  linux-egui-package:'), false);
+check(
+  'Linux checks live in ci.yml',
+  workflow.includes('\n  linux-check:') && workflow.includes('\n  linux-package:'),
+  true,
+);
+check(
+  'Linux gate is fail-open',
+  workflow.includes("needs.changes.outputs.linux != 'false'"),
+  true,
+);
 
 // Balance VM count and latency: the small Windows-only subset reuses the
 // existing stable runner; Linux tests and packaging remain parallel.

@@ -96,7 +96,7 @@ still require review and a deliberate patch/dependency update.
 
 ## Shared performance changes (2026-10-22)
 
-All hosts that use `AudioProcessor` (including desktop Tauri and Linux egui)
+All hosts that use `AudioProcessor` (including desktop Tauri and Linux host)
 reuse mono, frame and resampled output scratch buffers. Rational resampling
 phases are precomputed once per stream, capped at 1024 phases; unusual clocks
 fall back to the original kernel calculation. The output duration and filter
@@ -137,13 +137,13 @@ The comparator fails on any PCM difference or duration/case-set mismatch;
 and a truncated output cannot pass. The probe sources must be identical in
 both builds. Original baseline sources/models must remain unchanged.
 
-Desktop Tauri and Linux egui use the shared processor directly. Harmony uses
+Desktop Tauri and Linux host use the shared processor directly. Harmony uses
 the external PCM recorder, which reuses conversion scratch per session.
 The iOS native recorder now optionally applies the same processor with
 session-frozen settings and a reused input buffer; the stop/drain barrier
 flushes its tail before finishing the archive. Enhancement remains off by
 default. Its native Swift settings page persists the same software DSP
-controls as egui and Tauri, with writes blocked while a capture is active.
+controls as the Linux host and Tauri, with writes blocked while a capture is active.
 Native iOS conversion uses a separate
 Swift AVAudioConverter worker; its output scratch is now actor-owned and
 reused with exact output capacities and a two-entry bound.

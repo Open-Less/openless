@@ -3,8 +3,8 @@ import { access, constants } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// The Tauri shell no longer ships a Linux desktop target: Linux runs the egui
-// host in `openless-all/app/linux-egui`. This contract keeps that split from
+// The Tauri shell no longer ships a Linux desktop target: Linux runs the host
+// host in `openless-all/app/linux-host`. This contract keeps that split from
 // drifting back — a Linux-only cfg block, a Linux-only dependency, or a Linux
 // branch in the React frontend would silently re-grow an unsupported target.
 //
@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 //   - `src-tauri/src/lib.rs` keeps a `#[cfg(target_os = "linux")] compile_error!`
 //     guard so an accidental Linux build fails with an actionable message.
 //   - i18n platform descriptions may legitimately say "Windows / Linux"
-//     because Linux users still run the product through the egui host.
+//     because Linux users still run the product through the host host.
 
 const appRoot = new URL('..', import.meta.url);
 const tauriSrc = fileURLToPath(new URL('../src-tauri/src', import.meta.url));
@@ -82,14 +82,30 @@ try {
   // absent, as expected
 }
 
-// ── 3. React: no Linux branch (i18n copy is excluded, see the header) ────────
+// ── 3. React: Linux branches must go through the capability layer ───────────
+// Linux 现在和 macOS/Windows 共用同一份 React 界面：允许的能力判断只有
+// `PlatformCapabilities`（`linuxHost` / `supports*`）与 `detectOS() === 'linux'`。
+// 不允许再出现旧的 Linux 专属实现（自定义标题栏常量、`ol-linux-*` 类名）。
+const ALLOWED_LINUX_FILES = new Set([
+  'runtime/environment.ts', // 宿主检测
+  'runtime/platform.ts', // 平台能力
+  'runtime/transport.ts', // 选择原生传输层
+  'runtime/domain-events.ts', // 选择域事件来源
+  'preview/profiles.ts', // 补全平台类型
+  'app/shell/WindowChrome.tsx', // 使用原生窗口装饰
+  'features/settings/shell/navigation.ts', // 按平台筛选设置页
+  'features/input/RecordingInputSection.tsx', // 按平台筛选录音功能
+]);
 const reactFiles = await collect(reactSrc, new Set(['.ts', '.tsx']), {
   skip: (path) => /[/\\]i18n[/\\]/.test(path),
 });
 for (const file of reactFiles) {
   if (file.endsWith('.test.ts') || file.endsWith('.test.tsx')) continue;
+  const relative = file.slice(reactSrc.length + 1).split(/[/\\]/).join('/');
   const source = await readFile(file, 'utf8');
-  for (const pattern of [/LINUX_TITLEBAR_HEIGHT/, /ol-linux-/, /['"]linux['"]/]) {
+  const patterns = [/LINUX_TITLEBAR_HEIGHT/, /ol-linux-/];
+  if (!ALLOWED_LINUX_FILES.has(relative)) patterns.push(/['"]linux['"]/);
+  for (const pattern of patterns) {
     const match = source.match(pattern);
     if (match) failures.push(`${file}: React still branches on Linux (${match[0]})`);
   }

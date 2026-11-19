@@ -32,7 +32,7 @@
 <p align="center">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-14%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square&logo=windows&logoColor=white" />
-  <img alt="Linux" src="https://img.shields.io/badge/Linux-egui-fcc624?style=flat-square&logo=linux&logoColor=black" />
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-Qt6-fcc624?style=flat-square&logo=linux&logoColor=black" />
   <img alt="Android" src="https://img.shields.io/badge/Android-8%2B-3ddc84?style=flat-square&logo=android&logoColor=white" />
   <img alt="iOS" src="https://img.shields.io/badge/iOS-16%2B-000000?style=flat-square&logo=apple&logoColor=white" />
   <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-adapting-0a59f7?style=flat-square" />
@@ -119,7 +119,7 @@ OpenLess 是一个跨平台（macOS、Windows、Linux、Android、iOS 与 Harmon
 | --- | --- | --- | --- |
 | macOS 14 Sonoma+ | Tauri 2 + React（`src-tauri/`） | 完整桌面应用：快捷键、插入、历史、风格包、光标上下文、Apple Speech、实验性本地 ASR | DMG（Apple Silicon / Intel）、Homebrew Cask |
 | Windows 10+ | Tauri 2 + React（`src-tauri/`） | 完整桌面应用，另有原生 TSF 输入法（`windows-ime/`）与 Foundry/sherpa 本地 ASR | NSIS 安装包 |
-| Linux | 原生 egui/eframe 宿主（`linux-egui/`，不依赖 Tauri 或 WebKitGTK） | Core 2.0 服务已接到原生界面；L01–L12 真机验收尚未完成 | 源码构建；验收通过后才提供 deb/rpm |
+| Linux | Qt6 WebEngine 宿主（`linux-qt/`）+ `linux-web` 后端桥（不依赖 Tauri 或 WebKitGTK） | 与桌面端同一套 React 界面，经 `/api/invoke` + `/api/events` 驱动 | `ci.yml` 的 `linux-package` 作业产出 deb/rpm；发布需真机验收记录 |
 | Android 8.0+ | Tauri 移动宿主 + React、OpenLess 键盘（`android/`、`mobile-ime/`） | 应用、悬浮胶囊、输入法、光标上下文、应用内更新 | 按 ABI 分发的 APK |
 | iOS 16+ | 原生 SwiftUI/UIKit 应用、键盘扩展、录音小组件（`openless-all/ios/`） | 中英文输入、语音优先与按住空格模式、语音翻译 | 源码构建的未签名 IPA，个人签名 |
 | HarmonyOS（API 12+） | ArkTS + ArkWeb 宿主与输入法扩展（`harmony/`、`harmony/rust`） | 宿主、输入法与语音管线已打通；联网识别、更新流程与上架仍在进行 | Release 中的未签名 HAP |
@@ -219,7 +219,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 
 下面每一项都是又一层沉淀为默认值的能力——授权一次，此后无需再管理。这是启动之后你脚下站立的基础设施：
 
-- 共享的 Rust 后端位于 `openless-core`。macOS、Windows 与 Android 使用轻薄的 Tauri 2 宿主加 React/TypeScript 前端；Android 另有原生键盘，Windows 另有 TSF 输入法。Linux 使用独立的原生 egui 宿主，从不编译 Tauri 或 WebKitGTK。iOS 运行原生 SwiftUI/UIKit 应用并带键盘扩展，HarmonyOS 运行 ArkTS/ArkWeb 宿主，通过同一套 napi 暴露的 Core 工作。
+- 共享的 Rust 后端位于 `openless-core`。macOS、Windows 与 Android 使用轻薄的 Tauri 2 宿主加 React/TypeScript 前端；Android 另有原生键盘，Windows 另有 TSF 输入法。Linux 使用独立的原生 Qt6 宿主，从不编译 Tauri 或 WebKitGTK。iOS 运行原生 SwiftUI/UIKit 应用并带键盘扩展，HarmonyOS 运行 ArkTS/ArkWeb 宿主，通过同一套 napi 暴露的 Core 工作。
 - 🎨 **风格包 Marketplace**——在应用内 Marketplace 浏览、安装、点赞社区的**风格包**，也可以发布自己的（每个包一份自定义系统提示词，快捷键切换）。后端经过审核，上传内容公开前会先审核。
 - ⚡ **流式插入**——润色文本逐字写入光标以降低感知延迟，并有自动回退到一次性粘贴的机制。在 设置 → 录音 中开关。
 - **切换式与按住说话式**两种录音模式，另支持 **MediaPlayPause 触发**，让有线耳机线控也能开始/结束录音。任意阶段按 `Esc` 都可以取消，包括润色与插入阶段。
@@ -255,7 +255,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
   - 应用内更新（设置 → 关于与更新）读取 `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`；Beta 用户需在高级设置中加入 Beta，读取对应的 `.../updates/beta/latest-android-{arch}-beta.json`。
   - 调试冒烟包：workflow_dispatch 产物中的 `OpenLess-android-debug-{abi}-*.apk`。
   - 拿不准时，执行 `adb shell getprop ro.product.cpu.abi` 选择匹配的 APK。
-- **Linux**：Tauri/WebView 版本已退役。原生 `eframe` 宿主使用共享的 Core 2.0 服务。在 CI 与真实 Ubuntu 上的音频、输入、安装、升级与回滚验收通过后，共享 Release 会包含 deb/rpm 包与 `SHA256SUMS`。Linux 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）；没有 AppImage，也没有应用内更新。
+- **Linux**：Tauri/WebView 版本已退役。Qt6 WebEngine 宿主（`linux-qt`）通过 `linux-web` 的 HTTP 命令桥使用共享的 Core 2.0 服务。在 CI 与真实 Ubuntu 上的音频、输入、安装、升级与回滚验收通过后，共享 Release 会包含 deb/rpm 包与 `SHA256SUMS`。Linux 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）；没有 AppImage，也没有应用内更新。
 - **HarmonyOS**（适配中）：从同一个 Release 下载 `OpenLess_harmony_arm64.hap`。它是未签名包，供开发者/测试人员通过 DevEco Studio 或 `hdc` 安装；AppGallery 分发包由工作流生成但需人工提交，目前还没有更新流程。本地构建与签名步骤见 `openless-all/app/harmony/README.md`。
 - **iOS**：没有可下载的 IPA。请从源码构建原生应用并用你自己的团队签名——bootstrap、构建与开启键盘的步骤见 [openless-all/ios/README.md](openless-all/ios/README.md)。
 - **macOS（Homebrew）**：
@@ -285,9 +285,9 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 
 ## 从源码构建（开发者）
 
-活跃工作区位于 `openless-all/app/`。`crates/openless-core` 是与框架无关的后端；`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 是原生 Linux 界面及其平台适配层，`harmony/` 是 ArkTS/ArkWeb 宿主加上 `harmony/rust` napi crate，`openless-all/ios/` 是独立的原生 iOS 工程。本地化的 crate（`cpal`、`tauri-runtime-wry`）直接签入 `src-tauri/vendor/`，因此**无需初始化 Git 子模块**。根 Core/Linux 工作区排除了 `src-tauri`，所以它独立的检查不会解析 Tauri 清单。建议先看[文档索引](docs/index.md)、[架构](docs/architecture.md)与[源码结构](docs/structure.md)。
+活跃工作区位于 `openless-all/app/`。`crates/openless-core` 是与框架无关的后端；`src-tauri` 承载 macOS/Windows/Android，`linux-Qt6` 是原生 Linux 界面及其平台适配层，`harmony/` 是 ArkTS/ArkWeb 宿主加上 `harmony/rust` napi crate，`openless-all/ios/` 是独立的原生 iOS 工程。本地化的 crate（`cpal`、`tauri-runtime-wry`）直接签入 `src-tauri/vendor/`，因此**无需初始化 Git 子模块**。根 Core/Linux 工作区排除了 `src-tauri`，所以它独立的检查不会解析 Tauri 清单。建议先看[文档索引](docs/index.md)、[架构](docs/architecture.md)与[源码结构](docs/structure.md)。
 
-Rust 1.99 是所有源码树（`openless-core`、`src-tauri`、`linux-egui`）的最低支持工具链，推荐使用最新稳定版 Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.99 与 stable，Linux egui 宿主验证 stable，并同时构建 Android、iOS 与 HarmonyOS 宿主。
+Rust 1.99 是所有源码树（`openless-core`、`src-tauri`、`linux-Qt6`）的最低支持工具链，推荐使用最新稳定版 Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.99 与 stable，Linux Qt6 宿主验证 stable，并同时构建 Android、iOS 与 HarmonyOS 宿主。
 
 ```bash
 cd "openless-all/app"
@@ -309,7 +309,7 @@ bash scripts/build-harmony-frontend.sh
 
 # 共享后端与 Linux 宿主/界面（不编译 Tauri/WebKitGTK）
 cargo check -p openless-core
-cargo check -p openless-linux-egui --all-targets
+cargo check -p openless-linux-Qt6 --all-targets
 
 # Tauri 宿主类型检查
 cargo check --manifest-path "src-tauri/Cargo.toml"
@@ -430,14 +430,14 @@ Chromium 系编辑器（VS Code、Electron 应用）只有在检测到活动辅�
 
 ```
 React UI  ── Tauri Adapter (macOS/Windows/Android) ──┐
-egui UI   ── Linux Adapter (no Tauri/WebKitGTK) ────┤
+Qt6 UI   ── Linux Adapter (no Tauri/WebKitGTK) ────┤
 SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── openless-core
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
+`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。
 
-`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流在一次 Actions run 中构建 macOS、Windows、Android 与 HarmonyOS 宿主；HarmonyOS 附上未签名 HAP，Android 不再有独立的 tag 触发。Linux egui 打包是独立的手动工作流，在真机验收前保持暂停；验收通过后由管理员把验证过的 deb/rpm 包附到共享 Release。Beta 产物保持 draft 直到管理员发布。Linux 没有 AppImage，也没有应用内更新清单。
+`v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流在一次 Actions run 中构建 macOS、Windows、Android 与 HarmonyOS 宿主；HarmonyOS 附上未签名 HAP，Android 不再有独立的 tag 触发。Linux Qt6 打包是独立的手动工作流，在真机验收前保持暂停；验收通过后由管理员把验证过的 deb/rpm 包附到共享 Release。Beta 产物保持 draft 直到管理员发布。Linux 没有 AppImage，也没有应用内更新清单。
 
 听写管线：`快捷键沿 → Recorder.start + ASR.openSession → [音频帧] → 快捷键沿 → Recorder.stop + ASR.sendLastFrame → 润色 → 插入 → History.save`。
 

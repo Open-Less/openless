@@ -211,7 +211,7 @@ const dependencies: Record<string, any> = {
   Card: 'card',
   Toggle: 'toggle',
   getCloudSyncPreviewScenario: () => undefined,
-  isTauriHost: () => true,
+  isNativeDesktopHost: () => true,
   listenEncryptedSyncStateChanges: (callback) => listen('cloud-sync-e2ee:state', callback),
   listenEncryptedSyncConflicts: (callback) => listen('cloud-sync-e2ee:conflict', callback),
   listenEncryptedSyncRestores: (callback) => listen('cloud-sync-e2ee:restored', callback),

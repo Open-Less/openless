@@ -108,33 +108,31 @@ for (const command of [
 ]) {
   assert.ok(deviceCommands.includes(command), `retain device check: ${command}`);
 }
-assert.equal(ci.jobs['linux-egui-package'], undefined, 'Linux CI is paused');
-for (const name of ['check-linux-egui.yml', 'release-linux-egui.yml']) {
-  assert.equal(
-    existsSync(path(name)),
-    false,
-    `${name} must stay removed while Linux automation is paused`,
-  );
+// Linux 与其它平台一样直接写进 ci.yml / release-tauri.yml：
+// 不再有独立的 Linux 工作流文件。
+for (const name of ['check-linux.yml', 'release-linux.yml']) {
+  assert.equal(existsSync(path(name)), false, `${name} must stay removed: one workflow file per platform`);
 }
-assert.equal(ci.jobs.changes.outputs.linux, undefined);
-assert.equal(
-  ci.jobs['windows-frontend'],
-  undefined,
-  'do not launch a duplicate Windows frontend VM',
-);
+assert.ok(ci.jobs['linux-check'], 'Linux checks live in ci.yml');
+assert.ok(ci.jobs['linux-package'], 'Linux packaging lives in ci.yml');
+assert.equal(ci.jobs.changes.outputs.linux, '${{ steps.detect.outputs.linux }}');
+// Windows 平台契约复用 cross-platform 的同一个 VM（不再启动第二个 Windows runner）。
+assert.equal(ci.jobs['windows-frontend'], undefined, 'no duplicate Windows frontend VM');
 const stable = ci.jobs['cross-platform'];
 const windowsContracts = stable.steps.find(
   (s) => s.name === 'Run the platform-sensitive contracts',
 );
 assert.equal(windowsContracts.if, "runner.os == 'Windows'");
-assert.equal(windowsContracts.run, 'node scripts/frontend-test-runner.mjs --platform-only windows');
+assert.equal(
+  windowsContracts.run,
+  'node scripts/frontend-test-runner.mjs --platform-only windows',
+);
 const frontend = stable.steps.find((s) => s.name === 'Build the frontend for the Tauri context');
 assert.equal(frontend.if, "runner.os == 'Windows'");
-assert.ok(stable.steps.indexOf(frontend) < stable.steps.indexOf(windowsContracts));
 assert.ok(
-  stable.steps.indexOf(windowsContracts) <
+  stable.steps.indexOf(frontend) <
     stable.steps.findIndex((s) => s.name === 'Compile Rust backend unit tests (Windows)'),
-  'fail fast on contract errors',
+  'build the frontend before compiling the Tauri lib',
 );
 assert.equal(
   stable.steps.find((s) => s.name === 'Check Windows prerequisites').if,

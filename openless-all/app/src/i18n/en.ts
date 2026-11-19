@@ -13,6 +13,8 @@ export const en: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Edit a selection',
+  voiceEditLinuxHint: 'Within 30 seconds, switch to the target app, select text, and press your selection polish shortcut.',
   voiceEdit: {
     title: 'Voice editing session',
     description:
@@ -307,6 +309,8 @@ export const en: typeof zhCN = {
     tagline: 'Speak naturally, write perfectly',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Coming soon',
     loading: 'Loading…',
     retry: 'Retry',
     settingsLoadFailed: 'Settings load failed',
@@ -657,6 +661,8 @@ export const en: typeof zhCN = {
     actions: {
       refresh: 'Try again',
       services: 'AI & models',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: 'Pick speech and text services; manage channels and the network proxy.',
       general: 'General',
       shortcuts: 'Shortcuts',
       privacy: 'Permissions & data',
@@ -1222,6 +1228,13 @@ export const en: typeof zhCN = {
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
       polishHotkey: 'Selection assistant shortcut',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        'The voice-edit window is not implemented on Linux yet. Once it lands you can hold the shortcut, speak an instruction, and have the model rewrite the selection.',
+      polishDeliveryComingSoonDesc:
+        'Linux replaces the selection directly for now (preview needs a confirmation surface, still in progress).',
+      previewConfirmComingSoonHint:
+        'Preview-and-confirm is not available on Linux yet: there is no confirmation surface, so the result is replaced directly.',
       polishHotkeyDesc:
         'Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).',
       polishDelivery: 'Result handling',
@@ -1434,6 +1447,7 @@ export const en: typeof zhCN = {
       stableTranscriptionDesc:
         'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',
       lowLatencyDictationLabel: 'Low-latency capture',
+      linuxEarlyCaptureDesc: 'Open the microphone as soon as you press the hotkey. Until recording starts, audio is held only in memory and is discarded if the trigger is cancelled. The microphone stays off while idle.',
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       dsp: {
@@ -1609,6 +1623,7 @@ export const en: typeof zhCN = {
       startupGroupTitle: 'Startup',
       startMinimizedLabel: 'Start minimized (no main window)',
       startMinimizedDesc: 'No main window on any launch path — menu bar / tray only.',
+      startMinimizedDescLinux: 'Applies to the login entry only: autostart stays in the background, while opening the app yourself still shows the main window.',
       autoUpdateCheckLabel: 'Auto-check for updates',
       autoUpdateCheckDesc: 'Check for updates on launch and every 60 minutes.',
       marketplaceGroupTitle: 'Style Pack Marketplace',
@@ -2015,6 +2030,12 @@ export const en: typeof zhCN = {
       hotkeyStarting: 'Installing…',
       hotkeyFailed: 'Listener failed',
       windowsImeLabel: 'Windows input method backend',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: 'Input method backend',
+      imeBackendChecking: 'Checking…',
+      imeBackendReady: 'Ready (fcitx5 addon loaded)',
+      imeBackendDaemonDown: 'fcitx5 not running (starts at login)',
+      imeBackendPluginMissing: 'Addon missing — reinstall OpenLess',
       windowsImeDesc:
         'Inserts dictated text through the OpenLess TSF text service, which stays active alongside your input method, to avoid clipboard insertion limits.',
       windowsImeInstalled: 'Installed',
@@ -2218,12 +2239,16 @@ export const en: typeof zhCN = {
       macosCompositionInputDesc:
         'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'Show live transcript in the input box',
+      liveInputComingSoonDesc:
+        'Live composition (text appearing in the field as you speak) is being implemented for Linux. Once ready, the equivalent of the Windows composition toggle will live here.',
       windowsCompositionInputDesc:
         'While you speak, the recognized text appears underlined in the input box and is replaced by the final result when you finish. Requires the OpenLess TSF input component and a target app that supports the Text Services Framework (TSF).',
       streamingInsertSaveClipboardLabel: 'Copy to clipboard',
       streamingInsertSaveClipboardHint:
         'After a successful insert, write the final text to the clipboard so Cmd+V can paste it again. Off = clipboard is never touched.',
       localAsrTitle: 'Local ASR models',
+      localAsrComingSoonDesc:
+        'Local speech recognition (sherpa-onnx / Whisper) is on the Linux roadmap: the model download and inference runtime are being wired up. Once ready you can pick a model and transcribe offline right here.',
       localAsrDesc:
         'Move transcription from cloud ASR to on-device inference. Offline / privacy-sensitive use only.',
       localAsrWarningShort: 'Local inference is slower; under-spec hardware may drop words.',

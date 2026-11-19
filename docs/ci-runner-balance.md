@@ -2,7 +2,7 @@
 
 ## 当前决定
 
-- Linux egui 专属 CI 与自动发行暂停：删除两个 workflow 和桌面 tag 自动派发；源码、本地打包和包校验脚本保留。
+- Linux（Qt 宿主 + `linux-web`）与其它平台同文件：CI 在 `ci.yml` 的 `linux-check` / `linux-package`，发版在 `release-tauri.yml` 的 `linux` 作业，由真机验收 tag 控制。
 - Windows 平台敏感契约合入现有 stable job，复用已有 checkout、npm 安装、前端构建和 PowerShell 解析，不再单独启动 Windows 前端 VM。
 - iOS 测试与真机构建复用统一变更检测，但独立运行：两者不共享产物，不必串行。保留 `test` / `device-build` 检查名；两项都应作为合并门禁，不能仅要求其中一项。
 - 不增加大规格收费 runner、不增加浏览器 worker 或 Android ABI。浏览器双引擎、stable/MSRV、胶囊继续保留独立缓存/任务，避免强行合并造成关键路径重编译。
@@ -14,7 +14,7 @@
 | 标签 | 日志中的镜像/系统 | 主要用途 |
 |---|---|---|
 | `ubuntu-latest` | Ubuntu 26.04（维护/同步任务日志） | 改动检测、Android、鸿蒙、维护与发行协调 |
-| `ubuntu-24.04` | Ubuntu 24.04.5 | Chromium/WebKit 浏览器测试；Linux egui 原生任务现已移除 |
+| `ubuntu-24.04` | Ubuntu 24.04.5 | Chromium/WebKit 浏览器测试；Linux 构建/打包/校验（Qt6 WebEngine 宿主） |
 | `windows-latest` | Windows Server 2025 / `windows-2025-vs2026` | Windows stable、MSRV、胶囊与发行 |
 | `macos-latest` | macOS 26.7.2 / `macos-26-arm64` | macOS stable、MSRV、胶囊、ARM 发行 |
 | `macos-15-intel` | macOS 15.7.9 / `macos-15`，x86_64 目标 | Intel 桌面发行、手动 CI 回退 |

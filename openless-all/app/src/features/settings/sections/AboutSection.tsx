@@ -97,7 +97,9 @@ export function AboutSection() {
             </div>
           </div>
           {/* Top right of the icon: stable-channel check-updates button. The Beta section has its own channel check. */}
-          {platformCaps?.supportsAutoUpdate === true && (
+          {/* Linux installs deb/rpm packages, so there is no in-app installer: the
+              native host checks the same manifest and notifies instead. */}
+          {platformCaps?.supportsAutoUpdate === true && platformCaps.linuxHost !== true && (
             <CheckUpdateButton channel="stable" compact={compactLayout} />
           )}
         </div>

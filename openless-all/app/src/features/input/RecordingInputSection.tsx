@@ -16,7 +16,7 @@ import {
   isPlainTextInsertionActive,
   pasteShortcutForPlainTextToggle,
 } from '../../lib/plainTextInsertion';
-import { isTauriHost } from '../../runtime/environment';
+import { isNativeDesktopHost, isTauriHost } from '../../runtime/environment';
 import {
   getAutostartEnabled,
   getVoiceActivationState,
@@ -249,6 +249,10 @@ export function RecordingInputSection({
   }
 
   const isAndroid = platformCaps?.platform === 'android';
+  // 「插入与剪贴板」整组在 Linux 上还没实现（要补「写剪贴板 → 模拟粘贴」通道），
+  // 按约定先显示、整块置灰并标注「即将支持」，而不是直接藏掉。
+  const clipboardInsertComingSoon =
+    platformCaps?.supportsClipboardPasteInsertion === false;
   const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
   const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
@@ -580,11 +584,12 @@ export function RecordingInputSection({
               onToggle={(next) => savePrefs({ ...prefs, stableTranscriptionEnabled: next })}
             />
           </SettingRow>
-          {showDesktopHotkey && os === 'win' && (
+          {/* 低延迟听写由 Windows 和 Linux 宿主实现；语音唤醒仍只在 Windows 可用。 */}
+          {showDesktopHotkey && (os === 'win' || os === 'linux') && (
             <>
               <SettingRow
                 label={t('settings.recording.lowLatencyDictationLabel')}
-                desc={t('settings.recording.lowLatencyDictationDesc')}
+                desc={t(os === 'linux' ? 'settings.recording.linuxEarlyCaptureDesc' : 'settings.recording.lowLatencyDictationDesc')}
               >
                 <Toggle
                   on={prefs.lowLatencyDictationEnabled ?? false}
@@ -592,6 +597,7 @@ export function RecordingInputSection({
                 />
               </SettingRow>
               <SettingRow
+                comingSoon={os !== 'win'}
                 label={t('settings.recording.voiceActivationLabel')}
                 desc={t('settings.recording.voiceActivationDesc')}
               >
@@ -600,7 +606,7 @@ export function RecordingInputSection({
                   onToggle={(next) => savePrefs({ ...prefs, voiceActivationEnabled: next })}
                 />
               </SettingRow>
-              {prefs.voiceActivationEnabled && (
+              {os === 'win' && prefs.voiceActivationEnabled && (
                 <div
                   style={{
                     margin: '4px 0 10px',
@@ -777,6 +783,7 @@ export function RecordingInputSection({
           <SettingRow
             label={t('settings.recording.restoreClipboardLabel')}
             desc={t('settings.recording.restoreClipboardDesc')}
+            comingSoon={clipboardInsertComingSoon}
           >
             <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
           </SettingRow>
@@ -784,6 +791,7 @@ export function RecordingInputSection({
             <SettingRow
               label={t('settings.recording.pasteShortcutLabel')}
               desc={t('settings.recording.pasteShortcutDesc')}
+              comingSoon={clipboardInsertComingSoon}
             >
               <SelectLite
                 value={prefs.pasteShortcut}
@@ -815,6 +823,7 @@ export function RecordingInputSection({
             <SettingRow
               label={t('settings.recording.plainTextInsertionLabel')}
               desc={t('settings.recording.plainTextInsertionDesc')}
+              comingSoon={platformCaps?.supportsClipboardPasteInsertion === false}
             >
               <Toggle
                 on={plainTextInsertionOn}
@@ -932,7 +941,10 @@ export function RecordingInputSection({
         <Card>
           <SectionTitle>{t('settings.recording.startupGroupTitle')}</SectionTitle>
           <AutostartRow />
-          <SettingRow label={t('settings.recording.startMinimizedLabel')}>
+          <SettingRow
+            label={t('settings.recording.startMinimizedLabel')}
+            desc={platformCaps?.linuxHost ? t('settings.recording.startMinimizedDescLinux') : undefined}
+          >
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
           </SettingRow>
           <SettingRow label={t('settings.recording.autoUpdateCheckLabel')}>
@@ -954,7 +966,7 @@ function AutostartRow() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isTauriHost()) {
+    if (!isNativeDesktopHost()) {
       setLoaded(true);
       return;
     }
@@ -968,7 +980,7 @@ function AutostartRow() {
       })
       .catch((err: unknown) => {
         console.error('[autostart] isEnabled failed', err);
-        if (!cancelled) setLoaded(true);
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;

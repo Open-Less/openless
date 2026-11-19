@@ -41,6 +41,8 @@ const expectedByPlatform: Record<OS, readonly string[]> = {
   // arm64 Android links sherpa-onnx; Foundry stays Windows-only.
   android: ['sherpa-onnx-local'],
   harmony: [],
+  // Linux 宿主不提供本地模型（sherpa / foundry / whisper 全部隐藏）。
+  linux: [],
 };
 
 // Production receives this catalog from Core. The test supplies only the

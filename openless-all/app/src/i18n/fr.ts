@@ -10,6 +10,8 @@ export const fr: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Modifier la sélection',
+  voiceEditLinuxHint: 'Dans les 30 secondes, passez à l’application cible, sélectionnez le texte et utilisez le raccourci de reformulation de la sélection.',
   voiceEdit: {
     title: 'Session de modification vocale',
     description:
@@ -312,6 +314,8 @@ export const fr: typeof zhCN = {
     tagline: 'Parlez naturellement, écrivez avec précision',
   },
   common: {
+    // 尚未在 Linux 上实现的功能：整块置灰并标注，避免假开关。
+    comingSoon: 'Bientôt',
     loading: 'Chargement…',
     retry: 'Réessayer',
     settingsLoadFailed: 'Impossible de charger les réglages',
@@ -675,6 +679,8 @@ export const fr: typeof zhCN = {
     actions: {
       refresh: 'Réessayer',
       services: 'IA et modèles',
+      // Linux 宿主不提供本地模型，副标题不再提它。
+      servicesNoLocalModels: 'Choisissez les services de parole et de texte ; gérez les canaux et le proxy réseau.',
       general: 'Général',
       shortcuts: 'Raccourcis',
       privacy: 'Autorisations et données',
@@ -1283,6 +1289,13 @@ export const fr: typeof zhCN = {
       title: 'Assistant de sélection',
       hint: 'Sélectionnez du texte, puis utilisez un seul raccourci : amélioration directe sans édition vocale ; sinon, maintenez et parlez, puis choisissez Question ou Modification.',
       polishHotkey: 'Raccourci de l’assistant de sélection',
+      // 选区助手：语音编辑与预览确认在 Linux 上还没做，先标注清楚。
+      voiceEditComingSoonDesc:
+        "La fenêtre d'édition vocale n'est pas encore disponible sous Linux. Une fois prête, vous pourrez maintenir le raccourci, dicter une consigne et le modèle réécrira la sélection.",
+      polishDeliveryComingSoonDesc:
+        'Pour le moment Linux remplace la sélection directement (la prévisualisation demande une interface de confirmation, en cours).',
+      previewConfirmComingSoonHint:
+        "La prévisualisation avec confirmation n'existe pas encore sous Linux : sans interface de confirmation, le résultat est remplacé directement.",
       polishHotkeyDesc:
         'Améliore directement le texte sans édition vocale ; sinon, maintenez pour parler. L’enregistrement suit les réglages généraux.',
       polishDelivery: 'Traitement du résultat',
@@ -1472,6 +1485,7 @@ export const fr: typeof zhCN = {
       stableTranscriptionDesc:
         'Une fois activé, l’ASR se connecte après l’arrêt et reçoit l’enregistrement complet. Le résultat arrive plus tard, mais la capture n’est pas perturbée par le délai de connexion ni par les variations du réseau pendant l’enregistrement.',
       lowLatencyDictationLabel: 'Capture à faible latence',
+      linuxEarlyCaptureDesc: 'Ouvre le microphone dès que vous appuyez sur le raccourci. Avant le début de l’enregistrement, le son reste en mémoire et est supprimé en cas d’annulation. Le microphone reste éteint au repos.',
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
       dsp: {
@@ -1652,6 +1666,8 @@ export const fr: typeof zhCN = {
       startMinimizedLabel: 'Démarrer réduit (sans fenêtre principale)',
       startMinimizedDesc:
         'Au lancement, seule la barre des menus ou la zone de notification est affichée, jamais la fenêtre principale.',
+      startMinimizedDescLinux:
+        "Ne concerne que le démarrage automatique : l'application reste en arrière-plan, mais une ouverture manuelle affiche toujours la fenêtre principale.",
       autoUpdateCheckLabel: 'Rechercher automatiquement les mises à jour',
       autoUpdateCheckDesc: 'Recherche les mises à jour au lancement, puis toutes les 60 minutes.',
       marketplaceGroupTitle: 'Catalogue de packs de styles',
@@ -2076,6 +2092,12 @@ export const fr: typeof zhCN = {
       hotkeyStarting: 'Installation…',
       hotkeyFailed: 'Échec du détecteur',
       windowsImeLabel: 'Moteur de saisie Windows',
+      // Linux 的「输入法后端」是 fcitx5 插件，不是 Windows TSF。
+      imeBackendLabel: "Backend de méthode d'entrée",
+      imeBackendChecking: 'Vérification…',
+      imeBackendReady: 'Prêt (module fcitx5 chargé)',
+      imeBackendDaemonDown: 'fcitx5 ne tourne pas (démarre à la connexion)',
+      imeBackendPluginMissing: 'Module absent — réinstallez OpenLess',
       windowsImeDesc:
         'Insère le texte dicté via le service de texte TSF d’OpenLess, qui reste actif à côté de votre méthode de saisie, pour éviter les limites du presse-papiers.',
       windowsImeInstalled: 'Installé',
@@ -2287,12 +2309,16 @@ export const fr: typeof zhCN = {
       macosCompositionInputDesc:
         'Affiche la transcription dans le champ initial, puis la remplace par le résultat corrigé ou traduit. Nécessite les autorisations d’accessibilité et un éditeur compatible. Déplacer le curseur ou modifier le texte arrête le remplacement.',
       windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ',
+      liveInputComingSoonDesc:
+        "La composition en direct (le texte s'écrit dans le champ pendant que vous parlez) est en cours d'implémentation pour Linux. Une fois prêt, l'équivalent de l'option de composition Windows apparaîtra ici.",
       windowsCompositionInputDesc:
         "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
       streamingInsertSaveClipboardLabel: 'Copier dans le presse-papiers',
       streamingInsertSaveClipboardHint:
         'Après une insertion réussie, copie le texte final dans le presse-papiers pour pouvoir le recoller avec Cmd+V. Désactivé : le presse-papiers n’est jamais modifié.',
       localAsrTitle: 'Modèles ASR locaux (expérimentaux)',
+      localAsrComingSoonDesc:
+        "La reconnaissance vocale locale (sherpa-onnx / Whisper) est prévue pour Linux : le téléchargement des modèles et le moteur d'inférence sont en cours d'intégration. Une fois prêt, vous pourrez choisir un modèle et transcrire hors ligne ici.",
       localAsrDesc:
         'Remplace l’ASR dans le cloud par l’inférence sur l’appareil. Pour l’usage hors ligne ou les données sensibles.',
       localAsrWarningShort:
