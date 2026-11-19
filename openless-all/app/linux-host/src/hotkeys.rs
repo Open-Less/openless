@@ -197,6 +197,7 @@ fn run_listener(
         }
     };
     let stop_for_match = Arc::clone(&stop);
+    let waker_for_match = Arc::clone(&waker);
     let press_ids = HotkeyPressIds::default();
     let signal_match =
         match connection.add_match(rule, move |args: (u32, u32, bool), _, message| {
@@ -217,7 +218,11 @@ fn run_listener(
                     stop_for_match.store(true, std::sync::atomic::Ordering::Release);
                     return false;
                 }
-                if let Some(thread) = waker.lock().expect("hotkey waker lock poisoned").as_ref() {
+                if let Some(thread) = waker_for_match
+                    .lock()
+                    .expect("hotkey waker lock poisoned")
+                    .as_ref()
+                {
                     thread.unpark();
                 }
             }
@@ -237,6 +242,9 @@ fn run_listener(
         if let Err(dbus_error) = connection.process(std::time::Duration::from_millis(250)) {
             *error.lock().expect("fcitx5 hotkey error lock poisoned") =
                 Some(dbus_backend_error(dbus_error));
+            if let Some(thread) = waker.lock().expect("hotkey waker lock poisoned").as_ref() {
+                thread.unpark();
+            }
             break;
         }
     }

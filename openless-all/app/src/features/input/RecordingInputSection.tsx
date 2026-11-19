@@ -584,15 +584,12 @@ export function RecordingInputSection({
               onToggle={(next) => savePrefs({ ...prefs, stableTranscriptionEnabled: next })}
             />
           </SettingRow>
-          {/* 低延迟听写与语音唤醒目前只有 Windows 实现：macOS 一直不显示这两项，
-              维持原样；Linux 按约定显示但整块置灰标注「即将支持」。 */}
+          {/* 低延迟听写由 Windows 和 Linux 宿主实现；语音唤醒仍只在 Windows 可用。 */}
           {showDesktopHotkey && (os === 'win' || os === 'linux') && (
             <>
-
               <SettingRow
-                comingSoon={os !== 'win'}
                 label={t('settings.recording.lowLatencyDictationLabel')}
-                desc={t('settings.recording.lowLatencyDictationDesc')}
+                desc={t(os === 'linux' ? 'settings.recording.linuxEarlyCaptureDesc' : 'settings.recording.lowLatencyDictationDesc')}
               >
                 <Toggle
                   on={prefs.lowLatencyDictationEnabled ?? false}

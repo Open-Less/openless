@@ -1466,6 +1466,7 @@ export const es: typeof zhCN = {
       stableTranscriptionDesc:
         'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',
       lowLatencyDictationLabel: 'Captura de baja latencia',
+      linuxEarlyCaptureDesc: 'Abre el micrófono al pulsar el atajo. Hasta que comienza la grabación, el audio se guarda solo en memoria y se descarta si cancelas. El micrófono permanece apagado en reposo.',
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
       dsp: {

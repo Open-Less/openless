@@ -1483,6 +1483,7 @@ export const fr: typeof zhCN = {
       stableTranscriptionDesc:
         'Une fois activé, l’ASR se connecte après l’arrêt et reçoit l’enregistrement complet. Le résultat arrive plus tard, mais la capture n’est pas perturbée par le délai de connexion ni par les variations du réseau pendant l’enregistrement.',
       lowLatencyDictationLabel: 'Capture à faible latence',
+      linuxEarlyCaptureDesc: 'Ouvre le microphone dès que vous appuyez sur le raccourci. Avant le début de l’enregistrement, le son reste en mémoire et est supprimé en cas d’annulation. Le microphone reste éteint au repos.',
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
       dsp: {

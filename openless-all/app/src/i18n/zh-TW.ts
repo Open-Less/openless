@@ -1381,6 +1381,7 @@ export const zhTW: typeof zhCN = {
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
       lowLatencyDictationLabel: '低延遲錄音',
+      linuxEarlyCaptureDesc: '按下快速鍵時立即啟用麥克風。正式錄音前，音訊只暫存在記憶體；取消時會捨棄。待機時不使用麥克風。',
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       dsp: {

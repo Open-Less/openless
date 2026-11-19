@@ -188,9 +188,7 @@ fn spawn_tray(host: std::sync::Arc<Host>) {
                 }
             };
             println!("[linux-web] 托盘已注册");
-            let lang = match openless_linux_host::LocalePref::from_tag("system").resolve() {
-                lang => lang,
-            };
+            let lang = openless_linux_host::LocalePref::from_tag("system").resolve();
             let _ = tray.set_lang(lang);
             let mut logged_styles = false;
             let mut devices_rx = host.host_events.subscribe();
@@ -615,7 +613,7 @@ fn find_recording(data_dir: &std::path::Path, session_id: &str) -> Option<PathBu
 fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
@@ -753,8 +751,6 @@ impl Host {
         value
     }
 }
-
-/// 需要 GTK 主线程执行的动作（`Host` 本身不能持有 GTK 对象）。
 
 /// 把键盘焦点交回主窗口。
 fn focus_main_window(_host: &Host) {
@@ -1028,7 +1024,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "remove_vocab" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             backend
-                .remove_vocabulary(&required_str(_args, "id")?)
+                .remove_vocabulary(required_str(_args, "id")?)
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "removed": true }))
         }
@@ -1079,7 +1075,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "remove_correction_rule" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             backend
-                .remove_correction_rule(&required_str(_args, "id")?)
+                .remove_correction_rule(required_str(_args, "id")?)
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "removed": true }))
         }
@@ -1087,20 +1083,20 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let enabled = _args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
             backend
-                .set_correction_rule_enabled(&required_str(_args, "id")?, enabled)
+                .set_correction_rule_enabled(required_str(_args, "id")?, enabled)
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "enabled": enabled }))
         }
         "accept_pending_correction" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             backend
-                .accept_pending_correction(&required_str(_args, "id")?)
+                .accept_pending_correction(required_str(_args, "id")?)
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "accepted": true }))
         }
         "reject_pending_correction" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
-            backend.reject_pending_correction(&required_str(_args, "id")?);
+            backend.reject_pending_correction(required_str(_args, "id")?);
             Ok(json!({ "rejected": true }))
         }
         "dismiss_vocab_suggestions" => {
@@ -1134,7 +1130,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         "delete_style_pack" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             backend
-                .remove_style_pack(&required_str(_args, "id")?)
+                .remove_style_pack(required_str(_args, "id")?)
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "removed": true }))
         }
@@ -1143,7 +1139,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let enabled = _args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
             serde_json::to_value(
                 backend
-                    .set_style_pack_enabled(&required_str(_args, "id")?, enabled)
+                    .set_style_pack_enabled(required_str(_args, "id")?, enabled)
                     .map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())
@@ -1152,7 +1148,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             serde_json::to_value(
                 backend
-                    .reset_builtin_style_pack(&required_str(_args, "id")?)
+                    .reset_builtin_style_pack(required_str(_args, "id")?)
                     .map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())
@@ -1183,7 +1179,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let path = std::path::PathBuf::from(required_str(_args, "targetPath")?);
             backend
-                .export_style_pack_path(&required_str(_args, "id")?, &path)
+                .export_style_pack_path(required_str(_args, "id")?, &path)
                 .map_err(|error| error.to_string())?;
             Ok(json!(path.to_string_lossy()))
         }
@@ -2319,14 +2315,24 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         }
         "get_capsule_snapshot" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let replay = backend.replay_events_after(0);
             let dictation = backend.snapshot().dictation;
-            Ok(json!({
-                "sessionId": dictation.session_id.map(|id| id.to_string()),
-                "phase": json_value(dictation.phase),
-                "level": dictation.level,
-                "elapsedMs": dictation.elapsed_ms,
-                "transcriptVisible": *host.capsule_transcript_visible.lock().unwrap(),
-            }))
+            let mut transcript = openless_core::TranscriptAccumulator::default();
+            for event in replay.events {
+                if dictation.session_id.is_some() && event.session_id == dictation.session_id {
+                    if let openless_core::BackendEventKind::TranscriptDelta(delta) = &event.kind {
+                        let _ = transcript.apply(delta);
+                    }
+                }
+            }
+            let mut payload = events::capsule_payload(&dictation, backend.get_preferences().capsule_style);
+            payload["sequence"] = json!(replay.latest_sequence);
+            payload["revision"] = json!(replay.latest_sequence);
+            payload["payloadRevision"] = json!(replay.latest_sequence);
+            payload["transcript"] = json!(transcript.text());
+            payload["phase"] = json_value(dictation.phase);
+            payload["transcriptVisible"] = json!(*host.capsule_transcript_visible.lock().unwrap());
+            Ok(payload)
         }
         "set_capsule_transcript_visible" => {
             let visible = arg_bool(_args, "visible")?;
@@ -2753,6 +2759,22 @@ fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
                 continue;
             }
         };
+        let canonical = json!({ "name": "backend:event", "payload": json_value(&event).to_string() });
+        write!(stream, "data: {canonical}\n\n")?;
+        let frontend_event = match &event.kind {
+            openless_core::BackendEventKind::PreferencesChanged(_) => {
+                Some(("prefs:changed", json_value(backend.get_preferences())))
+            }
+            openless_core::BackendEventKind::DictationStateChanged(state) => {
+                Some(("capsule:state", events::capsule_payload(state, backend.get_preferences().capsule_style)))
+            }
+            _ => None,
+        };
+        if let Some((name, payload)) = frontend_event {
+            let line = json!({ "name": name, "payload": payload.to_string() });
+            write!(stream, "data: {line}\n\n")?;
+        }
+        stream.flush()?;
         let Some((name, payload)) = events::map_event(&event) else {
             continue;
         };

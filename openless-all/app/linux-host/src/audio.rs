@@ -94,8 +94,8 @@ impl AudioProcessingWorker {
         raw_writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
         far_end: Option<openless_core::FarEndQueue>,
         reference_slot: Arc<std::sync::Mutex<Option<Arc<openless_core::ReferenceAudioBuffer>>>>,
-    ) -> Result<(Self, SyncSender<RawAudioFrame>), BackendError> {
-        let (sender, receiver) = sync_channel::<RawAudioFrame>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        receiver: std::sync::mpsc::Receiver<RawAudioFrame>,
+    ) -> Result<Self, BackendError> {
         let started = std::time::Instant::now();
         let join_handle = std::thread::Builder::new()
             .name("openless-linux-audio-processor".to_string())
@@ -184,12 +184,9 @@ impl AudioProcessingWorker {
                     format!("failed to spawn Linux audio processor: {error}"),
                 )
             })?;
-        Ok((
-            Self {
-                join_handle: Some(join_handle),
-            },
-            sender,
-        ))
+        Ok(Self {
+            join_handle: Some(join_handle),
+        })
     }
 
     fn finish(mut self) -> Result<(), BackendError> {
@@ -206,6 +203,20 @@ impl AudioProcessingWorker {
 }
 
 impl AudioRecorder for LinuxCpalRecorder {
+    #[cfg(target_os = "linux")]
+    fn arm_capture(
+        &self,
+        request: openless_core::CaptureStartRequest,
+    ) -> Result<Box<dyn openless_core::PendingAudioCapture>, BackendError> {
+        if !request.low_latency {
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "early Linux capture is disabled",
+            ));
+        }
+        Ok(Box::new(LinuxPendingCapture::arm(self.clone(), request)?))
+    }
+
     fn start(
         &self,
         session_id: SessionId,
@@ -246,6 +257,7 @@ impl AudioRecorder for LinuxCpalRecorder {
                         },
                         consumer,
                         progress,
+                        None,
                     )
                 })
                 .await
@@ -269,6 +281,172 @@ impl AudioRecorder for LinuxCpalRecorder {
 }
 
 #[cfg(target_os = "linux")]
+struct LinuxPendingCapture {
+    recorder: LinuxCpalRecorder,
+    device: Option<String>,
+    system_echo: bool,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
+    reference_slot: EchoSlot,
+    thread: Option<JoinHandle<()>>,
+    frames: Option<std::sync::mpsc::Receiver<RawAudioFrame>>,
+    startup: Option<std::sync::mpsc::Receiver<Result<(), BackendError>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxPendingCapture {
+    fn arm(
+        recorder: LinuxCpalRecorder,
+        request: openless_core::CaptureStartRequest,
+    ) -> Result<Self, BackendError> {
+        let device = request
+            .microphone_device_name
+            .or_else(|| recorder.preferred_device_name.clone());
+        let system_echo = request.audio_processing.echo_cancellation_enabled;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runtime_error = Arc::new(std::sync::Mutex::new(None));
+        let reference_slot = EchoSlot::default();
+        let (frame_tx, frames) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let (startup_tx, startup) = sync_channel(1);
+        let (thread_stop, thread_error, thread_reference, thread_device) = (
+            stop.clone(),
+            runtime_error.clone(),
+            reference_slot.clone(),
+            device.clone(),
+        );
+        let thread = std::thread::Builder::new()
+            .name("openless-linux-armed-mic".into())
+            .spawn(move || {
+                if thread_stop.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                match open_audio_stream(
+                    thread_device.as_deref(),
+                    &frame_tx,
+                    &thread_stop,
+                    &thread_error,
+                    &thread_reference,
+                    system_echo,
+                ) {
+                    Ok(streams) => {
+                        if startup_tx.send(Ok(())).is_ok() {
+                            wait_for_stop(streams, &thread_stop, &thread_reference);
+                        }
+                    }
+                    Err(error) => {
+                        let _ = startup_tx.send(Err(error));
+                    }
+                }
+            })
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    format!("arm Linux microphone: {error}"),
+                )
+            })?;
+        Ok(Self {
+            recorder,
+            device,
+            system_echo,
+            stop,
+            runtime_error,
+            reference_slot,
+            thread: Some(thread),
+            frames: Some(frames),
+            startup: Some(startup),
+        })
+    }
+
+    fn signal_stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = &self.thread {
+            thread.thread().unpark();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxPendingCapture {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            self.signal_stop();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl openless_core::PendingAudioCapture for LinuxPendingCapture {
+    fn commit(
+        self: Box<Self>,
+        session_id: SessionId,
+        context: Arc<DictationContext>,
+        consumer: Arc<dyn AudioConsumer>,
+        progress: Arc<dyn RecordingProgressSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+        Box::pin(async move {
+            let preferred_device_name = context
+                .recording
+                .microphone_device_name
+                .clone()
+                .or_else(|| self.recorder.preferred_device_name.clone());
+            if self.device != preferred_device_name
+                || self.system_echo != context.recording.audio_processing.echo_cancellation_enabled
+            {
+                let recorder = self.recorder.clone();
+                self.discard().await?;
+                return recorder
+                    .start(session_id, context, consumer, progress)
+                    .await;
+            }
+            let options = LinuxRecordingOptions {
+                preferred_device_name,
+                recordings_dir: self.recorder.recordings_dir.clone(),
+                require_archive: context.output_target
+                    == openless_core::DictationOutputTarget::QuickNote,
+                mute_during_recording: context.recording.mute_during_recording,
+                audio_processing: context.recording.audio_processing,
+                archive_processed: context.recording.archive_processed,
+                archive_raw: context.recording.archive_raw,
+                aec_reference_device_name: context.recording.aec_reference_device_name.clone(),
+            };
+            tokio::task::spawn_blocking(move || {
+                start_linux_recording(session_id, options, consumer, progress, Some(*self))
+            })
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!("commit Linux microphone: {error}"),
+                )
+            })?
+        })
+    }
+
+    fn discard(mut self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.signal_stop();
+        let thread = self.thread.take();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || thread.map(JoinHandle::join))
+                .await
+                .map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Internal,
+                        format!("discard Linux microphone: {error}"),
+                    )
+                })?
+                .transpose()
+                .map_err(|_| {
+                    BackendError::new(
+                        BackendErrorCode::Internal,
+                        "armed Linux microphone thread panicked",
+                    )
+                })?;
+            Ok(())
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
 struct LinuxActiveRecording {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -280,12 +458,17 @@ struct LinuxActiveRecording {
     /// AEC 的扬声器参考采集；随录音一起停（字段顺序即 Drop 顺序，先停参考流再
     /// 拆主线程，避免参考线程还在往已释放的队列里写）。
     reference: Option<ReferenceCapture>,
+    processor: Option<AudioProcessingWorker>,
 }
 
 impl Drop for LinuxActiveRecording {
     fn drop(&mut self) {
         // 先显式停掉 AEC 参考流：它只在录音期间有意义，且必须在主采集线程之前
         // 结束，避免参考线程还在往已释放的队列写。
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = &self.thread {
+            thread.thread().unpark();
+        }
         drop(self.reference.take());
         // Taking the guard here forces the field to be consumed (and therefore
         // restored) even if `stop()` is never reached — e.g. the handle is
@@ -354,6 +537,10 @@ impl ActiveRecording for LinuxActiveRecording {
         Box::pin(async move {
             self.stop.store(true, std::sync::atomic::Ordering::Release);
             let thread = self.thread.take();
+            if let Some(thread) = &thread {
+                thread.thread().unpark();
+            }
+            let processor = self.processor.take();
             let runtime_error = Arc::clone(&self.runtime_error);
             tokio::task::spawn_blocking(move || {
                 if let Some(thread) = thread {
@@ -363,6 +550,9 @@ impl ActiveRecording for LinuxActiveRecording {
                             "Linux recorder thread panicked while stopping",
                         )
                     })?;
+                }
+                if let Some(processor) = processor {
+                    processor.finish()?;
                 }
                 runtime_error
                     .lock()
@@ -387,6 +577,7 @@ fn start_linux_recording(
     options: LinuxRecordingOptions,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
+    pending: Option<LinuxPendingCapture>,
 ) -> Result<Box<dyn ActiveRecording>, BackendError> {
     use std::sync::atomic::AtomicBool;
 
@@ -411,34 +602,7 @@ fn start_linux_recording(
     } else {
         None
     };
-    let mut reference_capture = None;
-    if let Some(queue) = far_end.clone() {
-        let preferred =
-            (!aec_reference_device_name.is_empty()).then(|| aec_reference_device_name.clone());
-        match start_reference_capture(preferred, queue) {
-            Ok(capture) => reference_capture = Some(capture),
-            // 没有回环源（典型是纯 ALSA）不该让整次录音失败：AEC 退化为无参考。
-            Err(error) => log::warn!(
-                "[aec] speaker reference unavailable; continuing without it: {}",
-                error.message
-            ),
-        }
-    }
-
-    // Mute is best-effort and independent of capture availability (mirrors the
-    // Tauri reference): if it fails we log and continue recording. If capture
-    // later fails on this path, the guard drops here and restores the sink.
-    let mute = if mute_during_recording {
-        match crate::audio_mute::AudioMuteGuard::activate() {
-            Ok(guard) => Some(guard),
-            Err(error) => {
-                log::warn!("[audio-mute] failed to mute output; capture continues: {error}");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let reference_queue = far_end.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let runtime_error = Arc::new(std::sync::Mutex::new(None));
     let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
@@ -493,47 +657,99 @@ fn start_linux_recording(
         }
         None => (None, None, None),
     };
-    let thread = std::thread::Builder::new()
-        .name("openless-linux-recorder".to_string())
-        .spawn(move || {
-            run_audio_thread(LinuxAudioThreadArgs {
-                preferred_device_name,
-                consumer,
-                progress,
-                writer,
-                write_processed: archive_processed,
-                raw_writer,
-                far_end,
-                audio_processing,
-                stop: stop_for_thread,
-                runtime_error: runtime_error_for_thread,
-                startup: startup_tx,
-            });
-        })
-        .map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Platform,
-                format!("failed to spawn Linux recorder thread: {error}"),
-            )
-        })?;
+    let (thread, stop, runtime_error, processor, startup_rx) = if let Some(mut pending) = pending {
+        let processor = AudioProcessingWorker::start(
+            audio_processing,
+            consumer,
+            progress,
+            writer,
+            archive_processed,
+            raw_writer,
+            far_end,
+            Arc::clone(&pending.reference_slot),
+            pending.frames.take().expect("pending frames"),
+        )?;
+        (
+            pending.thread.take().expect("pending microphone thread"),
+            Arc::clone(&pending.stop),
+            Arc::clone(&pending.runtime_error),
+            Some(processor),
+            pending.startup.take().expect("pending startup"),
+        )
+    } else {
+        let thread = std::thread::Builder::new()
+            .name("openless-linux-recorder".to_string())
+            .spawn(move || {
+                run_audio_thread(LinuxAudioThreadArgs {
+                    preferred_device_name,
+                    consumer,
+                    progress,
+                    writer,
+                    write_processed: archive_processed,
+                    raw_writer,
+                    far_end,
+                    audio_processing,
+                    stop: stop_for_thread,
+                    runtime_error: runtime_error_for_thread,
+                    startup: startup_tx,
+                });
+            })
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    format!("failed to spawn Linux recorder thread: {error}"),
+                )
+            })?;
 
+        (thread, stop, runtime_error, None, startup_rx)
+    };
     match startup_rx.recv() {
-        Ok(Ok(())) => Ok(Box::new(LinuxActiveRecording {
-            stop,
-            thread: Some(thread),
-            runtime_error,
-            archive,
-            mute,
-            reference: reference_capture,
-        })),
+        Ok(Ok(())) => {
+            // The microphone is already delivering PCM. A slow loopback probe
+            // or audio-server mute must not hold the input stream closed.
+            let mute = if mute_during_recording {
+                match crate::audio_mute::AudioMuteGuard::activate() {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        log::warn!(
+                            "[audio-mute] failed to mute output; capture continues: {error}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let reference = reference_queue.and_then(|queue| {
+                let preferred =
+                    (!aec_reference_device_name.is_empty()).then_some(aec_reference_device_name);
+                match start_reference_capture(preferred, queue) {
+                    Ok(capture) => Some(capture),
+                    Err(error) => {
+                        log::warn!(
+                            "[aec] speaker reference unavailable; continuing without it: {}",
+                            error.message
+                        );
+                        None
+                    }
+                }
+            });
+            Ok(Box::new(LinuxActiveRecording {
+                stop,
+                thread: Some(thread),
+                runtime_error,
+                archive,
+                mute,
+                reference,
+                processor,
+            }))
+        }
         Ok(Err(error)) => {
             let _ = thread.join();
-            // `mute` is dropped on the error path, restoring the sink.
             Err(error)
         }
         Err(error) => {
             let _ = thread.join();
-            // `mute` is dropped on the error path, restoring the sink.
             Err(BackendError::new(
                 BackendErrorCode::Platform,
                 format!("Linux recorder thread exited during startup: {error}"),
@@ -558,7 +774,8 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         startup,
     } = args;
     let reference_slot = Arc::new(std::sync::Mutex::new(None));
-    let (processor, frame_tx) = match AudioProcessingWorker::start(
+    let (frame_tx, frame_rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+    let processor = match AudioProcessingWorker::start(
         audio_processing,
         consumer,
         progress,
@@ -567,6 +784,7 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         raw_writer,
         far_end,
         Arc::clone(&reference_slot),
+        frame_rx,
     ) {
         Ok(worker) => worker,
         Err(error) => {
@@ -574,6 +792,39 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
             return;
         }
     };
+    let result = open_audio_stream(
+        preferred_device_name.as_deref(),
+        &frame_tx,
+        &stop,
+        &runtime_error,
+        &reference_slot,
+        audio_processing.echo_cancellation_enabled,
+    );
+    match result {
+        Ok(streams) => {
+            let _ = startup.send(Ok(()));
+            wait_for_stop(streams, &stop, &reference_slot);
+        }
+        Err(error) => {
+            let _ = startup.send(Err(error));
+        }
+    }
+    drop(frame_tx);
+    let _ = processor.finish();
+}
+
+#[cfg(target_os = "linux")]
+type EchoSlot = Arc<std::sync::Mutex<Option<Arc<openless_core::ReferenceAudioBuffer>>>>;
+
+#[cfg(target_os = "linux")]
+fn open_audio_stream(
+    preferred_device_name: Option<&str>,
+    frame_tx: &SyncSender<RawAudioFrame>,
+    stop: &Arc<std::sync::atomic::AtomicBool>,
+    runtime_error: &Arc<std::sync::Mutex<Option<BackendError>>>,
+    reference_slot: &EchoSlot,
+    system_echo: bool,
+) -> Result<LinuxAudioStreams, BackendError> {
     let mut result = Err(BackendError::new(
         BackendErrorCode::Platform,
         "no Linux audio backend is available",
@@ -599,21 +850,15 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         match try_start_audio_stream(
             &host,
             backend,
-            preferred_device_name.as_deref(),
-            &frame_tx,
-            &stop,
-            &runtime_error,
-            &reference_slot,
-            audio_processing.echo_cancellation_enabled,
+            preferred_device_name,
+            frame_tx,
+            stop,
+            runtime_error,
+            reference_slot,
+            system_echo,
         ) {
-            Ok(stream) => {
-                result = Ok(stream);
-                break;
-            }
-            Err(error) if error.code == BackendErrorCode::PermissionDenied => {
-                let _ = startup.send(Err(error));
-                return;
-            }
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.code == BackendErrorCode::PermissionDenied => return Err(error),
             Err(error) => {
                 log::warn!("{backend} audio backend failed; trying next backend: {error}");
                 result = Err(error);
@@ -621,23 +866,15 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         }
     }
 
-    let streams = match result {
-        Ok(streams) => {
-            let _ = startup.send(Ok(()));
-            streams
-        }
-        Err(error) => {
-            log::error!(
-                "[audio] no input backend could open a stream (tried {:?}): {}",
-                audio_backend_order(),
-                error.message
-            );
-            drop(frame_tx);
-            let _ = processor.finish();
-            let _ = startup.send(Err(error));
-            return;
-        }
-    };
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_stop(
+    streams: LinuxAudioStreams,
+    stop: &std::sync::atomic::AtomicBool,
+    reference_slot: &EchoSlot,
+) {
     while !stop.load(std::sync::atomic::Ordering::Acquire) {
         std::thread::park_timeout(std::time::Duration::from_millis(25));
     }
@@ -647,8 +884,6 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         .expect("Linux echo reference lock poisoned")
         .take();
     drop(streams.reference);
-    drop(frame_tx);
-    let _ = processor.finish();
 }
 
 /// 判断一个输入设备名是否是「扬声器回环 / 监听」源。
@@ -1220,6 +1455,12 @@ fn select_input_device(
     use cpal::traits::HostTrait;
 
     if let Some(preferred) = preferred_device_name.filter(|name| !name.trim().is_empty()) {
+        if let Some(default) = host
+            .default_input_device()
+            .filter(|device| device.to_string() == preferred)
+        {
+            return Ok(default);
+        }
         let devices = host
             .input_devices()
             .map_err(|error| classify_audio_error("enumerate input devices", error.to_string()))?;
