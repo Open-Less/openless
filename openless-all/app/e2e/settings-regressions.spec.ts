@@ -215,7 +215,7 @@ for (const scale of [1, 1.1]) {
   });
 }
 
-test('experimental download respects the settings modal and switch-off does not push later rows', async ({
+test('experimental download cancels from its Settings page without pushing later rows', async ({
   page,
 }) => {
   await openSettings(page);
@@ -246,8 +246,10 @@ test('experimental download respects the settings modal and switch-off does not 
     return { right: text.right, progressRight: progress.right };
   });
   expect(Math.abs(statusText.right - statusText.progressRight)).toBeLessThan(2);
-  await expect(card.getByRole('button', { name: '取消下载', exact: true })).toBeDisabled();
-  await toggle.click();
+  const cancel = card.getByRole('button', { name: '取消下载', exact: true });
+  await expect(cancel).toBeEnabled();
+  await expect(cancel).toHaveAttribute('data-action-style', 'cancel-icon');
+  await cancel.click();
   await expect(card).toHaveCount(0);
   await page.waitForTimeout(2100);
   await expect(card).toHaveCount(0);
