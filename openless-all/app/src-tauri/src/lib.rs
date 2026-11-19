@@ -51,6 +51,7 @@ mod native_audio_cue;
 #[cfg(not(mobile))]
 mod native_capsule;
 mod qa_adapter;
+mod qa_draft;
 mod qa_window_geometry;
 use qa_window_geometry::{resize_qa_frame, QA_WINDOW_BOTTOM_INSET, QA_WINDOW_HEIGHT, QA_WINDOW_WIDTH};
 mod recording_companion;
@@ -148,6 +149,7 @@ const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
 /// Positions the QA window at the bottom-center of the screen on first show only, so the
 /// user-dragged position survives hide → show cycles. See issue #118 v2.
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
+static QA_PRESENT_PENDING: AtomicBool = AtomicBool::new(false);
 /// 「润色结果」模式的事件名。该模式复用选区助手（qa）面板，不再有独立预览窗。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) const SELECTION_POLISH_PREVIEW_SHOWN: &str = "selection-polish-preview:shown";
@@ -473,6 +475,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::qa_stop_recording,
             commands::qa_window_set_expanded,
             commands::qa_get_snapshot,
+            commands::qa_set_draft_focus,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
             commands::deepseek_tts_start,
@@ -2873,6 +2876,11 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
     let window = app
         .get_webview_window("qa")
         .ok_or_else(|| "qa_window_unavailable".to_string())?;
+    if expanded && !QA_WINDOW_POSITIONED.swap(true, Ordering::Relaxed) {
+        if let Err(error) = position_qa_window(&window) {
+            log::warn!("[qa] could not place the initial window: {error}");
+        }
+    }
     let area = chat_window_work_area(&window, false).map_err(|_| "qa_geometry_unavailable")?;
     let scale = match area {
         Some((_, scale)) => scale,
@@ -2915,7 +2923,10 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
 /// `content_kind` is an opaque string ("loading" / "answer" / "idle", etc.); the frontend
 /// React view decides which to render. **Never** steals focus from the frontmost app
 /// (keeps the Cmd+C fallback able to read the selection from the original app).
-pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
+pub(crate) fn show_qa_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    content_kind: &str,
+) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         match crate::android::jni::android::with_android_env(|env, context| {
@@ -2932,76 +2943,47 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
                 openless_core::QaStateKind::Idle,
             )),
         );
-        return;
+        return Ok(());
     }
 
-    let Some(window) = ensure_qa_window(app) else {
-        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
+    QA_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+    QA_PRESENT_PENDING.store(true, Ordering::SeqCst);
+    if ensure_qa_window(app).is_none() {
+        QA_PRESENT_PENDING.store(false, Ordering::SeqCst);
+        log::warn!("[qa] window unavailable for {content_kind}");
+        return Err("qa_window_unavailable".into());
+    }
+    // Invalidate a pending close, but leave the native window hidden until its
+    // webview has requested the expanded frame. A cold webview hydrates state.
+    let _ = app.emit_to("qa", "chat-panel:shown", ());
+    Ok(())
+}
+
+/// Called on the main thread after the webview requests its drawable geometry.
+pub(crate) fn present_pending_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if !QA_PRESENT_PENDING.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let Some(window) = app.get_webview_window("qa") else {
         return;
     };
-    // Center only on first show; afterwards keep the user-dragged position.
-    if !QA_WINDOW_POSITIONED.load(Ordering::Relaxed) {
-        if let Err(e) = position_qa_window(&window) {
-            log::warn!("[qa] position before first show failed: {e}");
-        }
-        QA_WINDOW_POSITIONED.store(true, Ordering::Relaxed);
-    }
-    // macOS: don't use window.show() (it does makeKeyAndOrderFront, pushing OpenLess to
-    // frontmost; the subsequent capture_selection AX read / Cmd+C fallback would then run
-    // against OpenLess's own webview → can't grab the original app's selection). Use
-    // orderFrontRegardless so the window is visible but **not** key; the user's app stays
-    // frontmost and AX can still read the selection. Standard Spotlight / Raycast approach.
-    //
-    // ⚠️ Critical: every NSWindow operation must run on the main thread; macOS 26 asserts
-    // this hard (violations SIGTRAP immediately). show_qa_window is often called from a
-    // tokio worker (qa_hotkey_bridge_loop), so raw ObjC msg_send must be dispatched via
-    // `app.run_on_main_thread`. See issue #118 v2.
     #[cfg(target_os = "macos")]
-    {
-        let window_clone = window.clone();
-        let _ = app.run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            match window_clone.ns_window() {
-                Ok(handle) => {
-                    let ns = handle as *mut AnyObject;
-                    if ns.is_null() {
-                        log::warn!("[qa] ns_window null; falling back to window.show()");
-                        let _ = window_clone.show();
-                    } else {
-                        unsafe {
-                            let _: () = msg_send![ns, orderFrontRegardless];
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[qa] ns_window unavailable: {e}; falling back to window.show()");
-                    let _ = window_clone.show();
-                }
-            }
-        });
+    if let Ok(handle) = window.ns_window() {
+        use objc2::{msg_send, runtime::AnyObject};
+        let ns = handle as *mut AnyObject;
+        if !ns.is_null() {
+            // Do not take keyboard focus while the original selection is being captured.
+            unsafe { let _: () = msg_send![ns, orderFrontRegardless]; }
+            return;
+        }
     }
     #[cfg(target_os = "windows")]
-    if !show_qa_window_no_activate(&window) {
-        log::warn!("[qa] show_no_activate failed; falling back to window.show()");
-        if let Err(e) = window.show() {
-            log::warn!("[qa] show fallback failed: {e}");
-        }
+    if crate::tauri_coordinator_host::set_capsule_window_topmost_no_activate(&window, true) {
+        return;
     }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    if let Err(e) = window.show() {
-        log::warn!("[qa] show failed: {e}");
+    if let Err(error) = window.show() {
+        log::warn!("[qa] failed to present expanded window: {error}");
     }
-    // Cancel the pending exit-hide (fast close-open) and replay the entrance animation.
-    QA_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let _ = app.emit_to("qa", "chat-panel:shown", serde_json::json!({}));
-    tauri_events::publish(
-        app,
-        None,
-        openless_core::BackendEventKind::QaState(openless_core::QaStateEvent::simple(
-            openless_core::QaStateKind::Idle,
-        )),
-    );
 }
 
 /// Converts the chat-panel floating windows (qa / less-computer) into non-activating
@@ -3114,6 +3096,7 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
             .inner_size(QA_WINDOW_WIDTH, QA_WINDOW_HEIGHT)
             .decorations(false)
             .transparent(true)
+            .background_color(tauri::webview::Color(0, 0, 0, 0))
             .shadow(true)
             .always_on_top(true)
             .skip_taskbar(true)
@@ -3268,6 +3251,8 @@ fn hide_chat_window_animated<R: tauri::Runtime>(
 
 /// Hides the QA window. Shared by commands::qa_window_dismiss and coordinator session teardown.
 pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    QA_PRESENT_PENDING.store(false, Ordering::SeqCst);
+    crate::qa_draft::clear();
     #[cfg(target_os = "android")]
     {
         let _ = app.emit_to("main", "qa:dismiss", serde_json::json!({}));
@@ -3283,7 +3268,11 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
     SELECTION_POLISH_PREVIEW_PENDING.store(true, Ordering::SeqCst);
-    show_qa_window(app, "polish-preview");
+    if let Err(error) = show_qa_window(app, "polish-preview") {
+        clear_selection_polish_preview_pending();
+        log::warn!("[qa] selection preview could not show: {error}");
+        return;
+    }
     // 面板可能是本次才懒创建（刚挂载，订阅还没装上）——它在挂载时也会自己
     // 拉一次负载（见 `get_selection_polish_preview` 的 pending 门禁）。
     let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, ());

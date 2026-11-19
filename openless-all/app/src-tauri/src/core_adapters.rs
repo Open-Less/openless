@@ -4228,6 +4228,10 @@ where
 
 impl CoreTextInserter for TauriTextInserter {
     fn capture_target(&self) -> Option<CapturedTextTarget> {
+        let app = self.app.lock().clone();
+        if let Some(target) = app.as_ref().and_then(crate::qa_draft::capture) {
+            return Some(target);
+        }
         let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
         let ime_target = crate::windows_ime_target::capture_ime_submit_target();
@@ -5708,14 +5712,17 @@ impl HostActions for TauriHostActions {
             HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
             HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
             HostAction::ShowQa => {
+                // Logical presentation includes a cold webview waiting for its first frame.
                 let was_visible = self.qa_context.is_panel_visible()
-                    && app
-                        .get_webview_window("qa")
-                        .is_some_and(|window| window.is_visible().unwrap_or(false));
+                    && (cfg!(mobile) || app.get_webview_window("qa").is_some());
                 self.qa_context.set_voice_surface_active(true);
                 self.qa_context.prepare_show();
                 if !was_visible {
-                    crate::show_qa_window(&app, "idle");
+                    if let Err(error) = crate::show_qa_window(&app, "idle") {
+                        self.qa_context.set_voice_surface_active(false);
+                        self.qa_context.clear();
+                        return Err(map_tauri_error(error));
+                    }
                 }
             }
             HostAction::HideQa => {

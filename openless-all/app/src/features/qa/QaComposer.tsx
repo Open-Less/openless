@@ -1,7 +1,8 @@
 import { MicIcon, PencilLineIcon, QuoteIcon, SquareIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { QaPromptBox } from './QaPromptBox';
-import { VoiceWaveform } from './chat/VoiceWaveform';
+import { useQaDraftDictation } from './useQaDraftDictation';
+import { QaVoiceStrip } from './QaVoiceStrip';
 
 export type QaStatus = 'idle' | 'recording' | 'thinking' | 'error';
 
@@ -51,6 +52,7 @@ export function QaComposer({
       ? t('common.loading')
       : t('overview.inAppDictation.processing');
   const inputLabel = t('qa.composerPlaceholder');
+  const editor = useQaDraftDictation(available && !embedded, onChange);
 
   return (
     <QaPromptBox
@@ -59,6 +61,7 @@ export function QaComposer({
       placeholder={voiceActive ? voiceLabel : inputLabel}
       disabled={!available}
       readOnly={voiceActive}
+      recording={recording}
       sendDisabled={busy}
       sendLabel={t('qa.composerSend')}
       stop={
@@ -67,6 +70,8 @@ export function QaComposer({
           : undefined
       }
       onChange={onChange}
+      editorRef={editor.input}
+      onEditorFocusChange={editor.setFocused}
       onSubmit={onSubmit}
       onRequestKeyboard={onRequestKeyboard}
       actions={
@@ -98,11 +103,7 @@ export function QaComposer({
       feedback={
         voiceActive ? (
           <div className="qa-voice-feedback">
-            <VoiceWaveform
-              level={recording ? level : 0}
-              processing={!recording}
-              label={voiceLabel}
-            />
+            <QaVoiceStrip level={level} recording={recording} label={voiceLabel} />
             {selectionPreview && (
               <span className="qa-recording-selection" title={selectionPreview}>
                 <QuoteIcon />

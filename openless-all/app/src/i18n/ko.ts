@@ -1136,6 +1136,14 @@ export const ko: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '질문 단축키 동작',
+      desc: '녹음 단축키와 보조 키를 함께 사용합니다. 녹음 단축키만 누르면 커서 위치에 받아씁니다.',
+      record: '열고 즉시 녹음',
+      open: '열기만 하고 다시 눌러 녹음',
+      draft: '열고 텍스트 입력란에 포커스',
+      failed: '단축키 동작을 저장하지 못했습니다.',
+    },
     dictation: '받아쓰기',
     translation: '번역',
     question: '무엇이든 질문',

@@ -1143,6 +1143,14 @@ export const ja: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '質問ショートカットの動作',
+      desc: '録音ショートカットと追加キーを使用します。録音ショートカット単体ではカーソル位置に文字を入力します。',
+      record: '開いてすぐに録音',
+      open: '開くだけ（再度押して録音）',
+      draft: '開いて入力欄にフォーカス',
+      failed: 'ショートカットの動作を保存できませんでした。',
+    },
     dictation: '音声入力',
     translation: '翻訳',
     question: '何でも質問',

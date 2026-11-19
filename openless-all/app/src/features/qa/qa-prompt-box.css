@@ -233,3 +233,84 @@
     padding: 5px 9px;
   }
 }
+
+.qa-voice-strip {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid rgb(59 130 246 / 24%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--qa-paper) 84%, #3b82f6);
+  color: var(--qa-accent);
+}
+.qa-send-morph-strip .qa-voice-strip {
+  min-height: 56px;
+  padding-inline: 8px 16px;
+}
+.qa-voice-strip-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--qa-paper);
+}
+.qa-voice-strip-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.qa-voice-strip-bars {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  width: clamp(24px, 18cqw, 104px);
+  min-width: 16px;
+  height: 21px;
+}
+.qa-voice-strip-bars i {
+  flex: 1;
+  min-width: 1px;
+  border-radius: 20px;
+  background: currentColor;
+  transition: height 90ms linear;
+}
+.qa-voice-strip-time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.qa-voice-strip-label {
+  min-width: 0;
+  font-size: 11px;
+}
+
+/* The draft stays mounted through capture; the strip is the visible input surface. */
+.qa-prompt[data-recording] {
+  position: relative;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.qa-prompt[data-recording] .qa-input-stage {
+  position: absolute;
+  inset: 0 12px auto;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.qa-prompt[data-recording] .qa-prompt-tools {
+  padding: 0;
+}
+.qa-prompt[data-recording] .qa-voice-feedback {
+  flex: 1;
+}
+.qa-prompt[data-recording] .qa-prompt-actions {
+  order: 2;
+  margin: 0;
+}
+.qa-prompt[data-recording] :is(.qa-mode, .qa-send) {
+  display: none;
+}

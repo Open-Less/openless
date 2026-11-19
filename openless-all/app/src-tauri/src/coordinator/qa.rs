@@ -25,18 +25,27 @@ pub(super) fn install_recording_companion(inner: &Arc<Inner>) {
 /// One chord owns the complete question: start → record → finish. Processing
 /// never queues another question. Later turns retain the conversation until dismissal.
 pub(super) async fn handle_qa_hotkey_pressed(inner: &Arc<Inner>) {
-    let Ok(_handoff) = inner.overlay_qa_handoff.try_lock() else {
-        return;
-    };
     let qa = &inner.backend.services().qa;
     let Ok(snapshot) = qa.snapshot().await else {
         return;
+    };
+    // A second press may stop the exact recording already published while the
+    // first press is still opening its audio stream. Do not queue a new turn.
+    let stop = snapshot.phase == openless_core::QaPhase::Recording;
+    let _handoff = if stop {
+        None
+    } else {
+        let Ok(guard) = inner.overlay_qa_handoff.try_lock() else { return; };
+        Some(guard)
     };
     let result = match (snapshot.phase, snapshot.session_id) {
         (openless_core::QaPhase::Recording, Some(session_id)) => {
             qa.stop_recording(session_id).await
         }
         (openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval, _) => return,
+        _ if !snapshot.panel_open
+            && inner.backend.get_preferences().qa_shortcut_behavior
+                != openless_core::shared_types::QaShortcutBehavior::Record => qa.show().await,
         _ => {
             inner
                 .backend

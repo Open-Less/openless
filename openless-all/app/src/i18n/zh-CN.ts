@@ -1104,6 +1104,14 @@ export const zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提问快捷键行为',
+      desc: '使用当前录音快捷键加提问附加键。单独按录音快捷键仍会在光标处听写。',
+      record: '打开并立即录音',
+      open: '仅打开，再按一次录音',
+      draft: '打开并聚焦文字框',
+      failed: '无法保存提问快捷键行为。',
+    },
     dictation: '口述',
     translation: '翻译',
     question: '随便问',

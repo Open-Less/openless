@@ -46,6 +46,7 @@ const bridge = {
   dictationActions: [] as string[],
   qaActions: [] as { command: string; args: unknown }[],
   externalLinks: [] as string[],
+  qaDraftFocus: null as { token: string; focused: boolean } | null,
   pipelineMode: params.get('pipelineMode') === 'deepseek' ? 'deepseek' : 'traditional',
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
@@ -97,6 +98,10 @@ window.__TAURI_INTERNALS__ = {
     callbacks.delete(id);
   },
   async invoke(command: string, args: any) {
+    if (command === 'qa_set_draft_focus') {
+      bridge.qaDraftFocus = args;
+      return;
+    }
     if (command === 'plugin:shell|open') {
       bridge.externalLinks.push(args.path);
       return;
@@ -135,6 +140,7 @@ window.__TAURI_INTERNALS__ = {
       const settings = {
         translationTargetLanguage: bridge.target.targetLanguage,
         capsuleStyle: 'classic',
+        qaShortcutBehavior: params.get('qaBehavior') ?? 'record',
         pipelineMode: bridge.pipelineMode,
         capsuleTranscriptEnabled: params.has('transcript'),
         ...(themeSync ? { themeMode: bridge.theme } : {}),
