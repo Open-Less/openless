@@ -64,6 +64,14 @@ pub struct AutostartManager {
 }
 
 impl AutostartManager {
+    /// The desktop host provides its own path; the HTTP backend is not a launcher.
+    pub fn detect_gui() -> Result<Self, DesktopError> {
+        let executable = std::env::var_os("OPENLESS_GUI_EXECUTABLE")
+            .map(PathBuf::from)
+            .ok_or_else(|| DesktopError::InvalidInput("No OpenLess desktop launcher is available".into()))?;
+        Self::detect(executable)
+    }
+
     pub fn detect(executable: PathBuf) -> Result<Self, DesktopError> {
         let config_home = match std::env::var_os("XDG_CONFIG_HOME") {
             Some(path) if !path.is_empty() => PathBuf::from(path),

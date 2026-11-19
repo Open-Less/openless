@@ -196,9 +196,9 @@ fn spawn_tray(host: std::sync::Arc<Host>) {
             let mut devices_rx = host.host_events.subscribe();
             let mut devices_dirty = true;
             loop {
-                // 热插拔监听线程每 3 秒比对一次，变了就推 `devices:changed`。
+                // 托盘和设置页消费同一个麦克风变化事件。
                 while let Ok((name, _)) = devices_rx.try_recv() {
-                    if name == "devices:changed" {
+                    if name == "microphone:devices-changed" {
                         devices_dirty = true;
                     }
                 }
@@ -371,7 +371,7 @@ fn spawn_device_watcher(host: std::sync::Arc<Host>) {
                     if !first && signature.is_some() {
                         println!("[linux-web] 麦克风设备变化：{} 个", names.len());
                         let _ = host.host_events.send((
-                            "devices:changed".into(),
+                            "microphone:devices-changed".into(),
                             json!({ "count": names.len() }).to_string(),
                         ));
                     }
@@ -2261,6 +2261,16 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     .apply_history_repolish(&session_id, text, style_pack_id)
                     .map_err(|error| error.to_string())?,
             ))
+        }
+        "plugin:autostart|is_enabled" | "plugin:autostart|enable" | "plugin:autostart|disable" => {
+            let manager = openless_linux_host::AutostartManager::detect_gui()
+                .map_err(|error| error.to_string())?;
+            if command == "plugin:autostart|is_enabled" {
+                return manager.is_enabled().map(json_value).map_err(|error| error.to_string());
+            }
+            manager.set_enabled(command == "plugin:autostart|enable")
+                .map_err(|error| error.to_string())?;
+            Ok(Value::Null)
         }
         "start_microphone_level_monitor" => {
             // Tauri 这条是空实现（电平由录音链自己推）；这里同样不额外起采集，

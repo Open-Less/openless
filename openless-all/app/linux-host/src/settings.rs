@@ -191,12 +191,8 @@ struct Fcitx5SettingsEffects {
 }
 
 fn production_autostart() -> Result<crate::AutostartManager, String> {
-    std::env::current_exe()
-        .map_err(|error| format!("resolve current executable for autostart: {error}"))
-        .and_then(|executable| {
-            crate::AutostartManager::detect(executable)
-                .map_err(|error| format!("initialize XDG autostart manager: {error}"))
-        })
+    crate::AutostartManager::detect_gui()
+        .map_err(|error| format!("initialize XDG autostart manager: {error}"))
 }
 
 impl LinuxSettingsEffects for Fcitx5SettingsEffects {

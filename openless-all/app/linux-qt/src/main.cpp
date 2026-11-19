@@ -525,6 +525,7 @@ int main(int argc, char **argv) {
     // X11 及不支持按 .desktop 取图标的桌面用它兜底。
     app.setWindowIcon(openlessIcon());
     app.setQuitOnLastWindowClosed(false);
+    const bool minimized = app.arguments().contains(QStringLiteral("--minimized"));
 
     // ── 0. 单实例 ───────────────────────────────────────────────────────────
     // 托盘 / 桌面图标每点一次都会执行一次 `/usr/bin/openless`。这里必须用**原子**
@@ -553,6 +554,7 @@ int main(int argc, char **argv) {
     const QString instanceKey =
         QStringLiteral("openless-qt-%1").arg(static_cast<qulonglong>(::geteuid()));
     if (!isPrimary) {
+        if (minimized) return 0;
         // 已有实例：让它抬起窗口，本进程退出。等一小会儿是因为对方的监听
         // socket 可能刚建好（它也要跑完 QApplication 初始化）。
         for (int attempt = 0; attempt < 30; ++attempt) {
@@ -586,6 +588,7 @@ int main(int argc, char **argv) {
         // 与 Qt 的三个窗口重叠（日志里会出现两份 capsule）。
         QProcessEnvironment backendEnv = QProcessEnvironment::systemEnvironment();
         backendEnv.insert("OPENLESS_HEADLESS", "1");
+        backendEnv.insert("OPENLESS_GUI_EXECUTABLE", QCoreApplication::applicationFilePath());
         backend->setProcessEnvironment(backendEnv);
         // 默认与自身同目录（安装后是 /usr/lib/openless），这样解包试跑也能找到后端。
         QString defaultHost = QCoreApplication::applicationDirPath() + "/openless-linux-web";
@@ -686,7 +689,7 @@ int main(int argc, char **argv) {
     capsule.load();
     qa.load();
     mainWindow.setVisible(qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_MAIN") ||
-                          !qEnvironmentVariableIsSet("OPENLESS_QT_HIDE_MAIN"));
+                          (!minimized && !qEnvironmentVariableIsSet("OPENLESS_QT_HIDE_MAIN")));
     if (qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_CAPSULE")) capsule.setVisible(true);
     if (qEnvironmentVariableIsSet("OPENLESS_QT_SHOW_QA")) qa.setVisible(true);
 

@@ -16,7 +16,7 @@ import {
   isPlainTextInsertionActive,
   pasteShortcutForPlainTextToggle,
 } from '../../lib/plainTextInsertion';
-import { isTauriHost } from '../../runtime/environment';
+import { isNativeDesktopHost, isTauriHost } from '../../runtime/environment';
 import {
   getAutostartEnabled,
   getVoiceActivationState,
@@ -963,7 +963,7 @@ function AutostartRow() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isTauriHost()) {
+    if (!isNativeDesktopHost()) {
       setLoaded(true);
       return;
     }
@@ -977,7 +977,7 @@ function AutostartRow() {
       })
       .catch((err: unknown) => {
         console.error('[autostart] isEnabled failed', err);
-        if (!cancelled) setLoaded(true);
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
