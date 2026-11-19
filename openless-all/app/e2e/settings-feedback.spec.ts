@@ -287,7 +287,15 @@ for (const scale of ['small', 'medium', 'large'] as const) {
       await expect(notice).toHaveAttribute('data-state', 'saved');
       await expect(notice).toHaveAttribute('data-same-operation', 'save');
       await expect(notice).toContainText('DeepSeek 配置已保存');
-      await expect(notice).toHaveCSS('border-radius', '8px');
+      const surface = notice.locator('.ol-toast-panel');
+      await expect(surface).toHaveCSS('clip-path', /^path\(/);
+      expect(
+        await surface.evaluate((node: HTMLElement) => [
+          node.offsetWidth,
+          node.offsetHeight,
+          node.style.borderRadius,
+        ]),
+      ).toEqual([356, 56, '21px']);
       await expect(save).toBeEnabled();
       expect(
         await page.evaluate(() => JSON.parse(window.settingsStatusFixture.stored()).apiKey),
@@ -295,8 +303,7 @@ for (const scale of ['small', 'medium', 'large'] as const) {
       await expect(notice).toHaveCSS('transform', 'none');
       const box = (await notice.boundingBox())!;
       const viewport = (await page.locator('.ol-app-viewport').boundingBox())!;
-      // Font fallback can wrap the label onto two lines in WebKit. Apply the compact
-      // height budget in rendered pixels at each interface scale.
+      // Confirm that the scaled card stays within the viewport as well as its CSS box.
       expect(box.height).toBeLessThanOrEqual(60 * FONT_SCALE_VALUES[scale]);
       expect(box.x).toBeGreaterThanOrEqual(viewport.x);
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.x + viewport.width);
