@@ -309,6 +309,8 @@ test('the welcome box docks on first send without remounting the editor', async 
       return Math.abs(box.y + box.height / 2 - frame.y - frame.height / 2);
     })
     .toBeLessThan(40);
+  await editor.fill(Array(10).fill('Long draft').join('\n'));
+  await expect(editor).toHaveCSS('height', '192px');
   await editor.fill('A first question');
   await editor.evaluate((el) => el.setAttribute('data-original-editor', 'yes'));
   await editor.press('Enter');

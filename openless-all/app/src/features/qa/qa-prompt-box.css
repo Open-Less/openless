@@ -35,8 +35,8 @@
   position: absolute;
   inset: 0 0 auto;
   min-height: 24px;
-  max-height: 72px;
-  max-height: clamp(24px, 19cqh, 96px);
+  max-height: 96px;
+  max-height: clamp(24px, 25cqh, 192px);
   overflow: hidden;
   visibility: hidden;
 }
