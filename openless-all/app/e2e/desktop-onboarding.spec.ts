@@ -223,15 +223,18 @@ test('the main action stays in place while the current step moves to the center'
   expect(Math.abs((await button.boundingBox())!.y - before.y)).toBeLessThan(1);
 });
 
-test('text reveals progressively without shifting layout and input focus uses an underline', async ({
+test('text reveals progressively without shifting layout while the name field uses a single focus surface', async ({
   page,
 }) => {
   await page.goto('/?onboarding=1&os=mac');
   const input = page.getByRole('textbox', { name: '怎么称呼你？（选填）' });
   await input.click();
   await expect(input).toHaveCSS('outline-style', 'none');
-  await expect(input).toHaveCSS('padding-inline-start', '12px');
-  await expect(input).toHaveCSS('padding-inline-end', '12px');
+  await expect(input).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const frame = input.locator('..');
+  await expect(frame).toHaveClass(/\bol-field\b/);
+  await expect(frame).toHaveCSS('padding-inline-start', '11px');
+  await expect(frame).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
   const before = (await input.boundingBox())!;
   const reveal = await page.locator('.ol-reveal-glyph').evaluateAll((elements) =>
     elements

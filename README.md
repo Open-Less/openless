@@ -498,6 +498,8 @@ The Overview annual activity card adapts calendar and expandable-panel code from
 OpenLess supplies its own dictation data, app ranking, and desktop icons. See the
 [component attribution and license](docs/ATTRIBUTION.md). The credit is also shown in Settings → About → Component credits.
 
+The shared password field adapts the animated eye from Rare UI's [Password Input](https://www.rareui.com/components/passwordinput).
+
 ## License
 
 OpenLess 2.0 is released under the [AGPL-3.0-only license](LICENSE).

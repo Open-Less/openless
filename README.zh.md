@@ -497,6 +497,8 @@ OpenLess 同样认可并感谢 LinuxDo 社区开放、务实、对开发者友�
 日历和可展开面板代码（Copyright (c) 2026 Swami Malode）。听写数据、应用排名与桌面图标由 OpenLess 提供。
 详情见[组件署名与许可](docs/ATTRIBUTION.md)；署名也可在「设置 → 关于与更新 → 组件来源」中查看。
 
+共用密码输入框的眼睛动效改编自 Rare UI 的 [Password Input](https://www.rareui.com/components/passwordinput)。
+
 ## 许可证
 
 OpenLess 2.0 依据 [AGPL-3.0-only 许可证](LICENSE) 发布。

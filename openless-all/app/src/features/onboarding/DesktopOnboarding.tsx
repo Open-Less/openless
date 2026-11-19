@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import {
   ArrowRight,
   Check,
@@ -145,7 +146,7 @@ export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Pro
                                 void run(() => advance('done'));
                               }}
                             >
-                              <input
+                              <TextField
                                 value={name}
                                 onChange={(event) => setName(event.target.value)}
                                 maxLength={40}

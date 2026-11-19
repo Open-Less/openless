@@ -11,6 +11,10 @@ The Overview annual activity card adapts the calendar and expandable-panel code 
 
 The adapted component lives in `openless-all/app/src/ui/controls/GitHubActivity.tsx`, with styles in `openless-all/app/src/ui/styles/github-activity.css`. The in-app credit is Settings → About and updates → Component credits.
 
+## Rare UI Password Input
+
+[Password Input](https://www.rareui.com/components/passwordinput) is the visual reference for OpenLess's shared input fields. `openless-all/app/src/ui/controls/PasswordEye.tsx` adapts the animated eye geometry from [password-input.tsx](https://github.com/swamimalode07/rare-ui/blob/main/components/ui/password-input.tsx) (Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt)). OpenLess uses native text rendering and masking, not the demo's per-character overlay or password strength meter. The credit appears in Settings → About and updates → Component credits.
+
 ## Rare UI AI Prompt Box and Streaming Response
 
 [AI Prompt Box](https://www.rareui.com/components/promptbox) and

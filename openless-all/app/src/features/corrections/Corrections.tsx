@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useTranslation } from 'react-i18next';
 import type { CorrectionRule } from '../../api/contracts';
 import { useMobileLayout } from '../../lib/useMobileLayout';
@@ -37,20 +38,11 @@ export function Corrections() {
             data-columns={mobile ? '1' : undefined}
             style={{ alignItems: 'center' }}
           >
-            <input
+            <TextField
               className="ol-col-5"
               value={rulePatternDraft}
               onChange={(e) => setRulePatternDraft(e.target.value)}
               placeholder={t('vocab.corrections.patternPlaceholder')}
-              style={{
-                height: 32,
-                padding: '0 10px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 'var(--ol-control-radius)',
-                background: 'var(--ol-surface-2)',
-                fontFamily: 'inherit',
-                fontSize: 13,
-              }}
             />
             {!mobile && (
               <span
@@ -61,20 +53,11 @@ export function Corrections() {
                 →
               </span>
             )}
-            <input
+            <TextField
               className="ol-col-4"
               value={ruleReplacementDraft}
               onChange={(e) => setRuleReplacementDraft(e.target.value)}
               placeholder={t('vocab.corrections.replacementPlaceholder')}
-              style={{
-                height: 32,
-                padding: '0 10px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 'var(--ol-control-radius)',
-                background: 'var(--ol-surface-2)',
-                fontFamily: 'inherit',
-                fontSize: 13,
-              }}
             />
             <Btn
               size="sm"

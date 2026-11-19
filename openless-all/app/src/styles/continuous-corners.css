@@ -1,7 +1,7 @@
 /* One radius for interface surfaces; shader geometry and inline help text stay unclipped. */
 :where(
   button:not(:where(.qa-prompt button, .qa-conversation .qa-close)),
-  input,
+  input:not(.ol-field-control),
   select,
   textarea,
   dialog,
@@ -19,7 +19,6 @@
   .ol-pressable,
   .ol-select-trigger,
   .ol-select-popup,
-  .ol-select-search,
   .ol-select-item,
   .ol-switch-thumb,
   .ol-style-icon-edit,
@@ -53,7 +52,6 @@
   .ol-model-dialog-mirror select,
   .ol-model-close,
   .ol-model-filters button,
-  .ol-language-search,
   .ol-language-choice,
   .ol-language-check,
   .ol-voice-edit-card,
@@ -71,7 +69,6 @@
   .ol-chip,
   .ol-seg,
   .ol-seg-item,
-  .ol-search,
   .ol-like,
   .ol-like-bloom,
   .ol-range:focus-visible,
@@ -112,7 +109,7 @@
   .ol-intent-instruction,
   .ol-settings-return,
   .ol-settings-sections > .ol-card,
-  .ol-settings-search-field,
+  .ol-field,
   .ol-shortcuts-filters button,
   .ol-shortcut-binding,
   .ol-shortcut-recording,
@@ -144,7 +141,7 @@
 @supports (corner-shape: superellipse(1.5)) {
   :where(
     button:not(:where(.qa-prompt button, .qa-conversation .qa-close)),
-    input,
+    input:not(.ol-field-control),
     select,
     textarea,
     dialog,
@@ -162,7 +159,6 @@
     .ol-pressable,
     .ol-select-trigger,
     .ol-select-popup,
-    .ol-select-search,
     .ol-select-item,
     .ol-switch-thumb,
     .ol-style-icon-edit,
@@ -196,7 +192,6 @@
     .ol-model-dialog-mirror select,
     .ol-model-close,
     .ol-model-filters button,
-    .ol-language-search,
     .ol-language-choice,
     .ol-language-check,
     .ol-voice-edit-card,
@@ -214,7 +209,6 @@
     .ol-chip,
     .ol-seg,
     .ol-seg-item,
-    .ol-search,
     .ol-like,
     .ol-like-bloom,
     .ol-range:focus-visible,
@@ -255,7 +249,7 @@
     .ol-intent-instruction,
     .ol-settings-return,
     .ol-settings-sections > .ol-card,
-    .ol-settings-search-field,
+    .ol-field,
     .ol-shortcuts-filters button,
     .ol-shortcut-binding,
     .ol-shortcut-recording,
@@ -381,7 +375,7 @@ html
     .ol-segmented-option,
     .ol-select-popup,
     .ol-select-trigger,
-    .ol-settings-search-field
+    .ol-field
   ) {
   clip-path: none !important;
   border-radius: var(--ol-corner-radius, var(--ol-radius)) !important;

@@ -140,28 +140,11 @@ html[data-ol-input='pointer'] .ol-select-trigger:focus-visible {
   border: 0;
   background: transparent;
 }
-.ol-select-search {
+.ol-field.ol-select-search {
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  width: auto;
+  height: 34px;
   margin: 1px 1px 4px;
-  padding: 0 9px;
-  min-height: 34px;
-  border: 0.5px solid var(--ol-line-strong);
-  border-radius: var(--ol-control-radius);
-  background: var(--ol-select-trigger-bg);
-}
-.ol-select-search input {
-  flex: 1;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  /* The search wrapper is the only field surface. */
-  background-color: transparent !important;
-  color: inherit;
-  font: inherit;
 }
 .ol-select-empty {
   padding: 18px 10px;

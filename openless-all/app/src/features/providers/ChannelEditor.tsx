@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -344,7 +345,7 @@ export function ChannelEditor({
               )}
             </ChannelFormRow>
             <ChannelFormRow label={t('settings.channels.nameLabel')} htmlFor={nameId}>
-              <input
+              <TextField
                 id={nameId}
                 value={name}
                 onChange={(e) => {
@@ -353,7 +354,7 @@ export function ChannelEditor({
                 }}
                 onBlur={() => void saveName()}
                 placeholder={t('settings.channels.namePlaceholder')}
-                style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+                style={{ height: 38 }}
               />
               <p className="ol-channel-name-hint">{t('settings.channels.nameHint')}</p>
             </ChannelFormRow>

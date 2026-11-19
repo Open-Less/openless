@@ -74,8 +74,10 @@ for (const profile of [
     const geometry = await selects.evaluateAll((elements) =>
       elements.map((element) => {
         const control = element.getBoundingClientRect();
-        const label = element.closest('.ol-setting-row')!
-          .querySelector('.ol-setting-row-label')!.getBoundingClientRect();
+        const label = element
+          .closest('.ol-setting-row')!
+          .querySelector('.ol-setting-row-label')!
+          .getBoundingClientRect();
         return {
           x: control.x,
           width: control.width,
@@ -92,8 +94,9 @@ for (const profile of [
   });
 }
 
-
-test('the settings language popup paints one search field and filters languages', async ({ page }) => {
+test('the settings language popup paints one search field and filters languages', async ({
+  page,
+}) => {
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
@@ -104,6 +107,8 @@ test('the settings language popup paints one search field and filters languages'
   const popup = page.locator('.ol-select-positioner[data-open] .ol-select-popup');
   const search = popup.getByPlaceholder('搜索语言…');
   await expect(search).toBeFocused();
+  await expect(search.locator('..')).toHaveClass(/\bol-field\b/);
+  await expect(search).toHaveCSS('box-shadow', 'none');
   await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(search).toHaveCSS('border-top-width', '0px');
   await search.fill('Deutsch');

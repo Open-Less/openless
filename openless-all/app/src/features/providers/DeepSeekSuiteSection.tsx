@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -56,11 +57,11 @@ export function DeepSeekSuiteSection() {
       {config && (
         <>
           <SettingRow label="DeepSeek API Key">
-            <input
+            <TextField
               aria-label="DeepSeek suite API Key"
               type="password"
               autoComplete="off"
-              style={inputStyle}
+              style={{ maxWidth: 360 }}
               value={config.apiKey}
               disabled={busy}
               onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
