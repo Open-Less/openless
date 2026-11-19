@@ -1,11 +1,9 @@
 'use client';
 
 /**
- * Ported from Rare UI "GitHub Activity" (https://rareui.com/components/githubactivity).
- * Copyright (c) 2026 Swami Malode. MIT + Commons Clause; attribution required.
- * The week/month layout, tooltip and expandable panel follow upstream. Callers can fit
- * the calendar to a dashboard or expand the app list in a growing page. Local dictation
- * data and app name/count chips replace the GitHub fetch and repo avatars.
+ * Calendar and expandable-panel code adapted from Rare UI "GitHub Activity"
+ * (https://rareui.com/components/githubactivity). Copyright (c) 2026 Swami Malode.
+ * MIT + Commons Clause + Attribution. App ranking and desktop icons use OpenLess data.
  * See docs/ATTRIBUTION.md.
  */
 
@@ -273,30 +271,41 @@ const ContributionGrid = ({
   );
 };
 
-function AppIcon({ src }: { src?: string }) {
+function AppArtwork({
+  src,
+  name,
+  className,
+  fallback,
+}: {
+  src?: string;
+  name: string;
+  className?: string;
+  fallback: React.ReactNode;
+}) {
   const [failed, setFailed] = React.useState<string>();
-  return (
-    <span className="ol-gha-app-icon" aria-hidden="true">
-      {typeof src === 'string' && src.startsWith('data:image/png;base64,') && failed !== src ? (
-        <img src={src} alt="" onError={() => setFailed(src)} />
-      ) : (
-        <AppWindow size={14} aria-hidden="true" />
-      )}
-    </span>
-  );
+  if (typeof src !== 'string' || !src.startsWith('data:image/png;base64,') || failed === src)
+    return fallback;
+  return <img className={className} src={src} alt={name} onError={() => setFailed(src)} />;
 }
 
-const AppChip = ({ app }: { app: ActivityApp }) => (
-  <span className="ol-gha-app-chip" title={app.name}>
-    <AppIcon src={app.icon} />
-    <span className="ol-gha-app-chip-name">{app.name}</span>
-    <span className="ol-gha-app-chip-count">{app.count}</span>
-  </span>
+const AppPreview = ({ app }: { app: ActivityApp }) => (
+  <AppArtwork
+    src={app.icon}
+    name={app.name}
+    className="ol-gha-app-avatar"
+    fallback={
+      <span className="ol-gha-app-preview-name" title={app.name}>
+        {app.name}
+      </span>
+    }
+  />
 );
 
 const AppRow = ({ app }: { app: ActivityApp }) => (
   <div className="ol-gha-app-row">
-    <AppIcon src={app.icon} />
+    <span className="ol-gha-app-icon" aria-hidden="true">
+      <AppArtwork src={app.icon} name="" fallback={<AppWindow size={14} />} />
+    </span>
     <span className="ol-gha-app-name">{app.name}</span>
     <span className="ol-gha-app-count">{app.count}</span>
   </div>
@@ -539,9 +548,9 @@ const GitHubActivity = ({
 
             <div className="ol-gha-panel-actions">
               {!open && (
-                <div className="ol-gha-app-chips">
+                <div className="ol-gha-app-preview">
                   {apps.slice(0, STACK_LIMIT).map((app) => (
-                    <AppChip key={app.name} app={app} />
+                    <AppPreview key={app.name} app={app} />
                   ))}
                 </div>
               )}

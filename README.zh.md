@@ -493,11 +493,9 @@ OpenLess 同样认可并感谢 LinuxDo 社区开放、务实、对开发者友�
 
 ## 第三方组件
 
-概览页的年度活动热力图移植自 **Rare UI** 的 [GitHub Activity](https://rareui.com/components/githubactivity)
-组件（Copyright (c) 2026 Swami Malode，MIT + Commons Clause，要求署名）。移植保留上游的布局、
-周/月换算、悬浮提示和可展开面板，只把 GitHub 数据源换成本地听写统计。源码位于
-`openless-all/app/src/components/ui/GitHubActivity.tsx` 与 `github-activity.css`。
-同一署名也出现在「设置 → 关于与更新 → 组件来源」。
+概览页的年度活动卡片改编了 **Rare UI** 的 [GitHub Activity](https://rareui.com/components/githubactivity)
+日历和可展开面板代码（Copyright (c) 2026 Swami Malode）。听写数据、应用排名与桌面图标由 OpenLess 提供。
+详情见[组件署名与许可](docs/ATTRIBUTION.md)；署名也可在「设置 → 关于与更新 → 组件来源」中查看。
 
 ## 许可证
 

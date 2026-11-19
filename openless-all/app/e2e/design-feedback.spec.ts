@@ -300,7 +300,7 @@ test('selected segmented options and the overview heatmap stay visible', async (
   }));
   expect(overviewStyle.background).not.toBe('rgba(0, 0, 0, 0)');
   expect(overviewStyle.color).not.toBe(overviewStyle.background);
-  // The yearly card is the ported GitHub Activity component: its heading is the yearly
+  // The yearly card adapts the GitHub Activity component: its heading is the yearly
   // count line and its grid is made of real day cells.
   const dashboard = page.locator('.ol-overview-dashboard');
   await expect
@@ -310,7 +310,7 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await expect(activityCard).toBeVisible();
   await expect(activityCard.locator('.ol-gha-heading')).toContainText('次听写');
   expect(await activityCard.locator('.ol-gha-cell').count()).toBeGreaterThan(300);
-  await expect(activityCard.locator('.ol-gha-app-chips')).toBeVisible();
+  await expect(activityCard.locator('.ol-gha-app-preview')).toBeVisible();
   const cellSize = await activityCard
     .locator('.ol-gha-cell')
     .first()
