@@ -321,8 +321,8 @@ for (const scale of ['small', 'medium', 'large'] as const) {
   }
 }
 
-test('Sync Now keeps one progress notice until native completion', async ({ page }) => {
-  await page.goto('/e2e/fixtures/settings-status.html?theme=dark');
+test('Sync Now keeps one spinner-only notice until native completion', async ({ page }) => {
+  await page.goto('/e2e/fixtures/settings-status.html?theme=dark&delaySyncStart');
   const sync = page.getByRole('button', { name: '立即同步', exact: true });
   const warningOffset = () =>
     page
@@ -338,13 +338,16 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   const notice = page.locator('.ol-notification-card');
   await expect(notice).toHaveCount(1);
   await expect(notice).toContainText('正在同步云端最新内容');
-  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice.locator('.ol-toast-spinner')).toBeVisible();
+  await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await notice.evaluate((node) => node.setAttribute('data-same-operation', 'sync'));
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(notice).not.toContainText('同步完成');
   await waitForSettingsOperation(page, 'sync', 1);
   const cancel = page.getByRole('button', { name: '取消当前任务', exact: true });
   const noticeCancel = notice.getByRole('button', { name: '取消同步', exact: true });
+  await expect(noticeCancel).toHaveCount(0);
+  await page.evaluate(() => window.settingsStatusFixture.startSync());
   await expect(noticeCancel).toBeEnabled();
   await expect(cancel).toHaveCount(0);
   await expect(noticeCancel).toHaveAttribute('data-action-style', 'cancel-icon');
@@ -353,8 +356,17 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
     .poll(() => page.evaluate(() => window.settingsStatusFixture.canRestoreDuringSync()))
     .toBe(true);
   await page.evaluate(() => window.settingsStatusFixture.restoreDuringSync());
-  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice).toHaveAttribute('data-state', 'saving');
+  await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await expect(notice).not.toContainText('已恢复');
+  await page.evaluate(() => window.settingsStatusFixture.commitSync());
+  await noticeCancel.click();
+  await expect(notice).toContainText('已请求取消');
+  await expect(noticeCancel).toBeDisabled();
+  await expect(sync).toBeDisabled();
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
+    .toBe(1);
   await finishSettingsOperation(page, 'sync', 1);
   await expect(notice).toHaveAttribute('data-state', 'saved');
   await expect(notice).toHaveAttribute('data-same-operation', 'sync');
@@ -372,11 +384,12 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await noticeCancel.click();
   await expect(notice).toContainText('已请求取消');
   await expect(noticeCancel).toBeDisabled();
-  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice).toHaveAttribute('data-state', 'saving');
+  await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await expect(cancel).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledSyncTasks.length))
-    .toBe(1);
+    .toBe(2);
   await finishSettingsOperation(page, 'sync', 2);
   await expect(notice).toContainText('任务已取消。');
   expect(await warningOffset()).toBeCloseTo(warningTop, 0);
@@ -387,7 +400,8 @@ test('Sync Now keeps one progress notice until native completion', async ({ page
   await expect(notice).toHaveCount(0);
 
   await sync.click();
-  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice).toHaveAttribute('data-state', 'saving');
+  await expect(notice.getByRole('progressbar')).toHaveCount(0);
   await waitForSettingsOperation(page, 'sync', 3);
   await page.evaluate(() => window.settingsStatusFixture.hide());
   await expect(sync).toHaveCount(0);
@@ -409,7 +423,8 @@ test('cloud sync keeps keyboard cancellation inside the welcome modal', async ({
   const cancel = dialog.getByRole('button', { name: '取消当前任务', exact: true });
   await sync.click();
   await waitForSettingsOperation(page, 'sync', 1);
-  await expect(notice.getByRole('progressbar')).toBeVisible();
+  await expect(notice).toHaveAttribute('data-state', 'saving');
+  await expect(notice.getByRole('progressbar')).toHaveCount(0);
   const toastCancel = notice.getByRole('button', { name: '取消同步', exact: true });
   await expect(toastCancel).toBeEnabled();
   await expect(toastCancel).toHaveAttribute('tabindex', '-1');
@@ -614,11 +629,12 @@ test('normal download cancellation is available only outside a modal and before 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
   const card = page.locator('[data-notification-key="download:qwen3:normal-model"]');
   const cancel = card.getByRole('button', { name: '取消下载', exact: true });
+  const result = page.locator('[data-notification-key="download-result:qwen3:normal-model"]');
+  await expect(card.getByRole('status')).toContainText('正在下载 normal-model');
   await expect(cancel).toBeEnabled();
   await expect(cancel).toHaveAttribute('title', '取消下载 normal-model');
-  await expect(card.locator('.ol-toast-footer')).toHaveCSS('opacity', '0');
-  await card.hover();
-  await expect(card.locator('.ol-toast-footer')).toHaveCSS('opacity', '1');
+  await expect(cancel).toHaveAttribute('data-action-style', 'cancel-icon');
+  await expect(card.locator('.ol-toast-row [data-slot="toast-action"]')).toBeVisible();
   await page.getByRole('button', { name: 'Open download modal', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Download modal' })).toBeVisible();
   await expect(cancel).toBeDisabled();
@@ -657,24 +673,30 @@ test('normal download cancellation is available only outside a modal and before 
     JSON.stringify({ disabled: true, pointerEvents: 'none' }),
   );
   await expect(card).toHaveCount(0);
+  await expect(result).toHaveAttribute('data-type', 'success');
   expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
   await card.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(card).toHaveCount(0);
   expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
-  await page.evaluate(() =>
-    window.settingsStatusFixture.emitDownload('normal-model', 'downloading'),
-  );
+  await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'progress'));
   await expect(card).toHaveCount(0);
 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
-  await card.hover();
   await cancel.click();
+  await expect(cancel).toBeDisabled();
+  await expect
+    .poll(() => page.evaluate(() => window.settingsStatusFixture.cancelledDownloads))
+    .toEqual(['normal-model']);
+  await page.evaluate(async () => {
+    const { emitDownload } = window.settingsStatusFixture;
+    await emitDownload('normal-model', 'cancelled');
+    await emitDownload('normal-model', 'progress');
+    await emitDownload('normal-model', 'finished');
+  });
   await expect(card).toHaveCount(0);
-  expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([
-    'normal-model',
-  ]);
+  await expect(result).toHaveCount(0);
 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('broken-model', 'started'));
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('broken-model', 'failed'));
@@ -684,4 +706,7 @@ test('normal download cancellation is available only outside a modal and before 
   await expect(page.getByRole('alert').filter({ hasText: '模型下载失败' })).toContainText(
     'broken-model',
   );
+  await expect(
+    page.locator('[data-notification-key="download-result:qwen3:broken-model"]'),
+  ).toHaveAttribute('data-type', 'warning');
 });

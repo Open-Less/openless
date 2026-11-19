@@ -21,7 +21,8 @@ export interface WarningOptions {
 
 export type NotificationState = 'info' | 'saved' | 'failed' | 'deleting' | 'deleted' | 'saving';
 
-export type ToastVariant = 'default' | 'success' | 'error' | 'warning' | 'info' | 'loading';
+export type ToastVariant =
+  'default' | 'success' | 'error' | 'warning' | 'info' | 'loading' | 'trash';
 
 export interface NotificationOptions {
   message: string;
@@ -36,7 +37,7 @@ export interface NotificationOptions {
   progressValue?: number;
   actionLabel?: string;
   onAction?: () => void;
-  actionStyle?: 'cancel-icon' | 'below';
+  actionStyle?: 'cancel-icon';
   actionDisabled?: boolean;
   actionTitle?: string;
   /** A modal may allow a pointer action only when it owns this anchor. */

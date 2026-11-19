@@ -2432,6 +2432,10 @@ impl TauriCoordinatorHost {
             .commit_capsule_payload(payload, captured_revision)
     }
 
+    pub(crate) fn expire_terminal_capsule(&self) -> Option<CapsulePayload> {
+        self.capsule.snapshot.lock().expire_terminal_capsule()
+    }
+
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
         self.capsule.snapshot.lock().record_backend_event(event);

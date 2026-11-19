@@ -15,6 +15,25 @@ for (const variant of ['default', 'info', 'error', 'warning', 'success', 'loadin
   assert.equal(controller.getRequest(), request, 'the toast must not affect a modal decision');
   handle.dismiss();
 }
+assert.equal(toastVariant({ state: 'deleting', message: 'Deleting' }), 'trash');
+assert.equal(toastVariant({ state: 'deleted', message: 'Deleted' }), 'trash');
+assert.equal(
+  toastVariant({ state: 'failed', severity: 'warning', message: 'Delete failed' }),
+  'warning',
+);
+
+const previous = scope.interaction.notify({ state: 'saved', message: 'First saved' });
+const download = toast.loading('Downloading', { progress: true });
+const saving = scope.interaction.notify({ state: 'saving', message: 'Saving again' });
+assert.deepEqual(
+  controller.getNotifications().map((item) => item.message),
+  ['Saving again', 'Downloading'],
+);
+previous.update({ message: 'Stale receipt' });
+assert.equal(controller.getNotifications().length, 2);
+saving.dismiss();
+download.dismiss();
+
 request?.cancel();
 assert.equal(await dialog, false);
 

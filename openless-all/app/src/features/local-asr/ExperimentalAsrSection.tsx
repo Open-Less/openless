@@ -8,6 +8,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { ExperimentalSectionTitle } from '../../ui/layout/ExperimentalSectionTitle';
+import { useExperimentalDownloadOwnerRefs } from '../downloads/experimentalDownloadOwner';
 import {
   downloadPercent,
   EXPERIMENTAL_ASR_MODELS,
@@ -28,6 +29,7 @@ export function ExperimentalAsrSection({
 }) {
   const { t } = useTranslation();
   const { confirm, notify } = useInteraction();
+  const downloadOwnerRefs = useExperimentalDownloadOwnerRefs();
   const deleteRequest = useRef(false);
   const { models, error, pending, toggle, remove } = controller;
   const [navigationError, setNavigationError] = useState<string | null>(null);
@@ -62,7 +64,11 @@ export function ExperimentalAsrSection({
         const name = experimentalAsrName(status.model);
         const percent = downloadPercent(status);
         return (
-          <section key={status.model} data-experimental-model={status.model}>
+          <section
+            key={status.model}
+            ref={downloadOwnerRefs[status.model]}
+            data-experimental-model={status.model}
+          >
             <SettingRow
               className="ol-experimental-model-row"
               label={

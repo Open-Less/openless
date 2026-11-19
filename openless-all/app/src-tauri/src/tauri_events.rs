@@ -216,35 +216,21 @@ async fn forward_legacy_event(
         }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
-            capsule_owners.transcription_notice = None;
-            capsule_owners.qa_voice = None;
-            capsule_owners.qa_capsule = None;
             if selection_voice_blocks_dictation_capsule(app) {
                 return;
             }
+            let Some(payload) = crate::capsule_feedback::dictation_completion_payload(
+                &result,
+                &backend.snapshot().dictation,
+                backend.get_preferences().capsule_style,
+            ) else {
+                return;
+            };
+            capsule_owners.transcription_notice = None;
+            capsule_owners.qa_voice = None;
+            capsule_owners.qa_capsule = None;
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
-                let message = match &result.inserted {
-                    openless_core::DictationInsertStatus::Inserted => "已输入",
-                    openless_core::DictationInsertStatus::PasteSent => "已发送粘贴，请确认",
-                    openless_core::DictationInsertStatus::CopiedFallback => "已复制，请手动粘贴",
-                    openless_core::DictationInsertStatus::NotRequested => "处理完成",
-                };
-                coordinator.present_core_capsule(CapsulePayload {
-                    session_id: Some(result.session_id.to_string()),
-                    state: CapsuleState::Done,
-                    level: 0.0,
-                    elapsed_ms: result.duration_ms,
-                    message: Some(message.to_string()),
-                    inserted_chars: Some(
-                        u32::try_from(result.polished_text.chars().count()).unwrap_or(u32::MAX),
-                    ),
-                    translation: false,
-                    operating: false,
-                    warming: false,
-                    capsule_style: backend.get_preferences().capsule_style,
-                    selection_polish: false,
-                    qa: false,
-                });
+                coordinator.present_core_capsule(payload);
             }
         }
         BackendEventKind::RecordingControlRequested(request) => {

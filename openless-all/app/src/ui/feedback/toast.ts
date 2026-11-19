@@ -53,7 +53,8 @@ export function toastVariant(item: NotificationOptions): ToastVariant {
   if (item.variant) return item.variant;
   if (item.severity === 'warning') return 'warning';
   if (item.state === 'failed' || item.severity === 'error') return 'error';
-  if (item.state === 'saving' || item.state === 'deleting' || item.progress) return 'loading';
-  if (item.state === 'saved' || item.state === 'deleted') return 'success';
+  if (item.state === 'deleting' || item.state === 'deleted') return 'trash';
+  if (item.state === 'saving' || item.progress) return 'loading';
+  if (item.state === 'saved') return 'success';
   return 'info';
 }

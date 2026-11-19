@@ -9,17 +9,34 @@
   pointer-events: none;
 }
 .ol-notification-stack {
+  --ol-toast-stack-gutter: 14px;
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
   width: 100%;
   box-sizing: border-box;
-  padding: max(8px, env(safe-area-inset-top, 0px)) 14px 16px;
+  padding: max(8px, env(safe-area-inset-top, 0px)) var(--ol-toast-stack-gutter) 16px;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
   zoom: var(--ol-interface-scale, 1);
+}
+.ol-notification-slot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: 100%;
+}
+/* popLayout owns the old vertical anchor. Keep the exit centered and reflowable on resize. */
+.ol-notification-slot[data-exiting] {
+  z-index: 0;
+  inset-inline: var(--ol-toast-stack-gutter) !important;
+  width: auto !important;
+  height: auto !important;
 }
 .ol-notification-card {
   --ol-toast-bg: #fff;
@@ -71,11 +88,12 @@
 .ol-notification-icon[data-tone='success'] {
   background: #34c759;
 }
-.ol-notification-icon[data-tone='error'] {
+.ol-notification-icon:is([data-tone='error'], [data-tone='trash']) {
   background: #ff3b30;
 }
 .ol-notification-icon[data-tone='warning'] {
-  background: #ff9500;
+  background: #ffcc00;
+  color: #342800;
 }
 .ol-notification-icon[data-tone='info'] {
   background: #007aff;
@@ -83,11 +101,11 @@
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='success'] {
   background: #30d158;
 }
-[data-ol-theme='dark'] .ol-notification-icon[data-tone='error'] {
+[data-ol-theme='dark'] .ol-notification-icon:is([data-tone='error'], [data-tone='trash']) {
   background: #ff453a;
 }
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='warning'] {
-  background: #ff9f0a;
+  background: #ffd60a;
 }
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='info'] {
   background: #0a84ff;
@@ -101,6 +119,20 @@
   inset: 0;
   display: grid;
   place-items: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ol-toast-stroke {
+    stroke-dasharray: var(--ol-toast-stroke-dashes);
+    animation: ol-toast-draw 240ms ease-out both;
+  }
+}
+@keyframes ol-toast-draw {
+  from {
+    stroke-dashoffset: var(--ol-toast-stroke-start);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 .ol-toast-spinner {
   animation: ol-toast-spin 1s linear infinite;
@@ -138,10 +170,20 @@
   font-weight: 500;
   line-height: 18px;
 }
+.ol-notification-card.ol-notification-card--progress .ol-notification-body {
+  align-items: center;
+  padding-inline-start: 0;
+  gap: 5px;
+  text-align: center;
+}
+.ol-notification-card--progress .ol-notification-message {
+  font-size: 12px;
+  line-height: 16px;
+}
 .ol-notification-progress {
   display: block;
   overflow: hidden;
-  width: 100%;
+  width: min(96px, 100%);
   height: 4px;
   border-radius: 999px;
   background: var(--ol-toast-action-bg);
@@ -181,7 +223,7 @@
 .ol-notification-card .ol-notification-action:hover:not(:disabled) {
   background: var(--ol-toast-action-hover);
 }
-.ol-notification-action:disabled {
+.ol-notification-action[data-action-disabled] {
   opacity: 0.52;
 }
 .ol-notification-card .ol-notification-action[data-action-style='cancel-icon'] {
@@ -189,15 +231,6 @@
   flex: 0 0 36px;
   place-items: center;
   padding: 0;
-}
-.ol-toast-footer {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
-}
-.ol-toast-footer .ol-notification-action {
-  max-width: 100%;
-  min-height: 30px;
 }
 .ol-notification-card .ol-notification-close {
   position: absolute;
@@ -220,16 +253,12 @@
   outline-offset: -2px;
 }
 @media (hover: hover) {
-  .ol-notification-close,
-  .ol-toast-footer {
+  .ol-notification-close {
     opacity: 0;
     transition: opacity 150ms ease;
   }
-  .ol-notification-card:is(:hover, :focus-within) :is(.ol-notification-close, .ol-toast-footer) {
+  .ol-notification-card:is(:hover, :focus-within) .ol-notification-close {
     opacity: 1;
-  }
-  .ol-notification-card:not(:hover, :focus-within) .ol-toast-footer > button {
-    pointer-events: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -238,8 +267,7 @@
     animation: none;
   }
   .ol-notification-icon,
-  .ol-notification-close,
-  .ol-toast-footer {
+  .ol-notification-close {
     transition: none;
   }
 }

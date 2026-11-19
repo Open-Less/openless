@@ -1,224 +1,203 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { listenModelProgress } from '../../data/model-progress';
-import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   cancelFoundryLocalAsrPrepare,
   cancelLocalAsrDownload,
   cancelSherpaOnnxAsrDownload,
   type LocalAsrDownloadProgress,
 } from '../../api/local-asr';
-import {
-  downloadPercent,
-  experimentalAsrModelFromDownloadId,
-  experimentalAsrName,
-  type ExperimentalAsrModel,
-  type ExperimentalAsrStatus,
-} from '../../lib/experimentalAsr';
-import { useExperimentalAsr } from '../../lib/useExperimentalAsr';
+import { listenModelProgress } from '../../data/model-progress';
+import { experimentalAsrModelFromDownloadId, experimentalAsrName } from '../../lib/experimentalAsr';
+import { observeExperimentalAsr, toggleExperimentalAsr } from '../../lib/useExperimentalAsr';
+import { getRuntimeOS, isTauriHost } from '../../runtime/environment';
 import { useAppViewport } from '../../ui/layout/AppViewport';
+import { useExperimentalDownloadOwners } from './experimentalDownloadOwner';
+import type { ExperimentalAsrModel } from '../../lib/experimentalAsr';
 
-type Engine = 'qwen3' | 'sherpa' | 'foundry' | 'experimental';
-export interface ProgressItem {
+type Target =
+  | { engine: 'qwen3' | 'sherpa' | 'foundry'; id: string }
+  | { engine: 'experimental'; id: ExperimentalAsrModel };
+type Progress = Target & {
   key: string;
-  id: string;
   name: string;
   percent: number | null;
-  engine: Engine;
-  model?: ExperimentalAsrModel;
-  phase?: string;
-  generation?: number;
-}
-const TERMINAL = new Set(['finished', 'cancelled', 'failed']);
-const isExperimentalDownload = (status: ExperimentalAsrStatus) =>
-  status.enabled && (status.phase === 'downloading' || status.phase === 'preparing');
+  preparing: boolean;
+};
+export type ProgressItem = Progress & {
+  generation: number;
+  switching?: boolean;
+  cancelling?: boolean;
+  cancelFailed?: boolean;
+};
+type Outcome = 'finished' | 'failed';
 
-function experimentalItem(status: ExperimentalAsrStatus): ProgressItem {
-  return {
-    key: `experimental:${status.model}`,
-    id: status.model,
-    model: status.model,
-    name: experimentalAsrName(status.model),
-    engine: 'experimental',
-    phase: status.phase,
-    percent:
-      status.phase === 'downloading' && status.downloadedBytes > 0 ? downloadPercent(status) : null,
-  };
+function percentFromBytes(downloaded: number, total: number) {
+  return total > 0 ? Math.min(100, Math.max(0, (downloaded / total) * 100)) : null;
 }
 
-function withoutItem(items: Record<string, ProgressItem>, key: string) {
-  if (!(key in items)) return items;
-  const next = { ...items };
-  delete next[key];
-  return next;
-}
-
-export function useDownloadJobs(onFailure: (item: ProgressItem) => void) {
+export function useDownloadJobs(onResult: (item: ProgressItem, outcome: Outcome) => void) {
   const { modalStack } = useAppViewport();
-  const experimental = useExperimentalAsr(getRuntimeOS() === 'mac');
-  const [items, setItems] = useState<Record<string, ProgressItem>>({});
-  const activeNative = useRef(items);
-  const reportFailure = useRef(onFailure);
-  const activeExperimental = useRef(experimental);
-  const [pending, setPending] = useState<string[]>([]);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const cancelledJobs = useRef(new Set<string>());
-  const generations = useRef(new Map<string, number>());
-  const cancelling = useRef(new Map<string, symbol>());
+  const getExperimentalOwner = useExperimentalDownloadOwners();
+  const active = useRef(new Map<string, ProgressItem>());
+  const generation = useRef(0);
+  const [visible, setVisible] = useState<ProgressItem[]>([]);
+  const reportResult = useRef(onResult);
+  useLayoutEffect(() => {
+    reportResult.current = onResult;
+  }, [onResult]);
 
   useLayoutEffect(() => {
-    const previous = activeExperimental.current.models;
-    activeExperimental.current = experimental;
-    reportFailure.current = onFailure;
-    for (const status of experimental.models) {
-      if (
-        status.enabled &&
-        status.phase === 'failed' &&
-        previous.some((entry) => entry.model === status.model && isExperimentalDownload(entry))
-      )
-        onFailure(experimentalItem(status));
-    }
-  });
-
-  useEffect(() => {
-    if (!isTauriHost()) return;
+    const jobs = active.current;
+    const closedDownloads = new Set<string>();
     const unlistens: Array<() => void> = [];
-    let cancelled = false;
-    const update = (item: ProgressItem, phase: string) => {
-      if (cancelled) return;
-      if (phase === 'started') {
-        setErrors((previous) => {
-          if (!(item.key in previous)) return previous;
-          const next = { ...previous };
-          delete next[item.key];
-          return next;
-        });
-        generations.current.set(item.key, (generations.current.get(item.key) ?? 0) + 1);
-        if (cancelling.current.delete(item.key)) {
-          setPending((previous) => previous.filter((key) => key !== item.key));
-        }
-      }
-      const cancellingJob = cancelledJobs.current.has(item.key) || cancelling.current.has(item.key);
-      if (phase === 'started' || TERMINAL.has(phase)) cancelledJobs.current.delete(item.key);
-      if (phase === 'failed' && !cancellingJob) reportFailure.current(item);
-      // The host can finish before React removes the previous card.
-      if (TERMINAL.has(phase)) activeNative.current = withoutItem(activeNative.current, item.key);
-      else if (!cancelledJobs.current.has(item.key)) {
-        activeNative.current = {
-          ...activeNative.current,
-          [item.key]: { ...item, generation: generations.current.get(item.key) },
-        };
-      }
-      setItems(activeNative.current);
+    let disposed = false;
+    let foundry: string | undefined;
+    const publish = () => setVisible([...jobs.values()]);
+    const track = (progress: Progress, current = jobs.get(progress.key), switching = false) => {
+      jobs.set(progress.key, {
+        ...current,
+        ...progress,
+        generation: current?.generation ?? ++generation.current,
+        switching,
+      });
     };
-    void (async () => {
+    const finish = (key: string, outcome: Outcome | 'cancelled') => {
+      const job = jobs.get(key);
+      // Retire before publishing a receipt: the previous card may still be clickable.
+      jobs.delete(key);
+      if (job && !job.cancelling && outcome !== 'cancelled') reportResult.current(job, outcome);
+    };
+
+    if (getRuntimeOS() === 'mac') {
+      unlistens.push(
+        observeExperimentalAsr(({ models, pending }) => {
+          for (const status of models) {
+            const key = `experimental:${status.model}`;
+            const preparing = status.phase === 'preparing';
+            if (status.enabled && (status.phase === 'downloading' || preparing)) {
+              track(
+                {
+                  key,
+                  id: status.model,
+                  name: experimentalAsrName(status.model),
+                  engine: 'experimental',
+                  preparing,
+                  percent: preparing
+                    ? null
+                    : percentFromBytes(status.downloadedBytes, status.totalBytes),
+                },
+                jobs.get(key),
+                pending.includes(status.model),
+              );
+            } else if (status.enabled && status.phase === 'ready' && status.channelId) {
+              finish(key, 'finished');
+            } else if (status.enabled && status.phase === 'failed') {
+              finish(key, 'failed');
+            } else {
+              finish(key, 'cancelled');
+            }
+          }
+          for (const job of jobs.values()) {
+            if (job.engine === 'experimental' && !models.some((status) => status.model === job.id))
+              finish(job.key, 'cancelled');
+          }
+          publish();
+        }),
+      );
+    }
+
+    if (isTauriHost()) {
       const keep = async (registration: Promise<() => void>) => {
-        const off = await registration;
-        if (cancelled) off();
-        else unlistens.push(off);
+        try {
+          const off = await registration;
+          if (disposed) off();
+          else unlistens.push(off);
+        } catch (error) {
+          if (!disposed) console.warn('[global-download-progress] subscribe failed', error);
+        }
       };
       const download = (engine: 'qwen3' | 'sherpa') => (p: LocalAsrDownloadProgress) => {
-        // Generic model-store progress also includes experiments. Their IDs are
-        // not legacy model IDs and must never reach cancelLocalAsrDownload().
-        if (experimentalAsrModelFromDownloadId(p.modelId)) return;
-        update(
-          {
-            key: `${engine}:${p.modelId}`,
+        // Experimental jobs finish only after installation, not at the model-store byte event.
+        if (disposed || experimentalAsrModelFromDownloadId(p.modelId)) return;
+        const key = `${engine}:${p.modelId}`;
+        if (p.phase === 'finished' || p.phase === 'failed' || p.phase === 'cancelled') {
+          closedDownloads.add(key);
+          finish(key, p.phase);
+        } else {
+          if (p.phase === 'started') {
+            jobs.delete(key);
+            closedDownloads.delete(key);
+          } else if (closedDownloads.has(key)) return;
+          track({
+            key,
             id: p.modelId,
             name: p.modelId,
-            percent: p.bytesTotal > 0 ? (p.bytesDownloaded / p.bytesTotal) * 100 : null,
+            percent: percentFromBytes(p.bytesDownloaded, p.bytesTotal),
             engine,
-          },
-          p.phase,
-        );
+            preparing: false,
+          });
+        }
+        publish();
       };
-      const results = await Promise.allSettled([
-        keep(listenModelProgress('local-asr-download-progress', download('qwen3'))),
-        keep(listenModelProgress('sherpa-onnx-asr-download-progress', download('sherpa'))),
-        keep(
-          listenModelProgress('foundry-local-asr-prepare-progress', (p) => {
-            update(
-              {
-                key: `foundry:${p.modelAlias}`,
-                id: p.modelAlias,
-                name: p.label || p.modelAlias,
-                percent: p.percent ?? null,
-                engine: 'foundry',
-              },
-              p.phase,
-            );
-          }),
-        ),
-      ]);
-      for (const result of results)
-        if (result.status === 'rejected')
-          console.warn('[global-download-progress] subscribe failed', result.reason);
-    })().catch((error) => console.warn('[global-download-progress] subscribe failed', error));
+      void keep(listenModelProgress('local-asr-download-progress', download('qwen3')));
+      void keep(listenModelProgress('sherpa-onnx-asr-download-progress', download('sherpa')));
+      void keep(
+        listenModelProgress('foundry-local-asr-prepare-progress', (p) => {
+          if (disposed) return;
+          const key = `foundry:${p.modelAlias}`;
+          if (p.phase === 'finished' || p.phase === 'failed') {
+            if (foundry !== key) return;
+            foundry = undefined;
+            finish(key, p.phase);
+          } else {
+            // The host serializes Foundry work and its cancel command has no model argument.
+            if (foundry && foundry !== key) finish(foundry, 'cancelled');
+            foundry = key;
+            track({
+              key,
+              id: p.modelAlias,
+              name: p.modelAlias,
+              percent: p.percent,
+              engine: 'foundry',
+              preparing: p.phase !== 'model',
+            });
+          }
+          publish();
+        }),
+      );
+    }
     return () => {
-      cancelled = true;
+      disposed = true;
       for (const off of unlistens) off();
+      jobs.clear();
     };
   }, []);
 
-  const handleCancel = async (item: ProgressItem) => {
-    if (modalStack.getActive() || cancelling.current.has(item.key)) return;
-    const currentExperimental = activeExperimental.current;
-    if (item.engine === 'experimental') {
-      if (
-        !item.model ||
-        currentExperimental.pending.includes(item.model) ||
-        !currentExperimental.models.some(
-          (status) => status.model === item.model && isExperimentalDownload(status),
-        )
-      )
-        return;
-    } else if (!activeNative.current[item.key]) return;
+  const getActionOwner = (item: ProgressItem) =>
+    item.engine === 'experimental' ? getExperimentalOwner(item.id) : null;
 
-    const token = Symbol(item.key);
-    cancelling.current.set(item.key, token);
-    const generation = generations.current.get(item.key);
-    const isCurrent = () =>
-      cancelling.current.get(item.key) === token &&
-      generations.current.get(item.key) === generation;
-    setPending((previous) => [...previous, item.key]);
-    setErrors((previous) => {
-      const next = { ...previous };
-      delete next[item.key];
-      return next;
-    });
-    // Generic/Sherpa events have a Started boundary to admit a later retry.
-    // Foundry has no such event; keep its card until the native terminal event
-    // rather than fencing all future prepares for the same model alias.
-    if (item.engine === 'qwen3' || item.engine === 'sherpa') cancelledJobs.current.add(item.key);
+  const handleCancel = async (item: ProgressItem) => {
+    const overlay = modalStack.getTopOverlay();
+    if (overlay && !overlay.contains(getActionOwner(item))) return;
+    const jobs = active.current;
+    const current = jobs.get(item.key);
+    if (current?.generation !== item.generation || current.cancelling || current.switching) return;
+
+    const amend = (change: Pick<ProgressItem, 'cancelling' | 'cancelFailed'>) => {
+      const job = jobs.get(item.key);
+      if (job?.generation !== item.generation) return;
+      jobs.set(item.key, { ...job, ...change });
+      setVisible([...jobs.values()]);
+    };
+    amend({ cancelling: true, cancelFailed: false });
     try {
-      if (item.engine === 'experimental' && item.model)
-        await experimental.toggle(item.model, false);
+      if (item.engine === 'experimental') await toggleExperimentalAsr(item.id, false);
       else if (item.engine === 'qwen3') await cancelLocalAsrDownload(item.id);
       else if (item.engine === 'sherpa') await cancelSherpaOnnxAsrDownload(item.id);
       else await cancelFoundryLocalAsrPrepare();
-      if (isCurrent() && item.engine !== 'foundry') {
-        activeNative.current = withoutItem(activeNative.current, item.key);
-        setItems(activeNative.current);
-      }
-    } catch (error) {
-      if (!isCurrent()) return;
-      cancelledJobs.current.delete(item.key);
-      setErrors((previous) => ({ ...previous, [item.key]: String(error) }));
-    } finally {
-      if (isCurrent()) {
-        cancelling.current.delete(item.key);
-        setPending((previous) => previous.filter((key) => key !== item.key));
-      }
+    } catch {
+      amend({ cancelling: false, cancelFailed: true });
     }
   };
-  const visible: ProgressItem[] = [
-    ...Object.values(items),
-    ...experimental.models.filter(isExperimentalDownload).map(experimentalItem),
-  ];
 
-  return {
-    visible,
-    errors,
-    pending: [...pending, ...experimental.pending.map((model) => `experimental:${model}`)],
-    handleCancel,
-  };
+  return { visible, handleCancel, getActionOwner };
 }

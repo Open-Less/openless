@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Swami Malode. See public/licenses/rare-ui-LICENSE.txt.
  * https://www.rareui.com/components/toast
  */
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { getSvgPath } from 'figma-squircle';
 import type { ToastVariant } from '../../api/interaction';
@@ -19,7 +19,6 @@ const TILE_CLIP = `path('${squircle(TILE, TILE, TILE_RADIUS)}')`;
 const POP = { type: 'spring', stiffness: 520, damping: 30 } as const;
 // critically damped, so the tile eases in without the glyph's bounce
 const SETTLE = { type: 'spring', stiffness: 320, damping: 36 } as const;
-const DRAW = { duration: 0.3, delay: 0.1, ease: 'easeOut' } as const;
 // The viewport entrance is 220 ms; reveal the glyph after the shell starts to settle.
 const ARRIVAL = 0.16;
 const INSTANT = { duration: 0 } as const;
@@ -32,12 +31,14 @@ const BUMP = {
   times: [0, 0.4, 1],
 };
 
-function Glyph({ type, reduced, delay }: { type: ToastVariant; reduced: boolean; delay: number }) {
-  const stroke = {
-    initial: reduced ? false : { pathLength: 0 },
-    animate: { pathLength: 1 },
-    transition: reduced ? INSTANT : { ...DRAW, delay: DRAW.delay + delay },
-  } as const;
+function Glyph({ type, delay }: { type: ToastVariant; delay: number }) {
+  // Use real SVG user-unit distances; WebKit can leave normalized pathLength dashes split.
+  const stroke = (length: number) =>
+    ({
+      '--ol-toast-stroke-dashes': `${length} ${length + 4}`,
+      '--ol-toast-stroke-start': length + 2,
+      animationDelay: `${40 + delay * 1000}ms`,
+    }) as CSSProperties;
 
   if (type === 'loading') {
     return (
@@ -68,23 +69,31 @@ function Glyph({ type, reduced, delay }: { type: ToastVariant; reduced: boolean;
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      {type === 'success' && <motion.path d="M6 12.5l4 4 8-9" {...stroke} />}
+      {type === 'success' && (
+        <path className="ol-toast-stroke" d="M6 12.5l4 4 8-9" style={stroke(18)} />
+      )}
+      {type === 'trash' && (
+        <path
+          d="M4.5 6.5h15m-10.5 0V4h6v2.5M6.5 6.5l1 13.5h9l1-13.5M10 10v6m4-6v6"
+          strokeWidth={2}
+        />
+      )}
       {type === 'error' && (
         <>
-          <motion.path d="M7.5 7.5l9 9" {...stroke} />
-          <motion.path d="M16.5 7.5l-9 9" {...stroke} />
+          <path className="ol-toast-stroke" d="M7.5 7.5l9 9" style={stroke(13)} />
+          <path className="ol-toast-stroke" d="M16.5 7.5l-9 9" style={stroke(13)} />
         </>
       )}
       {type === 'warning' && (
         <>
-          <motion.path d="M12 6v7" {...stroke} />
+          <path className="ol-toast-stroke" d="M12 6v7" style={stroke(8)} />
           <circle cx="12" cy="18" r="1.6" fill="currentColor" stroke="none" />
         </>
       )}
       {type === 'info' && (
         <>
           <circle cx="12" cy="6.25" r="1.6" fill="currentColor" stroke="none" />
-          <motion.path d="M12 11v7" {...stroke} />
+          <path className="ol-toast-stroke" d="M12 11v7" style={stroke(8)} />
         </>
       )}
     </svg>
@@ -97,15 +106,21 @@ export function ToastIcon({ type }: { type: Exclude<ToastVariant, 'default'> }) 
   const [arrivingType] = useState(type);
   const settled = type !== arrivingType;
   const delay = settled ? 0 : ARRIVAL;
+  const success = type === 'success';
+  const bump = settled && !success;
 
   return (
     <motion.span
       aria-hidden
       data-slot="toast-icon"
       initial={reduced ? false : { scale: 0.85, opacity: 0 }}
-      animate={{ scale: settled ? [1, 1.08, 1] : 1, opacity: 1 }}
+      animate={{ scale: bump ? [1, 1.08, 1] : 1, opacity: 1 }}
       transition={
-        reduced ? INSTANT : settled ? { scale: BUMP } : { ...SETTLE, delay: ARRIVAL - 0.08 }
+        reduced
+          ? INSTANT
+          : bump
+            ? { scale: BUMP }
+            : { ...SETTLE, delay: settled ? 0 : ARRIVAL - 0.08 }
       }
       style={{ width: TILE, height: TILE, clipPath: TILE_CLIP }}
       className="ol-notification-icon"
@@ -114,17 +129,17 @@ export function ToastIcon({ type }: { type: Exclude<ToastVariant, 'default'> }) 
       <AnimatePresence initial={!reduced} mode="wait">
         <motion.span
           key={type}
-          initial={{ scale: 0.4, opacity: 0 }}
+          initial={{ scale: success ? 1 : 0.4, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           exit={{
             scale: 0.5,
             opacity: 0,
             transition: reduced ? INSTANT : LEAVE,
           }}
-          transition={reduced ? INSTANT : { ...POP, delay }}
+          transition={reduced ? INSTANT : success ? { duration: 0.12, delay } : { ...POP, delay }}
           className="ol-toast-glyph"
         >
-          <Glyph type={type} reduced={reduced} delay={delay} />
+          <Glyph type={type} delay={delay} />
         </motion.span>
       </AnimatePresence>
     </motion.span>

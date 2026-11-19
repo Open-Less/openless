@@ -15,6 +15,14 @@ interface StatusNoticeProps {
   onExit?: () => void;
 }
 
+type NoticeFrame = { transform: string; opacity: string };
+const visible: NoticeFrame = { transform: 'none', opacity: '1' };
+
+function paintedFrame(card: HTMLElement): NoticeFrame {
+  const { transform, opacity } = getComputedStyle(card);
+  return { transform, opacity };
+}
+
 /** A non-modal status surface; the viewport owns clipping and the animation owns removal. */
 export function StatusNotice({
   children,
@@ -31,7 +39,7 @@ export function StatusNotice({
   const reduced = useReducedMotion();
   const exit = useRef(onExit);
   exit.current = onExit;
-  const interrupted = useRef<string | null>(null);
+  const interrupted = useRef<NoticeFrame | null>(null);
 
   useLayoutEffect(() => {
     if (ref.current) ref.current.inert = !present;
@@ -56,25 +64,32 @@ export function StatusNotice({
     let cancelled = false;
     let frame = 0;
     let previousSize = '';
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      if (!animation) return;
+      animation.onfinish = null;
+      animation.cancel();
+      animation = undefined;
+    };
     const run = (initial: boolean) => {
-      const painted = getComputedStyle(card).transform;
-      const from = animation ? painted : interrupted.current;
-      animation?.cancel();
+      const from = animation ? paintedFrame(card) : interrupted.current;
+      interrupted.current = null;
+      stop();
       const box = card.getBoundingClientRect();
       const style = getComputedStyle(card);
       // CSS zoom changes the painted distance, while translateY is in local CSS pixels.
       const scale = box.height / parseFloat(style.height) || 1;
       const top = boundary?.getBoundingClientRect().top ?? 0;
-      const hidden = `translate3d(0, ${Math.min(-2, (top - box.bottom - 2) / scale)}px, 0)`;
+      const hidden: NoticeFrame = {
+        transform: `translate3d(0, ${Math.min(-2, (top - box.bottom - 2) / scale)}px, 0)`,
+        opacity: present ? '1' : '0',
+      };
       previousSize = `${box.width}:${box.height}:${boundary?.clientHeight}`;
       animation = card.animate(
-        [
-          { transform: from ?? (initial && present ? hidden : 'none') },
-          { transform: present ? 'none' : hidden },
-        ],
+        [from ?? (initial && present ? hidden : visible), present ? visible : hidden],
         {
           duration: present ? 220 : 180,
-          easing: present ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.55, 0, 1, 0.45)',
+          easing: present ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.4, 0, 0.6, 1)',
           fill: 'both',
         },
       );
@@ -89,32 +104,31 @@ export function StatusNotice({
           });
         });
       }
-      void current.finished
-        .then(() => {
-          if (cancelled || animation !== current) return;
-          if (present) {
-            interrupted.current = null;
-            current.cancel();
-            animation = undefined;
-          } else exit.current?.();
-        })
-        .catch(() => {});
+      // A retargeted or unmounted card must not keep a pending finished callback.
+      current.onfinish = () => {
+        current.onfinish = null;
+        if (cancelled || animation !== current || !card.isConnected) return;
+        if (present) stop();
+        else {
+          observer.disconnect();
+          exit.current?.();
+        }
+      };
     };
-    run(true);
     const observer = new ResizeObserver(() => {
       if (cancelled) return;
       const box = card.getBoundingClientRect();
       if (`${box.width}:${box.height}:${boundary?.clientHeight}` !== previousSize && animation)
         run(false);
     });
+    run(true);
     observer.observe(card);
     if (boundary) observer.observe(boundary);
     return () => {
       cancelled = true;
-      cancelAnimationFrame(frame);
-      interrupted.current = animation ? getComputedStyle(card).transform : null;
+      interrupted.current = animation && card.isConnected ? paintedFrame(card) : null;
       observer.disconnect();
-      animation?.cancel();
+      stop();
     };
   }, [present, reduced, boundary]);
 

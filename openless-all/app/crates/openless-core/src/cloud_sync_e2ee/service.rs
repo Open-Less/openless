@@ -331,6 +331,11 @@ impl EncryptedSyncService {
 
     async fn current_account(&self, runtime: &Runtime) -> SyncResult<()> {
         self.check_cancelled()?;
+        self.verify_account(runtime).await?;
+        self.check_cancelled()
+    }
+
+    async fn verify_account(&self, runtime: &Runtime) -> SyncResult<()> {
         let connection = runtime
             .connection
             .as_ref()
@@ -341,7 +346,7 @@ impl EncryptedSyncService {
         {
             return Err(error("account_changed"));
         }
-        self.check_cancelled()
+        Ok(())
     }
 
     fn finish<T>(&self, runtime: &mut Runtime, result: &SyncResult<T>) {
@@ -1442,6 +1447,9 @@ impl EncryptedSyncService {
             old_key_id,
         };
         let owner = self.storage_owner(runtime)?;
+        self.check_cancelled()?;
+        // Once we start persisting a replayable proposal, finish its submit/receipt path.
+        // Cancellation here could otherwise leave an unsent operation for the next sync to replay.
         self.0
             .local
             .write(
@@ -1455,7 +1463,7 @@ impl EncryptedSyncService {
             .write(&owner, "pending", pending.clone())
             .await?;
         self.update(|s| s.pending_operation_id = Some(pending.operation_id.clone()));
-        self.current_account(runtime).await?;
+        self.verify_account(runtime).await?;
         // Once submitted, preserve the exact operation until a validated receipt.
         let receipt = connection
             .transport
@@ -1576,7 +1584,8 @@ impl EncryptedSyncService {
         pending: &Pending,
         receipt: &OperationReceipt,
     ) -> SyncResult<()> {
-        self.current_account(runtime).await?;
+        // A cancellation cannot invalidate a receipt for an operation already sent.
+        self.verify_account(runtime).await?;
         let owner = self.storage_owner(runtime)?;
         if receipt.operation_id.as_str() != pending.operation_id
             || receipt.vault_id.as_str() != pending.vault_id
@@ -2050,6 +2059,7 @@ impl EncryptedSyncService {
         self.require_consent(runtime).await?;
         self.connect(runtime).await?;
         self.reconcile(runtime).await?;
+        self.check_cancelled()?;
         if !runtime.settings.enabled {
             return Ok(());
         }
@@ -2065,6 +2075,7 @@ impl EncryptedSyncService {
         let key = self.unlocked(runtime)?;
         let snapshot = self.download(runtime).await?;
         let remote = self.decrypt(runtime, snapshot.clone(), key.clone()).await?;
+        self.check_cancelled()?;
         runtime.snapshot = Some(snapshot.clone());
         let baseline = self.baseline_documents(runtime)?;
         if baseline.is_none() {
@@ -2073,6 +2084,7 @@ impl EncryptedSyncService {
         }
         let scope = self.active_scope(runtime)?;
         let mut captured = self.0.data.export(scope.clone()).await?;
+        self.check_cancelled()?;
         let merge = documents::diff_sync_documents(baseline.as_ref(), &captured.documents, &remote)
             .map_err(document_error)?;
         if !merge.conflicts().is_empty() {

@@ -1,5 +1,13 @@
 import { TextField } from '../../ui/controls/TextField';
-import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -15,12 +23,14 @@ import { Dialog } from '../../ui/overlays/Dialog';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { SelectLite } from '../../ui/controls/SelectLite';
 import { useOverlayMotion } from '../../lib/motion';
-import { emitSaved } from '../../lib/savedEvent';
+import { notify } from '../../lib/notifications';
+import { channelEditorMessages } from '../../i18n/channelEditorMessages';
 import { Button as Btn } from '../../ui/controls/Button';
 import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { ChannelEditorHostContext } from '../settings/shell/ChannelEditorHostContext';
 import { ProviderFormContext, useProviderForm } from './ProviderForm';
 import { ChannelCredentialFields, ChannelFormRow, ChannelSectionHeading } from './ProvidersSection';
+import { CredentialDraft } from './credentialDraft';
 
 import {
   defaultChannelNameForProvider,
@@ -56,10 +66,41 @@ export function ChannelEditor({
   /** The user made a meaningful change to the draft; must fire synchronously before async writes. */
   onUserMutation: () => void;
 }) {
-  const { t } = useTranslation();
-  // Drain the channel form's unwritten async writes before closing / switching provider (#1044 semantics).
+  const { t, i18n } = useTranslation();
+  const messages = channelEditorMessages(i18n.resolvedLanguage ?? i18n.language);
+  // Closing, saving and switching all drain the same registered fields.
   const form = useProviderForm();
-  const [name, setName] = useState(channel.name);
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+  const refreshChannel = async () => {
+    try {
+      await onChangedRef.current();
+    } catch (error) {
+      console.error('[channels] refresh failed', error);
+    }
+  };
+  const savedName = useRef(channel.name.trim());
+  // The host keys the editor by channel ID. List refreshes must not replace an active draft.
+  const [nameDraft] = useState(
+    () =>
+      new CredentialDraft(
+        async () => channel.name,
+        async (value) => {
+          const next = value.trim();
+          if (next === savedName.current) return;
+          await renameChannel(kind, channel.id, next);
+          savedName.current = next;
+          await refreshChannel();
+        },
+      ),
+  );
+  const name = useSyncExternalStore(nameDraft.subscribe, nameDraft.snapshot, nameDraft.snapshot);
+  const { register } = form;
+  useLayoutEffect(() => register('channel-name', nameDraft.flush), [nameDraft, register]);
+  useEffect(() => {
+    void nameDraft.load();
+    return () => nameDraft.dispose();
+  }, [nameDraft]);
   const [providerType, setProviderType] = useState(channel.providerType);
   const [providerChangeError, setProviderChangeError] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -84,7 +125,7 @@ export function ChannelEditor({
   };
   const closeRequestedRef = useRef(false);
   const lifetime = useRef<symbol | null>(null);
-  const pendingSwitch = useRef<{ closeInstead: boolean } | null>(null);
+  const pendingAction = useRef<{ closeAfterDrain: boolean } | null>(null);
   useLayoutEffect(() => {
     lifetime.current = closing ? null : Symbol();
     return () => {
@@ -100,9 +141,9 @@ export function ChannelEditor({
     return true;
   };
   const requestClose = () => {
-    if (!lifetime.current || closeRequestedRef.current) return;
-    if (pendingSwitch.current) {
-      pendingSwitch.current.closeInstead = true;
+    if (!lifetime.current || closeRequestedRef.current || deleteRequest.current) return;
+    if (pendingAction.current) {
+      pendingAction.current.closeAfterDrain = true;
       return;
     }
     void form.finish(closeEditor);
@@ -158,14 +199,28 @@ export function ChannelEditor({
     }
   };
 
-  const saveName = async () => {
-    if (name.trim() === channel.name.trim()) return;
+  const saveChannel = async () => {
+    const owner = lifetime.current;
+    if (!owner || closeRequestedRef.current || deleteRequest.current || form.isBusy()) return;
+    const request = { closeAfterDrain: false };
+    pendingAction.current = request;
     try {
-      await renameChannel(kind, channel.id, name.trim());
-      await onChanged();
-    } catch (error) {
-      console.error('[channels] rename failed', error);
-      emitSaved('failed', t('common.operationFailed'));
+      const saved = await form.finish(async () => {
+        if (lifetime.current !== owner) return false;
+        // Explicitly saving a new channel keeps it even if all its fields are blank.
+        onUserMutation();
+        await refreshChannel();
+      });
+      if (lifetime.current !== owner) return;
+      notify({
+        id: `channel-save:${kind}:${channel.id}`,
+        state: saved ? 'saved' : 'failed',
+        message: saved ? messages.saved : messages.saveFailed,
+        durationMs: saved ? undefined : 5000,
+      });
+      if (saved && request.closeAfterDrain) closeEditor();
+    } finally {
+      if (pendingAction.current === request) pendingAction.current = null;
     }
   };
 
@@ -206,34 +261,42 @@ export function ChannelEditor({
 
   const changeProvider = async (next: string) => {
     const owner = lifetime.current;
-    if (!owner || closeRequestedRef.current || pendingSwitch.current || next === providerType)
+    if (
+      !owner ||
+      closeRequestedRef.current ||
+      deleteRequest.current ||
+      form.isBusy() ||
+      next === providerType
+    )
       return;
-    const request = { closeInstead: false };
-    pendingSwitch.current = request;
+    const request = { closeAfterDrain: false };
+    pendingAction.current = request;
     const isCurrent = () =>
-      lifetime.current === owner && pendingSwitch.current === request && !closeRequestedRef.current;
+      lifetime.current === owner && pendingAction.current === request && !closeRequestedRef.current;
     setProviderChangeError(false);
     onUserMutation();
     try {
       const finished = await form.finish(async () => {
         if (!isCurrent()) return false;
-        if (request.closeInstead) return closeEditor();
+        if (request.closeAfterDrain) return closeEditor();
         await setChannelProviderType(kind, channel.id, next);
         if (!isCurrent()) return false;
         await fillProviderDefaults(next, isCurrent);
         if (!isCurrent()) return false;
         // The provider is durable now. A later rename or list refresh cannot undo it.
         setProviderType(next);
-        try {
-          const defaultName = defaultChannelNameForProvider(next, name);
-          if (defaultName !== name) {
-            await renameChannel(kind, channel.id, defaultName);
-            if (isCurrent()) setName(defaultName);
+        const currentName = nameDraft.snapshot().value;
+        const defaultName = defaultChannelNameForProvider(next, currentName);
+        if (defaultName !== currentName) {
+          nameDraft.edit(defaultName);
+          if (!(await nameDraft.flush())) {
+            if (isCurrent()) await refreshChannel();
+            return false;
           }
-        } finally {
-          if (isCurrent()) await onChanged();
+        } else if (isCurrent()) {
+          await refreshChannel();
         }
-        if (isCurrent() && request.closeInstead) closeEditor();
+        if (isCurrent() && request.closeAfterDrain) closeEditor();
         return true;
       });
       if (!finished && isCurrent()) setProviderChangeError(true);
@@ -241,32 +304,48 @@ export function ChannelEditor({
       console.error('[channels] change provider failed', error);
       if (isCurrent()) setProviderChangeError(true);
     } finally {
-      if (pendingSwitch.current === request) pendingSwitch.current = null;
+      if (pendingAction.current === request) pendingAction.current = null;
     }
   };
 
   const remove = async () => {
-    if (deleteRequest.current || closing || form.leaving || !lifetime.current) return;
+    if (deleteRequest.current || closeRequestedRef.current || form.isBusy() || !lifetime.current)
+      return;
     const owner = lifetime.current;
     deleteRequest.current = true;
     setDeleting(true);
     try {
       const confirmed = await interaction.confirm({
         title: t('settings.channels.delete'),
-        description: t('settings.channels.deleteScope', { name: channel.name }),
+        description: t('settings.channels.deleteScope', {
+          name: nameDraft.snapshot().value.trim(),
+        }),
         confirmLabel: t('settings.channels.confirmDelete'),
         cancelLabel: t('common.cancel'),
         tone: 'danger',
         icon: 'trash',
-        errorMessage: t('common.operationFailed'),
+        errorMessage: messages.deleteFailed,
         onConfirm: async () => {
-          if (lifetime.current !== owner) throw new Error('Channel editor no longer active');
-          const finished = await form.finish(async () => {
-            if (lifetime.current !== owner) return false;
-            await deleteChannel(kind, channel.id);
-            emitSaved('deleted', t('common.deleted'));
-          });
-          if (!finished) throw new Error('Could not finish pending channel changes');
+          // Window-level feedback must survive the editor closing after a successful delete.
+          const id = `channel-delete:${kind}:${channel.id}`;
+          try {
+            const finished = await form.finish(async () => {
+              if (lifetime.current !== owner) return false;
+              notify({ id, state: 'deleting', message: messages.deleting });
+              await deleteChannel(kind, channel.id);
+              notify({ id, state: 'deleted', message: t('common.deleted') });
+            });
+            if (!finished) throw new Error('Could not finish pending channel changes');
+          } catch (error) {
+            notify({
+              id,
+              state: 'failed',
+              severity: 'warning',
+              message: messages.deleteFailed,
+              durationMs: 5000,
+            });
+            throw error;
+          }
         },
       });
       if (confirmed && lifetime.current === owner) closeEditor();
@@ -347,16 +426,23 @@ export function ChannelEditor({
             <ChannelFormRow label={t('settings.channels.nameLabel')} htmlFor={nameId}>
               <TextField
                 id={nameId}
-                value={name}
+                value={name.value}
                 onChange={(e) => {
+                  if (form.isBusy()) return;
                   onUserMutation();
-                  setName(e.target.value);
+                  nameDraft.edit(e.target.value);
                 }}
-                onBlur={() => void saveName()}
+                onBlur={() => void nameDraft.flush()}
+                disabled={!name.loaded || form.leaving}
                 placeholder={t('settings.channels.namePlaceholder')}
                 style={{ height: 38 }}
               />
               <p className="ol-channel-name-hint">{t('settings.channels.nameHint')}</p>
+              {name.status === 'saveError' && (
+                <p role="alert" className="ol-channel-change-error">
+                  {messages.saveFailed}
+                </p>
+              )}
             </ChannelFormRow>
 
             {/* Model list, provider-specific fields, and test results all stay in the same scroll area. */}
@@ -389,10 +475,10 @@ export function ChannelEditor({
             <span className="ol-channel-autosave-hint">{t('modal.autoSaveHint')}</span>
             <Btn
               variant={embedded ? 'primary' : 'blue'}
-              onClick={requestClose}
-              disabled={form.leaving}
+              onClick={embedded ? requestClose : () => void saveChannel()}
+              disabled={form.leaving || deleting}
             >
-              {t(embedded ? 'settings.channels.done' : 'common.close')}
+              {embedded ? t('settings.channels.done') : messages.save}
             </Btn>
           </div>
         </footer>
