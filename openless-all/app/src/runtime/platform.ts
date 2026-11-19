@@ -18,7 +18,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
   if (environment.os === 'linux') {
     return { ...unavailableMobileCapabilities, platform: 'desktop', linuxHost: true,
       supportsDesktopHotkey: true, supportsOverlay: true, supportsTray: true,
-      supportsClipboardPasteInsertion: false, supportsAutoUpdate: true };
+      supportsClipboardPasteInsertion: false, supportsAutoUpdate: true, supportsVoiceEdit: true };
   }
   if (environment.os === 'android') {
     return { ...unavailableMobileCapabilities, platform: 'android', supportsInAppDictation: true };

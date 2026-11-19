@@ -28,7 +28,12 @@ fn dispatch_edge(
 }
 
 /// 起热键监听：快捷键 → 听写 / 语音提问。
-pub fn spawn_headless(backend: Arc<OpenLessBackend>, runtime: Arc<tokio::runtime::Runtime>) {
+pub fn spawn_headless(
+    backend: Arc<OpenLessBackend>,
+    runtime: Arc<tokio::runtime::Runtime>,
+    voice_edit: Arc<crate::voice_edit::VoiceEdit>,
+    host_events: tokio::sync::broadcast::Sender<(String, String)>,
+) {
     std::thread::Builder::new()
         .name("openless-hotkeys".into())
         .spawn(move || match Fcitx5HotkeyListener::start() {
@@ -53,6 +58,18 @@ pub fn spawn_headless(backend: Arc<OpenLessBackend>, runtime: Arc<tokio::runtime
                             DictationHotkeyEdge::Combined { press_id, at },
                         ),
                         LinuxHotkeyEvent::SelectionPolishPressed => {
+                            if voice_edit.take_arm() && backend.get_preferences().voice_edit_enabled
+                            {
+                                let event = match runtime.block_on(voice_edit.capture()) {
+                                    Ok(()) => ("voice-edit:show".into(), "{}".into()),
+                                    Err(error) => (
+                                        "voice-edit:error".into(),
+                                        serde_json::json!(error).to_string(),
+                                    ),
+                                };
+                                let _ = host_events.send(event);
+                                return;
+                            }
                             // 选区助手：读当前选区（fcitx5 surrounding/selection）→
                             // 润色 → 用 SelectionRuntimeAdapter 替换回原处。
                             // previewConfirm 需要预览确认 UI，Linux 还没有，先按直替处理。

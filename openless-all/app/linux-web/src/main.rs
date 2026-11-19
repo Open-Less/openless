@@ -8,6 +8,7 @@
 //! 静态资源用一个只在 127.0.0.1 上监听的小 HTTP 服务提供（Chromium 拒绝
 //! file:// 下的 ES module / fetch）。
 mod events;
+mod voice_edit;
 mod host;
 mod hotkeys;
 
@@ -32,6 +33,7 @@ struct Host {
     host_events: tokio::sync::broadcast::Sender<(String, String)>,
     /// core 处在「润色预览」模式时为 true；`get_selection_polish_preview` 用它做门禁。
     selection_preview_pending: std::sync::atomic::AtomicBool,
+    voice_edit: std::sync::Arc<voice_edit::VoiceEdit>,
     /// core 的 host action 队列（窗口显隐、打开外链、重启…）。
     host_actions: Option<std::sync::Arc<openless_linux_host::LinuxHostActions>>,
     /// action pump 的唤醒端：core 推一个 action 就 send 一次，线程立刻 drain。
@@ -121,7 +123,7 @@ fn main() {
     // 无头模式仍要挂热键监听：快捷键 → 听写/QA → 事件推给渲染宿主。
     // 之前漏了这步，所以「按快捷键没反应」。
     if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) {
-        hotkeys::spawn_headless(backend, runtime);
+        hotkeys::spawn_headless(backend, runtime, host.voice_edit.clone(), host.host_events.clone());
     }
     // 托盘由这里负责（StatusNotifierItem），而不是渲染宿主：菜单项、本地化
     // （8 种语言）与命令语义因此与 macOS/Windows 完全一致。
@@ -462,6 +464,7 @@ fn init_host() -> Host {
         cloud_sync_status_cache: std::sync::Mutex::new(None),
         host_events,
         selection_preview_pending: std::sync::atomic::AtomicBool::new(false),
+        voice_edit: Default::default(),
         host_actions: None,
         action_wake_rx: std::sync::Mutex::new(None),
     };
@@ -2150,6 +2153,39 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // ── 选区润色的预览 / 确认 / 取消 / 撤销 ───────────────────────────
         // 与 Tauri 的 `*_selection_polish_preview` 同一套语义：预览模式下面板
         // 拉一次负载，用户确认后把（可能改过的）文本替换回选区。
+        "voice_edit_window_open" => {
+            let backend = backend.ok_or("Backend unavailable")?;
+            let prefs = backend.get_preferences();
+            if !prefs.voice_edit_enabled || prefs.selection_polish_hotkey.is_none() {
+                return Err("Enable voice editing and configure the selection polish shortcut first".into());
+            }
+            host.voice_edit.arm();
+            Ok(Value::Null)
+        }
+        "get_voice_edit_state" | "voice_edit_window_close" => {
+            let runtime = host.runtime.as_ref().ok_or("Runtime unavailable")?;
+            let snapshot = runtime.block_on(host.voice_edit.snapshot());
+            if command == "get_voice_edit_state" { return Ok(json_value(snapshot)); }
+            if snapshot.as_ref().is_some_and(|s| !voice_edit::terminal(s.phase)) {
+                return Err("Finish or cancel voice editing before closing".into());
+            }
+            let _ = host.host_events.send(("voice-edit:hide".into(), "{}".into()));
+            Ok(Value::Null)
+        }
+        "start_voice_edit_instruction" | "stop_voice_edit_instruction" | "finalize_voice_edit_instruction"
+        | "commit_voice_edit" | "commit_voice_edit_session" | "cancel_voice_edit_session" => {
+            let backend = backend.ok_or("Backend unavailable")?;
+            let runtime = host.runtime.as_ref().ok_or("Runtime unavailable")?;
+            let Some(id) = _args.get("sessionId").and_then(Value::as_str) else {
+                if command == "cancel_voice_edit_session"
+                    && runtime.block_on(host.voice_edit.snapshot()).is_none()
+                {
+                    return Ok(Value::Null);
+                }
+                return Err("Missing voice edit session ID".into());
+            };
+            runtime.block_on(host.voice_edit.action(backend, command, id)).map(json_value)
+        }
         "get_selection_polish_preview" => {
             if !host
                 .selection_preview_pending

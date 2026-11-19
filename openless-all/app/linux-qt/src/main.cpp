@@ -211,7 +211,7 @@ public:
     }
 };
 
-enum class Surface { Main, Capsule, Qa };
+enum class Surface { Main, Capsule, Qa, VoiceEdit };
 
 /// 顶层容器。主窗口关闭时只隐藏，不退出进程（托盘常驻）。
 class TopLevelWindow : public QWidget {
@@ -347,6 +347,13 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
             view_->page()->setBackgroundColor(Qt::transparent);
             compactSize_ = QSize(460, 228);
             break;
+        case Surface::VoiceEdit:
+            windowKind = "voice-edit";
+            container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+                                       Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+            container_->setAttribute(Qt::WA_ShowWithoutActivating);
+            compactSize_ = QSize(680, 520);
+            break;
         case Surface::Qa:
             windowKind = "qa";
             container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
@@ -430,7 +437,7 @@ void SurfaceWindow::applyLayerShell() {
     }
     layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
     layerWindow->setExclusiveZone(-1);
-    if (kind_ == Surface::Capsule) {
+    if (kind_ == Surface::Capsule || kind_ == Surface::VoiceEdit) {
         layerWindow->setAnchors(LayerShellQt::Window::AnchorBottom);
         layerWindow->setMargins(QMargins(0, 0, 0, 12));
         // 胶囊出现时用户正在别的应用里说话：绝不能抢焦点，
@@ -463,14 +470,14 @@ void SurfaceWindow::setVisible(bool visible) {
     if (visible == topLevel()->isVisible()) {
         if (visible) {
             topLevel()->raise();
-            topLevel()->activateWindow();
+            if (kind_ != Surface::VoiceEdit) topLevel()->activateWindow();
         }
         return;
     }
     if (visible) {
         topLevel()->show();
         topLevel()->raise();
-        topLevel()->activateWindow();
+        if (kind_ != Surface::VoiceEdit) topLevel()->activateWindow();
     } else {
         topLevel()->hide();
     }
@@ -673,6 +680,8 @@ int main(int argc, char **argv) {
     SurfaceWindow mainWindow(Surface::Main, baseUrl, &app);
     SurfaceWindow capsule(Surface::Capsule, baseUrl, &app);
     SurfaceWindow qa(Surface::Qa, baseUrl, &app);
+    SurfaceWindow voiceEdit(Surface::VoiceEdit, baseUrl, &app);
+    voiceEdit.load();
     mainWindow.load();
     capsule.load();
     qa.load();
@@ -716,7 +725,7 @@ int main(int argc, char **argv) {
         capsule.setVisible(false);
     });
     QObject::connect(reply, &QNetworkReply::readyRead, &app,
-                     [reply, buffer, &mainWindow, &capsule, &qa, capsuleHideTimer]() {
+                     [reply, buffer, &mainWindow, &capsule, &qa, &voiceEdit, capsuleHideTimer]() {
         buffer->append(reply->readAll());
         int index;
         while ((index = buffer->indexOf("\n\n")) >= 0) {
@@ -757,6 +766,10 @@ int main(int argc, char **argv) {
                         QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
                         QCoreApplication::quit();
                     }
+                } else if (name == "voice-edit:show") {
+                    voiceEdit.setVisible(true);
+                } else if (name == "voice-edit:hide") {
+                    voiceEdit.setVisible(false);
                 } else if (name == "selection-polish-preview:shown") {
                     // 润色预览复用问答面板（与 Tauri 一致），面板自己拉负载。
                     qa.setVisible(true);

@@ -15,6 +15,8 @@ export const ja: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '選択したテキストを編集',
+  voiceEditLinuxHint: '30 秒以内に対象アプリに切り替え、テキストを選択して選択範囲の推敲ショートカットを押してください。',
   voiceEdit: {
     title: '音声編集セッション',
     description:

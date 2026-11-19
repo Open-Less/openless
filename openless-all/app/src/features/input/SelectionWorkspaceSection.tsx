@@ -7,6 +7,7 @@ import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { defaultSelectionPolishShortcut, getHotkeyStartStopLabel } from '../../lib/hotkey';
 import { openVoiceEditWindow } from '../../api/voice-edit';
 import { setSelectionPolishHotkey } from '../../api/hotkeys';
+import { listenHostEvent } from '../../lib/hostEventBus';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { useHotkeySettings } from '../../data/preferences';
 import { Segmented } from '../../components/ui/Segmented';
@@ -25,10 +26,18 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [extraControlsOpen, setExtraControlsOpen] = useState(false);
+  const [voiceEditNotice, setVoiceEditNotice] = useState('');
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
+
+  useEffect(() => {
+    if (!platformCaps?.linuxHost) return;
+    const show = listenHostEvent('voice-edit:show', () => setVoiceEditNotice(''));
+    const error = listenHostEvent('voice-edit:error', (message) => setVoiceEditNotice(String(message)));
+    return () => { show(); error(); };
+  }, [platformCaps?.linuxHost]);
 
   if (
     !prefs ||
@@ -92,8 +101,10 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
             />
             <button
               type="button"
-              disabled={!prefs.voiceEditEnabled}
-              onClick={() => void openVoiceEditWindow()}
+              disabled={!prefs.voiceEditEnabled || (platformCaps.linuxHost && !prefs.selectionPolishHotkey)}
+              onClick={() => void openVoiceEditWindow().then(() => {
+                if (platformCaps.linuxHost) setVoiceEditNotice(t('voiceEditLinuxHint'));
+              }).catch((error) => setVoiceEditNotice(String(error)))}
               style={{
                 background: 'transparent',
                 border: '0.5px solid var(--ol-line)',
@@ -106,8 +117,9 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 opacity: prefs.voiceEditEnabled ? 1 : 0.5,
               }}
             >
-              {t('voiceEdit.openPanel')}
+              {platformCaps.linuxHost ? t('voiceEditLinuxArm') : t('voiceEdit.openPanel')}
             </button>
+            {voiceEditNotice && <span role="status">{voiceEditNotice}</span>}
           </div>
         </SettingRow>
       )}

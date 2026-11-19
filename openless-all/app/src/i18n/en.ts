@@ -13,6 +13,8 @@ export const en: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Edit a selection',
+  voiceEditLinuxHint: 'Within 30 seconds, switch to the target app, select text, and press your selection polish shortcut.',
   voiceEdit: {
     title: 'Voice editing session',
     description:

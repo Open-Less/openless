@@ -10,6 +10,8 @@ export const de: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Auswahl bearbeiten',
+  voiceEditLinuxHint: 'Wechseln Sie innerhalb von 30 Sekunden zur Ziel-App, markieren Sie Text und drücken Sie das Kürzel zum Überarbeiten der Auswahl.',
   voiceEdit: {
     title: 'Sprachbearbeitung',
     description:

@@ -875,9 +875,14 @@ pub fn commit_text(_: &str) -> Result<(), BackendError> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn capture_selection_target(session_id: &str) -> Result<String, BackendError> {
-    send_string_message("CaptureSelectionTarget", |message| {
-        message.append1(session_id)
-    })
+    send_string_message("CaptureSelectionTarget", |message| message.append1(session_id))
+}
+
+pub(crate) fn capture_focused_selection_target(session_id: &str) -> Result<String, BackendError> {
+    #[cfg(target_os = "linux")]
+    { send_string_message("CaptureFocusedSelectionTarget", |message| message.append1(session_id)) }
+    #[cfg(not(target_os = "linux"))]
+    { capture_selection_target(session_id) }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -894,8 +899,24 @@ pub(crate) fn apply_selection_target(
     source: &str,
     replacement: &str,
 ) -> Result<(), BackendError> {
+    apply_selection_target_with_method("ApplySelectionTarget", session_id, source, replacement)
+}
+
+pub(crate) fn apply_focused_selection_target(
+    session_id: &str, source: &str, replacement: &str,
+) -> Result<(), BackendError> {
+    #[cfg(target_os = "linux")]
+    { apply_selection_target_with_method("ApplyFocusedSelectionTarget", session_id, source, replacement) }
+    #[cfg(not(target_os = "linux"))]
+    { apply_selection_target(session_id, source, replacement) }
+}
+
+#[cfg(target_os = "linux")]
+fn apply_selection_target_with_method(
+    method: &str, session_id: &str, source: &str, replacement: &str,
+) -> Result<(), BackendError> {
     crate::selection::validate_selection_replacement_source(source)?;
-    if send_bool_message("ApplySelectionTarget", |message| {
+    if send_bool_message(method, |message| {
         message.append3(session_id, source, replacement)
     })? {
         Ok(())

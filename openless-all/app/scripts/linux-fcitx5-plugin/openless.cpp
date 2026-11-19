@@ -273,8 +273,10 @@ public:
                         if (isPress) selectionIc_ = keyEvent.inputContext();
                         FCITX_LOGC(openless, Debug)
                             << "Selection polish shortcut";
-                        selectionPolishEvent(selectionPolishRawSym_,
-                                             selectionPolishRawStates_, isPress);
+                        if (openless_hotkeys::shouldNotifyAction(isPress,
+                                static_cast<uint32_t>(keyEvent.origKey().states()))) {
+                            selectionPolishEvent(selectionPolishRawSym_, selectionPolishRawStates_, true);
+                        }
                         consume(selectionPolishRawSym_);
                         return;
                     }
@@ -409,6 +411,20 @@ public:
         return text;
     }
 
+    std::string captureFocusedSelectionTarget(const std::string &ticket) {
+        if (ticket.empty() || !selectionIc_ || !selectionIc_->hasFocus() ||
+            selectionIc_->capabilityFlags().test(fcitx::CapabilityFlag::Password)) {
+            return {};
+        }
+        const auto &surrounding = selectionIc_->surroundingText();
+        if (!surrounding.isValid()) return {};
+        const auto text = surrounding.selectedText();
+        if (text.empty()) return {};
+        selectionTargets_[ticket] = {selectionIc_, text, {}, surrounding.text(),
+                                     surrounding.cursor(), surrounding.anchor(), true};
+        return text;
+    }
+
     bool captureDictationTarget(const std::string &ticket) {
         if (ticket.empty() || !savedIc_) return false;
         // A session keeps its own native target even when later key events
@@ -461,6 +477,18 @@ public:
         ic->commitString(replacement);
         found->second.replacement = replacement;
         return true;
+    }
+
+    bool applyFocusedSelectionTarget(const std::string &ticket,
+                                     const std::string &source,
+                                     const std::string &replacement) {
+        const auto found = selectionTargets_.find(ticket);
+        if (found == selectionTargets_.end() || !found->second.inputContext ||
+            !found->second.inputContext->hasFocus() ||
+            found->second.inputContext->capabilityFlags().test(fcitx::CapabilityFlag::Password)) {
+            return false;
+        }
+        return applySelectionTarget(ticket, source, replacement);
     }
 
     bool revertSelectionTarget(const std::string &ticket) {
@@ -848,7 +876,9 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureSelectionTarget, "CaptureSelectionTarget", "s", "s");
+    FCITX_OBJECT_VTABLE_METHOD(captureFocusedSelectionTarget, "CaptureFocusedSelectionTarget", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(applySelectionTarget, "ApplySelectionTarget", "sss", "b");
+    FCITX_OBJECT_VTABLE_METHOD(applyFocusedSelectionTarget, "ApplyFocusedSelectionTarget", "sss", "b");
     FCITX_OBJECT_VTABLE_METHOD(revertSelectionTarget, "RevertSelectionTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(rekeySelectionTarget, "RekeySelectionTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelSelectionTarget, "CancelSelectionTarget", "s", "b");

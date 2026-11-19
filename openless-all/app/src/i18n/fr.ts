@@ -10,6 +10,8 @@ export const fr: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: 'Modifier la sélection',
+  voiceEditLinuxHint: 'Dans les 30 secondes, passez à l’application cible, sélectionnez le texte et utilisez le raccourci de reformulation de la sélection.',
   voiceEdit: {
     title: 'Session de modification vocale',
     description:

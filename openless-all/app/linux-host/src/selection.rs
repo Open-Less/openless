@@ -32,11 +32,15 @@ trait LinuxSelectionBridge: Send + Sync + 'static {
     fn cancel_target(&self, session_id: SessionId) -> Result<(), BackendError>;
 }
 
-struct Fcitx5SelectionBridge;
+struct Fcitx5SelectionBridge { require_focus: bool }
 
 impl LinuxSelectionBridge for Fcitx5SelectionBridge {
     fn capture_target(&self, session_id: SessionId) -> Result<String, BackendError> {
-        crate::fcitx5::capture_selection_target(&session_id.to_string())
+        if self.require_focus {
+            crate::fcitx5::capture_focused_selection_target(&session_id.to_string())
+        } else {
+            crate::fcitx5::capture_selection_target(&session_id.to_string())
+        }
     }
 
     fn apply_target(
@@ -45,7 +49,11 @@ impl LinuxSelectionBridge for Fcitx5SelectionBridge {
         source: &str,
         replacement: &str,
     ) -> Result<(), BackendError> {
-        crate::fcitx5::apply_selection_target(&session_id.to_string(), source, replacement)
+        if self.require_focus {
+            crate::fcitx5::apply_focused_selection_target(&session_id.to_string(), source, replacement)
+        } else {
+            crate::fcitx5::apply_selection_target(&session_id.to_string(), source, replacement)
+        }
     }
 
     fn revert_target(&self, session_id: SessionId) -> Result<(), BackendError> {
@@ -84,7 +92,11 @@ impl Default for LinuxSelectionRuntime {
 
 impl LinuxSelectionRuntime {
     pub fn new() -> Self {
-        Self::with_bridge(Arc::new(Fcitx5SelectionBridge))
+        Self::with_bridge(Arc::new(Fcitx5SelectionBridge { require_focus: false }))
+    }
+
+    pub fn focused_only() -> Self {
+        Self::with_bridge(Arc::new(Fcitx5SelectionBridge { require_focus: true }))
     }
 
     fn with_bridge(bridge: Arc<dyn LinuxSelectionBridge>) -> Self {

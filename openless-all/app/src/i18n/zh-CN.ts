@@ -11,6 +11,8 @@ export const zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '编辑选中文字',
+  voiceEditLinuxHint: '请在 30 秒内切到目标应用，选中文字，再按选区润色快捷键。',
   voiceEdit: {
     title: '语音编辑会话',
     description: '口述草稿或读取目标文本，再用多轮语音指令修改，确认后写回输入框。',

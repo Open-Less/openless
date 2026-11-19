@@ -15,6 +15,8 @@ export const ko: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '선택한 텍스트 편집',
+  voiceEditLinuxHint: '30초 안에 대상 앱으로 전환해 텍스트를 선택하고 선택 영역 다듬기 단축키를 누르세요.',
   voiceEdit: {
     title: '음성 편집 세션',
     description:

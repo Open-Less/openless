@@ -11,6 +11,8 @@ export const zhTW: typeof zhCN = {
   siwc,
   experimentalAsr,
   uiRefinement,
+  voiceEditLinuxArm: '編輯選取的文字',
+  voiceEditLinuxHint: '請在 30 秒內切換到目標應用程式，選取文字，再按選取範圍潤飾快速鍵。',
   voiceEdit: {
     title: '語音編輯工作階段',
     description: '口述草稿或讀取目標文字，再以多輪語音指令修改，確認後寫回輸入欄位。',
