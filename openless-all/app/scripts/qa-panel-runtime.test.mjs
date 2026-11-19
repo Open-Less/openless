@@ -254,7 +254,7 @@ function context(native = true, embedded = false) {
       resize,
       async (_boundary, _fits, signal) => {
         if (signal.aborted) throw new DOMException('Layout superseded', 'AbortError');
-        return {};
+        return { width: 920, height: 800 };
       },
       {},
     ),

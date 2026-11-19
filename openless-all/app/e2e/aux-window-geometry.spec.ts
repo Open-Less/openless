@@ -57,6 +57,27 @@ test('QA waits for observed geometry and reopens without the closed transcript',
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
 });
 
+test('QA scales the frame and composer together on a large display', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1300 });
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.holdQaGeometry = true;
+    bridge.emit('qa:state', { kind: 'recording', sessionId: 'large', messages: [] });
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.sizes.at(-1))).toBe(true);
+  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 1380, 1200));
+  const panel = page.locator('.qa-conversation');
+  await expect(panel).toBeVisible();
+  const frame = (await panel.boundingBox())!;
+  const prompt = (await panel.locator('.qa-prompt').boundingBox())!;
+  expect(frame.width).toBe(1380);
+  expect(frame.height).toBe(1200);
+  expect(prompt.width).toBe(840);
+  await expect(panel.getByRole('button', { name: '关闭' })).toBeInViewport();
+});
+
 test('QA keeps a reachable close action when the host rejects expansion', async ({ page }) => {
   await page.goto(fixture + '?qa');
   await expect(page.locator('.ol-default-capsule')).toBeVisible();

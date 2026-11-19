@@ -2322,6 +2322,8 @@ const QA_WINDOW_HEIGHT: f64 = 80.0;
 // Use logical pixels and a single scale when fitting smaller work areas.
 const QA_WINDOW_EXPANDED_WIDTH: f64 = 920.0;
 const QA_WINDOW_EXPANDED_HEIGHT: f64 = 800.0;
+const QA_REFERENCE_WORK_AREA_WIDTH: f64 = 1440.0;
+const QA_REFERENCE_WORK_AREA_HEIGHT: f64 = 900.0;
 const QA_WINDOW_MIN_EXPANDED_HEIGHT: f64 = 144.0;
 /// Reserve room for the independent recording capsule and its context badge.
 const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
@@ -2899,9 +2901,14 @@ fn qa_expanded_size(area: Option<LogicalMonitorFrame>) -> (f64, f64) {
     let fit = area.map_or(1.0, |frame| {
         let available_width = (frame.width - 2.0 * QA_WINDOW_EXPANDED_INSET).max(1.0);
         let available_height = (frame.height - 2.0 * QA_WINDOW_EXPANDED_INSET).max(1.0);
+        // Grow with the shorter relative work-area axis, not the monitor's DPI or
+        // its width alone. The fit still wins if the default card would overflow.
+        let preferred = (frame.width / QA_REFERENCE_WORK_AREA_WIDTH)
+            .min(frame.height / QA_REFERENCE_WORK_AREA_HEIGHT)
+            .max(1.0);
         (available_width / QA_WINDOW_EXPANDED_WIDTH)
             .min(available_height / QA_WINDOW_EXPANDED_HEIGHT)
-            .min(1.0)
+            .min(preferred)
     });
     (QA_WINDOW_EXPANDED_WIDTH * fit, QA_WINDOW_EXPANDED_HEIGHT * fit)
 }
@@ -4309,7 +4316,9 @@ mod tests {
             }))
         };
         assert_eq!(fit(1440.0, 900.0), (920.0, 800.0));
-        for (width, height) in [(800.0, 700.0), (1280.0, 480.0)] {
+        assert_eq!(fit(2160.0, 1350.0), (1380.0, 1200.0));
+        assert_eq!(fit(3840.0, 900.0), (920.0, 800.0));
+        for (width, height) in [(800.0, 700.0), (1280.0, 480.0), (3840.0, 2160.0)] {
             let (w, h) = fit(width, height);
             assert!(w <= width - 32.0 + 1e-6);
             assert!(h <= height - 32.0 + 1e-6);

@@ -11,10 +11,13 @@ interface LayoutKey {
 interface LayoutResult extends LayoutKey {
   ready: boolean;
   failed: boolean;
+  contentScale?: number;
 }
 
 const COMPACT_HEIGHT = 80;
 const MIN_EXPANDED_HEIGHT = 144;
+const EXPANDED_BASE_WIDTH = 920;
+const EXPANDED_BASE_HEIGHT = 800;
 
 function fitsQa(size: ViewportSize, expanded: boolean) {
   if (size.width < 220) return false;
@@ -52,9 +55,15 @@ export function useQaWindowLayout({
     );
     pending.current = { expanded, enterEpoch, promise };
     void promise.then(
-      () => {
-        if (!request.signal.aborted)
-          setOutcome({ expanded, enterEpoch, ready: true, failed: false });
+      ({ width, height }) => {
+        if (!request.signal.aborted) {
+          // Only upscale the UI. On small work areas the responsive layout
+          // preserves minimum text and control sizes inside the smaller frame.
+          const contentScale = expanded
+            ? Math.max(1, Math.min(width / EXPANDED_BASE_WIDTH, height / EXPANDED_BASE_HEIGHT))
+            : 1;
+          setOutcome({ expanded, enterEpoch, ready: true, failed: false, contentScale });
+        }
       },
       () => {
         if (!request.signal.aborted)
@@ -66,6 +75,7 @@ export function useQaWindowLayout({
 
   const current = outcome?.expanded === expanded && outcome.enterEpoch === enterEpoch;
   return {
+    contentScale: nativeWindow && current ? (outcome.contentScale ?? 1) : 1,
     ready: !nativeWindow || !!(current && outcome.ready),
     failed: nativeWindow && !!(current && outcome.failed),
     waitForReady() {

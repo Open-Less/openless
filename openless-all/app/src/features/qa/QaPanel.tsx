@@ -1,4 +1,5 @@
-// Fn+Space opens this conversation immediately. Closing dismisses the native
+// The recording shortcut plus the Ask companion key opens this conversation.
+// Closing dismisses the native
 // session, so the next press starts a new one; an open panel keeps it and can
 // take the next voice turn or a typed message.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -454,6 +455,8 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     nativeWindow: isTauri && !embedded,
   });
 
+  const scaledStyle = layout.contentScale > 1 ? { zoom: layout.contentScale } : undefined;
+
   const onClose = async () => {
     if (dismissRef.current) return;
     const request = Symbol('dismiss');
@@ -831,6 +834,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
       >
         <section
           className="qa-answer-panel"
+          style={scaledStyle}
           data-platform={getRuntimeOS()}
           aria-label={t('selectionPolishPreview.title')}
         >
@@ -919,6 +923,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
       {expanded && (
         <section
           className="qa-answer-panel qa-conversation"
+          style={scaledStyle}
           data-welcome={showWelcome ? 'true' : undefined}
           data-platform={getRuntimeOS()}
           aria-label={t('capsule.asking')}
