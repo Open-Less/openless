@@ -235,7 +235,7 @@ test('experimental download respects the settings modal and switch-off does not 
   await expect(toggle).toBeEnabled();
   const before = (await next.boundingBox())!.y;
   await toggle.click();
-  const card = page.locator('.ol-download-card[data-download-id="sense-voice"]');
+  const card = page.locator('[data-notification-key="download:experimental:sense-voice"]');
   await expect(card).toBeVisible();
   expect(Math.abs((await next.boundingBox())!.y - before)).toBeLessThan(1);
   const statusText = await sense.locator('.ol-experimental-model-status').evaluate((element) => {
@@ -246,7 +246,7 @@ test('experimental download respects the settings modal and switch-off does not 
     return { right: text.right, progressRight: progress.right };
   });
   expect(Math.abs(statusText.right - statusText.progressRight)).toBeLessThan(2);
-  await expect(card.getByRole('button', { name: '取消', exact: true })).toBeDisabled();
+  await expect(card.getByRole('button', { name: '取消下载', exact: true })).toBeDisabled();
   await toggle.click();
   await expect(card).toHaveCount(0);
   await page.waitForTimeout(2100);

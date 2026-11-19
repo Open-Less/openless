@@ -1,12 +1,15 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import type { ToastVariant } from '../../api/interaction';
 import { useReducedMotion } from '../../lib/motion';
 import { useAppViewport } from '../layout/AppViewport';
-import './status-notice.css';
+import './toast.css';
 
 interface StatusNoticeProps {
   children: ReactNode;
   state: string;
   progress?: boolean;
+  notificationKey?: string;
+  variant: ToastVariant;
   severity?: 'warning' | 'error';
   present?: boolean;
   onExit?: () => void;
@@ -18,6 +21,8 @@ export function StatusNotice({
   state,
   progress,
   severity,
+  variant,
+  notificationKey,
   present = true,
   onExit,
 }: StatusNoticeProps) {
@@ -27,6 +32,10 @@ export function StatusNotice({
   const exit = useRef(onExit);
   exit.current = onExit;
   const interrupted = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.inert = !present;
+  }, [present]);
 
   useLayoutEffect(() => {
     const card = ref.current;
@@ -114,7 +123,9 @@ export function StatusNotice({
       ref={ref}
       className={`ol-notification-card${progress ? ' ol-notification-card--progress' : ''}`}
       data-state={state}
-      data-variant={severity || state === 'failed' ? 'alert' : 'default'}
+      data-type={variant}
+      data-notification-key={notificationKey}
+      data-variant={variant === 'error' || variant === 'warning' ? 'alert' : 'default'}
       data-severity={severity ?? (state === 'failed' ? 'error' : undefined)}
       aria-hidden={!present || undefined}
     >

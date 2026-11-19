@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -241,7 +242,7 @@ export function ShortcutsSection() {
   return (
     <section className="ol-shortcuts" aria-label={t('settings.shortcuts.title')}>
       <div className="ol-shortcuts-toolbar">
-        <input
+        <TextField
           type="search"
           className="ol-settings-search-field"
           value={query}

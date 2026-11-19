@@ -26,10 +26,24 @@ export interface ProgressItem {
   engine: Engine;
   model?: ExperimentalAsrModel;
   phase?: string;
+  generation?: number;
 }
 const TERMINAL = new Set(['finished', 'cancelled', 'failed']);
 const isExperimentalDownload = (status: ExperimentalAsrStatus) =>
   status.enabled && (status.phase === 'downloading' || status.phase === 'preparing');
+
+function experimentalItem(status: ExperimentalAsrStatus): ProgressItem {
+  return {
+    key: `experimental:${status.model}`,
+    id: status.model,
+    model: status.model,
+    name: experimentalAsrName(status.model),
+    engine: 'experimental',
+    phase: status.phase,
+    percent:
+      status.phase === 'downloading' && status.downloadedBytes > 0 ? downloadPercent(status) : null,
+  };
+}
 
 function withoutItem(items: Record<string, ProgressItem>, key: string) {
   if (!(key in items)) return items;
@@ -38,11 +52,12 @@ function withoutItem(items: Record<string, ProgressItem>, key: string) {
   return next;
 }
 
-export function useDownloadJobs() {
+export function useDownloadJobs(onFailure: (item: ProgressItem) => void) {
   const { modalStack } = useAppViewport();
   const experimental = useExperimentalAsr(getRuntimeOS() === 'mac');
   const [items, setItems] = useState<Record<string, ProgressItem>>({});
   const activeNative = useRef(items);
+  const reportFailure = useRef(onFailure);
   const activeExperimental = useRef(experimental);
   const [pending, setPending] = useState<string[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -51,7 +66,17 @@ export function useDownloadJobs() {
   const cancelling = useRef(new Map<string, symbol>());
 
   useLayoutEffect(() => {
+    const previous = activeExperimental.current.models;
     activeExperimental.current = experimental;
+    reportFailure.current = onFailure;
+    for (const status of experimental.models) {
+      if (
+        status.enabled &&
+        status.phase === 'failed' &&
+        previous.some((entry) => entry.model === status.model && isExperimentalDownload(entry))
+      )
+        onFailure(experimentalItem(status));
+    }
   });
 
   useEffect(() => {
@@ -61,16 +86,27 @@ export function useDownloadJobs() {
     const update = (item: ProgressItem, phase: string) => {
       if (cancelled) return;
       if (phase === 'started') {
+        setErrors((previous) => {
+          if (!(item.key in previous)) return previous;
+          const next = { ...previous };
+          delete next[item.key];
+          return next;
+        });
         generations.current.set(item.key, (generations.current.get(item.key) ?? 0) + 1);
         if (cancelling.current.delete(item.key)) {
           setPending((previous) => previous.filter((key) => key !== item.key));
         }
       }
+      const cancellingJob = cancelledJobs.current.has(item.key) || cancelling.current.has(item.key);
       if (phase === 'started' || TERMINAL.has(phase)) cancelledJobs.current.delete(item.key);
+      if (phase === 'failed' && !cancellingJob) reportFailure.current(item);
       // The host can finish before React removes the previous card.
       if (TERMINAL.has(phase)) activeNative.current = withoutItem(activeNative.current, item.key);
       else if (!cancelledJobs.current.has(item.key)) {
-        activeNative.current = { ...activeNative.current, [item.key]: item };
+        activeNative.current = {
+          ...activeNative.current,
+          [item.key]: { ...item, generation: generations.current.get(item.key) },
+        };
       }
       setItems(activeNative.current);
     };
@@ -176,18 +212,7 @@ export function useDownloadJobs() {
   };
   const visible: ProgressItem[] = [
     ...Object.values(items),
-    ...experimental.models.filter(isExperimentalDownload).map((status): ProgressItem => ({
-      key: `experimental:${status.model}`,
-      id: status.model,
-      model: status.model,
-      name: experimentalAsrName(status.model),
-      engine: 'experimental',
-      phase: status.phase,
-      percent:
-        status.phase === 'downloading' && status.downloadedBytes > 0
-          ? downloadPercent(status)
-          : null,
-    })),
+    ...experimental.models.filter(isExperimentalDownload).map(experimentalItem),
   ];
 
   return {

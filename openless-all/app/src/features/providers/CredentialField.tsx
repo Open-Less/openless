@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import {
   useContext,
   useEffect,
@@ -75,7 +76,6 @@ export function CredentialField({
     [account, provider],
   );
   const { value, loaded, dirty, status } = useSyncExternalStore(draft.subscribe, draft.snapshot);
-  const [revealed, setRevealed] = useState(false);
   const [customModelMode, setCustomModelMode] = useState(false);
   const onValueChangeRef = useRef(onValueChange);
   onValueChangeRef.current = onValueChange;
@@ -83,7 +83,6 @@ export function CredentialField({
   const register = form?.register;
 
   useEffect(() => {
-    setRevealed(false);
     setCustomModelMode(false);
     void draft.load();
     return () => draft.dispose();
@@ -143,7 +142,6 @@ export function CredentialField({
     }
   };
 
-  const inputType = mask && !revealed ? 'password' : 'text';
   const disabled = !loaded || form?.leaving;
   const showInsecureEndpointWarning =
     (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint') &&
@@ -215,9 +213,10 @@ export function CredentialField({
                 }}
               />
             ) : (
-              <input
+              <TextField
+                key={JSON.stringify([provider, account])}
                 id={fieldId}
-                type={inputType}
+                type={mask ? 'password' : 'text'}
                 value={value}
                 placeholder={loaded ? placeholder : t('common.loading')}
                 onChange={(event) => edit(event.target.value)}
@@ -225,11 +224,8 @@ export function CredentialField({
                 disabled={disabled}
                 readOnly={!!endpointPresets && !!presetValue}
                 style={{
-                  ...inputStyle,
                   flex: 1,
                   height: 38,
-                  minWidth: 0,
-                  maxWidth: '100%',
                   fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit',
                 }}
               />
@@ -256,22 +252,14 @@ export function CredentialField({
             )}
             {mask && (
               <button
-                onClick={() => setRevealed((r) => !r)}
-                title={revealed ? t('common.hide') : t('common.show')}
+                onClick={onCopy}
+                title={t('common.copy')}
                 style={iconBtnStyle}
-                disabled={disabled}
+                disabled={!value || disabled}
               >
-                <Icon name="eye" size={14} />
+                <Icon name="copy" size={14} />
               </button>
             )}
-            <button
-              onClick={onCopy}
-              title={t('common.copy')}
-              style={iconBtnStyle}
-              disabled={!value || disabled}
-            >
-              <Icon name="copy" size={14} />
-            </button>
             {/* readError is a persistent "field unreadable" error and stays in place to tell the
               user the field is unavailable; other transient states (saving / saved / saveError /
               copied / copyError) go through emitSaved to the window notification host instead of
