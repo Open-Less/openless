@@ -418,14 +418,14 @@ impl UsageLedger {
         let current = state
             .as_ref()
             .ok_or_else(|| persistence_error("service usage needs reload"))?;
-        let Some((next, bytes)) = merge_retained_records(current, records)? else {
+        let Some(update) = merge_retained_records(current, records)? else {
             return Ok(false);
         };
-        if let Err(error) = atomic_write(&self.path, &bytes) {
+        if let Err(error) = atomic_write(&self.path, &update.encoded) {
             *state = None;
             return Err(error);
         }
-        *state = Some(next);
+        *state = Some(update.records);
         Ok(true)
     }
 

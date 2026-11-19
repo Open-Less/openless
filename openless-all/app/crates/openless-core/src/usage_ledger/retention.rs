@@ -13,10 +13,15 @@ const DOCUMENT_PREFIX: &[u8] = br#"{"version":1,"records":["#;
 const DOCUMENT_SUFFIX: &[u8] = b"]}";
 pub(super) const EMPTY_DOCUMENT: &[u8] = br#"{"version":1,"records":[]}"#;
 
+pub(super) struct RetainedUpdate {
+    pub(super) records: Vec<UsageRecord>,
+    pub(super) encoded: Vec<u8>,
+}
+
 pub(super) fn merge_retained_records(
     current: &[UsageRecord],
     records: impl IntoIterator<Item = UsageRecord>,
-) -> Result<Option<(Vec<UsageRecord>, Vec<u8>)>, BackendError> {
+) -> Result<Option<RetainedUpdate>, BackendError> {
     let mut joined: HashMap<Uuid, UsageRecord> = current
         .iter()
         .map(|record| (record.id, record.clone()))
@@ -46,7 +51,10 @@ pub(super) fn merge_retained_records(
     if next.as_slice() == current {
         return Ok(None);
     }
-    Ok(Some((next, bytes)))
+    Ok(Some(RetainedUpdate {
+        records: next,
+        encoded: bytes,
+    }))
 }
 
 pub(super) fn retention_key(record: &UsageRecord) -> (i64, Uuid) {
