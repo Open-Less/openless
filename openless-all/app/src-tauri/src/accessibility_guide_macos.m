@@ -2,7 +2,6 @@
 #import <ApplicationServices/ApplicationServices.h>
 #include <math.h>
 
-static const NSWindowStyleMask OLGuideStyle = NSWindowStyleMaskBorderless;
 static const NSWindowCollectionBehavior OLGuideCollectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorMoveToActiveSpace;
 
 static NSString *OLGuideText(NSString *zh, NSString *en) {
@@ -51,6 +50,15 @@ static BOOL OLSettingsWindowFrame(NSRect *frame) {
 
 @protocol OLGuideDragOwner <NSObject>
 - (void)guideDragEnded;
+@end
+
+@interface OLAccessibilityGuidePanel : NSPanel
+@end
+
+@implementation OLAccessibilityGuidePanel
+// The file drag accepts the first mouse event without borrowing keyboard focus.
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
 @end
 
 @interface OLGuideApplicationView : NSView <NSDraggingSource>
@@ -119,7 +127,7 @@ static BOOL OLSettingsWindowFrame(NSRect *frame) {
 @end
 
 @interface OLAccessibilityGuideController : NSObject <NSWindowDelegate, OLGuideDragOwner>
-@property(nonatomic, strong) NSWindow *window;
+@property(nonatomic, strong) OLAccessibilityGuidePanel *window;
 @property(nonatomic, strong) NSTimer *timer;
 @property(nonatomic, strong) NSURL *applicationURL;
 @property(nonatomic) NSTimeInterval startedAt;
@@ -139,9 +147,11 @@ static OLAccessibilityGuideController *guideController;
     if (!self) return nil;
     _applicationURL = url;
     _startedAt = NSProcessInfo.processInfo.systemUptime;
-    // Keep one bounded window without nonactivating or all-Spaces panel state.
-    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 136)
-        styleMask:OLGuideStyle backing:NSBackingStoreBuffered defer:NO];
+    // Set the nonactivating style at creation so mouse input doesn't activate the app.
+    _window = [[OLAccessibilityGuidePanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 136)
+        styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+        backing:NSBackingStoreBuffered defer:NO];
+    _window.hidesOnDeactivate = NO;
     _window.title = OLGuideText(@"OpenLess 授权引导", @"OpenLess access guide");
     _window.level = NSFloatingWindowLevel;
     _window.releasedWhenClosed = NO;
@@ -219,7 +229,7 @@ static OLAccessibilityGuideController *guideController;
     }
     if (!target) { [self close]; return; }
     [self.window setFrame:OLGuideFrame(settings, target.visibleFrame, self.window.frame.size) display:YES];
-    if (!self.shown) { [self.window orderFront:nil]; self.shown = YES; }
+    if (!self.shown) { [self.window orderFrontRegardless]; self.shown = YES; }
 }
 - (void)start {
     __weak OLAccessibilityGuideController *weakSelf = self;
