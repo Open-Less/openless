@@ -55,6 +55,56 @@ pub fn get_activity_apps(core: CoreState<'_>, year: u32) -> Result<Vec<(String, 
     core.list_activity_apps(year).map_err(|error| error.to_string())
 }
 
+/// Resolves only the top ranked names through local native icon sources.
+#[tauri::command]
+pub async fn get_activity_app_icons(
+    app: tauri::AppHandle,
+    core: CoreState<'_>,
+    year: u32,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let names: Vec<_> = core
+        .list_activity_apps(year)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .take(5)
+        .map(|(name, _)| name)
+        .collect();
+    #[cfg(target_os = "macos")]
+    {
+        let mut bundles = std::collections::BTreeMap::new();
+        for record in core.list_history().unwrap_or_default() {
+            if let (Some(name), Some(id)) = (record.app_name, record.app_bundle_id) {
+                if names.contains(&name) {
+                    let bundle = bundles.entry(name).or_insert_with(|| Some(id.clone()));
+                    if bundle.as_deref() != Some(id.as_str()) {
+                        // Never pick one of two distinct applications sharing a visible name.
+                        *bundle = None;
+                    }
+                }
+            }
+        }
+        let requests = names
+            .into_iter()
+            .map(|name| {
+                let bundle = bundles.remove(&name).flatten();
+                (name, bundle)
+            })
+            .collect();
+        Ok(crate::activity_app_icons::macos_icons(&app, requests).await)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        Ok(crate::activity_app_icons::windows_icons(names).await)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (app, core, year);
+        Ok(std::collections::BTreeMap::new())
+    }
+}
+
 fn recording_path_candidates(session_id: &str) -> Result<[std::path::PathBuf; 2], String> {
     if !is_valid_session_id(session_id) {
         return Err("invalid session id".into());

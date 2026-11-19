@@ -61,6 +61,14 @@ mockIPC(
           });
         return value;
       }
+      case 'get_activity_app_icons': {
+        if ((args as { year: number }).year !== year) throw new Error('Expected current year');
+        return params.has('icons')
+          ? {
+              Editor: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2Z0AAAAASUVORK5CYII=',
+            }
+          : {};
+      }
       case 'get_activity_apps': {
         if ((args as { year: number }).year !== year) throw new Error('Expected current year');
         if (dashboard) {

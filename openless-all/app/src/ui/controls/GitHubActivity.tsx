@@ -10,6 +10,7 @@
  */
 
 import * as React from 'react';
+import { AppWindow } from 'lucide-react';
 import { Tooltip as BaseTooltip } from '@base-ui/react/tooltip';
 import { usePopupViewport } from '../layout/AppViewport';
 import { motion, useReducedMotion, type Transition } from 'framer-motion';
@@ -26,6 +27,7 @@ export type Contribution = {
 export type ActivityApp = {
   name: string;
   count: number;
+  icon?: string;
 };
 
 const DEFAULT_ACCENT = '#39d353';
@@ -271,8 +273,22 @@ const ContributionGrid = ({
   );
 };
 
+function AppIcon({ src }: { src?: string }) {
+  const [failed, setFailed] = React.useState<string>();
+  return (
+    <span className="ol-gha-app-icon" aria-hidden="true">
+      {typeof src === 'string' && src.startsWith('data:image/png;base64,') && failed !== src ? (
+        <img src={src} alt="" onError={() => setFailed(src)} />
+      ) : (
+        <AppWindow size={14} aria-hidden="true" />
+      )}
+    </span>
+  );
+}
+
 const AppChip = ({ app }: { app: ActivityApp }) => (
   <span className="ol-gha-app-chip" title={app.name}>
+    <AppIcon src={app.icon} />
     <span className="ol-gha-app-chip-name">{app.name}</span>
     <span className="ol-gha-app-chip-count">{app.count}</span>
   </span>
@@ -280,6 +296,7 @@ const AppChip = ({ app }: { app: ActivityApp }) => (
 
 const AppRow = ({ app }: { app: ActivityApp }) => (
   <div className="ol-gha-app-row">
+    <AppIcon src={app.icon} />
     <span className="ol-gha-app-name">{app.name}</span>
     <span className="ol-gha-app-count">{app.count}</span>
   </div>
