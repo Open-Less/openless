@@ -219,7 +219,7 @@ function context(native = true, embedded = false) {
     useReducedMotion: () => true,
     getSettings: async () => ({}),
     QaVoiceStrip: 'qa-voice-strip',
-    useQaDraftDictation: () => ({ input: { current: null }, setFocused() {} }),
+    useQaDraftDictation: () => ({ input: { current: null }, setFocused() {}, clearError() {} }),
     useCallback: (callback) => callback,
     MotionConfig: 'motion-config',
     motion: { div: 'motion-div', span: 'motion-span' },

@@ -73,6 +73,10 @@ pub(crate) fn present(app: &AppHandle, snapshot: &DictationStateSnapshot) -> boo
     };
     let phase = match snapshot.phase {
         DictationPhase::Starting | DictationPhase::Recording => "recording",
+        DictationPhase::Transcribing | DictationPhase::Polishing | DictationPhase::Inserting => {
+            "processing"
+        }
+        DictationPhase::Failed => "failed",
         _ => "idle",
     };
     let _ = app.emit_to(
@@ -84,6 +88,7 @@ pub(crate) fn present(app: &AppHandle, snapshot: &DictationStateSnapshot) -> boo
             "phase": phase,
             "level": snapshot.level,
             "elapsedMs": snapshot.elapsed_ms,
+            "error": if snapshot.phase == DictationPhase::Failed { snapshot.message.as_deref() } else { None },
         }),
     );
     true

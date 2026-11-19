@@ -31,7 +31,8 @@ export function listenQaDictationDraft(
 export interface QaDraftRecording {
   token: string;
   sessionId: string;
-  phase: 'recording' | 'idle';
+  phase: 'recording' | 'processing' | 'failed' | 'idle';
+  error?: string | null;
   level: number;
   elapsedMs: number;
 }

@@ -55,6 +55,7 @@ export function QaComposer({
   const inputLabel = t('qa.composerPlaceholder');
   const editor = useQaDraftDictation(draftDictationEnabled, onChange);
   const draft = editor.recording;
+  const draftRecording = draft?.phase === 'recording';
   const stopLabel = t('qa.micStop');
 
   return (
@@ -64,9 +65,9 @@ export function QaComposer({
       placeholder={voiceActive ? voiceLabel : inputLabel}
       disabled={!available}
       readOnly={voiceActive}
-      recording={recording ? 'question' : draft ? 'draft' : undefined}
+      recording={recording ? 'question' : draftRecording ? 'draft' : undefined}
       recordingControl={
-        recording || draft ? (
+        recording || draftRecording ? (
           <>
             <QaVoiceStrip
               level={recording ? level : (draft?.level ?? 0)}
@@ -96,10 +97,16 @@ export function QaComposer({
           ? { label: t('qa.stop'), disabled: !available || cancelBusy, onClick: onCancelTurn }
           : undefined
       }
-      onChange={onChange}
+      onChange={(text) => {
+        editor.clearError();
+        onChange(text);
+      }}
       editorRef={editor.input}
       onEditorFocusChange={editor.setFocused}
-      onSubmit={onSubmit}
+      onSubmit={() => {
+        editor.clearError();
+        onSubmit();
+      }}
       onRequestKeyboard={() => {
         if (available && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
       }}
@@ -119,7 +126,7 @@ export function QaComposer({
           <button
             className="qa-mic"
             type="button"
-            disabled={!available || generating || micBusy || busy}
+            disabled={!available || generating || micBusy || busy || !!draft}
             onClick={onToggleRecording}
             aria-label={t('qa.micLabel')}
             title={t('qa.micLabel')}
@@ -129,7 +136,19 @@ export function QaComposer({
         </>
       }
       feedback={
-        !available ? (
+        editor.error ? (
+          <span className="qa-browser-note" role="alert">
+            {t(
+              editor.error === 'PermissionDenied'
+                ? 'overview.androidMicBanner.title'
+                : 'qa.compact.microphoneError',
+            )}
+          </span>
+        ) : draft?.phase === 'processing' ? (
+          <span className="qa-browser-note" role="status">
+            {t('overview.inAppDictation.processing')}
+          </span>
+        ) : !available ? (
           <span className="qa-browser-note">{t('qa.compact.browserUnavailable')}</span>
         ) : undefined
       }

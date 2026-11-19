@@ -11,6 +11,7 @@ export function useQaDraftDictation(enabled: boolean, onChange: (text: string) =
   const input = useRef<HTMLTextAreaElement>(null);
   const token = useRef<string>();
   const [recording, setRecording] = useState<QaDraftRecording | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const change = useRef(onChange);
   change.current = onChange;
 
@@ -49,12 +50,11 @@ export function useQaDraftDictation(enabled: boolean, onChange: (text: string) =
       attach(
         listenQaDraftRecording((state) => {
           if (stopped || state.token !== id) return;
+          const active = state.phase === 'recording' || state.phase === 'processing';
+          if (active) setError(null);
+          else if (state.phase === 'failed') setError(state.error ?? 'Internal');
           setRecording((current) =>
-            state.phase === 'recording'
-              ? state
-              : current?.sessionId === state.sessionId
-                ? null
-                : current,
+            active ? state : current?.sessionId === state.sessionId ? null : current,
           );
         }),
       ),
@@ -75,5 +75,11 @@ export function useQaDraftDictation(enabled: boolean, onChange: (text: string) =
     };
   }, [enabled]);
 
-  return { input, setFocused, recording: enabled ? recording : null };
+  return {
+    input,
+    setFocused,
+    recording: enabled ? recording : null,
+    error,
+    clearError: () => setError(null),
+  };
 }

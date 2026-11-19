@@ -410,10 +410,21 @@ test('the waiting composer opens without a recording and voice dictation only ed
     bridge.emit('qa:draft-recording', {
       token: bridge.qaDraftFocus.token,
       sessionId: 'dictation',
-      phase: 'idle',
+      phase: 'processing',
     });
+  });
+  await expect(strip).toHaveCount(0);
+  await editor.press('Enter');
+  expect(await page.evaluate(() => (window as any).fixture.qaActions)).toEqual([]);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
     bridge.emit('qa:dictation-draft', { token: 'old-window', text: 'stale' });
     bridge.emit('qa:dictation-draft', { token: bridge.qaDraftFocus.token, text: 'spoken ' });
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'dictation',
+      phase: 'idle',
+    });
   });
   await expect(strip).toHaveCount(0);
   await expect(editor).toBeFocused();
@@ -426,6 +437,31 @@ test('the waiting composer opens without a recording and voice dictation only ed
       command: 'qa_submit_text',
       args: { text: 'Before spoken after' },
     });
+});
+
+test('draft dictation failure is shown without moving focus or losing text', async ({ page }) => {
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'idle', panelOpen: true, messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const editor = panel.locator('textarea');
+  await editor.fill('Keep this');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.qaDraftFocus?.focused))
+    .toBe(true);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emit('qa:draft-recording', {
+      token: bridge.qaDraftFocus.token,
+      sessionId: 'failed',
+      phase: 'failed',
+      error: 'PermissionDenied',
+    });
+  });
+  await expect(panel.getByRole('alert')).toBeVisible();
+  await expect(editor).toHaveValue('Keep this');
+  await expect(editor).toBeFocused();
+  await expect(panel.locator('.qa-voice-strip')).toHaveCount(0);
 });
 
 test('typed send never clips the conversation or displays recording feedback', async ({ page }) => {
