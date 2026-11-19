@@ -86,6 +86,8 @@ async fn native_openai_realtime_records_before_setup_and_reuses_shared_insertion
     let (allow_setup, setup_allowed) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = within(listener.accept()).await.unwrap();
+        // The upgrade callback's error type is fixed by tungstenite.
+        #[allow(clippy::result_large_err)]
         let mut socket = tokio_tungstenite::accept_hdr_async(
             stream,
             |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {

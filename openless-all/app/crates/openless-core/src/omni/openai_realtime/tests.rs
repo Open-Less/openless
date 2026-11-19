@@ -45,6 +45,8 @@ where
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
         let (stream, _) = timeout(DEADLINE, listener.accept()).await.unwrap().unwrap();
+        // The upgrade callback's error type is fixed by tungstenite.
+        #[allow(clippy::result_large_err)]
         let socket = tokio_tungstenite::accept_hdr_async(
             stream,
             |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {

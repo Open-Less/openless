@@ -3140,8 +3140,10 @@ mod tests {
 
     #[test]
     fn realtime_dictation_uses_the_original_style_cursor_and_language_contract() {
-        let mut context = crate::dictation_context::DictationContext::default();
-        context.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+        let mut context = crate::dictation_context::DictationContext {
+            pipeline_mode: crate::shared_types::PipelineMode::Multimodal,
+            ..Default::default()
+        };
         context.omni.provider_type = crate::provider_rules::OPENAI_REALTIME_OMNI_PROVIDER_ID.into();
         context.polish.style_system_prompt =
             "Selected custom style: preserve every parallel item.".into();
@@ -3240,8 +3242,10 @@ mod tests {
                 Arc::new(crate::InMemoryCredentialStore::default()),
                 traditional.clone(),
             );
-            let mut context = DictationContext::default();
-            context.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+            let mut context = DictationContext {
+                pipeline_mode: crate::shared_types::PipelineMode::Multimodal,
+                ..Default::default()
+            };
             context.omni.provider_type = provider.into();
             let output = polisher
                 .polish(

@@ -13,8 +13,8 @@ pub(super) struct Resampler {
 impl Resampler {
     pub(super) fn push(&mut self, pcm: &[u8]) -> Vec<u8> {
         let mut output = Vec::with_capacity(pcm.len() * 3 / 2 + 4);
-        for pair in pcm.chunks_exact(2) {
-            let current = i16::from_le_bytes([pair[0], pair[1]]);
+        for &pair in pcm.as_chunks::<2>().0 {
+            let current = i16::from_le_bytes(pair);
             let Some(previous) = self.previous.replace(current) else {
                 output.extend_from_slice(&current.to_le_bytes());
                 self.next_output = 1;

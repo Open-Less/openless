@@ -77,6 +77,8 @@ where
     );
     let server = tokio::spawn(async move {
         let (stream, _) = timeout(DEADLINE, listener.accept()).await.unwrap().unwrap();
+        // The upgrade callback's error type is fixed by tungstenite.
+        #[allow(clippy::result_large_err)]
         let socket = timeout(
             DEADLINE,
             tokio_tungstenite::accept_hdr_async(
