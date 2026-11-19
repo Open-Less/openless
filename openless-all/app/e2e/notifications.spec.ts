@@ -73,19 +73,30 @@ test('a new save replaces the previous receipt in place and draws a full success
   ]);
   await expect(oldCard).toHaveAttribute('aria-hidden', 'true');
   await expect(replacement).toHaveCSS('transform', 'none');
-  expect((await oldCard.boundingBox())!.y).toBeCloseTo(anchor.y, 0);
+  const start = (await oldCard.boundingBox())!;
+  expect(start.y).toBeCloseTo(anchor.y, 0);
+  expect(start.x).toBeCloseTo(anchor.x, 0);
+  expect(start.width).toBeCloseTo(anchor.width, 0);
+  expect(start.height).toBeCloseTo(anchor.height, 0);
   expect((await replacement.boundingBox())!.y).toBeCloseTo(anchor.y, 0);
   const halfway = await oldCard.evaluate((node) => {
     const exit = node.getAnimations().find((animation) => animation.id === 'ol-notice-exit')!;
     exit.currentTime = Number(exit.effect!.getTiming().duration) / 2;
+    const box = node.getBoundingClientRect();
     const pose = {
-      y: node.getBoundingClientRect().y,
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
       opacity: Number(getComputedStyle(node).opacity),
     };
     exit.play();
     return pose;
   });
   expect(halfway.y).toBeLessThan(anchor.y);
+  expect(halfway.x).toBeCloseTo(anchor.x, 0);
+  expect(halfway.width).toBeCloseTo(anchor.width, 0);
+  expect(halfway.height).toBeCloseTo(anchor.height, 0);
   expect(halfway.opacity).toBeGreaterThan(0);
   expect(halfway.opacity).toBeLessThan(1);
   const cards = page.locator('.ol-notification-card');
@@ -195,7 +206,7 @@ test('progress notification paints above a portaled channel editor', async ({ pa
   await expect(page.locator('.ol-channel-dialog')).toBeVisible();
 });
 
-test('compact progress centers its track above status and fades the departing cancel action', async ({
+test('compact progress centers its track below status and fades the departing cancel action', async ({
   page,
 }) => {
   await page.goto('/e2e/fixtures/notifications.html');
@@ -217,7 +228,7 @@ test('compact progress centers its track above status and fades the departing ca
   const cancel = card.getByRole('button', { name: 'Cancel download', exact: true });
   await expect(card).toHaveCSS('transform', 'none');
   await expect(progress).toHaveAttribute('aria-valuenow', '42');
-  await expect(progress).toHaveCSS('width', '96px');
+  await expect(progress).toHaveCSS('width', '184px');
   await expect(status.locator('.ol-notification-message')).toHaveCSS('font-size', '12px');
   await expect(cancel).toHaveAttribute('data-action-style', 'cancel-icon');
   const [track, text, action] = await Promise.all([
@@ -225,7 +236,7 @@ test('compact progress centers its track above status and fades the departing ca
     status.boundingBox(),
     cancel.boundingBox(),
   ]);
-  expect(track!.y + track!.height).toBeLessThan(text!.y);
+  expect(text!.y + text!.height).toBeLessThan(track!.y);
   expect(track!.x + track!.width / 2).toBeCloseTo(text!.x + text!.width / 2, 0);
   expect(action!.x).toBeGreaterThan(track!.x + track!.width);
   expect(await card.evaluate((node) => node.clientHeight)).toBe(56);

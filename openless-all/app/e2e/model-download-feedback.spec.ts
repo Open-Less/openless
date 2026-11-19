@@ -37,12 +37,20 @@ test('experimental download cancels only from its owning Settings page or outsid
 
   await page.evaluate(() => {
     window.settingsStatusFixture.setExperimentalStatus('text-stream', {
+      downloadedBytes: 0,
+      totalBytes: 2500,
+    });
+  });
+  await expect(textStream.getByRole('status')).toHaveText('Downloading TextStream · 0%');
+  await page.evaluate(() => {
+    window.settingsStatusFixture.setExperimentalStatus('text-stream', {
       downloadedBytes: 625,
       totalBytes: 2500,
     });
   });
   await expect(bar).toHaveAttribute('aria-valuenow', '25');
-  await expect(textStream.locator('[data-slot="toast-description"]')).toHaveText('25%');
+  await expect(textStream.getByRole('status')).toHaveText('Downloading TextStream · 25%');
+  await expect(textStream.locator('[data-slot="toast-description"]')).toHaveCount(0);
   await expect(cancel).toBeEnabled();
   await expect(cancel).toHaveAttribute('title', 'Cancel the download of TextStream');
 

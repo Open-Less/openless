@@ -348,28 +348,53 @@ export function CloudSyncSection() {
   const customServerOrigin = prefs?.syncCustomServerOrigin ?? '';
 
   const progressNotification = useRef<NotificationHandle>();
+  const busyNotification = useRef<NotificationHandle>();
   const notificationSettled = useRef(false);
   const syncIntent = useRef(false);
   const awaitingSync = useRef(false);
-  const announce = (key: string, state: 'saved' | 'info' | 'failed' = 'saved') => {
+  const pendingReview = useRef<EncryptedSyncConflictEvent | null>(null);
+  const requestingPreview = useRef(false);
+  const announce = (key: string, tone: 'saved' | 'info' | 'warning' | 'failed' = 'saved') => {
     const options = {
-      state,
+      state: tone === 'warning' ? ('info' as const) : tone,
+      severity: tone === 'warning' ? ('warning' as const) : undefined,
+      align: 'center' as const,
       message: t(`cloudSyncE2ee.${key}`),
       progress: false,
       actionLabel: undefined,
       onAction: undefined,
-      durationMs: state === 'saved' ? 3500 : 0,
+      durationMs: tone === 'saved' ? 3500 : 0,
     };
     if (progressNotification.current) progressNotification.current.update(options);
     else notify({ ...options, key: 'cloud-sync-operation' });
     progressNotification.current = undefined;
     notificationSettled.current = true;
   };
+  const presentReview = (preview: RestorePreview, enableAfter: boolean, scope: string) => {
+    const next = { kind: 'restore' as const, preview, enableAfter, scope };
+    currentDialog.current = next;
+    setDialog(next);
+    announce(preview.conflicts.length ? 'states.conflict' : 'restoreTitle', 'warning');
+  };
+  const showBusy = () => {
+    busyNotification.current = notify({
+      key: 'cloud-sync-busy',
+      state: 'info',
+      severity: 'warning',
+      align: 'center',
+      durationMs: 6500,
+      message: t('cloudSyncE2ee.errors.busy'),
+    });
+  };
   const showError = (error: unknown, settled = false) => {
     if (!alive.current) return;
     const errorKey = encryptedSyncErrorKey(error);
     const key = `errors.${errorKey}`;
-    if (currentDialog.current && errorKey !== 'outcomeUnknown') setNotice({ key, error: true });
+    if (errorKey === 'busy') showBusy();
+    else if (errorKey === 'reviewRequired') {
+      if (currentDialog.current?.kind !== 'restore') announce(key, 'warning');
+    } else if (currentDialog.current && errorKey !== 'outcomeUnknown')
+      setNotice({ key, error: true });
     else if (settled) announce(key, 'failed');
     else
       notify({
@@ -389,17 +414,31 @@ export function CloudSyncSection() {
     watermark.current = next.sequence;
     setStatus(next);
     if (scopeChanged) {
+      pendingReview.current = null;
       if (activeAction.current === null || !retainsSyncScope(before, next)) {
         setDialog(null);
       }
       awaitingSync.current = false;
       syncIntent.current = false;
-    } else if (awaitingSync.current && next.syncState !== 'syncing') {
-      awaitingSync.current = false;
-      syncIntent.current = false;
-      if (next.lastError) showError(next.lastError, true);
-      else if (next.syncState === 'ready') announce('synced');
-      else if (next.syncState === 'conflict') announce('states.conflict', 'info');
+    } else if (next.syncState !== 'syncing' && !next.taskId) {
+      const review = pendingReview.current;
+      pendingReview.current = null;
+      const scope = encryptedSyncScope(next);
+      if (
+        review &&
+        before?.taskId === review.taskId &&
+        matchesRestorePreview(review.preview, next, scope)
+      ) {
+        presentReview(review.preview, false, scope);
+        awaitingSync.current = false;
+        syncIntent.current = false;
+      } else if (awaitingSync.current) {
+        awaitingSync.current = false;
+        syncIntent.current = false;
+        if (next.lastError) showError(next.lastError, true);
+        else if (next.syncState === 'ready') announce('synced');
+        else if (next.syncState === 'conflict') announce('states.conflict', 'warning');
+      }
     }
     return true;
   };
@@ -458,14 +497,14 @@ export function CloudSyncSection() {
         !matchesEncryptedSyncEvent(snapshot, event, watermark.current)
       )
         return;
+      // A requested preview is validated together with its terminal status before presentation.
+      if (requestingPreview.current) return;
       watermark.current = event.sequence;
-      setDialog({
-        kind: 'restore',
-        preview: event.preview,
-        enableAfter: false,
-        scope: encryptedSyncScope(snapshot),
-      });
-      announce('states.conflict', 'info');
+      // Core emits the review while the task still owns the runtime. Do not show a
+      // confirmation that would race that lock, or switch the toast twice.
+      if (event.taskId) pendingReview.current = event;
+      else if (matchesRestorePreview(event.preview, snapshot, encryptedSyncScope(snapshot)))
+        presentReview(event.preview, false, encryptedSyncScope(snapshot));
     },
     restored(event) {
       const snapshot = current.current;
@@ -547,6 +586,8 @@ export function CloudSyncSection() {
 
   const perform = async (work: (valid: () => boolean) => Promise<void>, syncing = false) => {
     if (activeAction.current !== null || current.current?.syncState === 'syncing') return;
+    busyNotification.current?.dismiss();
+    busyNotification.current = undefined;
     const action = ++actionSequence.current;
     activeAction.current = action;
     syncIntent.current = syncing;
@@ -581,13 +622,18 @@ export function CloudSyncSection() {
   };
   const previewRestore = async (enableAfter: boolean, valid: () => boolean) => {
     const scope = current.current ? encryptedSyncScope(current.current) : null;
-    const preview = await cloudSyncE2eePreviewRestore(observedRevision());
-    if (!valid()) return;
-    const next = await cloudSyncE2eeStatus();
-    if (!valid() || (current.current && encryptedSyncScope(current.current) !== scope)) return;
-    if (!scope || !matchesRestorePreview(preview, next, scope)) throw localError('stale_preview');
-    if (!acceptStatus(next)) return;
-    setDialog({ kind: 'restore', preview, enableAfter, scope });
+    requestingPreview.current = true;
+    try {
+      const preview = await cloudSyncE2eePreviewRestore(observedRevision());
+      if (!valid()) return;
+      const next = await cloudSyncE2eeStatus();
+      if (!valid() || (current.current && encryptedSyncScope(current.current) !== scope)) return;
+      if (!scope || !matchesRestorePreview(preview, next, scope)) throw localError('stale_preview');
+      if (!acceptStatus(next)) return;
+      presentReview(preview, enableAfter, scope);
+    } finally {
+      requestingPreview.current = false;
+    }
   };
   const routePreparation = async (
     prepared: EnablePreparation,
@@ -654,7 +700,7 @@ export function CloudSyncSection() {
         await refresh();
       }
       if (next.syncState === 'conflict') {
-        if (valid()) announce('states.conflict', 'info');
+        if (currentDialog.current?.kind === 'restore') return;
         await previewRestore(false, valid);
         return;
       }
@@ -718,6 +764,10 @@ export function CloudSyncSection() {
   };
   const applyRestore = (mode: 'replace' | 'merge', conflictChoices: SyncConflictChoice[]) => {
     if (dialog?.kind !== 'restore') return;
+    if (activeAction.current !== null || current.current?.syncState === 'syncing') {
+      showBusy();
+      return;
+    }
     const { preview, enableAfter, scope } = dialog;
     void perform(async (valid) => {
       const snapshot = current.current;
@@ -795,6 +845,8 @@ export function CloudSyncSection() {
     const options = {
       message: progressMessage,
       state: 'saving' as const,
+      severity: undefined,
+      align: 'center' as const,
       progress: !syncing,
       actionLabel: canCancel ? cancelLabel : undefined,
       actionStyle: 'cancel-icon' as const,

@@ -19,8 +19,7 @@ const TILE_CLIP = `path('${squircle(TILE, TILE, TILE_RADIUS)}')`;
 const POP = { type: 'spring', stiffness: 520, damping: 30 } as const;
 // critically damped, so the tile eases in without the glyph's bounce
 const SETTLE = { type: 'spring', stiffness: 320, damping: 36 } as const;
-// The viewport entrance is 220 ms; reveal the glyph after the shell starts to settle.
-const ARRIVAL = 0.16;
+const ARRIVAL = 0.07;
 const INSTANT = { duration: 0 } as const;
 // a promise result waits for the spinner to leave, then the tile gives one small bump
 const LEAVE = { duration: 0.14, ease: 'easeIn' } as const;
@@ -86,7 +85,7 @@ function Glyph({ type, delay }: { type: ToastVariant; delay: number }) {
       )}
       {type === 'warning' && (
         <>
-          <path className="ol-toast-stroke" d="M12 6v7" style={stroke(8)} />
+          <path d="M12 6v7" />
           <circle cx="12" cy="18" r="1.6" fill="currentColor" stroke="none" />
         </>
       )}
@@ -106,37 +105,31 @@ export function ToastIcon({ type }: { type: Exclude<ToastVariant, 'default'> }) 
   const [arrivingType] = useState(type);
   const settled = type !== arrivingType;
   const delay = settled ? 0 : ARRIVAL;
-  const success = type === 'success';
-  const bump = settled && !success;
+  const stable = type === 'success' || type === 'warning' || type === 'loading';
+  const bump = settled && !stable;
 
   return (
     <motion.span
       aria-hidden
       data-slot="toast-icon"
-      initial={reduced ? false : { scale: 0.85, opacity: 0 }}
+      initial={reduced || stable ? false : { scale: 0.85, opacity: 0 }}
       animate={{ scale: bump ? [1, 1.08, 1] : 1, opacity: 1 }}
-      transition={
-        reduced
-          ? INSTANT
-          : bump
-            ? { scale: BUMP }
-            : { ...SETTLE, delay: settled ? 0 : ARRIVAL - 0.08 }
-      }
+      transition={reduced ? INSTANT : bump ? { scale: BUMP } : { ...SETTLE }}
       style={{ width: TILE, height: TILE, clipPath: TILE_CLIP }}
       className="ol-notification-icon"
       data-tone={type}
     >
-      <AnimatePresence initial={!reduced} mode="wait">
+      <AnimatePresence initial={!reduced} mode="sync">
         <motion.span
           key={type}
-          initial={{ scale: success ? 1 : 0.4, opacity: 0 }}
+          initial={{ scale: stable ? 1 : 0.4, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           exit={{
-            scale: 0.5,
+            scale: stable ? 1 : 0.5,
             opacity: 0,
-            transition: reduced ? INSTANT : LEAVE,
+            transition: reduced || type === 'loading' ? INSTANT : LEAVE,
           }}
-          transition={reduced ? INSTANT : success ? { duration: 0.12, delay } : { ...POP, delay }}
+          transition={reduced ? INSTANT : stable ? { duration: 0.14, delay } : { ...POP, delay }}
           className="ol-toast-glyph"
         >
           <Glyph type={type} delay={delay} />

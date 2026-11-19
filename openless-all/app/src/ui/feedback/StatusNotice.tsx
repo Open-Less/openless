@@ -7,6 +7,7 @@ import './toast.css';
 interface StatusNoticeProps {
   children: ReactNode;
   state: string;
+  centered?: boolean;
   progress?: boolean;
   notificationKey?: string;
   variant: ToastVariant;
@@ -27,6 +28,7 @@ function paintedFrame(card: HTMLElement): NoticeFrame {
 export function StatusNotice({
   children,
   state,
+  centered,
   progress,
   severity,
   variant,
@@ -62,10 +64,8 @@ export function StatusNotice({
     }
     let animation: Animation | undefined;
     let cancelled = false;
-    let frame = 0;
     let previousSize = '';
     const stop = () => {
-      cancelAnimationFrame(frame);
       if (!animation) return;
       animation.onfinish = null;
       animation.cancel();
@@ -88,22 +88,13 @@ export function StatusNotice({
       animation = card.animate(
         [from ?? (initial && present ? hidden : visible), present ? visible : hidden],
         {
-          duration: present ? 220 : 180,
-          easing: present ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.4, 0, 0.6, 1)',
+          duration: present ? 220 : 230,
+          easing: present ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.28, 0.5, 0.57, 1)',
           fill: 'both',
         },
       );
       animation.id = present ? 'ol-notice-enter' : 'ol-notice-exit';
       const current = animation;
-      if (initial && present && !from) {
-        current.pause();
-        current.currentTime = 0;
-        frame = requestAnimationFrame(() => {
-          frame = requestAnimationFrame(() => {
-            if (!cancelled && animation === current) current.play();
-          });
-        });
-      }
       // A retargeted or unmounted card must not keep a pending finished callback.
       current.onfinish = () => {
         current.onfinish = null;
@@ -137,6 +128,7 @@ export function StatusNotice({
       ref={ref}
       className={`ol-notification-card${progress ? ' ol-notification-card--progress' : ''}`}
       data-state={state}
+      data-centered={centered || undefined}
       data-type={variant}
       data-notification-key={notificationKey}
       data-variant={variant === 'error' || variant === 'warning' ? 'alert' : 'default'}

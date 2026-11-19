@@ -80,6 +80,7 @@ const NotificationCard = forwardRef<
         state={state}
         variant={variant}
         notificationKey={item.key}
+        centered={item.align === 'center' || item.progress}
         progress={item.progress}
         severity={item.severity}
         present={present}
@@ -89,6 +90,16 @@ const NotificationCard = forwardRef<
           <div className="ol-toast-row">
             {variant !== 'default' && <ToastIcon type={variant} />}
             <div className="ol-notification-body">
+              <div role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}>
+                <span className="ol-notification-message" data-slot="toast-title">
+                  {item.message}
+                </span>
+                {item.description && (
+                  <span className="ol-notification-description" data-slot="toast-description">
+                    {item.description}
+                  </span>
+                )}
+              </div>
               {item.progress && (
                 <span
                   className="ol-notification-progress"
@@ -105,16 +116,6 @@ const NotificationCard = forwardRef<
                   />
                 </span>
               )}
-              <div role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}>
-                <span className="ol-notification-message" data-slot="toast-title">
-                  {item.message}
-                </span>
-                {item.description && (
-                  <span className="ol-notification-description" data-slot="toast-description">
-                    {item.description}
-                  </span>
-                )}
-              </div>
             </div>
             <AnimatePresence initial={false}>{action}</AnimatePresence>
           </div>

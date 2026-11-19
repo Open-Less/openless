@@ -35,23 +35,22 @@ export function GlobalDownloadProgress() {
       handles.current.delete(key);
     }
     for (const item of visible) {
-      const message = t(
-        item.preparing ? 'modelDownloads.preparing' : 'modelDownloads.downloading',
-        {
-          name: item.name,
-        },
-      );
+      const label = t(item.preparing ? 'modelDownloads.preparing' : 'modelDownloads.downloading', {
+        name: item.name,
+      });
       const percent = item.percent;
       const belowOnePercent = percent !== null && percent > 0 && percent < 1;
-      const description = item.cancelling
+      const progressLabel =
+        percent === null
+          ? undefined
+          : `${belowOnePercent ? '<' : ''}${formatPercent.format((belowOnePercent ? 1 : Math.floor(percent)) / 100)}`;
+      const message = item.cancelling
         ? t('localAsr.cancellingDownload')
-        : item.cancelFailed
-          ? t('common.operationFailed')
-          : percent === null
-            ? undefined
-            : `${belowOnePercent ? '<' : ''}${formatPercent.format((belowOnePercent ? 1 : Math.floor(percent)) / 100)}`;
+        : progressLabel === undefined
+          ? label
+          : `${label} · ${progressLabel}`;
       const options = {
-        description,
+        description: item.cancelFailed ? t('common.operationFailed') : undefined,
         progress: true,
         progressValue: percent ?? undefined,
         onAction: () => void handleCancel(item),

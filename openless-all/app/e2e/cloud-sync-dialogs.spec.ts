@@ -16,6 +16,46 @@ async function dismissWhilePending(page: Page, dialog: Locator) {
   await expect(dialog).toBeVisible();
 }
 
+test('restore waits for the sync result and shows task contention above the review', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=review');
+  await page.getByRole('button', { name: 'Sync now', exact: true }).click();
+  const toast = page.locator('[data-notification-key="cloud-sync-operation"]');
+  await expect(toast.getByRole('status')).toContainText('Syncing the latest cloud data');
+  await expect(toast.getByRole('progressbar')).toHaveCount(0);
+  await expect(toast).toHaveCSS('width', '356px');
+  await page.evaluate(() => (window as any).syncDialogFixture.publishReview());
+  const review = page.getByRole('dialog', { name: 'Review before restoring' });
+  await expect(review).toHaveCount(0);
+  await finish(page);
+  await expect(review).toBeVisible();
+  await expect(toast.getByRole('alert')).toHaveText('Review before restoring');
+  await expect(toast).toHaveAttribute('data-severity', 'warning');
+  await expect(toast).toHaveCSS('width', '356px');
+  await review.getByRole('checkbox').check();
+  const confirm = review.getByRole('button', { name: 'Confirm restore' });
+  await confirm.click();
+  const warning = page.locator('[data-notification-key="cloud-sync-busy"]');
+  await expect(warning.getByRole('alert')).toHaveText(
+    'Another sync task is running. Wait or cancel it first.',
+  );
+  await expect(warning).toHaveAttribute('data-severity', 'warning');
+  await expect(review.getByRole('alert')).toHaveCount(0);
+  await expect(review.getByRole('checkbox')).toBeChecked();
+  await confirm.click();
+  await expect(review).toHaveCount(0);
+  await expect(warning).toHaveCount(0);
+  await expect(toast.getByRole('status')).toBeVisible();
+  expect(
+    (await attempts(page)).map(({ command, args }: any) => [command, args?.previewId]),
+  ).toEqual([
+    ['cloud_sync_e2ee_sync_now', undefined],
+    ['cloud_sync_e2ee_apply_restore', 'restore-preview'],
+    ['cloud_sync_e2ee_apply_restore', 'restore-preview'],
+  ]);
+});
+
 test('renewal appears before settings, stays paused on dismissal, and waits for native confirmation', async ({
   page,
 }) => {

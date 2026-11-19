@@ -31,17 +31,18 @@
   justify-content: center;
   width: 100%;
 }
-/* popLayout owns the old vertical anchor. Keep the exit centered and reflowable on resize. */
+/* popLayout owns the old vertical anchor. An explicit width avoids shrink-to-fit on exit. */
 .ol-notification-slot[data-exiting] {
   z-index: 0;
-  inset-inline: var(--ol-toast-stack-gutter) !important;
-  width: auto !important;
+  inset-inline: var(--ol-toast-stack-gutter) auto !important;
+  width: calc(100% - 2 * var(--ol-toast-stack-gutter)) !important;
   height: auto !important;
 }
 .ol-notification-card {
   --ol-toast-bg: #fff;
   --ol-toast-line: rgb(0 0 0 / 7%);
   --ol-toast-muted: #6e6d7b;
+  --ol-toast-warning-text: #785600;
   --ol-toast-action-bg: #f4f4f9;
   --ol-toast-action-hover: #ededf3;
   --ol-toast-shadow: drop-shadow(0 1px 1px rgb(0 0 0 / 5%)) drop-shadow(0 2px 5px rgb(0 0 0 / 6%));
@@ -55,6 +56,7 @@
   --ol-toast-bg: #1c1c1e;
   --ol-toast-line: rgb(255 255 255 / 10%);
   --ol-toast-muted: #9b9aa7;
+  --ol-toast-warning-text: #ffd60a;
   --ol-toast-action-bg: #2c2c2e;
   --ol-toast-action-hover: #3a3a3c;
   --ol-toast-shadow: drop-shadow(0 1px 1px rgb(0 0 0 / 30%)) drop-shadow(0 2px 5px rgb(0 0 0 / 30%));
@@ -170,23 +172,32 @@
   font-weight: 500;
   line-height: 18px;
 }
-.ol-notification-card.ol-notification-card--progress .ol-notification-body {
+.ol-notification-card[data-severity='warning'] .ol-notification-message {
+  color: var(--ol-toast-warning-text);
+}
+.ol-notification-card[data-centered] .ol-notification-body {
   align-items: center;
   padding-inline-start: 0;
   gap: 5px;
   text-align: center;
 }
-.ol-notification-card--progress .ol-notification-message {
+.ol-notification-card[data-centered]:not([data-type='default'])
+  .ol-toast-row:not(:has(.ol-notification-action))::after {
+  content: '';
+  flex: 0 0 36px;
+}
+.ol-notification-card[data-centered] .ol-notification-message {
   font-size: 12px;
   line-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
 .ol-notification-progress {
   display: block;
   overflow: hidden;
-  width: min(96px, 100%);
+  width: min(184px, 100%);
   height: 4px;
   border-radius: 999px;
-  background: var(--ol-toast-action-bg);
+  background: color-mix(in srgb, var(--ol-toast-muted) 30%, transparent);
 }
 .ol-notification-progress-value {
   display: block;

@@ -32,6 +32,7 @@ export interface NotificationOptions {
   severity?: 'warning' | 'error';
   durationMs?: number;
   key?: string;
+  align?: 'center';
   progress?: boolean;
   /** Percent complete when known; absent means indeterminate. */
   progressValue?: number;
