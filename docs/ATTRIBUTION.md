@@ -20,3 +20,6 @@ The in-app credit is Settings → About and updates → Component credits. The r
 [Streaming Response](https://www.rareui.com/components/streamingresponse) are the
 interaction references for OpenLess Ask Anything. The OpenLess implementation uses
 its own native shortcut, voice, and streaming contracts rather than the demo's mock backend.
+
+The blue Ask recording and sending strip also uses [Rare UI Voice Note](https://www.rareui.com/components/voicenote)
+as its visual reference, with live microphone levels and elapsed time instead of the demo's audio player.

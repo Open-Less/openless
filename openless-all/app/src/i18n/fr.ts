@@ -1184,6 +1184,14 @@ export const fr: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Action du raccourci de question',
+      desc: 'Utilise le raccourci d’enregistrement et la touche supplémentaire. Le raccourci seul dicte toujours à la position du curseur.',
+      record: 'Ouvrir et enregistrer immédiatement',
+      open: 'Ouvrir, puis appuyer à nouveau pour enregistrer',
+      draft: 'Ouvrir et placer le curseur dans le champ',
+      failed: 'Impossible d’enregistrer le comportement du raccourci.',
+    },
     dictation: 'Dicter',
     translation: 'Traduire',
     question: 'Poser une question',

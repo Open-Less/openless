@@ -142,7 +142,7 @@ async fn forward_legacy_event(
             }
         }
     }
-    if matches!(
+    if cfg!(mobile) && matches!(
         kind,
         BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
     ) {

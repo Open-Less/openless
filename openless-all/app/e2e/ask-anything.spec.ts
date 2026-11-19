@@ -334,3 +334,61 @@ test('the welcome box docks on first send without remounting the editor', async 
     })
     .toBeLessThan(30);
 });
+
+test('the waiting composer opens without a recording and voice dictation only edits its draft', async ({
+  page,
+}) => {
+  await page.goto(fixture + '?qa&qaBehavior=draft');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'idle', panelOpen: true, messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const editor = panel.locator('textarea');
+  await expect(panel.locator('.qa-welcome-title')).toBeVisible();
+  await expect(editor).toBeFocused();
+  await expect(panel.locator('.qa-voice-strip')).toHaveCount(0);
+  await editor.fill('Before after');
+  await editor.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(7, 7));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.qaDraftFocus?.focused))
+    .toBe(true);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emit('qa:dictation-draft', { token: 'old-window', text: 'stale' });
+    bridge.emit('qa:dictation-draft', { token: bridge.qaDraftFocus.token, text: 'spoken ' });
+  });
+  await expect(editor).toHaveValue('Before spoken after');
+  expect(await page.evaluate(() => (window as any).fixture.qaActions)).toEqual([]);
+  await editor.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.qaActions.at(-1)))
+    .toMatchObject({
+      command: 'qa_submit_text',
+      args: { text: 'Before spoken after' },
+    });
+});
+
+test('typed send morphs into the voice-note strip before submitting', async ({ page }) => {
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await emit(page, 'qa:state', { kind: 'idle', panelOpen: true, messages: [] });
+  const panel = page.locator('.qa-conversation');
+  const editor = panel.locator('textarea');
+  await editor.fill('Wait until the strip appears');
+  const before = await editor.evaluate((el) => {
+    el.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    return new Promise((done) =>
+      requestAnimationFrame(() => {
+        const bridge = (window as any).fixture;
+        done({
+          strip: !!document.querySelector('.qa-send-morph-strip'),
+          sent: bridge.qaActions.length,
+        });
+      }),
+    );
+  });
+  expect(before).toEqual({ strip: true, sent: 0 });
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.qaActions.length)).toBe(1);
+  await expect(panel.locator('.qa-send-morph-strip')).toHaveCount(0);
+});

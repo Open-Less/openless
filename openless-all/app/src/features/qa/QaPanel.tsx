@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next';
 import { motion, MotionConfig } from 'framer-motion';
 import { useReducedMotion } from '../../lib/motion';
+import { getSettings } from '../../api/preferences';
 import { CheckIcon, CopyIcon, XIcon } from 'lucide-react';
 import {
   MessageScroller,
@@ -16,6 +17,7 @@ import {
 import { OpenLessPill } from '../capsule/OpenLessCapsule';
 import { QaSurface } from './QaSurface';
 import { QaComposer, type QaStatus } from './QaComposer';
+import { QaVoiceStrip } from './QaVoiceStrip';
 import { QaStreamingResponse } from './QaStreamingResponse';
 import { useChatPanelLifecycle } from './chat/lifecycle';
 import {
@@ -69,6 +71,8 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   const [errorMsg, setErrorMsg] = useState('');
   const [selectionPreview, setSelectionPreview] = useState('');
   const [composerText, setComposerText] = useState('');
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [sendMorph, setSendMorph] = useState(false);
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [editApplyAvailable, setEditApplyAvailable] = useState(false);
   const [editRevertAvailable, setEditRevertAvailable] = useState(false);
@@ -147,6 +151,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     setThoughtSeconds(0);
     setActivity(undefined);
     setSubmitBusy(false);
+    setSendMorph(false);
     setMicBusy(false);
     setEditApplyBusy(false);
     setModeBusy(false);
@@ -161,6 +166,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     activeSessionIdRef.current = null;
     changeStatus('idle');
     setMessages([]);
+    setPanelOpen(false);
     setErrorMsg('');
     setStreamingAnswer('');
     setSelectionPreview('');
@@ -200,6 +206,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           const sessionEvent = acceptQaSessionEvent(activeSessionIdRef.current, payload);
           if (!sessionEvent.accepted) return;
           nativeStateEpoch.current += 1;
+          if (payload.panelOpen != null) setPanelOpen(payload.panelOpen);
           if (activeSessionIdRef.current !== sessionEvent.sessionId) {
             stopDeepSeekReading();
             cancelRequestRef.current = null;
@@ -211,6 +218,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
             if (payload.kind === 'idle' || payload.kind === 'recording') {
               submissionRef.current = null;
               setSubmitBusy(false);
+              setSendMorph(false);
               if (!payload.messages?.length) setSubmitted(false);
             }
             // Apply/revert belongs to the captured QA session. A new turn must
@@ -354,6 +362,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           activeSessionIdRef.current = null;
           setSelectionPreview('');
           setComposerText('');
+          setPanelOpen(false);
           setLevel(0);
           if (embeddedRef.current && !delegatedDismiss.current) onRequestCloseRef.current?.();
         });
@@ -432,6 +441,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
 
   const expanded =
     embedded ||
+    panelOpen ||
     polishResult !== null ||
     status !== 'idle' ||
     submitted ||
@@ -452,6 +462,22 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     blocked: presentationClosing,
     nativeWindow: isTauri && !embedded,
   });
+
+  const composerRegion = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isTauri || embedded || !panelOpen || !layout.ready || presentationClosing) return;
+    let current = true;
+    void getSettings()
+      .then((prefs) => {
+        if (current && prefs.qaShortcutBehavior === 'draft' && statusRef.current === 'idle') {
+          composerRegion.current?.querySelector('textarea')?.focus({ preventScroll: true });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [isTauri, embedded, panelOpen, layout.ready, presentationClosing, enterEpoch]);
 
   const scaledStyle = layout.contentScale > 1 ? { zoom: layout.contentScale } : undefined;
   // Motion measures projected bounds in viewport pixels but writes transforms
@@ -507,17 +533,20 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     const originSession = activeSessionIdRef.current;
     submissionRef.current = request;
     setSubmitBusy(true);
+    setSendMorph(!reduced);
     setSubmitted(true);
     setComposerText('');
     setErrorMsg('');
     try {
       await layout.waitForReady();
+      if (!reduced) await new Promise((resolve) => setTimeout(resolve, 245));
       if (
         panelEpoch.current !== epoch ||
         submissionRef.current !== request ||
         activeSessionIdRef.current !== originSession
       )
         return;
+      setSendMorph(false);
       await qaSubmitText(text, originSession);
     } catch {
       if (
@@ -532,6 +561,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     } finally {
       if (submissionRef.current === request) {
         submissionRef.current = null;
+        setSendMorph(false);
         setSubmitBusy(false);
       }
     }
@@ -749,7 +779,10 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   }, [embedded, modalActive, onRequestDismiss]);
 
   const showWelcome =
-    !submitBusy && messages.length === 0 && status !== 'thinking' && status !== 'error';
+    (sendMorph || !submitBusy) &&
+    messages.length === 0 &&
+    status !== 'thinking' &&
+    status !== 'error';
   const lastRole = messages[messages.length - 1]?.role;
   const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
   const firstQuestion = messages.find((message) => message.role === 'user');
@@ -932,6 +965,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           className="qa-answer-panel qa-conversation"
           style={scaledStyle}
           data-welcome={showWelcome ? 'true' : undefined}
+          data-send-morph={sendMorph ? 'true' : undefined}
           data-platform={getRuntimeOS()}
           aria-label={t('capsule.asking')}
         >
@@ -1004,7 +1038,12 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
               </button>
             </div>
           )}
-          <div className="qa-composer-dock">
+          {sendMorph && (
+            <div className="qa-send-morph-strip" aria-hidden="true">
+              <QaVoiceStrip level={0} recording={false} />
+            </div>
+          )}
+          <div className="qa-composer-dock" ref={composerRegion}>
             {showWelcome && <h1 className="qa-welcome-title">{t('qa.emptyTitle')}</h1>}
             <MotionConfig transformPagePoint={composerPoint}>
               <motion.div

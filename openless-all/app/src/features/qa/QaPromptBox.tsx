@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUpIcon, SquareIcon } from 'lucide-react';
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useReducedMotion } from '../../lib/motion';
 import './qa-prompt-box.css';
 
@@ -12,12 +12,15 @@ interface QaPromptBoxProps {
   feedback?: ReactNode;
   disabled?: boolean;
   readOnly?: boolean;
+  recording?: boolean;
   sendDisabled: boolean;
   sendLabel: string;
   stop?: { label: string; disabled: boolean; onClick: () => void };
   onChange: (value: string) => void;
   onSubmit: () => void;
   onRequestKeyboard: () => void;
+  editorRef?: RefObject<HTMLTextAreaElement>;
+  onEditorFocusChange?: (focused: boolean) => void;
 }
 
 interface SentDraft {
@@ -36,15 +39,19 @@ export function QaPromptBox({
   feedback,
   disabled,
   readOnly,
+  recording,
   sendDisabled,
   sendLabel,
   stop,
   onChange,
   onSubmit,
   onRequestKeyboard,
+  editorRef,
+  onEditorFocusChange,
 }: QaPromptBoxProps) {
   const composing = useRef(false);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const fallbackEditor = useRef<HTMLTextAreaElement>(null);
+  const input = editorRef ?? fallbackEditor;
   const measure = useRef<HTMLDivElement>(null);
   const submitted = useRef<SentDraft | null>(null);
   const [flight, setFlight] = useState<SentDraft | null>(null);
@@ -86,6 +93,7 @@ export function QaPromptBox({
   return (
     <form
       className="qa-prompt"
+      data-recording={recording || undefined}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -136,6 +144,7 @@ export function QaPromptBox({
             }}
             onBlur={() => {
               composing.current = false;
+              onEditorFocusChange?.(false);
             }}
             onKeyDown={(event) => {
               if (event.key === ' ' && event.getModifierState('Fn')) event.preventDefault();
@@ -150,7 +159,10 @@ export function QaPromptBox({
               event.preventDefault();
               if (!event.repeat) submit();
             }}
-            onFocus={onRequestKeyboard}
+            onFocus={() => {
+              onRequestKeyboard();
+              onEditorFocusChange?.(true);
+            }}
             onPointerDown={onRequestKeyboard}
           />
         </motion.div>
