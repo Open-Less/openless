@@ -10,7 +10,7 @@ void openless_macos_activity_app_icon(const char *name, const char *bundleId,
         NSString *bundle = bundleId ? [NSString stringWithUTF8String:bundleId] : nil;
         NSURL *url = bundle.length ? [workspace URLForApplicationWithBundleIdentifier:bundle] : nil;
         NSImage *icon = url ? [workspace iconForFile:url.path] : nil;
-        if (!icon && name) {
+        if (!icon && !bundle.length && name) {
             NSString *label = [NSString stringWithUTF8String:name];
             // Older rankings only have a name. Resolve it only when the running app is unambiguous.
             NSRunningApplication *match = nil;

@@ -29,8 +29,8 @@ export function InterfaceLanguagePicker({
   includeSystem?: boolean;
 }) {
   const { t } = useTranslation();
-  const options = SUPPORTED_LOCALES.map((locale) => ({
-    value: locale as LocalePreference,
+  const options: { value: LocalePreference; label: string }[] = SUPPORTED_LOCALES.map((locale) => ({
+    value: locale,
     label: t(`settings.language.${labelKeys[locale]}`),
   }));
   if (includeSystem)
@@ -40,7 +40,10 @@ export function InterfaceLanguagePicker({
     <SelectLite
       value={value}
       options={options}
-      onChange={(next) => onChange(next as LocalePreference)}
+      onChange={(next) => {
+        const option = options.find(({ value }) => value === next);
+        if (option) onChange(option.value);
+      }}
       ariaLabel={ariaLabel}
       side={side}
       searchable

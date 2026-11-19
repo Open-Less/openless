@@ -348,7 +348,10 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 
         let foreground = unsafe { GetForegroundWindow() };
         let windows = capture_windows_selection_target_for_window(foreground);
-        let windows_app = windows_app_for_window(foreground);
+        let windows_app = windows.map_or_else(
+            || windows_app_for_window(foreground),
+            |target| crate::activity_app_icons::app_name_for_pid(target.foreground_process_id),
+        );
         return SelectionInsertionTarget { windows, windows_app };
     }
 

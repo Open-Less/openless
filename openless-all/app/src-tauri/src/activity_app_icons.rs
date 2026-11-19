@@ -89,18 +89,64 @@ fn macos_png(name: &str, bundle_id: Option<&str>) -> Option<Vec<u8>> {
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq)]
+struct MacIconRequest {
+    name: String,
+    bundle: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacIconRequest {
+    fn cache_key(&self) -> String {
+        match &self.bundle {
+            Some(id) => format!("mac:bundle:{id}"),
+            None => format!("mac:name:{}", self.name),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_requests(
+    names: Vec<String>,
+    recorded_apps: impl IntoIterator<Item = (String, String)>,
+) -> Vec<MacIconRequest> {
+    let mut bundles = BTreeMap::new();
+    for (name, id) in recorded_apps {
+        if names.contains(&name) && !id.is_empty() {
+            let bundle = bundles.entry(name).or_insert_with(|| Some(id.clone()));
+            if bundle.as_deref() != Some(id.as_str()) {
+                *bundle = None;
+            }
+        }
+    }
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let bundle = match bundles.remove(&name) {
+                // Ambiguous names must not use a cached icon or a running-app guess.
+                Some(None) => return None,
+                found => found.flatten(),
+            };
+            Some(MacIconRequest { name, bundle })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) async fn macos_icons(
     app: &tauri::AppHandle,
-    requests: Vec<(String, Option<String>)>,
+    names: Vec<String>,
+    recorded_apps: impl IntoIterator<Item = (String, String)>,
 ) -> BTreeMap<String, String> {
+    let requests = macos_requests(names, recorded_apps);
     let cached = tauri::async_runtime::spawn_blocking(move || {
         let mut found = Vec::new();
         let mut missing = Vec::new();
-        for (name, bundle) in requests {
-            if let Some(png) = read_cached(&name) {
-                found.push((name, png));
+        for request in requests {
+            if let Some(png) = read_cached(&request.cache_key()) {
+                found.push((request.name, png));
             } else {
-                missing.push((name, bundle));
+                missing.push(request);
             }
         }
         (found, missing)
@@ -116,8 +162,9 @@ pub(crate) async fn macos_icons(
             .run_on_main_thread(move || {
                 let rows: Vec<_> = missing
                     .into_iter()
-                    .filter_map(|(name, bundle)| {
-                        macos_png(&name, bundle.as_deref()).map(|png| (name, png))
+                    .filter_map(|request| {
+                        macos_png(&request.name, request.bundle.as_deref())
+                            .map(|png| (request, png))
                     })
                     .collect();
                 let _ = send.send(rows);
@@ -126,10 +173,12 @@ pub(crate) async fn macos_icons(
         {
             if let Ok(rows) = receive.await {
                 if let Ok(mut rows) = tauri::async_runtime::spawn_blocking(move || {
-                    for (name, png) in &rows {
-                        let _ = cache(name, png);
-                    }
-                    rows
+                    rows.into_iter()
+                        .map(|(request, png)| {
+                            let _ = cache(&request.cache_key(), &png);
+                            (request.name, png)
+                        })
+                        .collect()
                 })
                 .await
                 {
@@ -139,6 +188,27 @@ pub(crate) async fn macos_icons(
         }
     }
     data_urls(found)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::*;
+
+    #[test]
+    fn a_bundle_is_the_cache_identity_and_an_ambiguous_name_is_not_resolved() {
+        let requests = macos_requests(
+            vec!["Browser".into(), "Editor".into(), "Legacy".into()],
+            [
+                ("Browser".into(), "com.example.browser".into()),
+                ("Editor".into(), "com.example.editor1".into()),
+                ("Editor".into(), "com.example.editor2".into()),
+                ("Editor".into(), "com.example.editor1".into()),
+            ],
+        );
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].cache_key(), "mac:bundle:com.example.browser");
+        assert_eq!(requests[1].cache_key(), "mac:name:Legacy");
+    }
 }
 
 #[cfg(target_os = "windows")]

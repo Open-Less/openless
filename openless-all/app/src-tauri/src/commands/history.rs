@@ -72,26 +72,12 @@ pub async fn get_activity_app_icons(
         .collect();
     #[cfg(target_os = "macos")]
     {
-        let mut bundles = std::collections::BTreeMap::new();
-        for record in core.list_history().unwrap_or_default() {
-            if let (Some(name), Some(id)) = (record.app_name, record.app_bundle_id) {
-                if names.contains(&name) {
-                    let bundle = bundles.entry(name).or_insert_with(|| Some(id.clone()));
-                    if bundle.as_deref() != Some(id.as_str()) {
-                        // Never pick one of two distinct applications sharing a visible name.
-                        *bundle = None;
-                    }
-                }
-            }
-        }
-        let requests = names
+        let recorded_apps = core
+            .list_history()
+            .unwrap_or_default()
             .into_iter()
-            .map(|name| {
-                let bundle = bundles.remove(&name).flatten();
-                (name, bundle)
-            })
-            .collect();
-        Ok(crate::activity_app_icons::macos_icons(&app, requests).await)
+            .filter_map(|record| Some((record.app_name?, record.app_bundle_id?)));
+        Ok(crate::activity_app_icons::macos_icons(&app, names, recorded_apps).await)
     }
     #[cfg(target_os = "windows")]
     {

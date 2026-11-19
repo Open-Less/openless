@@ -18,6 +18,7 @@ import { QaComposer, type QaStatus } from './QaComposer';
 import { QaStreamingResponse } from './QaStreamingResponse';
 import { useChatPanelLifecycle } from './chat/lifecycle';
 import {
+  chatPanelFocusKeyboard,
   listenQaDismissed,
   listenQaLevelChanges,
   listenQaStateChanges,
@@ -1004,12 +1005,14 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
               selectionPreview={selectionPreview}
               busy={inputBusy}
               micBusy={micBusy}
-              embedded={embedded}
               editInstructionMode={editInstructionMode}
               onEditInstructionModeChange={onEditInstructionModeChange}
               onChange={setComposerText}
               onSubmit={onSubmitText}
               onToggleRecording={onToggleRecording}
+              onRequestKeyboard={() => {
+                if (isTauri && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
+              }}
               onCancelTurn={() => void cancelTurnForSession(currentSession)}
               cancelBusy={cancelBusy}
               available={isTauri}

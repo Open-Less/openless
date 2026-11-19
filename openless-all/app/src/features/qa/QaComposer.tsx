@@ -1,6 +1,5 @@
 import { MicIcon, PencilLineIcon, QuoteIcon, SquareIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { chatPanelFocusKeyboard } from '../../api/qa';
 import { QaPromptBox } from './QaPromptBox';
 import { VoiceWaveform } from './chat/VoiceWaveform';
 
@@ -14,13 +13,13 @@ interface QaComposerProps {
   selectionPreview: string;
   busy: boolean;
   micBusy: boolean;
-  embedded: boolean;
   available: boolean;
   editInstructionMode: boolean;
   onEditInstructionModeChange: (enabled: boolean) => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onToggleRecording: () => void;
+  onRequestKeyboard: () => void;
   onCancelTurn: () => void;
   cancelBusy: boolean;
 }
@@ -33,13 +32,13 @@ export function QaComposer({
   selectionPreview,
   busy,
   micBusy,
-  embedded,
   available,
   editInstructionMode,
   onEditInstructionModeChange,
   onChange,
   onSubmit,
   onToggleRecording,
+  onRequestKeyboard,
   onCancelTurn,
   cancelBusy,
 }: QaComposerProps) {
@@ -69,9 +68,7 @@ export function QaComposer({
       }
       onChange={onChange}
       onSubmit={onSubmit}
-      onRequestKeyboard={() => {
-        if (available && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
-      }}
+      onRequestKeyboard={onRequestKeyboard}
       actions={
         <>
           <button
