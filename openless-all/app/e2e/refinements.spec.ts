@@ -31,8 +31,10 @@ test('shortcut search remains visible without focus', async ({ page }) => {
   const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
   await expect(search).toHaveCSS('clip-path', 'none');
   await expect(search).toHaveCSS('appearance', 'none');
-  await expect(search).toHaveCSS('border-radius', '16px');
-  const colors = await search.evaluate((element) => ({
+  await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const frame = search.locator('..');
+  await expect(frame).toHaveCSS('border-radius', '12px');
+  const colors = await frame.evaluate((element) => ({
     search: getComputedStyle(element).backgroundColor,
     page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
       .backgroundColor,

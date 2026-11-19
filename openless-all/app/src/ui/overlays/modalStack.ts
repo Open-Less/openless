@@ -80,8 +80,8 @@ export function createModalStack() {
         document.removeEventListener('keydown', onKeydown);
         document.removeEventListener('focusin', onFocusIn);
       }
-      listeners.forEach((listener) => listener());
     }
+    if (before !== top) listeners.forEach((listener) => listener());
   }
 
   function onFocusIn(event: FocusEvent) {
@@ -128,6 +128,7 @@ export function createModalStack() {
     captureKey() {
       clickTarget = null;
     },
+    getTopOverlay: () => top?.overlay ?? null,
     getReturnFocus() {
       // Safari mouse clicks do not focus buttons. Keep the initiating control
       // for the current surface so dismissal can return to it in that engine.

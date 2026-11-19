@@ -1,7 +1,7 @@
+import { TextField } from '../../ui/controls/TextField';
 import type { RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession } from '../../api/contracts';
-import { Icon } from '../../components/Icon';
 import { formatHistoryTime } from '../../lib/localeFormat';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
@@ -60,39 +60,15 @@ export function HistoryList({
             padding: '12px 14px',
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 10px',
-              fontSize: 12,
-              border: '0.5px solid var(--ol-line-strong)',
-              borderRadius: 'var(--ol-control-radius)',
-              background: 'var(--ol-surface-2)',
-              color: 'var(--ol-ink-3)',
-            }}
-          >
-            <Icon name="search" size={12} />
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={query}
-              onChange={(e) => onQuery(e.target.value)}
-              placeholder={t('history.searchPlaceholder', { shortcut: searchShortcut })}
-              aria-label={t('history.searchPlaceholder', { shortcut: searchShortcut })}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                outline: 'none',
-                border: 0,
-                background: 'transparent',
-                fontSize: 12,
-                color: 'var(--ol-ink-1)',
-                fontFamily: 'inherit',
-              }}
-            />
-          </div>
+          <TextField
+            ref={searchInputRef}
+            type="search"
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder={t('history.searchPlaceholder', { shortcut: searchShortcut })}
+            aria-label={t('history.searchPlaceholder', { shortcut: searchShortcut })}
+            style={{ fontSize: 12 }}
+          />
         </div>
         <div style={{ padding: 6 }}>
           {loading && (

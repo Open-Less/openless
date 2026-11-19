@@ -1,0 +1,106 @@
+.ol-field {
+  --ol-corner-radius: 12px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+  padding-inline: 11px;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--ol-corner-radius);
+  background: var(--ol-field-bg);
+  color: var(--ol-ink);
+  box-shadow: var(--ol-field-shadow);
+  font-size: 13.5px;
+  cursor: text;
+  transition:
+    background-color 160ms var(--ol-motion-quick),
+    border-color 160ms var(--ol-motion-quick);
+}
+.ol-field:focus-within {
+  border-color: var(--ol-blue);
+}
+.ol-field:has(.ol-field-control[aria-invalid='true']) {
+  border-color: var(--ol-err);
+}
+.ol-field:has(.ol-field-control:disabled) {
+  opacity: 0.6;
+}
+.ol-field > .ol-field-control {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+}
+/* The frame owns the focus indicator, including for comboboxes inside a dialog. */
+.ol-field > .ol-field-control:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.ol-field-control::placeholder {
+  color: var(--ol-ink-3);
+  opacity: 1;
+}
+.ol-field > .ol-field-secret {
+  font-family: var(--ol-font-mono);
+}
+.ol-field-secret::placeholder {
+  font-family: var(--ol-font-body);
+}
+.ol-field-secret::-ms-reveal {
+  display: none;
+}
+.ol-field-search-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  color: var(--ol-ink-3);
+  pointer-events: none;
+}
+.ol-field:has(> .ol-field-visibility) {
+  padding-inline-end: 3px;
+}
+.ol-field > .ol-field-visibility {
+  --ol-corner-radius: 8px;
+  display: grid;
+  flex: 0 0 30px;
+  height: min(30px, 100%);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ol-corner-radius);
+  background: transparent;
+  color: var(--ol-ink-3);
+  transition: color 160ms var(--ol-motion-quick);
+}
+.ol-field > .ol-field-visibility:hover:not(:disabled) {
+  color: var(--ol-ink);
+}
+.ol-field > .ol-field-visibility:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: -2px;
+}
+@media (prefers-contrast: more) {
+  .ol-field:not(:focus-within):not(:has(.ol-field-control[aria-invalid='true'])) {
+    border-color: var(--ol-ink-3);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-field,
+  .ol-field > .ol-field-visibility {
+    transition: none;
+  }
+}

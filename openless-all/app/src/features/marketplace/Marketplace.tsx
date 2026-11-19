@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
@@ -750,36 +751,15 @@ export function Marketplace() {
             <>
               {/* Top row: search (left) + username/login (center) + close × (right) */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                {/* Search box (leftmost) */}
-                <div
-                  style={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '6px 10px',
-                    border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 'var(--ol-r-md)',
-                    background: 'var(--ol-surface)',
-                  }}
-                >
-                  <Icon name="search" size={14} stroke="var(--ol-ink-3)" />
-                  <input
-                    type="search"
-                    placeholder={t('marketplace.myPacks.searchPlaceholder')}
-                    value={myPacksQuery}
-                    onChange={(e) => setMyPacksQuery(e.target.value)}
-                    autoFocus
-                    style={{
-                      flex: 1,
-                      outline: 'none',
-                      border: 0,
-                      background: 'transparent',
-                      fontSize: 13,
-                      color: 'var(--ol-ink-1)',
-                    }}
-                  />
-                </div>
+                <TextField
+                  type="search"
+                  placeholder={t('marketplace.myPacks.searchPlaceholder')}
+                  aria-label={t('marketplace.myPacks.searchPlaceholder')}
+                  value={myPacksQuery}
+                  onChange={(e) => setMyPacksQuery(e.target.value)}
+                  autoFocus
+                  style={{ flex: 1 }}
+                />
                 {/* Username + login chip. Click → GitHub OAuth Device Flow.
                 Clicking again while signed in restarts the flow (account switch). */}
                 <button

@@ -78,7 +78,7 @@ pub(super) async fn handle_pressed_edge(
         // second-stage follow-up flow. Only the explicit companion chord asks.
         if let Ok(qa) = inner.backend.services().qa.snapshot().await {
             if crate::recording_companion::claimed() || matches!(qa.phase,
-                openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
+                openless_core::QaPhase::Recording) { return; }
         }
     }
     match dispatch(
@@ -102,7 +102,7 @@ pub(super) async fn handle_released_edge(
 ) {
     if inner.qa_context.is_panel_visible() {
         if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if matches!(qa.phase, openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
+            if qa.phase == openless_core::QaPhase::Recording { return; }
         }
     }
     match dispatch(

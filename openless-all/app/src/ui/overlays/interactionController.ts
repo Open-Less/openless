@@ -76,7 +76,18 @@ export function createInteractionController() {
       !item.progress &&
       !item.actionLabel &&
       !item.severity &&
-      (item.state === 'saved' || item.state === 'deleted')
+      (item.variant === 'success' ||
+        (!item.variant && (item.state === 'saved' || item.state === 'deleted')))
+    );
+  }
+
+  function supersedesReceipt(item: NotificationOptions, entry: NotificationOptions) {
+    if (!isTransientSuccess(entry)) return false;
+    if (isTransientSuccess(item)) return true;
+    // Starting another ordinary save retires the previous save receipt before
+    // insertion. It must not move under the new toast or hide other active jobs.
+    return (
+      item.state === 'saving' && !item.actionLabel && !item.progress && entry.state === 'saved'
     );
   }
 
@@ -84,8 +95,7 @@ export function createInteractionController() {
     return notifications.filter((entry) => {
       if (keepId && entry.id === item.id) return true;
       const replaced =
-        (item.key !== undefined && entry.key === item.key) ||
-        (isTransientSuccess(item) && isTransientSuccess(entry));
+        (item.key !== undefined && entry.key === item.key) || supersedesReceipt(item, entry);
       if (replaced) clearTimer(entry.id);
       return !replaced;
     });

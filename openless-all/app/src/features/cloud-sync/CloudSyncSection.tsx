@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { NotificationHandle } from '../../api/interaction';
@@ -242,6 +243,8 @@ export function CustomSyncServerSection() {
       window.clearInterval(timer);
     };
   }, [status?.syncState]);
+  const tokenId = useId();
+  const originId = useId();
   const working = busy || loading || status?.syncState === 'syncing';
   const save = () => {
     if (saving.current || working || !prefs) return;
@@ -274,15 +277,6 @@ export function CustomSyncServerSection() {
         if (alive.current) setBusy(false);
       });
   };
-  const inputStyle = {
-    width: '100%',
-    boxSizing: 'border-box' as const,
-    border: '1px solid var(--ol-line-strong)',
-    borderRadius: 'var(--ol-r-md)',
-    background: 'var(--ol-control-solid)',
-    color: 'var(--ol-ink)',
-    padding: '10px 12px',
-  };
   return (
     <Card>
       <div
@@ -291,28 +285,29 @@ export function CustomSyncServerSection() {
       >
         <strong>{t('cloudSyncE2ee.customServerTitle')}</strong>
         <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.customServerHint')}</p>
-        <label>
-          {t('cloudSyncE2ee.customServerOrigin')}
-          <input
+        <div className="ol-sync-form-field">
+          <label htmlFor={originId}>{t('cloudSyncE2ee.customServerOrigin')}</label>
+          <TextField
+            id={originId}
             type="text"
+
             value={origin}
             onChange={(event) => setOrigin(event.currentTarget.value)}
             placeholder="https://sync.example.com/"
             disabled={working}
-            style={inputStyle}
           />
-        </label>
-        <label>
-          {t('cloudSyncE2ee.customServerToken')}
-          <input
+        </div>
+        <div className="ol-sync-form-field">
+          <label htmlFor={tokenId}>{t('cloudSyncE2ee.customServerToken')}</label>
+          <TextField
+            id={tokenId}
             type="password"
             value={token}
             onChange={(event) => setToken(event.currentTarget.value)}
             autoComplete="off"
             disabled={working}
-            style={inputStyle}
           />
-        </label>
+        </div>
         <Btn size="sm" variant="blue" disabled={working || !prefs || !status} onClick={save}>
           {t('cloudSyncE2ee.customServerSave')}
         </Btn>
@@ -324,6 +319,7 @@ export function CustomSyncServerSection() {
 export function CloudSyncSection() {
   const { t, i18n } = useTranslation();
   const { notify, confirm } = useInteraction('cloud-sync');
+  const section = useRef<HTMLElement>(null);
   const modalActive = useModalActive();
   const dialogDescriptionId = useId();
   const previewScenario = getCloudSyncPreviewScenario();
@@ -333,7 +329,7 @@ export function CloudSyncSection() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cancelRequestedTask, setCancelRequestedTask] = useState<string | null>(null);
-  const cancelling = useRef<string | null>(null);
+  const requestedCancellation = useRef<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const currentDialog = useRef(dialog);
@@ -344,6 +340,7 @@ export function CloudSyncSection() {
   const current = useRef<EncryptedSyncStatus | null>(null);
   const watermark = useRef('0');
   const alive = useRef(false);
+  const subscriptionsReady = useRef(false);
   const loadSequence = useRef(0);
   const actionSequence = useRef(0);
   const activeAction = useRef<number | null>(null);
@@ -503,15 +500,18 @@ export function CloudSyncSection() {
       try {
         if (isTauriHost()) {
           const subscriptions = [
-            () => listenEncryptedSyncStateChanges((event) => {
-              if (!disposed) eventsRef.current.state(event);
-            }),
-            () => listenEncryptedSyncConflicts((event) => {
-              if (!disposed) eventsRef.current.conflict(event);
-            }),
-            () => listenEncryptedSyncRestores((event) => {
-              if (!disposed) eventsRef.current.restored(event);
-            }),
+            () =>
+              listenEncryptedSyncStateChanges((event) => {
+                if (!disposed) eventsRef.current.state(event);
+              }),
+            () =>
+              listenEncryptedSyncConflicts((event) => {
+                if (!disposed) eventsRef.current.conflict(event);
+              }),
+            () =>
+              listenEncryptedSyncRestores((event) => {
+                if (!disposed) eventsRef.current.restored(event);
+              }),
           ];
           for (const subscribe of subscriptions) {
             const stop = await subscribe();
@@ -525,11 +525,15 @@ export function CloudSyncSection() {
       } catch (error) {
         if (!disposed) showError(error);
       }
-      if (!disposed) await loadRef.current();
+      if (!disposed) {
+        subscriptionsReady.current = true;
+        await loadRef.current();
+      }
     })();
     return () => {
       disposed = true;
       alive.current = false;
+      subscriptionsReady.current = false;
       loadSequence.current += 1;
       actionSequence.current += 1;
       unlisten.forEach((stop) => stop());
@@ -537,13 +541,15 @@ export function CloudSyncSection() {
     };
   }, []);
   useEffect(() => {
-    if (alive.current) void loadRef.current();
+    // The first usable status must not race the subscription for the native task ID.
+    if (subscriptionsReady.current) void loadRef.current();
   }, [loginHint]);
 
-  const perform = async (work: (valid: () => boolean) => Promise<void>) => {
+  const perform = async (work: (valid: () => boolean) => Promise<void>, syncing = false) => {
     if (activeAction.current !== null || current.current?.syncState === 'syncing') return;
     const action = ++actionSequence.current;
     activeAction.current = action;
+    syncIntent.current = syncing;
     notificationSettled.current = false;
     setBusy(true);
     setNotice(null);
@@ -561,7 +567,10 @@ export function CloudSyncSection() {
         void loadRef.current();
       }
     } finally {
-      if (activeAction.current === action) activeAction.current = null;
+      if (activeAction.current === action) {
+        activeAction.current = null;
+        if (!awaitingSync.current) syncIntent.current = false;
+      }
       if (alive.current) setBusy(false);
     }
   };
@@ -632,7 +641,6 @@ export function CloudSyncSection() {
     signOut = false,
     syncing = false,
   ) => {
-    syncIntent.current = syncing;
     void perform(async (valid) => {
       const next = await request();
       if (!valid() || !acceptStatus(next)) return;
@@ -662,9 +670,7 @@ export function CloudSyncSection() {
         }
         if (!syncing || next.syncState === 'ready') announce(syncing ? 'synced' : 'done');
       }
-    }).finally(() => {
-      if (!awaitingSync.current) syncIntent.current = false;
-    });
+    }, syncing);
   };
 
   const submitPassword = (value: PasswordSubmission) => {
@@ -735,19 +741,20 @@ export function CloudSyncSection() {
     });
   };
   const cancelTask = async (task: string) => {
-    if (current.current?.taskId !== task || cancelling.current === task) return;
-    cancelling.current = task;
+    if (current.current?.taskId !== task || requestedCancellation.current === task) return;
+    requestedCancellation.current = task;
     setCancelRequestedTask(task);
     try {
-      const next = await cloudSyncE2eeCancel(task);
-      if (alive.current) acceptStatus(next);
+      // This only acknowledges the request. The running command/event owns the outcome.
+      await cloudSyncE2eeCancel(task);
     } catch (error) {
+      if (requestedCancellation.current === task) requestedCancellation.current = null;
       if (alive.current && current.current?.taskId === task) {
         setCancelRequestedTask((value) => (value === task ? null : value));
-        showError(error);
+        // A task can finish before a click reaches Core. Refresh rather than replacing its result.
+        if (encryptedSyncErrorKey(error) === 'changed') void loadRef.current();
+        else showError(error);
       }
-    } finally {
-      if (cancelling.current === task) cancelling.current = null;
     }
   };
   const cancelTaskRef = useRef(cancelTask);
@@ -768,10 +775,11 @@ export function CloudSyncSection() {
   const sectionHeaderAction = t(
     sectionHeaderTask ? 'cloudSyncE2ee.cancelTask' : 'cloudSyncE2ee.refresh',
   );
+  const syncing = syncIntent.current;
   const progressMessage = t(
     cancelRequested
       ? 'cloudSyncE2ee.cancelRequested'
-      : syncIntent.current
+      : syncing
         ? 'cloudSyncE2ee.syncing'
         : 'cloudSyncE2ee.working',
   );
@@ -782,18 +790,21 @@ export function CloudSyncSection() {
       return;
     }
     if (notificationSettled.current) return;
-    // Global notification actions are outside the modal focus scope.
-    const canCancel = taskId !== null && !cancelRequested && !modalActive;
+    const canCancel = taskId !== null && !dialog;
+    const cancelLabel = t(syncing ? 'cloudSyncE2ee.cancelSync' : 'cloudSyncE2ee.cancelTask');
     const options = {
       message: progressMessage,
       state: 'saving' as const,
-      progress: true,
-      actionLabel: canCancel ? t('cloudSyncE2ee.cancelTask') : undefined,
+      progress: !syncing,
+      actionLabel: canCancel ? cancelLabel : undefined,
+      actionStyle: 'cancel-icon' as const,
+      actionDisabled: cancelRequested,
+      actionOwner: () => section.current,
       onAction: canCancel ? () => void cancelTaskRef.current(taskId) : undefined,
     };
     if (progressNotification.current) progressNotification.current.update(options);
     else progressNotification.current = notify({ ...options, key: 'cloud-sync-operation' });
-  }, [working, taskId, cancelRequested, modalActive, progressMessage, notify, t]);
+  }, [working, taskId, cancelRequested, dialog, syncing, progressMessage, notify, t]);
   useEffect(
     () => () => {
       progressNotification.current?.dismiss();
@@ -848,7 +859,7 @@ export function CloudSyncSection() {
 
   return (
     <Card>
-      <section className="ol-cloud-sync" aria-labelledby="cloud-sync-e2ee-title">
+      <section ref={section} className="ol-cloud-sync" aria-labelledby="cloud-sync-e2ee-title">
         <header>
           <span className="ol-cloud-sync-icon">
             <Icon name="cloud" size={21} />
@@ -1130,7 +1141,9 @@ export function CloudSyncSection() {
                   : t(`cloudSyncE2ee.${dialogTitle}`)
               }
               descriptionId={
-                dialog.kind === 'consent' || dialog.kind === 'create' ? dialogDescriptionId : undefined
+                dialog.kind === 'consent' || dialog.kind === 'create'
+                  ? dialogDescriptionId
+                  : undefined
               }
               busy={working}
               onClose={closeDialog}
@@ -1408,7 +1421,11 @@ export function PasswordForm({
           />
           {creating && (
             <SyncPasswordField
-              label={t(mode === 'create' ? 'cloudSyncE2ee.confirmSyncPassword' : 'cloudSyncE2ee.confirmPassword')}
+              label={t(
+                mode === 'create'
+                  ? 'cloudSyncE2ee.confirmSyncPassword'
+                  : 'cloudSyncE2ee.confirmPassword',
+              )}
               value={confirmation}
               onChange={setConfirmation}
               autoComplete={preview ? 'off' : 'new-password'}

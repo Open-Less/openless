@@ -1,7 +1,7 @@
 //! Noninteractive feedback on the existing shared capsule surface.
 use openless_core::{
-    CapsulePayload, CapsuleState, CapsuleStyle, DictationPhase, VoiceActivationPhase,
-    VoiceActivationStateSnapshot,
+    CapsulePayload, CapsuleState, CapsuleStyle, DictationInsertStatus, DictationPhase,
+    DictationResult, DictationStateSnapshot, VoiceActivationPhase, VoiceActivationStateSnapshot,
 };
 
 pub(crate) const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
@@ -12,6 +12,43 @@ pub(crate) fn core_capsule_hide_delay(state: CapsuleState) -> Option<u64> {
         CapsuleState::Cancelled => Some(0),
         _ => None,
     }
+}
+
+pub(crate) fn dictation_completion_payload(
+    result: &DictationResult,
+    current: &DictationStateSnapshot,
+    style: CapsuleStyle,
+) -> Option<CapsulePayload> {
+    // The event can arrive after its session reset, but must never reclaim a
+    // successor's capsule while that successor is still starting or recording.
+    if current
+        .session_id
+        .is_some_and(|session| session != result.session_id)
+    {
+        return None;
+    }
+    let message = match &result.inserted {
+        DictationInsertStatus::Inserted => "已输入",
+        DictationInsertStatus::PasteSent => "已发送粘贴，请确认",
+        DictationInsertStatus::CopiedFallback => "已复制，请手动粘贴",
+        DictationInsertStatus::NotRequested => "处理完成",
+    };
+    Some(CapsulePayload {
+        session_id: Some(result.session_id.to_string()),
+        state: CapsuleState::Done,
+        level: 0.0,
+        elapsed_ms: result.duration_ms,
+        message: Some(message.into()),
+        inserted_chars: Some(
+            u32::try_from(result.polished_text.chars().count()).unwrap_or(u32::MAX),
+        ),
+        translation: false,
+        operating: false,
+        warming: false,
+        capsule_style: style,
+        selection_polish: false,
+        qa: false,
+    })
 }
 
 #[derive(Default)]
