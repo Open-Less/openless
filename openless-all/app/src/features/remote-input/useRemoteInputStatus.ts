@@ -7,7 +7,7 @@ import {
   type RemoteInputStartError,
   type RemoteInputStatus,
 } from '../../api/input';
-import { isTauriHost } from '../../runtime/environment';
+import { isNativeDesktopHost } from '../../runtime/environment';
 
 export function useRemoteInputStatus(locale: string) {
   const [status, setStatus] = useState<RemoteInputStatus | null>(null);
@@ -39,7 +39,7 @@ export function useRemoteInputStatus(locale: string) {
       else stop();
     };
     void (async () => {
-      if (isTauriHost()) {
+      if (isNativeDesktopHost()) {
         const listeners = await Promise.allSettled([
           listenRemoteInputStatusChanges(() => {
             if (!active) return;

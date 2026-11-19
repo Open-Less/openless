@@ -117,8 +117,10 @@ fn main() {
             println!("[linux-web] 宿主桥 socket: {socket}");
         }
     }
-    let start_minimized = host.backend.as_ref().is_some_and(|b| b.get_preferences().start_minimized);
-    println!("OPENLESS_READY={} {}", port, u8::from(start_minimized));
+    // The window layer only needs the port: whether to hide on launch is decided
+    // by the autostart entry (`--minimized`), never by a preference, so a stale
+    // setting cannot make a manual launch look like a failed start.
+    println!("OPENLESS_READY={port}");
     println!("[linux-web] serving {} at {}", dist.display(), url);
 
     // 再无头 GUI 分支：窗口渲染由 Qt 宿主负责，这里只提供 /api 与静态资源。
@@ -609,6 +611,60 @@ fn persist_preferences(
     Ok(())
 }
 
+/// Core permission state → the camelCase strings the settings page expects.
+fn permission_status(state: openless_core::PermissionState) -> &'static str {
+    match state {
+        openless_core::PermissionState::Granted => "granted",
+        openless_core::PermissionState::Denied => "denied",
+        openless_core::PermissionState::Restricted => "restricted",
+        openless_core::PermissionState::NoDevice => "noDevice",
+        openless_core::PermissionState::Unsupported => "notApplicable",
+        openless_core::PermissionState::Unknown => "notDetermined",
+    }
+}
+
+/// Parse a UUID command argument into a Core session id.
+fn parse_session_arg(args: &Value, key: &str) -> Result<openless_core::SessionId, String> {
+    let raw = required_str(args, key)?;
+    let uuid = uuid::Uuid::parse_str(raw).map_err(|error| error.to_string())?;
+    Ok(openless_core::SessionId::from_uuid(uuid))
+}
+
+/// 原生文件选择：Linux 宿主没有 Tauri 的 dialog 插件，用桌面自带的 kdialog。
+/// 取消、未装 kdialog、或没有图形会话时返回 None —— 前端会当成用户取消。
+fn kdialog_output(args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("kdialog")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty()).then_some(path)
+}
+
+fn pick_file_with_kdialog(filters: &[&str]) -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let mut args = vec!["--title", "OpenLess", "--getopenfilename", home.as_str()];
+    args.extend_from_slice(filters);
+    kdialog_output(&args)
+}
+
+fn pick_save_path_with_kdialog(file_name: &str) -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let safe_name = file_name.replace(['/', '\\'], "_");
+    let initial = format!("{home}/{safe_name}");
+    kdialog_output(&[
+        "--title",
+        "OpenLess",
+        "--getsavefilename",
+        &initial,
+        "Style Pack ZIP (*.zip)",
+    ])
+}
+
 fn shortcut_arg(args: &Value, optional: bool) -> Result<Option<openless_core::shared_types::ShortcutBinding>, String> {
     let raw = args.get("binding").cloned().unwrap_or(Value::Null);
     if raw.is_null() {
@@ -860,11 +916,9 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
                 .unwrap_or_default();
             let revision = backend.snapshot().preferences_revision;
-            let draft = openless_core::preference_patch::patch_preferences(
-                &backend.get_preferences(),
-                &edits,
-            )
-            .map_err(|error| error.to_string())?;
+            let previous = backend.get_preferences();
+            let draft = openless_core::preference_patch::patch_preferences(&previous, &edits)
+                .map_err(|error| error.to_string())?;
             backend
                 .update_settings(
                     draft,
@@ -875,8 +929,20 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     runtime,
                 )
                 .map_err(|error| error.to_string())?;
+            let updated = backend.get_preferences();
+            // "启动时最小化" only affects the login entry on Linux: manual
+            // launches must always show the window, otherwise clicking the app
+            // icon looks like a failed start. Re-sync on every save so enabling
+            // autostart while the toggle is off writes a visible-window entry.
+            if let Ok(manager) = openless_linux_host::AutostartManager::detect_gui() {
+                if manager.is_enabled().unwrap_or(false) {
+                    if let Err(error) = manager.sync_minimized(updated.start_minimized) {
+                        log::warn!("[linux-web] update autostart minimized flag failed: {error}");
+                    }
+                }
+            }
             Ok(json!({
-                "preferences": serde_json::to_value(backend.get_preferences()).unwrap_or(Value::Null),
+                "preferences": serde_json::to_value(updated).unwrap_or(Value::Null),
                 "revision": backend.snapshot().preferences_revision,
             }))
         }
@@ -891,6 +957,173 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .list_activity()
                 .map_err(|error| error.to_string())?;
             serde_json::to_value(days).map_err(|error| error.to_string())
+        }
+        // Overview heatmap's per-app breakdown. Without this the Linux page
+        // silently fell back to "unsupported" while the same data existed.
+        "get_activity_apps" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let year = _args.get("year").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let apps = backend
+                .list_activity_apps(year)
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(apps).map_err(|error| error.to_string())
+        }
+        // ── QA 面板：停止本轮录音 / 取消本轮 ─────────────────────────────
+        "qa_stop_recording" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let snapshot = runtime
+                .block_on(backend.services().qa.snapshot())
+                .map_err(|error| error.to_string())?;
+            // Only this generation: toggling again could start or stop a newer turn.
+            if snapshot.phase == openless_core::QaPhase::Recording {
+                if let Some(session_id) = snapshot.session_id {
+                    runtime
+                        .block_on(backend.services().qa.stop_recording(session_id))
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            Ok(Value::Null)
+        }
+        "qa_cancel_turn" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime
+                .block_on(backend.services().qa.cancel(None))
+                .map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        }
+        // ── 选区语音（QA 编辑预览 / 意图选择）──────────────────────────
+        "get_selection_voice_intent_prompt" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let snapshot = runtime
+                .block_on(backend.services().selection_voice.snapshot())
+                .map_err(|error| error.to_string())?;
+            Ok(snapshot.intent_prompt.map_or(Value::Null, |prompt| {
+                json!({ "instruction": prompt.instruction, "sourceText": prompt.source_text })
+            }))
+        }
+        "confirm_selection_voice_intent_prompt" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let intent = required_str(_args, "intent")?.to_string();
+            let service = &backend.services().selection_voice;
+            let snapshot = runtime
+                .block_on(service.snapshot())
+                .map_err(|error| error.to_string())?;
+            let session_id = snapshot
+                .intent_prompt
+                .map(|prompt| prompt.session_id)
+                .ok_or_else(|| "selectionVoiceIntentPromptUnavailable".to_string())?;
+            let disposition = runtime
+                .block_on(service.confirm_intent(session_id, intent))
+                .map_err(|error| error.message)?;
+            let route = runtime
+                .block_on(service.route_disposition(disposition))
+                .map_err(|error| error.message)?;
+            if let openless_core::SelectionVoiceRoute::ReadyToApply { preview } = route {
+                // Auto-apply mode: replace the selection directly, then settle
+                // the preview ticket so revert/undo keeps working.
+                let ticket = service
+                    .begin_preview_apply(Some(session_id), preview.text.clone())
+                    .map_err(|error| error.message)?;
+                let target = ticket.session_id.to_string();
+                match openless_linux_host::apply_selection_voice_target(
+                    &target,
+                    &ticket.source_text,
+                    &ticket.replacement_text,
+                ) {
+                    Ok(()) => {
+                        runtime
+                            .block_on(service.finish_preview_apply(
+                                ticket.ticket_id,
+                                openless_core::SelectionVoiceApplyOutcome::Inserted,
+                            ))
+                            .map_err(|error| error.message)?;
+                    }
+                    Err(error) => {
+                        let _ = runtime.block_on(service.finish_preview_apply(
+                            ticket.ticket_id,
+                            openless_core::SelectionVoiceApplyOutcome::Failed,
+                        ));
+                        return Err(error.message);
+                    }
+                }
+            }
+            Ok(Value::Null)
+        }
+        "cancel_selection_voice_intent_prompt" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let service = &backend.services().selection_voice;
+            let session_id = runtime
+                .block_on(service.snapshot())
+                .map_err(|error| error.to_string())?
+                .session_id;
+            if let Some(session_id) = session_id {
+                runtime
+                    .block_on(service.cancel(Some(session_id)))
+                    .map_err(|error| error.message)?;
+            }
+            Ok(Value::Null)
+        }
+        "get_selection_voice_preview" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let qa_turn = parse_session_arg(_args, "qaSessionId")?;
+            let qa = runtime
+                .block_on(backend.services().qa.snapshot())
+                .map_err(|error| error.to_string())?;
+            if qa.session_id != Some(qa_turn) {
+                return Err("selectionVoicePreviewUnavailable".into());
+            }
+            let owner = qa
+                .conversation_id
+                .ok_or_else(|| "selectionVoicePreviewUnavailable".to_string())?;
+            let preview = runtime
+                .block_on(backend.services().selection_voice.preview(Some(owner)))
+                .map_err(|error| error.message)?;
+            Ok(preview.map_or(Value::Null, |preview| {
+                json!({
+                    "text": preview.text,
+                    "sourceText": preview.source_text,
+                    "summary": preview.summary,
+                })
+            }))
+        }
+        "confirm_selection_voice_preview" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let text = required_str(_args, "text")?.to_string();
+            let qa_turn = parse_session_arg(_args, "qaSessionId")?;
+            let qa = backend.services().qa.as_ref();
+            let ticket = runtime
+                .block_on(qa.begin_edit_preview_apply(qa_turn, text))
+                .map_err(|error| error.message)?;
+            let outcome = match openless_linux_host::apply_selection_voice_target(
+                &ticket.session_id.to_string(),
+                &ticket.source_text,
+                &ticket.replacement_text,
+            ) {
+                Ok(()) => openless_core::SelectionVoiceApplyOutcome::Inserted,
+                Err(error) => {
+                    let _ = runtime.block_on(backend.services().selection_voice.finish_preview_apply(
+                        ticket.ticket_id,
+                        openless_core::SelectionVoiceApplyOutcome::Failed,
+                    ));
+                    return Err(error.message);
+                }
+            };
+            runtime
+                .block_on(backend.services().selection_voice.finish_preview_apply(ticket.ticket_id, outcome))
+                .map_err(|error| error.message)?;
+            if let Err(error) = runtime.block_on(qa.dismiss_session(qa_turn)) {
+                if error.code != openless_core::BackendErrorCode::Cancelled {
+                    return Err(error.message);
+                }
+            }
+            serde_json::to_value(outcome).map_err(|error| error.to_string())
         }
         "list_provider_descriptors" => {
             let kind = match _args.get("kind").and_then(|value| value.as_str()) {
@@ -1313,7 +1546,9 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         | "set_selection_polish_hotkey" | "set_translation_hotkey"
         | "set_switch_style_hotkey" | "set_open_app_hotkey" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
-            let optional = command != "set_dictation_hotkey" && command != "set_translation_hotkey";
+            // Only dictation is mandatory. Null clears every other shortcut,
+            // including translation, exactly as the desktop command contract does.
+            let optional = command != "set_dictation_hotkey";
             let binding = shortcut_arg(_args, optional)?;
             persist_preferences(host, backend, |prefs| match command {
                 "set_dictation_hotkey" => {
@@ -1325,15 +1560,33 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 "set_quick_note_hotkey" => prefs.quick_note_hotkey = binding.clone(),
                 "set_selection_polish_hotkey" => prefs.selection_polish_hotkey = binding.clone(),
                 "set_translation_hotkey" => {
-                    if let Some(binding) = binding.clone() {
-                        prefs.translation_hotkey = binding;
-                    }
+                    prefs.translation_hotkey = binding.clone().unwrap_or_else(openless_core::shared_types::ShortcutBinding::unassigned);
                 }
                 "set_switch_style_hotkey" => prefs.switch_style_hotkey = binding.clone(),
                 "set_open_app_hotkey" => prefs.open_app_hotkey = binding.clone(),
                 _ => {}
             })?;
             Ok(json!({ "saved": true }))
+        }
+        "cloud_sync_e2ee_refresh_backup_metadata" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_refresh_backup_metadata())
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        // ── 原生文件选择（kdialog，KDE 桌面自带）─────────────────────
+        "pick_style_pack_zip" => Ok(json!(pick_file_with_kdialog(&[
+            "Style Pack ZIP (*.zip)",
+        ]))),
+        "pick_style_pack_zip_target" => {
+            let file_name = _args
+                .get("fileName")
+                .and_then(Value::as_str)
+                .unwrap_or("style-pack.zip");
+            Ok(json!(pick_save_path_with_kdialog(file_name)))
         }
         // ── 云同步（sync / async 混用：同步直接调，async 用 block_on）─────
         "cloud_sync_e2ee_status" => {
@@ -2086,9 +2339,18 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 // Linux 没有系统级授权弹窗：申请即尝试打开一次采集设备。
                 let _ = runtime.block_on(platform.request_microphone_permission());
             }
-            match runtime.block_on(platform.microphone_permission()) {
-                Ok(snapshot) => Ok(json!({ "microphone": json_value(snapshot.microphone) })),
-                Err(error) => Err(error.to_string()),
+            // Linux has no grant prompt: whichever device PipeWire exposes is
+            // usable. Report presence rather than the adapter's "unknown",
+            // which the diagnostics row would show as an unanswered request.
+            match runtime.block_on(platform.microphone_devices()) {
+                Ok(devices) if devices.is_empty() => Ok(json!("noDevice")),
+                Ok(_) => Ok(json!("granted")),
+                Err(_) => Ok(json!(permission_status(
+                    runtime
+                        .block_on(platform.microphone_permission())
+                        .map_err(|error| error.to_string())?
+                        .microphone
+                ))),
             }
         }
         "get_remote_input_status" => {
@@ -2099,12 +2361,12 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let pin = runtime
                 .block_on(remote.read_pairing_pin())
                 .map_err(|error| error.message)?;
-            Ok(json!({
-                "status": json_value(status),
-                // SecretValue 故意没有 Serialize（避免把密钥直接扔进任何序列化路径），
-                // 这里取它的明文展示形式。
-                "pairingPin": pin.expose_secret(),
-            }))
+            // The shared settings UI expects one flat status object, not the
+            // legacy { status, pairingPin } envelope. A nested snapshot makes
+            // running/port/pin undefined and leaves the phone page unusable.
+            let mut snapshot = json_value(status);
+            snapshot["pin"] = json!(pin.expose_secret());
+            Ok(snapshot)
         }
         "set_remote_locale" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
@@ -2481,7 +2743,8 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // Linux 没有 macOS 的辅助功能授权，也没有 Windows 的 IME 状态：
         // 返回「已授权 / 非 Windows」而不是报错，否则设置页会显示成故障。
         "check_accessibility_permission" | "request_accessibility_permission" => {
-            Ok(json!("granted"))
+            // Text insertion goes through fcitx5, so there is nothing to grant.
+            Ok(json!("notApplicable"))
         }
         // 输入法后端状态（Linux 版）：前端用的还是 `WindowsImeStatus` 那个结构，
         // 但 Linux 上「后端」指的是 fcitx5 插件，所以这里给的是真实的三项：

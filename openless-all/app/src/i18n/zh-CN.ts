@@ -1541,6 +1541,7 @@ export const zhCN = {
       startupGroupTitle: '启动',
       startMinimizedLabel: '启动时静默运行',
       startMinimizedDesc: '所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。',
+      startMinimizedDescLinux: '只影响开机自启：自启时在后台运行，手动打开仍会显示主窗口。',
       autoUpdateCheckLabel: '自动检查更新',
       autoUpdateCheckDesc: '启动时及每 60 分钟自动检查更新。',
       marketplaceGroupTitle: '风格市场',

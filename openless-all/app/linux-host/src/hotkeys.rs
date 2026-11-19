@@ -48,6 +48,9 @@ pub enum LinuxHotkeyEvent {
     TranslationPressed {
         symbol: u32,
         states: u32,
+        /// A modifier binding emits both edges. Only press arms translation;
+        /// treating key-up as another press armed it after the dictation ended.
+        pressed: bool,
     },
     SwitchStylePressed,
     OpenAppPressed,
@@ -308,8 +311,8 @@ fn event_from_signal(
         ("QaShortcutEvent", true) => Some(LinuxHotkeyEvent::QaPressed),
         ("QuickNoteEvent", true) => Some(LinuxHotkeyEvent::QuickNotePressed),
         ("SelectionPolishEvent", true) => Some(LinuxHotkeyEvent::SelectionPolishPressed),
-        ("TranslationModifierEvent", true) => {
-            Some(LinuxHotkeyEvent::TranslationPressed { symbol, states })
+        ("TranslationModifierEvent", pressed) => {
+            Some(LinuxHotkeyEvent::TranslationPressed { symbol, states, pressed })
         }
         ("SwitchStyleEvent", true) => Some(LinuxHotkeyEvent::SwitchStylePressed),
         ("OpenAppEvent", true) => Some(LinuxHotkeyEvent::OpenAppPressed),
@@ -389,5 +392,15 @@ mod tests {
             event_from_signal("QaShortcutEvent", 0, 0, false, at, &press_ids),
             None
         );
+        // Translation modifier forwards both edges but must label them: a
+        // key-up treated as a press armed translation after dictation ended.
+        assert!(matches!(
+            event_from_signal("TranslationModifierEvent", 0xffe1, 1, true, at, &press_ids),
+            Some(LinuxHotkeyEvent::TranslationPressed { pressed: true, .. })
+        ));
+        assert!(matches!(
+            event_from_signal("TranslationModifierEvent", 0xffe1, 0, false, at, &press_ids),
+            Some(LinuxHotkeyEvent::TranslationPressed { pressed: false, .. })
+        ));
     }
 }

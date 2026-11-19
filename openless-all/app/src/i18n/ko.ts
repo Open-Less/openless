@@ -1597,6 +1597,8 @@ export const ko: typeof zhCN = {
       startMinimizedLabel: '시작 시 메인 창 숨기기',
       startMinimizedDesc:
         '모든 시작 경로에서 메인 창을 열지 않고 메뉴 막대 / 트레이에서만 실행합니다.',
+      startMinimizedDescLinux:
+        '로그인 시 자동 실행에만 적용됩니다. 직접 실행하면 기본 창이 표시됩니다.',
       autoUpdateCheckLabel: '자동 업데이트 확인',
       autoUpdateCheckDesc: '시작 시 및 60 분마다 자동 확인.',
       marketplaceGroupTitle: '스타일 팩 마켓플레이스',

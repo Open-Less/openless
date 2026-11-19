@@ -1607,6 +1607,8 @@ export const ja: typeof zhCN = {
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',
+      startMinimizedDescLinux:
+        'ログイン時の自動起動のみに適用されます。手動で起動した場合はメインウィンドウが表示されます。',
       autoUpdateCheckLabel: 'アップデートを自動チェック',
       autoUpdateCheckDesc: '起動時および 60 分ごとに自動チェック。',
       marketplaceGroupTitle: 'スタイルパックマーケット',

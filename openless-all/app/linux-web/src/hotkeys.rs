@@ -167,34 +167,31 @@ pub fn spawn_headless(
                             let gate = quick_note_gate.clone();
                             runtime.spawn(async move {
                                 let Ok(_guard) = gate.try_lock() else { return };
-                                let result = match backend.snapshot().dictation.session_id {
-                                    Some(id)
-                                        if backend.dictation_output_target()
-                                            == Some(
-                                                openless_core::DictationOutputTarget::QuickNote,
-                                            ) =>
-                                    {
-                                        backend.stop_dictation_session(id).await.map(|_| ())
-                                    }
+                                // Match the desktop quick-note shortcut: it can
+                                // redirect an in-progress capture (including a
+                                // still-Starting capture) into a note, not just
+                                // stop an already-labelled QuickNote session.
+                                let snapshot = backend.snapshot().dictation;
+                                let target = backend.dictation_output_target();
+                                let result = match snapshot.session_id {
+                                    Some(_) if matches!(snapshot.phase, openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording)
+                                        && matches!(target, Some(openless_core::DictationOutputTarget::QuickNote | openless_core::DictationOutputTarget::Undecided)) =>
+                                        backend.stop_dictation_with_options(openless_core::DictationStopOptions {
+                                            quick_note: Some(true),
+                                            ..Default::default()
+                                        }).await.map(|_| ()),
                                     Some(_) => return,
-                                    None => backend
-                                        .start_dictation_with_options(
-                                            openless_core::DictationStartOptions {
-                                                output_target:
-                                                    openless_core::DictationOutputTarget::QuickNote,
-                                                insert_text: false,
-                                                ..Default::default()
-                                            },
-                                        )
-                                        .await
-                                        .map(|_| ()),
+                                    None => backend.start_dictation_with_options(openless_core::DictationStartOptions {
+                                        output_target: openless_core::DictationOutputTarget::QuickNote,
+                                        ..Default::default()
+                                    }).await.map(|_| ()),
                                 };
                                 if let Err(error) = result {
                                     log::warn!("[quick note] {error}");
                                 }
                             });
                         }
-                        LinuxHotkeyEvent::TranslationPressed { .. } => {
+                        LinuxHotkeyEvent::TranslationPressed { pressed: true, .. } => {
                             if backend.snapshot().dictation.session_id.is_some() {
                                 let backend = backend.clone();
                                 runtime.spawn(async move {
@@ -205,6 +202,7 @@ pub fn spawn_headless(
                                 translation_at = Some(std::time::Instant::now());
                             }
                         }
+                        LinuxHotkeyEvent::TranslationPressed { pressed: false, .. } => {}
                     });
                     if listener.take_error().is_some() {
                         eprintln!("[linux-web] fcitx5 热键监听断开");

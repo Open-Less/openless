@@ -60,9 +60,11 @@ export function BetaChannelSection() {
       <SettingRow label={t('settings.about.betaChannelToggleLabel')}>
         <Toggle variant="flat" on={channel === 'beta'} onToggle={onToggle} />
       </SettingRow>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
-        <CheckUpdateButton channel="beta" variant="flat" autoCheckChannel={autoCheckChannel} />
-      </div>
+      {platformCaps?.linuxHost !== true && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
+          <CheckUpdateButton channel="beta" variant="flat" autoCheckChannel={autoCheckChannel} />
+        </div>
+      )}
     </Card>
   );
 }

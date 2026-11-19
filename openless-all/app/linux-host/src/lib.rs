@@ -298,13 +298,14 @@ impl LinuxHost {
                     .await?;
                 Ok(None)
             }
-            LinuxHotkeyEvent::TranslationPressed { .. } => {
+            LinuxHotkeyEvent::TranslationPressed { pressed: true, .. } => {
                 if self.backend.snapshot().dictation.phase == DictationPhase::Idle {
                     self.translation_pending
                         .store(true, std::sync::atomic::Ordering::Release);
                 }
                 Ok(None)
             }
+            LinuxHotkeyEvent::TranslationPressed { pressed: false, .. } => Ok(None),
             LinuxHotkeyEvent::SwitchStylePressed => {
                 self.backend.activate_previous_style_pack()?;
                 Ok(None)

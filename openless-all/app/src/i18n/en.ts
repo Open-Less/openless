@@ -1623,6 +1623,7 @@ export const en: typeof zhCN = {
       startupGroupTitle: 'Startup',
       startMinimizedLabel: 'Start minimized (no main window)',
       startMinimizedDesc: 'No main window on any launch path — menu bar / tray only.',
+      startMinimizedDescLinux: 'Applies to the login entry only: autostart stays in the background, while opening the app yourself still shows the main window.',
       autoUpdateCheckLabel: 'Auto-check for updates',
       autoUpdateCheckDesc: 'Check for updates on launch and every 60 minutes.',
       marketplaceGroupTitle: 'Style Pack Marketplace',

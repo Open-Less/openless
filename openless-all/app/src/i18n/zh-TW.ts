@@ -1543,6 +1543,7 @@ export const zhTW: typeof zhCN = {
       startupGroupTitle: '啟動',
       startMinimizedLabel: '啟動時靜默執行',
       startMinimizedDesc: '所有啟動路徑都不彈主視窗，僅選單欄 / 託盤執行。',
+      startMinimizedDescLinux: '只影響開機自啟：自啟時在背景執行，手動開啟仍會顯示主視窗。',
       autoUpdateCheckLabel: '自動檢查更新',
       autoUpdateCheckDesc: '啟動時及每 60 分鐘自動檢查更新。',
       marketplaceGroupTitle: '風格市場',

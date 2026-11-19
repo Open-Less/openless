@@ -185,7 +185,7 @@ pub fn plugin_event_hotkey(
         LinuxHotkeyEvent::QaPressed => LocalHotkey::Qa,
         LinuxHotkeyEvent::QuickNotePressed => LocalHotkey::QuickNote,
         LinuxHotkeyEvent::SelectionPolishPressed => LocalHotkey::SelectionPolish,
-        LinuxHotkeyEvent::TranslationPressed { symbol, states } => {
+        LinuxHotkeyEvent::TranslationPressed { symbol, states, .. } => {
             if !shortcut_event_matches(&target.translation, *symbol, *states) {
                 return None;
             }
@@ -265,7 +265,7 @@ fn shortcut_event_matches(binding: &ShortcutBinding, symbol: u32, states: u32) -
 /// private shortcut-conversion module.
 pub fn translation_hotkey_event(target: &HotkeyRuntimeTarget) -> Option<LinuxHotkeyEvent> {
     let (symbol, states) = crate::settings::shortcut_to_raw(&target.translation).ok()?;
-    Some(LinuxHotkeyEvent::TranslationPressed { symbol, states })
+    Some(LinuxHotkeyEvent::TranslationPressed { symbol, states, pressed: true })
 }
 
 /// 本地边沿与插件信号之间的去重记账。

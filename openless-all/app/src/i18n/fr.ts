@@ -1666,6 +1666,8 @@ export const fr: typeof zhCN = {
       startMinimizedLabel: 'Démarrer réduit (sans fenêtre principale)',
       startMinimizedDesc:
         'Au lancement, seule la barre des menus ou la zone de notification est affichée, jamais la fenêtre principale.',
+      startMinimizedDescLinux:
+        "Ne concerne que le démarrage automatique : l'application reste en arrière-plan, mais une ouverture manuelle affiche toujours la fenêtre principale.",
       autoUpdateCheckLabel: 'Rechercher automatiquement les mises à jour',
       autoUpdateCheckDesc: 'Recherche les mises à jour au lancement, puis toutes les 60 minutes.',
       marketplaceGroupTitle: 'Catalogue de packs de styles',

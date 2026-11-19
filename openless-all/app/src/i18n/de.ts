@@ -1655,6 +1655,8 @@ export const de: typeof zhCN = {
       startMinimizedLabel: 'Minimiert starten (ohne Hauptfenster)',
       startMinimizedDesc:
         'Zeigt bei keinem Startweg das Hauptfenster an. Nur Menüleiste / Infobereich.',
+      startMinimizedDescLinux:
+        'Gilt nur für den Autostart: Beim Anmelden läuft die App im Hintergrund, ein manueller Start zeigt weiterhin das Hauptfenster.',
       autoUpdateCheckLabel: 'Automatisch nach Updates suchen',
       autoUpdateCheckDesc: 'Sucht beim Start und alle 60 Minuten nach Updates.',
       marketplaceGroupTitle: 'Stilpaket-Marktplatz',

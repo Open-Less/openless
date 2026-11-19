@@ -1648,6 +1648,8 @@ export const es: typeof zhCN = {
       startMinimizedLabel: 'Iniciar minimizado (sin ventana principal)',
       startMinimizedDesc:
         'Al iniciar, solo se muestra la barra de menús o la bandeja del sistema, nunca la ventana principal.',
+      startMinimizedDescLinux:
+        'Solo afecta al inicio de sesión: el arranque automático queda en segundo plano, pero abrir la app manualmente sigue mostrando la ventana principal.',
       autoUpdateCheckLabel: 'Buscar actualizaciones automáticamente',
       autoUpdateCheckDesc: 'Busca actualizaciones al iniciar y cada 60 minutos.',
       marketplaceGroupTitle: 'Catálogo de paquetes de estilos',

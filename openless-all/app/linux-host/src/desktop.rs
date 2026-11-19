@@ -123,11 +123,19 @@ impl AutostartManager {
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<(), DesktopError> {
+        self.set_enabled_with(enabled, true)
+    }
+
+    /// `minimized` decides whether the login entry passes `--minimized`, i.e.
+    /// whether an autostart launch hides the main window. Manual launches are
+    /// never affected, so a stale preference cannot make the app look broken
+    /// when the user clicks its icon.
+    pub fn set_enabled_with(&self, enabled: bool, minimized: bool) -> Result<(), DesktopError> {
         if enabled {
             // Inspect first so a hostile/pre-existing symlink is never silently
             // replaced and reported as a successfully managed entry.
             let _ = self.is_enabled()?;
-            let contents = desktop_entry(&self.executable)?;
+            let contents = desktop_entry(&self.executable, minimized)?;
             atomic_write(&self.entry_path, contents.as_bytes(), Some(0o600))
         } else {
             match fs::symlink_metadata(&self.entry_path) {
@@ -149,6 +157,22 @@ impl AutostartManager {
             }
         }
     }
+
+    /// Rewrite an existing entry with the current start-minimized preference.
+    /// Missing entries are not created: autostart is still an explicit toggle.
+    pub fn sync_minimized(&self, minimized: bool) -> Result<(), DesktopError> {
+        match fs::symlink_metadata(&self.entry_path) {
+            Ok(metadata) if metadata.is_file() => {
+                let contents = desktop_entry(&self.executable, minimized)?;
+                atomic_write(&self.entry_path, contents.as_bytes(), Some(0o600))
+            }
+            Ok(_) => Err(DesktopError::InvalidInput(
+                "autostart entry exists but is not a regular file".into(),
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(io_error("inspect autostart entry", error)),
+        }
+    }
 }
 
 fn validate_executable(executable: &Path) -> Result<(), DesktopError> {
@@ -166,7 +190,7 @@ fn validate_executable(executable: &Path) -> Result<(), DesktopError> {
     Ok(())
 }
 
-fn desktop_entry(executable: &Path) -> Result<String, DesktopError> {
+fn desktop_entry(executable: &Path, minimized: bool) -> Result<String, DesktopError> {
     validate_executable(executable)?;
     let escaped = executable
         .as_os_str()
@@ -176,7 +200,8 @@ fn desktop_entry(executable: &Path) -> Result<String, DesktopError> {
         .replace('`', "\\`")
         .replace('$', "\\$");
     Ok(format!(
-        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=OpenLess\nComment=Start OpenLess in the background\nExec=\"{escaped}\" --minimized\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=OpenLess\nComment=Start OpenLess in the background\nExec=\"{escaped}\"{}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+        if minimized { " --minimized" } else { "" }
     ))
 }
 

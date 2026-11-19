@@ -941,7 +941,10 @@ export function RecordingInputSection({
         <Card>
           <SectionTitle>{t('settings.recording.startupGroupTitle')}</SectionTitle>
           <AutostartRow />
-          <SettingRow label={t('settings.recording.startMinimizedLabel')}>
+          <SettingRow
+            label={t('settings.recording.startMinimizedLabel')}
+            desc={platformCaps?.linuxHost ? t('settings.recording.startMinimizedDescLinux') : undefined}
+          >
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
           </SettingRow>
           <SettingRow label={t('settings.recording.autoUpdateCheckLabel')}>
