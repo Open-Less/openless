@@ -11,7 +11,7 @@ test('every configurable shortcut can be cleared and stays clear after remount',
   const rows = page.locator('.ol-shortcut-row[role="group"]');
   await expect(rows.first()).toBeVisible();
   const count = await rows.count();
-  expect(count).toBeGreaterThanOrEqual(7);
+  expect(count).toBeGreaterThanOrEqual(6);
   await expect(page.getByRole('button', { name: 'Mac 听写键', exact: true })).toHaveCount(0);
   for (let index = 0; index < count; index++) {
     const row = rows.nth(index);

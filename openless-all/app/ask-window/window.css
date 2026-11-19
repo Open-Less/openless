@@ -1,0 +1,75 @@
+@import 'tailwindcss' source(none);
+@source '../third_party/rare-ui';
+@custom-variant dark (&:is(.dark *));
+
+@font-face {
+  font-family: 'Open Runde';
+  src: url('../third_party/rare-ui/fonts/OpenRunde-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Open Runde';
+  src: url('../third_party/rare-ui/fonts/OpenRunde-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Open Runde';
+  src: url('../third_party/rare-ui/fonts/OpenRunde-Semibold.woff2') format('woff2');
+  font-weight: 600;
+  font-display: swap;
+}
+
+@theme inline {
+  --color-foreground: var(--foreground);
+  --font-runde: var(--font-open-runde), sans-serif;
+}
+
+html {
+  --font-open-runde: 'Open Runde';
+  --foreground: oklch(0.3211 0 0);
+  background: #fff;
+  color: #343434;
+  color: var(--foreground);
+}
+
+html.dark {
+  --foreground: oklch(0.9219 0 0);
+  background: #000;
+  color: #e5e5e5;
+  color: var(--foreground);
+}
+
+html,
+body,
+#ask-root {
+  height: 100%;
+  overflow: hidden;
+}
+
+.window-bar {
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
+  height: 56px;
+}
+
+#close-window {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(127, 127, 127, 0.12);
+  cursor: pointer;
+}
+
+#close-window:hover {
+  background: rgba(127, 127, 127, 0.24);
+}

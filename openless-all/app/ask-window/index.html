@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>OpenLess — Ask Anything</title>
+  </head>
+  <body>
+    <div class="window-bar" data-tauri-drag-region>
+      <button type="button" id="close-window" aria-label="Close Ask Anything">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="m4 4 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+      </button>
+    </div>
+    <main id="ask-root"></main>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

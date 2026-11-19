@@ -131,15 +131,23 @@ export function AboutSection() {
             {t('modal.sections.releaseNotes')}
           </button>
         </Row>
-        {/* Required credit for the ported yearly activity component. */}
         <Row label={t('modal.about.credits')}>
-          <button
-            style={btnGhostStyle}
-            title="Rare UI GitHub Activity — MIT License + Commons Clause"
-            onClick={() => void openExternal('https://rareui.com/components/githubactivity')}
-          >
-            Rare UI · GitHub Activity
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button
+              style={btnGhostStyle}
+              title="Rare UI GitHub Activity — MIT License + Commons Clause"
+              onClick={() => void openExternal('https://rareui.com/components/githubactivity')}
+            >
+              Rare UI · GitHub Activity
+            </button>
+            <button
+              style={btnGhostStyle}
+              title="Rare UI Prompt Box — MIT License + Commons Clause"
+              onClick={() => void openExternal('https://rareui.com/components/promptbox')}
+            >
+              Rare UI · Prompt Box
+            </button>
+          </div>
         </Row>
         <Row label={t('modal.about.feedback')}>
           <button

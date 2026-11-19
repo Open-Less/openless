@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": ["ES2020", "ES2022.Array", "ES2022.Object", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -19,10 +19,11 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@android/*": ["android/frontend/*"]
+      "@android/*": ["android/frontend/*"],
+      "@/*": ["third_party/rare-ui/*"]
     }
   },
-  "include": ["src", "android/frontend"],
+  "include": ["src", "android/frontend", "ask-window"],
   "references": [
     {
       "path": "./tsconfig.node.json"

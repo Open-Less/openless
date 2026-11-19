@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ask-window",
+  "description": "Title-bar controls for the standalone Ask window",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["ask-anything"],
+  "permissions": ["core:window:allow-close", "core:window:allow-start-dragging"]
+}
