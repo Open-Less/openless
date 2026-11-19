@@ -12,7 +12,8 @@ interface QaPromptBoxProps {
   feedback?: ReactNode;
   disabled?: boolean;
   readOnly?: boolean;
-  recording?: boolean;
+  recording?: 'question' | 'draft';
+  recordingControl?: ReactNode;
   sendDisabled: boolean;
   sendLabel: string;
   stop?: { label: string; disabled: boolean; onClick: () => void };
@@ -40,6 +41,7 @@ export function QaPromptBox({
   disabled,
   readOnly,
   recording,
+  recordingControl,
   sendDisabled,
   sendLabel,
   stop,
@@ -93,7 +95,7 @@ export function QaPromptBox({
   return (
     <form
       className="qa-prompt"
-      data-recording={recording || undefined}
+      data-recording={recording}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -200,36 +202,40 @@ export function QaPromptBox({
           </motion.div>
         )}
       </div>
-      <div className="qa-prompt-tools">
-        <div className="qa-prompt-actions">{actions}</div>
-        {feedback}
-        <button
-          type={stop ? 'button' : 'submit'}
-          className={`qa-send${stop ? ' is-stop' : ''}`}
-          disabled={stop ? stop.disabled : !canSend}
-          aria-label={stop?.label ?? sendLabel}
-          title={stop?.label ?? sendLabel}
-          onMouseDown={(event) => {
-            // Clicking send keeps the active editor focused for the next prompt.
-            if (event.button === 0 && document.activeElement === input.current)
-              event.preventDefault();
-          }}
-          onClick={stop?.onClick}
-        >
-          <AnimatePresence initial={false} mode="popLayout">
-            <motion.span
-              key={stop ? 'stop' : 'send'}
-              initial={reduced ? false : { opacity: 0, scale: 0.45 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: reduced ? 1 : 0.45 }}
-              transition={reduced ? { duration: 0 } : transition}
-              aria-hidden="true"
-            >
-              {stop ? <SquareIcon /> : <ArrowUpIcon />}
-            </motion.span>
-          </AnimatePresence>
-        </button>
-      </div>
+      {recording ? (
+        <div className="qa-prompt-recording">{recordingControl}</div>
+      ) : (
+        <div className="qa-prompt-tools">
+          <div className="qa-prompt-actions">{actions}</div>
+          {feedback}
+          <button
+            type={stop ? 'button' : 'submit'}
+            className={`qa-send${stop ? ' is-stop' : ''}`}
+            disabled={stop ? stop.disabled : !canSend}
+            aria-label={stop?.label ?? sendLabel}
+            title={stop?.label ?? sendLabel}
+            onMouseDown={(event) => {
+              // Clicking send keeps the active editor focused for the next prompt.
+              if (event.button === 0 && document.activeElement === input.current)
+                event.preventDefault();
+            }}
+            onClick={stop?.onClick}
+          >
+            <AnimatePresence initial={false} mode="popLayout">
+              <motion.span
+                key={stop ? 'stop' : 'send'}
+                initial={reduced ? false : { opacity: 0, scale: 0.45 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: reduced ? 1 : 0.45 }}
+                transition={reduced ? { duration: 0 } : transition}
+                aria-hidden="true"
+              >
+                {stop ? <SquareIcon /> : <ArrowUpIcon />}
+              </motion.span>
+            </AnimatePresence>
+          </button>
+        </div>
+      )}
     </form>
   );
 }

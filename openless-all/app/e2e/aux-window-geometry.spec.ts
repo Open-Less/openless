@@ -109,6 +109,20 @@ test('QA scales the frame and composer together on a large display', async ({ pa
   await expect
     .poll(async () => (await prompt.boundingBox())!.y)
     .toBeGreaterThan(positions.start + 180);
+
+  await page.evaluate(() => {
+    (window as any).fixture.emit('qa:state', {
+      kind: 'recording',
+      sessionId: 'next',
+      messages: [],
+    });
+  });
+  const strip = panel.locator('.qa-voice-strip');
+  await expect(strip).toBeVisible();
+  const recorded = (await strip.boundingBox())!;
+  expect(recorded.width).toBeCloseTo(340, 0);
+  expect(recorded.height).toBeCloseTo(52, 0);
+  await expect(panel).toHaveCSS('clip-path', 'none');
 });
 
 test('QA keeps a reachable close action when the host rejects expansion', async ({ page }) => {

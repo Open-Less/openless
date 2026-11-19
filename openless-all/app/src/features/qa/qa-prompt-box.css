@@ -158,72 +158,25 @@
   fill: currentColor;
 }
 .qa-browser-note,
-.qa-voice-feedback,
-.qa-voice-feedback .voice-waveform {
+.qa-recording-selection {
   min-width: 0;
-}
-.qa-browser-note,
-.qa-voice-feedback .voice-waveform-label,
-.qa-recording-selection > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.qa-browser-note,
-.qa-voice-feedback {
-  font-size: 13px;
   color: var(--qa-prompt-muted);
-}
-.qa-voice-feedback {
-  animation: qa-voice-feedback-in 160ms ease-out;
-}
-.qa-voice-feedback .voice-waveform {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.qa-voice-feedback .voice-waveform-bars {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 28px;
-  flex-shrink: 0;
-}
-.qa-voice-feedback .voice-waveform-bars span {
-  width: 2px;
-  border-radius: 2px;
-  background: var(--qa-accent);
-  transition: height 90ms linear;
-}
-.qa-voice-feedback .voice-waveform.is-processing .voice-waveform-bars span {
-  animation: qa-processing-pulse 1.2s ease-in-out var(--wave-delay) infinite;
+  font-size: 12px;
 }
 .qa-recording-selection {
   display: flex;
   align-items: center;
   gap: 4px;
-  max-width: 220px;
-  font-size: 11px;
-  line-height: 1.2;
+  max-width: min(100%, 340px);
+}
+.qa-recording-selection > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .qa-recording-selection svg {
   width: 10px;
   height: 10px;
-}
-@keyframes qa-voice-feedback-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@container (max-width: 350px) {
-  .qa-voice-feedback .voice-waveform-bars {
-    display: none;
-  }
 }
 @container (max-height: 260px) {
   .qa-input-stage {
@@ -234,83 +187,76 @@
   }
 }
 
-.qa-voice-strip {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px 4px 4px;
-  border: 1px solid rgb(59 130 246 / 24%);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--qa-paper) 84%, #3b82f6);
-  color: var(--qa-accent);
-}
-.qa-send-morph-strip .qa-voice-strip {
-  min-height: 56px;
-  padding-inline: 8px 16px;
-}
-.qa-voice-strip-icon {
+/* Rare UI Voice Note medium geometry; only the composer switches surfaces. */
+.qa-prompt-recording {
   display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--qa-paper);
-}
-.qa-voice-strip-icon svg {
-  width: 15px;
-  height: 15px;
-}
-.qa-voice-strip-bars {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 2px;
-  width: clamp(24px, 18cqw, 104px);
-  min-width: 16px;
-  height: 21px;
-}
-.qa-voice-strip-bars i {
-  flex: 1;
-  min-width: 1px;
-  border-radius: 20px;
-  background: currentColor;
-  transition: height 90ms linear;
-}
-.qa-voice-strip-time {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.qa-voice-strip-label {
+  justify-items: center;
+  gap: 3px;
   min-width: 0;
-  font-size: 11px;
+  padding: 6px;
 }
-
-/* The draft stays mounted through capture; the strip is the visible input surface. */
-.qa-prompt[data-recording] {
+.qa-prompt[data-recording='question'] {
   position: relative;
   border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
-.qa-prompt[data-recording] .qa-input-stage {
+.qa-prompt[data-recording='question'] .qa-input-stage {
   position: absolute;
   inset: 0 12px auto;
   margin: 0;
   opacity: 0;
   pointer-events: none;
 }
-.qa-prompt[data-recording] .qa-prompt-tools {
-  padding: 0;
+.qa-voice-strip {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(340px, 100%);
+  height: 52px;
+  padding: 6px 10px 6px 6px;
+  border-radius: 999px;
+  background:
+    radial-gradient(ellipse at 20% 145%, rgb(59 130 246 / 65%), transparent 70%),
+    radial-gradient(ellipse at 88% -28%, rgb(59 130 246 / 25%), transparent 68%),
+    color-mix(in srgb, var(--qa-paper) 92%, var(--qa-ink));
+  color: var(--qa-prompt-muted);
 }
-.qa-prompt[data-recording] .qa-voice-feedback {
+.qa-prompt .qa-voice-strip .qa-voice-strip-control {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 50%;
+  background: var(--qa-paper);
+  color: var(--qa-ink);
+}
+.qa-prompt .qa-voice-strip-control:disabled {
+  opacity: 0.65;
+}
+.qa-voice-strip-bars {
+  display: grid;
+  grid-template-columns: repeat(40, minmax(0, 1fr));
+  align-items: center;
   flex: 1;
+  gap: min(3px, 0.85cqw);
+  min-width: 0;
 }
-.qa-prompt[data-recording] .qa-prompt-actions {
-  order: 2;
-  margin: 0;
+.qa-voice-strip-bars i {
+  width: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--qa-ink) 42%, transparent);
+  transition: height 65ms linear;
 }
-.qa-prompt[data-recording] :is(.qa-mode, .qa-send) {
-  display: none;
+.qa-voice-strip-bars i:nth-last-child(-n + 5) {
+  background: color-mix(in srgb, var(--qa-ink) 85%, #3b82f6);
+}
+.qa-voice-strip-time {
+  flex-shrink: 0;
+  min-width: 27px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }

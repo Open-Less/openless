@@ -471,6 +471,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::qa_window_set_expanded,
             commands::qa_get_snapshot,
             commands::qa_set_draft_focus,
+            commands::qa_stop_draft_recording,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
             commands::deepseek_tts_start,
