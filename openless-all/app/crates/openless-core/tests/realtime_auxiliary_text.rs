@@ -200,7 +200,10 @@ async fn backend(
 async fn qwen_realtime_qa_resolves_saved_channel_and_legacy_models() {
     for profile in QWEN_PROFILES {
         for legacy in [false, true] {
-            let (endpoint, server) = text_server(vec!["text answer"]).await;
+            // The default Q&A flow asks the text provider to plan a search first.
+            // An empty query keeps both calls on the fixture server.
+            let (endpoint, server) =
+                text_server(vec![r#"{"query":""}"#, "text answer"]).await;
             let (backend, store, llm_id, data_dir) = backend(
                 profile,
                 &endpoint,
@@ -232,7 +235,7 @@ async fn qwen_realtime_qa_resolves_saved_channel_and_legacy_models() {
             .await
             .unwrap();
             assert_eq!(answer, "text answer");
-            assert_eq!(server.await.unwrap().len(), 1);
+            assert_eq!(server.await.unwrap().len(), 2);
             drop(backend);
             std::fs::remove_dir_all(data_dir).unwrap();
         }

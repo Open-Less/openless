@@ -124,6 +124,7 @@ pub(super) fn decode_message(message: Message) -> Result<Option<Value>, LLMError
     Ok(Some(value))
 }
 
+#[cfg(test)]
 pub(super) fn decode(message: Message) -> Result<Option<Value>, LLMError> {
     let value = decode_message(message)?;
     if let Some(value) = &value {
