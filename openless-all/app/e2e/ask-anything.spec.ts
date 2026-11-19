@@ -136,6 +136,7 @@ test('Stop cancels the current turn and retains the open conversation for a foll
   await emit(page, 'qa:state', { kind: 'answer_delta', sessionId: 'ask-b', chunk: 'draft answer' });
   const stop = page.locator('.qa-send.is-stop');
   await expect(stop).toBeVisible();
+  await expect(stop.locator('span').last()).toHaveCSS('pointer-events', 'none');
   await stop.click();
   await expect
     .poll(() =>
@@ -429,6 +430,7 @@ test('the waiting composer opens without a recording and voice dictation only ed
   await expect(strip).toHaveCount(0);
   await expect(editor).toBeFocused();
   await expect(editor).toHaveValue('Before spoken after');
+  await expect(panel.locator('.qa-send')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).fixture.qaActions)).toEqual([]);
   await editor.press('Enter');
   await expect

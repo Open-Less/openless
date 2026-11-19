@@ -116,7 +116,7 @@
   background: var(--qa-wash);
   color: var(--qa-ink);
 }
-.qa-prompt button:not(:disabled):active {
+.qa-prompt button:not(:disabled, .qa-send):active {
   transform: scale(0.9);
 }
 .qa-prompt button:focus-visible {
@@ -144,6 +144,14 @@
   height: 36px;
   background: var(--qa-ink);
   color: var(--qa-paper);
+}
+/* Animated icons can be replaced between pointer down and up. Keep the
+   hit target on the button, including while the icon changes size. */
+.qa-prompt .qa-send > span {
+  pointer-events: none;
+}
+.qa-prompt .qa-send:not(:disabled):active svg {
+  transform: scale(0.9);
 }
 .qa-prompt .qa-send:disabled {
   background: var(--qa-wash);
