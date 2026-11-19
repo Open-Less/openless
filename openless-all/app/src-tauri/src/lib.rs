@@ -2323,8 +2323,10 @@ fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 /// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 720.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 380.0;
+// 1950 × 830 at 2× display scale. Keep a shared scale when fitting smaller work areas.
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 975.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 415.0;
+const QA_WINDOW_MIN_EXPANDED_HEIGHT: f64 = 144.0;
 /// Reserve room for the independent recording capsule and its context badge.
 const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
 /// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
@@ -2897,6 +2899,17 @@ fn qa_resize_origin(
     )
 }
 
+fn qa_expanded_size(area: Option<LogicalMonitorFrame>) -> (f64, f64) {
+    let fit = area.map_or(1.0, |frame| {
+        let available_width = (frame.width - 32.0).max(1.0);
+        let available_height = (frame.height - 32.0 - QA_WINDOW_EXPANDED_BOTTOM_INSET).max(1.0);
+        (available_width / QA_WINDOW_EXPANDED_WIDTH)
+            .min(available_height / QA_WINDOW_EXPANDED_HEIGHT)
+            .min(1.0)
+    });
+    (QA_WINDOW_EXPANDED_WIDTH * fit, QA_WINDOW_EXPANDED_HEIGHT * fit)
+}
+
 /// Called on the native main thread by the restricted QA command. The compact
 /// state has a genuinely small native frame, so hidden content cannot eat clicks.
 pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
@@ -2921,19 +2934,18 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .map_err(|_| "qa_geometry_unavailable")?
         .to_logical::<f64>(scale);
     let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
-    let mut width = if expanded {
-        QA_WINDOW_EXPANDED_WIDTH
+    let (width, height) = if expanded {
+        qa_expanded_size(area.map(|(frame, _)| frame))
+    } else if let Some((frame, _)) = area {
+        (
+            QA_WINDOW_WIDTH.min((frame.width - 32.0).max(240.0)),
+            QA_WINDOW_HEIGHT,
+        )
     } else {
-        QA_WINDOW_WIDTH
+        (QA_WINDOW_WIDTH, QA_WINDOW_HEIGHT)
     };
-    let mut height = if expanded {
-        QA_WINDOW_EXPANDED_HEIGHT
-    } else {
-        QA_WINDOW_HEIGHT
-    };
-    if let Some((frame, _)) = area {
-        width = width.min((frame.width - 32.0).max(240.0));
-        height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
+    if expanded && height < QA_WINDOW_MIN_EXPANDED_HEIGHT {
+        return Err("qa_work_area_too_small".into());
     }
     let (mut x, mut y) = qa_resize_origin(
         position.x,
@@ -4291,16 +4303,35 @@ mod tests {
     }
 
     #[test]
+    fn expanded_qa_fits_the_work_area_with_a_single_scale() {
+        let fit = |width, height| {
+            super::qa_expanded_size(Some(LogicalMonitorFrame {
+                x: -1600.0,
+                y: 20.0,
+                width,
+                height,
+            }))
+        };
+        assert_eq!(fit(1440.0, 900.0), (975.0, 415.0));
+        for (width, height) in [(800.0, 700.0), (1280.0, 480.0)] {
+            let (w, h) = fit(width, height);
+            assert!(w <= width - 32.0 + 1e-6);
+            assert!(h <= height - 164.0 + 1e-6);
+            assert!((w / h - 1950.0 / 830.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn qa_resize_preserves_centre_baseline_and_user_position() {
         let expanded =
-            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 720.0, 380.0, false, true);
-        assert_eq!(expanded, (-820.0, 360.0));
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 975.0, 415.0, false, true);
+        assert_eq!(expanded, (-947.5, 325.0));
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 720.0, 380.0, true, true),
+            super::qa_resize_origin(expanded.0, expanded.1, 975.0, 415.0, 975.0, 415.0, true, true),
             expanded
         );
         assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 480.0, 80.0, true, false),
+            super::qa_resize_origin(expanded.0, expanded.1, 975.0, 415.0, 480.0, 80.0, true, false),
             (-700.0, 700.0)
         );
     }

@@ -1,0 +1,204 @@
+.qa-conversation .qa-prompt {
+  --qa-prompt-muted: #868593;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--qa-prompt-line);
+  border-radius: 24px;
+  background: var(--qa-paper);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+.qa-conversation .qa-prompt:focus-within {
+  border-color: var(--qa-strong);
+}
+.qa-input-stage {
+  position: relative;
+  min-width: 0;
+  margin: 15px 16px 0;
+  font-size: 15px;
+  line-height: 24px;
+}
+/* Size the editor from its draft without a frame of collapsed height or a layout read. */
+.qa-input-stage::after,
+.qa-input-stage textarea {
+  display: block;
+  min-height: 24px;
+  max-height: 72px;
+  max-height: clamp(24px, 19cqh, 96px);
+  padding: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.qa-input-stage::after {
+  content: attr(data-value) ' ';
+  overflow: hidden;
+  visibility: hidden;
+}
+.qa-input-stage textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--qa-ink);
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: thin;
+}
+.qa-input-stage textarea::placeholder {
+  color: var(--qa-prompt-muted);
+  opacity: 1;
+}
+.qa-prompt-tools,
+.qa-prompt-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.qa-prompt-tools {
+  gap: 8px;
+  padding: 12px;
+}
+.qa-prompt-actions {
+  gap: 4px;
+  margin-inline-end: auto;
+}
+.qa-prompt button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--qa-prompt-muted);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 160ms ease;
+}
+.qa-prompt button:not(:disabled):hover {
+  background: var(--qa-wash);
+  color: var(--qa-ink);
+}
+.qa-prompt button:not(:disabled):active {
+  transform: scale(0.9);
+}
+.qa-prompt button:focus-visible {
+  outline-offset: 1px;
+}
+.qa-prompt button svg {
+  width: 18px;
+  height: 18px;
+}
+.qa-prompt-actions button {
+  color: var(--qa-prompt-muted);
+}
+.qa-prompt :is(.qa-mode, .qa-mic):disabled {
+  opacity: 0.5;
+}
+.qa-prompt .qa-mode.is-on,
+.qa-prompt .qa-mic.is-recording {
+  background: var(--qa-wash);
+  color: var(--qa-accent);
+}
+.qa-prompt .qa-send,
+.qa-prompt .qa-send:not(:disabled):hover {
+  width: 36px;
+  height: 36px;
+  background: var(--qa-ink);
+  color: var(--qa-paper);
+}
+.qa-prompt .qa-send:disabled {
+  background: var(--qa-wash);
+  color: var(--qa-prompt-muted);
+}
+.qa-prompt :is(.qa-send.is-stop, .qa-mic.is-recording) svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+.qa-browser-note,
+.qa-voice-feedback,
+.qa-voice-feedback .voice-waveform {
+  min-width: 0;
+}
+.qa-browser-note,
+.qa-voice-feedback .voice-waveform-label,
+.qa-recording-selection > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-browser-note,
+.qa-voice-feedback {
+  font-size: 13px;
+  color: var(--qa-prompt-muted);
+}
+.qa-voice-feedback {
+  animation: qa-voice-feedback-in 160ms ease-out;
+}
+.qa-voice-feedback .voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qa-voice-feedback .voice-waveform-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.qa-voice-feedback .voice-waveform-bars span {
+  width: 2px;
+  border-radius: 2px;
+  background: var(--qa-accent);
+  transition: height 90ms linear;
+}
+.qa-voice-feedback .voice-waveform.is-processing .voice-waveform-bars span {
+  animation: qa-processing-pulse 1.2s ease-in-out var(--wave-delay) infinite;
+}
+.qa-recording-selection {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+.qa-recording-selection svg {
+  width: 10px;
+  height: 10px;
+}
+@keyframes qa-voice-feedback-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@container (max-width: 350px) {
+  .qa-voice-feedback .voice-waveform-bars {
+    display: none;
+  }
+}
+@container (max-height: 260px) {
+  .qa-input-stage {
+    margin-top: 8px;
+  }
+  .qa-prompt-tools {
+    padding: 5px 9px;
+  }
+}

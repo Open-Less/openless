@@ -65,7 +65,14 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
   });
   await expect.poll(distance).toBeLessThanOrEqual(1);
   const held = await viewport.evaluate((node) => {
-    node.dispatchEvent(new Event('touchmove'));
+    for (const [type, clientY] of [
+      ['touchstart', 20],
+      ['touchmove', 50],
+    ] as const) {
+      const event = new Event(type);
+      Object.defineProperty(event, 'touches', { value: [{ clientY }] });
+      node.dispatchEvent(event);
+    }
     node.scrollTop -= 30;
     node.dispatchEvent(new Event('scroll'));
     const value = node.scrollTop;
@@ -116,7 +123,7 @@ test('QA jump control appears only more than 120 pixels from the latest message'
   });
   await expect(jump).toHaveAttribute('data-active', 'false');
   await viewport.evaluate((node) => {
-    node.dispatchEvent(new Event('touchmove'));
+    node.dispatchEvent(new WheelEvent('wheel', { deltaY: -80 }));
     node.scrollTop = node.scrollHeight - node.clientHeight - 80;
     node.dispatchEvent(new Event('scroll'));
   });
@@ -158,7 +165,12 @@ for (const platform of ['mac', 'win'] as const) {
     const header = panel.locator('.qa-answer-header');
     await expect(panel).toHaveAttribute('data-platform', platform);
     await expect(header.locator('h1')).toContainText('Message 0:');
-    await expect(header).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await expect(header).toHaveCSS(
+      'background-color',
+      await panel.evaluate((el) => getComputedStyle(el).backgroundColor),
+    );
+    await expect(panel).toHaveCSS('border-radius', '0px');
+    await expect(panel).toHaveCSS('overflow', 'hidden');
     await expect(header.locator('.qa-symbol')).toHaveCount(0);
     const headerBox = (await header.boundingBox())!;
     const closeBox = (await header.locator('.qa-close').boundingBox())!;
@@ -176,8 +188,6 @@ for (const platform of ['mac', 'win'] as const) {
       el.scrollTop = 0;
     });
     expect(await viewport.evaluate((el) => el.scrollTop)).toBe(0);
-    expect(await header.evaluate((el) => getComputedStyle(el, '::after').backdropFilter)).toContain(
-      'blur',
-    );
+    await expect(panel.locator('.qa-prompt textarea')).toBeInViewport();
   });
 }
