@@ -26,7 +26,7 @@ pub const LOCAL_ASR_KEEP_LOADED_FOREVER_SECS: u32 = 86_400;
 
 /// Recognition pipeline mode (issue #902): `traditional` = two-stage ASR +
 /// LLM polish; `multimodal` = one multimodal model turns audio + prompt
-/// into final text in a single step. The two configs live in fully isolated
+/// into final text in a single step; `deepseek` uses the dedicated suite. All configs use isolated
 /// credential namespaces; the runtime reads only the active mode and
 /// switching never deletes the other config.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -35,13 +35,14 @@ pub enum PipelineMode {
     #[default]
     Traditional,
     Multimodal,
+    Deepseek,
 }
 
 pub fn effective_pipeline_mode(enabled: bool, configured: PipelineMode) -> PipelineMode {
-    if enabled {
-        configured
-    } else {
+    if !enabled && configured == PipelineMode::Multimodal {
         PipelineMode::Traditional
+    } else {
+        configured
     }
 }
 
@@ -478,6 +479,8 @@ pub struct UserPreferences {
     /// Opt-in local voice command listener. Standby audio is never sent to a cloud provider.
     #[serde(default)]
     pub voice_activation_enabled: bool,
+    #[serde(default)]
+    pub voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     pub voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1078,6 +1081,8 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     #[serde(default)]
     voice_activation_enabled: bool,
+    #[serde(default)]
+    voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1366,6 +1371,7 @@ impl Default for UserPreferencesWire {
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
             voice_activation_enabled: prefs.voice_activation_enabled,
+            voice_activation_hotkey_linked: prefs.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: prefs.voice_activation_wake_enabled,
             voice_activation_finish_enabled: prefs.voice_activation_finish_enabled,
             voice_activation_wake_phrase: prefs.voice_activation_wake_phrase,
@@ -1592,6 +1598,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
             voice_activation_enabled: wire.voice_activation_enabled,
+            voice_activation_hotkey_linked: wire.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: wire.voice_activation_wake_enabled,
             voice_activation_finish_enabled: wire.voice_activation_finish_enabled,
             voice_activation_wake_phrase: wire.voice_activation_wake_phrase,
@@ -1996,6 +2003,7 @@ impl Default for UserPreferences {
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
             voice_activation_enabled: false,
+            voice_activation_hotkey_linked: false,
             voice_activation_wake_enabled: true,
             voice_activation_finish_enabled: true,
             voice_activation_wake_phrase: default_voice_activation_wake_phrase(),
@@ -2897,6 +2905,8 @@ pub struct CapsulePayload {
     /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub qa: bool,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -2906,7 +2916,7 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
-    /// Current recognition pipeline mode ("traditional" | "multimodal"); the
+    /// Current recognition pipeline mode ("traditional" | "multimodal" | "deepseek"); the
     /// frontend uses it to pick which config cards to render and which set
     /// the Overview treats as "configured".
     pub pipeline_mode: PipelineMode,

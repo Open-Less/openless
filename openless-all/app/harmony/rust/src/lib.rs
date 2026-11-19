@@ -169,6 +169,10 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
     let account = required(args, "account")?;
     let namespace = if account == openless_core::MARKETPLACE_GITHUB_TOKEN_ACCOUNT {
         openless_core::CredentialNamespace::Marketplace
+    } else if account == openless_core::web_search::CONFIG_ACCOUNT
+        || account == openless_core::deepseek_suite::CONFIG_ACCOUNT
+    {
+        openless_core::CredentialNamespace::Application
     } else if account.starts_with("ark.") {
         openless_core::CredentialNamespace::Llm
     } else if account.starts_with("omni.") {
@@ -466,12 +470,18 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
             let entries = b.list_history().map_err(|e| e.to_string())?;
             b.clear_history().map_err(|e| e.to_string())?;
             for entry in entries {
-                history::remove_audio(host, &entry.id)?;
+                if entry.source != openless_core::HistorySource::QuickNote {
+                    history::remove_audio(host, &entry.id)?;
+                }
             }
             Value::Null
         }
         "list_vocab" => json!(b.list_vocabulary().map_err(|e| e.to_string())?),
         "get_activity_stats" => json!(b.list_activity().map_err(|e| e.to_string())?),
+        "get_activity_apps" => {
+            let year = args["year"].as_u64().and_then(|value| u32::try_from(value).ok()).ok_or("invalid activity year")?;
+            json!(b.list_activity_apps(year).map_err(|e| e.to_string())?)
+        }
         "list_correction_rules" => json!(b.list_correction_rules().map_err(|e| e.to_string())?),
         "add_learned_vocab" => {
             b.add_learned_vocabulary(required(&args, "phrase")?.into())
@@ -957,5 +967,18 @@ pub unsafe extern "C" fn openless_feed_pcm(
 pub unsafe extern "C" fn openless_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
+    }
+}
+
+#[cfg(test)]
+mod web_search_config_tests {
+    #[test]
+    fn search_settings_share_the_core_application_namespace() {
+        let key = super::credential_key(&serde_json::json!({
+            "account": openless_core::web_search::CONFIG_ACCOUNT
+        }))
+        .unwrap();
+        assert_eq!(key.namespace, openless_core::CredentialNamespace::Application);
+        assert!(key.provider_id.is_none());
     }
 }

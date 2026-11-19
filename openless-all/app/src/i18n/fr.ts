@@ -107,6 +107,8 @@ export const fr: typeof zhCN = {
     noSnapshot: 'Aucune sauvegarde cloud chiffrée pour le moment.',
     snapshotUnknown: 'La sauvegarde cloud n’a pas encore été vérifiée.',
     lastSync: 'Dernière synchronisation : {{time}}',
+    synced: 'Synchronisation terminée',
+    syncing: 'Synchronisation des dernières données du cloud…',
     syncNow: 'Synchroniser maintenant',
     checkPending: 'Vérifier le résultat en attente',
     unlock: 'Déverrouiller',
@@ -137,6 +139,15 @@ export const fr: typeof zhCN = {
     newPassword: 'Nouveau mot de passe',
     currentPassword: 'Mot de passe actuel',
     confirmPassword: 'Confirmer le nouveau mot de passe',
+    setSyncPasswordTitle: 'Définir un mot de passe de synchronisation',
+    setSyncPasswordDescription:
+      'OpenLess utilise ce mot de passe pour chiffrer les données sur cet appareil et créer une sauvegarde en ligne. La synchronisation s’active une fois la sauvegarde créée.',
+    confirmSyncPassword: 'Confirmer le mot de passe de synchronisation',
+    confirmAndContinue: 'Confirmer et continuer',
+    revealPassword: 'Afficher le mot de passe ({{field}})',
+    concealPassword: 'Masquer le mot de passe ({{field}})',
+    previewNotice:
+      'Aperçu de la synchronisation. Utilisez un mot de passe fictif : aucune connexion au serveur ni conservation des identifiants.',
     passwordPolicy:
       '12 à 128 caractères avec majuscule, minuscule et chiffre. Évitez les mots de passe courants.',
     rememberKey: 'Mémoriser la clé dans le stockage sécurisé de cet appareil',
@@ -144,6 +155,7 @@ export const fr: typeof zhCN = {
     disableDescription:
       'Les synchronisations cessent. La sauvegarde cloud et les données locales sont conservées. La suppression est une action distincte.',
     confirmDisable: 'Désactiver la synchronisation',
+    refreshBackup: 'Afficher ou actualiser la sauvegarde cloud',
     deleteTitle: 'Supprimer la sauvegarde cloud chiffrée ?',
     deleteDescription:
       'Seule la sauvegarde cloud de ce compte sera supprimée. Les données locales restent. Une nouvelle sauvegarde sera nécessaire pour un autre appareil.',
@@ -231,6 +243,8 @@ export const fr: typeof zhCN = {
       cancelled: 'Tâche annulée.',
       network: 'Service de synchronisation inaccessible. Vérifiez votre connexion et réessayez.',
       rateLimited: 'Trop de demandes. Attendez avant de réessayer.',
+      deletePendingOperation:
+        'Une opération précédente reste à confirmer. Actualisez l’état plus tard, puis réessayez de supprimer la sauvegarde.',
       outcomeUnknown:
         'Résultat cloud non confirmé. Vérifiez l’opération en attente avant une nouvelle sauvegarde.',
       recovery:
@@ -307,10 +321,13 @@ export const fr: typeof zhCN = {
     delete: 'Supprimer',
     later: 'Plus tard',
     cancel: 'Annuler',
+    confirmAction: 'Confirmer',
     close: 'Fermer',
     show: 'Afficher',
     hide: 'Masquer',
+    apiKeySaved: 'Clé API enregistrée',
     saved: 'Enregistré',
+    deleted: 'Supprimé',
     refreshed: 'Actualisé',
     saving: 'Enregistrement…',
     experimental: 'Expérimental',
@@ -322,6 +339,7 @@ export const fr: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    asking: 'Posez une question',
     thinking: 'réflexion',
     using: 'action',
     cancelled: 'Annulé',
@@ -380,6 +398,9 @@ export const fr: typeof zhCN = {
     title: 'Questions',
     headerHint: 'Posez une question à tout moment',
     thinking: 'Réflexion…',
+    thoughtLive: 'Réflexion ({{seconds}} s)',
+    thoughtDone: 'Réflexion terminée ({{seconds}} s)',
+    stop: 'Arrêter',
     error: 'Une erreur s’est produite. Réessayez.',
     errorRetry: 'Réessayer',
     errorRetryHint: 'Veuillez réessayer.',
@@ -538,6 +559,7 @@ export const fr: typeof zhCN = {
   shell: {
     shortcutLabel: 'Raccourci d’enregistrement',
     shortcutHint: 'Démarrer / Arrêter',
+    homeLabel: 'Retour à l’aperçu',
     betaTag: 'BETA',
     betaNote: 'Stockage local, sauvegarde cloud facultative',
     navHint: {
@@ -564,6 +586,7 @@ export const fr: typeof zhCN = {
         tagline: 'Saisie vocale privilégiant le traitement local',
         releaseNotes: 'Notes de version ↗',
         docs: 'Centre d’aide ↗',
+        credits: 'Crédits',
       },
     },
     providerPrompt: {
@@ -692,6 +715,12 @@ export const fr: typeof zhCN = {
     llmConfigured: 'LLM actif configuré',
     llmNotConfigured: 'Non configuré',
     statusConfigured: 'Configuré',
+    statusFailed: 'Échec',
+    serviceHint: {
+      asr: 'Reconnaissance vocale : voir si elle est configurée, cliquer pour ouvrir les réglages',
+      llm: 'Traitement du texte : voir si elle est configurée, cliquer pour ouvrir les réglages',
+      omni: 'Voix multimodale : voir si elle est configurée, cliquer pour ouvrir les réglages',
+    },
     statusNotConfigured: 'Non configuré',
     statusUnknown: 'Indisponible',
     credentialsLoadError: 'Impossible de lire l’état des identifiants',
@@ -706,6 +735,16 @@ export const fr: typeof zhCN = {
     metricTotalTrend: 'Archive locale (200 maximum)',
     activityTitle: 'Activité annuelle',
     activityCount: '{{count}} dictée(s)',
+    activityAppsLabel: 'Applications les plus dictées',
+    activityAppsShow: 'Afficher les applis principales',
+    activityAppsHide: 'Masquer les applis principales',
+    activityAppsUnavailable:
+      'L’activité annuelle par application est indisponible sur cette plateforme.',
+    activityAppsError: 'Impossible de charger l’activité annuelle par application.',
+    activityYearTitle: 'Cette année',
+    activityActiveDays: 'Jours actifs',
+    activityPeakDay: 'Jour le plus actif',
+    activityDailyAverage: 'Moyenne quotidienne',
     activityLoadError: 'Impossible de charger l’activité',
     period: {
       ariaLabel: 'Période du rapport',
@@ -1219,6 +1258,8 @@ export const fr: typeof zhCN = {
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Insertion de texte',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
@@ -1588,6 +1629,15 @@ export const fr: typeof zhCN = {
       voiceActivationDesc: 'Écouter localement une phrase d’activation pour démarrer la dictée.',
       voiceActivationLocalOnly:
         'La reconnaissance reste sur cet appareil ; l’audio en veille n’est ni envoyé ni archivé.',
+      voiceActivationHotkeyLinked: "Lier le raccourci d’enregistrement",
+      voiceActivationHotkeyLinkedDesc: "Un appui active ou suspend la veille au lieu d’enregistrer. En pause au lancement. La pause coupe le préchauffage du micro, pas les autres enregistrements. La veille est locale ; la dictée utilise le service actuel.",
+      voiceActivationDisabled: "Activation vocale désactivée",
+      voiceActivationPaused: "Veille vocale temporairement suspendue",
+      voiceActivationPausing: "Arrêt de la veille…",
+      voiceActivationStarting: "Démarrage de la veille…",
+      voiceActivationListening: "En attente de la phrase d’activation",
+      voiceActivationDictating: "Dictée ou finalisation en cours",
+      voiceActivationError: "Veille indisponible. Vérifiez le modèle, les autorisations et le microphone.",
       voiceActivationMultimodalModels:
         'Préparez ici le modèle d’activation vocale. La dictée utilise toujours votre service multimodal actuel.',
       voiceActivationModelMissing: 'Le modèle local Zipformer n’est pas installé.',
@@ -1646,7 +1696,7 @@ export const fr: typeof zhCN = {
       validationHint:
         'Envoyez manuellement une requête réelle pour vérifier cette configuration. Elle peut consommer des crédits du service. L’enregistrement des réglages ne lance pas de vérification.',
       validationHintOmni:
-        'Envoyez manuellement une requête de connectivité texte uniquement (sans enregistrement). Réussir ne signifie pas que la dictée audio fonctionne — confirmez avec un court enregistrement. Elle peut consommer des crédits du service.',
+        'Envoie une requête de connexion textuelle. Elle peut utiliser des crédits du serveur.',
       autoSaveHint:
         'Les modifications sont enregistrées automatiquement. Une fois le service configuré, vous pouvez vérifier la connexion.',
       nameHint:
@@ -1710,10 +1760,11 @@ export const fr: typeof zhCN = {
       pipelineModeLabel: 'Mode de traitement',
       pipelineModeHint:
         'Traditionnel : deux étapes, ASR + LLM. Multimodal : un seul passage avec un modèle capable de traiter l’audio.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Traditionnel',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Les deux modes conservent des identifiants distincts. Changer de mode garde l’autre configuration sans l’utiliser ; elle est restaurée à votre retour.',
+        'Les trois pipelines conservent leurs réglages séparément. Le choix reste actif après la fermeture des réglages ou de la fenêtre et au redémarrage. Revenir à un pipeline restaure sa configuration.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
@@ -2434,6 +2485,7 @@ export const fr: typeof zhCN = {
     experimentsTitle: 'Expérimentations et extensions',
     experimentsDescription: 'Configurer les fonctions expérimentales et les extensions.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Réglages des services',
       llm: 'Modèles de langage',
       asr: 'Reconnaissance vocale',
@@ -2441,11 +2493,12 @@ export const fr: typeof zhCN = {
       models: 'Modèles locaux',
       connections: 'Connexions',
       inactive: 'Inutilisé dans ce mode',
+      unavailable: 'Indisponible',
       inactiveDetail:
         'Ces réglages sont conservés, mais le mode de reconnaissance actuel ne les utilise pas.',
       statusConfigured:
-        'Point vert : au moins un service est activé. Les requêtes utilisent le premier service activé.',
-      statusMissing: 'Point rouge : aucun service n’est activé.',
+        'Au moins un service est activé. Les requêtes utilisent le premier service activé.',
+      statusMissing: 'Aucun service n’est activé.',
     },
     searchPlaceholder: 'Rechercher une catégorie de réglages…',
     clearSearch: 'Effacer la recherche',
@@ -2457,6 +2510,8 @@ export const fr: typeof zhCN = {
     backToAdvanced: 'Retour aux fonctions avancées',
     back: 'Retour',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configurer la transcription en direct dans le champ.',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       customSyncServer:

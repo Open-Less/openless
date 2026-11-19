@@ -141,6 +141,8 @@ pub(crate) fn backend_dependencies(
     #[cfg(target_os = "windows")]
     {
         let prefs = preferences.get();
+        warm_hub.set_capture_paused(0,
+            prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked);
         warm_hub.configure(
             crate::recorder::warm_capture_enabled(prefs.low_latency_dictation_enabled, false),
             (!prefs.microphone_device_name.trim().is_empty())
@@ -1975,6 +1977,10 @@ impl TauriVoiceActivationRuntime {
 
 #[cfg(target_os = "windows")]
 impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
+    fn set_capture_paused(&self, revision: u64, paused: bool) {
+        self.warm_hub.set_capture_paused(revision, paused);
+    }
+
     fn configure(
         &self,
         config: VoiceActivationConfig,
@@ -5702,9 +5708,15 @@ impl HostActions for TauriHostActions {
             HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
             HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
             HostAction::ShowQa => {
+                let was_visible = self.qa_context.is_panel_visible()
+                    && app
+                        .get_webview_window("qa")
+                        .is_some_and(|window| window.is_visible().unwrap_or(false));
                 self.qa_context.set_voice_surface_active(true);
                 self.qa_context.prepare_show();
-                crate::show_qa_window(&app, "idle");
+                if !was_visible {
+                    crate::show_qa_window(&app, "idle");
+                }
             }
             HostAction::HideQa => {
                 self.qa_context.set_voice_surface_active(false);

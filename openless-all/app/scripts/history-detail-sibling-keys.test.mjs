@@ -12,7 +12,10 @@
 
 import { readFile } from 'node:fs/promises';
 
-const historyTsx = await readFile(new URL('../src/pages/History.tsx', import.meta.url), 'utf-8');
+const historyTsx = await readFile(
+  new URL('../src/features/history/HistoryDetail.tsx', import.meta.url),
+  'utf-8',
+);
 
 /** Extract the full expression after each `key={` by brace matching (`${}` inside template strings doesn't truncate). */
 function readKeyExpressions(source) {
@@ -39,7 +42,7 @@ function readKeyExpressions(source) {
 
 // Detail panel = the right-column Card. Take from the "always rendered on desktop / rendered
 // when expanded on mobile" condition to the Card's closing tag.
-const detailStart = historyTsx.indexOf('{(!mobile || mobileDetailOpen) && (');
+const detailStart = historyTsx.indexOf('<Card');
 if (detailStart === -1) {
   throw new Error('未定位到历史详情面板（右栏 Card）的起始位置，契约测试需要同步更新');
 }

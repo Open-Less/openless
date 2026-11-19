@@ -161,6 +161,20 @@
     },
     {
       "authRequirement": "api_key",
+      "defaultEndpoint": "https://api.deepseek.com/v1",
+      "defaultModel": "deepseek-asr",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "deepseek",
+      "providerType": "deepseek",
+      "staticModels": [
+        "deepseek-asr"
+      ],
+      "supportedRequestFormats": [],
+      "validationProbe": "asr_silence"
+    },
+    {
+      "authRequirement": "api_key",
       "defaultEndpoint": "https://openrouter.ai/api/v1",
       "defaultModel": "openai/whisper-large-v3-turbo",
       "defaultRequestFormat": null,
@@ -413,7 +427,7 @@
     {
       "authRequirement": "api_key_unless_custom_endpoint",
       "defaultEndpoint": "https://api.deepseek.com/v1",
-      "defaultModel": "deepseek-v4-flash",
+      "defaultModel": "deepseek-flash",
       "defaultRequestFormat": "chat_completions",
       "kind": "llm",
       "labelKey": "deepseek",
@@ -500,6 +514,18 @@
         "gpt-5.4",
         "gpt-5.5"
       ],
+      "supportedRequestFormats": [],
+      "validationProbe": "llm_text"
+    },
+    {
+      "authRequirement": "siwc",
+      "defaultEndpoint": "https://api.openai.com/v1",
+      "defaultModel": null,
+      "defaultRequestFormat": null,
+      "kind": "llm",
+      "labelKey": "chatgptSiwc",
+      "providerType": "chatgpt_siwc",
+      "staticModels": [],
       "supportedRequestFormats": [],
       "validationProbe": "llm_text"
     },

@@ -210,6 +210,10 @@ Optional:
 
 Manual workflow runs can still produce ad-hoc signed test builds, but tagged macOS releases fail if signing/notarization secrets are missing.
 
+## Third-party components
+
+The overview yearly activity card ports [Rare UI GitHub Activity](https://rareui.com/components/githubactivity) (Copyright (c) 2026 Swami Malode). The license is MIT plus the Commons Clause. Cell size, gap, radius, padding, month labels, tooltip, and the expandable panel stay with the upstream component; local dictation counts replace GitHub contributions, and the apps with the most voice input replace repositories. The same credit is in the app under Settings → About and updates → Component credits. See [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md).
+
 ## Ignored Local Output
 
 The following are intentionally local-only:

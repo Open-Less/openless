@@ -110,6 +110,8 @@ export const en: typeof zhCN = {
     noSnapshot: 'No encrypted cloud backup yet.',
     snapshotUnknown: 'Cloud backup has not been checked yet.',
     lastSync: 'Last synced {{time}}',
+    synced: 'Sync complete',
+    syncing: 'Syncing the latest cloud data…',
     syncNow: 'Sync now',
     checkPending: 'Check pending result',
     unlock: 'Unlock',
@@ -139,6 +141,15 @@ export const en: typeof zhCN = {
     newPassword: 'New sync password',
     currentPassword: 'Current sync password',
     confirmPassword: 'Confirm new password',
+    setSyncPasswordTitle: 'Set your cloud sync password',
+    setSyncPasswordDescription:
+      'OpenLess uses this password to encrypt data on this device and create a cloud backup. Sync turns on after the backup is created.',
+    confirmSyncPassword: 'Confirm sync password',
+    confirmAndContinue: 'Confirm and continue',
+    revealPassword: 'Show password ({{field}})',
+    concealPassword: 'Hide password ({{field}})',
+    previewNotice:
+      'Cloud sync preview. Use a sample password; it will not connect to a server or store any credentials.',
     passwordPolicy:
       'Use 12–128 characters with uppercase and lowercase letters and a number. Avoid common passwords.',
     rememberKey: 'Remember the unlock key in this device’s secure storage',
@@ -146,6 +157,7 @@ export const en: typeof zhCN = {
     disableDescription:
       'This stops further sync. Your cloud backup and local data are kept. Deleting the cloud backup is a separate action.',
     confirmDisable: 'Turn off sync',
+    refreshBackup: 'View or refresh cloud backup',
     deleteTitle: 'Delete the encrypted cloud backup?',
     deleteDescription:
       'Only this account’s cloud backup is deleted. Local data is kept. You will need a new backup to restore on another device.',
@@ -231,6 +243,8 @@ export const en: typeof zhCN = {
       cancelled: 'The task was cancelled.',
       network: 'Could not reach the sync service. Check your connection and try again.',
       rateLimited: 'Too many requests. Wait before retrying.',
+      deletePendingOperation:
+        'An earlier cloud operation is unconfirmed. Refresh the status later and try deleting again.',
       outcomeUnknown:
         'The cloud result is not confirmed. Check the pending result before creating another backup.',
       recovery:
@@ -302,10 +316,13 @@ export const en: typeof zhCN = {
     delete: 'Delete',
     later: 'Later',
     cancel: 'Cancel',
+    confirmAction: 'Confirm',
     close: 'Close',
     show: 'Show',
     hide: 'Hide',
+    apiKeySaved: 'API key saved',
     saved: 'Saved',
+    deleted: 'Deleted',
     refreshed: 'Refreshed',
     saving: 'Saving…',
     experimental: 'Experimental',
@@ -317,6 +334,7 @@ export const en: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    asking: 'Ask anything',
     thinking: 'thinking',
     using: 'using',
     cancelled: 'Cancelled',
@@ -374,6 +392,9 @@ export const en: typeof zhCN = {
     title: 'Ask',
     headerHint: 'Ask anytime',
     thinking: 'Thinking…',
+    thoughtLive: 'Thinking for {{seconds}}s',
+    thoughtDone: 'Thought for {{seconds}}s',
+    stop: 'Stop',
     error: 'Something went wrong. Please try again.',
     errorRetry: 'Retry',
     errorRetryHint: 'Please try again.',
@@ -529,6 +550,7 @@ export const en: typeof zhCN = {
   shell: {
     shortcutLabel: 'Recording shortcut',
     shortcutHint: 'Start / Stop',
+    homeLabel: 'Back to overview',
     betaTag: 'BETA',
     betaNote: 'Local storage, optional cloud backup',
     navHint: {
@@ -552,6 +574,7 @@ export const en: typeof zhCN = {
         tagline: 'Local-first voice input layer',
         releaseNotes: 'Release notes ↗',
         docs: 'Help center ↗',
+        credits: 'Component credits',
       },
     },
     providerPrompt: {
@@ -674,6 +697,12 @@ export const en: typeof zhCN = {
     llmConfigured: 'Active LLM configured',
     llmNotConfigured: 'Not configured',
     statusConfigured: 'Configured',
+    statusFailed: 'Failed',
+    serviceHint: {
+      asr: 'Speech recognition: see if it is configured, click to open service settings',
+      llm: 'Text processing: see if it is configured, click to open service settings',
+      omni: 'Multimodal voice: see if it is configured, click to open service settings',
+    },
     statusNotConfigured: 'Not configured',
     statusUnknown: 'Unavailable',
     credentialsLoadError: 'Could not read credential status',
@@ -688,6 +717,15 @@ export const en: typeof zhCN = {
     metricTotalTrend: 'Local archive (max 200)',
     activityTitle: 'Annual activity',
     activityCount: '{{count}} dictation(s)',
+    activityAppsLabel: 'Top apps by dictations',
+    activityAppsShow: 'Show top apps',
+    activityAppsHide: 'Hide top apps',
+    activityAppsUnavailable: 'Yearly activity by app is unavailable on this platform.',
+    activityAppsError: 'Could not load yearly activity by app.',
+    activityYearTitle: 'This year',
+    activityActiveDays: 'Active days',
+    activityPeakDay: 'Busiest day',
+    activityDailyAverage: 'Daily average',
     activityLoadError: 'Activity data load failed',
     period: {
       ariaLabel: 'Reporting period',
@@ -1242,6 +1280,8 @@ export const en: typeof zhCN = {
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Text insertion',
       experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Voice enhancement and playback suppression',
@@ -1547,6 +1587,15 @@ export const en: typeof zhCN = {
       voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
       voiceActivationLocalOnly:
         'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationHotkeyLinked: "Link recording shortcut",
+      voiceActivationHotkeyLinkedDesc: "Click the recording shortcut to toggle wake listening instead of the usual recording gesture. Starts paused after launch. Pausing disables idle microphone prewarming, not other recordings. Wake listening is local; dictation still uses your current service.",
+      voiceActivationDisabled: "Voice activation disabled",
+      voiceActivationPaused: "Wake listening temporarily paused",
+      voiceActivationPausing: "Stopping wake listening…",
+      voiceActivationStarting: "Starting wake listening…",
+      voiceActivationListening: "Listening for the wake phrase",
+      voiceActivationDictating: "Dictating or finishing",
+      voiceActivationError: "Unable to start wake listening. Check the model, microphone permissions and device.",
       voiceActivationMultimodalModels:
         'Prepare the voice activation model here. Dictation still uses your current multimodal service.',
       voiceActivationModelMissing: 'The local Zipformer model is not installed.',
@@ -1601,8 +1650,7 @@ export const en: typeof zhCN = {
       validationTitle: 'Connection check',
       validationHint:
         'Manually send a real request to check this configuration. It may use service credits. Saving settings does not run a check.',
-      validationHintOmni:
-        'Manually send a text-only connectivity request (no recording). Passing does not mean audio dictation works—please confirm with a short recording. It may use service credits.',
+      validationHintOmni: 'Manually send a text-only connection request. It may use server credits.',
       autoSaveHint:
         'Changes save automatically. Once configured, you can check the connection manually.',
       nameHint:
@@ -1660,11 +1708,12 @@ export const en: typeof zhCN = {
         'One model that turns audio + prompt into the final text directly (experimental pipeline).',
       pipelineModeLabel: 'Pipeline mode',
       pipelineModeHint:
-        'Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.',
+        'Traditional uses ASR + LLM; multimodal uses one audio model; DeepSeek suite combines its speech, language and search services.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Traditional',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.',
+        'All three pipelines retain independent credentials. Your selection persists after closing settings, closing the window, or restarting the app.',
       presets: {
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
@@ -2359,6 +2408,7 @@ export const en: typeof zhCN = {
     experimentsTitle: 'Experiments & extensions',
     experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Service settings',
       llm: 'Language models',
       asr: 'Speech recognition',
@@ -2366,11 +2416,11 @@ export const en: typeof zhCN = {
       models: 'Local models',
       connections: 'Connections',
       inactive: 'Not used in this mode',
+      unavailable: 'Unavailable',
       inactiveDetail:
         'These settings are saved, but the current recognition pipeline does not use them.',
-      statusConfigured:
-        'Green dot: at least one service is on. Requests use the first enabled service.',
-      statusMissing: 'Red dot: no service is turned on yet.',
+      statusConfigured: 'At least one service is on. Requests use the first enabled service.',
+      statusMissing: 'No service is turned on yet.',
     },
     searchPlaceholder: 'Find a settings category…',
     clearSearch: 'Clear search',
@@ -2382,6 +2432,8 @@ export const en: typeof zhCN = {
     backToAdvanced: 'Back to advanced features',
     back: 'Back',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configure the live transcript in the input field.',
       experiments: 'Configure experimental features and extensions.',
       customSyncServer: 'For self-hosted services only; official sync needs no configuration.',

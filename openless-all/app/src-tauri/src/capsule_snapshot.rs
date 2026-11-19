@@ -262,6 +262,7 @@ mod tests {
             warming: false,
             capsule_style: CapsuleStyle::Classic,
             selection_polish: false,
+            qa: false,
         }
     }
 

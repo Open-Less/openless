@@ -1,22 +1,26 @@
+import { previewHistory } from '../../preview/history';
 import { isDesktop } from './platform-exports';
-import { invokeOrMock, isTauriNow, platformCapabilities } from './shared';
+import { invokeOrMock, isTauriNow, platformCapabilities, requireBackendReady } from './shared';
 import type { CapsuleSnapshot } from '../types';
 
 export function startDictation(): Promise<void> {
-  return invokeOrMock('start_dictation', undefined, () => undefined);
+  return invokeOrMock('start_dictation', undefined, () => {
+    previewHistory.startRecording();
+  });
 }
 
 export function stopDictation(): Promise<void> {
-  return invokeOrMock('stop_dictation', undefined, () => undefined);
+  return invokeOrMock('stop_dictation', undefined, () => previewHistory.stopRecording());
 }
 
 export function cancelDictation(): Promise<void> {
-  return invokeOrMock('cancel_dictation', undefined, () => undefined);
+  return invokeOrMock('cancel_dictation', undefined, () => previewHistory.cancelRecording());
 }
 
 export async function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
   if (!isDesktop()) return;
   if (isTauriNow()) {
+    await requireBackendReady();
     const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
     // Mirrors render the shared transcript but never own the primary rail's native layout.
     // This also prevents a retained/closing mirror's cleanup from hiding the active rail.

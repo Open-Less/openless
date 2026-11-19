@@ -2,11 +2,15 @@ import { useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'r
 
 import { keyboardInteraction } from './interactionMode';
 
-export const OVERLAY_EXIT_MS = 180;
-const ENTER_MS = 240;
-const SETTINGS_ENTER_MS = 240;
-const SETTINGS_BACKDROP_MS = 280;
-const CONTENT_MS = 160;
+// Presence leaves room for the browser to paint the last frame before removal.
+export const OVERLAY_EXIT_MS = 156;
+const SURFACE_EXIT_MS = 120;
+const SURFACE_ENTER_MS = 168;
+const BACKDROP_ENTER_MS = 136;
+const CONTENT_ENTER_MS = 148;
+const SELECTION_MS = 240;
+const SURFACE_EXIT_EASING = 'cubic-bezier(0.4, 0, 0.73, 0.55)';
+const SURFACE_ENTER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 let media: MediaQueryList | undefined;
 
@@ -32,13 +36,7 @@ export function useReducedMotion() {
 type Frame = { opacity: string | number; transform: string; width?: string };
 const VISIBLE: Frame = { opacity: 1, transform: 'none' };
 const FADED: Frame = { opacity: 0, transform: 'none' };
-const POP_HIDDEN: Frame = { opacity: 0, transform: 'translate3d(0, 18px, 0) scale(0.84)' };
-const POP_ENTER_MS = 520;
-const POP_ENTER: Keyframe[] = [
-  { opacity: 0, transform: 'translate3d(0, 18px, 0) scale(0.84)', offset: 0 },
-  { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1.045)', offset: 0.74 },
-  { opacity: 1, transform: 'none', offset: 1 },
-];
+const POP_HIDDEN: Frame = { opacity: 0, transform: 'translate3d(0, 6px, 0) scale(0.94)' };
 
 function currentFrame(element: HTMLElement): Frame {
   const style = getComputedStyle(element);
@@ -51,25 +49,14 @@ function animate(
   to: Frame,
   duration: number,
   exiting: boolean,
-  easingToken = exiting ? '--ol-motion-exit' : '--ol-motion-spring',
-  frames?: Keyframe[],
+  easing = exiting ? SURFACE_EXIT_EASING : SURFACE_ENTER_EASING,
 ) {
-  const style = getComputedStyle(element);
-  const easing = style.getPropertyValue(easingToken).trim();
   const previousWillChange = element.style.willChange;
-  const sequence = frames ?? [from, to];
-  const transforms = sequence.map((frame) => frame.transform);
   // A flat page/backdrop fade must not create a transform containing block or
   // promote its text as if it were scaling. Cards/indicators still need both.
-  element.style.willChange = transforms.every((value) => value === 'none' || value == null)
-    ? 'opacity'
-    : 'opacity, transform';
-  const animation = element.animate(sequence, {
-    duration,
-    // Custom frames already carry the overshoot. A second ease would flatten it.
-    easing: frames ? 'linear' : easing || 'cubic-bezier(0.23, 1, 0.32, 1)',
-    fill: 'both',
-  });
+  element.style.willChange =
+    from.transform === 'none' && to.transform === 'none' ? 'opacity' : 'opacity, transform';
+  const animation = element.animate([from, to], { duration, easing, fill: 'both' });
   animation.id = exiting ? 'ol-surface-exit' : 'ol-surface-enter';
   let released = false;
   const releaseLayer = () => {
@@ -129,39 +116,18 @@ export function useOverlayMotion(
           ? currentFrame(element)
           : hidden;
     interrupted.current = null;
-    const popEnter = variant === 'pop' && !closing && from === hidden;
     const motion = animate(
       element,
       from,
       closing ? hidden : VISIBLE,
       closing
-        ? OVERLAY_EXIT_MS
-        : popEnter
-          ? POP_ENTER_MS
-          : settingsEntrance
-            ? variant === 'backdrop'
-              ? SETTINGS_BACKDROP_MS
-              : SETTINGS_ENTER_MS
-            : variant === 'backdrop'
-              ? CONTENT_MS
-              : ENTER_MS,
+        ? SURFACE_EXIT_MS
+        : variant === 'backdrop' && !settingsEntrance
+          ? BACKDROP_ENTER_MS
+          : SURFACE_ENTER_MS,
       closing,
-      closing ? '--ol-motion-exit' : settingsEntrance ? '--ol-motion-soft' : '--ol-motion-spring',
-      popEnter ? POP_ENTER : undefined,
     );
     let cancelled = false;
-    let entryFrame: number | undefined;
-    if (settingsEntrance && !closing) {
-      // Paint the mounted dialog at its starting pose before advancing the entrance clock.
-      motion.animation.pause();
-      motion.animation.currentTime = 0;
-      entryFrame = window.requestAnimationFrame(() => {
-        if (cancelled) return;
-        entryFrame = window.requestAnimationFrame(() => {
-          if (!cancelled) motion.animation.play();
-        });
-      });
-    }
     void motion.animation.finished
       .then(() => {
         if (cancelled) return;
@@ -171,11 +137,10 @@ export function useOverlayMotion(
       .catch(() => {});
     return () => {
       cancelled = true;
-      if (entryFrame !== undefined) window.cancelAnimationFrame(entryFrame);
-      const elapsed = Number(motion.animation.currentTime ?? 0);
-      // StrictMode runs this effect twice before paint. A zero-progress cancel
-      // must not replace the pop entrance with a plain ease to rest.
-      interrupted.current = elapsed > 32 ? { element, frame: currentFrame(element) } : null;
+      interrupted.current =
+        motion.animation.playState === 'running' || motion.animation.playState === 'paused'
+          ? { element, frame: currentFrame(element) }
+          : null;
       motion.cancel();
     };
   }, [ref, closing, variant, enabled, entrance, reduced]);
@@ -200,7 +165,7 @@ export function useContentMotion(ref: RefObject<HTMLElement>, key: string) {
         ? interrupted.current.frame
         : { opacity: 0, transform: 'translate3d(0, 6px, 0)' };
     interrupted.current = null;
-    const motion = animate(element, from, VISIBLE, ENTER_MS, false);
+    const motion = animate(element, from, VISIBLE, CONTENT_ENTER_MS, false);
     void motion.animation.finished.then(motion.cancel).catch(() => {});
     return () => {
       interrupted.current =
@@ -284,7 +249,7 @@ export function useSelectionMotion(
           indicator,
           from,
           { opacity: 1, transform: target, width },
-          ENTER_MS,
+          SELECTION_MS,
           false,
         );
         motion.animation.id = 'ol-selection-move';

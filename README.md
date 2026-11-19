@@ -101,13 +101,6 @@
       <sub>Contributor / Linux Maintainer</sub>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="170">
-      <img src="assets/people/jimmy54.png" width="80" height="80" alt="jimmy54" /><br/>
-      <strong><a href="https://github.com/jimmy54" target="_blank" rel="noopener">jimmy54</a></strong><br/>
-      <sub>macOS packaging &amp; developer account</sub>
-    </td>
-  </tr>
 </table>
 
 OpenLess is a cross-platform (macOS, Windows, Linux, Android, iOS, and HarmonyOS) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
@@ -497,6 +490,15 @@ We appreciate our sponsors for making sustained project work possible, and we th
 OpenLess also recognizes and appreciates the LinuxDo community for its open, practical, and developer-friendly atmosphere. Many of the ideas, discussions, and early feedback around OpenLess were inspired by the broader open-source spirit that LinuxDo represents.
 
 This acknowledgement does not imply official endorsement or affiliation.
+
+## Third-party components
+
+The Overview yearly-activity card is a port of **Rare UI**'s [GitHub Activity](https://rareui.com/components/githubactivity)
+component (Copyright (c) 2026 Swami Malode, MIT + Commons Clause, attribution required).
+The port keeps the upstream layout, week/month maths, tooltip and expandable panel, and
+replaces the GitHub data source with local dictation counts. Source:
+`openless-all/app/src/components/ui/GitHubActivity.tsx` and `github-activity.css`.
+The same credit is shown in Settings → About → Component credits.
 
 ## License
 
