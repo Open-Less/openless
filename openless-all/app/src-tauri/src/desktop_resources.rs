@@ -33,6 +33,8 @@ pub(crate) struct MainWindowState {
     /// second close resetting the deadline while the first timer is pending.
     pub hide_grace: Option<(u64, std::time::Instant)>,
     pub hide_grace_seq: u64,
+    #[cfg(target_os = "macos")]
+    presentation: MainPresentation,
     pub size: Option<tauri::PhysicalSize<u32>>,
     pub position: Option<tauri::PhysicalPosition<i32>>,
     pub maximized: bool,
@@ -40,6 +42,96 @@ pub(crate) struct MainWindowState {
 
 #[cfg(not(mobile))]
 pub(crate) type MainWindowLifecycle = parking_lot::Mutex<MainWindowState>;
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct MainPresentation {
+    ready: bool,
+    pending_focus: Option<bool>,
+    ticket: u64,
+}
+
+#[cfg(target_os = "macos")]
+fn show_prepared_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, focus: bool) {
+    use tauri::Manager;
+    if let Err(error) = window.show() {
+        log::warn!("[main] show prepared window failed: {error}");
+        return;
+    }
+    if focus {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        crate::activate_app(window.app_handle());
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn request_main_presentation<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    focus: bool,
+) {
+    use tauri::Manager;
+    let app = window.app_handle();
+    let lifecycle = app.state::<MainWindowLifecycle>();
+    let ticket = {
+        let mut state = lifecycle.lock();
+        if state.closing {
+            state.reopen_pending = true;
+            return;
+        }
+        let presentation = &mut state.presentation;
+        if presentation.ready {
+            drop(state);
+            show_prepared_main(window, focus);
+            return;
+        }
+        if let Some(existing) = &mut presentation.pending_focus {
+            *existing |= focus;
+            return;
+        }
+        presentation.pending_focus = Some(focus);
+        presentation.ticket = presentation.ticket.wrapping_add(1);
+        presentation.ticket
+    };
+
+    // An actual startup failure must stay recoverable even if JS never reports a frame.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let main_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let focus = {
+                let lifecycle = main_app.state::<MainWindowLifecycle>();
+                let mut state = lifecycle.lock();
+                if state.closing || state.presentation.ticket != ticket {
+                    return;
+                }
+                state.presentation.pending_focus.take()
+            };
+            if let (Some(focus), Some(window)) = (focus, main_app.get_webview_window("main")) {
+                log::warn!("[main] first content frame timed out; showing recovery surface");
+                show_prepared_main(&window, focus);
+            }
+        });
+    });
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn main_frame_ready(window: &tauri::WebviewWindow) {
+    use tauri::Manager;
+    let lifecycle = window.state::<MainWindowLifecycle>();
+    let focus = {
+        let mut state = lifecycle.lock();
+        if state.closing {
+            return;
+        }
+        state.presentation.ready = true;
+        state.presentation.pending_focus.take()
+    };
+    if let Some(focus) = focus {
+        show_prepared_main(window, focus);
+    }
+}
 
 #[cfg(not(mobile))]
 pub(crate) fn initialize_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
@@ -113,6 +205,11 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         }
         state.closing = true;
         state.hide_grace = None;
+        #[cfg(target_os = "macos")]
+        {
+            state.presentation.ready = false;
+            state.presentation.pending_focus = None;
+        }
         state.maximized = window.is_maximized().unwrap_or(false);
         // Keep the last normal bounds: reopening a maximized window must not
         // overwrite its restore size with the monitor's dimensions.
@@ -125,6 +222,7 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     // otherwise keep the page's JS/DOM allocator in the shared content process used by the
     // resident capsule, which makes a closed main window look like a memory leak.
     let _ = window.hide();
+    let page_url = window.url().ok();
     let _ = window.eval("window.stop(); location.replace('about:blank');");
     let app_for_destroy = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -147,11 +245,11 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 // The unload step intentionally replaced the document before destroy. If the
                 // native destroy fails, restore the main document before the next open instead
                 // of leaving a hidden, reusable about:blank WebView behind.
-                let _ = window.eval("location.replace('index.html')");
+                if let Some(page_url) = page_url {
+                    let _ = window.navigate(page_url);
+                }
                 if reopen {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
+                    crate::show_main_window(&app_for_main);
                 }
                 log::warn!("[main] destroy after WebView unload failed: {error}");
             }
@@ -180,6 +278,10 @@ pub(crate) fn hide_main_with_grace<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
             state.hide_grace_seq,
             std::time::Instant::now() + MAIN_CLOSE_GRACE,
         ));
+        #[cfg(target_os = "macos")]
+        {
+            state.presentation.pending_focus = None;
+        }
         state.hide_grace_seq
     } else {
         0

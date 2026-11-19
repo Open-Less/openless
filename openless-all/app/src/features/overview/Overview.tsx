@@ -84,7 +84,15 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   }, [isMac, modalActive, refreshAll]);
 
   return (
-    <div className="ol-overview-dashboard" data-mobile={mobile || undefined}>
+    <div
+      className="ol-overview-dashboard"
+      data-mobile={mobile || undefined}
+      data-ol-overview-pending={
+        (history.data === null && history.error === null) ||
+        (activity.data === null && activity.error === null) ||
+        undefined
+      }
+    >
       <PageHeader
         compact
         title={t('overview.title')}

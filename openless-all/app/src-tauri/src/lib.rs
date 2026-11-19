@@ -274,6 +274,8 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            #[cfg(target_os = "macos")]
+            main_window_frame_ready,
             get_capsule_auxiliary_snapshot,
             commands::get_capsule_snapshot,
             commands::get_dictation_translation_target,
@@ -1021,6 +1023,9 @@ fn run_desktop() {
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
+                    #[cfg(target_os = "macos")]
+                    desktop_resources::request_main_presentation(&main, false);
+                    #[cfg(not(target_os = "macos"))]
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }
@@ -2118,13 +2123,28 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     };
     #[cfg(mobile)]
     let main = app.get_webview_window("main");
-    if let Some(w) = main {
-        let _ = w.show();
-        #[cfg(not(mobile))]
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+    #[cfg(target_os = "macos")]
+    if let Some(window) = main {
+        desktop_resources::request_main_presentation(&window, true);
     }
-    activate_app(app);
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(w) = main {
+            let _ = w.show();
+            #[cfg(not(mobile))]
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+        activate_app(app);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn main_window_frame_ready(window: tauri::WebviewWindow) {
+    if window.label() == "main" {
+        desktop_resources::main_frame_ready(&window);
+    }
 }
 
 /// Routes a CLI intent to the shared Core or the QA host still owned by Tauri. Two entry
@@ -2200,9 +2220,11 @@ pub(crate) fn request_microphone_from_foreground<R: Runtime>(
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(not(mobile))]
     {
-        // The main editor is an infrequent surface. Destroy its WebView when the
-        // user closes it so WebKit can release its content process and memory;
-        // tray/menu actions recreate it through ensure_main on the next open.
+        // Let a quick macOS reopen reuse the page. Once the grace expires, release
+        // the WebView's content and let ensure_main recreate it on the next open.
+        #[cfg(target_os = "macos")]
+        desktop_resources::hide_main_with_grace(app);
+        #[cfg(not(target_os = "macos"))]
         desktop_resources::close_main(app);
         let app_for_preview = app.clone();
         tauri::async_runtime::spawn_blocking(move || {

@@ -545,10 +545,8 @@ button:disabled {
   height: 100%;
   min-height: 100%;
   padding: 24px;
-  background: rgb(255 255 255 / 88%);
-  color: #18181b;
-  -webkit-backdrop-filter: blur(28px);
-  backdrop-filter: blur(28px);
+  background: var(--ol-surface);
+  color: var(--ol-ink);
 }
 .ol-startup-content {
   max-width: 420px;
@@ -562,7 +560,7 @@ button:disabled {
 }
 .ol-startup-content > p {
   margin: 8px 0;
-  color: #52525b;
+  color: var(--ol-ink-2);
   font-size: 12px;
 }
 .ol-startup-mark {
@@ -774,9 +772,6 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   .ol-startup {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-  }
-  .ol-startup {
-    background: #fff;
   }
   .ol-dialog-card {
     background: var(--ol-surface) !important;
