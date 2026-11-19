@@ -29,10 +29,11 @@ writeFileSync(
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
-import {OmniChannelSection} from '/src/pages/settings/ProvidersSection.tsx';
-import {HotkeySettingsProvider} from '/src/state/HotkeySettingsContext.tsx';
+import {OmniChannelSection} from '/src/features/providers/ProvidersSection.tsx';
+import {HotkeySettingsProvider} from '/src/data/preferences.tsx';
 import {TooltipProvider} from '/src/components/Tooltip.tsx';
-import {mockCredentialValues,mockSettings,mockSetSettings,mockHotkeyCapability} from '/src/lib/ipc/mock-data.ts';
+import {mockCredentialValues,mockSettings,mockSetSettings} from '/src/lib/ipc/mock-data.ts';
+import {getPreviewProfile} from '/src/preview/profiles.ts';
 import descriptors from '/src/lib/ipc/mock-provider-descriptors.json';
 import i18n,{i18nReady} from '/src/i18n/index.ts';
 import '/src/styles/tokens.css';
@@ -49,14 +50,16 @@ mockCredentialValues.set('openai-realtime:omni.api_key','');
 mockCredentialValues.set('openai-realtime:omni.extra_headers','{"X-Fixture":"synthetic-only"}');
 window.fixtureRead=(provider,account)=>mockCredentialValues.get(provider+':'+account)??null;
 window.fixtureCalls=[]; window.fixtureUnexpected=[];
-let revision=0;let releaseWrite;
+let revision=0;let releaseWrite;let callbackId=0;
 window.fixtureReleaseWrite=()=>{releaseWrite?.();releaseWrite=undefined};
 window.fixtureDelayNextOptionsWrite=false;
-window.fixtureEnableNative=()=>{window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{
+window.fixtureEnableNative=()=>{window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};window.__TAURI_INTERNALS__={transformCallback:()=>++callbackId,invoke:async(cmd,args={})=>{
   window.fixtureCalls.push({cmd,args:cmd==='set_credential'?{account:args.account,provider:args.provider,value:'[synthetic fixture]'}:args});
   if(cmd==='get_startup_snapshot')return {contractVersion:'2.0.0',backend:{running:true}};
   if(cmd==='set_windows_caption_theme')return;
-  if(cmd==='get_hotkey_capability')return structuredClone(mockHotkeyCapability);
+  if(cmd==='get_hotkey_capability')return getPreviewProfile('win').hotkeyCapability;
+  if(cmd==='plugin:event|listen')return callbackId;
+  if(cmd==='plugin:event|unlisten')return;
   if(cmd==='read_credential')return window.fixtureRead(args.provider,args.account);
   if(cmd==='set_credential'){
     if(args.account==='omni.realtime_options'&&window.fixtureDelayNextOptionsWrite){window.fixtureDelayNextOptionsWrite=false;await new Promise(resolve=>releaseWrite=resolve)}
@@ -131,7 +134,7 @@ try {
   const options = async (provider) =>
     JSON.parse((await read(provider, 'omni.realtime_options')) || '{}');
   const settled = async () =>
-    expect(card.getByRole('button', { name: labels.verify, exact: true })).toBeEnabled();
+    await expect(card.getByRole('button', { name: labels.verify, exact: true })).toBeEnabled();
   const verifyScope = async (provider) => {
     await settled();
     await card.getByRole('button', { name: labels.verify, exact: true }).click();

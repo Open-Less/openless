@@ -1,5 +1,7 @@
 # OpenLess All-Platform
 
+[English](README.md) | [简体中文](README.zh.md)
+
 This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
 
 ## Native iOS app and keyboard
@@ -18,12 +20,9 @@ The runnable sources live in `app/`:
 - `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
 - `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
 
-The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
+The Tauri manifest includes path dependencies under `app/src-tauri/vendor/` (`cpal`, `tauri-runtime-wry`). These crates are vendored in the repository, so **there are no Git submodules to initialize** — a fresh clone is ready to build. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require them.
 
 ```bash
-# Tauri source development — pull in vendored submodules
-git submodule update --init --recursive
-
 cd app
 npm ci
 npm run tauri dev
@@ -41,7 +40,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
+Linux packaging is manual while the L01–L12 device acceptance is open: the dedicated CI workflows (`check-linux-egui.yml`, `release-linux-egui.yml`) were removed and desktop releases no longer dispatch Linux. The local scripts still build deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). Restoring automated Linux releases requires the acceptance evidence described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
 
 ## macOS Build
 
@@ -140,6 +139,58 @@ cd app
 - Text insertion through `Ctrl+V` is treated as copy fallback unless the app can
   confirm insertion.
 
+## Android Build
+
+A fresh clone has no generated Android project, and the build script stops until `src-tauri/gen/android` exists. Initialize it, copy the Kotlin/XML scaffolding, and merge the manifests the same way CI does:
+
+```bash
+cd app
+npm ci
+npm run tauri:android:init                  # creates src-tauri/gen/android
+npm run copy:android-scaffolding            # Kotlin sources + res/xml
+node scripts/merge-android-v1-manifest.mjs  # microphone permission
+node scripts/merge-android-overlay-manifest.mjs
+node scripts/merge-android-shizuku-manifest.mjs
+node scripts/patch-android-shizuku-deps.mjs
+node scripts/merge-android-updater-manifest.mjs   # release builds: in-app update manifest
+npm run tauri:android:build:release
+```
+
+The same chain, including the local Gradle workflow, is documented in [`app/android/README.md`](app/android/README.md).
+
+APKs are written under `app/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/`. Use `npm run tauri:android:build:debug` for a debug build; the `android-apk.yml` workflow produces debug smoke artifacts for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`. The native keyboard/IME backend lives in `app/android/` and `app/mobile-ime/`.
+
+## HarmonyOS Build
+
+The ArkTS/ArkWeb host builds through the frontend script; see [`app/harmony/README.md`](app/harmony/README.md) for the toolchain details.
+
+```bash
+cd openless-all/app
+bash scripts/build-harmony-frontend.sh
+```
+
+Requirements: HarmonyOS Command Line Tools, Python 3, and `rustup target add aarch64-unknown-linux-ohos`. The unsigned HAP is written to `app/harmony/openless-project/entry/build/default/outputs/default/`; the `release-harmony.yml` workflow attaches it to releases, while AppGallery packages are submitted manually. Installing on a device additionally needs a Huawei debug certificate for `openless.hm.com` and a debug Profile that contains that device — see [`app/harmony/README.md`](app/harmony/README.md).
+
+## iOS Build
+
+The native project is independent of the desktop version; see [`ios/README.md`](ios/README.md). Requirements: an Apple Silicon Mac, Xcode with its command-line tools selected, Python 3, CMake, Git, and Rustup.
+
+```bash
+cd openless-all/ios
+./scripts/bootstrap.sh                    # Rust 1.99.0, iOS targets, pinned native deps, XcodeGen
+./scripts/bootstrap-local-speech.sh       # bundled SenseVoice runtime
+./scripts/build-rime.sh                   # Rime data and compiled table
+./scripts/build-core.sh                   # Frameworks/<platform>/libOpenLessCore.a
+python3 scripts/collect-rust-licenses.py
+python3 scripts/validate-project.py
+./scripts/build.sh device Release unsigned
+python3 scripts/package-ipa.py \
+  DerivedData/Build/Products/Release-iphoneos/OpenLess.app \
+  "$HOME/Downloads/OpenLess-0.1.0-16-unsigned.ipa"
+```
+
+`build.sh` takes `<simulator|device> <Debug|Personal|Release> [unsigned|signed]` and defaults to `simulator Debug unsigned`; it refuses to run until `build-core.sh` and `build-rime.sh` have produced `libOpenLessCore.a`, `libOpenLessRime.a`, the Rime table, and the prediction lexicon. `package-ipa.py` needs the built `.app` plus a new output path, never overwrites an existing IPA, and packages only an unsigned device build for personal signing.
+
 ## Release Signing
 
 Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
@@ -158,6 +209,10 @@ Optional:
 - `KEYCHAIN_PASSWORD`
 
 Manual workflow runs can still produce ad-hoc signed test builds, but tagged macOS releases fail if signing/notarization secrets are missing.
+
+## Third-party components
+
+The overview yearly activity card ports [Rare UI GitHub Activity](https://rareui.com/components/githubactivity) (Copyright (c) 2026 Swami Malode). The license is MIT plus the Commons Clause. Cell size, gap, radius, padding, month labels, tooltip, and the expandable panel stay with the upstream component; local dictation counts replace GitHub contributions, and the apps with the most voice input replace repositories. The same credit is in the app under Settings → About and updates → Component credits. See [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md).
 
 ## Ignored Local Output
 

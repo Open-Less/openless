@@ -404,7 +404,7 @@ impl SelectionVoiceWorkflow {
                 };
                 (llm, text)
             }
-            PipelineMode::Traditional => (
+            PipelineMode::Traditional | PipelineMode::Deepseek => (
                 text,
                 ProviderInvocation::for_provider("selection-voice-unused-omni"),
             ),
@@ -734,6 +734,7 @@ impl SelectionVoicePersistence {
             preferences.pipeline_mode,
         ) {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let session = DictationSession {
@@ -762,6 +763,7 @@ impl SelectionVoicePersistence {
             asr_ms: None,
             polish_ms: None,
         };
+        let activity_app = session.app_name.clone();
         let mut changed = false;
         match self.history.append_with_retention(
             session,
@@ -779,6 +781,9 @@ impl SelectionVoicePersistence {
             log::warn!("failed to persist selection voice activity: {error}");
         } else {
             changed = true;
+        }
+        if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
+            log::warn!("failed to persist application activity: {error}");
         }
         if changed {
             let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;

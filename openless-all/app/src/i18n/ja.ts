@@ -111,6 +111,8 @@ export const ja: typeof zhCN = {
     noSnapshot: '暗号化クラウドバックアップはまだありません。',
     snapshotUnknown: 'クラウドバックアップは未確認です。',
     lastSync: '最終同期：{{time}}',
+    synced: '同期が完了しました',
+    syncing: 'クラウドの最新データを同期しています…',
     syncNow: '今すぐ同期',
     checkPending: '未確定の結果を確認',
     unlock: 'ロック解除',
@@ -140,6 +142,15 @@ export const ja: typeof zhCN = {
     newPassword: '新しい同期パスワード',
     currentPassword: '現在の同期パスワード',
     confirmPassword: '新しいパスワードを再入力',
+    setSyncPasswordTitle: '同期パスワードを設定',
+    setSyncPasswordDescription:
+      'OpenLess はこのパスワードで端末上のデータを暗号化し、クラウドバックアップを作成します。同期はバックアップの作成後に有効になります。',
+    confirmSyncPassword: '同期パスワードを再入力',
+    confirmAndContinue: '確認して続行',
+    revealPassword: 'パスワードを表示（{{field}}）',
+    concealPassword: 'パスワードを非表示（{{field}}）',
+    previewNotice:
+      'クラウド同期のプレビューです。サンプルのパスワードを使用してください。サーバーへの接続や認証情報の保存は行いません。',
     passwordPolicy:
       '12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。',
     rememberKey: 'この端末の安全なストレージに解除キーを記憶する',
@@ -147,6 +158,7 @@ export const ja: typeof zhCN = {
     disableDescription:
       '以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。',
     confirmDisable: '同期をオフにする',
+    refreshBackup: 'クラウドバックアップを表示・更新',
     deleteTitle: '暗号化クラウドバックアップを削除しますか？',
     deleteDescription:
       'このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。',
@@ -232,6 +244,8 @@ export const ja: typeof zhCN = {
       cancelled: '処理をキャンセルしました。',
       network: '同期サービスに接続できません。ネットワークを確認して再試行してください。',
       rateLimited: 'リクエストが多すぎます。しばらく待ってから再試行してください。',
+      deletePendingOperation:
+        '以前のクラウド操作が確認できていません。しばらくしてから状態を更新し、削除を再試行してください。',
       outcomeUnknown:
         'クラウドの結果が未確定です。新しいバックアップを作る前に未確定の結果を確認してください。',
       recovery:
@@ -293,10 +307,13 @@ export const ja: typeof zhCN = {
     delete: '削除',
     later: '後で',
     cancel: 'キャンセル',
+    confirmAction: '確認',
     close: '閉じる',
     show: '表示',
     hide: '非表示',
+    apiKeySaved: 'API キーを保存しました',
     saved: '保存しました',
+    deleted: '削除しました',
     refreshed: '更新しました',
     saving: '保存中',
     experimental: '実験的',
@@ -308,6 +325,7 @@ export const ja: typeof zhCN = {
     durationMinutes: '{{value}} 分',
   },
   capsule: {
+    asking: 'なんでも質問',
     thinking: 'thinking',
     using: 'using',
     cancelled: 'キャンセルしました',
@@ -365,6 +383,9 @@ export const ja: typeof zhCN = {
     title: '質問',
     headerHint: 'いつでも質問',
     thinking: '思考中…',
+    thoughtLive: '思考中（{{seconds}}秒）',
+    thoughtDone: '思考しました（{{seconds}}秒）',
+    stop: '停止',
     error: 'エラーが発生しました。後でもう一度お試しください。',
     errorRetry: '再試行',
     errorRetryHint: 'もう一度お試しください。',
@@ -520,6 +541,7 @@ export const ja: typeof zhCN = {
   shell: {
     shortcutLabel: '録音ショートカット',
     shortcutHint: '開始 / 停止',
+    homeLabel: '概要に戻る',
     betaTag: 'BETA',
     betaNote: 'ローカル保存、任意でクラウドバックアップ',
     navHint: {
@@ -543,6 +565,7 @@ export const ja: typeof zhCN = {
         tagline: 'ローカル駆動の音声入力レイヤー',
         releaseNotes: 'リリースノートを見る ↗',
         docs: 'ヘルプセンター ↗',
+        credits: 'コンポーネント',
       },
     },
     providerPrompt: {
@@ -662,6 +685,12 @@ export const ja: typeof zhCN = {
     llmConfigured: 'アクティブ LLM を設定済み',
     llmNotConfigured: '未設定',
     statusConfigured: '設定済み',
+    statusFailed: '未通過',
+    serviceHint: {
+      asr: '音声認識：設定状態を確認し、クリックでサービス設定を開く',
+      llm: '文字処理：設定状態を確認し、クリックでサービス設定を開く',
+      omni: 'マルチモーダル音声：設定状態を確認し、クリックでサービス設定を開く',
+    },
     statusNotConfigured: '未設定',
     statusUnknown: '読み取れません',
     credentialsLoadError: '認証情報の状態を読み取れません',
@@ -676,6 +705,16 @@ export const ja: typeof zhCN = {
     metricTotalTrend: 'ローカル保存（上限 200）',
     activityTitle: '年間アクティビティ',
     activityCount: '{{count}} 回の入力',
+    activityAppsLabel: '音声入力が多いアプリ',
+    activityAppsShow: 'よく使うアプリを表示',
+    activityAppsHide: 'よく使うアプリを隠す',
+    activityAppsUnavailable:
+      'このプラットフォームではアプリ別の年間アクティビティを表示できません。',
+    activityAppsError: 'アプリ別の年間アクティビティを読み込めませんでした。',
+    activityYearTitle: '今年',
+    activityActiveDays: '活動日数',
+    activityPeakDay: '最多の日',
+    activityDailyAverage: '1日平均',
     activityLoadError: 'アクティビティの読み込みに失敗',
     period: {
       ariaLabel: '集計期間',
@@ -1173,6 +1212,8 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
@@ -1261,6 +1302,11 @@ export const ja: typeof zhCN = {
     vocabularyLearning: {
       title: '修正から単語を学習',
       enabled: '修正からの学習を有効にする',
+      suggestionPosition: '提案カードの位置',
+      positionNearInput: '入力位置の近く',
+      positionBottomRight: '右下に固定',
+      suggestionPositionHint:
+        'Windows のみ：テキストカーソルまたは入力欄の近くに表示し、位置を取得できない場合は元の入力先画面の右下に表示します。固定表示では常にその画面の作業領域を使います。',
       observationSeconds: '監視時間',
       observationSecondsHint: '音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。',
       suggestionSeconds: '候補の表示時間',
@@ -1500,11 +1546,6 @@ export const ja: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多くのエディタ）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（チャット入力）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'キーボード一覧に OpenLess を表示',
-      windowsShowOpenlessInKeyboardListDesc:
-        'オフにすると Win+Space で OpenLess に切り替わりません。SendInput とクリップボード貼り付け挿入には影響しません。オンに戻すと一覧に再表示されます。',
-      windowsShowOpenlessInKeyboardListError:
-        'キーボード一覧を更新できません：システムが OpenLess 言語プロファイルの変更を拒否しました。',
       historyGroupTitle: '履歴とコンテキスト',
       historyRetentionLabel: '履歴保持期間（日）',
       historyRetentionDesc:
@@ -1531,6 +1572,15 @@ export const ja: typeof zhCN = {
       voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
       voiceActivationLocalOnly:
         '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
+      voiceActivationHotkeyLinked: "録音ショートカットと連動",
+      voiceActivationHotkeyLinkedDesc: "録音操作の代わりに、1回押すとウェイク監視を開始・一時停止します。起動直後は一時停止します。停止中はマイクの待機予熱を無効にしますが、他の録音は中断しません。監視はローカルで、音声入力は現在のサービスを使用します。",
+      voiceActivationDisabled: "音声起動は無効です",
+      voiceActivationPaused: "ウェイク監視を一時停止中",
+      voiceActivationPausing: "ウェイク監視を停止しています…",
+      voiceActivationStarting: "ウェイク監視を開始しています…",
+      voiceActivationListening: "開始フレーズを待機中",
+      voiceActivationDictating: "音声入力または終了処理中",
+      voiceActivationError: "監視を開始できません。モデル、マイク権限、デバイスを確認してください。",
       voiceActivationMultimodalModels:
         'ここで音声起動用モデルを準備します。音声入力には引き続き現在のマルチモーダルサービスを使用します。',
       voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',
@@ -1587,7 +1637,7 @@ export const ja: typeof zhCN = {
       validationHint:
         '実際にリクエストを送信して設定を確認します。サービスの利用枠を消費する場合があります。設定の保存だけでは確認を実行しません。',
       validationHintOmni:
-        'テキストのみの疎通確認を手動送信します（録音なし）。成功しても音声ディクテーションが使えるとは限りません。短い録音で再確認してください。サービスの利用枠を消費する場合があります。',
+        'テキストによる接続確認を手動で送信します。サーバーの利用枠を消費する場合があります。',
       validationHintRealtime:
         '音声の送信、マイクの起動、応答の生成を行わずに Realtime の接続とモデル設定を確認します。その後、短い録音でディクテーションの品質を確認してください。',
       autoSaveHint: '変更は自動保存されます。設定が終わったら、手動で接続を確認できます。',
@@ -1690,10 +1740,11 @@ export const ja: typeof zhCN = {
       pipelineModeLabel: '認識パイプライン',
       pipelineModeHint:
         '従来 = ASR 文字起こし + LLM 整形の2段式。マルチモーダル = 音声対応モデルが1回で完了。',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: '従来モード',
       pipelineModeMultimodal: 'マルチモーダルモード',
       pipelineIsolationNotice:
-        '2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。',
+        '3つのパイプラインは設定を個別に保存します。設定画面やウィンドウを閉じたりアプリを再起動したりしても選択は保持され、切り戻すと元の設定を使えます。',
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK（Volcengine Ark）',
@@ -2376,6 +2427,7 @@ export const ja: typeof zhCN = {
     experimentsTitle: '実験と拡張',
     experimentsDescription: '実験的な機能と拡張オプションを設定します。',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'サービス設定',
       llm: '言語モデル',
       asr: '音声認識',
@@ -2383,10 +2435,10 @@ export const ja: typeof zhCN = {
       models: 'ローカルモデル',
       connections: '接続と拡張',
       inactive: '現在のモードでは未使用',
+      unavailable: '使用できません',
       inactiveDetail: 'この設定は保存されていますが、現在の認識パイプラインでは使用されません。',
-      statusConfigured:
-        '緑の点：有効なサービスがあります。リクエストは有効な一覧の先頭を使います。',
-      statusMissing: '赤の点：まだ有効なサービスがありません。',
+      statusConfigured: '有効なサービスがあります。リクエストは有効な一覧の先頭を使います。',
+      statusMissing: 'まだ有効なサービスがありません。',
     },
     searchPlaceholder: '設定カテゴリを検索…',
     clearSearch: '検索をクリア',
@@ -2398,6 +2450,8 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: '入力欄に表示するリアルタイム原文を設定します。',
       experiments: '実験的な機能と拡張オプションを設定します。',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',

@@ -27,10 +27,13 @@ assert.match(worker, /TextStreamChunk\s*\{\s*text: finalized \+ &draft,\s*offset
 const core = read('crates/openless-core/src/local_asr_service.rs');
 const activate = core.match(/    fn activate\([^]*?(?=\n    fn )/)[0];
 assert.doesNotMatch(activate, /\.(?:prepare|preload|preload_lease|download_native_model)\(/);
-const page = read('src/pages/LocalAsr/index.tsx');
+const page = read('src/features/local-asr/index.tsx');
 for (const name of ['handleDownload', 'handleDownloadSherpa', 'handlePrepareFoundry']) {
   const body = page.match(new RegExp('const ' + name + ' = async[^]*?(?=\\n  const )'))[0];
   assert.doesNotMatch(body, /activateLocalAsr|activateSherpaProvider|preloadLocalAsr|handleEnable/);
 }
-assert.doesNotMatch(read('src/pages/settings/models/LocalModelPicker.tsx'), /preloadLocalAsr/);
+assert.doesNotMatch(
+  read('src/features/local-asr/settings/LocalModelPicker.tsx'),
+  /preloadLocalAsr/,
+);
 console.log('local inference lifecycle and optional runtime isolation contracts passed');

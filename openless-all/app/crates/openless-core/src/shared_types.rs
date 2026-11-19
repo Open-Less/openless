@@ -26,7 +26,7 @@ pub const LOCAL_ASR_KEEP_LOADED_FOREVER_SECS: u32 = 86_400;
 
 /// Recognition pipeline mode (issue #902): `traditional` = two-stage ASR +
 /// LLM polish; `multimodal` = one multimodal model turns audio + prompt
-/// into final text in a single step. The two configs live in fully isolated
+/// into final text in a single step; `deepseek` uses the dedicated suite. All configs use isolated
 /// credential namespaces; the runtime reads only the active mode and
 /// switching never deletes the other config.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -35,13 +35,14 @@ pub enum PipelineMode {
     #[default]
     Traditional,
     Multimodal,
+    Deepseek,
 }
 
 pub fn effective_pipeline_mode(enabled: bool, configured: PipelineMode) -> PipelineMode {
-    if enabled {
-        configured
-    } else {
+    if !enabled && configured == PipelineMode::Multimodal {
         PipelineMode::Traditional
+    } else {
+        configured
     }
 }
 
@@ -266,6 +267,9 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Host presentation correlation only; absent for manually queued suggestions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<u64>,
     /// Absolute deadline shared by native and web confirmation surfaces.
     pub expires_at_ms: i64,
     /// The (wrong) pre-correction spelling. Only shown on the card so the
@@ -320,6 +324,15 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
+/// Windows suggestion-card placement; other platforms retain their native presentation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VocabularySuggestionPosition {
+    #[default]
+    NearInput,
+    BottomRight,
+}
+
 /// Local-only tuning. Consent and sensitive-field protections remain separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -327,6 +340,7 @@ pub struct VocabularyLearningSettings {
     pub observation_seconds: u32,
     pub suggestion_seconds: u32,
     pub max_phrase_chars: u32,
+    pub suggestion_position: VocabularySuggestionPosition,
 }
 
 impl Default for VocabularyLearningSettings {
@@ -335,6 +349,7 @@ impl Default for VocabularyLearningSettings {
             observation_seconds: 60,
             suggestion_seconds: 10,
             max_phrase_chars: 12,
+            suggestion_position: VocabularySuggestionPosition::default(),
         }
     }
 }
@@ -345,6 +360,7 @@ impl VocabularyLearningSettings {
             observation_seconds: self.observation_seconds.clamp(10, 60),
             suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
             max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+            suggestion_position: self.suggestion_position,
         }
     }
 }
@@ -463,6 +479,8 @@ pub struct UserPreferences {
     /// Opt-in local voice command listener. Standby audio is never sent to a cloud provider.
     #[serde(default)]
     pub voice_activation_enabled: bool,
+    #[serde(default)]
+    pub voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     pub voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -540,11 +558,8 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows: whether the OpenLess TSF IME shows in the system keyboard
-    /// list (Win+Space) under non-TSF insertion (SendInput / clipboard
-    /// paste). Default true keeps current behavior; when off, the language
-    /// profile is disabled per-user without admin rights. TSF mode still
-    /// force-enables the profile but never rewrites this pref.
+    /// Legacy wire compatibility only. The Windows speech TIP does not appear
+    /// in the keyboard list and stays enabled regardless of this preference.
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// User's working languages (multi-select, native names). Injected as
@@ -1066,6 +1081,8 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     #[serde(default)]
     voice_activation_enabled: bool,
+    #[serde(default)]
+    voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1354,6 +1371,7 @@ impl Default for UserPreferencesWire {
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
             voice_activation_enabled: prefs.voice_activation_enabled,
+            voice_activation_hotkey_linked: prefs.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: prefs.voice_activation_wake_enabled,
             voice_activation_finish_enabled: prefs.voice_activation_finish_enabled,
             voice_activation_wake_phrase: prefs.voice_activation_wake_phrase,
@@ -1580,6 +1598,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
             voice_activation_enabled: wire.voice_activation_enabled,
+            voice_activation_hotkey_linked: wire.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: wire.voice_activation_wake_enabled,
             voice_activation_finish_enabled: wire.voice_activation_finish_enabled,
             voice_activation_wake_phrase: wire.voice_activation_wake_phrase,
@@ -1984,6 +2003,7 @@ impl Default for UserPreferences {
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
             voice_activation_enabled: false,
+            voice_activation_hotkey_linked: false,
             voice_activation_wake_enabled: true,
             voice_activation_finish_enabled: true,
             voice_activation_wake_phrase: default_voice_activation_wake_phrase(),
@@ -2885,6 +2905,8 @@ pub struct CapsulePayload {
     /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub qa: bool,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -2894,7 +2916,7 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
-    /// Current recognition pipeline mode ("traditional" | "multimodal"); the
+    /// Current recognition pipeline mode ("traditional" | "multimodal" | "deepseek"); the
     /// frontend uses it to pick which config cards to render and which set
     /// the Overview treats as "configured".
     pub pipeline_mode: PipelineMode,

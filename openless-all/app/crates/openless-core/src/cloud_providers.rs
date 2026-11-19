@@ -59,6 +59,7 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "zhipu",
     "groq",
     "whisper",
+    "deepseek",
     "openrouter",
     "orcarouter",
     "zenmux",
@@ -431,6 +432,17 @@ async fn read_asr_channel_credentials(
     credentials: &dyn CredentialStore,
     channel_id: &str,
 ) -> Result<HashMap<&'static str, Option<String>>, BackendError> {
+    if channel_id == crate::deepseek_suite::CHANNEL_ID {
+        let config = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        return Ok(HashMap::from([
+            (ASR_API_KEY_ACCOUNT, Some(config.api_key)),
+            (
+                ASR_ENDPOINT_ACCOUNT,
+                Some(crate::deepseek_suite::ENDPOINT.into()),
+            ),
+            (ASR_MODEL_ACCOUNT, Some("deepseek-asr".into())),
+        ]));
+    }
     let mut values = HashMap::new();
     for account in ASR_SNAPSHOT_ACCOUNTS {
         values.insert(
@@ -823,6 +835,9 @@ async fn build_cloud_transcription_session(
                 ),
             )
             .with_request_format(crate::provider_rules::whisper_request_format(provider_type));
+            if provider_type == "deepseek" {
+                provider = provider.with_endpoint_path("/tools/asr");
+            }
             if provider_type == "minimax" {
                 provider = provider.with_endpoint_path("/speech_to_text");
             }
@@ -1472,6 +1487,11 @@ pub(crate) async fn llm_channel_configured(
     provider_type: &str,
     model: Option<&str>,
 ) -> bool {
+    if channel_id == crate::deepseek_suite::CHANNEL_ID {
+        return crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials)
+            .await
+            .is_ok_and(|config| config.configured());
+    }
     let channel_id = channel_id.trim();
     let provider_type = provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
@@ -1528,6 +1548,23 @@ async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<CloudPolisherProvider, BackendError> {
+    if context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+        let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        require_configured(&suite.api_key, "DeepSeek suite API key")?;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek suite",
+            crate::deepseek_suite::ENDPOINT,
+            suite.api_key,
+            crate::deepseek_suite::MODEL,
+        )
+        .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::OpenAI(
+                crate::polish::OpenAICompatibleLLMProvider::new(config),
+            ),
+        ));
+    }
     let channel_id = context.llm.provider_id.trim();
     let provider_type = context.llm.provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
@@ -1823,7 +1860,7 @@ pub async fn answer_qa_with_context(
     progress: Arc<dyn crate::QaProgressSink>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<String, BackendError> {
-    let messages = messages
+    let mut messages = messages
         .into_iter()
         .map(|message| crate::shared_types::QaChatMessage {
             role: message.role,
@@ -1849,28 +1886,59 @@ pub async fn answer_qa_with_context(
     let should_cancel =
         move || cancelled.load(Ordering::Acquire) || publish_error_for_cancel.lock().is_some();
 
+    let suite_mode = context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek;
+    let search_config = if suite_mode {
+        crate::web_search::WebSearchConfig::default()
+    } else {
+        crate::web_search::WebSearchConfig::load(credentials.as_ref()).await?
+    };
+    messages.insert(
+        0,
+        crate::shared_types::QaChatMessage {
+            role: "system".into(),
+            content: crate::web_search::backend_prompt(&search_config, suite_mode),
+            selection_text: None,
+        },
+    );
     let use_text_provider =
         crate::provider_rules::omni_uses_text_provider_for_auxiliary(&context.omni.provider_type);
     if use_text_provider && audio_wav.is_some() {
         return Err(BackendError::new(BackendErrorCode::Unsupported,
             "This Realtime protocol supports dictation, not audio-attachment Q&A; use text Q&A or an audio-Q&A provider"));
     }
-    let result = if audio_wav.is_some()
+    let result = if (audio_wav.is_some() && !suite_mode)
         || (context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal
             && !use_text_provider)
     {
         let provider = build_omni_provider(credentials.as_ref(), &context).await?;
-        let system_prompt = crate::compose_qa_system_prompt(
+        let mut system_prompt = crate::compose_qa_system_prompt(
             &context.polish.working_languages,
             context.polish.chinese_script_preference,
             context.polish.output_language_preference,
             context.polish.front_app.as_deref(),
         );
-        let user_text = messages
+        system_prompt.push_str(&crate::web_search::backend_prompt(&search_config, false));
+        let mut user_text = messages
             .iter()
             .map(|message| format!("{}: {}", message.role, message.content))
             .collect::<Vec<_>>()
             .join("\n\n");
+        if search_config.provider != crate::web_search::SearchProvider::Off {
+            let plan = provider
+                .complete_streaming(
+                    &crate::web_search::planner_prompt(),
+                    &user_text,
+                    audio_wav.as_deref(),
+                    |_| {},
+                    &should_cancel,
+                )
+                .await
+                .map_err(map_omni_error)?;
+            if let Some(query) = crate::web_search::planned_query(&plan) {
+                user_text
+                    .push_str(&qa_search_context(&search_config, &query, &should_cancel).await?);
+            }
+        }
         provider
             .complete_streaming(
                 &system_prompt,
@@ -1882,37 +1950,113 @@ pub async fn answer_qa_with_context(
             .await
             .map_err(map_omni_error)
     } else {
-        match build_cloud_polisher_provider(credentials.as_ref(), &context).await? {
-            CloudPolisherProvider::OpenAi(provider) => provider
-                .answer_chat_streaming(
-                    &messages,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    on_delta,
-                    should_cancel,
-                )
-                .await
-                .map_err(map_llm_error),
-            CloudPolisherProvider::Gemini(provider) => provider
-                .answer_chat_streaming(
-                    &messages,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    on_delta,
-                    should_cancel,
-                )
-                .await
-                .map_err(map_llm_error),
+        let mut provider = build_cloud_polisher_provider(credentials.as_ref(), &context).await?;
+        let native = configure_qa_search(&mut provider, context.pipeline_mode);
+        if suite_mode && !native {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "DeepSeek native search is unavailable",
+            ));
         }
+        let mut messages = messages;
+        if !suite_mode && search_config.provider != crate::web_search::SearchProvider::Off {
+            let mut planning = messages.clone();
+            planning.push(crate::shared_types::QaChatMessage {
+                role: "user".into(),
+                content: crate::web_search::planner_prompt(),
+                selection_text: None,
+            });
+            let plan =
+                answer_cloud_qa(&provider, &context, &planning, |_| {}, &should_cancel).await?;
+            if let Some(query) = crate::web_search::planned_query(&plan) {
+                let search_context =
+                    qa_search_context(&search_config, &query, &should_cancel).await?;
+                if let Some(last) = messages.last_mut() {
+                    last.content.push_str(&search_context);
+                }
+            }
+        }
+        answer_cloud_qa(&provider, &context, &messages, on_delta, should_cancel).await
     };
     if let Some(error) = publish_error.lock().take() {
         return Err(error);
     }
     result
+}
+
+fn configure_qa_search(
+    provider: &mut CloudPolisherProvider,
+    mode: crate::shared_types::PipelineMode,
+) -> bool {
+    match provider {
+        CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(provider)) => {
+            provider.configure_qa_web_search(mode == crate::shared_types::PipelineMode::Deepseek)
+        }
+        _ => false,
+    }
+}
+
+async fn qa_search_context<C>(
+    config: &crate::web_search::WebSearchConfig,
+    query: &str,
+    should_cancel: C,
+) -> Result<String, BackendError>
+where
+    C: Fn() -> bool + Send + Sync,
+{
+    let cancelled = || BackendError::new(BackendErrorCode::Cancelled, "cancelled");
+    if should_cancel() {
+        return Err(cancelled());
+    }
+    let cancellation = async {
+        while !should_cancel() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancellation => Err(cancelled()),
+        result = crate::web_search::search(config, query) => Ok(crate::web_search::context(result)),
+    }
+}
+
+async fn answer_cloud_qa<F, C>(
+    provider: &CloudPolisherProvider,
+    context: &DictationContext,
+    messages: &[crate::shared_types::QaChatMessage],
+    on_delta: F,
+    should_cancel: C,
+) -> Result<String, BackendError>
+where
+    F: Fn(&str) + Send + Sync,
+    C: Fn() -> bool + Send + Sync,
+{
+    match provider {
+        CloudPolisherProvider::OpenAi(provider) => provider
+            .answer_chat_streaming(
+                messages,
+                &context.polish.working_languages,
+                context.polish.chinese_script_preference,
+                context.polish.output_language_preference,
+                context.polish.front_app.as_deref(),
+                on_delta,
+                should_cancel,
+            )
+            .await
+            .map_err(map_llm_error),
+        CloudPolisherProvider::Gemini(provider) => provider
+            .answer_chat_streaming(
+                messages,
+                &context.polish.working_languages,
+                context.polish.chinese_script_preference,
+                context.polish.output_language_preference,
+                context.polish.front_app.as_deref(),
+                on_delta,
+                should_cancel,
+            )
+            .await
+            .map_err(map_llm_error),
+    }
 }
 
 async fn build_omni_provider(
@@ -3128,6 +3272,73 @@ mod tests {
         let prompt = super::build_omni_prompt(&context);
         assert!(!prompt.contains("<previous_context>"));
         assert!(!prompt.contains('🙂'));
+    }
+
+    #[test]
+    fn native_search_is_exclusive_to_the_deepseek_pipeline() {
+        use super::*;
+        use crate::shared_types::PipelineMode;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek",
+            crate::deepseek_suite::ENDPOINT,
+            "key",
+            crate::deepseek_suite::MODEL,
+        );
+        let mut provider = CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
+            crate::polish::OpenAICompatibleLLMProvider::new(config),
+        ));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Traditional
+        ));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Multimodal
+        ));
+        assert!(configure_qa_search(&mut provider, PipelineMode::Deepseek));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Traditional
+        ));
+        let search = crate::web_search::WebSearchConfig::default();
+        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
+    }
+
+    #[tokio::test]
+    async fn qa_search_cancels_while_waiting_for_a_response() {
+        use super::*;
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = crate::web_search::WebSearchConfig {
+            provider: crate::web_search::SearchProvider::Searxng,
+            endpoint: format!("http://{}/search", listener.local_addr().unwrap()),
+            ..Default::default()
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancelled);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            signal.store(true, Ordering::Release);
+            // Keep the response pending until the client drops its cancelled request.
+            loop {
+                if socket.read(&mut bytes).await.unwrap_or(0) == 0 {
+                    break;
+                }
+            }
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(3),
+            qa_search_context(&config, "weather", || cancelled.load(Ordering::Acquire)),
+        )
+        .await
+        .expect("cancellation must not wait for the 15-second search timeout")
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        server.abort();
     }
 
     #[tokio::test]

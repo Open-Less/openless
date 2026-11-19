@@ -673,7 +673,7 @@ pub(super) fn less_computer_modifier_bridge_loop(
                     handle_less_computer_modifier_pressed(&inner_cloned, press_id, at).await
                 });
             }
-            HotkeyEvent::Released { press_id, at } => {
+            HotkeyEvent::Released { press_id, at, .. } => {
                 if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id {
                     continue;
                 }
@@ -1334,7 +1334,9 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked)
+                {
                     let press_id = current_press_id;
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
@@ -1351,7 +1353,9 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked)
+                {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
                         handle_released_edge(&task_inner, at, press_id).await;
@@ -2129,7 +2133,8 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                 let hold = matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                );
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked);
                 debug_operation.record(
                     DebugEvent::Requested,
                     DebugOutcome::Observed,
@@ -2163,11 +2168,18 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     });
                 }
             }
-            HotkeyEvent::Released { at, press_id } => {
+            HotkeyEvent::Released { at, press_id, combined } => {
+                if combined {
+                    // The abort bridge may lag this FIFO. Suppress linked clicks
+                    // using the verdict captured before native key-up was sent.
+                    inner_cloned.backend.accept_voice_activation_hotkey_edge(
+                        openless_core::DictationHotkeyEdge::Combined { at, press_id });
+                }
                 let hold = matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                );
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked);
                 debug_operation.record(
                     DebugEvent::Requested,
                     DebugOutcome::Observed,
@@ -2319,8 +2331,8 @@ pub(super) async fn handle_window_hotkey_event(
             .map(|snapshot| snapshot.phase != openless_core::QaPhase::Idle)
             .unwrap_or(false);
         if panel_visible || qa_active {
-            if let Err(error) = inner.backend.services().qa.dismiss().await {
-                log::warn!("[coord] QA dismiss from Escape failed: {error}");
+            if let Err(error) = inner.backend.services().qa.cancel(None).await {
+                log::warn!("[coord] QA cancellation from Escape failed: {error}");
             }
         } else {
             super::dictation::cancel_active_session(inner).await;
@@ -2481,6 +2493,7 @@ pub(crate) mod less_computer_test_support {
             overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
+            vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
             hotkey: Mutex::new(None),
             hotkey_status: Arc::new(Mutex::new(HotkeyStatus::default())),
             window_hotkey_press_id: AtomicU64::new(0),
@@ -2511,6 +2524,7 @@ pub(crate) mod less_computer_test_support {
             last_capsule_state: Mutex::new(None),
             capsule_event_epoch: AtomicU64::new(0),
             capsule_event_lock: Mutex::new(()),
+            voice_activation_feedback: Mutex::new(VoiceActivationFeedback::default()),
             selection_polish_capsule_active: AtomicBool::new(false),
             qa_context: Arc::new(TauriQaHostContext::default()),
             shutdown: AtomicBool::new(false),
@@ -2818,6 +2832,7 @@ pub(crate) mod windows_less_computer_tests {
             translation: true,
             operating: true,
             selection_polish: false,
+            qa: false,
             capsule_style: CapsuleStyle::Classic,
         };
         coordinator.present_core_capsule(expected.clone());
@@ -2927,6 +2942,7 @@ pub(crate) mod windows_less_computer_tests {
                 tx.send(HotkeyEvent::Released {
                     at: released,
                     press_id: 47,
+                    combined: false,
                 })
                 .unwrap();
                 drop(tx);

@@ -83,6 +83,26 @@ impl NativeCapsule {
                     let backend = coordinator.backend();
                     // Recheck Core ownership after the process/async hop. A delayed
                     // action can never operate on a newly started dictation.
+                    if let Ok(qa) = backend.services().qa.snapshot().await {
+                        if qa.session_id.map(|id| id.to_string()).as_deref()
+                            == Some(session_id.as_str())
+                        {
+                            match action {
+                                Action::Cancel => {
+                                    let _ = backend.services().qa.cancel(qa.session_id).await;
+                                }
+                                Action::Confirm
+                                    if qa.phase == openless_core::QaPhase::Recording =>
+                                {
+                                    if let Some(id) = qa.session_id {
+                                        let _ = backend.services().qa.stop_recording(id).await;
+                                    }
+                                }
+                                _ => {}
+                            }
+                            return;
+                        }
+                    }
                     let snapshot = backend.snapshot().dictation;
                     if snapshot.session_id.map(|id| id.to_string()).as_deref()
                         != Some(session_id.as_str())
@@ -292,6 +312,7 @@ impl NativeCapsule {
                 operating: payload.operating,
                 inserted_chars: payload.inserted_chars,
                 selection_polish: payload.selection_polish,
+                qa: payload.qa,
                 translation_target: payload
                     .translation
                     .then(|| self.translation_target(&preferences.translation_target_language)),

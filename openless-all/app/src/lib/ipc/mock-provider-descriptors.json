@@ -32,7 +32,7 @@
     "providerType": "deepseek",
     "labelKey": "deepseek",
     "defaultEndpoint": "https://api.deepseek.com/v1",
-    "defaultModel": "deepseek-v4-flash",
+    "defaultModel": "deepseek-flash",
     "authRequirement": "api_key_unless_custom_endpoint",
     "validationProbe": "llm_text",
     "staticModels": [],
@@ -535,6 +535,20 @@
     "authRequirement": "api_key",
     "validationProbe": "asr_silence",
     "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "asr",
+    "providerType": "deepseek",
+    "labelKey": "deepseek",
+    "defaultEndpoint": "https://api.deepseek.com/v1",
+    "defaultModel": "deepseek-asr",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
+    "staticModels": [
+      "deepseek-asr"
+    ],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []
   },

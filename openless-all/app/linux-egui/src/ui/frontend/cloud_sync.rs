@@ -7,7 +7,7 @@
 
 use openless_core::cloud_sync_e2ee::{ConflictSide, KeyState, RestoreMode, RestorePreview};
 use openless_linux_egui::cloud_sync_ui::{
-    CloudSyncAction, CloudSyncDialog, CloudSyncIntent, CloudSyncUi,
+    CloudSyncAction, CloudSyncDialog, CloudSyncIntent, CloudSyncUi, CONSENT_VERSION,
 };
 use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
 
@@ -18,6 +18,21 @@ use crate::ui::theme;
 
 fn act(action: CloudSyncAction) -> FrontendAction {
     FrontendAction::SettingsCloudSync(action)
+}
+
+fn sync_disclosure(lang: Lang) -> &'static serde_json::Value {
+    static DISCLOSURE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    let value = DISCLOSURE.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../src/features/cloud-sync/disclosure.json"
+        ))
+        .expect("bundled encrypted sync disclosure must be valid JSON")
+    });
+    &value[if matches!(lang, Lang::ZhCn | Lang::ZhTw) {
+        "zh-CN"
+    } else {
+        "en"
+    }]
 }
 
 /// The privacy section's cloud sync card.
@@ -125,6 +140,22 @@ pub fn cloud_sync_card(
                 );
             }
             note(ui, tr_l10n(lang, state.state_key()), theme::INK_3);
+
+            if status.enabled
+                && status.consent_version.as_deref() != Some(CONSENT_VERSION)
+                && button(
+                    ui,
+                    sync_disclosure(lang)["updatedTitle"]
+                        .as_str()
+                        .unwrap_or_default(),
+                    ButtonKind::Blue,
+                    !state.working(),
+                )
+            {
+                actions.push(act(CloudSyncAction::OpenDialog(CloudSyncDialog::Consent {
+                    intent: CloudSyncIntent::Enable,
+                })));
+            }
 
             // ── actions ──────────────────────────────────────────────────
             ui.horizontal_wrapped(|ui| {
@@ -392,40 +423,53 @@ fn dialog_contents(
     match dialog {
         CloudSyncDialog::None => {}
         CloudSyncDialog::Consent { intent } => {
+            let disclosure = sync_disclosure(lang);
+            let text = |key: &str| disclosure[key].as_str().unwrap_or_default();
+            let updated = state.status.as_ref().is_some_and(|status| {
+                status.enabled && status.consent_version.as_deref() != Some(CONSENT_VERSION)
+            });
             ui.label(
-                egui::RichText::new(tr_l10n(lang, "cloudSyncE2ee.consentTitle"))
+                egui::RichText::new(text(if updated { "updatedTitle" } else { "title" }))
                     .size(13.5)
                     .strong(),
             );
-            note(
-                ui,
-                tr_l10n(lang, "cloudSyncE2ee.consentDescription"),
-                theme::INK_2,
-            );
+            if updated {
+                note(ui, text("updatedDescription"), theme::INK_2);
+            }
+            note(ui, text("intro"), theme::INK_2);
+            note(ui, CONSENT_VERSION, theme::INK_3);
+            if let Some(sections) = disclosure["sections"].as_array() {
+                for section in sections {
+                    ui.label(
+                        egui::RichText::new(section["title"].as_str().unwrap_or_default()).strong(),
+                    );
+                    note(
+                        ui,
+                        section["body"].as_str().unwrap_or_default(),
+                        theme::INK_2,
+                    );
+                }
+            }
+            note(ui, text("draftBoundary"), theme::INK_2);
+            note(ui, text("cancelHint"), theme::INK_2);
             let mut checked = state.consent_checked;
             if ui
-                .add(egui::Checkbox::new(
-                    &mut checked,
-                    tr_l10n(lang, "cloudSyncE2ee.consentCheck"),
-                ))
+                .add_enabled(!busy, egui::Checkbox::new(&mut checked, text("checkbox")))
                 .changed()
             {
                 actions.push(act(CloudSyncAction::ConsentChecked(checked)));
             }
-            ui.horizontal(|ui| {
-                if small_button(ui, tr_l10n(lang, "common.cancel"), false) {
+            ui.horizontal_wrapped(|ui| {
+                if button(ui, text("cancel"), ButtonKind::Ghost, !busy) {
                     actions.push(act(CloudSyncAction::CloseDialog));
                 }
                 if button(
                     ui,
-                    tr_l10n(lang, "cloudSyncE2ee.continue"),
+                    text("confirm"),
                     ButtonKind::Blue,
                     state.consent_checked && !busy,
                 ) {
-                    // 同意之后还要过一屏协议警告，形态与 Tauri 一致。
-                    actions.push(act(CloudSyncAction::OpenDialog(
-                        CloudSyncDialog::Protocol { intent },
-                    )));
+                    actions.push(act(CloudSyncAction::Prepare(intent)));
                 }
             });
         }

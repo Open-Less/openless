@@ -208,6 +208,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_only_microphone_capture",
     },
     PreferenceField {
+        rust_name: "voice_activation_hotkey_linked",
+        key: "voiceActivationHotkeyLinked",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "voice_activation_wake_enabled",
         key: "voiceActivationWakeEnabled",
         class: PreferenceClass::Excluded,
@@ -1039,7 +1046,7 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
             "foregroundWindowScreen",
             "allScreens",
         ],
-        "pipelineMode" => &["traditional", "multimodal"],
+        "pipelineMode" => &["traditional", "multimodal", "deepseek"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],
         "selectionPolishOutputMode" => &["directReplace", "previewConfirm"],
