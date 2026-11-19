@@ -89,7 +89,6 @@
   border-radius: 3px;
   overflow: hidden;
   background: color-mix(in srgb, var(--ol-ink) 8%, transparent);
-  will-change: opacity, transform;
 }
 .ol-gha-cell-fill {
   width: 100%;

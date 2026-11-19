@@ -13,6 +13,7 @@ import '../../src/styles/refinements.css';
 
 const params = new URLSearchParams(location.search);
 const dashboard = params.has('dashboard');
+const pendingHeatmap = params.has('pendingHeatmap');
 const state = params.get('state');
 const profile = getPreviewProfile('mac');
 const year = new Date().getFullYear();
@@ -148,7 +149,9 @@ function Fixture() {
       >
         App read count
       </button>
-      {activity.data && <ActivityHeatmap activity={activity.data} />}
+      {(activity.data || pendingHeatmap) && (
+        <ActivityHeatmap activity={activity.data ?? []} pending={activity.data === null} />
+      )}
     </main>
   );
 }

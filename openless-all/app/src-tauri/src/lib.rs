@@ -978,12 +978,8 @@ fn run_desktop() {
             // — saving 3 resident webviews. Positioning and the QA drag fix are applied in
             // the creation/show paths.
 
-            // Main-window material: Mica on Windows. macOS deliberately applies no
-            // NSVisualEffectView: the React shell (WindowChrome, --ol-window-bg) paints a fully
-            // opaque surface over the whole content view, so a HudWindow/Active effect view would
-            // be invisible yet keep a live behind-window blur compositing on every frame. The
-            // native title bar style (Overlay + traffic lights) comes from tauri.conf.json at
-            // window creation; do not call set_decorations here (tao no-ops it when unchanged).
+            // Windows keeps Mica. macOS uses transient launch glass before the
+            // opaque React shell, not a persistent behind-window effect.
             //
             // decorations is decided per-platform at runtime: macOS keeps true for the
             // system traffic lights; Windows disables native chrome so the React

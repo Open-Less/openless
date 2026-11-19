@@ -16,9 +16,11 @@ function localDateKey(date: Date): string {
 
 export function ActivityHeatmap({
   activity,
+  pending = false,
   mobile = false,
 }: {
   activity: ActivityDay[];
+  pending?: boolean;
   mobile?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -67,15 +69,19 @@ export function ActivityHeatmap({
     [locale],
   );
 
-  const appStatus =
-    apps.loadFailed
-      ? t('overview.activityAppsError')
-      : apps.unsupported
-        ? t('overview.activityAppsUnavailable')
-        : null;
+  const appStatus = apps.loadFailed
+    ? t('overview.activityAppsError')
+    : apps.unsupported
+      ? t('overview.activityAppsUnavailable')
+      : null;
 
   return (
-    <section className="ol-overview-heatmap" aria-label={t('overview.activityTitle')}>
+    <section
+      className="ol-overview-heatmap"
+      aria-label={t('overview.activityTitle')}
+      aria-busy={pending || undefined}
+      data-waiting={pending || undefined}
+    >
       <GitHubActivity
         className="ol-overview-activity"
         style={{ width: '100%' }}
@@ -110,6 +116,7 @@ export function ActivityHeatmap({
           )
         }
         inFlow={mobile}
+        reservePanel
         year={year}
         cellSize={11}
         fitToWidth

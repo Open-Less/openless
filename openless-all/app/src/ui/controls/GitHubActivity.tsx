@@ -42,13 +42,8 @@ const gapFor = (cellSize: number) => Math.max(2, Math.round(cellSize / 4));
 // never zero: weeks.slice(-0) would hand back the whole history instead of nothing
 const weeksFor = (months: number) => Math.max(1, Math.ceil(months * WEEKS_PER_MONTH));
 
-const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 const SPRING = { type: 'spring', bounce: 0.2, duration: 0.62 } as const;
-const CELL_FADE = { duration: 0.2, ease: EASE_OUT } as const;
 const TOOLTIP_EDGE = 8;
-const COLUMN_STAGGER = 0.012;
-const LABEL_BLUR = 6;
-const LABEL_REVEAL = { duration: 0.45, ease: EASE_OUT } as const;
 
 const LEVELS = [0, 1, 2, 3, 4] as const;
 
@@ -165,7 +160,6 @@ const ContributionGrid = ({
   label,
   monthNames,
   formatDay,
-  reduceMotion,
   fitToWidth,
 }: {
   contributions: Contribution[];
@@ -177,7 +171,6 @@ const ContributionGrid = ({
   label: string;
   monthNames: string[];
   formatDay: (day: Contribution) => string;
-  reduceMotion: boolean | null;
   fitToWidth: boolean;
 }) => {
   const weeks = React.useMemo(() => toWeeks(contributions), [contributions]);
@@ -187,7 +180,6 @@ const ContributionGrid = ({
 
   const cap = Math.min(weeks.length, weeksFor(months));
   const visible = weeks.slice(weeks.length - cap);
-  const sweepEnd = (visible.length - 1) * COLUMN_STAGGER + CELL_FADE.duration;
 
   React.useLayoutEffect(() => {
     const scroll = ref.current;
@@ -211,19 +203,13 @@ const ContributionGrid = ({
     >
       <div className="ol-gha-grid-inner">
         {showMonths && (
-          <motion.div
-            className="ol-gha-months"
-            style={{ gap, marginBottom: gap }}
-            initial={reduceMotion ? false : { opacity: 0, filter: `blur(${LABEL_BLUR}px)` }}
-            animate={{ opacity: 1, filter: 'blur(0px)' }}
-            transition={{ ...LABEL_REVEAL, delay: reduceMotion ? 0 : sweepEnd }}
-          >
+          <div className="ol-gha-months" style={{ gap, marginBottom: gap }}>
             {toMonthLabels(visible, monthNames).map((month, index) => (
               <div key={index} className="ol-gha-month" style={{ width: cellSize }}>
                 {month && <span className="ol-gha-month-label">{month}</span>}
               </div>
             ))}
-          </motion.div>
+          </div>
         )}
 
         <div
@@ -236,7 +222,7 @@ const ContributionGrid = ({
           {visible.map((week, weekIndex) => (
             <div key={weekIndex} className="ol-gha-week" style={{ gap }}>
               {week.map((day) => (
-                <motion.div
+                <div
                   key={day.date}
                   onPointerEnter={(event) => {
                     if (event.pointerType !== 'touch') hover(day)(event);
@@ -246,15 +232,9 @@ const ContributionGrid = ({
                   }}
                   className="ol-gha-cell"
                   style={{ width: cellSize, height: cellSize }}
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.4 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{
-                    ...CELL_FADE,
-                    delay: reduceMotion ? 0 : weekIndex * COLUMN_STAGGER,
-                  }}
                 >
                   <div className="ol-gha-cell-fill" style={scale[day.level] ?? scale[0]} />
-                </motion.div>
+                </div>
               ))}
             </div>
           ))}
@@ -349,6 +329,8 @@ export type GitHubActivityProps = {
   footer?: React.ReactNode;
   /** On growing pages, expand in normal flow and leave vertical scrolling to the page. */
   inFlow?: boolean;
+  /** Keep the collapsed panel's space while the dashboard resolves its ranking. */
+  reservePanel?: boolean;
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -377,6 +359,7 @@ const GitHubActivity = ({
   summary,
   footer,
   inFlow = false,
+  reservePanel = false,
   defaultOpen = false,
   open: openProp,
   onOpenChange,
@@ -400,8 +383,14 @@ const GitHubActivity = ({
   React.useLayoutEffect(() => {
     const card = cardRef.current;
     if (!card || !fitToWidth) return;
-    // ResizeObserver reports fractional design pixels before viewport zoom rounding.
-    const observer = new ResizeObserver(([entry]) => setContentWidth(entry.contentRect.width));
+    // Fit before the first paint; ResizeObserver maintains fractional design pixels on resize.
+    const css = getComputedStyle(card);
+    const initial = card.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
+    setContentWidth(initial);
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      setContentWidth((last) => (last !== null && Math.abs(last - width) < 0.75 ? last : width));
+    });
     observer.observe(card);
     return () => observer.disconnect();
   }, [fitToWidth]);
@@ -484,6 +473,7 @@ const GitHubActivity = ({
 
   const contributions = contributionsProp;
   const apps = appsProp;
+  const hasPanel = reservePanel || apps.length > 0;
   const scale = React.useMemo(() => toScale(accent), [accent]);
   const transition = reduceMotion ? { duration: 0 } : SPRING;
 
@@ -508,9 +498,7 @@ const GitHubActivity = ({
   return (
     <div
       ref={cardRef}
-      className={['ol-gha', apps.length > 0 && 'ol-gha--with-panel', className]
-        .filter(Boolean)
-        .join(' ')}
+      className={['ol-gha', hasPanel && 'ol-gha--with-panel', className].filter(Boolean).join(' ')}
       data-in-flow={inFlow || undefined}
       style={{ width, ...style }}
     >
@@ -529,13 +517,12 @@ const GitHubActivity = ({
         label={typeof headingText === 'string' ? headingText : label}
         monthNames={monthNames}
         formatDay={formatDay ?? ((day) => `${day.count} · ${day.date}`)}
-        reduceMotion={reduceMotion}
         fitToWidth={fitToWidth}
       />
 
-      {footer}
+      {(!hasPanel || apps.length > 0) && footer}
 
-      {apps.length > 0 && (
+      {hasPanel && (
         <div
           ref={panelRef}
           id={`${uid}-panel`}
@@ -544,28 +531,30 @@ const GitHubActivity = ({
           className="ol-gha-panel"
         >
           <div ref={headerRef} className="ol-gha-panel-header">
-            <span className="ol-gha-panel-label">{label}</span>
+            <div className="ol-gha-panel-label">{apps.length === 0 && footer ? footer : label}</div>
 
-            <div className="ol-gha-panel-actions">
-              {!open && (
-                <div className="ol-gha-app-preview">
-                  {apps.slice(0, STACK_LIMIT).map((app) => (
-                    <AppPreview key={app.name} app={app} />
-                  ))}
-                </div>
-              )}
+            {apps.length > 0 && (
+              <div className="ol-gha-panel-actions">
+                {!open && (
+                  <div className="ol-gha-app-preview">
+                    {apps.slice(0, STACK_LIMIT).map((app) => (
+                      <AppPreview key={app.name} app={app} />
+                    ))}
+                  </div>
+                )}
 
-              <button
-                type="button"
-                onClick={toggle}
-                aria-expanded={open}
-                aria-controls={`${uid}-panel`}
-                aria-label={open ? hideLabel : showLabel}
-                className="ol-gha-toggle"
-              >
-                <Chevron open={open} transition={transition} />
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={toggle}
+                  aria-expanded={open}
+                  aria-controls={`${uid}-panel`}
+                  aria-label={open ? hideLabel : showLabel}
+                  className="ol-gha-toggle"
+                >
+                  <Chevron open={open} transition={transition} />
+                </button>
+              </div>
+            )}
           </div>
 
           <ul

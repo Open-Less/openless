@@ -20,9 +20,11 @@ export function bootstrap() {
   const params = new URLSearchParams(location.search);
   const kind = resolveWindowKind(params);
   const environment = getRuntimeEnvironment();
-  if (kind === 'main' && environment.host === 'tauri' && environment.os === 'mac')
-    void preloadMainWindow();
   const rootElement = document.documentElement;
+  if (kind === 'main' && environment.host === 'tauri' && environment.os === 'mac') {
+    rootElement.setAttribute('data-ol-main-content-covered', '');
+    void preloadMainWindow();
+  }
   rootElement.dataset.olPlatform = environment.os;
   rootElement.toggleAttribute('data-ol-aux', kind !== 'main');
 

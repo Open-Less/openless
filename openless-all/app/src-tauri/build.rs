@@ -40,6 +40,12 @@ fn main() {
             .flag("-fobjc-arc")
             .flag("-mmacosx-version-min=14.0")
             .compile("openless_accessibility_guide");
+        println!("cargo:rerun-if-changed=src/macos_main_launch.m");
+        cc::Build::new()
+            .file("src/macos_main_launch.m")
+            .flag("-fobjc-arc")
+            .flag("-mmacosx-version-min=14.0")
+            .compile("openless_macos_main_launch");
         println!("cargo:rerun-if-changed=src/activity_app_icon_macos.m");
         cc::Build::new()
             .file("src/activity_app_icon_macos.m")
@@ -47,6 +53,7 @@ fn main() {
             .flag("-mmacosx-version-min=14.0")
             .compile("openless_activity_app_icon");
         println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=WebKit");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=CoreAudio");

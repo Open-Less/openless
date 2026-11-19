@@ -47,8 +47,41 @@ pub(crate) type MainWindowLifecycle = parking_lot::Mutex<MainWindowState>;
 #[derive(Default)]
 struct MainPresentation {
     ready: bool,
-    pending_focus: Option<bool>,
+    pending: bool,
     ticket: u64,
+}
+
+#[cfg(target_os = "macos")]
+mod launch_cover {
+    use std::ffi::c_void;
+
+    extern "C" {
+        fn openless_install_main_launch_cover(window: *mut c_void);
+        fn openless_reveal_main_webview(webview: *mut c_void);
+        fn openless_remove_main_launch_cover(window: *mut c_void);
+    }
+
+    pub(super) fn install<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
+        if let Ok(handle) = window.ns_window() {
+            // Callers run on AppKit's main thread and own the native window.
+            unsafe { openless_install_main_launch_cover(handle) };
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn reveal<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+        let _ = window.with_webview(|webview| unsafe {
+            openless_reveal_main_webview(webview.inner());
+        });
+    }
+
+    pub(super) fn remove<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+        if let Ok(handle) = window.ns_window() {
+            unsafe { openless_remove_main_launch_cover(handle) };
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -70,6 +103,15 @@ pub(crate) fn request_main_presentation<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     focus: bool,
 ) {
+    let owned = window.clone();
+    let _ = window.run_on_main_thread(move || request_main_on_main_thread(&owned, focus));
+}
+
+#[cfg(target_os = "macos")]
+fn request_main_on_main_thread<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    focus: bool,
+) {
     use tauri::Manager;
     let app = window.app_handle();
     let lifecycle = app.state::<MainWindowLifecycle>();
@@ -82,17 +124,26 @@ pub(crate) fn request_main_presentation<R: tauri::Runtime>(
         let presentation = &mut state.presentation;
         if presentation.ready {
             drop(state);
+            launch_cover::reveal(window);
             show_prepared_main(window, focus);
             return;
         }
-        if let Some(existing) = &mut presentation.pending_focus {
-            *existing |= focus;
+        if presentation.pending {
+            drop(state);
+            if focus {
+                show_prepared_main(window, true);
+            }
             return;
         }
-        presentation.pending_focus = Some(focus);
+        presentation.pending = true;
         presentation.ticket = presentation.ticket.wrapping_add(1);
         presentation.ticket
     };
+
+    // Cover the transparent WebView before ordering the window, never after the first frame.
+    if launch_cover::install(window) {
+        show_prepared_main(window, focus);
+    }
 
     // An actual startup failure must stay recoverable even if JS never reports a frame.
     let app = app.clone();
@@ -100,17 +151,22 @@ pub(crate) fn request_main_presentation<R: tauri::Runtime>(
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         let main_app = app.clone();
         let _ = app.run_on_main_thread(move || {
-            let focus = {
+            let waiting = {
                 let lifecycle = main_app.state::<MainWindowLifecycle>();
                 let mut state = lifecycle.lock();
                 if state.closing || state.presentation.ticket != ticket {
                     return;
                 }
-                state.presentation.pending_focus.take()
+                std::mem::take(&mut state.presentation.pending)
             };
-            if let (Some(focus), Some(window)) = (focus, main_app.get_webview_window("main")) {
-                log::warn!("[main] first content frame timed out; showing recovery surface");
-                show_prepared_main(&window, focus);
+            if waiting {
+                if let Some(window) = main_app.get_webview_window("main") {
+                    log::warn!("[main] first content frame timed out; showing recovery surface");
+                    launch_cover::reveal(&window);
+                    if !window.is_visible().unwrap_or(false) {
+                        show_prepared_main(&window, focus);
+                    }
+                }
             }
         });
     });
@@ -119,26 +175,27 @@ pub(crate) fn request_main_presentation<R: tauri::Runtime>(
 #[cfg(target_os = "macos")]
 pub(crate) fn main_frame_ready(window: &tauri::WebviewWindow) {
     use tauri::Manager;
-    let lifecycle = window.state::<MainWindowLifecycle>();
-    let focus = {
-        let mut state = lifecycle.lock();
-        if state.closing {
-            return;
+    let owned = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let requested = {
+            let lifecycle = owned.state::<MainWindowLifecycle>();
+            let mut state = lifecycle.lock();
+            if state.closing {
+                return;
+            }
+            state.presentation.ready = true;
+            std::mem::take(&mut state.presentation.pending)
+        };
+        launch_cover::reveal(&owned);
+        if requested && !owned.is_visible().unwrap_or(false) {
+            show_prepared_main(&owned, false);
         }
-        state.presentation.ready = true;
-        state.presentation.pending_focus.take()
-    };
-    if let Some(focus) = focus {
-        show_prepared_main(window, focus);
-    }
+    });
 }
 
 #[cfg(not(mobile))]
 pub(crate) fn initialize_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    // macOS deliberately applies no NSVisualEffectView: the React shell paints an opaque
-    // surface over the whole content view, so a behind-window blur would be invisible yet
-    // keep compositing every frame. Decorations and the Overlay title bar come from
-    // tauri.conf.json, which also covers windows recreated by `ensure_main`.
+    // macOS launch glass is transient; an opaque React surface owns steady-state painting.
     #[cfg(target_os = "windows")]
     {
         if let Err(error) = window_vibrancy::apply_mica(window, None) {
@@ -208,7 +265,7 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         #[cfg(target_os = "macos")]
         {
             state.presentation.ready = false;
-            state.presentation.pending_focus = None;
+            state.presentation.pending = false;
         }
         state.maximized = window.is_maximized().unwrap_or(false);
         // Keep the last normal bounds: reopening a maximized window must not
@@ -222,6 +279,8 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     // otherwise keep the page's JS/DOM allocator in the shared content process used by the
     // resident capsule, which makes a closed main window look like a memory leak.
     let _ = window.hide();
+    #[cfg(target_os = "macos")]
+    launch_cover::remove(&window);
     let page_url = window.url().ok();
     let _ = window.eval("window.stop(); location.replace('about:blank');");
     let app_for_destroy = app.clone();
@@ -280,13 +339,15 @@ pub(crate) fn hide_main_with_grace<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
         ));
         #[cfg(target_os = "macos")]
         {
-            state.presentation.pending_focus = None;
+            state.presentation.pending = false;
         }
         state.hide_grace_seq
     } else {
         0
     };
     let _ = window.hide();
+    #[cfg(target_os = "macos")]
+    launch_cover::remove(&window);
     let app_for_destroy = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(MAIN_CLOSE_GRACE).await;

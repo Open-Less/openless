@@ -2,6 +2,44 @@ import { expect, test, type Page } from '@playwright/test';
 import { expectOverviewContained } from './support/overview';
 import { fixtureOrigin } from './support/server';
 
+test('overview colors the full heatmap before revealing its details without resizing', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 980, height: 640 });
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/native-overview.html?scale=large&pendingHeatmap`);
+  await page.evaluate(() =>
+    document.documentElement.setAttribute('data-ol-main-content-covered', ''),
+  );
+  const heatmap = page.locator('.ol-overview-heatmap');
+  await expect(heatmap).toHaveAttribute('aria-busy', 'true');
+  await expect(heatmap.locator('.ol-gha-grid')).toBeHidden();
+  const card = heatmap.locator('.ol-gha');
+  const initial = await card.boundingBox();
+  await page.getByRole('button', { name: 'Complete initial activity read' }).click();
+  await expect(heatmap).not.toHaveAttribute('aria-busy');
+  const colored = await heatmap.locator('.ol-gha-cell').evaluateAll(
+    (cells) =>
+      cells.filter((cell) => {
+        const style = getComputedStyle(cell);
+        return (
+          style.opacity === '1' &&
+          style.transform === 'none' &&
+          Number(getComputedStyle(cell.firstElementChild!).opacity) > 0
+        );
+      }).length,
+  );
+  expect(colored).toBeGreaterThan(0);
+  const heading = heatmap.locator('.ol-gha-heading');
+  await expect(heading).toBeHidden();
+  await page.evaluate(() =>
+    document.documentElement.removeAttribute('data-ol-main-content-covered'),
+  );
+  await expect(heading).toBeVisible();
+  const final = await card.boundingBox();
+  expect(final!.height).toBeCloseTo(initial!.height, 0);
+  expect(final!.y).toBeCloseTo(initial!.y, 0);
+});
+
 test('native overview paints cached activity and discards an app list invalidated by a newer revision', async ({
   page,
 }) => {
