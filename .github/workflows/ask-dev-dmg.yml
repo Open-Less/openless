@@ -1,0 +1,72 @@
+name: Ask Dev DMG
+
+on:
+  push:
+    branches: [build/ask-item6-dev-dmg]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package Apple Silicon DMG
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Configure macOS build environment
+        run: bash scripts/macos-build-env.sh
+      - uses: swatinem/rust-cache@v2
+        with:
+          prefix-key: v0-rust-aarch64-apple-darwin
+          shared-key: tauri-macos
+          workspaces: 'openless-all/app/src-tauri -> target'
+          save-if: false
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Bundle the exact candidate
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          export OPENLESS_BUILD_ID=$(git rev-parse HEAD)
+          [[ "$OPENLESS_BUILD_ID" == "$GITHUB_SHA" && "$(uname -m)" == arm64 ]]
+          layout_env="$RUNNER_TEMP/openless-dmg-layout"
+          python3 -m venv "$layout_env"
+          "$layout_env/bin/python3" -m pip install --quiet --disable-pip-version-check \
+            --only-binary=:all: --no-deps --require-hashes -r scripts/macos-dmg-requirements.txt
+          CI=true TAURI_BUNDLER_DMG_IGNORE_CI=false \
+            OPENLESS_DMG_LAYOUT_ROOT="$PWD" OPENLESS_DMG_LAYOUT_PYTHON="$layout_env/bin/python3" \
+            OPENLESS_DMG_LAYOUT_STAMP="$layout_env/layout-applied" \
+            PATH="$PWD/scripts/macos-dmg-bin:$PATH" npm run tauri -- build --ci --bundles dmg \
+              --config src-tauri/tauri.macos.conf.json \
+              --config '{"build":{"beforeBuildCommand":"npm --ignore-scripts run build"},"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+          version=$(node -p "require('./package.json').version")
+          dmg="src-tauri/target/release/bundle/dmg/OpenLess_${version}_aarch64.dmg"
+          [[ -s "$layout_env/layout-applied" && -s "$dmg" ]]
+          lipo src-tauri/target/release/bundle/macos/OpenLess.app/Contents/MacOS/openless -verify_arch arm64
+          destination="$RUNNER_TEMP/OpenLess-Dev-AskFix-${GITHUB_SHA:0:8}-arm64.dmg"
+          mv "$dmg" "$destination"
+          digest=$(shasum -a 256 "$destination" | cut -d ' ' -f 1)
+          printf 'source_sha=%s\ndmg_sha256=%s\n' "$OPENLESS_BUILD_ID" "$digest" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload Apple Silicon Dev DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-dev-askfix-${{ github.sha }}-arm64
+          path: ${{ runner.temp }}/OpenLess-Dev-AskFix-*-arm64.dmg
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

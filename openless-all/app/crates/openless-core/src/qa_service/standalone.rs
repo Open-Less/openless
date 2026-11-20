@@ -1210,6 +1210,9 @@ impl StandaloneQaService {
     ) -> Result<(), BackendError> {
         let operation = match (route, &preparation.selection) {
             (AskRoute::Write, ExternalSelection::None) => Some(AskWriteOperation::Insert),
+            (AskRoute::Write, _) if preparation.writer.as_ref().is_some_and(|writer| writer.has_original_caret()) => {
+                Some(AskWriteOperation::Insert)
+            }
             (AskRoute::Edit, selection) if selection.verified().is_some() => {
                 Some(AskWriteOperation::Replace)
             }
@@ -1259,7 +1262,7 @@ impl StandaloneQaService {
                         try_copy = true;
                         AskCopyStatus::Pending
                     } else {
-                        AskCopyStatus::Failed
+                        AskCopyStatus::NotNeeded
                     };
                 }
             }

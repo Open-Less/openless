@@ -620,6 +620,12 @@ mod platform {
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
 
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
+    const SPACE_KEYCODE: i64 = 49;
+    const SOURCE_PID_FIELD: CgEventField = 41;
+    const SOURCE_USER_DATA_FIELD: CgEventField = 42;
+    const REPLAYED_SPACE: i64 = 0x4f4c5350414345;
+    const SPACE_FIRST_GRACE: std::time::Duration = std::time::Duration::from_millis(32);
+    const MOUSE_DOWN: [CgEventType; 3] = [1, 3, 25];
 
     const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
@@ -659,6 +665,10 @@ mod platform {
         fn CGEventTapEnable(tap: CfMachPortRef, enable: bool);
         fn CGEventGetIntegerValueField(event: CgEventRef, field: CgEventField) -> i64;
         fn CGEventGetFlags(event: CgEventRef) -> CgEventFlags;
+        fn CGEventCreateCopy(event: CgEventRef) -> CgEventRef;
+        fn CGEventSetIntegerValueField(event: CgEventRef, field: CgEventField, value: i64);
+        fn CGEventTapPostEvent(proxy: *mut c_void, event: CgEventRef);
+        fn CGEventPost(tap: CgEventTapLocation, event: CgEventRef);
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -672,7 +682,67 @@ mod platform {
         fn CFRunLoopAddSource(rl: CfRunLoopRef, source: CfRunLoopSourceRef, mode: CfStringRef);
         fn CFRunLoopRun();
         fn CFRunLoopStop(rl: CfRunLoopRef);
+        fn CFAbsoluteTimeGetCurrent() -> f64;
+        fn CFRunLoopTimerCreate(
+            allocator: CfAllocatorRef, fire: f64, interval: f64, flags: usize, order: isize,
+            callback: extern "C" fn(*mut c_void, *mut c_void), context: *mut TimerContext,
+        ) -> *mut c_void;
+        fn CFRunLoopAddTimer(rl: CfRunLoopRef, timer: *mut c_void, mode: CfStringRef);
+        fn CFRunLoopTimerSetNextFireDate(timer: *mut c_void, fire: f64);
+        fn CFRunLoopTimerInvalidate(timer: *mut c_void);
+        fn CFRelease(value: *const c_void);
         static kCFRunLoopCommonModes: CfStringRef;
+    }
+
+    #[repr(C)]
+    struct TimerContext {
+        version: isize,
+        data: *mut c_void,
+        retain: *const c_void,
+        release: *const c_void,
+        description: *const c_void,
+    }
+
+    struct PendingSpace {
+        event: CgEventRef,
+        foreground: u32,
+        space_epoch: u64,
+        deadline: std::time::Instant,
+    }
+
+    impl Drop for PendingSpace {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.event.cast()) };
+        }
+    }
+
+    impl PendingSpace {
+        fn current(&self) -> bool {
+            self.space_epoch == crate::ask_window::active_space_epoch()
+                && crate::ask_window::foreground_pid() == Some(self.foreground)
+                && !crate::unicode_keystroke::is_secure_input_enabled()
+        }
+
+        fn replay(&self, proxy: *mut c_void) {
+            if !self.current() {
+                return;
+            }
+            unsafe {
+                CGEventSetIntegerValueField(self.event, SOURCE_USER_DATA_FIELD, REPLAYED_SPACE);
+                if proxy.is_null() {
+                    CGEventPost(SESSION_EVENT_TAP, self.event);
+                } else {
+                    CGEventTapPostEvent(proxy, self.event);
+                }
+            }
+        }
+    }
+
+    extern "C" fn flush_space_timer(_: *mut c_void, data: *mut c_void) {
+        let ctx = unsafe { &*(data as *const CallbackContext) };
+        if let Some(pending) = ctx.pending_space.lock().take() {
+            pending.replay(std::ptr::null_mut());
+        }
     }
 
     struct CallbackContext {
@@ -688,6 +758,9 @@ mod platform {
         /// (tap, runloop) refs shared with MacHotkeyAdapter. Tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT goes through handles.tap; adapter shutdown uses both locks.
         handles: Arc<MacShutdownHandles>,
+        pending_space: parking_lot::Mutex<Option<PendingSpace>>,
+        space_timer: *mut c_void,
+        space_down: std::sync::atomic::AtomicBool,
     }
 
     unsafe impl Send for CallbackContext {}
@@ -703,7 +776,8 @@ mod platform {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
             | (1u64 << KEY_DOWN)
             | (1u64 << KEY_UP)
-            | (1u64 << SYSTEM_DEFINED);
+            | (1u64 << SYSTEM_DEFINED)
+            | MOUSE_DOWN.into_iter().fold(0, |mask, kind| mask | (1u64 << kind));
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -715,6 +789,9 @@ mod platform {
             combo_tx,
             fn_pressed_at: parking_lot::Mutex::new(None),
             handles: Arc::clone(&handles),
+            pending_space: parking_lot::Mutex::new(None),
+            space_timer: std::ptr::null_mut(),
+            space_down: std::sync::atomic::AtomicBool::new(false),
         }));
 
         unsafe {
@@ -741,6 +818,21 @@ mod platform {
 
             let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
             let runloop = CFRunLoopGetCurrent();
+            let mut timer_context = TimerContext {
+                version: 0,
+                data: context.cast(),
+                retain: std::ptr::null(),
+                release: std::ptr::null(),
+                description: std::ptr::null(),
+            };
+            let parked = CFAbsoluteTimeGetCurrent() + 1.0e8;
+            let timer = CFRunLoopTimerCreate(
+                std::ptr::null(), parked, 1.0e8, 0, 0, flush_space_timer, &mut timer_context,
+            );
+            (*context).space_timer = timer;
+            if !timer.is_null() {
+                CFRunLoopAddTimer(runloop, timer, kCFRunLoopCommonModes);
+            }
             *handles.runloop.lock().unwrap() = Some(runloop);
             CFRunLoopAddSource(runloop, source, kCFRunLoopCommonModes);
             CGEventTapEnable(tap, true);
@@ -751,12 +843,16 @@ mod platform {
             // MacHotkeyAdapter::shutdown). After it returns, the listener thread drops the context
             // and exits naturally.
             CFRunLoopRun();
+            if !timer.is_null() {
+                CFRunLoopTimerInvalidate(timer);
+                CFRelease(timer);
+            }
             let _ = Box::from_raw(context);
         }
     }
 
     extern "C" fn tap_callback(
-        _proxy: *mut c_void,
+        proxy: *mut c_void,
         event_type: CgEventType,
         event: CgEventRef,
         user_info: *mut c_void,
@@ -768,12 +864,68 @@ mod platform {
 
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                if let Some(pending) = ctx.pending_space.lock().take() {
+                    pending.replay(std::ptr::null_mut());
+                }
+                ctx.space_down.store(false, Ordering::Relaxed);
                 crate::ask_window::hotkey::reset_physical_state();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
                 return event;
             }
+            _ if event.is_null() => return event,
+            _ => {}
+        }
+
+        if unsafe { CGEventGetIntegerValueField(event, SOURCE_USER_DATA_FIELD) } == REPLAYED_SPACE {
+            return event;
+        }
+        let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+        let flags = unsafe { CGEventGetFlags(event) };
+        let hardware = unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } == 0;
+        let is_fn_down = event_type == FLAGS_CHANGED && hardware && keycode == 63
+            && flags & FLAG_MASK_SECONDARY_FN != 0;
+        if !is_fn_down {
+            if let Some(pending) = ctx.pending_space.lock().take() {
+                pending.replay(proxy);
+            }
+        }
+        if hardware && keycode == SPACE_KEYCODE {
+            if event_type == KEY_UP {
+                ctx.space_down.store(false, Ordering::Relaxed);
+            } else if event_type == KEY_DOWN {
+                let first = !ctx.space_down.swap(true, Ordering::Relaxed)
+                    && unsafe { CGEventGetIntegerValueField(event, 8) } == 0;
+                if first
+                    && flags & (FLAG_MASK_SHIFT | FLAG_MASK_CONTROL | FLAG_MASK_ALTERNATE
+                        | FLAG_MASK_COMMAND | FLAG_MASK_SECONDARY_FN) == 0
+                    && !ctx.space_timer.is_null()
+                    && !ctx.shared.recording_active.load(Ordering::SeqCst)
+                    && crate::ask_window::hotkey::can_buffer_space()
+                    && !crate::unicode_keystroke::is_secure_input_enabled()
+                {
+                    if let Some(foreground) = crate::ask_window::foreground_pid() {
+                        let copy = unsafe { CGEventCreateCopy(event) };
+                        if !copy.is_null() {
+                            *ctx.pending_space.lock() = Some(PendingSpace {
+                                event: copy,
+                                foreground,
+                                space_epoch: crate::ask_window::active_space_epoch(),
+                                deadline: std::time::Instant::now() + SPACE_FIRST_GRACE,
+                            });
+                            unsafe {
+                                CFRunLoopTimerSetNextFireDate(
+                                    ctx.space_timer, CFAbsoluteTimeGetCurrent() + SPACE_FIRST_GRACE.as_secs_f64(),
+                                );
+                            }
+                            return std::ptr::null_mut();
+                        }
+                    }
+                }
+            }
+        }
+        match event_type {
             FLAGS_CHANGED => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 let flags = unsafe { CGEventGetFlags(event) };
@@ -784,7 +936,19 @@ mod platform {
                         crate::side_aware_combo::platform::resolve_side_pressed_from_flags(keycode, flags)
                             .unwrap_or_else(|| crate::side_aware_combo::platform::keycode_is_down(keycode))
                     };
-                    if ask_key_edge(ctx, event, keycode, down).is_some() {
+                    let handled = ask_key_edge(ctx, event, keycode, down).is_some();
+                    if is_fn_down {
+                        if let Some(pending) = ctx.pending_space.lock().take() {
+                            let paired = handled && pending.deadline > std::time::Instant::now()
+                                && pending.current()
+                                && ask_key_edge(ctx, pending.event, SPACE_KEYCODE, true)
+                                    .is_some_and(|result| result.is_null());
+                            if !paired {
+                                pending.replay(proxy);
+                            }
+                        }
+                    }
+                    if handled {
                         return event;
                     }
                 }
@@ -1257,6 +1421,9 @@ mod platform {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
                     }),
+                    pending_space: parking_lot::Mutex::new(None),
+                    space_timer: std::ptr::null_mut(),
+                    space_down: std::sync::atomic::AtomicBool::new(false),
                 },
                 rx,
                 combo_rx,

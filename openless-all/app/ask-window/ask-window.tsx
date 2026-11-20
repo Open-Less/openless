@@ -49,7 +49,9 @@ function ComposerSession(props: SessionProps) {
         turns={snapshot.turns}
         showSources={setSourcesTurn}
       >
-        {submission && !chatRoute && <SubmissionResult submission={submission} active={current} />}
+        {submission && !chatRoute && (!current || props.expanded) && (
+          <SubmissionResult submission={submission} active={current} />
+        )}
         {box}
       </ConversationLayout>
       <Sources

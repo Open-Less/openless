@@ -17,6 +17,7 @@ mod native;
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(1200);
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
+const TARGET_FRESHNESS: Duration = Duration::from_secs(90);
 const OBSERVER_TICK: Duration = Duration::from_millis(25);
 const FOCUS_REFRESH: Duration = Duration::from_millis(175);
 const MAX_SELECTION_UTF16: usize = 8_000;
@@ -44,6 +45,7 @@ impl CapturedTarget {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct WriteTarget(Arc<()>);
 
 #[derive(Clone, Copy)]
@@ -79,7 +81,10 @@ impl Drop for Running {
 type Claim = Box<dyn FnOnce() -> bool + Send>;
 
 enum Request {
-    Capture(oneshot::Sender<CapturedTarget>),
+    Capture {
+        expected_pid: Option<u32>,
+        reply: oneshot::Sender<CapturedTarget>,
+    },
     Deliver {
         target: Arc<()>,
         operation: WriteOperation,
@@ -129,9 +134,17 @@ impl TargetTracker {
     }
 
     pub(crate) async fn capture(&self) -> CapturedTarget {
+        self.capture_for(None, CAPTURE_TIMEOUT).await
+    }
+
+    pub(crate) async fn capture_before_focus(&self, pid: u32) -> CapturedTarget {
+        self.capture_for(Some(pid), Duration::from_millis(300)).await
+    }
+
+    async fn capture_for(&self, expected_pid: Option<u32>, timeout: Duration) -> CapturedTarget {
         let (reply, result) = oneshot::channel();
-        if self.send(Request::Capture(reply)) {
-            if let Ok(Ok(captured)) = tokio::time::timeout(CAPTURE_TIMEOUT, result).await {
+        if self.send(Request::Capture { expected_pid, reply }) {
+            if let Ok(Ok(captured)) = tokio::time::timeout(timeout, result).await {
                 return captured;
             }
         }
@@ -221,7 +234,7 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
         return;
     };
     let mut latest = Latest::new(Instant::now());
-    let mut targets: Vec<(Weak<()>, native::Identity, Baseline)> = Vec::new();
+    let mut targets: Vec<(Weak<()>, native::Identity, Baseline, Instant, u64)> = Vec::new();
     while active.load(Ordering::Acquire) {
         let request = match receiver.recv_timeout(OBSERVER_TICK) {
             Ok(request) => Some(request),
@@ -231,7 +244,10 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
         if !active.load(Ordering::Acquire) {
             break;
         }
-        targets.retain(|(lease, _, _)| lease.strong_count() != 0);
+        targets.retain(|(lease, _, _, at, _)| {
+            lease.strong_count() != 0 && at.elapsed() <= TARGET_FRESHNESS
+        });
+        platform.poll();
 
         if let Some(Request::Deliver {
             target,
@@ -244,11 +260,12 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
         {
             let outcome = targets
                 .iter()
-                .position(|(lease, _, _)| lease.as_ptr() == Arc::as_ptr(&target))
+                .position(|(lease, _, _, _, _)| lease.as_ptr() == Arc::as_ptr(&target))
                 .map_or(WriteOutcome::NotWritten, |index| {
-                    let (_, identity, baseline) = targets.swap_remove(index);
+                    let (_, identity, baseline, _, revision) = targets.swap_remove(index);
                     if !active.load(Ordering::Acquire)
                         || !phase.pending()
+                        || revision != epoch.load(Ordering::Acquire)
                         || text.is_empty()
                         || text.len() > MAX_DOCUMENT_UTF16 * 4
                         || !baseline.permits(operation)
@@ -261,11 +278,21 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
             continue;
         }
 
-        platform.poll();
         let front = platform.foreground();
         let revision = epoch.load(Ordering::Acquire);
         let capture = match request {
-            Some(Request::Capture(reply)) if !reply.is_closed() => Some(reply),
+            Some(Request::Capture { expected_pid, reply }) if !reply.is_closed() => {
+                #[cfg(target_os = "macos")]
+                let mismatched = expected_pid
+                    .is_some_and(|pid| front != Foreground::External(pid as i32));
+                #[cfg(not(target_os = "macos"))]
+                let mismatched = expected_pid.is_some();
+                if mismatched {
+                    let _ = reply.send(CapturedTarget::unavailable());
+                    continue;
+                }
+                Some(reply)
+            }
             _ => None,
         };
         latest.refresh(front, revision, Instant::now(), capture.is_some(), |key| {
@@ -290,7 +317,9 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
                     captured.selection = selection;
                     if let Some(baseline) = baseline {
                         let lease = Arc::new(());
-                        targets.push((Arc::downgrade(&lease), identity.clone(), baseline));
+                        targets.push((
+                            Arc::downgrade(&lease), identity.clone(), baseline, Instant::now(), revision,
+                        ));
                         captured.write_target = Some(WriteTarget(lease));
                     }
                 }

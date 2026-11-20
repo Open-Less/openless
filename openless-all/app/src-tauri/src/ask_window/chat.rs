@@ -29,6 +29,7 @@ pub(crate) struct AskHost {
     context_preference: Option<PathBuf>,
     entry_settings: Arc<AskEntrySettingsStore>,
     targets: Arc<TargetTracker>,
+    original: Mutex<Option<(u64, target::WriteTarget)>>,
 }
 
 impl AskHost {
@@ -68,6 +69,7 @@ impl AskHost {
             context_preference,
             entry_settings,
             targets,
+            original: Mutex::new(None),
         }
     }
 
@@ -107,7 +109,11 @@ impl AskHost {
             .map_err(attachment_error)
     }
 
-    async fn prepare_submission(&self) -> Result<ask::AskPreparation, BackendError> {
+    async fn prepare_submission(
+        &self,
+        desktop: Option<std::sync::Weak<super::Desktop>>,
+        generation: Option<u64>,
+    ) -> Result<ask::AskPreparation, BackendError> {
         let committed_settings = self.entry_settings.read().map_err(|_| {
             BackendError::new(BackendErrorCode::Persistence, "askEntrySettingsUnavailable")
         })?;
@@ -122,17 +128,29 @@ impl AskHost {
             target::ExternalSelection::Selected(text) => ask::ExternalSelection::Selected(text),
             target::ExternalSelection::Unavailable => ask::ExternalSelection::Unavailable,
         };
-        let writer = locked.write_target.map(|target| {
+        let original = self.original.lock().as_ref()
+            .filter(|(epoch, _)| Some(*epoch) == generation)
+            .map(|(_, target)| target.clone());
+        let insert = if cfg!(target_os = "macos") {
+            original
+        } else {
+            locked.write_target.clone()
+        };
+        let replace = locked.write_target;
+        let writer = (insert.is_some() || replace.is_some()).then(|| {
             Arc::new(TargetWriter {
                 tracker: self.targets.clone(),
-                target,
+                insert,
+                replace,
+                desktop,
+                generation,
             }) as Arc<dyn ask::AskWriter>
         });
         Ok(ask::AskPreparation {
             intent_mode,
             selection,
             writer,
-            clipboard: Some(Arc::new(Clipboard)),
+            clipboard: (!cfg!(target_os = "macos")).then(|| Arc::new(Clipboard) as Arc<dyn ask::AskClipboard>),
         })
     }
 
@@ -203,24 +221,45 @@ impl AskHost {
 
 struct TargetWriter {
     tracker: Arc<TargetTracker>,
-    target: target::WriteTarget,
+    insert: Option<target::WriteTarget>,
+    replace: Option<target::WriteTarget>,
+    desktop: Option<std::sync::Weak<super::Desktop>>,
+    generation: Option<u64>,
 }
 
 impl ask::AskWriter for TargetWriter {
+    fn has_original_caret(&self) -> bool {
+        cfg!(target_os = "macos") && self.insert.is_some()
+    }
+
     fn write(
         &self,
         operation: ask::AskWriteOperation,
         text: String,
         claim: ask::AskWriteClaim,
     ) -> futures_util::future::BoxFuture<'_, ask::AskWriteOutcome> {
-        let operation = match operation {
-            ask::AskWriteOperation::Insert => target::WriteOperation::Insert,
-            ask::AskWriteOperation::Replace => target::WriteOperation::Replace,
+        let (target, operation) = match operation {
+            ask::AskWriteOperation::Insert => (self.insert.as_ref(), target::WriteOperation::Insert),
+            ask::AskWriteOperation::Replace => (self.replace.as_ref(), target::WriteOperation::Replace),
         };
         Box::pin(async move {
+            let Some(target) = target else {
+                return ask::AskWriteOutcome::NotWritten;
+            };
+            let desktop = self.desktop.clone();
+            let generation = self.generation;
+            let current = move || {
+                !cfg!(target_os = "macos") || generation.is_some_and(|generation| {
+                    desktop.as_ref().and_then(std::sync::Weak::upgrade)
+                        .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))
+                })
+            };
+            if !current() {
+                return ask::AskWriteOutcome::NotWritten;
+            }
             match self
                 .tracker
-                .deliver(&self.target, operation, text, claim)
+                .deliver(target, operation, text, Box::new(move || current() && claim()))
                 .await
             {
                 target::WriteOutcome::Written => ask::AskWriteOutcome::Written,
@@ -487,9 +526,12 @@ pub async fn ask_submit(
         .map_err(wire::error)?;
     let conversation_id = request.conversation_id;
     let used_attachments = request.attachment_ids.clone();
+    let desktop = window.try_state::<Arc<super::Desktop>>();
+    let generation = desktop.as_ref().and_then(|desktop| desktop.external_target_generation());
+    let desktop = desktop.as_ref().map(|desktop| Arc::downgrade(&**desktop));
     let turn_id = host
         .service
-        .submit_prepared(request, || host.prepare_submission())
+        .submit_prepared(request, || host.prepare_submission(desktop, generation))
         .await
         .map_err(wire::error)?;
     let _guard = host.attachment_gate.lock();
@@ -637,6 +679,7 @@ impl super::Integration for DesktopPorts {
     fn prepare_open(
         &self,
         invocation: super::capture::Invocation,
+        generation: u64,
     ) -> super::Task<Result<(), String>> {
         let app = self.app.clone();
         let ask = self.ask.clone();
@@ -644,6 +687,17 @@ impl super::Integration for DesktopPorts {
             let conversation = ask.open().map_err(|error| error.message)?;
             if let Some(desktop) = app.try_state::<Arc<super::Desktop>>() {
                 desktop.set_conversation(Some(conversation.to_string()));
+            }
+            if cfg!(target_os = "macos") {
+                let target = match invocation.foreground_pid {
+                    Some(pid) => ask.targets.capture_before_focus(pid).await.write_target,
+                    None => None,
+                };
+                if app.try_state::<Arc<super::Desktop>>().is_some_and(|desktop| {
+                    desktop.external_target_generation() == Some(generation)
+                }) {
+                    *ask.original.lock() = target.map(|target| (generation, target));
+                }
             }
             if let Some(source) = &invocation.foreground_app {
                 if ask.context.app_metadata_allowed() {
@@ -688,9 +742,24 @@ impl super::Integration for DesktopPorts {
         })
     }
 
-    fn ordinary_dictation_edge(&self, edge: openless_core::DictationHotkeyEdge) -> super::Task<()> {
+    fn ordinary_dictation_edge(
+        &self,
+        edge: openless_core::DictationHotkeyEdge,
+        fn_commit: Option<super::hotkey::FnCommit>,
+    ) -> super::Task<()> {
         let coordinator = self.coordinator.clone();
         Box::pin(async move {
+            if let (Some(commit), openless_core::DictationHotkeyEdge::Pressed { press_id, .. }) =
+                (fn_commit, edge)
+            {
+                let backend = coordinator.backend();
+                if let Err(error) = backend.dispatch_arbitrated_dictation_hotkey_press(edge, || {
+                    super::hotkey::fn_stroke_is_current(press_id, commit)
+                }).await {
+                    log::warn!("[ask] ordinary Fn dispatch failed: {error}");
+                }
+                return;
+            }
             coordinator.dispatch_ask_passthrough(edge).await;
         })
     }

@@ -125,7 +125,7 @@ export type AskWindowEvent =
 export type AskVoiceEvent = Omit<AskEditor, 'editable'> & {
   recordingId: string;
   focusEpoch: number;
-} & ({ type: 'started' } | { type: 'cancelled' } | { type: 'transcribed'; text: string });
+} & ({ type: 'started' } | { type: 'polishing' } | { type: 'cancelled' } | { type: 'transcribed'; text: string });
 
 export interface AskClient {
   current(): Promise<
@@ -194,15 +194,19 @@ const INTENT_ERRORS: Record<string, [english: string, chinese: string]> = {
   ],
 };
 
-export function submissionErrorMessage(error?: AskError | null) {
-  if (!error) return undefined;
-  const localized = error.reason && INTENT_ERRORS[error.reason];
-  if (!localized) return error.message;
+export function askLocale() {
   let language = navigator.language;
   try {
     language = window.localStorage.getItem('ol.locale') ?? language;
   } catch {}
-  return localized[/^zh\b/i.test(language) ? 1 : 0];
+  return language;
+}
+
+export function submissionErrorMessage(error?: AskError | null) {
+  if (!error) return undefined;
+  const localized = error.reason && INTENT_ERRORS[error.reason];
+  if (!localized) return error.message;
+  return localized[/^zh\b/i.test(askLocale()) ? 1 : 0];
 }
 
 export function newRequestId(): string {

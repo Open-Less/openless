@@ -386,6 +386,7 @@ function PromptBox({
                         {!value && (
                             <motion.span
                                 key="placeholder"
+                                data-slot="prompt-box-placeholder"
                                 aria-hidden
                                 initial={{ opacity: 0 }}
                                 animate={{ opacity: 1 }}

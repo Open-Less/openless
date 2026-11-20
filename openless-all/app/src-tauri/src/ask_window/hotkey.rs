@@ -23,7 +23,7 @@ use crate::{
 use super::{capture, voice, Desktop};
 
 const CHORD_GRACE: Duration = Duration::from_millis(170);
-const FN_TAP_LIMIT: Duration = Duration::from_millis(350);
+const FN_GRACE: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +39,6 @@ struct Binding {
     key: Option<u16>,
     requirements: [u16; 4],
     mode: HotkeyMode,
-    fn_tap: bool,
     swallow_primary: bool,
     modifier_only: bool,
 }
@@ -72,15 +71,11 @@ fn parse_binding(binding: &ShortcutBinding, mode: HotkeyMode) -> Result<Binding,
         key: None,
         requirements: [0; 4],
         mode,
-        fn_tap: false,
         swallow_primary: false,
         modifier_only: false,
     };
     if let Some(trigger) = legacy_modifier_trigger(binding) {
         physical.key = Some(native_trigger(trigger).ok_or(Availability::UnsupportedBinding)?);
-        physical.fn_tap = cfg!(target_os = "macos")
-            && trigger == HotkeyTrigger::Fn
-            && matches!(mode, HotkeyMode::Auto | HotkeyMode::Toggle);
         physical.modifier_only = true;
         physical.swallow_primary = cfg!(target_os = "windows");
         return Ok(physical);
@@ -194,6 +189,9 @@ pub(crate) fn reset_physical_state() {
         let mut native = runtime.native.lock();
         native.invalidate(&runtime.tx);
         native.modifiers = 0;
+        native.space = SpaceLatch::default();
+        native.paired_primary = None;
+        native.escape_captured = false;
     }
 }
 
@@ -211,6 +209,17 @@ pub(crate) fn fn_is_held() -> bool {
     RUNTIME
         .get()
         .is_some_and(|runtime| runtime.native.lock().modifiers & FN != 0)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn can_buffer_space() -> bool {
+    RUNTIME.get().is_some_and(|runtime| {
+        !runtime.suspended.load(Ordering::Acquire)
+            && {
+                let native = runtime.native.lock();
+                native.binding.is_some_and(is_mac_fn) && native.modifiers == 0
+            }
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -266,6 +275,7 @@ struct Native {
     modifiers: u16,
     space: SpaceLatch,
     held: Option<Held>,
+    released_fn_tap: Option<Arc<Stroke>>,
     paired_primary: Option<(u16, Disposition)>,
     escape_captured: bool,
 }
@@ -281,6 +291,9 @@ struct Stroke {
     at: Instant,
     binding: Binding,
     origin: Origin,
+    foreground_pid: Option<u32>,
+    #[cfg(target_os = "macos")]
+    space_epoch: u64,
 }
 
 enum Origin {
@@ -291,6 +304,13 @@ enum Origin {
 struct Chord {
     trigger: Option<capture::Trigger>,
     autostart: bool,
+    generation: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FnCommit {
+    Held,
+    ReleasedTap,
 }
 
 enum Message {
@@ -304,9 +324,17 @@ enum Message {
 
 impl Native {
     fn invalidate(&mut self, tx: &mpsc::UnboundedSender<Message>) {
+        self.released_fn_tap = None;
         if let Some(held) = self.held.take() {
             let _ = tx.send(Message::Abort(held.stroke.id));
         }
+    }
+
+    fn pending_fn(&self, id: u64) -> bool {
+        self.held.as_ref().is_some_and(|held| {
+            held.stroke.id == id && !held.chord_taken && !held.companion
+                && held.stroke.context_is_current()
+        })
     }
 
     fn key_edge(
@@ -341,11 +369,15 @@ impl Native {
                 let Some(held) = held.as_mut().filter(|held| {
                     !held.chord_taken
                         && !held.companion
+                        && (!is_mac_fn(held.stroke.binding) || held.stroke.at.elapsed() < FN_GRACE)
                         && still_matches(held.stroke.binding, modifiers)
                 }) else {
                     return false;
                 };
                 let foreground = capture::foreground();
+                if is_mac_fn(held.stroke.binding) && !held.stroke.matches_foreground(foreground.as_ref()) {
+                    return false;
+                }
                 let trigger = match &held.stroke.origin {
                     Origin::Ask(_) => {
                         if !desktop.is_native_target(foreground.as_ref()) {
@@ -363,12 +395,17 @@ impl Native {
                 let chord = Chord {
                     trigger,
                     autostart: !desktop.voice_is_pending(),
+                    generation: desktop.begin_open(),
                 };
                 held.chord_taken = tx.send(Message::Chord(held.stroke.id, chord)).is_ok();
                 held.chord_taken
             });
             if down && !handled {
-                self.abort_for_companion(tx);
+                if !self.held.as_ref().is_some_and(|held| {
+                    is_mac_fn(held.stroke.binding) && held.stroke.at.elapsed() >= FN_GRACE
+                }) {
+                    self.abort_for_companion(tx);
+                }
             }
             return if handled {
                 Disposition::Consume
@@ -377,6 +414,9 @@ impl Native {
             };
         }
         if key == ESCAPE {
+            if down && !disabled {
+                desktop.cancel_pending_open();
+            }
             if !down && std::mem::take(&mut self.escape_captured) {
                 return Disposition::Consume;
             }
@@ -396,7 +436,13 @@ impl Native {
                 if !down {
                     self.paired_primary = None;
                     if let Some(held) = self.held.take() {
-                        let _ = tx.send(Message::Release(held.stroke.id, Instant::now()));
+                        let at = Instant::now();
+                        if is_mac_fn(held.stroke.binding) && !held.chord_taken && !held.companion
+                            && quick_fn_tap(held.stroke.binding.mode, at.saturating_duration_since(held.stroke.at))
+                        {
+                            self.released_fn_tap = Some(held.stroke.clone());
+                        }
+                        let _ = tx.send(Message::Release(held.stroke.id, at));
                     }
                 }
                 return disposition;
@@ -405,6 +451,10 @@ impl Native {
         let Some(binding) = self.binding.filter(|_| !disabled) else {
             return Disposition::Stock;
         };
+        #[cfg(target_os = "macos")]
+        if key == 63 && is_mac_fn(binding) && crate::unicode_keystroke::is_secure_input_enabled() {
+            return Disposition::Pass;
+        }
         if binding.key.is_none()
             && modifier != 0
             && self.held.is_some()
@@ -416,23 +466,34 @@ impl Native {
             return Disposition::Pass;
         }
         if repeat || !down {
-            return Disposition::Stock;
+            return if is_mac_fn(binding) && binding.key == Some(key) {
+                Disposition::Pass
+            } else {
+                Disposition::Stock
+            };
         }
         let matches_binding = if let Some(primary) = binding.key {
-            primary == key && (binding.modifier_only || still_matches(binding, self.modifiers))
+            primary == key && ((binding.modifier_only && !is_mac_fn(binding))
+                || still_matches(binding, self.modifiers))
         } else {
             modifier != 0 && still_matches(binding, self.modifiers)
         };
         if !matches_binding {
-            if modifier == 0 {
+            if modifier == 0 || (modifier != FN && self.modifiers & FN != 0) {
                 self.abort_for_companion(tx);
             }
-            return Disposition::Stock;
+            return if is_mac_fn(binding) && binding.key == Some(key) {
+                Disposition::Pass
+            } else {
+                Disposition::Stock
+            };
         }
         if self.held.is_some() {
             return Disposition::Pass;
         }
+        self.released_fn_tap = None;
         let foreground = capture::foreground();
+        let foreground_pid = foreground.as_ref().map(|app| app.pid);
         let origin = if desktop.is_native_target(foreground.as_ref()) {
             Origin::Ask(desktop.target_at_press())
         } else {
@@ -443,6 +504,9 @@ impl Native {
             at: Instant::now(),
             binding,
             origin,
+            foreground_pid,
+            #[cfg(target_os = "macos")]
+            space_epoch: super::active_space_epoch(),
         });
         if tx.send(Message::Press(stroke.clone())).is_err() {
             return Disposition::Stock;
@@ -482,6 +546,43 @@ fn still_matches(binding: Binding, physical_modifiers: u16) -> bool {
     modifiers_match(binding.requirements, physical_modifiers & !primary)
 }
 
+fn is_mac_fn(binding: Binding) -> bool {
+    cfg!(target_os = "macos") && binding.key == native_trigger(HotkeyTrigger::Fn)
+        && binding.key.is_some()
+}
+
+impl Stroke {
+    fn matches_foreground(&self, foreground: Option<&capture::Foreground>) -> bool {
+        #[cfg(target_os = "macos")]
+        if self.space_epoch != super::active_space_epoch()
+            || crate::unicode_keystroke::is_secure_input_enabled()
+        {
+            return false;
+        }
+        self.foreground_pid == foreground.map(|app| app.pid)
+    }
+
+    fn context_is_current(&self) -> bool {
+        self.matches_foreground(capture::foreground().as_ref())
+    }
+}
+
+fn quick_fn_tap(mode: HotkeyMode, held: Duration) -> bool {
+    mode != HotkeyMode::Hold && held < FN_GRACE
+}
+
+pub(super) fn fn_stroke_is_current(id: u64, commit: FnCommit) -> bool {
+    RUNTIME.get().is_some_and(|runtime| {
+        let native = runtime.native.lock();
+        match commit {
+            FnCommit::Held => native.pending_fn(id),
+            FnCommit::ReleasedTap => native.released_fn_tap.as_ref().is_some_and(|stroke| {
+                stroke.id == id && stroke.at.elapsed() < FN_GRACE * 2 && stroke.context_is_current()
+            }),
+        }
+    })
+}
+
 struct Dispatch {
     stroke: Arc<Stroke>,
     started: bool,
@@ -493,11 +594,11 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
     let (edges, mut ordinary) = mpsc::unbounded_channel();
     let ordinary_desktop = desktop.clone();
     tauri::async_runtime::spawn(async move {
-        while let Some((edge, mode)) = ordinary.recv().await {
+        while let Some((edge, mode, arbitrated_fn)) = ordinary.recv().await {
             let Some(desktop) = ordinary_desktop.upgrade() else {
                 break;
             };
-            let delivery = desktop.ports.ordinary_dictation_edge(edge);
+            let delivery = desktop.ports.ordinary_dictation_edge(edge, arbitrated_fn);
             if mode == HotkeyMode::Hold {
                 tauri::async_runtime::spawn(delivery);
             } else {
@@ -513,21 +614,24 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
         match message {
             Message::Press(stroke) => {
                 let active = desktop.ports.ordinary_dictation_is_active();
-                let preexisting_grace = matches!(stroke.origin, Origin::Ordinary)
+                let mac_fn = is_mac_fn(stroke.binding);
+                if mac_fn {
+                    desktop.warm_dictation();
+                }
+                let preexisting_grace = !mac_fn && matches!(stroke.origin, Origin::Ordinary)
                     && stroke.binding.modifier_only
-                    && !stroke.binding.fn_tap
                     && !active;
-                if !preexisting_grace
-                    && !stroke.binding.fn_tap
+                if mac_fn || (!preexisting_grace
                     && matches!(stroke.binding.mode, HotkeyMode::Hold | HotkeyMode::Auto)
                     && !active
-                    && (matches!(stroke.origin, Origin::Ordinary) || !desktop.voice_is_pending())
+                    && (matches!(stroke.origin, Origin::Ordinary) || !desktop.voice_is_pending()))
                 {
                     if let Some(runtime) = RUNTIME.get() {
                         let tx = runtime.tx.clone();
                         let id = stroke.id;
+                        let deadline = stroke.at + if mac_fn { FN_GRACE } else { CHORD_GRACE };
                         tauri::async_runtime::spawn(async move {
-                            tokio::time::sleep(CHORD_GRACE).await;
+                            tokio::time::sleep_until(deadline.into()).await;
                             let _ = tx.send(Message::Grace(id));
                         });
                     }
@@ -539,7 +643,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                     completed: false,
                 };
                 if preexisting_grace {
-                    next.start(&desktop, &edges, false);
+                    next.start(&desktop, &edges, false, None);
                 }
                 current = Some(next);
             }
@@ -548,10 +652,14 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                     .as_mut()
                     .filter(|state| state.stroke.id == id && !state.completed)
                 {
-                    if !matches!(state.stroke.origin, Origin::Ordinary)
+                    let mac_fn = is_mac_fn(state.stroke.binding);
+                    if mac_fn && !fn_stroke_is_current(id, FnCommit::Held) {
+                        continue;
+                    }
+                    if mac_fn || !matches!(state.stroke.origin, Origin::Ordinary)
                         || !desktop.ports.ordinary_dictation_is_active()
                     {
-                        state.start(&desktop, &edges, false);
+                        state.start(&desktop, &edges, mac_fn, mac_fn.then_some(FnCommit::Held));
                     }
                 }
             }
@@ -563,13 +671,16 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                     current = Some(state);
                     continue;
                 }
-                if state.completed
-                    || (state.stroke.binding.fn_tap
-                        && at.saturating_duration_since(state.stroke.at) >= FN_TAP_LIMIT)
-                {
+                if state.completed {
                     continue;
                 }
-                state.start(&desktop, &edges, true);
+                let commit = if is_mac_fn(state.stroke.binding) && !state.started {
+                    if !fn_stroke_is_current(id, FnCommit::ReleasedTap) {
+                        continue;
+                    }
+                    Some(FnCommit::ReleasedTap)
+                } else { None };
+                state.start(&desktop, &edges, true, commit);
                 state.release(&desktop, &edges, at);
             }
             Message::Chord(id, chord) => {
@@ -589,10 +700,10 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                             .ordinary_dictation_edge(DictationHotkeyEdge::Combined {
                                 press_id: id,
                                 at: Instant::now(),
-                            })
+                            }, None)
                             .await;
                     }
-                    if let Err(error) = desktop.open_with(chord.trigger, Some(autostart)).await {
+                    if let Err(error) = desktop.open_with(chord.trigger, Some(autostart), chord.generation).await {
                         log::warn!("[ask-window] could not open: {error}");
                     }
                 });
@@ -614,10 +725,10 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
     }
 }
 
-type EdgeSender = mpsc::UnboundedSender<(DictationHotkeyEdge, HotkeyMode)>;
+type EdgeSender = mpsc::UnboundedSender<(DictationHotkeyEdge, HotkeyMode, Option<FnCommit>)>;
 
 impl Dispatch {
-    fn start(&mut self, desktop: &Desktop, ordinary: &EdgeSender, toggle: bool) {
+    fn start(&mut self, desktop: &Desktop, ordinary: &EdgeSender, toggle: bool, commit: Option<FnCommit>) {
         if self.started {
             return;
         }
@@ -630,17 +741,22 @@ impl Dispatch {
                     press_id: self.stroke.id,
                     at: self.stroke.at,
                 },
+                commit,
             ),
-            Origin::Ask(target) => desktop.voice.manual(
-                target.clone(),
-                self.stroke.id,
-                toggle && mode != HotkeyMode::Hold,
-            ),
+            Origin::Ask(target) => {
+                let toggle = toggle && mode != HotkeyMode::Hold;
+                #[cfg(target_os = "macos")]
+                desktop.voice.manual(
+                    target.clone(), self.stroke.id, toggle, commit,
+                );
+                #[cfg(not(target_os = "macos"))]
+                desktop.voice.manual(target.clone(), self.stroke.id, toggle);
+            }
         }
     }
 
-    fn emit(&self, ordinary: &EdgeSender, edge: DictationHotkeyEdge) {
-        let _ = ordinary.send((edge, self.stroke.binding.mode));
+    fn emit(&self, ordinary: &EdgeSender, edge: DictationHotkeyEdge, commit: Option<FnCommit>) {
+        let _ = ordinary.send((edge, self.stroke.binding.mode, commit));
     }
 
     fn release(&self, desktop: &Desktop, ordinary: &EdgeSender, at: Instant) {
@@ -651,6 +767,7 @@ impl Dispatch {
                     press_id: self.stroke.id,
                     at,
                 },
+                None,
             ),
             Origin::Ask(_) => desktop.voice.release(
                 self.stroke.id,
@@ -672,6 +789,7 @@ impl Dispatch {
                         press_id: self.stroke.id,
                         at: Instant::now(),
                     },
+                    None,
                 ));
             }
             Origin::Ask(_) => desktop.voice.cancel_press(self.stroke.id),
@@ -797,6 +915,14 @@ mod tests {
         assert!(!space.edge(true, false, || unreachable!()));
         assert!(!space.edge(false, false, || unreachable!()));
         assert!(space.edge(true, false, || true));
+    }
+
+    #[test]
+    fn only_release_can_commit_a_quick_toggle_tap() {
+        assert!(quick_fn_tap(HotkeyMode::Auto, Duration::from_millis(80)));
+        assert!(quick_fn_tap(HotkeyMode::Toggle, Duration::from_millis(149)));
+        assert!(!quick_fn_tap(HotkeyMode::Hold, Duration::from_millis(80)));
+        assert!(!quick_fn_tap(HotkeyMode::Auto, FN_GRACE));
     }
 
     #[test]

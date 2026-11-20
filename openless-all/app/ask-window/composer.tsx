@@ -4,6 +4,7 @@ import { Brain, Paperclip } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { AttachmentDeck } from './attachments';
 import {
+  askLocale,
   errorMessage,
   newRequestId,
   requestFingerprint,
@@ -84,6 +85,7 @@ export function useComposer({
   check,
   focus,
   activation,
+  expanded,
   captureSubmitReceipt,
 }: {
   client: AskClient;
@@ -93,6 +95,7 @@ export function useComposer({
   check: () => void;
   focus?: AskFocus;
   activation: number;
+  expanded: boolean;
   captureSubmitReceipt: () => (turnId: string) => void;
 }) {
   const { conversationId, attachments } = snapshot;
@@ -119,6 +122,7 @@ export function useComposer({
   const [pending, setPending] = useState(false);
   const [acknowledgedTurn, setAcknowledgedTurn] = useState<string>();
   const [voiceListening, setVoiceListening] = useState(false);
+  const [voicePolishing, setVoicePolishing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
   const [cancelling, setCancelling] = useState<string>();
@@ -133,6 +137,19 @@ export function useComposer({
       : undefined);
   const attachmentsReady = attachments.every((item) => item.state === 'ready');
   const cannotSubmit = !connected || pending || adding || removing.size > 0 || !attachmentsReady;
+  const submission = snapshot.submission;
+  const showPolish =
+    !expanded &&
+    (voicePolishing ||
+      (submission?.currentTurnId === turnId &&
+        submission?.route === 'edit' &&
+        submission.status === 'writing'));
+  const language = askLocale();
+  const polishLabel = /^zh-(TW|HK|Hant)\b/i.test(language)
+    ? '正在潤飾…'
+    : /^zh\b/i.test(language)
+      ? '正在润色…'
+      : 'Polishing…';
 
   function replaceDraft(text: string, selection?: Selection) {
     if (selection && text === draftRef.current && editor.current) {
@@ -177,6 +194,7 @@ export function useComposer({
       editorFingerprint.current = key;
       editorRevision.current += 1;
       activeRecording.current = undefined;
+      setVoicePolishing(false);
     }
     focusSeen.current = requestKey;
     void client
@@ -340,6 +358,11 @@ export function useComposer({
         return;
       }
       const recording = activeRecording.current;
+      if (event.type === 'polishing') {
+        if (recording?.id === event.recordingId) setVoicePolishing(true);
+        return;
+      }
+      setVoicePolishing(false);
       if (event.type === 'cancelled') {
         if (recording?.id === event.recordingId) activeRecording.current = undefined;
         return;
@@ -372,6 +395,7 @@ export function useComposer({
     let stop: (() => void) | undefined;
     const clearRecording = () => {
       activeRecording.current = undefined;
+      setVoicePolishing(false);
     };
     window.addEventListener('blur', clearRecording);
     void client
@@ -402,12 +426,16 @@ export function useComposer({
   }, [client, notice]);
 
   useLayoutEffect(() => {
-    if (!connected) activeRecording.current = undefined;
+    if (!connected) {
+      activeRecording.current = undefined;
+      setVoicePolishing(false);
+    }
   }, [connected]);
 
   const box = (
     <div
       className="composer"
+      data-polishing={showPolish && !draft}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes('Files')) return;
         event.preventDefault();
@@ -431,7 +459,7 @@ export function useComposer({
     >
       <PromptBox
         className="w-full"
-        placeholder={PLACEHOLDERS}
+        placeholder={showPolish ? polishLabel : PLACEHOLDERS}
         status={turnId ? 'streaming' : 'idle'}
         efforts={EFFORTS}
         value={draft}
@@ -439,11 +467,13 @@ export function useComposer({
         submitDisabled={cannotSubmit || isComposing}
         canSubmitEmpty={attachments.length > 0 && attachmentsReady}
         inputProps={{
+          'aria-label': PLACEHOLDERS[0],
           'aria-describedby': attachments.length ? 'draft-references' : undefined,
           readOnly: pending,
           onFocus: () => syncEditor(),
           onBlur: () => {
             activeRecording.current = undefined;
+            setVoicePolishing(false);
             syncEditor(true);
           },
           onSelect: () => syncEditor(),

@@ -79,6 +79,10 @@ pub enum AskWriteOutcome {
 }
 
 pub trait AskWriter: Send + Sync {
+    fn has_original_caret(&self) -> bool {
+        false
+    }
+
     fn write(
         &self,
         operation: AskWriteOperation,

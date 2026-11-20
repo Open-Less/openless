@@ -24,7 +24,8 @@ test('a recovered question route expands one frame without replacing the editor'
   });
   await prompt.fill('hi');
   await prompt.press('Enter');
-  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Ask result' })).toHaveCount(0);
+  await expect(page.getByText('Working', { exact: true })).toHaveCount(0);
   await expect(page.locator('.user-bubble')).toHaveCount(0);
   await page.evaluate(() => window.askFixture.resolve('answer', false));
   const backdrop = page.locator('.ask-expansion-backdrop');
@@ -204,7 +205,7 @@ test('model tool status is visible without query controls; replay and sources wo
   await expect(thinking).toHaveCSS('color', accent);
   await prompt.fill('Search for current information');
   await prompt.press('Enter');
-  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Ask result' })).toHaveCount(0);
   expect(await page.evaluate(() => window.askFixture.submits[0].options)).toEqual({
     deepThinking: true,
   });
@@ -308,6 +309,36 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await expect(page.locator('.user-bubble')).toHaveText('private draft');
   const requests = await page.evaluate(() => window.askFixture.submits);
   expect(requests[1]).toEqual(requests[0]);
+});
+
+test('compact rewrite uses only the placeholder and restores it on cancellation', async ({ page }) => {
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  const composer = page.locator('.composer');
+  const placeholder = page.locator('[data-slot="prompt-box-placeholder"]');
+  await page.evaluate(() => {
+    window.askFixture.route = 'edit';
+    localStorage.setItem('ol.locale', 'zh-CN');
+  });
+  await prompt.fill('Make this shorter');
+  await prompt.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.askFixture.active())).toBeTruthy();
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'turnStatus', turnId: fixture.active(), status: 'writing' });
+  });
+  await expect(composer).toHaveAttribute('data-polishing', 'true');
+  await expect(placeholder).toHaveText('正在润色…');
+  await expect(page.getByRole('region', { name: 'Ask result' })).toHaveCount(0);
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  await prompt.fill('My next draft');
+  await expect(composer).toHaveAttribute('data-polishing', 'false');
+  await expect(prompt).toHaveValue('My next draft');
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'turnFinished', turnId: fixture.active(), status: 'cancelled' });
+  });
+  await prompt.fill('');
+  await expect(placeholder).not.toHaveText('正在润色…');
 });
 
 test('voice claims only the original scoped editor and inserts without submitting or replacing text', async ({
