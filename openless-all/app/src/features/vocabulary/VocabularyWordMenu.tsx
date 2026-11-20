@@ -1,5 +1,5 @@
 import { Menu } from '@base-ui/react/menu';
-import { useRef, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { usePopupViewport } from '../../ui/layout/AppViewport';
@@ -22,6 +22,18 @@ export function VocabularyWordMenu({
   const { t } = useTranslation();
   const { boundary, container } = usePopupViewport();
   const removalRequested = useRef(false);
+  useEffect(() => {
+    if (!open) return;
+    const scroll = anchor.current?.closest('.ol-vocab-scroll');
+    const dismiss = () => onOpenChange(false);
+    scroll?.addEventListener('scroll', dismiss, { passive: true });
+    window.addEventListener('resize', dismiss);
+    return () => {
+      scroll?.removeEventListener('scroll', dismiss);
+      window.removeEventListener('resize', dismiss);
+    };
+  }, [anchor, onOpenChange, open]);
+
   return (
     <Menu.Root
       open={open}

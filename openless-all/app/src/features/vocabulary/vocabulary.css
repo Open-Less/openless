@@ -144,6 +144,7 @@
 }
 
 .ol-grid-12.ol-vocab-grid {
+  isolation: isolate;
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 10px;
@@ -176,33 +177,104 @@
 
 .ol-word-card {
   position: relative;
+  z-index: 0;
+  display: grid;
+  min-inline-size: 0;
+  -webkit-touch-callout: none;
+  user-select: none;
+  transition: z-index 0s 170ms;
+}
+
+.ol-word-card-halo {
+  --ol-word-blur-mask: radial-gradient(
+    ellipse closest-side,
+    #000 42%,
+    rgb(0 0 0 / 0.87) 58%,
+    rgb(0 0 0 / 0.38) 79%,
+    transparent 100%
+  );
+  position: absolute;
+  inset: -50px -60px;
+  z-index: 0;
+  opacity: 0.1;
+  pointer-events: none;
+  -webkit-mask-image: var(--ol-word-blur-mask);
+  mask-image: var(--ol-word-blur-mask);
+  transition: opacity 170ms ease-out;
+}
+
+@starting-style {
+  .ol-word-card-halo {
+    opacity: 0;
+  }
+}
+
+.ol-word-card-halo[data-closing] {
+  opacity: 0;
+}
+
+.ol-word-card-halo-source {
+  position: absolute;
+  inset: -8px;
+  background: var(--ol-surface);
+  filter: blur(3px);
+}
+
+.ol-word-card-replica {
+  position: absolute;
+  display: grid;
+}
+
+.ol-word-card-face {
+  position: relative;
+  z-index: 1;
   display: grid;
   min-inline-size: 0;
   min-block-size: 38px;
-  -webkit-touch-callout: none;
-  user-select: none;
   border: 0.5px solid var(--ol-line);
   border-radius: var(--ol-r-lg);
   background: var(--ol-surface);
   transition:
+    transform 180ms var(--ol-motion-quick),
+    box-shadow 180ms var(--ol-motion-quick),
     background 0.16s var(--ol-motion-quick),
     border-color 0.16s var(--ol-motion-quick);
 }
 
-.ol-word-card:hover,
-.ol-word-card:focus-within,
-.ol-word-card[data-disabled='true'] {
+:is(.ol-word-card, .ol-word-card-replica):is(:hover, :focus-within, [data-disabled='true'])
+  > .ol-word-card-face {
   background: var(--ol-surface-2);
 }
 
-.ol-word-card:hover,
-.ol-word-card:focus-within {
+.ol-word-card:is(:hover, :focus-within) > .ol-word-card-face {
   border-color: var(--ol-line-strong);
 }
 
-.ol-word-card[data-selected='true'] {
+:is(.ol-word-card, .ol-word-card-replica)[data-selected='true'] > .ol-word-card-face {
   border-color: var(--ol-blue-ring);
   background: var(--ol-blue-soft);
+}
+
+.ol-word-card[data-pressing] > .ol-word-card-face {
+  transform: scale(0.97);
+}
+
+/* Keep the original button hit area when its painted surface contracts. */
+.ol-word-card[data-pressing] .ol-word-card-text::after {
+  content: '';
+  position: absolute;
+  inset: -3% -2%;
+}
+
+.ol-word-card[data-lifted] {
+  z-index: 2;
+  transition-delay: 0s;
+}
+
+.ol-word-card[data-lifted] > .ol-word-card-face {
+  transform: translateY(-2px) scale(1.025);
+  box-shadow: var(--ol-shadow-md);
+  pointer-events: none;
 }
 
 .ol-word-card-badge {
@@ -226,7 +298,7 @@
   color: var(--ol-ink-4);
 }
 
-.ol-word-card[data-disabled='true'] .ol-word-card-icon {
+:is(.ol-word-card, .ol-word-card-replica)[data-disabled='true'] .ol-word-card-icon {
   opacity: 0.55;
 }
 
@@ -253,7 +325,7 @@
   outline-offset: -2px;
 }
 
-.ol-word-card[data-disabled='true'] .ol-word-card-text {
+:is(.ol-word-card, .ol-word-card-replica)[data-disabled='true'] .ol-word-card-text {
   color: var(--ol-ink-2);
 }
 
@@ -327,6 +399,14 @@
   min-inline-size: 110px;
 }
 
+.ol-vocab-word-menu[data-open] {
+  transition-delay: 45ms;
+}
+
+.ol-vocab-word-menu[data-starting-style] {
+  transform: translateY(-4px) scale(0.98);
+}
+
 .ol-vocab-word-menu-delete {
   display: flex;
   align-items: center;
@@ -340,6 +420,26 @@
 
 .ol-vocab-word-menu-delete[data-highlighted] {
   background: var(--ol-surface-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ol-word-card,
+  .ol-word-card-halo,
+  .ol-word-card > .ol-word-card-face,
+  .ol-vocab-word-menu[data-open] {
+    transition: none;
+  }
+
+  .ol-word-card:is([data-pressing], [data-lifted]) > .ol-word-card-face,
+  .ol-vocab-word-menu[data-starting-style] {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .ol-word-card-halo {
+    display: none;
+  }
 }
 
 [data-ol-theme='dark'] .ol-vocab-dialog {

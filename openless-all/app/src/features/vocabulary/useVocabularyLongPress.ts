@@ -1,4 +1,11 @@
-import { useEffect, useRef, type MouseEvent, type PointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+} from 'react';
 
 const HOLD_MS = 500;
 const MOVE_THRESHOLD = 8;
@@ -10,30 +17,45 @@ export function useVocabularyLongPress(
 ) {
   const pending = useRef<{ id: number; x: number; y: number; timer: number } | null>(null);
   const consumed = useRef(false);
+  const [pressing, setPressing] = useState(false);
 
-  function cancel() {
-    if (pending.current) window.clearTimeout(pending.current.timer);
+  const clearTimer = useCallback(() => {
+    if (!pending.current) return;
+    window.clearTimeout(pending.current.timer);
     pending.current = null;
-  }
+  }, []);
+
+  const cancel = useCallback(() => {
+    clearTimer();
+    setPressing(false);
+  }, [clearTimer]);
 
   useEffect(() => {
     if (disabled) cancel();
-    return cancel;
-  }, [disabled]);
+    return clearTimer;
+  }, [cancel, clearTimer, disabled]);
 
-  return {
+  useEffect(() => {
+    if (!pressing) return;
+    window.addEventListener('blur', cancel);
+    return () => window.removeEventListener('blur', cancel);
+  }, [cancel, pressing]);
+
+  const handlers = {
     onPointerDown(event: PointerEvent<HTMLElement>) {
       cancel();
       if (!event.isPrimary || event.button !== 0) return;
       consumed.current = false;
       if (disabled || ignore?.(event.target)) return;
 
+      setPressing(true);
       pending.current = {
         id: event.pointerId,
         x: event.clientX,
         y: event.clientY,
         timer: window.setTimeout(() => {
           pending.current = null;
+          setPressing(false);
           consumed.current = true;
           onHold();
         }, HOLD_MS),
@@ -58,4 +80,6 @@ export function useVocabularyLongPress(
       consumed.current = false;
     },
   };
+
+  return { pressing, handlers };
 }

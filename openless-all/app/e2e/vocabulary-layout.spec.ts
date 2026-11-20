@@ -178,7 +178,7 @@ test('five vocabulary cards stay fixed while a long label loops on whole-card ho
   await expect(dialog).toHaveCount(0);
   const longWord = vocab.getByRole('button', { name: phrase, exact: true });
   const label = longWord.locator('.ol-word-card-label');
-  const card = longWord.locator('..');
+  const card = longWord.locator('../..');
   const before = await bounds(card);
   await expect(label).toHaveCSS('text-overflow', 'ellipsis');
   await card.locator('.ol-word-card-icon').hover();
@@ -216,7 +216,7 @@ test('five vocabulary cards stay fixed while a long label loops on whole-card ho
   await expect(label).toHaveCSS('text-overflow', 'ellipsis');
 });
 
-test('holding a vocabulary card opens the delete menu without toggling or deleting the word', async ({
+test('holding a vocabulary card compresses and lifts it above the blur before deletion', async ({
   page,
 }) => {
   await page.goto('/?os=mac');
@@ -224,7 +224,8 @@ test('holding a vocabulary card opens the delete menu without toggling or deleti
   const vocab = page.locator('[data-ol-page="vocab"]');
   await expect(vocab).toHaveAttribute('data-transition-phase', 'settled');
   const word = vocab.getByRole('button', { name: 'macOS', exact: true });
-  const card = word.locator('..');
+  const card = word.locator('../..');
+  const face = card.locator(':scope > .ol-word-card-face');
   const hits = card.locator('.ol-word-card-hits');
   await expect(hits).toHaveText('8');
   const normal = await bounds(hits);
@@ -252,10 +253,24 @@ test('holding a vocabulary card opens the delete menu without toggling or deleti
 
   await card.locator('.ol-word-card-hits').hover();
   await page.mouse.down();
+  await expect(card).toHaveAttribute('data-pressing', '');
+  await expect.poll(async () => (await bounds(face)).width).toBeLessThan(originalCard.width - 1);
   const menu = page.getByRole('menu', { name: 'macOS' });
   await expect(menu).toBeVisible();
+  await expect(card).toHaveAttribute('data-lifted', '');
+  await expect.poll(async () => (await bounds(face)).width).toBeGreaterThan(originalCard.width);
+  const halo = card.locator('.ol-word-card-halo');
+  await expect(halo).toHaveCSS('opacity', '0.1');
+  await expect(halo).toHaveCSS('mask-image', /radial-gradient\(.*closest-side/);
+  await expect(halo.locator('.ol-word-card-halo-source')).toHaveCSS('filter', 'blur(3px)');
+  await expect(halo.locator('.ol-word-card-replica').first()).toBeAttached();
+  const grid = vocab.locator('.ol-vocab-grid');
+  expect((await bounds(halo)).width).toBeLessThan((await bounds(grid)).width / 2);
+  await expect(grid).toHaveCSS('filter', 'none');
+  await expect(face).toHaveCSS('filter', 'none');
   const popup = await bounds(menu);
-  const tile = await bounds(card);
+  const tile = await bounds(face);
+  expect(await bounds(card)).toEqual(originalCard);
   expect(popup.y).toBeGreaterThan(tile.y + tile.height);
   await page.mouse.up();
   await expect(card).not.toHaveAttribute('data-disabled', 'true');
@@ -264,6 +279,8 @@ test('holding a vocabulary card opens the delete menu without toggling or deleti
   await menu.getByRole('menuitem', { name: '删除' }).click();
   const confirmation = page.getByRole('dialog', { name: /删除.*macOS/ });
   await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(card).not.toHaveAttribute('data-lifted', '');
+  await expect(halo).toHaveCount(0);
   await expect(word).toBeFocused();
   await word.press('Shift+F10');
   await expect(menu).toBeVisible();

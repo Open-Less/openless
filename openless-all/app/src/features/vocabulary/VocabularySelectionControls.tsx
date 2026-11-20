@@ -15,7 +15,7 @@ export function VocabularySelectionToggle({
   onSelectAll: () => void;
 }) {
   const { t } = useTranslation();
-  const hold = useVocabularyLongPress(!selecting || disabled, onSelectAll);
+  const { handlers: hold } = useVocabularyLongPress(!selecting || disabled, onSelectAll);
   return (
     <div
       {...hold}

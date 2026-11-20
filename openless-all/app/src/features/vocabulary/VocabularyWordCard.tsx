@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../components/Tooltip';
 import { useReducedMotion } from '../../lib/motion';
 import { useVocabularyLongPress } from './useVocabularyLongPress';
+import { VocabularyWordHalo } from './VocabularyWordHalo';
 import { VocabularyWordMenu } from './VocabularyWordMenu';
 
 interface WordCardProps {
@@ -42,12 +43,13 @@ export function VocabularyWordCard({
   const [pointerInside, setPointerInside] = useState(false);
   const [focused, setFocused] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const press = useVocabularyLongPress(
-    removing || menuOpen,
+  const lifted = menuOpen && !removing;
+  const { pressing, handlers: press } = useVocabularyLongPress(
+    removing || lifted,
     () => setMenuOpen(true),
     (target) => target instanceof Element && !!target.closest('.ol-word-card-action'),
   );
-  const active = (pointerInside || focused) && !removing && !reduced && !menuOpen;
+  const active = (pointerInside || focused) && !removing && !reduced && !lifted;
 
   useLayoutEffect(() => {
     const viewport = label.current;
@@ -106,6 +108,8 @@ export function VocabularyWordCard({
         data-disabled={entry.enabled ? undefined : 'true'}
         data-selected={selected ? 'true' : undefined}
         data-selecting={selecting ? 'true' : undefined}
+        data-pressing={pressing && !removing ? '' : undefined}
+        data-lifted={lifted ? '' : undefined}
         onPointerEnter={(event) => {
           if (event.pointerType !== 'touch') setPointerInside(true);
         }}
@@ -121,73 +125,76 @@ export function VocabularyWordCard({
         }}
         style={removing ? { pointerEvents: 'none' } : undefined}
       >
-        <button
-          ref={button}
-          type="button"
-          className="ol-word-card-text"
-          role={selecting ? 'checkbox' : undefined}
-          aria-checked={selecting ? selected : undefined}
-          aria-label={
-            selecting
-              ? t('vocab.selectWord', { phrase: entry.phrase })
-              : entry.enabled
-                ? entry.phrase
-                : `${entry.phrase} · ${t('vocab.disabledWord')}`
-          }
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          title={reduced ? entry.phrase : undefined}
-          disabled={removing}
-          onClick={(event) => (selecting ? onSelect(event.shiftKey) : onToggle())}
-          onFocus={(event) => setFocused(event.currentTarget.matches(':focus-visible'))}
-          onBlur={() => setFocused(false)}
-          onKeyDown={(event) => {
-            if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
-            event.preventDefault();
-            setMenuOpen(true);
-          }}
-        >
-          <span className="ol-word-card-icon" aria-hidden="true">
-            <Icon name={auto ? 'sparkle' : 'feather'} size={14} />
-          </span>
-          <span ref={label} className="ol-word-card-label">
-            <span ref={strip} className="ol-word-card-strip">
-              <span ref={text} className="ol-word-card-phrase">
-                {entry.phrase}
-              </span>
-              <span
-                className="ol-word-card-phrase-copy"
-                aria-hidden="true"
-                data-phrase={entry.phrase}
-              />
+        <VocabularyWordHalo open={lifted} />
+        <div className="ol-word-card-face">
+          <button
+            ref={button}
+            type="button"
+            className="ol-word-card-text"
+            role={selecting ? 'checkbox' : undefined}
+            aria-checked={selecting ? selected : undefined}
+            aria-label={
+              selecting
+                ? t('vocab.selectWord', { phrase: entry.phrase })
+                : entry.enabled
+                  ? entry.phrase
+                  : `${entry.phrase} · ${t('vocab.disabledWord')}`
+            }
+            aria-haspopup="menu"
+            aria-expanded={lifted}
+            title={reduced ? entry.phrase : undefined}
+            disabled={removing}
+            onClick={(event) => (selecting ? onSelect(event.shiftKey) : onToggle())}
+            onFocus={(event) => setFocused(event.currentTarget.matches(':focus-visible'))}
+            onBlur={() => setFocused(false)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+              event.preventDefault();
+              setMenuOpen(true);
+            }}
+          >
+            <span className="ol-word-card-icon" aria-hidden="true">
+              <Icon name={auto ? 'sparkle' : 'feather'} size={14} />
             </span>
-          </span>
-          <span className="ol-word-card-hits">{entry.hits}</span>
-        </button>
-        {!selecting && (
-          <Tooltip content={t('vocab.edit')} placement="top" className="ol-word-card-edit">
-            <button
-              type="button"
-              className="ol-word-card-action"
-              aria-label={t('vocab.edit')}
-              disabled={removing}
-              onClick={onEdit}
-            >
-              <Icon name="pencil" size={14} />
-            </button>
-          </Tooltip>
-        )}
-        {selected && (
-          <span className="ol-word-card-badge" aria-hidden="true">
-            <Icon name="check" size={10} strokeWidth={2.7} />
-          </span>
-        )}
+            <span ref={label} className="ol-word-card-label">
+              <span ref={strip} className="ol-word-card-strip">
+                <span ref={text} className="ol-word-card-phrase">
+                  {entry.phrase}
+                </span>
+                <span
+                  className="ol-word-card-phrase-copy"
+                  aria-hidden="true"
+                  data-phrase={entry.phrase}
+                />
+              </span>
+            </span>
+            <span className="ol-word-card-hits">{entry.hits}</span>
+          </button>
+          {!selecting && (
+            <Tooltip content={t('vocab.edit')} placement="top" className="ol-word-card-edit">
+              <button
+                type="button"
+                className="ol-word-card-action"
+                aria-label={t('vocab.edit')}
+                disabled={removing}
+                onClick={onEdit}
+              >
+                <Icon name="pencil" size={14} />
+              </button>
+            </Tooltip>
+          )}
+          {selected && (
+            <span className="ol-word-card-badge" aria-hidden="true">
+              <Icon name="check" size={10} strokeWidth={2.7} />
+            </span>
+          )}
+        </div>
       </div>
       <VocabularyWordMenu
         anchor={card}
         focusTarget={button}
         label={entry.phrase}
-        open={menuOpen && !removing}
+        open={lifted}
         onOpenChange={setMenuOpen}
         onRemove={onRemove}
       />
