@@ -1977,27 +1977,6 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   }
 }
 
-/* Content surfaces stay opaque; grain supplies the material texture on every host. */
-.ol-vocab-select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ol-ink-2);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.ol-vocab-select-all input,
-.ol-word-card-select {
-  accent-color: var(--ol-ink-2);
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.ol-word-card:not([data-selecting='true']) .ol-word-card-select,
-.ol-vocab-select-all[hidden] {
-  display: none;
-}
 .ol-vocab-delete-selected {
   display: inline-flex;
   align-items: center;
@@ -2019,8 +1998,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   opacity: 0.5;
   cursor: wait;
 }
-.ol-vocab-delete-selected:focus-visible,
-.ol-word-card-select:focus-visible {
+.ol-vocab-delete-selected:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: 3px;
 }

@@ -50,6 +50,7 @@ export function useVocabularyWorkspace() {
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
+  const selectionAnchor = useRef<string | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
 
   const refresh = async () => {
@@ -143,15 +144,6 @@ export function useVocabularyWorkspace() {
     } finally {
       deleteRequest.current = false;
     }
-  };
-
-  const toggleSelection = (id: string) => {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   const onToggle = async (entry: DictionaryEntry) => {
@@ -307,6 +299,36 @@ export function useVocabularyWorkspace() {
       (!needle || e.phrase.toLowerCase().includes(needle)),
   );
 
+  const toggleSelection = (id: string, extend: boolean) => {
+    const anchor = selectionAnchor.current;
+    const start = extend ? visibleEntries.findIndex((entry) => entry.id === anchor) : -1;
+    const end = start < 0 ? -1 : visibleEntries.findIndex((entry) => entry.id === id);
+    if (start >= 0 && end >= 0) {
+      const range = visibleEntries.slice(Math.min(start, end), Math.max(start, end) + 1);
+      setSelectedIds((current) => new Set([...current, ...range.map((entry) => entry.id)]));
+      return;
+    }
+    selectionAnchor.current = id;
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    if (batchBusy || visibleEntries.length === 0) return;
+    setSelectedIds((current) => new Set([...current, ...visibleEntries.map((entry) => entry.id)]));
+  };
+
+  const toggleSelectionMode = () => {
+    if (batchBusy) return;
+    selectionAnchor.current = null;
+    if (selecting) setSelectedIds(new Set());
+    setSelecting(!selecting);
+  };
+
   // FLIP: measure layout position only (offsetTop); rect is polluted by in-flight
   // animation transforms.
   useLayoutEffect(() => {
@@ -351,12 +373,12 @@ export function useVocabularyWorkspace() {
     cardRefs,
     removingIds,
     selectedIds,
-    setSelectedIds,
     selecting,
-    setSelecting,
     batchBusy,
     removeEntries,
     toggleSelection,
+    toggleSelectionMode,
+    selectAllVisible,
     onToggle,
     openEdit,
     saveEdit,

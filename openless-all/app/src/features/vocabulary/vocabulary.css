@@ -9,7 +9,6 @@
 }
 
 .ol-vocab-search-actions,
-.ol-vocab-selection-tools,
 .ol-vocab-filter-actions {
   display: flex;
   align-items: center;
@@ -18,14 +17,9 @@
   min-inline-size: 0;
 }
 
-.ol-vocab-selection-tools {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  margin-inline-start: auto;
-}
-
 .ol-vocab-filter-actions {
   justify-content: flex-end;
+  margin-inline-start: auto;
 }
 
 .ol-vocab-search-actions > .ol-search {
@@ -33,80 +27,90 @@
   min-inline-size: var(--ol-field-icon-size);
 }
 
-.ol-vocab-word-actions {
-  display: grid;
-  grid-template-columns: var(--ol-field-icon-size) minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-inline-size: 0;
-  max-inline-size: 100%;
-}
-
-.ol-vocab-word-actions > .ol-vocab-delete-selected {
-  min-inline-size: 0;
-  min-block-size: var(--ol-field-icon-size);
-  text-align: center;
-  line-height: 1.25;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  display: grid;
-  place-items: center;
-  justify-content: stretch;
-  padding: 7px 13px;
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--ol-font-weight-medium);
-  font-size: 13.5px;
-}
-
-/* Keep the search and add action stable while the selection count changes. */
-.ol-vocab-word-actions > [data-empty] {
-  visibility: hidden;
-}
-
-/* Reserve space for localized labels without adding to the control's accessible name. */
-.ol-vocab-reserved-label {
-  display: grid;
-  min-inline-size: 0;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-
-.ol-vocab-action-content {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-inline-size: 0;
-}
-
-.ol-vocab-action-content,
-.ol-vocab-reserved-label > span {
-  grid-area: 1 / 1;
-}
-
-.ol-vocab-action-content[aria-hidden='true'],
-.ol-vocab-reserved-label > [aria-hidden='true'] {
-  visibility: hidden;
-}
-
 .ol-vocab-filters {
   box-sizing: border-box;
   max-inline-size: 100%;
+  min-inline-size: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .ol-vocab-filters > button {
-  min-inline-size: 0;
-  overflow-wrap: anywhere;
+  flex: none;
+  white-space: nowrap;
 }
 
-.ol-vocab-filter-actions > .ol-vocab-select-mode {
-  align-self: stretch;
+.ol-vocab-select-slot {
+  display: grid;
+  flex: none;
+  justify-items: end;
+  min-inline-size: var(--ol-field-icon-size);
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.ol-vocab-select-slot > * {
+  grid-area: 1 / 1;
+  min-block-size: var(--ol-field-icon-size);
+}
+
+.ol-vocab-select-width {
+  visibility: hidden;
+  padding-inline: 10px;
+  font-size: 13px;
+  font-weight: var(--ol-font-weight-medium);
+  white-space: nowrap;
+}
+
+.ol-vocab-select-slot[data-selecting] > .ol-vocab-select-mode {
+  --ol-button-radius: 50%;
+  inline-size: var(--ol-field-icon-size);
   justify-content: center;
-  min-inline-size: 0;
-  text-align: center;
+}
+
+.ol-vocab-select-slot > .ol-vocab-select-mode:active:not(:disabled) {
+  transform: none;
+}
+
+.ol-vocab-selection-footer {
+  --ol-button-radius: 999px;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-block-start: 4px;
+}
+
+/* Reserve both positions so selections cannot move the grid or its controls. */
+.ol-vocab-selection-footer:not([data-selecting]),
+.ol-vocab-batch-remove[data-empty] {
+  visibility: hidden;
+}
+
+.ol-vocab-selection-footer button {
+  min-block-size: var(--ol-field-icon-size);
+}
+
+.ol-vocab-batch-remove {
+  display: flex;
+}
+
+.ol-vocab-batch-remove > button {
+  inline-size: var(--ol-field-icon-size);
+  justify-content: center;
+}
+
+.ol-vocab-batch-remove svg {
+  color: var(--ol-err);
 }
 
 .ol-vocab-scroll {
   container: vocab-words / inline-size;
+  margin-inline: -5px;
+  margin-block-start: -5px;
+  padding-inline: 5px 7px;
+  padding-block: 5px 12px;
 }
 
 .ol-grid-12.ol-vocab-grid {
@@ -141,12 +145,12 @@
 }
 
 .ol-word-card {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  position: relative;
+  display: grid;
   min-inline-size: 0;
   min-block-size: 38px;
-  padding: 6px 8px;
+  -webkit-touch-callout: none;
+  user-select: none;
   border: 0.5px solid var(--ol-line);
   border-radius: var(--ol-r-lg);
   background: var(--ol-surface);
@@ -157,8 +161,7 @@
 
 .ol-word-card:hover,
 .ol-word-card:focus-within,
-.ol-word-card[data-disabled='true'],
-.ol-word-card[data-selected='true'] {
+.ol-word-card[data-disabled='true'] {
   background: var(--ol-surface-2);
 }
 
@@ -168,7 +171,23 @@
 }
 
 .ol-word-card[data-selected='true'] {
-  border-color: var(--ol-ink-3);
+  border-color: var(--ol-blue-ring);
+  background: var(--ol-blue-soft);
+}
+
+.ol-word-card-badge {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: -5px;
+  inset-inline-end: -5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ol-accent-solid-bg);
+  color: var(--ol-accent-solid-ink);
+  pointer-events: none;
 }
 
 .ol-word-card-icon {
@@ -182,16 +201,26 @@
 }
 
 .ol-word-card-text {
-  flex: 1 1 0%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   min-inline-size: 0;
   border: 0;
-  padding: 0;
+  border-radius: inherit;
+  padding-block: 6px;
+  padding-inline: 8px 35px;
   background: transparent;
   color: var(--ol-ink);
   font-family: var(--ol-font-mono);
   font-size: 13px;
   text-align: start;
-  cursor: default;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+.ol-word-card-text:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: -2px;
 }
 
 .ol-word-card[data-disabled='true'] .ol-word-card-text {
@@ -200,6 +229,8 @@
 
 .ol-word-card-label {
   display: block;
+  flex: 1 1 0%;
+  min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: pre;
@@ -223,39 +254,33 @@
   display: block;
 }
 
+.ol-word-card-phrase-copy::before {
+  content: attr(data-phrase);
+}
+
 .ol-word-card-hits {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  justify-content: center;
-  min-inline-size: 18px;
-  max-inline-size: 45px;
-  block-size: 18px;
+  position: absolute;
+  z-index: 1;
+  inset-block-start: -5px;
+  inset-inline-start: -5px;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-inline-size: 16px;
+  block-size: 16px;
   padding-inline: 4px;
-  overflow: hidden;
-  border-radius: var(--ol-radius);
-  background: var(--ol-control-muted);
-  color: var(--ol-ink-4);
-  font-size: 10.5px;
-  font-weight: var(--ol-font-weight-semibold);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ol-ink) 15%, var(--ol-surface));
+  color: var(--ol-ink-2);
+  font: var(--ol-font-weight-semibold) 10px/1 var(--ol-font-sans);
   font-variant-numeric: tabular-nums;
 }
 
-.ol-word-card-actions {
-  display: inline-flex;
-  flex: none;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 0.16s var(--ol-motion-quick);
-}
-
-.ol-word-card:hover .ol-word-card-actions,
-.ol-word-card:focus-within .ol-word-card-actions {
-  opacity: 1;
-}
-
-.ol-word-card[data-selecting='true'] .ol-word-card-actions {
-  display: none;
+.ol-word-card-edit {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: 8px;
+  translate: 0 -50%;
 }
 
 .ol-word-card-action {
@@ -276,8 +301,24 @@
   color: var(--ol-ink);
 }
 
-.ol-word-card-select {
-  margin: 0 0 0 4px;
+.ol-vocab-word-menu {
+  inline-size: max-content;
+  min-inline-size: 110px;
+}
+
+.ol-vocab-word-menu-delete {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--ol-control-radius);
+  color: var(--ol-err);
+  outline: none;
+  cursor: pointer;
+}
+
+.ol-vocab-word-menu-delete[data-highlighted] {
+  background: var(--ol-surface-2);
 }
 
 [data-ol-theme='dark'] .ol-vocab-dialog {

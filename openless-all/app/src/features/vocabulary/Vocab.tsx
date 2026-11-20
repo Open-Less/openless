@@ -7,6 +7,10 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Modal } from '../../ui/overlays/Modal';
 import { useVocabularyWorkspace } from './useVocabularyWorkspace';
+import {
+  VocabularySelectionFooter,
+  VocabularySelectionToggle,
+} from './VocabularySelectionControls';
 import { VocabularyWordCard } from './VocabularyWordCard';
 import './vocabulary.css';
 
@@ -36,12 +40,12 @@ export function Vocab() {
     cardRefs,
     removingIds,
     selectedIds,
-    setSelectedIds,
     selecting,
-    setSelecting,
     batchBusy,
     removeEntries,
     toggleSelection,
+    toggleSelectionMode,
+    selectAllVisible,
     onToggle,
     openEdit,
     saveEdit,
@@ -54,12 +58,7 @@ export function Vocab() {
     visibleEntries,
   } = useVocabularyWorkspace();
   const selectedCount = selectedIds.size;
-  const visibleSelectedCount = visibleEntries.filter((entry) => selectedIds.has(entry.id)).length;
-  const allVisibleSelected =
-    visibleEntries.length > 0 && visibleSelectedCount === visibleEntries.length;
-  // Reserve for every visible entry plus selections retained by other filters.
-  const layoutCount = selectedCount - visibleSelectedCount + visibleEntries.length;
-  const selectAllLabel = t('vocab.selectAllVisible');
+  const canSelectMore = visibleEntries.some((entry) => !selectedIds.has(entry.id));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <PageHeader kicker={t('vocab.kicker')} title={t('vocab.title')} desc={t('vocab.desc')} />
@@ -73,109 +72,48 @@ export function Vocab() {
             label={t('vocab.searchPlaceholder')}
             expandTo="right"
           />
-          <div className="ol-vocab-word-actions">
-            <button
-              type="button"
-              className="ol-field ol-field-icon-action ol-pressable"
-              aria-label={t('vocab.newWord')}
-              title={t('vocab.newWord')}
-              onClick={() => {
-                setNewWordOpen(true);
-                setNewWordDraft('');
-                setNewWordTemplateIds([]);
-              }}
-            >
-              <Icon name="plus" size={15} />
-            </button>
-            <button
-              type="button"
-              className="ol-vocab-delete-selected"
-              data-empty={selectedCount === 0 ? '' : undefined}
-              disabled={batchBusy || selectedCount === 0}
-              onClick={() => void removeEntries([...selectedIds])}
-            >
-              <span className="ol-vocab-action-content" aria-hidden="true">
-                <Icon name="trash" size={13} />
-                <span>{t('vocab.deleteSelected', { count: layoutCount })}</span>
-              </span>
-              <span className="ol-vocab-action-content">
-                <Icon name="trash" size={13} />
-                <span>{t('vocab.deleteSelected', { count: selectedCount })}</span>
-              </span>
-            </button>
-          </div>
+          <button
+            type="button"
+            className="ol-field ol-field-icon-action ol-pressable"
+            aria-label={t('vocab.newWord')}
+            title={t('vocab.newWord')}
+            onClick={() => {
+              setNewWordOpen(true);
+              setNewWordDraft('');
+              setNewWordTemplateIds([]);
+            }}
+          >
+            <Icon name="plus" size={15} />
+          </button>
         </div>
-        <div className="ol-vocab-selection-tools">
-          <label className="ol-vocab-select-all" hidden={!selecting}>
-            <input
-              type="checkbox"
-              disabled={batchBusy || visibleEntries.length === 0}
-              checked={allVisibleSelected}
-              ref={(element) => {
-                if (element)
-                  element.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected;
-              }}
-              onChange={(event) => {
-                const checked = event.target.checked;
-                setSelectedIds((current) => {
-                  const next = new Set(current);
-                  visibleEntries.forEach((entry) =>
-                    checked ? next.add(entry.id) : next.delete(entry.id),
-                  );
-                  return next;
-                });
-              }}
-            />
-            <span className="ol-vocab-reserved-label">
-              <span aria-hidden="true">{selectAllLabel}</span>
-              <span aria-hidden="true">{t('vocab.selectedCount', { count: layoutCount })}</span>
-              <span>
-                {selectedCount
-                  ? t('vocab.selectedCount', { count: selectedCount })
-                  : selectAllLabel}
-              </span>
-            </span>
-          </label>
-          <div className="ol-vocab-filter-actions">
-            <div className="ol-seg ol-vocab-filters" role="tablist" aria-label={t('vocab.title')}>
-              {(
-                [
-                  { id: 'all', icon: null },
-                  { id: 'auto', icon: 'sparkle' },
-                  { id: 'manual', icon: 'feather' },
-                ] as const
-              ).map((seg) => (
-                <button
-                  key={seg.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={filter === seg.id}
-                  className={filter === seg.id ? 'ol-seg-item ol-seg-item-active' : 'ol-seg-item'}
-                  onClick={() => setFilter(seg.id)}
-                >
-                  {seg.icon && <Icon name={seg.icon} size={13} />}
-                  {t(`vocab.filter.${seg.id}`)}
-                </button>
-              ))}
-            </div>
-            <Btn
-              size="sm"
-              className="ol-vocab-select-mode"
-              style={{ paddingInline: 14 }}
-              onClick={() => {
-                setSelecting((current) => {
-                  if (current) setSelectedIds(new Set());
-                  return !current;
-                });
-              }}
-            >
-              <span className="ol-vocab-reserved-label">
-                <span aria-hidden="true">{t('vocab.selecting')}</span>
-                <span aria-hidden="true">{t('vocab.doneSelecting')}</span>
-                <span>{selecting ? t('vocab.doneSelecting') : t('vocab.selecting')}</span>
-              </span>
-            </Btn>
+        <div className="ol-vocab-filter-actions">
+          <div className="ol-seg ol-vocab-filters" role="tablist" aria-label={t('vocab.title')}>
+            {(
+              [
+                { id: 'all', icon: null },
+                { id: 'auto', icon: 'sparkle' },
+                { id: 'manual', icon: 'feather' },
+              ] as const
+            ).map((seg) => (
+              <button
+                key={seg.id}
+                type="button"
+                role="tab"
+                aria-selected={filter === seg.id}
+                className={filter === seg.id ? 'ol-seg-item ol-seg-item-active' : 'ol-seg-item'}
+                onClick={() => setFilter(seg.id)}
+              >
+                {seg.icon && <Icon name={seg.icon} size={13} />}
+                {t(`vocab.filter.${seg.id}`)}
+              </button>
+            ))}
           </div>
+          <VocabularySelectionToggle
+            selecting={selecting}
+            disabled={batchBusy}
+            onToggle={toggleSelectionMode}
+            onSelectAll={selectAllVisible}
+          />
         </div>
       </div>
 
@@ -221,7 +159,7 @@ export function Vocab() {
           content overflowed behind the section below. */}
       <div
         className="ol-thinscroll ol-vocab-scroll"
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2, paddingBottom: 12 }}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
         <div className="ol-grid-12 ol-vocab-grid">
           {loading && (
@@ -240,7 +178,7 @@ export function Vocab() {
               removing={removingIds.has(entry.id) || batchBusy}
               selected={selectedIds.has(entry.id)}
               selecting={selecting}
-              onSelect={() => toggleSelection(entry.id)}
+              onSelect={(extend) => toggleSelection(entry.id, extend)}
               cardRef={(element) => {
                 if (element) cardRefs.current.set(entry.id, element);
                 else cardRefs.current.delete(entry.id);
@@ -252,6 +190,15 @@ export function Vocab() {
           ))}
         </div>
       </div>
+
+      <VocabularySelectionFooter
+        selecting={selecting}
+        batchBusy={batchBusy}
+        canSelectMore={canSelectMore}
+        selectedCount={selectedCount}
+        onSelectAll={selectAllVisible}
+        onRemove={() => void removeEntries([...selectedIds])}
+      />
 
       {/* Edit-entry modal */}
       {editMount.mounted && (

@@ -812,7 +812,7 @@ export const zhCN = {
     dismiss: '关闭',
   },
   vocab: {
-    selectAllVisible: '选择当前结果',
+    selectAllVisible: '选择所有结果',
     selecting: '选择',
     doneSelecting: '完成',
     disabledWord: '已停用',

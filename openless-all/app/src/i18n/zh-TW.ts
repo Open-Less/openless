@@ -813,7 +813,7 @@ export const zhTW: typeof zhCN = {
     dismiss: '關閉',
   },
   vocab: {
-    selectAllVisible: '選取目前結果',
+    selectAllVisible: '選取所有結果',
     selecting: '選取',
     doneSelecting: '完成',
     disabledWord: '已停用',

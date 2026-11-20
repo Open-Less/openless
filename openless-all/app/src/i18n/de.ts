@@ -868,7 +868,7 @@ export const de: typeof zhCN = {
     dismiss: 'Ausblenden',
   },
   vocab: {
-    selectAllVisible: 'Aktuelle Ergebnisse auswählen',
+    selectAllVisible: 'Alle Ergebnisse auswählen',
     selecting: 'Auswählen',
     doneSelecting: 'Fertig',
     disabledWord: 'Aus',

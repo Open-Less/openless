@@ -60,60 +60,67 @@ for (const narrow of [false, true]) {
     );
     expect(addBefore.x).toBeGreaterThanOrEqual(searchBefore.x + searchBefore.width);
     expect(selectBefore.x).toBeGreaterThanOrEqual(filtersBefore.x + filtersBefore.width);
-    expect(selectBefore.height).toBeCloseTo(filtersBefore.height, 0);
-    expect(selectBefore.y).toBeCloseTo(filtersBefore.y, 0);
     if (!narrow) expect(filtersBefore.x).toBeGreaterThanOrEqual(addBefore.x + addBefore.width);
-    await select.click();
-    expect((await bounds(done)).height).toBeCloseTo(selectBefore.height, 0);
-    expect((await bounds(done)).width).toBeCloseTo(selectBefore.width, 0);
-    await expect(remove).toHaveCount(0);
-    const layout = async () =>
-      Promise.all([bounds(add), bounds(filters), bounds(search), bounds(wordList)]);
-    const unselected = await layout();
-    expect(unselected[0]).toEqual(addBefore);
+    const stableLayout = () =>
+      Promise.all([
+        bounds(filters),
+        bounds(wordList),
+        bounds(firstWord),
+        bounds(firstWord.locator('.ol-word-card-label')),
+      ]);
+    const layout = await stableLayout();
 
-    const rightEdge = page.viewportSize()!.width;
-    expect(unselected[1].x + unselected[1].width).toBeLessThanOrEqual(rightEdge);
+    await select.click();
+    const close = await bounds(done);
+    expect(close.height).toBeCloseTo(close.width, 0);
+    expect(close.x + close.width).toBeCloseTo(selectBefore.x + selectBefore.width, 0);
+    await expect(done).toHaveCSS('border-radius', '50%');
+    await expect(remove).toHaveCount(0);
+    expect(await stableLayout()).toEqual(layout);
+
     const firstCheckbox = firstWord.getByRole('checkbox');
-    await firstCheckbox.check();
+    await firstCheckbox.click();
+    await expect(firstCheckbox).toBeChecked();
+    const badge = firstWord.locator('.ol-word-card-badge');
+    const mark = await bounds(badge);
+    const word = await bounds(firstWord);
+    expect(Math.abs(mark.x + mark.width / 2 - (word.x + word.width))).toBeLessThan(5);
+    expect(Math.abs(mark.y + mark.height / 2 - word.y)).toBeLessThan(5);
     await expect(remove).toHaveAccessibleName(
       narrow ? 'Supprimer la sélection (1)' : '删除已选（1）',
     );
-    const a = await bounds(add);
-    const b = await bounds(remove);
-    expect(a).toEqual(addBefore);
-    expect(a.y + a.height / 2).toBeCloseTo(b.y + b.height / 2, 0);
-    expect(b.x).toBeGreaterThanOrEqual(0);
-    expect(a.x + a.width).toBeLessThanOrEqual(rightEdge);
-    for (const button of [add, remove]) {
-      const offset = await button.evaluate((el) => {
-        const box = el.getBoundingClientRect();
-        const children = Array.from(el.children)
-          .filter((child) => getComputedStyle(child).visibility === 'visible')
-          .map((child) => child.getBoundingClientRect());
-        return {
-          x: (children[0].left + children[children.length - 1].right - box.left - box.right) / 2,
-          y:
-            (Math.min(...children.map((child) => child.top)) +
-              Math.max(...children.map((child) => child.bottom)) -
-              box.top -
-              box.bottom) /
-            2,
-        };
-      });
-      expect(offset.x).toBeCloseTo(0, 0);
-      expect(offset.y).toBeCloseTo(0, 0);
-    }
-    expect(await layout()).toEqual(unselected);
+    const selectAll = vocab.getByRole('button', {
+      name: narrow ? 'Sélectionner tous les résultats' : '选择所有结果',
+    });
+    const all = await bounds(selectAll);
+    const trash = await bounds(remove);
+    expect(all.x + all.width).toBeLessThan(trash.x);
+    expect(all.y + all.height / 2).toBeCloseTo(trash.y + trash.height / 2, 0);
+    expect(trash.y).toBeGreaterThan(word.y);
+    expect(await stableLayout()).toEqual(layout);
 
-    await vocab.locator('.ol-vocab-select-all input').check();
-    await expect(remove).not.toHaveAccessibleName(narrow ? /\(1\)$/ : /（1）$/);
-    expect(await layout()).toEqual(unselected);
-    await vocab.locator('.ol-vocab-select-all input').uncheck();
+    await firstCheckbox.click();
+    await expect(firstCheckbox).not.toBeChecked();
+    await expect(badge).toHaveCount(0);
     await expect(remove).toHaveCount(0);
-    expect(await layout()).toEqual(unselected);
+    expect(await stableLayout()).toEqual(layout);
+
+    if (!narrow) {
+      await firstCheckbox.click();
+      const choices = wordList.getByRole('checkbox');
+      await choices.nth(3).click({ modifiers: ['Shift'] });
+      await expect(wordList.locator('[aria-checked="true"]')).toHaveCount(4);
+      await done.hover();
+      await page.mouse.down();
+      await expect(selectAll).toBeDisabled();
+      await page.mouse.up();
+      await expect(done).toHaveAccessibleName('完成');
+      await expect(choices.last()).toBeChecked();
+      expect(await stableLayout()).toEqual(layout);
+    }
 
     await done.click();
+    expect(await stableLayout()).toEqual(layout);
     await search.click();
     const input = vocab.getByRole('textbox', { name: narrow ? 'Rechercher' : '搜索' });
     await expect(input).toBeFocused();
@@ -143,7 +150,14 @@ test('five vocabulary cards stay fixed while a long label loops on whole-card ho
   expect(first.width).toBeCloseTo(fifth.width, 0);
   expect((await bounds(cards.nth(5))).y).toBeGreaterThan(first.y);
 
-  const longWord = vocab.getByRole('button', { name: 'TypeLazyWordsForm', exact: true });
+  const phrase = 'TypeLazyWordsFormWithAnExtraLongName';
+  await vocab.getByRole('button', { name: '新词' }).click();
+  const dialog = page.getByRole('dialog', { name: '添加新词' });
+  await dialog.getByRole('textbox').fill(phrase);
+  await dialog.getByRole('button', { name: '添加', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  const longWord = vocab.getByRole('button', { name: phrase, exact: true });
   const label = longWord.locator('.ol-word-card-label');
   const card = longWord.locator('..');
   const before = await bounds(card);
@@ -176,11 +190,64 @@ test('five vocabulary cards stay fixed while a long label loops on whole-card ho
   expect((await bounds(card)).height).toBeCloseTo(before.height, 0);
   await vocab.getByRole('heading').hover();
   await expect(label).not.toHaveAttribute('data-scrolling', '');
-  await longWord.focus();
+  await longWord.press('Shift');
   await expect(label).toHaveAttribute('data-scrolling', '');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(label).not.toHaveAttribute('data-scrolling', '');
   await expect(label).toHaveCSS('text-overflow', 'ellipsis');
+});
+
+test('holding a vocabulary card opens the delete menu without toggling or deleting the word', async ({
+  page,
+}) => {
+  await page.goto('/?os=mac');
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  const vocab = page.locator('[data-ol-page="vocab"]');
+  await expect(vocab).toHaveAttribute('data-transition-phase', 'settled');
+  const word = vocab.getByRole('button', { name: 'macOS', exact: true });
+  const card = word.locator('..');
+  const hits = card.locator('.ol-word-card-hits');
+  await expect(hits).toHaveText('8');
+  const normal = await bounds(hits);
+  const originalCard = await bounds(card);
+  expect(normal.width).toBeCloseTo(normal.height, 0);
+  expect(Math.abs(normal.x + normal.width / 2 - originalCard.x)).toBeLessThan(5);
+  expect(Math.abs(normal.y + normal.height / 2 - originalCard.y)).toBeLessThan(5);
+  const wide = await hits.evaluate((node) => {
+    const original = node.textContent;
+    node.textContent = '1234';
+    const { x, y, width, height } = node.getBoundingClientRect();
+    node.textContent = original;
+    return { x, y, width, height };
+  });
+  expect(wide.x).toBeCloseTo(normal.x, 0);
+  expect(wide.y).toBeCloseTo(normal.y, 0);
+  expect(wide.height).toBeCloseTo(normal.height, 0);
+  expect(wide.width).toBeGreaterThan(normal.width);
+  expect(await bounds(card)).toEqual(originalCard);
+  await expect(card.getByRole('button', { name: /删除/ })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
+
+  await card.locator('.ol-word-card-hits').hover();
+  await page.mouse.down();
+  const menu = page.getByRole('menu', { name: 'macOS' });
+  await expect(menu).toBeVisible();
+  const popup = await bounds(menu);
+  const tile = await bounds(card);
+  expect(popup.y).toBeGreaterThan(tile.y + tile.height);
+  await page.mouse.up();
+  await expect(card).not.toHaveAttribute('data-disabled', 'true');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await menu.getByRole('menuitem', { name: '删除' }).click();
+  const confirmation = page.getByRole('dialog', { name: /删除.*macOS/ });
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(word).toBeFocused();
+  await word.press('Shift+F10');
+  await expect(menu).toBeVisible();
+  await menu.getByRole('menuitem', { name: '删除' }).click();
+  await confirmation.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(word).toHaveCount(0);
 });
 
 test('add-word dialog keeps one blur through dismissal and retains the input focus ring', async ({

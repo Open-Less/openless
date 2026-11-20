@@ -836,7 +836,7 @@ export const ko: typeof zhCN = {
     dismiss: '닫기',
   },
   vocab: {
-    selectAllVisible: '현재 결과 선택',
+    selectAllVisible: '모든 결과 선택',
     selecting: '선택',
     doneSelecting: '완료',
     disabledWord: '꺼짐',

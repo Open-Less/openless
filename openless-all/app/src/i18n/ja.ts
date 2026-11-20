@@ -843,7 +843,7 @@ export const ja: typeof zhCN = {
     dismiss: '閉じる',
   },
   vocab: {
-    selectAllVisible: '現在の結果を選択',
+    selectAllVisible: 'すべての結果を選択',
     selecting: '選択',
     doneSelecting: '完了',
     disabledWord: '停止中',
