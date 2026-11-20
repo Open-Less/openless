@@ -123,7 +123,9 @@ for (const narrow of [false, true]) {
   });
 }
 
-test('dark add-word dialog blurs directly and retains the input focus ring', async ({ page }) => {
+test('add-word dialog keeps one blur through dismissal and retains the input focus ring', async ({
+  page,
+}) => {
   await page.goto('/?os=mac');
   await page
     .locator('.ol-sidebar-surface nav')
@@ -137,8 +139,10 @@ test('dark add-word dialog blurs directly and retains the input focus ring', asy
   const dialog = page.getByRole('dialog', { name: '添加新词' });
   await expect(dialog).toBeVisible();
   const overlay = dialog.locator('..');
+  const content = page.locator('.ol-viewport-content');
   await expect(overlay).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(overlay).toHaveCSS('backdrop-filter', 'blur(6px)');
+  await expect(overlay).toHaveCSS('backdrop-filter', 'none');
+  await expect(content).toHaveCSS('filter', 'blur(6px)');
   expect(
     await overlay.evaluate((node) => ({
       overlayAnimations: node.getAnimations().length,
@@ -163,4 +167,22 @@ test('dark add-word dialog blurs directly and retains the input focus ring', asy
       return color;
     }),
   );
+  const dismiss = dialog.getByRole('button', { name: '关闭', exact: true }).first();
+  const filters = await dismiss.evaluate((button: HTMLElement) => {
+    const overlay = button.closest('.ol-dialog-overlay')!;
+    const content = document.querySelector('.ol-viewport-content')!;
+    return new Promise<string[]>((resolve) => {
+      const samples = [getComputedStyle(content).filter];
+      const sample = () => {
+        samples.push(getComputedStyle(content).filter);
+        if (overlay.isConnected) requestAnimationFrame(sample);
+        else resolve(samples);
+      };
+      button.click();
+      requestAnimationFrame(sample);
+    });
+  });
+  expect(filters.length).toBeGreaterThan(2);
+  expect(filters.slice(0, -1).every((filter) => filter === 'blur(6px)')).toBe(true);
+  expect(filters.at(-1)).toBe('none');
 });
