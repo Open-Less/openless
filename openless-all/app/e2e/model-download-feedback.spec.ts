@@ -125,12 +125,24 @@ test('download labels stay readable through rapid percentages and one bounded ph
   const status = job.getByRole('status');
   await expect(status).toHaveText('Downloading Embedding Gemma · 0%');
   await expect(row.getByRole('status')).toContainText('0%');
+  await expect(job).toHaveCSS('width', '356px');
   const model = job.locator('.ol-download-model-name');
+  const expectOneLine = async () => {
+    const offset = await job.evaluate((element) => {
+      const model = element.querySelector('.ol-download-model-name')!;
+      const percent = element.querySelector('.ol-download-percent')!;
+      return Math.abs(percent.getBoundingClientRect().y - model.getBoundingClientRect().y);
+    });
+    expect(offset).toBeLessThan(2);
+  };
+  await expectOneLine();
   const original = await model.boundingBox();
   for (const selector of ['.ol-download-model-name', '.ol-download-phase-text', '.ol-notification-body', '[role=progressbar]']) {
     await job.locator(selector).first().evaluate((node) => node.setAttribute('data-same-job', 'true'));
   }
   await job.screenshot({ path: info.outputPath('after-download-zero.png') });
+  const cancel = job.getByRole('button', { name: 'Cancel download', exact: true });
+  const cancelBefore = (await cancel.boundingBox())!;
 
   for (const [bytes, text] of [[3, '<1%'], [10, '1%'], [30, '3%']] as const) {
     await change(bytes);
@@ -142,8 +154,7 @@ test('download labels stay readable through rapid percentages and one bounded ph
       (node) => node.getAnimations({ subtree: true }).length === 0,
     ),
   );
-  const badge = job.locator('.ol-download-percent');
-  expect(Math.abs((await badge.boundingBox())!.y - (await model.boundingBox())!.y)).toBeLessThan(2);
+  await expectOneLine();
   await job.screenshot({ path: info.outputPath('after-download-three-percent.png') });
   await row.getByRole('status').screenshot({ path: info.outputPath('after-download-inline-three-percent.png') });
 
@@ -160,6 +171,10 @@ test('download labels stay readable through rapid percentages and one bounded ph
   });
   await expect(status).toHaveText('Downloading Embedding Gemma · 30%');
   await expect(row.getByRole('status')).toContainText('30%');
+  await expectOneLine();
+  const cancelAfter = (await cancel.boundingBox())!;
+  expect(Math.abs(cancelBefore.x - cancelAfter.x)).toBeLessThan(1);
+  expect(cancelAfter.width).toBe(cancelBefore.width);
   expect(await job.locator('[data-same-job]').count()).toBe(4);
   expect(Math.abs((await model.boundingBox())!.x - original!.x)).toBeLessThan(1);
 
@@ -199,4 +214,29 @@ test('download labels stay readable through rapid percentages and one bounded ph
   await expect(status).toHaveText('Embedding Gemma is ready');
   await expect(job.locator('.ol-notification-body')).toHaveAttribute('data-same-job', 'true');
   await expect(job.getByRole('progressbar')).toHaveCount(0);
+});
+
+test('a long download label can wrap and keeps its percentage and cancel control readable', async ({
+  page,
+}, info) => {
+  await page.goto('/e2e/fixtures/settings-status.html?download');
+  await expect.poll(() => page.evaluate(() => window.settingsStatusFixture.hasDownloadListener())).toBe(true);
+  const name = 'Multilingual speech recognition large model for offline transcription';
+  await page.evaluate((model) => window.settingsStatusFixture.emitDownload(model, 'started'), name);
+  const job = page.getByRole('status').filter({ hasText: name });
+  await expect(job).toHaveText(`Downloading ${name} · 1%`);
+  const panel = page.locator('[data-type="loading"]').filter({ has: job });
+  const percent = panel.locator('.ol-download-percent');
+  const cancel = panel.getByRole('button', { name: 'Cancel download', exact: true });
+  await expect(percent).toBeVisible();
+  await expect(cancel).toBeEnabled();
+  const lines = await panel.locator('.ol-download-model-name').evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    return range.getClientRects().length;
+  });
+  expect(lines).toBeGreaterThan(1);
+  const percentBounds = (await percent.boundingBox())!;
+  expect(percentBounds.x + percentBounds.width).toBeLessThan((await cancel.boundingBox())!.x);
+  await panel.screenshot({ path: info.outputPath('after-download-long-label.png') });
 });

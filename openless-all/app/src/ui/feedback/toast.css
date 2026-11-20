@@ -191,6 +191,12 @@
   line-height: 16px;
   font-variant-numeric: tabular-nums;
 }
+.ol-toast-row[data-download-status] {
+  column-gap: 6px;
+}
+.ol-toast-row[data-download-status] .ol-notification-message {
+  font-weight: 500;
+}
 .ol-notification-progress {
   display: block;
   overflow: hidden;

@@ -90,7 +90,7 @@ const NotificationCard = forwardRef<
         onExit={remove ?? undefined}
       >
         <ToastPanel>
-          <div className="ol-toast-row">
+          <div className="ol-toast-row" data-download-status={item.downloadStatus ? '' : undefined}>
             {variant !== 'default' && <ToastIcon type={variant} />}
             <div className="ol-notification-body">
               <div role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}>
