@@ -1,4 +1,4 @@
-//! Standalone Ask search: confirmed public input, progress without page bodies, and bounded reads.
+//! Standalone Ask search: scoped public tool queries and bounded reads.
 
 use crate::web_search::{self, PageReadError, RequestPolicy, SearchProvider, WebSearchConfig};
 use crate::{CancellationToken, CredentialStore};
@@ -16,14 +16,14 @@ const MAX_SOURCE_URL_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PublicQueryError {
-    #[error("Confirm a non-empty public search query")]
+    #[error("The public search query is empty")]
     Empty,
     #[error("Public search query exceeds 400 characters")]
     TooLong,
 }
 
-/// Construct once from the accepted Ask submission, never from the prompt,
-/// model tool arguments, attachment, or conversation history.
+/// Construct once for a turn's validated tool query; never forward the user
+/// prompt, attachments, or private conversation context as search arguments.
 pub struct SearchTurn {
     conversation_id: Uuid,
     turn_id: Uuid,
@@ -34,15 +34,15 @@ impl SearchTurn {
     pub fn new(
         conversation_id: Uuid,
         turn_id: Uuid,
-        ask_web_search: bool,
-        confirmed_public_query: Option<&str>,
+        enabled: bool,
+        public_query: Option<&str>,
     ) -> Result<Self, PublicQueryError> {
-        let query = if let Some(raw) = confirmed_public_query.filter(|_| ask_web_search) {
+        let query = if let Some(raw) = public_query.filter(|_| enabled) {
             let query = raw.trim();
             if query.is_empty() {
                 return Err(PublicQueryError::Empty);
             }
-            if query.chars().count() > MAX_PUBLIC_QUERY_CHARS {
+            if query.chars().count() > MAX_PUBLIC_QUERY_CHARS || query.chars().any(char::is_control) {
                 return Err(PublicQueryError::TooLong);
             }
             Some(query.to_owned())
@@ -429,6 +429,14 @@ fn timestamp() -> String {
 }
 
 impl crate::ask::SearchTool for WebSearchTool {
+    fn enabled(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            WebSearchConfig::load(self.credentials.as_ref())
+                .await
+                .is_ok_and(|config| config.provider != SearchProvider::Off)
+        })
+    }
+
     fn search(
         &self,
         request: crate::ask::AskSearchRequest,

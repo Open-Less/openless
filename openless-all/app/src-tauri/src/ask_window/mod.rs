@@ -28,8 +28,8 @@ use capture::{Invocation, Trigger};
 
 pub(crate) const LABEL: &str = "ask-anything";
 const PAGE: &str = "ask-window/index.html";
-const WIDTH: f64 = 920.0;
-const HEIGHT: f64 = 800.0;
+const WIDTH: f64 = 800.0;
+const HEIGHT: f64 = 920.0;
 static OPEN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub(crate) type Task<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -387,6 +387,8 @@ fn ensure_window(app: &AppHandle, desktop: &Arc<Desktop>) -> Result<WebviewWindo
         .title("OpenLess — Ask Anything")
         .inner_size(WIDTH * scale, HEIGHT * scale)
         .decorations(false)
+        .transparent(true)
+        .shadow(false)
         .resizable(false)
         .disable_drag_drop_handler()
         .center()

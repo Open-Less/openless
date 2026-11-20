@@ -1,5 +1,6 @@
+import { useAskErrors } from './errors';
 import { PromptBox, type PromptEffort } from '@/components/ui/prompt-box';
-import { Brain, Globe, Paperclip } from 'lucide-react';
+import { Brain, Paperclip } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { AttachmentDeck } from './attachments';
 import {
@@ -64,7 +65,7 @@ type PendingAsk = Omit<SubmitAsk, 'clientRequestId'>;
 type Recording = { id: string } & (
   { mode: 'insert'; anchor: Draft } | { mode: 'submit'; request: Omit<SubmitAsk, 'text'> }
 );
-type VoiceRetry = { request: SubmitAsk; message: string };
+type VoiceRetry = { request: SubmitAsk };
 
 function selectionOf(editor: HTMLTextAreaElement | null): Selection | undefined {
   if (!editor) return;
@@ -91,6 +92,9 @@ export function useComposer({
   focusRevision: number;
 }) {
   const { conversationId, attachments } = snapshot;
+  const warn = useAskErrors();
+  const showError = (message: string) =>
+    void warn({ title: 'Ask Anything', description: message, dismissLabel: 'OK' });
   const editor = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef('');
   const lastClear = useRef<Draft>();
@@ -101,6 +105,8 @@ export function useComposer({
   const activeRecording = useRef<Recording>();
   const seenRecordings = useRef(new Set<string>());
   const receiveVoice = useRef<(event: AskVoiceEvent) => void>(() => {});
+  const reportVoiceError = useRef(showError);
+  reportVoiceError.current = showError;
   const mountId = useRef(newRequestId());
   const editorRevision = useRef(0);
   const editorFingerprint = useRef('');
@@ -108,14 +114,8 @@ export function useComposer({
   const [draft, setDraft] = useState('');
   const [focusSeen, setFocusSeen] = useState(-1);
   const [deepThinking, setDeepThinking] = useState(false);
-  const [webSearch, setWebSearch] = useState(false);
-  const [searchPanel, setSearchPanel] = useState(false);
-  const [query, setQuery] = useState('');
-  const [approvedQuery, setApprovedQuery] = useState<string>();
   const [pending, setPending] = useState(false);
   const [acknowledgedTurn, setAcknowledgedTurn] = useState<string>();
-  const [error, setError] = useState<string>();
-  const [voiceError, setVoiceError] = useState<string>();
   const [voiceRetries, setVoiceRetries] = useState<VoiceRetry[]>([]);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
@@ -151,21 +151,30 @@ export function useComposer({
     const selectionStart = input.selectionStart;
     const selectionEnd = input.selectionEnd;
     const attachmentIds = attachments.map((attachment) => attachment.attachmentId);
-    const options = { deepThinking, webSearch };
-    const key = JSON.stringify([editable, selectionStart, selectionEnd, draftRef.current, attachmentIds, options]);
-    if (!force && key === editorFingerprint.current) return;
-    editorFingerprint.current = key;
-    void client.syncEditor({
-      conversationId,
-      mountId: mountId.current,
-      editorId: mountId.current,
-      revision: ++editorRevision.current,
+    const options = { deepThinking };
+    const key = JSON.stringify([
       editable,
       selectionStart,
       selectionEnd,
+      draftRef.current,
       attachmentIds,
       options,
-    }).catch(() => {});
+    ]);
+    if (!force && key === editorFingerprint.current) return;
+    editorFingerprint.current = key;
+    void client
+      .syncEditor({
+        conversationId,
+        mountId: mountId.current,
+        editorId: mountId.current,
+        revision: ++editorRevision.current,
+        editable,
+        selectionStart,
+        selectionEnd,
+        attachmentIds,
+        options,
+      })
+      .catch(() => {});
   }
 
   useLayoutEffect(() => {
@@ -188,9 +197,10 @@ export function useComposer({
   });
 
   function keepVoice(request: SubmitAsk, message: string) {
+    showError(message);
     setVoiceRetries((retries) => [
       ...retries.filter((item) => item.request.clientRequestId !== request.clientRequestId),
-      { request, message },
+      { request },
     ]);
   }
 
@@ -230,8 +240,6 @@ export function useComposer({
 
     pendingRef.current = true;
     setPending(true);
-    if (fromVoice) setVoiceError(undefined);
-    else setError(undefined);
     void client
       .submit(request)
       .then(({ turnId: acceptedTurnId }) => {
@@ -240,9 +248,6 @@ export function useComposer({
           discardVoice(request);
         } else {
           draftIds.current.delete(requestFingerprint(request));
-          setApprovedQuery(undefined);
-          setQuery('');
-          setSearchPanel(false);
         }
       })
       .catch((cause) => {
@@ -251,7 +256,7 @@ export function useComposer({
         if (fromVoice) {
           keepVoice(request, message);
         } else {
-          setError(message);
+          showError(message);
         }
       })
       .finally(() => {
@@ -269,9 +274,8 @@ export function useComposer({
       conversationId,
       text,
       attachmentIds: attachments.map((attachment) => attachment.attachmentId),
-      options: { deepThinking: deepThinking || effort.id === 'deep', webSearch },
+      options: { deepThinking: deepThinking || effort.id === 'deep' },
     };
-    if (webSearch && approvedQuery) request.options.publicSearchQuery = approvedQuery;
     const fingerprint = requestFingerprint(request);
     let clientRequestId = draftIds.current.get(fingerprint);
     if (!clientRequestId) {
@@ -283,9 +287,8 @@ export function useComposer({
 
   function attach(add: () => Promise<unknown>) {
     setAdding(true);
-    setError(undefined);
     void add()
-      .catch((cause) => setError(errorMessage(cause, 'Could not add an attachment.')))
+      .catch((cause) => showError(errorMessage(cause, 'Could not add an attachment.')))
       .finally(() => {
         setAdding(false);
         check();
@@ -297,8 +300,12 @@ export function useComposer({
       if (event.conversationId !== conversationId || !canDeliverVoice()) return;
       const input = editor.current;
       if (event.type === 'started') {
-        if (seenRecordings.current.has(event.recordingId)
-          || (activeRecording.current?.id === event.recordingId && activeRecording.current.mode === event.mode)) return;
+        if (
+          seenRecordings.current.has(event.recordingId) ||
+          (activeRecording.current?.id === event.recordingId &&
+            activeRecording.current.mode === event.mode)
+        )
+          return;
         activeRecording.current = undefined;
         if (event.mode === 'insert') {
           if (!input || document.activeElement !== input || input.readOnly || composing.current)
@@ -317,7 +324,7 @@ export function useComposer({
               clientRequestId: event.recordingId,
               voiceRecordingId: event.recordingId,
               attachmentIds: attachments.map((attachment) => attachment.attachmentId),
-              options: { deepThinking, webSearch },
+              options: { deepThinking },
             },
           };
         }
@@ -371,7 +378,8 @@ export function useComposer({
         else stop = unsubscribe;
       })
       .catch((cause) => {
-        if (!stopped) setVoiceError(errorMessage(cause, 'Could not connect to Ask voice input.'));
+        if (!stopped)
+          reportVoiceError.current(errorMessage(cause, 'Could not connect to Ask voice input.'));
       });
     return () => {
       stopped = true;
@@ -398,7 +406,7 @@ export function useComposer({
         if (!connected || adding || pendingRef.current) return;
         const files = event.dataTransfer.files;
         if (files.length !== 1) {
-          setError('Drop one PNG or JPEG image at a time.');
+          showError('Drop one PNG or JPEG image at a time.');
           return;
         }
         const file = files[0];
@@ -407,52 +415,7 @@ export function useComposer({
           await client.addDroppedImage(conversationId, displayName, dataBase64);
         });
       }}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape' && searchPanel) {
-          setSearchPanel(false);
-          editor.current?.focus();
-        }
-      }}
     >
-      {searchPanel && (
-        <section className="query-panel" aria-label="Public search query">
-          <label htmlFor="public-search-query">Public search query</label>
-          <p>Only the query you approve is sent to web search.</p>
-          <input
-            id="public-search-query"
-            value={query}
-            onChange={(event) => {
-              setApprovedQuery(undefined);
-              setQuery(event.currentTarget.value);
-            }}
-            autoFocus
-          />
-          <div className="query-actions">
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => {
-                setSearchPanel(false);
-                editor.current?.focus();
-              }}
-            >
-              Close
-            </button>
-            <button
-              type="button"
-              className="text-button"
-              disabled={!query.trim()}
-              onClick={() => {
-                setApprovedQuery(query.trim());
-                setSearchPanel(false);
-                editor.current?.focus();
-              }}
-            >
-              Confirm public query
-            </button>
-          </div>
-        </section>
-      )}
       <PromptBox
         className="w-full"
         placeholder={PLACEHOLDERS}
@@ -492,11 +455,10 @@ export function useComposer({
         onStop={() => {
           if (!connected || !turnId || cancelling === turnId) return;
           setCancelling(turnId);
-          setError(undefined);
           void client
             .cancel(conversationId, turnId)
             .catch((cause) => {
-              setError(errorMessage(cause, 'Could not stop the current answer.'));
+              showError(errorMessage(cause, 'Could not stop the current answer.'));
             })
             .finally(() => {
               setCancelling(undefined);
@@ -512,11 +474,10 @@ export function useComposer({
             disabled={pending || !connected}
             remove={(attachmentId) => {
               setRemoving((current) => new Set(current).add(attachmentId));
-              setError(undefined);
               void client
                 .removeAttachment(conversationId, attachmentId)
                 .catch((cause) => {
-                  setError(errorMessage(cause, 'Could not remove this attachment.'));
+                  showError(errorMessage(cause, 'Could not remove this attachment.'));
                 })
                 .finally(() => {
                   check();
@@ -537,20 +498,6 @@ export function useComposer({
               <Paperclip size={18} />
             </ActionButton>
             <ActionButton
-              label={approvedQuery ? 'Web Search · Public query confirmed' : 'Web Search'}
-              pressed={webSearch}
-              onClick={() => {
-                setWebSearch(!webSearch);
-                setSearchPanel(!webSearch);
-                if (webSearch) {
-                  setQuery('');
-                  setApprovedQuery(undefined);
-                }
-              }}
-            >
-              <Globe size={18} />
-            </ActionButton>
-            <ActionButton
               label="Think deeply"
               pressed={deepThinking}
               onClick={() => setDeepThinking(!deepThinking)}
@@ -560,23 +507,10 @@ export function useComposer({
           </>
         }
       />
-      {error && (
-        <p className="composer-notice problem" role="alert">
-          {error}
-        </p>
-      )}
-      {voiceError && (
-        <p className="composer-notice problem" role="status">
-          {voiceError}
-        </p>
-      )}
       {voiceRetries.length > 0 && (
         <div className="voice-retries">
-          {voiceRetries.map(({ request, message }) => (
+          {voiceRetries.map(({ request }) => (
             <div key={request.clientRequestId} className="composer-notice">
-              <p className="problem" role="status">
-                {message}
-              </p>
               <p className="voice-excerpt">{request.text}</p>
               <button
                 className="text-button"

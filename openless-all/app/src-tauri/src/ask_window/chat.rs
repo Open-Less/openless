@@ -421,8 +421,6 @@ pub async fn ask_submit(
                                 .collect::<Vec<_>>()
                                 .iter())
                             && editor.options.deep_thinking == request.options.deep_thinking
-                            && editor.options.web_search == request.options.web_search
-                            && request.options.public_search_query.is_none()
                     })
                 })
             })
@@ -751,7 +749,7 @@ mod tests {
             "voiceRecordingId": recording,
             "text": "hi",
             "attachmentIds": [],
-            "options": { "deepThinking": false, "webSearch": false }
+            "options": { "deepThinking": false }
         }))
         .unwrap();
         assert_eq!(payload.request.conversation_id, conversation);

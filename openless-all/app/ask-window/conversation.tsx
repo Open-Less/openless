@@ -1,8 +1,15 @@
+import { AskErrorDialog } from './errors';
 import { AiStatus, type AiStatusState } from '@/components/ui/ai-status';
 import { ArrowUpRight, BookOpen } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { errorMessage, type AskClient, type AskSource, type AskTurn, type SearchStatus } from './client';
+import {
+  errorMessage,
+  type AskClient,
+  type AskSource,
+  type AskTurn,
+  type SearchStatus,
+} from './client';
 
 const FADE =
   'linear-gradient(to bottom, transparent 0, rgba(0,0,0,0.04) 20px, rgba(0,0,0,0.15) 48px, rgba(0,0,0,0.35) 80px, rgba(0,0,0,0.6) 112px, rgba(0,0,0,0.85) 144px, black 176px, black calc(100% - 28px), transparent 100%)';
@@ -11,8 +18,8 @@ export const SPRING = { type: 'spring', duration: 0.5, bounce: 0.15 } as const;
 
 const SEARCH_LABEL: Record<SearchStatus, string> = {
   idle: 'Not searched',
-  searching: 'Searching the web',
-  reading: 'Reading sources',
+  searching: 'Websearch · Searching…',
+  reading: 'Websearch · Reading sources…',
   done: 'Search complete',
   no_results: 'No results',
   error: 'Search failed',
@@ -66,8 +73,13 @@ export function ConversationLayout({
     }
   }, [turns, reduced]);
 
+  const latest = turns.at(-1);
   return (
     <div className="relative flex h-full flex-col items-center px-6 pt-6 pb-8">
+      <AskErrorDialog
+        key={latest?.turnId}
+        message={latest?.error?.message ?? latest?.searchError?.message}
+      />
       <div className="flex min-h-0 w-[560px] max-w-full flex-1 flex-col">
         {!started ? (
           <div className="flex flex-1 flex-col items-center justify-end pb-6">
@@ -113,13 +125,6 @@ export function ConversationLayout({
                           </ul>
                         )}
                       </div>
-                      <span
-                        className="effort-label flex items-center gap-1.5 pr-2 font-runde text-xs font-medium"
-                        data-deep={turn.deepThinking}
-                      >
-                        <span className="size-1.5 rounded-full bg-current" />
-                        {turn.deepThinking ? 'Think deeply' : 'Quick'}
-                      </span>
                     </div>
                     <div className="flex flex-col gap-1">
                       <AiStatus state={state} label={label} />
@@ -137,7 +142,7 @@ export function ConversationLayout({
                           </motion.p>
                         )}
                       </AnimatePresence>
-                      {turn.error && <p className="problem">{turn.error.message}</p>}
+
                       {turn.searchStatus !== 'idle' && (
                         <button
                           className="text-button turn-sources"
@@ -205,12 +210,10 @@ export function Sources({
       {open && (
         <section id="ask-sources" aria-label="Web search sources" className="source-panel">
           <p role="status">{SEARCH_LABEL[open.searchStatus]}</p>
-          {open.searchError && <p className="problem">{open.searchError.message}</p>}
-          {failure?.turnId === open.turnId && (
-            <p role="alert" className="problem">
-              {failure.message}
-            </p>
-          )}
+          <AskErrorDialog
+            title="Web search"
+            message={failure?.turnId === open.turnId ? failure.message : undefined}
+          />
           <ul>
             {open.sources.map((source) => (
               <li key={source.sourceId}>

@@ -27,8 +27,6 @@ pub(crate) enum Mode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Options {
     pub(crate) deep_thinking: bool,
-    pub(crate) web_search: bool,
-    pub(crate) public_search_query: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -542,8 +540,6 @@ mod tests {
                 attachment_ids: vec![],
                 options: Options {
                     deep_thinking: false,
-                    web_search: false,
-                    public_search_query: None,
                 },
             },
         }

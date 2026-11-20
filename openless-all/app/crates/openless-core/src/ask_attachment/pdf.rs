@@ -124,6 +124,12 @@ fn extract(bytes: &[u8]) -> Result<PdfText, AttachmentError> {
         let text = document
             .extract_text_with_limit(&[page_number], MAX_PDF_DECOMPRESSED_STREAM_BYTES)
             .map_err(parse_error)?;
+        let mut text = text
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        text.truncate(text.trim_end().len());
         text_bytes += text.len();
         if text_bytes > MAX_PDF_TEXT_BYTES {
             return Err(AttachmentError::PdfTooLarge);

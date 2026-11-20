@@ -31,7 +31,6 @@ pub(super) struct CompletedTurn {
 }
 
 pub(super) struct Material {
-    pub search_query: Option<String>,
     user_text: String,
     attachment_parts: Vec<AskModelPart>,
     total_window: usize,
@@ -94,26 +93,14 @@ impl Material {
         let total_window = caps.context_window.unwrap_or(UNKNOWN_WINDOW).min(TOTAL_CAP);
         let output_tokens = caps.output_tokens;
         let fixed_budget = budget(total_window, output_tokens)?;
-        let search_query = options
-            .public_search_query
-            .as_ref()
-            .filter(|_| options.web_search)
-            .cloned();
-        let search_reserve = if search_query.is_some() {
-            SEARCH_BUDGET
-        } else {
-            0
-        };
         let size = text
             .len()
             .saturating_add(MESSAGE_OVERHEAD + DATA_RULE.len())
-            .saturating_add(parts_cost(&attachment_parts, caps.image_token_reserve))
-            .saturating_add(search_reserve);
+            .saturating_add(parts_cost(&attachment_parts, caps.image_token_reserve));
         if size > fixed_budget {
             return Err(context_limit());
         }
         Ok(Self {
-            search_query,
             user_text: text.to_owned(),
             attachment_parts,
             total_window,
@@ -121,6 +108,12 @@ impl Material {
             image_token_reserve: caps.image_token_reserve,
             deep_thinking: options.deep_thinking,
         })
+    }
+    pub(super) fn question(&self) -> &str {
+        &self.user_text
+    }
+    pub(super) fn has_attachments(&self) -> bool {
+        !self.attachment_parts.is_empty()
     }
 }
 
@@ -134,20 +127,17 @@ pub(super) struct Plan {
     output_tokens: usize,
     image_token_reserve: usize,
     deep_thinking: bool,
+    reserve_search: bool,
 }
 
 impl Plan {
     pub(super) fn new(
         material: Material,
         context: AskContext,
-        evidence: &str,
+        reserve_search: bool,
         history: Vec<CompletedTurn>,
         summary: Option<Summary>,
-    ) -> Result<Self, BackendError> {
-        let evidence_part = serde_json::json!({"webEvidence": evidence}).to_string();
-        if !evidence.is_empty() && evidence_part.len() > SEARCH_BUDGET {
-            return Err(context_limit());
-        }
+    ) -> Self {
         let instructions = format!("{}\n\n{DATA_RULE}", context.static_instructions);
         let mut parts = vec![AskModelPart::Text(material.user_text)];
         if !context.facts.is_empty() || !context.missing.is_empty() {
@@ -157,13 +147,10 @@ impl Plan {
             ));
         }
         parts.extend(material.attachment_parts);
-        if !evidence.is_empty() {
-            parts.push(AskModelPart::Text(evidence_part));
-        }
         let version = context.static_version;
         let summary =
             summary.filter(|item| item.version == version && item.through <= history.len());
-        Ok(Self {
+        Self {
             instructions,
             current: AskModelMessage {
                 role: AskModelRole::User,
@@ -176,7 +163,8 @@ impl Plan {
             output_tokens: material.output_tokens,
             image_token_reserve: material.image_token_reserve,
             deep_thinking: material.deep_thinking,
-        })
+            reserve_search,
+        }
     }
 
     pub(super) async fn prepare(
@@ -186,7 +174,13 @@ impl Plan {
         model: &dyn AskModel,
         cancellation: &AskCancellation,
     ) -> Result<(AskModelRequest, Option<Summary>), BackendError> {
-        let available = budget(self.total_window, self.output_tokens)?;
+        let available = budget(self.total_window, self.output_tokens)?
+            .checked_sub(if self.reserve_search {
+                SEARCH_BUDGET + 1024
+            } else {
+                0
+            })
+            .ok_or_else(context_limit)?;
         let fixed = self
             .instructions
             .len()
@@ -252,11 +246,13 @@ impl Plan {
                         messages,
                         output_tokens,
                         deep_thinking: false,
+                        search: AskModelSearch::Disabled,
                     },
                     AskCallPurpose::Compact,
                     cancellation.clone(),
                 )
-                .await?;
+                .await?
+                .require_text()?;
             let removed = self.history[through..end]
                 .iter()
                 .map(history_cost)
@@ -285,6 +281,7 @@ impl Plan {
                 messages,
                 output_tokens: self.output_tokens,
                 deep_thinking: self.deep_thinking,
+                search: AskModelSearch::Disabled,
             },
             self.summary.filter(|_| through > original_through),
         ))
@@ -296,6 +293,39 @@ fn budget(window: usize, output: usize) -> Result<usize, BackendError> {
         .checked_sub(output.saturating_add(SAFETY_RESERVE))
         .filter(|limit| *limit > 0 && output > 0)
         .ok_or_else(context_limit)
+}
+
+pub(super) fn check_tool_budget(
+    request: &AskModelRequest,
+    caps: AskModelCapabilities,
+) -> Result<(), BackendError> {
+    let AskModelSearch::Result { call, output } = &request.search else {
+        return Ok(());
+    };
+    let available = budget(
+        caps.context_window.unwrap_or(UNKNOWN_WINDOW).min(TOTAL_CAP),
+        request.output_tokens,
+    )?;
+    let tool_cost = serde_json::to_string(&call.resume)
+        .map_err(|_| context_limit())?
+        .len()
+        + serde_json::to_string(output)
+            .map_err(|_| context_limit())?
+            .len()
+        + call.id.len()
+        + MESSAGE_OVERHEAD * 4;
+    let input = request.instructions.len()
+        + tool_cost
+        + request
+            .messages
+            .iter()
+            .map(|message| message_cost(message, caps.image_token_reserve))
+            .sum::<usize>();
+    if input > available {
+        Err(context_limit())
+    } else {
+        Ok(())
+    }
 }
 
 fn context_limit() -> BackendError {

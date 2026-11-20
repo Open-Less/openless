@@ -11,6 +11,8 @@ use crate::llm_protocol::{LlmRequestFormat, StreamEvent, TextEventStream};
 use crate::polish::{ActiveLLMProvider, LLMError, OpenAICompatibleLLMProvider};
 use crate::{CredentialStore, PreferencesStore, ProviderSlot};
 
+mod tools;
+
 const OUTPUT_BUDGET: usize = 8_192;
 const UNKNOWN_OUTPUT_BUDGET: usize = 2_048;
 const MAX_SSE_BYTES: usize = 16 * 1024 * 1024;
@@ -284,6 +286,13 @@ impl AskModel for PreparedModel {
         self.capabilities
     }
 
+    fn supports_search_tool(&self) -> bool {
+        match &self.wire {
+            Wire::Compatible(_) => true,
+            Wire::Gemini(_) => self.label.service == "gemini",
+        }
+    }
+
     fn stream(
         &self,
         request: AskModelRequest,
@@ -331,13 +340,15 @@ impl AskModel for PreparedModel {
                                 &request,
                                 config,
                             );
+                            tools::configure(body, format, &request.search);
                         })
                         .map_err(public_model_error)?;
                     (builder, format, false)
                 }
                 Wire::Gemini(provider) => {
-                    let body =
+                    let mut body =
                         gemini_body(&request, self.thinking, provider.ask_config().temperature);
+                    tools::configure_gemini(&mut body, &request.search);
                     (
                         provider.ask_request(&body),
                         LlmRequestFormat::ChatCompletions,
@@ -345,10 +356,11 @@ impl AskModel for PreparedModel {
                     )
                 }
             };
+            let search = matches!(request.search, AskModelSearch::Available);
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(cancelled()),
-                result = tokio::time::timeout(STREAM_TOTAL, stream(builder, format, gemini, progress)) => {
+                result = tokio::time::timeout(STREAM_TOTAL, stream_with_tools(builder, format, gemini, search, progress)) => {
                     result.map_err(|_| public_model_error(LLMError::Timeout))?
                 }
             }
@@ -510,10 +522,21 @@ fn image_base64(image: &AskImage) -> String {
     base64::engine::general_purpose::STANDARD.encode(&image.bytes)
 }
 
+#[cfg(test)]
 async fn stream(
     builder: reqwest::RequestBuilder,
     format: LlmRequestFormat,
     gemini: bool,
+    progress: AskModelSink,
+) -> Result<AskModelCompletion, BackendError> {
+    stream_with_tools(builder, format, gemini, false, progress).await
+}
+
+async fn stream_with_tools(
+    builder: reqwest::RequestBuilder,
+    format: LlmRequestFormat,
+    gemini: bool,
+    search: bool,
     progress: AskModelSink,
 ) -> Result<AskModelCompletion, BackendError> {
     let start = tokio::time::Instant::now();
@@ -523,12 +546,19 @@ async fn stream(
         .map_err(|error| public_model_error(crate::polish::llm_error_from_reqwest(error)))?;
     if !response.status().is_success() {
         let status = response.status();
+        if search && matches!(status.as_u16(), 400 | 422 | 501) {
+            return Err(ask_error(
+                BackendErrorCode::Provider,
+                "askModelRejectedTools",
+            ));
+        }
         return Err(
             ask_error(BackendErrorCode::Provider, "askModelRequestFailed")
                 .retryable(status.is_server_error() || status.as_u16() == 429),
         );
     }
     let mut parser = TextEventStream::new(format).for_ask(gemini);
+    let mut tools = tools::SearchStream::new(format, gemini, search);
     let mut usage = ReportedTokens::default();
     let mut bytes = 0usize;
     let mut has_answer = false;
@@ -551,7 +581,7 @@ async fn stream(
         }
         parser.push(&chunk).map_err(public_model_error)?;
         loop {
-            let event = parser.next();
+            let event = parser.next_with_observer(|value, kind| tools.observe(value, kind));
             let reported = parser.reported_tokens();
             if reported != usage {
                 usage = reported;
@@ -569,7 +599,9 @@ async fn stream(
         }
     }
     parser.finish().map_err(public_model_error)?;
-    Ok(AskModelCompletion::Complete)
+    Ok(tools
+        .take()
+        .map_or(AskModelCompletion::Complete, AskModelCompletion::ToolCall))
 }
 
 fn public_model_error(error: LLMError) -> BackendError {
@@ -578,6 +610,9 @@ fn public_model_error(error: LLMError) -> BackendError {
         LLMError::Network(_) => ("askModelNetworkError", true),
         LLMError::ParseError(reason) if reason == "llmResponseIncomplete" => {
             ("askModelIncomplete", true)
+        }
+        LLMError::ParseError(reason) if reason == "askInvalidToolCall" => {
+            ("askInvalidToolCall", false)
         }
         LLMError::ParseError(reason) if reason == "llmContentFiltered" => {
             ("askModelContentFiltered", false)

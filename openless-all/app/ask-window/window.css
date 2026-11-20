@@ -33,7 +33,6 @@
 html {
   --font-open-runde: 'Open Runde';
   --foreground: var(--ol-ink);
-  background: var(--ol-canvas);
   color: var(--ol-ink);
 }
 
@@ -46,10 +45,22 @@ body,
 
 #ask-root {
   position: relative;
+  background: var(--ol-canvas);
+  border-radius: 16px;
   font:
     400 14px / 1.45 'Open Runde',
     system-ui,
     sans-serif;
+}
+
+.ask-viewport .ol-viewport-content {
+  display: block;
+}
+
+.ask-reconnect {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
 }
 
 .window-bar {
@@ -82,8 +93,7 @@ body,
   background: var(--ol-line-strong);
 }
 
-button:focus-visible,
-.query-panel input:focus-visible {
+button:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: 2px;
 }
@@ -107,16 +117,11 @@ button:focus-visible,
   background: var(--ol-surface-2);
 }
 
-.effort-label,
 .icon-button,
 .connection-notice,
 .attachment-card small,
 .source-item small {
   color: var(--ol-ink-3);
-}
-
-.effort-label[data-deep='true'] {
-  color: var(--ol-warn);
 }
 
 .assistant-text {
@@ -129,7 +134,7 @@ button:focus-visible,
   cursor: pointer;
 }
 
-.icon-button:hover:not(:disabled),
+.icon-button:hover:not(:disabled):not([aria-pressed='true']),
 .text-button:hover:not(:disabled),
 .sources-toggle:hover {
   background: var(--ol-surface-2);
@@ -247,10 +252,6 @@ button:focus-visible,
   white-space: pre-wrap;
 }
 
-.attachment-card .problem {
-  color: var(--ol-err);
-}
-
 .attachment-references,
 .sent-attachments {
   display: flex;
@@ -281,47 +282,15 @@ button:focus-visible,
   padding-top: 5px;
 }
 
-.query-panel,
-.source-panel,
-.window-notice {
+.source-panel {
   border: 1px solid var(--ol-line);
   border-radius: 16px;
   background: var(--ol-surface);
   box-shadow: var(--ol-shadow-lg);
 }
 
-.query-panel {
-  position: absolute;
-  z-index: 5;
-  bottom: calc(100% + 8px);
-  left: 38px;
-  width: min(330px, calc(100% - 38px));
-  padding: 12px;
-}
-
-.query-panel label,
 .source-panel > p:first-child {
   font-weight: 600;
-}
-
-.query-panel p {
-  margin: 3px 0 8px;
-  color: var(--ol-ink-3);
-  font-size: 12px;
-}
-
-.query-panel input {
-  width: 100%;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
-  padding: 5px 8px;
-}
-
-.query-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 6px;
 }
 
 .text-button {
@@ -384,11 +353,6 @@ button:focus-visible,
   vertical-align: text-bottom;
 }
 
-.problem {
-  color: var(--ol-err);
-  overflow-wrap: anywhere;
-}
-
 .composer-notice {
   padding: 4px 12px 0;
   font-size: 12px;
@@ -404,18 +368,6 @@ button:focus-visible,
 .voice-retries {
   max-height: 22vh;
   overflow: auto;
-}
-
-.window-notice {
-  position: absolute;
-  z-index: 20;
-  top: 49px;
-  left: 50%;
-  width: max-content;
-  max-width: min(480px, calc(100% - 48px));
-  transform: translateX(-50%);
-  padding: 8px 12px;
-  overflow-wrap: anywhere;
 }
 
 .connection-notice {

@@ -186,13 +186,12 @@ fn images_use_real_decoder_and_preview_never_returns_source_bytes() {
 }
 
 #[test]
-fn image_dimensions_are_bounded_even_for_small_encoded_files() {
+fn image_above_the_send_dimension_budget_is_resized() {
     let mut encoded = Cursor::new(Vec::new());
     image::GrayImage::new(4_000, 3_001)
         .write_to(&mut encoded, image::ImageFormat::Png)
         .unwrap();
-    assert_eq!(
-        decode_image(FileKind::Png, encoded.into_inner()).err(),
-        Some(AttachmentError::ImageTooLarge),
-    );
+    let prepared = decode_image(FileKind::Png, encoded.into_inner()).unwrap();
+    assert_eq!(prepared.dimensions(), (2048, 1537));
+    assert!(prepared.bytes().len() < super::super::MAX_IMAGE_BYTES);
 }

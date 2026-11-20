@@ -455,6 +455,13 @@ impl TextEventStream {
     }
 
     pub fn next(&mut self) -> Result<Option<StreamEvent>, LLMError> {
+        self.next_with_observer(|_, _| Ok(false))
+    }
+
+    pub(crate) fn next_with_observer(
+        &mut self,
+        mut observe: impl FnMut(&Value, &str) -> Result<bool, LLMError>,
+    ) -> Result<Option<StreamEvent>, LLMError> {
         if self.done {
             return Ok(None);
         }
@@ -520,6 +527,13 @@ impl TextEventStream {
         if kind == "error" || !value["error"].is_null() {
             return Err(response_error("llmStreamError"));
         }
+        if observe(&value, kind)? {
+            self.ask_stop = true;
+            if self.format == LlmRequestFormat::Messages {
+                self.messages_complete = true;
+            }
+            return Ok(Some(StreamEvent::Ignore));
+        }
         if self.ask_gemini {
             return self.next_ask_gemini(&value).map(Some);
         }
@@ -537,7 +551,9 @@ impl TextEventStream {
                     self.ask_stop = true;
                 }
                 thinking = ["reasoning_content", "reasoning"].iter().any(|key| {
-                    choice["delta"][*key].as_str().is_some_and(|text| !text.is_empty())
+                    choice["delta"][*key]
+                        .as_str()
+                        .is_some_and(|text| !text.is_empty())
                 });
             } else if let Some(annotations) = value["choices"][0]["delta"]["annotations"].as_array()
             {
@@ -647,7 +663,11 @@ impl TextEventStream {
         }
         crate::polish::finish_utf8_sse_chunks(&mut self.buffer, &mut self.pending)?;
         if self.ask {
-            let completed = if self.ask_gemini { self.ask_stop } else { self.done };
+            let completed = if self.ask_gemini {
+                self.ask_stop
+            } else {
+                self.done
+            };
             if !completed || !self.buffer.trim().is_empty() {
                 return Err(response_error("llmResponseIncomplete"));
             }

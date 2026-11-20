@@ -22,8 +22,8 @@ mod tests;
 pub use model::ConfiguredAskModels;
 
 const MAX_ATTACHMENTS: usize = 4;
+const WEB_SEARCH_GUIDANCE: &str = "Consider using the web_search tool for every user question; prefer calling it to check relevant public facts, even if you think you already know the answer. Skip it for requests with no useful public query, such as a greeting or a purely creative task, or when searching would reveal private information. Send only a short public query, never private data.";
 const MAX_REQUEST_ID_BYTES: usize = 128;
-const MAX_QUERY_BYTES: usize = 1024;
 const EVENT_LIMIT: usize = 512;
 const EVENT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -62,8 +62,6 @@ pub struct AskTurnKey {
 #[serde(rename_all = "camelCase")]
 pub struct AskOptions {
     pub deep_thinking: bool,
-    pub web_search: bool,
-    pub public_search_query: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +270,10 @@ pub enum AskSearchResult {
 pub type AskToolSink = Arc<dyn Fn(AskToolProgress) + Send + Sync>;
 
 pub trait SearchTool: Send + Sync {
+    fn enabled(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+
     fn search(
         &self,
         request: AskSearchRequest,
@@ -317,11 +319,31 @@ pub struct AskModelMessage {
     pub parts: Vec<AskModelPart>,
 }
 
+#[derive(Clone)]
 pub struct AskModelRequest {
     pub instructions: String,
     pub messages: Vec<AskModelMessage>,
     pub output_tokens: usize,
     pub deep_thinking: bool,
+    pub search: AskModelSearch,
+}
+
+#[derive(Clone, Default)]
+pub enum AskModelSearch {
+    #[default]
+    Disabled,
+    Available,
+    Result {
+        call: AskModelToolCall,
+        output: String,
+    },
+}
+
+#[derive(Clone)]
+pub struct AskModelToolCall {
+    pub query: String,
+    pub id: String,
+    pub resume: Vec<serde_json::Value>,
 }
 
 pub enum AskModelProgress {
@@ -334,11 +356,32 @@ pub type AskModelSink = Arc<dyn Fn(AskModelProgress) + Send + Sync>;
 
 pub enum AskModelCompletion {
     Complete,
+    ToolCall(AskModelToolCall),
+}
+
+enum CallResult {
+    Text(String),
+    Tool(AskModelToolCall),
+}
+
+impl CallResult {
+    fn require_text(self) -> Result<String, BackendError> {
+        match self {
+            Self::Text(text) => Ok(text),
+            Self::Tool(_) => Err(ask_error(
+                BackendErrorCode::Provider,
+                "askUnexpectedToolCall",
+            )),
+        }
+    }
 }
 
 pub trait AskModel: Send + Sync {
     fn label(&self) -> &AskModelLabel;
     fn capabilities(&self) -> AskModelCapabilities;
+    fn supports_search_tool(&self) -> bool {
+        false
+    }
     fn stream(
         &self,
         request: AskModelRequest,
@@ -394,6 +437,7 @@ pub enum AskActivity {
 pub enum AskCallPurpose {
     Answer,
     Compact,
+    SearchDecision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -591,6 +635,7 @@ struct Conversation {
     requests: HashMap<String, usize>,
     active: Option<usize>,
     summary: Option<prompt::Summary>,
+    contains_private_context: bool,
     attachments: Vec<AskAttachmentMetadata>,
 }
 
@@ -997,27 +1042,23 @@ impl StandaloneQaService {
         material: prompt::Material,
         cancellation: AskCancellation,
     ) -> Result<(), BackendError> {
-        let evidence = if let Some(query) = &material.search_query {
-            self.dispatch_tool(
-                key,
-                AskToolCall::WebSearch {
-                    public_query: query.clone(),
-                },
-                cancellation.clone(),
-            )
-            .await?
-        } else {
-            String::new()
-        };
         let context = self
             .0
             .deps
             .context
             .context(key, cancellation.clone())
             .await?;
-        let (history, summary) = {
-            let state = self.0.state.lock();
-            let conversation = state.conversation(key.conversation_id)?;
+        // Only a user-authored question may reach a model while its search tool is enabled.
+        // Sensitive material is supplied to the separate response request, with tools disabled.
+        let question = material.question().to_owned();
+        let search_enabled = !question.trim().is_empty()
+            && model.supports_search_tool()
+            && self.0.deps.search.enabled().await;
+        let private = material.has_attachments()
+            || context.facts.iter().any(|fact| fact.name != "local_time");
+        let (history, summary, private) = {
+            let mut state = self.0.state.lock();
+            let conversation = state.conversation_mut(key.conversation_id)?;
             if conversation
                 .active
                 .is_none_or(|index| conversation.turns[index].snapshot.turn_id != key.turn_id)
@@ -1033,10 +1074,15 @@ impl StandaloneQaService {
                     assistant: turn.assistant.text.clone(),
                 })
                 .collect::<Vec<_>>();
-            (history, conversation.summary.clone())
+            conversation.contains_private_context |= private;
+            (
+                history,
+                conversation.summary.clone(),
+                conversation.contains_private_context,
+            )
         };
-        let plan = prompt::Plan::new(material, context, &evidence, history, summary)?;
-        let (request, replacement) = plan
+        let plan = prompt::Plan::new(material, context, search_enabled, history, summary);
+        let (mut request, replacement) = plan
             .prepare(self, key, model.as_ref(), &cancellation)
             .await?;
         if let Some(replacement) = replacement {
@@ -1048,6 +1094,57 @@ impl StandaloneQaService {
             conversation.summary = Some(replacement);
         }
         self.activity(key, AskActivity::Generating);
+        if !search_enabled {
+            self.call(
+                key,
+                model.as_ref(),
+                request,
+                AskCallPurpose::Answer,
+                cancellation,
+            )
+            .await?
+            .require_text()?;
+            return Ok(());
+        }
+        let (first, purpose) = if private {
+            (AskModelRequest {
+                instructions: format!("{WEB_SEARCH_GUIDANCE}\nIf no useful public search applies, reply no_search. Do not answer the question in this pass."),
+                messages: vec![AskModelMessage { role: AskModelRole::User, parts: vec![AskModelPart::Text(question)] }],
+                output_tokens: request.output_tokens.min(512),
+                deep_thinking: false,
+                search: AskModelSearch::Available,
+            }, AskCallPurpose::SearchDecision)
+        } else {
+            let mut first = request.clone();
+            first.instructions.push('\n');
+            first.instructions.push_str(WEB_SEARCH_GUIDANCE);
+            first.search = AskModelSearch::Available;
+            (first, AskCallPurpose::Answer)
+        };
+        match self
+            .call(key, model.as_ref(), first, purpose, cancellation.clone())
+            .await
+        {
+            Ok(CallResult::Tool(call)) => {
+                let output = self
+                    .dispatch_tool(
+                        key,
+                        AskToolCall::WebSearch {
+                            public_query: call.query.clone(),
+                        },
+                        cancellation.clone(),
+                    )
+                    .await?;
+                request.search = AskModelSearch::Result { call, output };
+            }
+            Ok(CallResult::Text(_)) if !private => return Ok(()),
+            Ok(CallResult::Text(_)) => {}
+            Err(error) if error.message == "askModelRejectedTools" => {}
+            Err(error) if private && error.code != BackendErrorCode::Cancelled => {}
+            Err(error) => return Err(error),
+        }
+        prompt::check_tool_budget(&request, model.capabilities())?;
+        self.activity(key, AskActivity::Generating);
         self.call(
             key,
             model.as_ref(),
@@ -1055,7 +1152,8 @@ impl StandaloneQaService {
             AskCallPurpose::Answer,
             cancellation,
         )
-        .await?;
+        .await?
+        .require_text()?;
         Ok(())
     }
 
@@ -1147,12 +1245,16 @@ impl StandaloneQaService {
         let mut state = self.0.state.lock();
         if let Ok(conversation) = state.conversation_mut(key.conversation_id) {
             if let Some(turn) = conversation.active_turn(key.turn_id) {
-                for event in turn.finish_search(status, error) {
+                for event in turn.finish_search(status.clone(), error) {
                     conversation.emit_turn(&self.0.events, key, event);
                 }
             }
         }
-        Ok(evidence)
+        if !evidence.is_empty() {
+            Ok(evidence)
+        } else {
+            Ok(serde_json::json!({"status":status, "message":"No verified search evidence was returned."}).to_string())
+        }
     }
 
     async fn call(
@@ -1162,7 +1264,8 @@ impl StandaloneQaService {
         request: AskModelRequest,
         purpose: AskCallPurpose,
         cancellation: AskCancellation,
-    ) -> Result<String, BackendError> {
+    ) -> Result<CallResult, BackendError> {
+        let tool_allowed = matches!(request.search, AskModelSearch::Available);
         let call_id = Uuid::new_v4();
         let label = model.label().clone();
         let text = Arc::new(Mutex::new(Some(String::new())));
@@ -1259,13 +1362,20 @@ impl StandaloneQaService {
         });
         let completion = model.stream(request, cancellation.clone(), progress).await;
         let output = text.lock().take().unwrap_or_default();
-        let result = completion.and_then(|AskModelCompletion::Complete| {
+        let result = completion.and_then(|completion| {
             if cancellation.is_cancelled() {
-                Err(cancelled())
-            } else if output.trim().is_empty() {
-                Err(ask_error(BackendErrorCode::Provider, "askEmptyModelOutput"))
-            } else {
-                Ok(output)
+                return Err(cancelled());
+            }
+            match completion {
+                AskModelCompletion::ToolCall(call) if tool_allowed => Ok(CallResult::Tool(call)),
+                AskModelCompletion::ToolCall(_) => Err(ask_error(
+                    BackendErrorCode::Provider,
+                    "askUnexpectedToolCall",
+                )),
+                AskModelCompletion::Complete if output.trim().is_empty() => {
+                    Err(ask_error(BackendErrorCode::Provider, "askEmptyModelOutput"))
+                }
+                AskModelCompletion::Complete => Ok(CallResult::Text(output)),
             }
         });
         if let Some(archive) = &mut archive {
@@ -1316,7 +1426,9 @@ impl Drop for CallArchive<'_> {
                 kind: ServiceKind::Llm,
                 purpose: match self.purpose {
                     AskCallPurpose::Answer => ServicePurpose::Question,
-                    AskCallPurpose::Compact => ServicePurpose::Other,
+                    AskCallPurpose::Compact | AskCallPurpose::SearchDecision => {
+                        ServicePurpose::Other
+                    }
                 },
                 outcome,
                 provider: None,
@@ -1599,19 +1711,6 @@ fn validate_submit(request: &AskSubmit) -> Result<(), BackendError> {
         return Err(ask_error(
             BackendErrorCode::InvalidArgument,
             "askInvalidAttachments",
-        ));
-    }
-    if request
-        .options
-        .public_search_query
-        .as_ref()
-        .is_some_and(|query| {
-            !request.options.web_search || query.trim().is_empty() || query.len() > MAX_QUERY_BYTES
-        })
-    {
-        return Err(ask_error(
-            BackendErrorCode::InvalidArgument,
-            "askInvalidPublicQuery",
         ));
     }
     Ok(())

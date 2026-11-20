@@ -17,6 +17,10 @@ impl AskModel for TestModel {
         self.caps
     }
 
+    fn supports_search_tool(&self) -> bool {
+        true
+    }
+
     fn stream(
         &self,
         request: AskModelRequest,
@@ -102,9 +106,13 @@ impl ContextProvider for Context {
 }
 
 #[derive(Default)]
-struct Search(Mutex<Vec<String>>);
+struct Search(Mutex<Vec<String>>, std::sync::atomic::AtomicBool);
 
 impl SearchTool for Search {
+    fn enabled(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { self.1.load(std::sync::atomic::Ordering::Relaxed) })
+    }
+
     fn search(
         &self,
         request: AskSearchRequest,
@@ -354,18 +362,17 @@ async fn submit_is_idempotent_and_late_cancellation_stays_with_its_owner() {
 }
 
 #[tokio::test]
-async fn only_confirmed_queries_are_sent_and_compact_never_receives_old_facts() {
+async fn compact_never_receives_old_facts() {
     let mut fixture = Fixture::new(4_300);
     let service = fixture.service.clone();
     let mut events = service.subscribe();
     let conversation_id = service.open();
     *fixture.context.0.lock() = Some("revoked-fact-marker".into());
-    let mut first = request(
+    let first = request(
         conversation_id,
         "one",
         &format!("Question one {}", "x".repeat(500)),
     );
-    first.options.web_search = true;
     let turn_id = service.submit(first).await.unwrap();
     let call = fixture.next().await;
     assert!(model_text(&call.request).contains("revoked-fact-marker"));
@@ -408,19 +415,14 @@ async fn only_confirmed_queries_are_sent_and_compact_never_receives_old_facts() 
         );
     }
 
-    let mut fourth = request(
-        conversation_id,
-        "four",
-        &format!("New question {}", "y".repeat(600)),
-    );
-    fourth.options.web_search = true;
-    fourth.options.public_search_query = Some("approved only".into());
-    let turn_id = {
-        let original = service.submit(fourth.clone()).await;
-        assert_eq!(original.unwrap_err().message, "askContextLimit");
-        fourth.options = AskOptions::default();
-        service.submit(fourth).await.unwrap()
-    };
+    let turn_id = service
+        .submit(request(
+            conversation_id,
+            "four",
+            &format!("New question {}", "y".repeat(600)),
+        ))
+        .await
+        .unwrap();
     let compact = fixture.next().await;
     let compact_text = model_text(&compact.request);
     assert!(compact_text.contains("Question one"));
@@ -459,17 +461,42 @@ async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
     let service = fixture.service.clone();
     let conversation_id = service.open();
     let mut events = service.subscribe();
-    let mut submit = request(conversation_id, "request", "don't send this text to search");
-    submit.options.web_search = true;
-    submit.options.public_search_query = Some("public query".into());
-    let turn_id = service.submit(submit).await.unwrap();
+    fixture
+        .search
+        .1
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    *fixture.context.0.lock() = Some("private app metadata".into());
+    let submission = request(
+        conversation_id,
+        "request",
+        "Find the latest public facts about the topic",
+    );
+    let turn_id = service.submit(submission).await.unwrap();
     let key = AskTurnKey {
         conversation_id,
         turn_id,
     };
+    let decision = fixture.next().await;
+    assert!(matches!(decision.request.search, AskModelSearch::Available));
+    assert!(!model_text(&decision.request).contains("private app metadata"));
+    assert!(fixture.search.0.lock().is_empty());
+    decision
+        .finish
+        .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
+            id: "call1".into(),
+            query: "public query".into(),
+            resume: Vec::new(),
+        })))
+        .ok()
+        .unwrap();
     let call = fixture.next().await;
     assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);
-    assert!(model_text(&call.request).contains("private-to-model source body"));
+    assert!(model_text(&call.request).contains("private app metadata"));
+    assert!(!model_text(&call.request).contains("private-to-model source body"));
+    assert!(
+        matches!(&call.request.search, AskModelSearch::Result { output, .. }
+        if output.contains("private-to-model source body"))
+    );
     let search_replay =
         serde_json::to_string(&service.events(conversation_id, 0).unwrap()).unwrap();
     assert!(!search_replay.contains("private-to-model source body"));

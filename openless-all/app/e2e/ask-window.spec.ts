@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import type {} from './fixtures/ask-window';
 import { fixtureOrigin } from './support/server';
 
-test.use({ viewport: { width: 920, height: 800 }, locale: 'en-US' });
+test.use({ viewport: { width: 800, height: 920 }, locale: 'en-US' });
 
 test.beforeEach(async ({ page }) => {
   await page.goto(`${fixtureOrigin}/e2e/fixtures/ask-window.html`);
@@ -14,12 +14,13 @@ test('first send moves the original composer and restores real state after gaps 
 }) => {
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   const box = page.locator('[data-slot="prompt-box"]');
-  expect((await box.boundingBox())!.y).toBeLessThan(440);
+  expect((await box.boundingBox())!.y).toBeLessThan(500);
   await prompt.fill('hi');
   await prompt.press('Enter');
   await expect(page.locator('.user-bubble')).toHaveText('hi');
+  await expect(page.locator('.effort-label')).toHaveCount(0);
   await expect(page.getByText('Working', { exact: true })).toBeVisible();
-  await expect.poll(async () => (await box.boundingBox())!.y).toBeGreaterThan(630);
+  await expect.poll(async () => (await box.boundingBox())!.y).toBeGreaterThan(750);
   await page.evaluate(() => {
     const fixture = window.askFixture;
     const turnId = fixture.active();
@@ -82,7 +83,10 @@ test('same-frame attachment references, full selection, IME, caret, and attachme
     window.askFixture.rejectNext = true;
   });
   await prompt.press('Enter');
-  await expect(page.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  const errorDialog = page.getByRole('dialog');
+  await expect(errorDialog).toContainText('Set up an Ask model first.');
+  await errorDialog.getByRole('button', { name: 'OK' }).click();
+  await expect(errorDialog).toHaveCount(0);
   await expect(box.getByText('PDF · 3 pages')).toBeVisible();
   await page.getByRole('button', { name: 'Send, hold to think harder' }).click();
   await expect(page.locator('.user-bubble')).toContainText('a notes.pdf');
@@ -98,16 +102,22 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
   for (const invalid of ['not_image', 'oversize']) {
     const prevented = await page.locator('.composer').evaluate((composer, invalid) => {
       const dataTransfer = new DataTransfer();
-      const bytes = invalid === 'oversize' ? new Uint8Array(8 * 1024 * 1024 + 1) : 'Text';
+      const bytes =
+        invalid === 'oversize' ? new Blob([new Uint8Array(48 * 1024 * 1024 + 1)]) : 'Text';
       dataTransfer.items.add(new File([bytes], 'invalid.png', { type: 'image/png' }));
       return !composer.dispatchEvent(
         new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true }),
       );
     }, invalid);
     expect(prevented).toBe(true);
-    await expect(page.getByRole('alert')).toHaveText(
-      invalid === 'oversize' ? 'Images must be 8 MiB or smaller.' : 'Drop a PNG or JPEG image.',
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(
+      invalid === 'oversize'
+        ? 'This image is too large to prepare safely.'
+        : 'Drop a valid PNG or JPEG image.',
     );
+    await dialog.getByRole('button', { name: 'OK' }).click();
+    await expect(dialog).toHaveCount(0);
   }
   const expected = await page.locator('.composer').evaluate((composer) => {
     const dataBase64 = window.askFixture.imageBase64;
@@ -126,24 +136,32 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
   expect(await page.evaluate(() => window.askFixture.submits)).toEqual([]);
 });
 
-test('explicit public query and actual search status; truncation uses a snapshot and sources open natively', async ({
+test('model tool status is visible without query controls; replay and sources work', async ({
   page,
 }) => {
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
-  await page.getByRole('button', { name: 'Web Search', exact: true }).click();
-  const query = page.getByRole('textbox', { name: 'Public search query', exact: true });
-  await query.fill('public words');
-  await query.press('Enter');
-  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
-  await page.getByRole('button', { name: 'Confirm public query' }).click();
-  await page.getByRole('button', { name: 'Think deeply' }).click();
-  await prompt.fill('private draft');
+  await expect(page.getByRole('button', { name: 'Web Search', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Public search query' })).toHaveCount(0);
+  const thinking = page.getByRole('button', { name: 'Think deeply' });
+  await thinking.hover();
+  await thinking.click();
+  await expect(thinking).toHaveAttribute('aria-pressed', 'true');
+  const accent = await page.evaluate(() => {
+    const sample = document.createElement('span');
+    sample.style.color = 'var(--ol-blue)';
+    document.body.append(sample);
+    const color = getComputedStyle(sample).color;
+    sample.remove();
+    return color;
+  });
+  await expect(thinking).toHaveCSS('color', accent);
+  await prompt.hover();
+  await expect(thinking).toHaveCSS('color', accent);
+  await prompt.fill('Search for current information');
   await prompt.press('Enter');
   await expect(page.getByText('Working', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.askFixture.submits[0].options)).toEqual({
     deepThinking: true,
-    webSearch: true,
-    publicSearchQuery: 'public words',
   });
   await page.evaluate(() => {
     const fixture = window.askFixture;
@@ -165,6 +183,7 @@ test('explicit public query and actual search status; truncation uses a snapshot
     });
   });
   await expect.poll(() => page.evaluate(() => window.askFixture.snapshotReads)).toBeGreaterThan(1);
+  await expect(page.getByText('Websearch · Reading sources…')).toBeVisible();
   const sources = page.getByRole('button', { name: 'Sources · 1' });
   await sources.click();
   await expect(page.getByRole('region', { name: 'Web search sources' })).toBeVisible();
@@ -177,12 +196,40 @@ test('explicit public query and actual search status; truncation uses a snapshot
   expect(await page.evaluate(() => window.askFixture.cancelled)).toEqual([
     ['conversation-1', 'turn-1'],
   ]);
-  await prompt.fill('do not reuse the prior approval');
+  await prompt.fill('Another question');
   await prompt.press('Enter');
   expect(await page.evaluate(() => window.askFixture.submits[1].options)).toEqual({
     deepThinking: true,
-    webSearch: true,
   });
+});
+
+test('large image drops are compressed before reaching Ask IPC', async ({ page }) => {
+  await page.locator('.composer').evaluate(async (composer) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 3000;
+    canvas.height = 4100;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#3367b4';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const png = await new Promise<Blob>((resolve) => canvas.toBlob((image) => resolve(image!)));
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(new File([png], 'large.png', { type: 'image/png' }));
+    composer.dispatchEvent(
+      new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true }),
+    );
+  });
+  await expect.poll(() => page.evaluate(() => window.askFixture.drops.length)).toBe(1);
+  const prepared = await page.evaluate(async () => {
+    const image = window.askFixture.drops[0];
+    const blob = await fetch(`data:image/png;base64,${image.dataBase64}`).then((result) =>
+      result.blob(),
+    );
+    const bitmap = await createImageBitmap(blob);
+    const size = [bitmap.width, bitmap.height];
+    bitmap.close();
+    return size;
+  });
+  expect(prepared).toEqual([1499, 2048]);
 });
 
 test('a rejected typed draft is restored with its raw text, selection, and request identity', async ({
@@ -195,7 +242,10 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await prompt.fill('  private draft  ');
   await prompt.evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(2, 9, 'backward'));
   await prompt.press('Enter');
-  await expect(page.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  const errorDialog = page.getByRole('dialog');
+  await expect(errorDialog).toContainText('Set up an Ask model first.');
+  await errorDialog.getByRole('button', { name: 'OK' }).click();
+  await expect(errorDialog).toHaveCount(0);
   await expect(prompt).toHaveValue('  private draft  ');
   expect(
     await prompt.evaluate((input: HTMLTextAreaElement) => [
@@ -243,6 +293,9 @@ test('normal voice preserves input geometry and selection, combo retries without
       text: 'spoken separately',
     });
   });
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'OK' }).click();
+  await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry recording' })).toBeEnabled();
   await expect(prompt).toHaveValue('one new three');
   await page.getByRole('button', { name: 'Retry recording' }).click();

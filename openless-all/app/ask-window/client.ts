@@ -31,8 +31,6 @@ export type AskSource = {
 
 export type AskOptions = {
   deepThinking: boolean;
-  webSearch: boolean;
-  publicSearchQuery?: string;
 };
 
 export type SubmitAsk = {
@@ -132,7 +130,10 @@ export interface AskClient {
     dataBase64: string,
   ): Promise<AttachmentInfo>;
   removeAttachment(conversationId: string, attachmentId: string): Promise<void>;
-  getAttachmentPreview(conversationId: string, attachmentId: string): Promise<AttachmentPreview | null>;
+  getAttachmentPreview(
+    conversationId: string,
+    attachmentId: string,
+  ): Promise<AttachmentPreview | null>;
   openSource(conversationId: string, turnId: string, sourceId: string): Promise<void>;
   hide(): Promise<void>;
   syncEditor?(editor: AskEditor): Promise<boolean>;
@@ -165,11 +166,5 @@ export function requestFingerprint({
   attachmentIds,
   options,
 }: Omit<SubmitAsk, 'clientRequestId'>) {
-  return JSON.stringify([
-    text,
-    attachmentIds,
-    options.deepThinking,
-    options.webSearch,
-    options.publicSearchQuery,
-  ]);
+  return JSON.stringify([text, attachmentIds, options.deepThinking]);
 }

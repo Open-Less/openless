@@ -5,9 +5,12 @@ use image::{ImageDecoder, ImageError, ImageFormat, ImageReader, Limits};
 
 use super::{
     AttachmentError, AttachmentPreview, AttachmentPreviewSummary, FileKind, MAX_IMAGE_BYTES,
+    MAX_IMAGE_SOURCE_BYTES,
 };
 
-const MAX_PIXELS: u32 = 12_000_000;
+const MAX_SOURCE_PIXELS: u64 = 40_000_000;
+const COMPACT_EDGE: u32 = 2048;
+const COMPACT_TARGET: usize = 3 * 1024 * 1024;
 const THUMBNAIL_EDGE: u32 = 320;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,31 +66,72 @@ impl VerifiedImage {
 }
 
 pub fn decode_image(kind: FileKind, bytes: Vec<u8>) -> Result<VerifiedImage, AttachmentError> {
-    let (format, mime) = match kind {
+    let (format, mut mime) = match kind {
         FileKind::Png => (ImageFormat::Png, ImageMime::Png),
         FileKind::Jpeg => (ImageFormat::Jpeg, ImageMime::Jpeg),
         FileKind::Pdf => return Err(AttachmentError::UnsupportedFile),
     };
-    if bytes.len() > MAX_IMAGE_BYTES {
+    if bytes.len() > MAX_IMAGE_SOURCE_BYTES {
         return Err(AttachmentError::ImageTooLarge);
     }
     if image::guess_format(&bytes).ok() != Some(format) {
         return Err(AttachmentError::ImageInvalid);
     }
     let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_PIXELS);
-    limits.max_image_height = Some(MAX_PIXELS);
-    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(24_000);
+    limits.max_image_height = Some(24_000);
+    limits.max_alloc = Some(256 * 1024 * 1024);
     let mut reader = ImageReader::with_format(Cursor::new(&bytes), format);
     reader.limits(limits);
     let mut decoder = reader.into_decoder().map_err(decode_error)?;
     let (width, height) = decoder.dimensions();
-    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > u64::from(MAX_PIXELS) {
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
         return Err(AttachmentError::ImageTooLarge);
     }
     let orientation = decoder.orientation().map_err(decode_error)?;
     let mut image = image::DynamicImage::from_decoder(decoder).map_err(decode_error)?;
     image.apply_orientation(orientation);
+    let mut bytes = bytes;
+    if bytes.len() > COMPACT_TARGET
+        || u64::from(width) * u64::from(height) > 12_000_000
+        || width.max(height) > 8_000
+    {
+        image = image.resize(
+            COMPACT_EDGE,
+            COMPACT_EDGE,
+            image::imageops::FilterType::Triangle,
+        );
+        // Preserve transparency and the legibility of PNG screenshots where possible.
+        let mut png = Cursor::new(Vec::new());
+        if mime == ImageMime::Png {
+            image
+                .write_to(&mut png, ImageFormat::Png)
+                .map_err(decode_error)?;
+        }
+        if mime == ImageMime::Png && png.get_ref().len() <= COMPACT_TARGET {
+            bytes = png.into_inner();
+        } else {
+            if image.color().has_alpha() {
+                let mut opaque = image::RgbImage::new(image.width(), image.height());
+                for (src, dst) in image.to_rgba8().pixels().zip(opaque.pixels_mut()) {
+                    let alpha = u16::from(src[3]);
+                    *dst = image::Rgb(std::array::from_fn(|channel| {
+                        ((u16::from(src[channel]) * alpha + 255 * (255 - alpha)) / 255) as u8
+                    }));
+                }
+                image = image::DynamicImage::ImageRgb8(opaque);
+            }
+            let rgb = image.to_rgb8();
+            bytes = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 86)
+                .encode_image(&rgb)
+                .map_err(decode_error)?;
+            mime = ImageMime::Jpeg;
+        }
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err(AttachmentError::ImageTooLarge);
+        }
+    }
     let (width, height) = (image.width(), image.height());
     let thumbnail = if width > THUMBNAIL_EDGE || height > THUMBNAIL_EDGE {
         image.thumbnail(THUMBNAIL_EDGE, THUMBNAIL_EDGE).into_rgba8()

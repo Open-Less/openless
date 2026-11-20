@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_ATTACHMENTS_PER_TURN: usize = 4;
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_PDF_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_IMAGE_SOURCE_BYTES: usize = 48 * 1024 * 1024;
+pub const MAX_PDF_BYTES: usize = 48 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,7 +34,7 @@ pub enum FileKind {
 impl FileKind {
     pub fn max_bytes(self) -> usize {
         match self {
-            Self::Png | Self::Jpeg => MAX_IMAGE_BYTES,
+            Self::Png | Self::Jpeg => MAX_IMAGE_SOURCE_BYTES,
             Self::Pdf => MAX_PDF_BYTES,
         }
     }
@@ -81,7 +82,7 @@ pub enum AttachmentError {
     EmptySelection,
     #[error("Selected text must fit within 4,000 characters and 16 KiB.")]
     SelectionTooLarge,
-    #[error("Images must fit within 8 MiB and 12 megapixels.")]
+    #[error("This image is too large to prepare safely. Try exporting a smaller copy.")]
     ImageTooLarge,
     #[error("The selected image could not be decoded as the chosen PNG or JPEG format.")]
     ImageInvalid,

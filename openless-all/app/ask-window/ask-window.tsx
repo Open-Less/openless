@@ -1,3 +1,5 @@
+import { AppViewport } from '../src/ui/layout/AppViewport';
+import { InteractionProvider, useInteraction } from '../src/ui/overlays/InteractionProvider';
 import { useEffect, useRef, useState } from 'react';
 import { errorMessage, type AskClient, type AskSnapshot } from './client';
 import { useComposer } from './composer';
@@ -48,6 +50,17 @@ function Session({
 }
 
 export function AskWindow({ client }: { client: AskClient }) {
+  return (
+    <AppViewport scale={false} className="ask-viewport">
+      <InteractionProvider>
+        <AskScreen client={client} />
+      </InteractionProvider>
+    </AppViewport>
+  );
+}
+
+function AskScreen({ client }: { client: AskClient }) {
+  const { warn } = useInteraction();
   const feed = useRef<ReturnType<typeof connectAskFeed>>();
   const shown = useRef(true);
   const hiding = useRef(false);
@@ -56,7 +69,7 @@ export function AskWindow({ client }: { client: AskClient }) {
   const [connected, setConnected] = useState(false);
   const [focusRevision, setFocusRevision] = useState(0);
   const [streamError, setStreamError] = useState<string>();
-  const [windowError, setWindowError] = useState<string>();
+
   const [platform, setPlatform] = useState<string>();
   const onWindows = platform ? platform === 'windows' : /Windows/i.test(navigator.userAgent);
 
@@ -78,7 +91,12 @@ export function AskWindow({ client }: { client: AskClient }) {
         if (!destroyed) {
           if (current.themeMode) theme.setTheme(current.themeMode);
           if (current.platform) setPlatform(current.platform);
-          if (current.notice) setWindowError(current.notice.message);
+          if (current.notice)
+            void warn({
+              title: 'Ask Anything',
+              description: current.notice.message,
+              dismissLabel: 'OK',
+            });
         }
         return current;
       },
@@ -128,14 +146,24 @@ export function AskWindow({ client }: { client: AskClient }) {
           connect();
         }
         if (event.type === 'themeChanged') theme.setTheme(event.themeMode);
-        if (event.type === 'notice') setWindowError(event.error.message);
+        if (event.type === 'notice')
+          void warn({
+            title: 'Ask Anything',
+            description: event.error.message,
+            dismissLabel: 'OK',
+          });
       })
       .then((stop) => {
         if (destroyed) stop();
         else unlisten = stop;
       })
       .catch((cause) => {
-        if (!destroyed) setWindowError(errorMessage(cause, 'Could not connect to the Ask window.'));
+        if (!destroyed)
+          void warn({
+            title: 'Could not connect to Ask',
+            description: errorMessage(cause, 'Could not connect to the Ask window.'),
+            dismissLabel: 'OK',
+          });
       });
     connect();
     window.addEventListener('focus', resume);
@@ -157,9 +185,16 @@ export function AskWindow({ client }: { client: AskClient }) {
       window.removeEventListener('drop', preventFileNavigation);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [client]);
+  }, [client, warn]);
 
-  const notice = windowError ?? streamError;
+  useEffect(() => {
+    if (streamError)
+      void warn({
+        title: 'Could not connect to Ask',
+        description: streamError,
+        dismissLabel: 'OK',
+      });
+  }, [streamError, warn]);
   return (
     <>
       <div className="window-bar" data-tauri-drag-region data-windows={onWindows}>
@@ -175,7 +210,11 @@ export function AskWindow({ client }: { client: AskClient }) {
               .hide()
               .catch((cause) => {
                 shown.current = true;
-                setWindowError(errorMessage(cause, 'Could not hide Ask.'));
+                void warn({
+                  title: 'Ask Anything',
+                  description: errorMessage(cause, 'Could not hide Ask.'),
+                  dismissLabel: 'OK',
+                });
                 reconnect.current();
               })
               .finally(() => {
@@ -216,19 +255,14 @@ export function AskWindow({ client }: { client: AskClient }) {
           </p>
         </ConversationLayout>
       )}
-      {notice && (
-        <div className="window-notice" role="alert">
-          <p>{notice}</p>
-          {windowError ? (
-            <button type="button" className="text-button" onClick={() => setWindowError(undefined)}>
-              Dismiss
-            </button>
-          ) : (
-            <button type="button" className="text-button" onClick={() => reconnect.current()}>
-              Reconnect
-            </button>
-          )}
-        </div>
+      {streamError && (
+        <button
+          className="text-button ask-reconnect"
+          type="button"
+          onClick={() => reconnect.current()}
+        >
+          Reconnect
+        </button>
       )}
     </>
   );
