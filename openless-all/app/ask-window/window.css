@@ -45,12 +45,16 @@ body,
 
 #ask-root {
   position: relative;
-  background: var(--ol-canvas);
-  border-radius: 24px;
   font:
     400 14px / 1.45 'Open Runde',
     system-ui,
     sans-serif;
+}
+
+.ask-viewport-conversation {
+  background: var(--ol-canvas);
+  border-radius: 24px;
+  overflow: hidden;
 }
 
 .ask-viewport .ol-viewport-content {
@@ -67,6 +71,7 @@ body,
 }
 
 .composer-surface {
+  padding-block: 8px 18px;
   overflow-y: auto;
   align-items: start;
 }

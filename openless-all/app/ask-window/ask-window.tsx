@@ -1,7 +1,7 @@
 import { ToastNotificationCenter } from '../src/ui/feedback/ToastNotificationCenter';
 import { AppViewport } from '../src/ui/layout/AppViewport';
 import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { errorMessage, type AskClient, type AskFocus, type AskSnapshot } from './client';
 import { useComposer } from './composer';
 import { ConversationLayout, Sources, SubmissionResult } from './conversation';
@@ -112,7 +112,7 @@ export function AskWindow({
   surface?: AskSurface;
 }) {
   return (
-    <AppViewport scale={false} className="ask-viewport">
+    <AppViewport scale={false} className={`ask-viewport ask-viewport-${surface}`}>
       <InteractionProvider notificationHost={ToastNotificationCenter}>
         <AskScreen client={client} surface={surface} />
       </InteractionProvider>
@@ -135,12 +135,46 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
   const [platform, setPlatform] = useState<string>();
   const onWindows = platform ? platform === 'windows' : /Windows/i.test(navigator.userAgent);
 
-  function suspend() {
+  const suspend = useCallback(() => {
     shown.current = false;
     feed.current?.disconnect();
     feed.current = undefined;
     setConnected(false);
-  }
+  }, []);
+
+  const dismiss = useCallback(() => {
+    if (hiding.current || !shown.current) return;
+    hiding.current = true;
+    suspend();
+    void client
+      .hide()
+      .catch((cause) => {
+        shown.current = true;
+        notice(errorMessage(cause, 'Could not hide Ask.'), 'error', 'ask-hide');
+        reconnect.current();
+      })
+      .finally(() => {
+        hiding.current = false;
+      });
+  }, [client, notice, suspend]);
+
+  useEffect(() => {
+    if (surface !== 'composer') return;
+    function onEscape(event: KeyboardEvent) {
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.repeat
+      )
+        return;
+      event.preventDefault();
+      dismiss();
+    }
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [dismiss, surface]);
 
   useEffect(() => {
     let destroyed = false;
@@ -264,42 +298,30 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
       window.removeEventListener('drop', preventFileNavigation);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [client, notice, surface]);
+  }, [client, notice, surface, suspend]);
 
   const Session = surface === 'composer' ? ComposerSession : ConversationSession;
   return (
     <>
-      <div className="window-bar" data-tauri-drag-region data-windows={onWindows}>
-        <button
-          type="button"
-          id="close-window"
-          aria-label={surface === 'composer' ? 'Close Ask Anything' : 'Close Ask Conversation'}
-          onClick={() => {
-            if (hiding.current) return;
-            hiding.current = true;
-            suspend();
-            void client
-              .hide()
-              .catch((cause) => {
-                shown.current = true;
-                notice(errorMessage(cause, 'Could not hide Ask.'), 'error', 'ask-hide');
-                reconnect.current();
-              })
-              .finally(() => {
-                hiding.current = false;
-              });
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="m4 4 8 8m0-8-8 8"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
-        </button>
-      </div>
+      {surface === 'conversation' && (
+        <div className="window-bar" data-tauri-drag-region data-windows={onWindows}>
+          <button
+            type="button"
+            id="close-window"
+            aria-label="Close Ask Conversation"
+            onClick={dismiss}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="m4 4 8 8m0-8-8 8"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+      )}
       {snapshot ? (
         <Session
           key={snapshot.conversationId}

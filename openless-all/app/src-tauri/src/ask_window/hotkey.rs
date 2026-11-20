@@ -608,7 +608,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                 }
             }
             Message::Escape => {
-                desktop.cancel_active_voice();
+                desktop.dismiss_composer_from_escape();
             }
         }
     }

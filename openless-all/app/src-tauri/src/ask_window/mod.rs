@@ -372,6 +372,19 @@ impl Desktop {
         Ok(())
     }
 
+    fn dismiss_composer_from_escape(self: &Arc<Self>) {
+        let focus = self.composer_focus();
+        self.cancel_active_voice();
+        let desktop = self.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            if desktop.composer_focus() == focus && desktop.is_focused() {
+                if let Some(window) = desktop.app.get_webview_window(LABEL) {
+                    let _ = desktop.hide(&window);
+                }
+            }
+        });
+    }
+
     fn notify_voice(
         &self,
         event: &str,

@@ -12,7 +12,8 @@ test.beforeEach(async ({ page }) => {
 test('only a live chat route shows the reader; gaps recover without moving or blurring the composer', async ({
   page,
 }) => {
-  await expect(page.locator('#ask-root')).toHaveCSS('border-radius', '24px');
+  await expect(page.locator('#ask-root')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(page.getByRole('button', { name: 'Close Ask Anything' })).toHaveCount(0);
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   const box = page.locator('[data-slot="prompt-box"]');
   expect((await box.boundingBox())!.y).toBeGreaterThan(750);
@@ -25,6 +26,7 @@ test('only a live chat route shows the reader; gaps recover without moving or bl
   await expect(page.getByText('Working', { exact: true })).toBeVisible();
   await expect(page.locator('.user-bubble')).toHaveCount(0);
   await page.evaluate(() => window.askFixture.resolve('answer'));
+  await expect(page.locator('.ask-viewport-conversation')).toHaveCSS('border-radius', '24px');
   await expect(page.locator('.user-bubble')).toHaveText('hi');
   await expect(page.locator('.effort-label')).toHaveCount(0);
   await expect(prompt).toBeFocused();
@@ -42,7 +44,9 @@ test('only a live chat route shows the reader; gaps recover without moving or bl
   await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(1);
   await page.evaluate(() => window.askFixture.showTranscript('turn-1'));
   await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toBeHidden();
-  await page.getByRole('button', { name: 'Close Ask Anything' }).click();
+  await prompt.dispatchEvent('keydown', { key: 'Escape', isComposing: true });
+  expect(await page.evaluate(() => window.askFixture.hideCount)).toBe(0);
+  await prompt.press('Escape');
   await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(0);
   await page.evaluate(() => {
     const fixture = window.askFixture;
@@ -157,7 +161,6 @@ test('attachment expansion keeps the bottom editor usable with a bounded viewpor
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   await expect(prompt).toBeFocused();
   await expect(prompt).toBeInViewport();
-  await expect(page.getByRole('button', { name: 'Close Ask Anything' })).toBeInViewport();
   await expect(page.getByRole('button', { name: 'Attach a file' })).toBeInViewport();
 });
 
@@ -387,7 +390,7 @@ test('write, edit, and clarify have no reader side effect and retain delivery ou
   await expect(page.getByText('Could not copy to the clipboard.')).toBeVisible();
   await expect(prompt).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Sources · 1' })).toBeVisible();
-  await page.getByRole('button', { name: 'Close Ask Anything' }).click();
+  await retained.press('Escape');
   await page.evaluate(() => window.askFixture.activate());
   await expect(retained).toHaveValue('Total: $420 USD');
   await page.evaluate(() => {
