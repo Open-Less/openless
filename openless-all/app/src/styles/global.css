@@ -661,24 +661,29 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 
 /* ── 词典页────────────────────────────────────────────── */
 
-/* 来源分段筛选：灰底胶囊容器 + 白色浮起选中片（参考 Typeless 词典稿）。 */
+/* A circular track and inset chip keep a constant gap around the end corners. */
 .ol-seg {
+  --ol-seg-radius: var(--ol-radius);
+  --ol-seg-inset: 3.5px;
+  --ol-corner-radius: var(--ol-seg-radius);
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3.5px;
-  border-radius: var(--ol-radius);
+  padding: var(--ol-seg-inset);
+  border-radius: var(--ol-corner-radius);
+  corner-shape: round;
   background: var(--ol-surface-2);
   border: 0;
   box-shadow: inset 0 0 0 0.5px var(--ol-line);
 }
 .ol-seg-item {
+  --ol-corner-radius: calc(var(--ol-seg-radius) - var(--ol-seg-inset));
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
   border: 0;
-  border-radius: var(--ol-radius);
+  border-radius: var(--ol-corner-radius);
   background: transparent;
   color: var(--ol-ink-3);
   font-family: inherit;

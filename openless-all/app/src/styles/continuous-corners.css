@@ -324,10 +324,6 @@
   --ol-corner-radius: calc(var(--ol-radius) - 4px);
 }
 
-/* Nested controls use the container's radius less its inset. */
-.ol-seg > .ol-seg-item {
-  --ol-corner-radius: var(--ol-button-radius);
-}
 .ol-segmented > :is(.ol-segmented-indicator, .ol-service-view-indicator, .ol-segmented-option) {
   --ol-corner-radius: var(--ol-button-radius);
 }
