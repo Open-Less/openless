@@ -183,9 +183,11 @@ export function createInteractionController() {
           notify(options) {
             if (!active) return dismissed;
             const existing =
-              options.key === undefined
+              options.taskId === undefined
                 ? undefined
-                : notifications.find((entry) => entry.key === options.key && entry.owner === owner);
+                : notifications.find(
+                    (entry) => entry.taskId === options.taskId && entry.owner === owner,
+                  );
             const id = existing?.id ?? ++sequence;
             const item: NotificationItem = { ...options, id, owner };
             notifyItems(

@@ -40,7 +40,7 @@ import { BetaChannelSection } from '../sections/BetaChannelSection';
 import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
-import { AskEntrySettingsSection } from '../sections/AskEntrySettingsSection';
+import { AskEntrySettingsSection, IntentRoutingSection } from '../sections/AskEntrySettingsSection';
 import { AskHistorySection } from '../sections/AskHistorySection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
@@ -710,7 +710,7 @@ export function AdvancedTab({
           icon={item.icon}
           title={item.titleKey}
           beta={'beta' in item && item.beta}
-          description={`modal.advancedPages.${item.id}`}
+          description={item.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${item.id}`}
           onClick={() => onOpenPage(item.id)}
         />
       ))}
@@ -750,6 +750,7 @@ export function AdvancedTab({
               </div>
             )}
             {item.id === 'webSearch' && <WebSearchSection />}
+            {item.id === 'intentRouting' && <IntentRoutingSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

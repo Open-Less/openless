@@ -168,6 +168,10 @@ export const ja: typeof zhCN = {
     deleteCheck: 'このクラウドバックアップの削除を確認します。',
     confirmDelete: 'クラウドバックアップを削除',
     restoreTitle: '復元前に確認',
+    cloudUpdateTitle: '新しいクラウドデータがあります',
+    cloudUpdateDescription: 'クラウドのスナップショットを使うと、この端末の同期対象データが上書きされます。',
+    keepLocal: '端末のデータを保持',
+    useCloud: 'クラウドを使用',
     restoreDescription:
       'データの種類を確認してください。機密の値は表示しません。確認するまで復元しません。',
     deviceReview:
@@ -177,6 +181,7 @@ export const ja: typeof zhCN = {
     replace: '同期対象のローカルデータをクラウドの内容で置換',
     replaceWarning:
       '同期範囲のローカルデータを置き換えます。ローカルの変更を残すにはマージを選んでください。',
+    mergeOverwriteDirection: '競合時に端末の項目を選ぶと、同期時にクラウドの項目を上書きします。クラウドを選ぶと端末の項目を上書きします。',
     restoreCheck: '復元方法と競合の選択を確認しました。',
     applyRestore: '復元を確認',
     conflictProgress: '競合を {{selected}} / {{total}} 件解決済み',
@@ -319,6 +324,7 @@ export const ja: typeof zhCN = {
     saving: '保存中',
     experimental: '実験的',
     copied: 'コピーしました',
+    dictationFailed: '音声入力に失敗しました。もう一度お試しください。',
     operationFailed: '操作に失敗しました',
     add: '追加',
     durationSeconds: '{{value}} 秒',
@@ -493,7 +499,7 @@ export const ja: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: 'パックを更新',
         withdraw: '取り下げ',
       },
       loadFailed: '自分の公開の読み込みに失敗：{{err}}',

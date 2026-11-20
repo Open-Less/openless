@@ -135,6 +135,15 @@ pub async fn cloud_sync_e2ee_cancel(
 }
 
 #[tauri::command]
+pub async fn cloud_sync_e2ee_inspect_cloud_changes(
+    window: tauri::WebviewWindow,
+    core: CoreState<'_>,
+) -> Result<Option<RestorePreview>, BackendError> {
+    require_settings_window(&window)?;
+    core.cloud_sync_e2ee_inspect_cloud_changes().await
+}
+
+#[tauri::command]
 pub async fn cloud_sync_e2ee_preview_restore(
     window: tauri::WebviewWindow,
     core: CoreState<'_>,

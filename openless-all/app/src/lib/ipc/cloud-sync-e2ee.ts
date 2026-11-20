@@ -140,6 +140,11 @@ export const cloudSyncE2eeSyncNow = (): Promise<EncryptedSyncStatus> =>
   );
 export const cloudSyncE2eeCancel = (taskId: string): Promise<EncryptedSyncStatus> =>
   invokeOrMock('cloud_sync_e2ee_cancel', { taskId }, unavailable);
+export const cloudSyncE2eeInspectCloudChanges = (): Promise<RestorePreview | null> =>
+  invokeOrMock('cloud_sync_e2ee_inspect_cloud_changes', undefined, () => {
+    const preview = previewCloudSync();
+    return preview ? preview.inspectCloudChanges() : unavailable();
+  });
 export const cloudSyncE2eePreviewRestore = (observedRevision: string): Promise<RestorePreview> =>
   invokeOrMock('cloud_sync_e2ee_preview_restore', { observedRevision }, () =>
     previewCloudSync()?.previewRestore(observedRevision) ?? unavailable(),

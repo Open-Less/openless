@@ -36,16 +36,15 @@ test('restore waits for the sync result and shows task contention above the revi
   await review.getByRole('checkbox').check();
   const confirm = review.getByRole('button', { name: 'Confirm restore' });
   await confirm.click();
-  const warning = page.locator('[data-notification-key="cloud-sync-busy"]');
-  await expect(warning.getByRole('alert')).toHaveText(
+  await expect(toast.getByRole('alert')).toHaveText(
     'Another sync task is running. Wait or cancel it first.',
   );
-  await expect(warning).toHaveAttribute('data-severity', 'warning');
+  await expect(toast).toHaveAttribute('data-severity', 'warning');
+  await expect(page.locator('[data-notification-key="cloud-sync-busy"]')).toHaveCount(0);
   await expect(review.getByRole('alert')).toHaveCount(0);
   await expect(review.getByRole('checkbox')).toBeChecked();
   await confirm.click();
   await expect(review).toHaveCount(0);
-  await expect(warning).toHaveCount(0);
   await expect(toast.getByRole('status')).toBeVisible();
   expect(
     (await attempts(page)).map(({ command, args }: any) => [command, args?.previewId]),
@@ -54,6 +53,59 @@ test('restore waits for the sync result and shows task contention above the revi
     ['cloud_sync_e2ee_apply_restore', 'restore-preview'],
     ['cloud_sync_e2ee_apply_restore', 'restore-preview'],
   ]);
+});
+
+function entryPersistence(page: Page) {
+  return page.evaluate(() => (window as any).syncDialogFixture.persistence());
+}
+
+test('entry compares without writing either side and Keep Local performs no sync', async ({ page }) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=entry-different');
+  const dialog = page.getByRole('dialog', { name: 'New cloud data is available' });
+  await expect(dialog).toBeVisible();
+  const before = { local: 'fixture-local', cloud: 'fixture-cloud', localWrites: 0, cloudWrites: 0, inspections: 1, syncRuns: [] };
+  expect(await entryPersistence(page)).toEqual(before);
+  expect(await attempts(page)).toEqual([]);
+  await dialog.getByRole('button', { name: 'Keep Local' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await entryPersistence(page)).toEqual(before);
+  expect(await attempts(page)).toEqual([]);
+  await expect(page.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+});
+
+test('Use Cloud writes only local data after selection and consumes its review', async ({ page }) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=entry-different');
+  const dialog = page.getByRole('dialog', { name: 'New cloud data is available' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Use Cloud' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => entryPersistence(page)).toEqual({
+    local: 'fixture-cloud', cloud: 'fixture-cloud', localWrites: 1, cloudWrites: 0, inspections: 1, syncRuns: [],
+  });
+  expect((await attempts(page)).map(({ command }: { command: string }) => command)).toEqual(['cloud_sync_e2ee_apply_restore']);
+  await expect(page.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+});
+
+test('equal snapshots need no choice and new syncs start after success failure and cancellation', async ({ page }) => {
+  await page.goto('/e2e/fixtures/cloud-sync-dialogs.html?mode=entry-equal');
+  await expect.poll(async () => (await entryPersistence(page)).inspections).toBe(1);
+  await expect(page.getByRole('dialog', { name: 'New cloud data is available' })).toHaveCount(0);
+  const sync = page.getByRole('button', { name: 'Sync now', exact: true });
+  const toast = page.locator('[data-notification-key="cloud-sync-operation"]');
+  for (const [index, outcome] of (['success', 'failure', 'cancel', 'success'] as const).entries()) {
+    await sync.click();
+    await expect(toast.getByRole('status')).toContainText('Syncing the latest cloud data');
+    await expect.poll(async () => (await entryPersistence(page)).syncRuns.length).toBe(index + 1);
+    await expect(sync).toBeDisabled();
+    const capsule = await toast.elementHandle();
+    if (outcome === 'cancel') await toast.getByRole('button', { name: 'Cancel sync' }).click();
+    else await page.evaluate((outcome) => (window as any).syncDialogFixture.finishSync(outcome), outcome);
+    await expect(sync).toBeEnabled();
+    await expect(toast).not.toHaveAttribute('data-state', 'saving');
+    expect(await capsule!.evaluate((element) => element.isConnected && !element.hasAttribute('aria-hidden'))).toBe(true);
+    await expect(page.locator('.ol-cloud-sync [role="alert"]')).toHaveCount(0);
+  }
+  expect((await entryPersistence(page)).syncRuns).toEqual(['sync-1', 'sync-2', 'sync-3', 'sync-4']);
 });
 
 test('renewal appears before settings, stays paused on dismissal, and waits for native confirmation', async ({

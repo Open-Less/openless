@@ -167,6 +167,10 @@ export const fr: typeof zhCN = {
     deleteCheck: 'Je confirme la suppression de cette sauvegarde cloud.',
     confirmDelete: 'Supprimer la sauvegarde cloud',
     restoreTitle: 'Examiner avant de restaurer',
+    cloudUpdateTitle: 'De nouvelles données cloud sont disponibles',
+    cloudUpdateDescription: 'La copie cloud remplacera les données synchronisées sur cet appareil.',
+    keepLocal: 'Garder les données locales',
+    useCloud: 'Utiliser le cloud',
     restoreDescription:
       'Vérifiez les catégories. Les valeurs sensibles restent masquées. Rien n’est restauré avant confirmation.',
     deviceReview:
@@ -176,6 +180,7 @@ export const fr: typeof zhCN = {
     replace: 'Remplacer les données locales synchronisées par le cloud',
     replaceWarning:
       'Les données locales du périmètre seront remplacées. Choisissez la fusion pour conserver vos modifications locales.',
+    mergeOverwriteDirection: 'En cas de conflit, la version locale remplace la donnée cloud lors de la synchronisation. La version cloud remplace la donnée locale.',
     restoreCheck: 'J’ai vérifié le mode et mes choix pour les conflits.',
     applyRestore: 'Confirmer la restauration',
     conflictProgress: '{{selected}} conflits résolus sur {{total}}',
@@ -335,6 +340,7 @@ export const fr: typeof zhCN = {
     saving: 'Enregistrement…',
     experimental: 'Expérimental',
     copied: 'Copié',
+    dictationFailed: 'La dictée a échoué. Réessayez.',
     operationFailed: 'L’opération a échoué',
     add: 'Ajouter',
     durationSeconds: '{{value}}s',
@@ -511,7 +517,7 @@ export const fr: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Mettre à jour',
+        update: 'Mettre à jour le pack',
         withdraw: 'Retirer',
       },
       loadFailed: 'Impossible de charger vos packs : {{err}}',

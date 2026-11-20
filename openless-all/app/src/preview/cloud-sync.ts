@@ -191,6 +191,7 @@ function createCloudSyncPreview(
       if (!state.enabled || state.keyState !== 'unlocked') fail('unlock_required');
       return update({ lastSuccessfulSyncAt: new Date().toISOString() });
     },
+    inspectCloudChanges: () => null,
     previewRestore,
     applyRestore: (previewId: string) => {
       if (state.remoteRevision === null || previewRestore(state.remoteRevision).previewId !== previewId)

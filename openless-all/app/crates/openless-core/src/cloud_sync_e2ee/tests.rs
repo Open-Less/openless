@@ -1064,6 +1064,68 @@ async fn lost_upload_response_reconciles_one_commit_without_another_put() {
 }
 
 #[tokio::test]
+async fn entry_inspection_is_read_only_until_the_cloud_snapshot_is_selected() {
+    fn protected_files(path: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        fn collect(
+            path: &std::path::Path,
+            files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+        ) {
+            for entry in std::fs::read_dir(path).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    collect(&path, files);
+                } else {
+                    files.insert(path.clone(), std::fs::read(path).unwrap());
+                }
+            }
+        }
+        let mut files = std::collections::BTreeMap::new();
+        collect(path, &mut files);
+        files
+    }
+    let server = Server::start().await;
+    let cloud = Fixture::new(&server).await;
+    cloud.data.edit("cloud fixture");
+    cloud.prepare().await;
+    cloud.create(false).await.unwrap();
+    assert!(cloud.service.inspect_cloud_changes().await.unwrap().is_none());
+
+    let local = Fixture::new(&server).await;
+    local.data.edit("local fixture");
+    local.service.prepare_enable(CONSENT_VERSION.into()).await.unwrap();
+    local.service.unlock(PASSWORD.into(), false).await.unwrap();
+    let before = local.data.documents.lock().unwrap().clone();
+    let local_generation = local.data.generation().unwrap();
+    let protected = local.root.join("protected");
+    let files_before = protected_files(&protected);
+    let (uploads_before, reads_before) = {
+        let remote = server.state.lock().unwrap();
+        (remote.put_attempts, remote.snapshot_reads)
+    };
+
+    let preview = local.service.inspect_cloud_changes().await.unwrap().unwrap();
+    assert_eq!(*local.data.documents.lock().unwrap(), before);
+    assert_eq!(local.data.generation().unwrap(), local_generation);
+    assert_eq!(protected_files(&protected), files_before);
+    {
+        let remote = server.state.lock().unwrap();
+        assert_eq!(remote.put_attempts, uploads_before);
+        assert!(remote.snapshot_reads > reads_before);
+    }
+    let restored = local.service.apply_restore(preview.preview_id, RestoreMode::Replace, vec![]).await.unwrap();
+    assert_ne!(*local.data.documents.lock().unwrap(), before);
+    assert!(!restored.enabled);
+    assert_eq!(server.state.lock().unwrap().put_attempts, uploads_before);
+    assert!(local.service.inspect_cloud_changes().await.unwrap().is_none());
+
+    cloud.data.edit("new cloud fixture");
+    let new_head = cloud.service.sync_now().await.unwrap();
+    let second_preview = local.service.inspect_cloud_changes().await.unwrap().unwrap();
+    assert_eq!(Some(second_preview.observed_revision), new_head.remote_revision);
+}
+
+#[tokio::test]
 async fn sync_now_cancellation_before_commit_does_not_submit_a_write() {
     let server = Server::start().await;
     let fixture = Fixture::new(&server).await;

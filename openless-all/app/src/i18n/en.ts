@@ -169,6 +169,10 @@ export const en: typeof zhCN = {
     deleteCheck: 'I confirm deletion of this cloud backup.',
     confirmDelete: 'Delete cloud backup',
     restoreTitle: 'Review before restoring',
+    cloudUpdateTitle: 'New cloud data is available',
+    cloudUpdateDescription: 'Using the cloud snapshot will replace the synced data on this device.',
+    keepLocal: 'Keep Local',
+    useCloud: 'Use Cloud',
     restoreDescription:
       'Review the categories below. Sensitive values stay hidden. Nothing is restored until you confirm.',
     deviceReview:
@@ -178,6 +182,7 @@ export const en: typeof zhCN = {
     replace: 'Replace synced local data with cloud data',
     replaceWarning:
       'This replaces local data within the sync scope. Choose merge if you need to keep local changes.',
+    mergeOverwriteDirection: 'For a conflict, choosing local replaces the cloud entry when the merge syncs. Choosing cloud replaces the local entry.',
     restoreCheck: 'I have reviewed the restore mode and conflict choices.',
     applyRestore: 'Confirm restore',
     conflictProgress: '{{selected}} of {{total}} conflicts resolved',
@@ -330,6 +335,7 @@ export const en: typeof zhCN = {
     saving: 'Saving…',
     experimental: 'Experimental',
     copied: 'Copied',
+    dictationFailed: 'Dictation failed. Please try again.',
     operationFailed: 'Operation failed',
     add: 'Add',
     durationSeconds: '{{value}}s',
@@ -504,7 +510,7 @@ export const en: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Update',
+        update: 'Update pack',
         withdraw: 'Withdraw',
       },
       loadFailed: 'Failed to load my packs: {{err}}',

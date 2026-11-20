@@ -123,6 +123,7 @@ enum ReconcilePolicy<'a> {
 }
 
 struct PreviewState {
+    entry_only: bool,
     public: RestorePreview,
     remote: ValidatedSyncDocuments,
     local: ExportedDocuments,
@@ -414,7 +415,11 @@ impl EncryptedSyncService {
             } else {
                 s.recovery_required = false;
                 s.last_error = None;
-                s.sync_state = if runtime.preview.is_some() {
+                s.sync_state = if runtime
+                    .preview
+                    .as_ref()
+                    .is_some_and(|preview| !preview.entry_only)
+                {
                     SyncState::Conflict
                 } else if !s.enabled {
                     SyncState::Disabled
@@ -880,9 +885,12 @@ impl EncryptedSyncService {
         }
         let backup_retention_days = transport.capabilities().max_backup_retention_days;
         let owner = account.github_id.as_str().to_string();
-        if runtime.settings.owner_id.as_deref() != Some(&owner)
-            || runtime.settings.service_origin.as_deref() != Some(origin.as_str())
-        {
+        let binding_changed = runtime.settings.owner_id.as_deref() != Some(&owner)
+            || runtime.settings.service_origin.as_deref() != Some(origin.as_str());
+        if binding_changed {
+            if expected_owner.is_some() {
+                return Err(error("account_changed"));
+            }
             if runtime.settings.owner_id.is_some() {
                 runtime.settings.enabled = false;
                 runtime.settings.remember_key = false;
@@ -908,9 +916,11 @@ impl EncryptedSyncService {
             runtime.metadata = None;
             runtime.snapshot = None;
         }
-        runtime.settings.owner_id = Some(owner.clone());
-        runtime.settings.service_origin = Some(origin);
-        self.save_settings(runtime).await?;
+        if binding_changed {
+            runtime.settings.owner_id = Some(owner.clone());
+            runtime.settings.service_origin = Some(origin);
+            self.save_settings(runtime).await?;
+        }
         let expires_at = Instant::now() + Duration::from_secs(u64::from(session.expires_in()));
         runtime.connection = Some(Connection {
             transport,
@@ -946,6 +956,10 @@ impl EncryptedSyncService {
     }
 
     async fn refresh_metadata(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        self.fetch_metadata(runtime, true).await
+    }
+
+    async fn fetch_metadata(&self, runtime: &mut Runtime, persist: bool) -> SyncResult<()> {
         self.current_account(runtime).await?;
         let connection = runtime
             .connection
@@ -972,10 +986,12 @@ impl EncryptedSyncService {
         {
             return Err(error("revision_rollback"));
         }
-        self.0
-            .local
-            .write(&owner, "last-seen-revision", value.revision)
-            .await?;
+        if persist {
+            self.0
+                .local
+                .write(&owner, "last-seen-revision", value.revision)
+                .await?;
+        }
         let key_binding_changed = runtime.key.is_some()
             && (runtime.settings.vault_id.as_deref()
                 != value.vault_id.as_ref().map(UuidV4::as_str)
@@ -991,7 +1007,7 @@ impl EncryptedSyncService {
             runtime.snapshot = None;
             runtime.preview = None;
         }
-        if value.state == VaultState::Deleted {
+        if persist && value.state == VaultState::Deleted {
             runtime.settings.enabled = false;
         }
         self.update(|s| {
@@ -1827,6 +1843,19 @@ impl EncryptedSyncService {
         let scope = self.active_scope(runtime)?;
         let local = self.0.data.export(scope.clone()).await?;
         let baseline = self.baseline_documents(runtime)?;
+        self.record_preview(runtime, remote, local, baseline, false)
+            .await
+    }
+
+    async fn record_preview(
+        &self,
+        runtime: &mut Runtime,
+        remote: ValidatedSyncDocuments,
+        local: ExportedDocuments,
+        baseline: Option<ValidatedSyncDocuments>,
+        entry_only: bool,
+    ) -> SyncResult<RestorePreview> {
+        let scope = self.active_scope(runtime)?;
         let merged = documents::diff_sync_documents(baseline.as_ref(), &local.documents, &remote)
             .map_err(document_error)?;
         let conflicts = merged
@@ -1862,6 +1891,7 @@ impl EncryptedSyncService {
             conflicts,
         };
         runtime.preview = Some(PreviewState {
+            entry_only,
             public: public.clone(),
             remote,
             local,
@@ -1869,23 +1899,83 @@ impl EncryptedSyncService {
             vault_id: scope.vault_id.clone(),
             key_id: scope.key_id.clone(),
         });
-        self.0.events.publish(
-            None,
-            BackendEventKind::CloudSyncConflictDetected(EncryptedSyncConflictEvent {
-                sequence: self
-                    .0
-                    .sequence
-                    .fetch_add(1, Ordering::AcqRel)
-                    .saturating_add(1)
-                    .to_string(),
-                service_origin: scope.service_origin.clone(),
-                account_id: scope.owner_github_id,
-                vault_id: scope.vault_id,
-                task_id: self.status().task_id,
-                preview: public.clone(),
-            }),
-        );
+        if !entry_only {
+            self.0.events.publish(
+                None,
+                BackendEventKind::CloudSyncConflictDetected(EncryptedSyncConflictEvent {
+                    sequence: self
+                        .0
+                        .sequence
+                        .fetch_add(1, Ordering::AcqRel)
+                        .saturating_add(1)
+                        .to_string(),
+                    service_origin: scope.service_origin.clone(),
+                    account_id: scope.owner_github_id,
+                    vault_id: scope.vault_id,
+                    task_id: self.status().task_id,
+                    preview: public.clone(),
+                }),
+            );
+        }
         Ok(public)
+    }
+
+    /// Compare the current cloud head without recovery, reconciliation, or persistent writes.
+    pub(crate) async fn inspect_cloud_changes(&self) -> SyncResult<Option<RestorePreview>> {
+        let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
+        if !runtime.initialized
+            || runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION)
+            || runtime.key.is_none()
+        {
+            return Ok(None);
+        }
+        let owner = self.owner(&runtime)?.to_owned();
+        let origin = canonical_origin(&self.remote_origin()).map_err(protocol_error)?;
+        if runtime.settings.service_origin.as_deref() != Some(origin.as_str()) {
+            return Err(error("account_changed"));
+        }
+        if runtime.retry_at.is_some_and(|at| at > Instant::now()) {
+            return Err(error("rate_limited"));
+        }
+        self.begin();
+        let result = async {
+            let token = self.read_custom_token().await?;
+            if token.is_none() && self.0.data.custom_server_origin().is_some() {
+                return Err(error("sign_in_required"));
+            }
+            let policy = ProxyPolicy::for_origin(&origin, crate::net::use_system_proxy());
+            self.connect_with_proxy_policy(&mut runtime, policy, origin, token, Some(&owner))
+                .await?;
+            self.fetch_metadata(&mut runtime, false).await?;
+            if self.metadata(&runtime)?.value().state != VaultState::Active {
+                return Ok(None);
+            }
+            let key = self.unlocked(&runtime)?;
+            let snapshot = self.download(&mut runtime).await?;
+            let remote = self.decrypt(&runtime, snapshot, key).await?;
+            let local = self.0.data.export(self.active_scope(&runtime)?).await?;
+            let baseline = self.baseline_documents(&runtime)?;
+            let merge =
+                documents::diff_sync_documents(baseline.as_ref(), &local.documents, &remote)
+                    .map_err(document_error)?;
+            self.current_account(&runtime).await?;
+            if same_documents(local.documents.documents(), remote.documents())
+                || (merge.conflicts().is_empty()
+                    && same_documents(
+                        local.documents.documents(),
+                        merge.resolve(&[]).map_err(document_error)?.documents(),
+                    ))
+            {
+                runtime.preview = None;
+                return Ok(None);
+            }
+            self.record_preview(&mut runtime, remote, local, baseline, true)
+                .await
+                .map(Some)
+        }
+        .await;
+        self.finish(&mut runtime, &result);
+        result
     }
 
     pub(crate) async fn preview_restore(
@@ -1966,6 +2056,7 @@ impl EncryptedSyncService {
                 }
             };
             let remote = preview.remote.clone();
+            let entry_only = preview.entry_only;
             let context = RestoreContext {
                 scope: scope.clone(),
                 operation_id: uuid::Uuid::new_v4().to_string(),
@@ -2000,7 +2091,7 @@ impl EncryptedSyncService {
                 } else {
                     None
                 };
-            if !self.0.cancelled.load(Ordering::Acquire) {
+            if !self.0.cancelled.load(Ordering::Acquire) && !entry_only {
                 runtime.settings.enabled = true;
             }
             self.save_settings(&runtime).await?;
@@ -2030,6 +2121,9 @@ impl EncryptedSyncService {
                 }),
             );
             self.check_cancelled()?;
+            if entry_only {
+                return Ok(());
+            }
             // A local conflict choice can differ from the current cloud head.
             // Use the same CAS/merge path to upload it, never claim it synced early.
             self.run_once(&mut runtime).await
@@ -2042,6 +2136,13 @@ impl EncryptedSyncService {
     pub(crate) async fn sync_now(&self) -> SyncResult<EncryptedSyncStatus> {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
+        if runtime
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.entry_only)
+        {
+            runtime.preview = None;
+        }
         let result = self.run_once(&mut runtime).await;
         self.finish(&mut runtime, &result);
         result.map(|()| self.status())

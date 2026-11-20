@@ -199,6 +199,7 @@ mockIPC((command, args) => {
     };
   if (command === 'set_remote_locale' || command === 'plugin:app|set_app_theme') return undefined;
   if (command === 'marketplace_auth_status') return { signedIn: true };
+  if (command === 'cloud_sync_e2ee_inspect_cloud_changes') return null;
   if (command === 'cloud_sync_e2ee_status') return { ...status };
   if (command === 'experimental_asr_status') {
     experimentalReads++;

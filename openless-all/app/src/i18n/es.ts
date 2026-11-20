@@ -165,6 +165,10 @@ export const es: typeof zhCN = {
     deleteCheck: 'Confirmo que quiero eliminar esta copia en la nube.',
     confirmDelete: 'Eliminar copia en la nube',
     restoreTitle: 'Revisar antes de restaurar',
+    cloudUpdateTitle: 'Hay nuevos datos en la nube',
+    cloudUpdateDescription: 'La copia de la nube reemplazará los datos sincronizados de este dispositivo.',
+    keepLocal: 'Conservar datos locales',
+    useCloud: 'Usar la nube',
     restoreDescription:
       'Revisa las categorías. Los valores sensibles permanecen ocultos. No se restaura nada hasta que confirmes.',
     deviceReview:
@@ -174,6 +178,7 @@ export const es: typeof zhCN = {
     replace: 'Reemplazar datos locales sincronizados por los de la nube',
     replaceWarning:
       'Se reemplazarán los datos locales incluidos. Elige combinar para conservar cambios locales.',
+    mergeOverwriteDirection: 'En un conflicto, la versión local reemplaza la entrada de la nube al sincronizar. La versión de la nube reemplaza la entrada local.',
     restoreCheck: 'He revisado el modo y las decisiones sobre conflictos.',
     applyRestore: 'Confirmar restauración',
     conflictProgress: '{{selected}} de {{total}} conflictos resueltos',
@@ -330,6 +335,7 @@ export const es: typeof zhCN = {
     saving: 'Guardando…',
     experimental: 'Experimental',
     copied: 'Copiado',
+    dictationFailed: 'Falló el dictado. Inténtalo de nuevo.',
     operationFailed: 'La operación falló',
     add: 'Añadir',
     durationSeconds: '{{value}}s',
@@ -506,7 +512,7 @@ export const es: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Actualizar',
+        update: 'Actualizar paquete',
         withdraw: 'Retirar',
       },
       loadFailed: 'No se pudieron cargar tus paquetes: {{err}}',

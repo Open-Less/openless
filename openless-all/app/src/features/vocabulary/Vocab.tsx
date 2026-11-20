@@ -75,7 +75,7 @@ export function Vocab() {
           />
           <button
             type="button"
-            className="ol-field ol-field-icon-action ol-pressable"
+            className="ol-field ol-field-icon-action ol-pressable ol-vocab-add"
             aria-label={t('vocab.newWord')}
             title={t('vocab.newWord')}
             onClick={() => {
@@ -96,8 +96,8 @@ export function Vocab() {
             sliding
             options={[
               { value: 'all', label: t('vocab.filter.all') },
-              { value: 'auto', label: t('vocab.filter.auto') },
-              { value: 'manual', label: t('vocab.filter.manual') },
+              { value: 'auto', label: t('vocab.filter.auto'), icon: <Icon name="sparkle" size={13} /> },
+              { value: 'manual', label: t('vocab.filter.manual'), icon: <Icon name="feather" size={13} /> },
             ]}
           />
           <VocabularySelectionToggle

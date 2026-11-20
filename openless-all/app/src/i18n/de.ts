@@ -166,6 +166,10 @@ export const de: typeof zhCN = {
     deleteCheck: 'Ich bestätige die Löschung dieser Cloud-Sicherung.',
     confirmDelete: 'Cloud-Sicherung löschen',
     restoreTitle: 'Wiederherstellung prüfen',
+    cloudUpdateTitle: 'Neue Cloud-Daten sind verfügbar',
+    cloudUpdateDescription: 'Die Cloud-Kopie ersetzt die synchronisierten Daten auf diesem Gerät.',
+    keepLocal: 'Lokale Daten behalten',
+    useCloud: 'Cloud verwenden',
     restoreDescription:
       'Prüfe die Datenkategorien. Vertrauliche Werte bleiben verborgen. Ohne Bestätigung wird nichts wiederhergestellt.',
     deviceReview:
@@ -175,6 +179,7 @@ export const de: typeof zhCN = {
     replace: 'Synchronisierte lokale Daten durch Cloud-Daten ersetzen',
     replaceWarning:
       'Lokale Daten im Sync-Umfang werden ersetzt. Zum Behalten lokaler Änderungen Zusammenführen wählen.',
+    mergeOverwriteDirection: 'Bei einem Konflikt überschreibt die lokale Version beim Synchronisieren den Cloud-Eintrag. Die Cloud-Version überschreibt den lokalen Eintrag.',
     restoreCheck: 'Ich habe Wiederherstellungsart und Konfliktentscheidungen geprüft.',
     applyRestore: 'Wiederherstellung bestätigen',
     conflictProgress: '{{selected}} von {{total}} Konflikten gelöst',
@@ -332,6 +337,7 @@ export const de: typeof zhCN = {
     saving: 'Wird gespeichert…',
     experimental: 'Experimentell',
     copied: 'Kopiert',
+    dictationFailed: 'Das Diktat ist fehlgeschlagen. Bitte versuche es erneut.',
     operationFailed: 'Vorgang fehlgeschlagen',
     add: 'Hinzufügen',
     durationSeconds: '{{value}}s',
@@ -509,7 +515,7 @@ export const de: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Aktualisieren',
+        update: 'Paket aktualisieren',
         withdraw: 'Zurückziehen',
       },
       loadFailed: 'Meine Pakete konnten nicht geladen werden: {{err}}',

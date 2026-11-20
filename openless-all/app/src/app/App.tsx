@@ -1,12 +1,14 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from '../ui/overlays/Tooltip';
 import { installEncryptedSyncUiBridge } from '../lib/encryptedSyncUiBridge';
 import { markStartup } from '../lib/startupMetrics';
 import { getRuntimeEnvironment, type OS } from '../runtime/environment';
-import { requireBackendReady } from '../runtime/transport';
+import { listenTauriEvent, requireBackendReady } from '../runtime/transport';
+import type { BackendEvent } from '../lib/backendEvent';
 import { AppViewport } from '../ui/layout/AppViewport';
 import { PreviewFrame } from '../ui/layout/PreviewFrame';
-import { InteractionProvider } from '../ui/overlays/InteractionProvider';
+import { InteractionProvider, useInteraction } from '../ui/overlays/InteractionProvider';
 import { CoreStartupScreen } from './CoreStartupScreen';
 import { MainWindowFirstFrame } from './MainWindowFirstFrame';
 import { isCompactWindow, isDormantWindow, WindowRoutes, type WindowKind } from './windowRoutes';
@@ -16,6 +18,30 @@ const GlobalDownloadProgress = lazy(() =>
     default: module.GlobalDownloadProgress,
   })),
 );
+
+function MainDictationNotifications() {
+  const { notify } = useInteraction('main-dictation');
+  const { t } = useTranslation();
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenTauriEvent<BackendEvent>('backend:event', ({ kind }) => {
+      if (disposed || kind.type !== 'dictation_state_changed') return;
+      const state = kind.payload as { phase?: string } | undefined;
+      if (state?.phase === 'failed') {
+        notify({ key: 'dictation-failed', state: 'failed', message: t('common.dictationFailed') });
+      }
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [notify, t]);
+  return null;
+}
 
 interface AppProps {
   kind: WindowKind;
@@ -72,9 +98,12 @@ export function App({
       <InteractionProvider
         notificationAside={
           kind === 'main' && !renderStartup ? (
-            <Suspense fallback={null}>
-              <GlobalDownloadProgress />
-            </Suspense>
+            <>
+              {host === 'tauri' && <MainDictationNotifications />}
+              <Suspense fallback={null}>
+                <GlobalDownloadProgress />
+              </Suspense>
+            </>
           ) : null
         }
       >

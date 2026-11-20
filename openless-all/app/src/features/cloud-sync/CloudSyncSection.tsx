@@ -40,6 +40,7 @@ import {
   cloudSyncE2eeSyncNow,
   cloudSyncE2eeCancel,
   cloudSyncE2eePreviewRestore,
+  cloudSyncE2eeInspectCloudChanges,
   cloudSyncE2eeApplyRestore,
   cloudSyncE2eeChangePassword,
   cloudSyncE2eeDeleteRemote,
@@ -316,6 +317,8 @@ export function CustomSyncServerSection() {
   );
 }
 
+let lastEntryDecision: string | undefined;
+
 export function CloudSyncSection() {
   const { t, i18n } = useTranslation();
   const { notify, confirm } = useInteraction('cloud-sync');
@@ -349,6 +352,7 @@ export function CloudSyncSection() {
 
   const progressNotification = useRef<NotificationHandle>();
   const busyNotification = useRef<NotificationHandle>();
+  const reviewedEntry = useRef<string>();
   const notificationSettled = useRef(false);
   const syncIntent = useRef(false);
   const awaitingSync = useRef(false);
@@ -371,10 +375,18 @@ export function CloudSyncSection() {
     notificationSettled.current = true;
   };
   const presentReview = (preview: RestorePreview, enableAfter: boolean, scope: string) => {
+    const shown = currentDialog.current;
+    const reviewingSameData =
+      shown?.kind === 'restore' &&
+      shown.scope === scope &&
+      shown.preview.observedRevision === preview.observedRevision &&
+      shown.preview.localGeneration === preview.localGeneration;
+    if (reviewingSameData && shown.preview.previewId === preview.previewId) return;
     const next = { kind: 'restore' as const, preview, enableAfter, scope };
     currentDialog.current = next;
     setDialog(next);
-    announce(preview.conflicts.length ? 'states.conflict' : 'restoreTitle', 'warning');
+    if (!reviewingSameData)
+      announce(preview.conflicts.length ? 'states.conflict' : 'restoreTitle', 'warning');
   };
   const showBusy = () => {
     busyNotification.current = notify({
@@ -390,9 +402,14 @@ export function CloudSyncSection() {
     if (!alive.current) return;
     const errorKey = encryptedSyncErrorKey(error);
     const key = `errors.${errorKey}`;
-    if (errorKey === 'busy') showBusy();
-    else if (errorKey === 'reviewRequired') {
-      if (currentDialog.current?.kind !== 'restore') announce(key, 'warning');
+    if (errorKey === 'busy') {
+      if (settled && progressNotification.current) announce(key, 'warning');
+      else showBusy();
+    } else if (errorKey === 'reviewRequired') {
+      if (currentDialog.current?.kind !== 'restore' && !notificationSettled.current)
+        announce(key, 'warning');
+    } else if (errorKey === 'changed') {
+      announce(key, 'warning');
     } else if (currentDialog.current && errorKey !== 'outcomeUnknown')
       setNotice({ key, error: true });
     else if (settled) announce(key, 'failed');
@@ -420,6 +437,8 @@ export function CloudSyncSection() {
       }
       awaitingSync.current = false;
       syncIntent.current = false;
+      progressNotification.current?.dismiss();
+      progressNotification.current = undefined;
     } else if (next.syncState !== 'syncing' && !next.taskId) {
       const review = pendingReview.current;
       pendingReview.current = null;
@@ -436,7 +455,7 @@ export function CloudSyncSection() {
         awaitingSync.current = false;
         syncIntent.current = false;
         if (next.lastError) showError(next.lastError, true);
-        else if (next.syncState === 'ready') announce('synced');
+        else if (next.syncState === 'ready' || next.syncState === 'pending') announce('synced');
         else if (next.syncState === 'conflict') announce('states.conflict', 'warning');
       }
     }
@@ -688,8 +707,11 @@ export function CloudSyncSection() {
     syncing = false,
   ) => {
     void perform(async (valid) => {
-      const next = await request();
-      if (!valid() || !acceptStatus(next)) return;
+      const returned = await request();
+      if (!valid()) return;
+      acceptStatus(returned);
+      const next = current.current;
+      if (!next) return;
       if (signOut) {
         try {
           const auth = await marketplaceAuthStatus();
@@ -711,13 +733,76 @@ export function CloudSyncSection() {
           return;
         }
         if (next.lastError) {
-          showError(next.lastError, true);
+          if (!notificationSettled.current) showError(next.lastError, true);
           return;
         }
-        if (!syncing || next.syncState === 'ready') announce(syncing ? 'synced' : 'done');
+        if (!notificationSettled.current) announce(syncing ? 'synced' : 'done');
       }
     }, syncing);
   };
+
+  const checkEntry = useRef<() => Promise<void>>();
+  checkEntry.current = async () => {
+    const snapshot = current.current;
+    if (!snapshot || snapshot.taskId || activeAction.current !== null || currentDialog.current)
+      return;
+    const scope = encryptedSyncScope(snapshot);
+    if (reviewedEntry.current === scope) return;
+    reviewedEntry.current = scope;
+    let review: { preview: RestorePreview; key: string } | undefined;
+    await perform(async (valid) => {
+      const preview = await cloudSyncE2eeInspectCloudChanges();
+      const latest = await cloudSyncE2eeStatus();
+      if (!valid() || !acceptStatus(latest) || !preview) return;
+      if (!matchesRestorePreview(preview, latest, scope)) throw localError('stale_preview');
+      const key = JSON.stringify([scope, preview.observedRevision, preview.localGeneration]);
+      if (lastEntryDecision !== key) review = { preview, key };
+    });
+    if (!review || !alive.current || currentDialog.current) return;
+    const { preview, key } = review;
+    if (!matchesRestorePreview(preview, current.current, scope)) return;
+    let applied = false;
+    const accepted = await confirm({
+      icon: 'cloud',
+      title: t('cloudSyncE2ee.cloudUpdateTitle'),
+      description: t('cloudSyncE2ee.cloudUpdateDescription'),
+      cancelLabel: t('cloudSyncE2ee.keepLocal'),
+      confirmLabel: t('cloudSyncE2ee.useCloud'),
+      errorMessage: (error) => t(`cloudSyncE2ee.errors.${encryptedSyncErrorKey(error)}`),
+      onConfirm: async () => {
+        if (!matchesRestorePreview(preview, current.current, scope)) {
+          announce('errors.changed', 'warning');
+          return;
+        }
+        try {
+          const next = await cloudSyncE2eeApplyRestore({
+            previewId: preview.previewId,
+            mode: 'replace',
+            conflictChoices: [],
+          });
+          applied = true;
+          if (!alive.current) return;
+          acceptStatus(next);
+          announce('restored');
+          void refresh().catch(showError);
+        } catch (error) {
+          if (encryptedSyncErrorKey(error) !== 'changed') throw error;
+          showError(error, true);
+        }
+      },
+    });
+    // This choice is local to the open app and never commits sync data.
+    if (alive.current && (!accepted || applied)) lastEntryDecision = key;
+  };
+  useEffect(() => {
+    if (
+      loading || busy || dialog || !status?.hasCloudSnapshot ||
+      status.authState !== 'signed_in' || status.keyState !== 'unlocked' ||
+      status.consentVersion !== CONSENT_VERSION || status.syncState === 'syncing' ||
+      status.recoveryRequired
+    ) return;
+    void checkEntry.current?.();
+  }, [loading, busy, dialog, status]);
 
   const submitPassword = (value: PasswordSubmission) => {
     const active = dialog;
@@ -764,10 +849,7 @@ export function CloudSyncSection() {
   };
   const applyRestore = (mode: 'replace' | 'merge', conflictChoices: SyncConflictChoice[]) => {
     if (dialog?.kind !== 'restore') return;
-    if (activeAction.current !== null || current.current?.syncState === 'syncing') {
-      showBusy();
-      return;
-    }
+    if (activeAction.current !== null || current.current?.syncState === 'syncing') return;
     const { preview, enableAfter, scope } = dialog;
     void perform(async (valid) => {
       const snapshot = current.current;
@@ -873,6 +955,13 @@ export function CloudSyncSection() {
   const lastSync = status?.lastSuccessfulSyncAt ? new Date(status.lastSuccessfulSyncAt) : null;
   const lastError = status?.lastError ? encryptedSyncErrorKey(status.lastError) : null;
   const visibleError = !dialog ? lastError : null;
+  const initialErrorReported = useRef(false);
+  useEffect(() => {
+    if (loading || !status || initialErrorReported.current) return;
+    initialErrorReported.current = true;
+    if (status.lastError && !activeAction.current) showError(status.lastError);
+  }, [loading, status]);
+
   const focus = status
     ? setupFocus(status, identityAvailable, preparingStep, setupReached)
     : identityAvailable
@@ -1125,9 +1214,6 @@ export function CloudSyncSection() {
         <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.passwordWarning')}</p>
         <Collapse open={!!visibleError}>
           <div className="ol-cloud-sync-status-line">
-            <p role="alert" className="ol-cloud-sync-error">
-              {t(`cloudSyncE2ee.errors.${visibleError}`)}
-            </p>
             {REFRESH_ERRORS.has(visibleError ?? '') && (
               <Btn
                 size="sm"
@@ -1250,7 +1336,11 @@ export function CloudSyncSection() {
               {dialog.kind === 'restore' && (
                 <DialogBody>
                   <RestoreReview
-                    key={dialog.preview.previewId}
+                    key={JSON.stringify([
+                      dialog.scope,
+                      dialog.preview.observedRevision,
+                      dialog.preview.localGeneration,
+                    ])}
                     preview={dialog.preview}
                     busy={working}
                     stale={!matchesRestorePreview(dialog.preview, status, dialog.scope)}

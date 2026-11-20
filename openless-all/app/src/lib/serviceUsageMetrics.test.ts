@@ -4,6 +4,7 @@ import {
   reportedCacheHitRate,
   summarizeCacheUsage,
   summarizeCacheUsageByModel,
+  summarizeModelUsageByPurpose,
 } from './serviceUsageMetrics';
 import type { ServiceUsageRecord } from './ipc/service-usage';
 
@@ -188,3 +189,18 @@ equal(
   0.3,
   'inclusive cache writes are already counted in input',
 );
+
+
+const purposeCards = summarizeModelUsageByPurpose([
+  inclusive({ purpose: 'quickNote', inputTokens: 100, cachedInputTokens: 35, cacheWriteInputTokens: 0 }),
+  make({ purpose: 'quickNote', inputTokens: 70 }),
+  make({ purpose: 'dictation', kind: 'multimodal', outputTokens: 20 }),
+  make({ purpose: 'dictation', kind: 'asr', inputTokens: 500 }),
+]);
+equal(purposeCards.length, 6, 'all six purposes appear even with sparse reporting');
+equal(purposeCards[1].reads, { value: 35, count: 1 }, 'absent cache reads do not contribute zero');
+equal(purposeCards[1].writes, { value: 0, count: 1 }, 'a reported zero remains distinguishable');
+equal(purposeCards[1].hitRate, { value: 0.35, count: 1 }, 'rate only uses comparable requests');
+equal(purposeCards[1].totalRecords, 2, 'partial coverage counts both model requests');
+equal(purposeCards[0].output, { value: 20, count: 1 }, 'multimodal dictation contributes to postprocessing');
+equal(purposeCards[0].input, { value: null, count: 0 }, 'ASR token reports stay out of model summaries');

@@ -165,6 +165,10 @@ export const ko: typeof zhCN = {
     deleteCheck: '이 클라우드 백업 삭제에 동의합니다.',
     confirmDelete: '클라우드 백업 삭제',
     restoreTitle: '복원 전 검토',
+    cloudUpdateTitle: '새 클라우드 데이터가 있습니다',
+    cloudUpdateDescription: '클라우드 스냅샷을 사용하면 이 기기의 동기화 대상 데이터를 덮어씁니다.',
+    keepLocal: '기기 데이터 유지',
+    useCloud: '클라우드 사용',
     restoreDescription:
       '데이터 종류를 확인하세요. 민감한 값은 표시하지 않습니다. 확인 전에는 복원하지 않습니다.',
     deviceReview:
@@ -174,6 +178,7 @@ export const ko: typeof zhCN = {
     replace: '동기화 대상 로컬 데이터를 클라우드 데이터로 교체',
     replaceWarning:
       '동기화 범위의 로컬 데이터를 교체합니다. 로컬 변경을 유지하려면 병합을 선택하세요.',
+    mergeOverwriteDirection: '충돌 시 기기 버전을 선택하면 병합 동기화 때 클라우드 항목을 덮어쓰고, 클라우드 버전을 선택하면 기기 항목을 덮어씁니다.',
     restoreCheck: '복원 방식과 충돌 선택을 확인했습니다.',
     applyRestore: '복원 확인',
     conflictProgress: '충돌 {{selected}} / {{total}}개 해결',
@@ -313,6 +318,7 @@ export const ko: typeof zhCN = {
     saving: '저장 중',
     experimental: '실험적',
     copied: '복사됨',
+    dictationFailed: '받아쓰기에 실패했습니다. 다시 시도하세요.',
     operationFailed: '작업 실패',
     add: '추가',
     durationSeconds: '{{value}}초',
@@ -487,7 +493,7 @@ export const ko: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '업데이트',
+        update: '팩 업데이트',
         withdraw: '내리기',
       },
       loadFailed: '내 게시물 불러오기 실패: {{err}}',

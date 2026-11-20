@@ -13,6 +13,16 @@ import '../../src/styles/refinements.css';
 
 const mode = new URLSearchParams(location.search).get('mode');
 const fresh = mode === 'fresh';
+const entry = mode === 'entry-different' || mode === 'entry-equal';
+const persisted = {
+  local: 'fixture-local',
+  cloud: mode === 'entry-different' ? 'fixture-cloud' : 'fixture-local',
+  localWrites: 0,
+  cloudWrites: 0,
+};
+let inspections = 0;
+const syncRuns: string[] = [];
+let finishSync: ((outcome: 'success' | 'failure' | 'cancel') => void) | undefined;
 const cold = mode === 'renew-cold';
 const disabled = cold && sessionStorage.getItem('sync-fixture-disabled') === 'true';
 let failRefresh = cold && !disabled;
@@ -50,6 +60,8 @@ let restoreAttempts = 0;
 Object.assign(window, {
   syncDialogFixture: {
     attempts,
+    persistence: () => ({ ...persisted, inspections, syncRuns: [...syncRuns] }),
+    finishSync: (outcome: 'success' | 'failure' | 'cancel') => finishSync?.(outcome),
     finish: (failed = false) => finish?.(failed),
     publishReview: () => publishReview?.(),
   },
@@ -84,7 +96,44 @@ mockIPC(
         return { ...status };
       case 'cloud_sync_e2ee_claim_setup_prompt':
         return false;
+      case 'cloud_sync_e2ee_inspect_cloud_changes':
+        inspections++;
+        if (!entry || persisted.cloud === persisted.local) return null;
+        return {
+          previewId: 'entry-preview',
+          observedRevision: status.remoteRevision,
+          localGeneration: status.localGeneration,
+          counts: { history: 1 },
+          conflicts: [],
+          deviceSettingsToReview: [],
+        };
+      case 'cloud_sync_e2ee_cancel': {
+        attempts.push({ command, args });
+        if (!entry || (args as { taskId: string }).taskId !== status.taskId || !finishSync)
+          throw new Error('Unexpected cancellation');
+        finishSync('cancel');
+        return { ...status };
+      }
       case 'cloud_sync_e2ee_sync_now':
+        if (entry) {
+          attempts.push({ command, args });
+          const task = `sync-${syncRuns.length + 1}`;
+          syncRuns.push(task);
+          update({ syncState: 'syncing', taskId: task, lastError: null });
+          return new Promise((resolve, reject) => {
+            finishSync = (outcome) => {
+              finishSync = undefined;
+              const code = outcome === 'cancel' ? 'cancelled' : 'transport_failed';
+              const next = update({
+                syncState: outcome === 'success' ? 'ready' : outcome === 'cancel' ? 'pending' : 'failed',
+                taskId: null,
+                lastError: outcome === 'success' ? null : { code, retryAfterSeconds: null },
+              });
+              if (outcome === 'success') resolve(next);
+              else reject({ details: { reason: code } });
+            };
+          });
+        }
         if (mode !== 'review') throw new Error('Unexpected sync');
         attempts.push({ command, args });
         update({ syncState: 'syncing', taskId: 'sync-review' });
@@ -117,6 +166,14 @@ mockIPC(
           };
         });
       case 'cloud_sync_e2ee_apply_restore':
+        if (entry) {
+          attempts.push({ command, args });
+          if ((args as { previewId: string }).previewId !== 'entry-preview')
+            throw new Error('Unexpected entry restore');
+          persisted.local = persisted.cloud;
+          persisted.localWrites++;
+          return update({ localGeneration: '2' });
+        }
         if (mode !== 'review') throw new Error('Unexpected restore');
         attempts.push({ command, args });
         if (++restoreAttempts === 1) throw { details: { reason: 'busy' } };

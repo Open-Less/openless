@@ -917,7 +917,7 @@ pub fn ask_get_entry_settings(window: WebviewWindow, host: AskState<'_>) -> IpcR
 pub async fn ask_set_entry_settings(
     window: WebviewWindow,
     host: AskState<'_>,
-    settings: AskEntrySettings,
+    settings: super::entry_settings::AskEntrySettingsPatch,
 ) -> IpcResult {
     if window.label() != "main" {
         return Err(

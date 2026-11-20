@@ -186,6 +186,12 @@ impl OpenLessBackend {
         self.encrypted_sync_service()?.cancel(&task_id)
     }
 
+    pub async fn cloud_sync_e2ee_inspect_cloud_changes(
+        &self,
+    ) -> Result<Option<RestorePreview>, BackendError> {
+        self.encrypted_sync_service()?.inspect_cloud_changes().await
+    }
+
     pub async fn cloud_sync_e2ee_preview_restore(
         &self,
         observed_revision: String,

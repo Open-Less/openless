@@ -84,7 +84,7 @@ test('the audio-model path removes the unused writing step and never reports an 
   page,
 }) => {
   await reachMode(page);
-  await page.getByRole('button', { name: /一个音频模型/ }).click();
+  await page.getByRole('button', { name: /一个多模态模型/ }).click();
   await page.getByRole('button', { name: '继续', exact: true }).click();
   await page.getByRole('button', { name: '保存并继续', exact: true }).click();
   await expect(active(page).getByRole('alert')).toContainText('请先完成服务配置');
@@ -184,7 +184,7 @@ test('native saves and permission failures remain retryable without advancing', 
   await page.evaluate(() => {
     (window as any).guideFixture.failSave = true;
   });
-  await page.getByRole('button', { name: /一个音频模型/ }).click();
+  await page.getByRole('button', { name: /一个多模态模型/ }).click();
   await expect(active(page).getByRole('alert')).toBeVisible();
   await expect(page.getByRole('button', { name: /语音识别 \+ 文字润色/ })).toHaveAttribute(
     'aria-pressed',
