@@ -1,4 +1,4 @@
-import { useAskErrors } from './errors';
+import { useAskNotice } from './notices';
 import { PromptBox, type PromptEffort } from '@/components/ui/prompt-box';
 import { Brain, Paperclip } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -92,9 +92,8 @@ export function useComposer({
   focusRevision: number;
 }) {
   const { conversationId, attachments } = snapshot;
-  const warn = useAskErrors();
-  const showError = (message: string) =>
-    void warn({ title: 'Ask Anything', description: message, dismissLabel: 'OK' });
+  const notice = useAskNotice();
+  const sendNotice = useRef<ReturnType<typeof notice>>();
   const editor = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef('');
   const lastClear = useRef<Draft>();
@@ -105,8 +104,6 @@ export function useComposer({
   const activeRecording = useRef<Recording>();
   const seenRecordings = useRef(new Set<string>());
   const receiveVoice = useRef<(event: AskVoiceEvent) => void>(() => {});
-  const reportVoiceError = useRef(showError);
-  reportVoiceError.current = showError;
   const mountId = useRef(newRequestId());
   const editorRevision = useRef(0);
   const editorFingerprint = useRef('');
@@ -196,8 +193,8 @@ export function useComposer({
     }
   });
 
-  function keepVoice(request: SubmitAsk, message: string) {
-    showError(message);
+  function keepVoice(request: SubmitAsk, message: string, severity: 'warning' | 'error') {
+    sendNotice.current = notice(message, severity, 'ask-send');
     setVoiceRetries((retries) => [
       ...retries.filter((item) => item.request.clientRequestId !== request.clientRequestId),
       { request },
@@ -233,12 +230,15 @@ export function useComposer({
           !connected || pendingRef.current || turnId
             ? 'Ask is busy or reconnecting.'
             : 'An attachment from this recording is no longer ready.',
+          'warning',
         );
       }
       return;
     }
 
     pendingRef.current = true;
+    sendNotice.current?.dismiss();
+    sendNotice.current = undefined;
     setPending(true);
     void client
       .submit(request)
@@ -252,11 +252,17 @@ export function useComposer({
       })
       .catch((cause) => {
         const message = errorMessage(cause, 'Ask could not send this message.');
+        const recoverable =
+          typeof cause === 'object' &&
+          cause !== null &&
+          'code' in cause &&
+          ['busy', 'invalid_argument', 'cancelled'].includes(String(cause.code));
+        const severity = recoverable ? 'warning' : 'error';
         if (restore) replaceDraft(restore.text, restore.selection);
         if (fromVoice) {
-          keepVoice(request, message);
+          keepVoice(request, message, severity);
         } else {
-          showError(message);
+          sendNotice.current = notice(message, severity, 'ask-send');
         }
       })
       .finally(() => {
@@ -288,7 +294,9 @@ export function useComposer({
   function attach(add: () => Promise<unknown>) {
     setAdding(true);
     void add()
-      .catch((cause) => showError(errorMessage(cause, 'Could not add an attachment.')))
+      .catch((cause) =>
+        notice(errorMessage(cause, 'Could not add an attachment.'), 'warning', 'ask-attachment'),
+      )
       .finally(() => {
         setAdding(false);
         check();
@@ -379,14 +387,18 @@ export function useComposer({
       })
       .catch((cause) => {
         if (!stopped)
-          reportVoiceError.current(errorMessage(cause, 'Could not connect to Ask voice input.'));
+          notice(
+            errorMessage(cause, 'Could not connect to Ask voice input.'),
+            'warning',
+            'ask-voice',
+          );
       });
     return () => {
       stopped = true;
       window.removeEventListener('blur', clearRecording);
       stop?.();
     };
-  }, [client]);
+  }, [client, notice]);
 
   useLayoutEffect(() => {
     if (!connected) activeRecording.current = undefined;
@@ -406,7 +418,7 @@ export function useComposer({
         if (!connected || adding || pendingRef.current) return;
         const files = event.dataTransfer.files;
         if (files.length !== 1) {
-          showError('Drop one PNG or JPEG image at a time.');
+          notice('Drop one PNG or JPEG image at a time.', 'warning', 'ask-attachment');
           return;
         }
         const file = files[0];
@@ -458,7 +470,11 @@ export function useComposer({
           void client
             .cancel(conversationId, turnId)
             .catch((cause) => {
-              showError(errorMessage(cause, 'Could not stop the current answer.'));
+              notice(
+                errorMessage(cause, 'Could not stop the current answer.'),
+                'error',
+                'ask-stop',
+              );
             })
             .finally(() => {
               setCancelling(undefined);
@@ -477,7 +493,11 @@ export function useComposer({
               void client
                 .removeAttachment(conversationId, attachmentId)
                 .catch((cause) => {
-                  showError(errorMessage(cause, 'Could not remove this attachment.'));
+                  notice(
+                    errorMessage(cause, 'Could not remove this attachment.'),
+                    'warning',
+                    'ask-attachment',
+                  );
                 })
                 .finally(() => {
                   check();

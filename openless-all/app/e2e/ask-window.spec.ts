@@ -83,10 +83,10 @@ test('same-frame attachment references, full selection, IME, caret, and attachme
     window.askFixture.rejectNext = true;
   });
   await prompt.press('Enter');
-  const errorDialog = page.getByRole('dialog');
-  await expect(errorDialog).toContainText('Set up an Ask model first.');
-  await errorDialog.getByRole('button', { name: 'OK' }).click();
-  await expect(errorDialog).toHaveCount(0);
+  const errorNotice = page.locator('.ol-notification-card[data-severity="error"]');
+  await expect(errorNotice.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(prompt).toBeFocused();
   await expect(box.getByText('PDF · 3 pages')).toBeVisible();
   await page.getByRole('button', { name: 'Send, hold to think harder' }).click();
   await expect(page.locator('.user-bubble')).toContainText('a notes.pdf');
@@ -110,14 +110,14 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
       );
     }, invalid);
     expect(prevented).toBe(true);
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toContainText(
+    const warning = page.locator('.ol-notification-card[data-severity="warning"]');
+    await expect(warning.getByRole('alert')).toContainText(
       invalid === 'oversize'
         ? 'This image is too large to prepare safely.'
         : 'Drop a valid PNG or JPEG image.',
     );
-    await dialog.getByRole('button', { name: 'OK' }).click();
-    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
   }
   const expected = await page.locator('.composer').evaluate((composer) => {
     const dataBase64 = window.askFixture.imageBase64;
@@ -242,10 +242,10 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await prompt.fill('  private draft  ');
   await prompt.evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(2, 9, 'backward'));
   await prompt.press('Enter');
-  const errorDialog = page.getByRole('dialog');
-  await expect(errorDialog).toContainText('Set up an Ask model first.');
-  await errorDialog.getByRole('button', { name: 'OK' }).click();
-  await expect(errorDialog).toHaveCount(0);
+  const errorNotice = page.locator('.ol-notification-card[data-severity="error"]');
+  await expect(errorNotice.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(prompt).toBeFocused();
   await expect(prompt).toHaveValue('  private draft  ');
   expect(
     await prompt.evaluate((input: HTMLTextAreaElement) => [
@@ -293,9 +293,10 @@ test('normal voice preserves input geometry and selection, combo retries without
       text: 'spoken separately',
     });
   });
-  const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: 'OK' }).click();
-  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.ol-notification-card[data-severity="error"]')).toContainText(
+    'Set up an Ask model first.',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry recording' })).toBeEnabled();
   await expect(prompt).toHaveValue('one new three');
   await page.getByRole('button', { name: 'Retry recording' }).click();

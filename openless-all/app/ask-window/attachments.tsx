@@ -1,4 +1,4 @@
-import { AskErrorDialog } from './errors';
+import { AskNotice } from './notices';
 import { FileText, Image as ImageIcon, Quote, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { errorMessage, type AskClient, type AttachmentInfo } from './client';
@@ -140,12 +140,12 @@ function AttachmentCard({
         </>
       )}
       {state === 'processing' && <small role="status">Preparing…</small>}
-      {state === 'error' && <small>Could not prepare attachment</small>}
+      {state === 'error' && <small>Not attached</small>}
       {state === 'ready' && kind === 'image' && hasThumbnail && !image && !failure && (
         <small role="status">Loading thumbnail…</small>
       )}
-      <AskErrorDialog
-        title="Attachment error"
+      <AskNotice
+        severity="warning"
         message={
           failure ??
           (state === 'error' ? error?.message || 'Attachment could not be prepared.' : undefined)

@@ -1,10 +1,11 @@
 import { AppViewport } from '../src/ui/layout/AppViewport';
-import { InteractionProvider, useInteraction } from '../src/ui/overlays/InteractionProvider';
+import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
 import { useEffect, useRef, useState } from 'react';
 import { errorMessage, type AskClient, type AskSnapshot } from './client';
 import { useComposer } from './composer';
 import { ConversationLayout, Sources } from './conversation';
 import { connectAskFeed } from './feed';
+import { useAskNotice } from './notices';
 import { watchTheme } from './theme';
 import './window.css';
 
@@ -60,7 +61,7 @@ export function AskWindow({ client }: { client: AskClient }) {
 }
 
 function AskScreen({ client }: { client: AskClient }) {
-  const { warn } = useInteraction();
+  const notice = useAskNotice();
   const feed = useRef<ReturnType<typeof connectAskFeed>>();
   const shown = useRef(true);
   const hiding = useRef(false);
@@ -91,12 +92,7 @@ function AskScreen({ client }: { client: AskClient }) {
         if (!destroyed) {
           if (current.themeMode) theme.setTheme(current.themeMode);
           if (current.platform) setPlatform(current.platform);
-          if (current.notice)
-            void warn({
-              title: 'Ask Anything',
-              description: current.notice.message,
-              dismissLabel: 'OK',
-            });
+          if (current.notice) notice(current.notice.message, 'warning', 'ask-selection');
         }
         return current;
       },
@@ -146,12 +142,7 @@ function AskScreen({ client }: { client: AskClient }) {
           connect();
         }
         if (event.type === 'themeChanged') theme.setTheme(event.themeMode);
-        if (event.type === 'notice')
-          void warn({
-            title: 'Ask Anything',
-            description: event.error.message,
-            dismissLabel: 'OK',
-          });
+        if (event.type === 'notice') notice(event.error.message, 'warning', 'ask-window-notice');
       })
       .then((stop) => {
         if (destroyed) stop();
@@ -159,11 +150,11 @@ function AskScreen({ client }: { client: AskClient }) {
       })
       .catch((cause) => {
         if (!destroyed)
-          void warn({
-            title: 'Could not connect to Ask',
-            description: errorMessage(cause, 'Could not connect to the Ask window.'),
-            dismissLabel: 'OK',
-          });
+          notice(
+            errorMessage(cause, 'Could not connect to the Ask window.'),
+            'error',
+            'ask-connection',
+          );
       });
     connect();
     window.addEventListener('focus', resume);
@@ -185,16 +176,13 @@ function AskScreen({ client }: { client: AskClient }) {
       window.removeEventListener('drop', preventFileNavigation);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [client, warn]);
+  }, [client, notice]);
 
   useEffect(() => {
-    if (streamError)
-      void warn({
-        title: 'Could not connect to Ask',
-        description: streamError,
-        dismissLabel: 'OK',
-      });
-  }, [streamError, warn]);
+    if (!streamError) return;
+    const notification = notice(streamError, 'error', 'ask-stream');
+    return notification.dismiss;
+  }, [streamError, notice]);
   return (
     <>
       <div className="window-bar" data-tauri-drag-region data-windows={onWindows}>
@@ -210,11 +198,7 @@ function AskScreen({ client }: { client: AskClient }) {
               .hide()
               .catch((cause) => {
                 shown.current = true;
-                void warn({
-                  title: 'Ask Anything',
-                  description: errorMessage(cause, 'Could not hide Ask.'),
-                  dismissLabel: 'OK',
-                });
+                notice(errorMessage(cause, 'Could not hide Ask.'), 'error', 'ask-hide');
                 reconnect.current();
               })
               .finally(() => {

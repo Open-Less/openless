@@ -1,4 +1,4 @@
-import { AskErrorDialog } from './errors';
+import { AskNotice } from './notices';
 import { AiStatus, type AiStatusState } from '@/components/ui/ai-status';
 import { ArrowUpRight, BookOpen } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
@@ -76,8 +76,9 @@ export function ConversationLayout({
   const latest = turns.at(-1);
   return (
     <div className="relative flex h-full flex-col items-center px-6 pt-6 pb-8">
-      <AskErrorDialog
+      <AskNotice
         key={latest?.turnId}
+        severity={latest?.error ? 'error' : 'warning'}
         message={latest?.error?.message ?? latest?.searchError?.message}
       />
       <div className="flex min-h-0 w-[560px] max-w-full flex-1 flex-col">
@@ -210,8 +211,8 @@ export function Sources({
       {open && (
         <section id="ask-sources" aria-label="Web search sources" className="source-panel">
           <p role="status">{SEARCH_LABEL[open.searchStatus]}</p>
-          <AskErrorDialog
-            title="Web search"
+          <AskNotice
+            severity="warning"
             message={failure?.turnId === open.turnId ? failure.message : undefined}
           />
           <ul>
