@@ -2,6 +2,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #include <math.h>
 
+static const NSWindowStyleMask OLGuideStyle = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel;
 static const NSWindowCollectionBehavior OLGuideCollectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorMoveToActiveSpace;
 
 static NSString *OLGuideText(NSString *zh, NSString *en) {
@@ -149,8 +150,7 @@ static OLAccessibilityGuideController *guideController;
     _startedAt = NSProcessInfo.processInfo.systemUptime;
     // Set the nonactivating style at creation so mouse input doesn't activate the app.
     _window = [[OLAccessibilityGuidePanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 136)
-        styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
-        backing:NSBackingStoreBuffered defer:NO];
+        styleMask:OLGuideStyle backing:NSBackingStoreBuffered defer:NO];
     _window.hidesOnDeactivate = NO;
     _window.title = OLGuideText(@"OpenLess 授权引导", @"OpenLess access guide");
     _window.level = NSFloatingWindowLevel;

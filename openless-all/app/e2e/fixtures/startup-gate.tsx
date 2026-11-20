@@ -160,6 +160,7 @@ Object.assign(window, {
       }
       if (command === 'get_hotkey_capability') return mocks.mockHotkeyCapability;
       if (command === 'get_hotkey_status') return { state: 'ready' };
+      if (['get_activity_apps', 'get_activity_stats', 'list_history'].includes(command)) return [];
       if (command === 'check_microphone_permission' || command === 'check_accessibility_permission')
         return 'granted';
       if (command === 'plugin:window|is_visible') return true;
