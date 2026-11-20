@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { useInteraction } from '../src/ui/overlays/InteractionProvider';
+import { useToast } from '../src/ui/overlays/InteractionProvider';
 
 type Severity = 'warning' | 'error';
 
 export function useAskNotice() {
-  const { notify } = useInteraction();
+  const toast = useToast();
   return useCallback(
     (message: string, severity: Severity, key?: string) =>
-      notify({
-        message,
-        severity,
+      toast[severity](message, {
         key,
-        ...(severity === 'warning' ? { durationMs: 6000 } : { state: 'failed' }),
+        durationMs: severity === 'warning' ? 6000 : 0,
       }),
-    [notify],
+    [toast],
   );
 }
 

@@ -12,6 +12,7 @@ test.beforeEach(async ({ page }) => {
 test('first send moves the original composer and restores real state after gaps and hide', async ({
   page,
 }) => {
+  await expect(page.locator('#ask-root')).toHaveCSS('border-radius', '24px');
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   const box = page.locator('[data-slot="prompt-box"]');
   expect((await box.boundingBox())!.y).toBeLessThan(500);
@@ -83,8 +84,9 @@ test('same-frame attachment references, full selection, IME, caret, and attachme
     window.askFixture.rejectNext = true;
   });
   await prompt.press('Enter');
-  const errorNotice = page.locator('.ol-notification-card[data-severity="error"]');
+  const errorNotice = page.locator('.ol-toast-notification-card[data-type="error"]');
   await expect(errorNotice.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  await expect(errorNotice.locator('[data-tone="error"]')).toHaveCSS('width', '36px');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(prompt).toBeFocused();
   await expect(box.getByText('PDF · 3 pages')).toBeVisible();
@@ -110,7 +112,8 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
       );
     }, invalid);
     expect(prevented).toBe(true);
-    const warning = page.locator('.ol-notification-card[data-severity="warning"]');
+    const warning = page.locator('.ol-toast-notification-card[data-type="warning"]');
+    await expect(warning.locator('[data-tone="warning"]')).toHaveCSS('width', '36px');
     await expect(warning.getByRole('alert')).toContainText(
       invalid === 'oversize'
         ? 'This image is too large to prepare safely.'
@@ -242,7 +245,7 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await prompt.fill('  private draft  ');
   await prompt.evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(2, 9, 'backward'));
   await prompt.press('Enter');
-  const errorNotice = page.locator('.ol-notification-card[data-severity="error"]');
+  const errorNotice = page.locator('.ol-toast-notification-card[data-type="error"]');
   await expect(errorNotice.getByRole('alert')).toHaveText('Set up an Ask model first.');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(prompt).toBeFocused();
@@ -293,7 +296,7 @@ test('normal voice preserves input geometry and selection, combo retries without
       text: 'spoken separately',
     });
   });
-  await expect(page.locator('.ol-notification-card[data-severity="error"]')).toContainText(
+  await expect(page.locator('.ol-toast-notification-card[data-type="error"]')).toContainText(
     'Set up an Ask model first.',
   );
   await expect(page.getByRole('dialog')).toHaveCount(0);

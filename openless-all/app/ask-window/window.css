@@ -46,7 +46,7 @@ body,
 #ask-root {
   position: relative;
   background: var(--ol-canvas);
-  border-radius: 16px;
+  border-radius: 24px;
   font:
     400 14px / 1.45 'Open Runde',
     system-ui,

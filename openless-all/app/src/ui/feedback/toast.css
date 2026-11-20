@@ -1,0 +1,274 @@
+/* The viewport anchors the stack; the reference's 356px card follows interface scale. */
+.ol-toast-notification-center {
+  position: absolute;
+  inset: 0;
+  z-index: var(--ol-layer-notification, 1400);
+  display: flex;
+  justify-content: center;
+  overflow: clip;
+  pointer-events: none;
+}
+.ol-toast-notification-stack {
+  --ol-toast-stack-gutter: 14px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: max(8px, env(safe-area-inset-top, 0px)) var(--ol-toast-stack-gutter) 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  zoom: var(--ol-interface-scale, 1);
+}
+.ol-toast-notification-slot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: 100%;
+}
+/* popLayout owns the old vertical anchor. Keep the exit centered and reflowable on resize. */
+.ol-toast-notification-slot[data-exiting] {
+  z-index: 0;
+  inset-inline: var(--ol-toast-stack-gutter) !important;
+  width: auto !important;
+  height: auto !important;
+}
+.ol-toast-notification-card {
+  --ol-toast-bg: #fff;
+  --ol-toast-line: rgb(0 0 0 / 7%);
+  --ol-toast-muted: #6e6d7b;
+  --ol-toast-action-bg: #f4f4f9;
+  --ol-toast-action-hover: #ededf3;
+  --ol-toast-shadow: drop-shadow(0 1px 1px rgb(0 0 0 / 5%)) drop-shadow(0 2px 5px rgb(0 0 0 / 6%));
+  position: relative;
+  flex-shrink: 0;
+  width: min(356px, 100%);
+  color: var(--ol-ink);
+  filter: var(--ol-toast-shadow);
+}
+[data-ol-theme='dark'] .ol-toast-notification-card {
+  --ol-toast-bg: #1c1c1e;
+  --ol-toast-line: rgb(255 255 255 / 10%);
+  --ol-toast-muted: #9b9aa7;
+  --ol-toast-action-bg: #2c2c2e;
+  --ol-toast-action-hover: #3a3a3c;
+  --ol-toast-shadow: drop-shadow(0 1px 1px rgb(0 0 0 / 30%)) drop-shadow(0 2px 5px rgb(0 0 0 / 30%));
+}
+.ol-toast-notification-card:not([aria-hidden]) {
+  pointer-events: auto;
+}
+.ol-toast-panel {
+  position: relative;
+  box-sizing: border-box;
+  background: var(--ol-toast-bg);
+}
+.ol-toast-outline {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  stroke: var(--ol-toast-line);
+}
+.ol-toast-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+}
+.ol-toast-notification-icon {
+  position: relative;
+  flex: none;
+  color: white;
+  transition: background-color 200ms ease;
+}
+.ol-toast-notification-icon[data-tone='success'] {
+  background: #34c759;
+}
+.ol-toast-notification-icon:is([data-tone='error'], [data-tone='trash']) {
+  background: #ff3b30;
+}
+.ol-toast-notification-icon[data-tone='warning'] {
+  background: #ffcc00;
+  color: #342800;
+}
+.ol-toast-notification-icon[data-tone='info'] {
+  background: #007aff;
+}
+[data-ol-theme='dark'] .ol-toast-notification-icon[data-tone='success'] {
+  background: #30d158;
+}
+[data-ol-theme='dark'] .ol-toast-notification-icon:is([data-tone='error'], [data-tone='trash']) {
+  background: #ff453a;
+}
+[data-ol-theme='dark'] .ol-toast-notification-icon[data-tone='warning'] {
+  background: #ffd60a;
+}
+[data-ol-theme='dark'] .ol-toast-notification-icon[data-tone='info'] {
+  background: #0a84ff;
+}
+.ol-toast-notification-icon[data-tone='loading'] {
+  background: var(--ol-toast-action-bg);
+  color: var(--ol-toast-muted);
+}
+.ol-toast-glyph {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ol-toast-stroke {
+    stroke-dasharray: var(--ol-toast-stroke-dashes);
+    animation: ol-toast-draw 240ms ease-out both;
+  }
+}
+@keyframes ol-toast-draw {
+  from {
+    stroke-dashoffset: var(--ol-toast-stroke-start);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.ol-toast-spinner {
+  animation: ol-toast-spin 1s linear infinite;
+}
+@keyframes ol-toast-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ol-toast-notification-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 6px;
+}
+.ol-toast-notification-card[data-type='default'] .ol-toast-notification-body {
+  padding-inline-start: 6px;
+}
+.ol-toast-notification-message,
+.ol-toast-notification-description {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.ol-toast-notification-message {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.01em;
+}
+.ol-toast-notification-description {
+  color: var(--ol-toast-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.ol-toast-notification-card.ol-toast-notification-card--progress .ol-toast-notification-body {
+  align-items: center;
+  padding-inline-start: 0;
+  gap: 5px;
+  text-align: center;
+}
+.ol-toast-notification-card--progress .ol-toast-notification-message {
+  font-size: 12px;
+  line-height: 16px;
+}
+.ol-toast-notification-progress {
+  display: block;
+  overflow: hidden;
+  width: min(96px, 100%);
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ol-toast-action-bg);
+}
+.ol-toast-notification-progress-value {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ol-blue);
+}
+.ol-toast-notification-progress-value[data-determinate='false'] {
+  width: 34%;
+  animation: ol-toast-notification-indeterminate 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes ol-toast-notification-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+.ol-toast-notification-card .ol-toast-notification-action {
+  --ol-corner-radius: 11px;
+  flex: 0 1 auto;
+  min-height: 36px;
+  max-width: 44%;
+  padding: 5px 14px;
+  background: var(--ol-toast-action-bg);
+  color: var(--ol-ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.ol-toast-notification-card .ol-toast-notification-action:hover:not(:disabled) {
+  background: var(--ol-toast-action-hover);
+}
+.ol-toast-notification-action[data-action-disabled] {
+  opacity: 0.52;
+}
+.ol-toast-notification-card .ol-toast-notification-action[data-action-style='cancel-icon'] {
+  display: grid;
+  flex: 0 0 36px;
+  place-items: center;
+  padding: 0;
+}
+.ol-toast-notification-card .ol-toast-notification-close {
+  position: absolute;
+  z-index: 1;
+  top: -6px;
+  left: -6px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border-radius: 50% !important;
+  background: var(--ol-toast-bg);
+  color: var(--ol-toast-muted);
+  box-shadow: 0 0 0 1px var(--ol-toast-line);
+  cursor: pointer;
+}
+.ol-toast-notification-card
+  :is(.ol-toast-notification-close, .ol-toast-notification-action):focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: -2px;
+}
+@media (hover: hover) {
+  .ol-toast-notification-close {
+    opacity: 0;
+    transition: opacity 150ms ease;
+  }
+  .ol-toast-notification-card:is(:hover, :focus-within) .ol-toast-notification-close {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-toast-spinner,
+  .ol-toast-notification-progress-value[data-determinate='false'] {
+    animation: none;
+  }
+  .ol-toast-notification-icon,
+  .ol-toast-notification-close {
+    transition: none;
+  }
+}

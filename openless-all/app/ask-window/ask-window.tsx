@@ -1,3 +1,4 @@
+import { ToastNotificationCenter } from '../src/ui/feedback/ToastNotificationCenter';
 import { AppViewport } from '../src/ui/layout/AppViewport';
 import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
 import { useEffect, useRef, useState } from 'react';
@@ -53,7 +54,7 @@ function Session({
 export function AskWindow({ client }: { client: AskClient }) {
   return (
     <AppViewport scale={false} className="ask-viewport">
-      <InteractionProvider>
+      <InteractionProvider notificationHost={ToastNotificationCenter}>
         <AskScreen client={client} />
       </InteractionProvider>
     </AppViewport>
