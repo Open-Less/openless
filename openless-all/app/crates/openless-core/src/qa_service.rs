@@ -17,6 +17,8 @@ use crate::types::{
 };
 use crate::{Clock, HistoryStore, PreferencesStore};
 
+pub mod standalone;
+
 #[derive(Default)]
 struct QaState {
     snapshot: QaSnapshot,
@@ -83,6 +85,17 @@ impl QaPersistence {
 }
 
 impl QaService {
+    pub fn standalone_history_sink(&self) -> Arc<standalone::AskHistorySink> {
+        let service = self.clone();
+        Arc::new(move |question, answer| {
+            service.persist_history(
+                question.to_owned(),
+                answer,
+                crate::domains::QaRuntimeCompletion::default(),
+            );
+        })
+    }
+
     pub fn new(runtime: Arc<dyn QaRuntimeAdapter>, host_actions: Arc<dyn HostActions>) -> Self {
         Self {
             runtime,
@@ -751,6 +764,10 @@ impl QaService {
 }
 
 impl QaApi for QaService {
+    fn ask_history_sink(&self) -> Option<Arc<standalone::AskHistorySink>> {
+        Some(self.standalone_history_sink())
+    }
+
     fn bind_runtime_restore_guard(
         &self,
         guard: crate::domains::RuntimeRestoreGuard,

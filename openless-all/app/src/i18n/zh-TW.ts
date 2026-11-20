@@ -5,11 +5,13 @@ import type { zhCN } from './zh-CN';
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsZhTW as askEntrySettings } from './askEntrySettings';
 
 export const zhTW: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: '語音編輯工作階段',
@@ -1115,6 +1117,11 @@ export const zhTW: typeof zhCN = {
       '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。關閉對話視窗後開始新對話。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: '向「隨便問」提供應用程式名稱',
+      description: '喚起「隨便問」時，記錄前景及已開啟的應用程式名稱，並在送出問題時提供給模型。不讀取視窗內容。',
+      saveFailed: '無法更新「隨便問」的桌面內容權限。',
+    },
     title: '隨便問',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
@@ -1136,7 +1143,7 @@ export const zhTW: typeof zhCN = {
     },
     history: {
       title: '儲存歷史',
-      desc: '開啟後在本地儲存問答記錄，預設關閉。',
+      desc: '開啟後在此裝置上儲存「隨便問」的歷史記錄，預設關閉。',
     },
     howto: {
       title: '使用方法',

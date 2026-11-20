@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { OS } from '../../../runtime/environment';
+import { isTauriHost, type OS } from '../../../runtime/environment';
 import { getCachedPlatformCapabilities, getPlatformCapabilities } from '../../../runtime/platform';
 import {
   searchSettingsSections,
@@ -62,7 +62,9 @@ export function useSettingsNavigation({
       : undefined;
   const activeGeneralPage =
     section === 'general' && !searching
-      ? visibleGeneralPages(platformCaps?.platform).find((page) => page.id === generalPage)
+      ? visibleGeneralPages(platformCaps?.platform, os, isTauriHost()).find(
+          (page) => page.id === generalPage,
+        )
       : undefined;
   const showingVoiceSettings = activeAdvancedPage?.id === 'voiceEnhancement' && voiceSettingsOpen;
   const contentTitle = searching

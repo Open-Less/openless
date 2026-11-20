@@ -7,7 +7,13 @@ import { ko } from '../../../i18n/ko';
 import { de } from '../../../i18n/de';
 import { fr } from '../../../i18n/fr';
 import { es } from '../../../i18n/es';
-import { ADVANCED_PAGES, SETTINGS_SECTIONS, searchSettingsSections } from './navigation';
+import { askEntrySettingsEn } from '../../../i18n/askEntrySettings';
+import {
+  ADVANCED_PAGES,
+  GENERAL_PAGES,
+  SETTINGS_SECTIONS,
+  searchSettingsSections,
+} from './navigation';
 
 const retiredServiceNames = [
   'AI 服务与模型',
@@ -35,6 +41,12 @@ for (const [locale, translation] of Object.entries({
 })) {
   const i18n = createInstance();
   await i18n.init({ lng: locale, fallbackLng: false, resources: { [locale]: { translation } } });
+  for (const key of [
+    ...GENERAL_PAGES.flatMap((page) => [page.titleKey, page.descriptionKey]),
+    ...Object.keys(askEntrySettingsEn).map((key) => `askEntrySettings.${key}`),
+  ]) {
+    if (!i18n.exists(key)) throw new Error(`${locale}: missing general settings label ${key}`);
+  }
   for (const key of [
     'modal.backToAdvanced',
     ...ADVANCED_PAGES.flatMap((page) => [page.titleKey, `modal.advancedPages.${page.id}`]),

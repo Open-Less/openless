@@ -169,7 +169,7 @@ export let mockSettings: UserPreferences = {
     up: 'cancel',
     down: 'none',
     left: 'translation',
-    right: 'qa',
+    right: 'none',
   },
   androidOverlaySizeDp: 72,
 };

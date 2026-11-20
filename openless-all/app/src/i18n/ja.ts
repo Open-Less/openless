@@ -1153,6 +1153,11 @@ export const ja: typeof zhCN = {
       '選択した文字を質問の文脈に使います。選択は任意です。毎回、新しい質問を開始します。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'アプリ名を「Ask」と共有',
+      description: '「Ask」を開いたときに使用中と起動中のアプリ名を記録し、質問を送信するときにモデルへ渡します。ウィンドウの内容は読み取りません。',
+      saveFailed: '「Ask」のデスクトップ情報の共有設定を更新できませんでした。',
+    },
     title: '何でも質問',
     desc: 'テキストを選択して音声で質問。複数ターンの追問対応。',
     shortcutSettings: 'ショートカット設定',
@@ -1174,7 +1179,7 @@ export const ja: typeof zhCN = {
     },
     history: {
       title: '履歴を保存',
-      desc: '有効時、Q&A 記録をローカルに保存。デフォルト OFF。',
+      desc: '「何でも質問」の履歴をこの端末に保存します。既定ではオフです。',
     },
     howto: {
       title: '使い方',

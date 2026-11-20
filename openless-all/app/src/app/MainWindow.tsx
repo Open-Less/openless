@@ -1,5 +1,4 @@
 import { lazy, Suspense } from 'react';
-import { useTranslation } from 'react-i18next';
 import { HotkeySettingsProvider } from '../data/preferences';
 import { useReducedMotion } from '../lib/motion';
 import type { OS } from '../runtime/environment';
@@ -7,7 +6,7 @@ import { CoreStartupScreen } from './CoreStartupScreen';
 import { useAndroidPanels } from './useAndroidPanels';
 import { useMainStartup } from './startup';
 import { useMainWindowHotkeys } from './windowHotkeys';
-import { Shell, QaPanel, VoiceEditPanel } from './destinations';
+import { Shell, VoiceEditPanel } from './destinations';
 import './main-window.css';
 
 const AutoUpdateGate = lazy(() =>
@@ -20,7 +19,6 @@ const Onboarding = lazy(() =>
 );
 
 export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboarding: boolean }) {
-  const { t } = useTranslation();
   const { gate, caps, error, onboardingHandoff, completeOnboarding } = useMainStartup(
     os,
     previewOnboarding,
@@ -33,20 +31,7 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
   return (
     <HotkeySettingsProvider>
       <Suspense fallback={<CoreStartupScreen />}>
-        {panel.kind === 'qa' ? (
-          <div key={panel.epoch} className="ol-embedded-panel">
-            <QaPanel
-              onRequestDismiss={() => close(panel)}
-              embedded
-              onRequestClose={() => didClose(panel)}
-            />
-            {panel.error && (
-              <div role="alert" className="ol-mobile-panel-error">
-                {t('qa.compact.closeError')} {panel.error}
-              </div>
-            )}
-          </div>
-        ) : panel.kind === 'voice-edit' ? (
+        {panel.kind === 'voice-edit' ? (
           <div key={panel.epoch} className="ol-embedded-panel">
             <VoiceEditPanel
               embedded

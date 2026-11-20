@@ -49,7 +49,7 @@ assert.deepEqual(
 );
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
-for (const kind of ['MainHotkey', 'QaHotkey', 'ComboHotkey', 'ActionHotkey', 'StyleHotkey']) {
+for (const kind of ['MainHotkey', 'ComboHotkey', 'ActionHotkey', 'StyleHotkey']) {
   assert.ok(loops.includes(`lock_host(&inner.settings_host_gate, DebugKind::${kind})`));
 }
 assert.doesNotMatch(loops, /fn coding_agent_hotkey_supervisor_loop/);

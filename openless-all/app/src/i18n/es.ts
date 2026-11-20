@@ -4,11 +4,13 @@ import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const es: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Sesión de edición por voz',
@@ -1182,6 +1184,11 @@ export const es: typeof zhCN = {
       'El texto seleccionado sirve de contexto. La selección es opcional. Cada combinación inicia una pregunta nueva.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Compartir los nombres de las aplicaciones con Ask',
+      description: 'Al abrir Ask, registra los nombres de la aplicación activa y de las abiertas para enviarlos al modelo junto con la pregunta. No se lee el contenido de las ventanas.',
+      saveFailed: 'No se pudo actualizar el permiso para compartir el contexto del escritorio.',
+    },
     title: 'Pregunta lo que quieras',
     desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
     shortcutSettings: 'Ajustes de atajos',
@@ -1204,7 +1211,7 @@ export const es: typeof zhCN = {
     },
     history: {
       title: 'Guardar historial',
-      desc: 'Guarda las conversaciones en este dispositivo. Desactivado de forma predeterminada.',
+      desc: 'Guarda el historial de Preguntar en este dispositivo. Desactivado de forma predeterminada.',
     },
     howto: {
       title: 'Cómo usarlo',

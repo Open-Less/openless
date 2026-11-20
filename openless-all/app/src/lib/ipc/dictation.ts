@@ -9,12 +9,12 @@ export function startDictation(): Promise<void> {
   });
 }
 
-export function stopDictation(): Promise<void> {
-  return invokeOrMock('stop_dictation', undefined, () => previewHistory.stopRecording());
+export function stopDictation(sessionId?: string): Promise<void> {
+  return invokeOrMock('stop_dictation', sessionId ? { sessionId } : undefined, () => previewHistory.stopRecording());
 }
 
-export function cancelDictation(): Promise<void> {
-  return invokeOrMock('cancel_dictation', undefined, () => previewHistory.cancelRecording());
+export function cancelDictation(sessionId?: string): Promise<void> {
+  return invokeOrMock('cancel_dictation', sessionId ? { sessionId } : undefined, () => previewHistory.cancelRecording());
 }
 
 export async function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {

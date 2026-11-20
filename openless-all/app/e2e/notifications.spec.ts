@@ -118,7 +118,7 @@ test('save bridge and independent in-flight saves keep their own lifecycle', asy
   await expect(page.getByText('Second saving')).toBeVisible();
 });
 
-for (const kind of ['qa', 'voice-edit', 'selection-voice-intent']) {
+for (const kind of ['voice-edit', 'selection-voice-intent']) {
   test(`auxiliary ${kind} window has its own notification host`, async ({ page }) => {
     await page.goto(`/?window=${kind}&os=mac`);
     await expect(page.locator('.ol-notification-center')).toHaveCount(1);

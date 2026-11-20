@@ -76,7 +76,8 @@ export function createInteractionController() {
       !item.progress &&
       !item.actionLabel &&
       !item.severity &&
-      (item.state === 'saved' || item.state === 'deleted')
+      (item.variant === 'success' ||
+        (!item.variant && (item.state === 'saved' || item.state === 'deleted')))
     );
   }
 

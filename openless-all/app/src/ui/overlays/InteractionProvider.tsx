@@ -5,9 +5,11 @@ import {
   useLayoutEffect,
   useMemo,
   useState,
+  type ComponentType,
   type ReactNode,
 } from 'react';
-import { createInteractionController } from './interactionController';
+import { createInteractionController, type InteractionController } from './interactionController';
+import { createToast } from '../feedback/toast';
 import { ConfirmDialogHost } from './ConfirmDialogHost';
 import { bindNotificationSink } from '../../lib/notifications';
 import { NotificationCenter } from '../feedback/NotificationCenter';
@@ -18,9 +20,11 @@ const Controller = createContext<ReturnType<typeof createInteractionController> 
 export function InteractionProvider({
   children,
   notificationAside,
+  notificationHost: NotificationHost = NotificationCenter,
 }: {
   children: ReactNode;
   notificationAside?: ReactNode;
+  notificationHost?: ComponentType<{ controller: InteractionController; aside?: ReactNode }>;
 }) {
   const [controller] = useState(createInteractionController);
   useLayoutEffect(() => {
@@ -45,7 +49,7 @@ export function InteractionProvider({
     <Controller.Provider value={controller}>
       {children}
       <ConfirmDialogHost controller={controller} />
-      <NotificationCenter controller={controller} aside={notificationAside} />
+      <NotificationHost controller={controller} aside={notificationAside} />
     </Controller.Provider>
   );
 }
@@ -60,4 +64,10 @@ export function useInteraction(scopeKey?: string | number) {
     return scope.dispose;
   }, [scope]);
   return scope.interaction;
+}
+
+/** Non-blocking feedback over the current window's interaction controller. */
+export function useToast(scopeKey?: string | number) {
+  const { notify } = useInteraction(scopeKey);
+  return useMemo(() => createToast(notify), [notify]);
 }

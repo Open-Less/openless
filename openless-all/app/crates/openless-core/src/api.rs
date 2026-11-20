@@ -1,4 +1,6 @@
 mod cloud_note;
+#[path = "ask_voice_capture.rs"]
+pub mod ask_voice_capture;
 use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -4350,6 +4352,32 @@ impl OpenLessBackend {
     /// the concrete implementation.
     pub fn services(&self) -> &crate::domains::BackendServices {
         &self.deps.services
+    }
+
+    #[cfg(feature = "ask-attachments")]
+    pub fn create_standalone_ask(
+        &self,
+        context: Arc<dyn crate::ask::ContextProvider>,
+        attachments: Arc<dyn crate::ask::AttachmentReader>,
+    ) -> crate::ask::StandaloneQaService {
+        use crate::ask::{AskUsagePersistence, ConfiguredAskModels, StandaloneQaDependencies};
+        crate::ask::StandaloneQaService::new(StandaloneQaDependencies {
+            models: Arc::new(ConfiguredAskModels::new(
+                self.deps.credential_store.clone(),
+                self.preferences.clone(),
+            )),
+            context,
+            search: Arc::new(crate::ask_search::WebSearchTool::new(
+                self.deps.credential_store.clone(),
+            )),
+            attachments,
+            spawner: self.deps.task_spawner.clone(),
+            history: self.deps.services.qa.ask_history_sink(),
+            usage: self.deps.services.usage_recorder.clone().map(|recorder| AskUsagePersistence {
+                recorder,
+                clock: self.clock.clone(),
+            }),
+        })
     }
 
     fn cloud_sync_service(&self) -> Result<&crate::cloud_sync::CloudSyncService, BackendError> {
