@@ -467,7 +467,7 @@ export function TestResultBlock({ result }: { result: LocalAsrTestResult | { err
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Local ASR model management refactor (two-pane board + download dialog + top-right download progress overlay).
+// The two-pane model browser and download dialog share these view primitives.
 // Presentational components only; data and actions are assembled by LocalAsr/index.tsx.
 // ─────────────────────────────────────────────────────────────────────
 

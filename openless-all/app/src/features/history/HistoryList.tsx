@@ -1,12 +1,13 @@
+import { TextField } from '../../ui/controls/TextField';
 import type { RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession } from '../../api/contracts';
-import { Icon } from '../../components/Icon';
 import { formatHistoryTime } from '../../lib/localeFormat';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { Pill } from '../../ui/controls/Pill';
 import { formatDuration, historyTitle, TRUNCATED_PILL_STYLE } from './presentation';
+import './history.css';
 
 interface Props {
   searchInputRef: RefObject<HTMLInputElement>;
@@ -42,59 +43,18 @@ export function HistoryList({
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
   return (
-    <Card
-      padding={0}
-      className="ol-history-list ol-col-4"
-      style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-    >
-      {/* The left column is one scroll container; the search box sticks to the top with an
-              opaque background — the list scrolls underneath it. Style filter chips and the
-              "N entries" count row are dropped; only search remains. */}
-      <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        <div
-          style={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 2,
-            background: 'var(--ol-surface-raised)',
-            padding: '12px 14px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 10px',
-              fontSize: 12,
-              border: '0.5px solid var(--ol-line-strong)',
-              borderRadius: 'var(--ol-control-radius)',
-              background: 'var(--ol-surface-2)',
-              color: 'var(--ol-ink-3)',
-            }}
-          >
-            <Icon name="search" size={12} />
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={query}
-              onChange={(e) => onQuery(e.target.value)}
-              placeholder={t('history.searchPlaceholder', { shortcut: searchShortcut })}
-              aria-label={t('history.searchPlaceholder', { shortcut: searchShortcut })}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                outline: 'none',
-                border: 0,
-                background: 'transparent',
-                fontSize: 12,
-                color: 'var(--ol-ink-1)',
-                fontFamily: 'inherit',
-              }}
-            />
-          </div>
-        </div>
-        <div style={{ padding: 6 }}>
+    <Card padding={0} className="ol-history-list ol-col-4">
+      <TextField
+        ref={searchInputRef}
+        className="ol-history-search"
+        type="search"
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder={t('history.searchPlaceholder', { shortcut: searchShortcut })}
+        aria-label={t('history.searchPlaceholder', { shortcut: searchShortcut })}
+      />
+      <div className="ol-thinscroll ol-history-list-scroll">
+        <div className="ol-history-list-records">
           {loading && (
             <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>
               {t('common.loading')}
@@ -132,6 +92,7 @@ export function HistoryList({
               data-history-record={s.id}
               aria-current={selectedId === s.id ? 'true' : undefined}
               onClick={() => onSelect(s.id)}
+              className="ol-history-list-record"
               style={{
                 width: '100%',
                 padding: '10px 12px',
@@ -141,11 +102,9 @@ export function HistoryList({
                 gap: 4,
                 border: '0.5px solid',
                 borderColor: selectedId === s.id ? 'var(--ol-line)' : 'transparent',
-                borderRadius: 'var(--ol-r-md)',
                 background: selectedId === s.id ? 'var(--ol-surface-2)' : 'transparent',
                 cursor: 'default',
                 fontFamily: 'inherit',
-                marginBottom: 4,
                 transition:
                   'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
                 // Rows fade in and drop slightly when search filters or new records

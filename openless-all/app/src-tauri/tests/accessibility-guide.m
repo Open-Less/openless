@@ -20,7 +20,7 @@ int main(int argc, const char **argv) {
         assert(NSContainsRect(secondary, OLGuideFrame(NSMakeRect(-1800, 250, 800, 700), secondary, size)));
         NSRect converted = OLGuideAppKitRect(CGRectMake(200, 100, 700, 800), 1112);
         assert(converted.origin.y == 212);
-        assert(OLGuideStyle == NSWindowStyleMaskBorderless);
+        assert((OLGuideStyle & NSWindowStyleMaskNonactivatingPanel) != 0);
         assert((OLGuideStyle & (NSWindowStyleMaskClosable | NSWindowStyleMaskTitled)) == 0);
         assert((OLGuideCollectionBehavior & NSWindowCollectionBehaviorCanJoinAllSpaces) == 0);
         assert((OLGuideCollectionBehavior & NSWindowCollectionBehaviorFullScreenAuxiliary) == 0);
@@ -31,6 +31,8 @@ int main(int argc, const char **argv) {
             @autoreleasepool {
                 OLAccessibilityGuideController *controller = [[OLAccessibilityGuideController alloc] initWithApplicationURL:[NSURL fileURLWithPath:@"/Applications/OpenLess.app"]];
                 closed = controller.window;
+                assert((controller.window.styleMask & NSWindowStyleMaskNonactivatingPanel) != 0);
+                assert(![controller.window canBecomeKeyWindow] && ![controller.window canBecomeMainWindow]);
                 assert([controller.window.contentView isKindOfClass:NSVisualEffectView.class]);
                 NSVisualEffectView *material = (NSVisualEffectView *)controller.window.contentView;
                 assert(material.maskImage != nil);

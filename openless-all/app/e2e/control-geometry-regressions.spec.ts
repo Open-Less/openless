@@ -125,11 +125,18 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   await settleNavigation(page);
   const list = page.locator('.ol-history-list');
   await expect(list).toBeVisible();
-  const colors = await list.evaluate((node) => ({
-    surface: getComputedStyle(node).backgroundColor,
-    header: getComputedStyle(node.querySelector('.ol-thinscroll > div')!).backgroundColor,
-  }));
-  expect(colors.header).toBe(colors.surface);
+  const search = list.locator('.ol-history-search');
+  const firstRecord = list.locator('[data-history-record]').first();
+  await expect(list).toHaveCSS('border-radius', '28px');
+  await expect(search).toHaveCSS('border-radius', '16px');
+  await expect(firstRecord).toHaveCSS('border-radius', '16px');
+  const outer = (await list.boundingBox())!;
+  const field = (await search.boundingBox())!;
+  const record = (await firstRecord.boundingBox())!;
+  expect(field.x - outer.x).toBeCloseTo(field.y - outer.y, 0);
+  expect(field.x - outer.x).toBeCloseTo(outer.x + outer.width - field.x - field.width, 0);
+  expect(record.x).toBeCloseTo(field.x, 0);
+  expect(record.width).toBeCloseTo(field.width, 0);
   const wheelPrevented = await list.locator('.ol-thinscroll').evaluate((node) => {
     const event = new WheelEvent('wheel', { deltaY: 13.25, bubbles: true, cancelable: true });
     node.dispatchEvent(event);

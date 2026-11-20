@@ -411,6 +411,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "qa_shortcut_behavior",
+        key: "qaShortcutBehavior",
+        class: PreferenceClass::DeviceProfile,
+        shape: PreferenceShape::Text,
+        reason: "device_bound",
+    },
+    PreferenceField {
         rust_name: "quick_note_hotkey",
         key: "quickNoteHotkey",
         class: PreferenceClass::DeviceProfile,

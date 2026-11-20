@@ -11,6 +11,13 @@ const params = new URLSearchParams(location.search);
 const mode = params.get('credentials');
 const android = params.get('os') === 'android';
 const exerciseClipboard = params.has('clipboard');
+const nativeTheme = params.get('nativeTheme') === 'light' ? 'light' : 'dark';
+const exerciseTheme = params.has('nativeTheme');
+let releaseTheme!: () => void;
+const themeGate = new Promise<void>((resolve) => {
+  releaseTheme = resolve;
+});
+const presentations: Array<{ theme?: string; heading?: string | null; recovering: boolean }> = [];
 let clipboardAllowed = false;
 if (android) localStorage.setItem('openless.androidSetupWizardComplete', '1');
 let voice: VoiceEditSnapshot | null = null;
@@ -42,6 +49,8 @@ Object.assign(window, {
   },
   startupFixture: {
     calls,
+    presentations,
+    releaseTheme,
     allowClipboard: (allowed: boolean) => {
       clipboardAllowed = allowed;
     },
@@ -110,11 +119,29 @@ Object.assign(window, {
         if (voice && voice.sessionId === id) voice = null;
         return null;
       }
-      if (command === 'get_settings')
-        return { ...mocks.mockSettings, remoteInputEnabled: exerciseClipboard };
+      if (command === 'main_window_frame_ready') {
+        presentations.push({
+          theme: document.documentElement.dataset.olTheme,
+          heading: document.querySelector('main h1')?.textContent,
+          recovering: Boolean(document.querySelector('.ol-startup [role="alert"]')),
+        });
+        return;
+      }
+      if (command === 'get_settings') {
+        if (exerciseTheme) await themeGate;
+        return {
+          ...mocks.mockSettings,
+          ...(exerciseTheme ? { themeMode: nativeTheme } : {}),
+          remoteInputEnabled: exerciseClipboard,
+        };
+      }
       if (command === 'get_settings_snapshot')
         return {
-          preferences: { ...mocks.mockSettings, remoteInputEnabled: exerciseClipboard },
+          preferences: {
+            ...mocks.mockSettings,
+            ...(exerciseTheme ? { themeMode: nativeTheme } : {}),
+            remoteInputEnabled: exerciseClipboard,
+          },
           revision: 0,
         };
       if (exerciseClipboard && command === 'get_remote_input_status')
@@ -133,6 +160,7 @@ Object.assign(window, {
       }
       if (command === 'get_hotkey_capability') return mocks.mockHotkeyCapability;
       if (command === 'get_hotkey_status') return { state: 'ready' };
+      if (['get_activity_apps', 'get_activity_stats', 'list_history'].includes(command)) return [];
       if (command === 'check_microphone_permission' || command === 'check_accessibility_permission')
         return 'granted';
       if (command === 'plugin:window|is_visible') return true;
@@ -154,6 +182,11 @@ const [{ App }, { i18nReady }] = await Promise.all([
   import('../../src/i18n'),
 ]);
 await i18nReady;
+if (exerciseTheme) {
+  localStorage.setItem('ol.theme', nativeTheme === 'light' ? 'dark' : 'light');
+  const { initThemeMode } = await import('../../src/lib/themeMode');
+  initThemeMode();
+}
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App kind="main" os={android ? 'android' : params.get('os') === 'win' ? 'win' : 'mac'} />
