@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { clearServiceUsage, supportsServiceUsage } from '../../api/usage';
+import { Icon } from '../../components/Icon';
 import { historyStore, useHistoryRecords } from '../../data/history';
 import { refreshServiceUsage, useServiceUsage } from '../../data/usage';
 import { Segmented } from '../../ui/controls/Segmented';
@@ -64,9 +65,11 @@ export function Usage() {
   };
   const clearControl = view === 'history' && serviceUsage.data && (
     <Btn
-      style={{ minHeight: 36, lineHeight: 1.4, flexShrink: 0, whiteSpace: 'nowrap' }}
+      className="ol-usage-clear-btn"
+      icon="trash"
       disabled={clearing}
       onClick={() => void clear()}
+      style={{ minHeight: 34, lineHeight: 1.4, flexShrink: 0, whiteSpace: 'nowrap' }}
     >
       {t('usage.clear')}
     </Btn>
@@ -85,60 +88,78 @@ export function Usage() {
           </Btn>
         }
       />
-      <nav aria-label={text('用量页面', 'Usage pages')} className="ol-usage-tabs">
-        <Segmented
-          label={text('用量页面', 'Usage pages')}
-          options={[
-            { value: 'overview', label: text('概览', 'Overview') },
-            { value: 'services', label: text('服务与用途', 'Services and purposes') },
-            { value: 'history', label: text('记录', 'History') },
-          ]}
-          value={view}
-          onChange={setView}
-        />
-      </nav>
-      <div className="ol-usage-toolbar">
-        <Segmented
-          label={text('统计时段', 'Usage period')}
-          options={[
-            { value: '7', label: text('近 7 天', 'Last 7 days') },
-            { value: '30', label: text('近 30 天', 'Last 30 days') },
-          ]}
-          value={String(days)}
-          onChange={(value) => setDays(Number(value))}
-        />
-        {clearControl}
+      <div className="ol-usage-controls">
+        <nav aria-label={text('用量页面', 'Usage pages')} className="ol-usage-tabs">
+          <Segmented
+            label={text('用量页面', 'Usage pages')}
+            options={[
+              { value: 'overview', label: text('概览', 'Overview') },
+              { value: 'services', label: text('服务与用途', 'Services and purposes') },
+              { value: 'history', label: text('记录', 'History') },
+            ]}
+            value={view}
+            onChange={setView}
+          />
+        </nav>
+        <div className="ol-usage-toolbar">
+          <Segmented
+            label={text('统计时段', 'Usage period')}
+            options={[
+              { value: '7', label: text('近 7 天', 'Last 7 days') },
+              { value: '30', label: text('近 30 天', 'Last 30 days') },
+            ]}
+            value={String(days)}
+            onChange={(value) => setDays(Number(value))}
+          />
+          {clearControl}
+        </div>
       </div>
       {!supportsServiceUsage() ? (
-        <p>
-          {text(
-            '当前平台不提供本地用量账本。',
-            'The local usage ledger is unavailable on this host.',
-          )}
+        <p className="ol-usage-banner">
+          <Icon name="info" size={14} />
+          <span>
+            {text(
+              '当前平台不提供本地用量账本。',
+              'The local usage ledger is unavailable on this host.',
+            )}
+          </span>
         </p>
       ) : (
         serviceUsage.error !== null && (
-          <p role="alert">
-            {text('无法读取本地 Token 账本。', 'Could not read the local token ledger.')}
+          <p className="ol-usage-banner ol-usage-banner--alert" role="alert">
+            <Icon name="alert" size={14} />
+            <span>
+              {text('无法读取本地 Token 账本。', 'Could not read the local token ledger.')}
+            </span>
           </p>
         )
       )}
       {serviceUsage.data && serviceUsage.data.droppedOrFailed > 0 && (
-        <p role="alert">
-          {text(
-            '本次运行中部分用量未能保存，统计不完整。',
-            'Some usage could not be saved during this run.',
-          )}
+        <p className="ol-usage-banner ol-usage-banner--alert" role="alert">
+          <Icon name="alert" size={14} />
+          <span>
+            {text(
+              '本次运行中部分用量未能保存，统计不完整。',
+              'Some usage could not be saved during this run.',
+            )}
+          </span>
         </p>
       )}
       {history.error !== null && (
-        <p role="alert">{text('无法读取历史记录。', 'Could not load history.')}</p>
+        <p className="ol-usage-banner ol-usage-banner--alert" role="alert">
+          <Icon name="alert" size={14} />
+          <span>{text('无法读取历史记录。', 'Could not load history.')}</span>
+        </p>
       )}
       {history.data === null && history.loading && (
-        <p role="status">{text('正在加载历史记录…', 'Loading history…')}</p>
+        <p className="ol-usage-banner" role="status">
+          <span>{text('正在加载历史记录…', 'Loading history…')}</span>
+        </p>
       )}
       {serviceUsage.data === null && serviceUsage.loading && (
-        <p role="status">{text('正在加载本地账本…', 'Loading local ledger…')}</p>
+        <p className="ol-usage-banner" role="status">
+          <span>{text('正在加载本地账本…', 'Loading local ledger…')}</span>
+        </p>
       )}
       {view === 'overview' && <UsageOverview dashboard={dashboard} />}
       {view === 'services' && <UsageServices dashboard={dashboard} />}
