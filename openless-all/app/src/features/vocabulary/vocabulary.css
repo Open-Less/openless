@@ -29,15 +29,7 @@
 
 .ol-vocab-filters {
   box-sizing: border-box;
-  max-inline-size: 100%;
   min-inline-size: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.ol-vocab-filters > button {
-  flex: none;
-  white-space: nowrap;
 }
 
 .ol-vocab-select-slot {

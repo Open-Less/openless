@@ -1107,6 +1107,20 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   opacity: 1;
   font-weight: var(--ol-font-weight-semibold);
 }
+.ol-segmented[data-sliding] {
+  flex-wrap: nowrap;
+}
+.ol-segmented[data-sliding] > .ol-segmented-indicator {
+  z-index: 0;
+  background: var(--ol-surface-2) !important;
+}
+.ol-segmented[data-sliding] > .ol-segmented-option {
+  padding-inline: 9px;
+  font-weight: var(--ol-font-weight-medium);
+}
+.ol-segmented[data-sliding] > .ol-segmented-option[aria-pressed='true'] {
+  background: transparent;
+}
 @media (hover: hover) and (pointer: fine) {
   .ol-segmented-option:not([aria-pressed='true']):not(:disabled):hover {
     color: var(--ol-choice-hover-ink);

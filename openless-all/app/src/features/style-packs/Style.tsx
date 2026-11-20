@@ -4,7 +4,6 @@ import { type CSSProperties } from 'react';
 import type { PolishMode } from '../../api/contracts';
 import { Icon } from '../../components/Icon';
 import { StylePackIconPicker } from './StylePackIconPicker';
-import { ChoiceChips } from '../../components/ui/ChoiceChips';
 import { ExpandableText } from '../../components/ui/Disclosure';
 import { DismissibleCard } from '../../components/ui/DismissibleCard';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
@@ -12,6 +11,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Pill } from '../../ui/controls/Pill';
+import { Segmented } from '../../ui/controls/Segmented';
 import { useStylePackWorkspace } from './useStylePackWorkspace';
 
 function modeTone(mode: PolishMode): 'default' | 'blue' | 'ok' | 'outline' | 'dark' {
@@ -303,10 +303,11 @@ export function Style() {
                 width: stackLayout ? '100%' : undefined,
               }}
             >
-              <ChoiceChips
+              <Segmented
                 label={t('style.pack.listTitle')}
                 value={workflowView}
                 onChange={setWorkflowView}
+                sliding
                 options={[
                   { value: 'dictation', label: t('style.pack.dictationTab') },
                   { value: 'selection', label: t('style.pack.selectionTab') },

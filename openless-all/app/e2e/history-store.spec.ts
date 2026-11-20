@@ -100,6 +100,7 @@ test('history switches transcripts inside a fixed frame with copy below the text
   const frame = surface.locator('.ol-history-content-frame');
   const content = frame.locator('.ol-history-content-scroll');
   const copy = frame.getByRole('button', { name: '复制', exact: true });
+  await expect(frame.locator('.ol-history-content-footer').getByRole('button')).toHaveCount(1);
   const raw = frame.getByRole('button', { name: '原文', exact: true });
   const polished = frame.getByRole('button', { name: /^润色 · / });
   await expect(content).toHaveText('Bring the notes to the planning meeting.');

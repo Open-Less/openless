@@ -14,6 +14,7 @@ export function Segmented<T extends string>({
   onChange,
   label,
   disabled = false,
+  sliding = false,
   className,
   indicatorClassName,
 }: {
@@ -22,6 +23,7 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   label: string;
   disabled?: boolean;
+  sliding?: boolean;
   className?: string;
   /** Extra hook for callers whose tests address the sliding chip directly. */
   indicatorClassName?: string;
@@ -35,6 +37,7 @@ export function Segmented<T extends string>({
       role="group"
       aria-label={label}
       className={['ol-segmented', className].filter(Boolean).join(' ')}
+      data-sliding={sliding || undefined}
     >
       <span
         ref={indicatorRef}

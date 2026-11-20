@@ -195,11 +195,19 @@ test('style card lists mount and switch without the React 18 PopChild ref warnin
   await page.getByRole('button', { name: '风格', exact: true }).click();
   await page.getByRole('button', { name: '润色模式', exact: true }).click();
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
-  const tabs = page.locator('main .ol-choice-chips').first().getByRole('button');
+  const switcher = page.locator('main .ol-segmented[data-sliding]');
+  const tabs = switcher.getByRole('button');
+  const indicator = switcher.locator('.ol-segmented-indicator');
   await expect(tabs).toHaveCount(2);
+  await expect(indicator).toBeVisible();
+  const initial = (await indicator.boundingBox())!;
   await tabs.nth(1).click();
+  await expect(tabs.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await indicator.boundingBox())!.x).toBeGreaterThan(initial.x);
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
   await tabs.nth(0).click();
+  await expect(tabs.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await indicator.boundingBox())!.x).toBeCloseTo(initial.x, 0);
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
 });
 

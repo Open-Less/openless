@@ -40,7 +40,10 @@ for (const narrow of [false, true]) {
       name: narrow ? 'Rechercher' : '搜索',
       exact: true,
     });
-    const filters = vocab.getByRole('tablist');
+    const filters = vocab.getByRole('group', {
+      name: narrow ? 'Dictionnaire' : '词典',
+      exact: true,
+    });
     const select = vocab.getByRole('button', {
       name: narrow ? 'Sélectionner' : '选择',
       exact: true,
@@ -140,6 +143,18 @@ for (const narrow of [false, true]) {
     await expect(remove).toHaveCount(0);
     await expect(selectAll).toHaveCount(0);
     expect(await stableLayout()).toEqual(layout);
+
+    const indicator = filters.locator('.ol-segmented-indicator');
+    const filterButtons = filters.getByRole('button');
+    const initial = await bounds(indicator);
+    await filterButtons.last().click();
+    await expect(filterButtons.last()).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await bounds(indicator)).x).toBeGreaterThan(initial.x);
+    await filterButtons.first().click();
+    await expect(filterButtons.first()).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await bounds(indicator)).x).toBeCloseTo(initial.x, 0);
+    expect(await bounds(filters)).toEqual(filtersBefore);
+
     await search.click();
     const input = vocab.getByRole('textbox', { name: narrow ? 'Rechercher' : '搜索' });
     await expect(input).toBeFocused();

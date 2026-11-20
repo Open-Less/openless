@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { Icon } from '../../components/Icon';
 import { Button as Btn } from '../../ui/controls/Button';
+import { Segmented } from '../../ui/controls/Segmented';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Modal } from '../../ui/overlays/Modal';
 import { useVocabularyWorkspace } from './useVocabularyWorkspace';
@@ -87,27 +88,18 @@ export function Vocab() {
           </button>
         </div>
         <div className="ol-vocab-filter-actions">
-          <div className="ol-seg ol-vocab-filters" role="tablist" aria-label={t('vocab.title')}>
-            {(
-              [
-                { id: 'all', icon: null },
-                { id: 'auto', icon: 'sparkle' },
-                { id: 'manual', icon: 'feather' },
-              ] as const
-            ).map((seg) => (
-              <button
-                key={seg.id}
-                type="button"
-                role="tab"
-                aria-selected={filter === seg.id}
-                className={filter === seg.id ? 'ol-seg-item ol-seg-item-active' : 'ol-seg-item'}
-                onClick={() => setFilter(seg.id)}
-              >
-                {seg.icon && <Icon name={seg.icon} size={13} />}
-                {t(`vocab.filter.${seg.id}`)}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            className="ol-vocab-filters"
+            label={t('vocab.title')}
+            value={filter}
+            onChange={setFilter}
+            sliding
+            options={[
+              { value: 'all', label: t('vocab.filter.all') },
+              { value: 'auto', label: t('vocab.filter.auto') },
+              { value: 'manual', label: t('vocab.filter.manual') },
+            ]}
+          />
           <VocabularySelectionToggle
             selecting={selecting}
             disabled={batchBusy}

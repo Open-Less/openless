@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession, StylePack } from '../../api/contracts';
 import type { Interaction } from '../../api/interaction';
-import { LearnVocabulary } from '../../components/LearnVocabulary';
 import { Hint } from '../../components/Tooltip';
 import { AssistantMarkdown } from '../../components/chat/markdown';
 import { canRetranscribeHistoryEntry } from '../../lib/history-retranscribe';
@@ -185,8 +184,6 @@ export function HistoryDetail({
           )}
         </div>
       )}
-      {/* Fixed-height concentric inset container: switch polished/raw at the top, scroll
-          content inside the clipped rounded frame, keep vocabulary & copy anchored below. */}
       <div className="ol-history-content-frame">
         <div className="ol-history-content-header">
           {hasRaw ? (
@@ -195,6 +192,7 @@ export function HistoryDetail({
               label={t('history.showRaw', '查看原文')}
               value={activeView}
               onChange={setContentView}
+              sliding
               options={[
                 { value: 'polished', label: polishSummaryLabel, title: polishSummaryLabel },
                 { value: 'raw', label: t('history.rawLabel', '原文') },
@@ -226,9 +224,6 @@ export function HistoryDetail({
           )}
         </div>
         <div className="ol-history-content-footer">
-          <div className="ol-history-learn-slot">
-            <LearnVocabulary key={`learn-${item.id}`} />
-          </div>
           <Btn
             className="ol-history-copy-btn"
             icon={activeCopied ? 'check' : 'copy'}
