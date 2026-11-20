@@ -33,6 +33,7 @@ export function VocabularyWordCard({
   const { t } = useTranslation();
   const reduced = useReducedMotion();
   const label = useRef<HTMLSpanElement>(null);
+  const strip = useRef<HTMLSpanElement>(null);
   const text = useRef<HTMLSpanElement>(null);
   const [pointerInside, setPointerInside] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -40,11 +41,12 @@ export function VocabularyWordCard({
 
   useLayoutEffect(() => {
     const viewport = label.current;
+    const track = strip.current;
     const value = text.current;
-    if (!active || !viewport || !value || typeof value.animate !== 'function') return;
+    if (!active || !viewport || !track || !value || typeof track.animate !== 'function') return;
 
     let animation: Animation | undefined;
-    let lastDistance = -1;
+    let lastWidth = -1;
     const reset = () => {
       animation?.cancel();
       animation = undefined;
@@ -52,26 +54,25 @@ export function VocabularyWordCard({
     };
     const measure = () => {
       // Measure in local CSS pixels so interface zoom never shortens the reveal.
-      const distance = value.offsetWidth - viewport.clientWidth;
-      if (distance === lastDistance) return;
-      lastDistance = distance;
-      reset();
-      if (distance <= 1 || viewport.clientWidth === 0) return;
-      const end = `translateX(${getComputedStyle(viewport).direction === 'rtl' ? distance : -distance}px)`;
-      const travel = Math.max(500, (distance / 45) * 1000);
-      const duration = travel * 2 + 1250;
-      const start = 'translateX(0px)';
+      const width = value.offsetWidth;
+      if (width <= viewport.clientWidth + 1 || viewport.clientWidth === 0) {
+        lastWidth = -1;
+        reset();
+        return;
+      }
+      if (width === lastWidth && animation) return;
+      lastWidth = width;
+      animation?.cancel();
       viewport.dataset.scrolling = '';
-      animation = value.animate(
-        [
-          { transform: start, offset: 0 },
-          { transform: start, offset: 450 / duration },
-          { transform: end, offset: (450 + travel) / duration },
-          { transform: end, offset: (1250 + travel) / duration },
-          { transform: start, offset: 1 },
-        ],
-        { duration, iterations: Infinity },
-      );
+      const gap = parseFloat(getComputedStyle(track).columnGap) || 0;
+      const sign = getComputedStyle(viewport).direction === 'rtl' ? 1 : -1;
+      // Half the track plus half the gap lines up the second copy exactly with the first.
+      const end = `translateX(calc(${sign * 50}% + ${(sign * gap) / 2}px))`;
+      animation = track.animate([{ transform: 'translateX(0px)' }, { transform: end }], {
+        duration: ((width + gap) / 55) * 1000,
+        iterations: Infinity,
+        easing: 'linear',
+      });
     };
     measure();
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : undefined;
@@ -90,6 +91,10 @@ export function VocabularyWordCard({
       data-disabled={entry.enabled ? undefined : 'true'}
       data-selected={selected ? 'true' : undefined}
       data-selecting={selecting ? 'true' : undefined}
+      onPointerEnter={(event) => {
+        if (event.pointerType !== 'touch') setPointerInside(true);
+      }}
+      onPointerLeave={() => setPointerInside(false)}
       style={removing ? { pointerEvents: 'none' } : undefined}
     >
       <span
@@ -107,15 +112,18 @@ export function VocabularyWordCard({
         aria-label={entry.enabled ? undefined : `${entry.phrase} · ${t('vocab.disabledWord')}`}
         disabled={removing}
         onClick={onToggle}
-        onPointerEnter={() => setPointerInside(true)}
-        onPointerLeave={() => setPointerInside(false)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         title={entry.phrase}
       >
         <span ref={label} className="ol-word-card-label">
-          <span ref={text} className="ol-word-card-phrase">
-            {entry.phrase}
+          <span ref={strip} className="ol-word-card-strip">
+            <span ref={text} className="ol-word-card-phrase">
+              {entry.phrase}
+            </span>
+            <span className="ol-word-card-phrase-copy" aria-hidden="true">
+              {entry.phrase}
+            </span>
           </span>
         </span>
       </button>

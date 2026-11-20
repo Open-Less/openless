@@ -209,9 +209,18 @@
   text-overflow: clip;
 }
 
-.ol-word-card-label[data-scrolling] .ol-word-card-phrase {
-  display: inline-block;
+.ol-word-card-phrase-copy {
+  display: none;
+}
+
+.ol-word-card-label[data-scrolling] .ol-word-card-strip {
+  display: inline-flex;
+  column-gap: 24px;
   inline-size: max-content;
+}
+
+.ol-word-card-label[data-scrolling] .ol-word-card-phrase-copy {
+  display: block;
 }
 
 .ol-word-card-hits {

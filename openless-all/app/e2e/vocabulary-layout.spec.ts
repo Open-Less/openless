@@ -123,7 +123,9 @@ for (const narrow of [false, true]) {
   });
 }
 
-test('vocabulary fits five cards and scrolls only the overflowing phrase', async ({ page }) => {
+test('five vocabulary cards stay fixed while a long label loops on whole-card hover', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1300, height: 835 });
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '词典', exact: true }).click();
@@ -141,33 +143,41 @@ test('vocabulary fits five cards and scrolls only the overflowing phrase', async
   expect(first.width).toBeCloseTo(fifth.width, 0);
   expect((await bounds(cards.nth(5))).y).toBeGreaterThan(first.y);
 
-  const phrase = '一条非常长的词条用于验证收窄之后仍然能够完整查看其中的所有文字';
-  await vocab.getByRole('button', { name: '新词' }).click();
-  const dialog = page.getByRole('dialog', { name: '添加新词' });
-  await dialog.getByRole('textbox').fill(phrase);
-  await dialog.getByRole('button', { name: '添加', exact: true }).click();
-  await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
-  const longWord = vocab.getByRole('button', { name: phrase, exact: true });
+  const longWord = vocab.getByRole('button', { name: 'TypeLazyWordsForm', exact: true });
   const label = longWord.locator('.ol-word-card-label');
   const card = longWord.locator('..');
   const before = await bounds(card);
   await expect(label).toHaveCSS('text-overflow', 'ellipsis');
-  await longWord.focus();
+  await card.locator('.ol-word-card-icon').hover();
   await expect(label).toHaveAttribute('data-scrolling', '');
-  const delta = await label.locator('.ol-word-card-phrase').evaluate((node: HTMLElement) => {
+  const loop = await label.locator('.ol-word-card-strip').evaluate((node: HTMLElement) => {
+    const copy = node.lastElementChild!;
+    const first = node.firstElementChild!;
     const animation = node.getAnimations()[0];
     const effect = animation?.effect as KeyframeEffect;
-    const frames = effect.getKeyframes();
+    const { duration, iterations } = effect.getTiming();
     animation.pause();
-    animation.currentTime = frames[2].offset! * Number(effect.getTiming().duration);
-    const actual = new DOMMatrix(getComputedStyle(node).transform).m41;
-    return { actual, expected: node.parentElement!.clientWidth - node.offsetWidth };
+    animation.currentTime = 0;
+    const origin = first.getBoundingClientRect().x;
+    animation.currentTime = Number(duration) - 1;
+    const firstPass = copy.getBoundingClientRect().x;
+    animation.currentTime = 2 * Number(duration) - 1;
+    const secondPass = copy.getBoundingClientRect().x;
+    return {
+      loops: iterations === Infinity,
+      firstOffset: firstPass - origin,
+      secondOffset: secondPass - origin,
+    };
   });
-  expect(delta.expected).toBeLessThan(0);
-  expect(delta.actual).toBeCloseTo(delta.expected, 0);
+  expect(loop.loops).toBe(true);
+  expect(loop.firstOffset).toBeCloseTo(0, 0);
+  expect(loop.secondOffset).toBeCloseTo(0, 0);
   expect((await bounds(card)).width).toBeCloseTo(before.width, 0);
   expect((await bounds(card)).height).toBeCloseTo(before.height, 0);
+  await vocab.getByRole('heading').hover();
+  await expect(label).not.toHaveAttribute('data-scrolling', '');
+  await longWord.focus();
+  await expect(label).toHaveAttribute('data-scrolling', '');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(label).not.toHaveAttribute('data-scrolling', '');
   await expect(label).toHaveCSS('text-overflow', 'ellipsis');
