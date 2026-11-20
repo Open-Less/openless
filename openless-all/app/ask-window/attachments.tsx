@@ -1,6 +1,6 @@
 import { AskNotice } from './notices';
 import { FileText, Image as ImageIcon, Quote, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { errorMessage, type AskClient, type AttachmentInfo } from './client';
 
 function AttachmentCard({
@@ -22,6 +22,7 @@ function AttachmentCard({
 }) {
   const { attachmentId, kind, displayName, state, preview, error } = attachment;
   const [image, setImage] = useState<string>();
+  const [loadedImage, setLoadedImage] = useState<string>();
   const [expanded, setExpanded] = useState(false);
   const [fullText, setFullText] = useState<string>();
   const [failure, setFailure] = useState<string>();
@@ -75,12 +76,7 @@ function AttachmentCard({
   }
 
   return (
-    <article
-      className="attachment-card"
-      data-kind={kind}
-      data-thumbnail={Boolean(image && !failure)}
-      aria-label={label}
-    >
+    <article className="attachment-card" data-kind={kind} aria-label={label}>
       <button
         className="icon-button attachment-remove"
         type="button"
@@ -93,14 +89,16 @@ function AttachmentCard({
       </button>
       {kind === 'image' ? (
         <>
+          <ImageIcon className="attachment-image-placeholder" size={20} aria-hidden="true" />
           {image && !failure && (
             <img
               src={image}
               alt={displayName}
+              data-loaded={loadedImage === image}
+              onLoad={() => setLoadedImage(image)}
               onError={() => setFailure('Could not display the thumbnail.')}
             />
           )}
-          {!image && state === 'processing' && <ImageIcon size={20} aria-hidden="true" />}
           <strong className="image-label">{label}</strong>
         </>
       ) : (
@@ -115,7 +113,15 @@ function AttachmentCard({
               {kind === 'selection' ? 'Selected text' : displayName}
             </strong>
             {kind === 'pdf' && (
-              <small>PDF{attachment.pageCount ? ` · ${attachment.pageCount} pages` : ''}</small>
+              <small>
+                {state === 'processing' ? (
+                  <span role="status">Preparing…</span>
+                ) : state === 'error' ? (
+                  'Not attached'
+                ) : (
+                  `PDF${attachment.pageCount ? ` · ${attachment.pageCount} pages` : ''}`
+                )}
+              </small>
             )}
             {kind === 'selection' && attachment.sourceApp && <small>{attachment.sourceApp}</small>}
           </div>
@@ -139,10 +145,14 @@ function AttachmentCard({
           {expanded && loading && <small role="status">Loading the original…</small>}
         </>
       )}
-      {state === 'processing' && <small role="status">Preparing…</small>}
-      {state === 'error' && <small>Not attached</small>}
-      {state === 'ready' && kind === 'image' && hasThumbnail && !image && !failure && (
-        <small role="status">Loading thumbnail…</small>
+      {((state === 'processing' && kind !== 'pdf') ||
+        (state === 'ready' && kind === 'image' && hasThumbnail && !loadedImage && !failure)) && (
+        <small role="status" className={kind === 'image' ? 'sr-only' : undefined}>
+          {state === 'processing' ? 'Preparing…' : 'Loading thumbnail…'}
+        </small>
+      )}
+      {state === 'error' && kind !== 'pdf' && (
+        <small className={kind === 'image' ? 'image-error' : undefined}>Not attached</small>
       )}
       <AskNotice
         severity="warning"
@@ -171,6 +181,24 @@ export function AttachmentDeck({
   remove: (attachmentId: string) => void;
 }) {
   const numbers = useRef(new Map<string, number>());
+  const frame = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const outer = frame.current;
+    const inner = content.current;
+    if (!outer || !inner) return;
+    // Measure only the intrinsic content, never the frame whose height is animating.
+    const measure = () => {
+      outer.style.height = `${inner.offsetHeight}px`;
+    };
+    measure();
+    outer.dataset.measured = 'true';
+    const observer = new ResizeObserver(measure);
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+
   const labels = attachments.map((attachment) => {
     if (attachment.kind === 'pdf') return `PDF: ${attachment.displayName}`;
     if (attachment.kind === 'selection') return 'Selected text';
@@ -180,34 +208,39 @@ export function AttachmentDeck({
     return `Image #${numbers.current.get(attachment.attachmentId)}`;
   });
 
-  if (!attachments.length) return null;
   return (
-    <>
-      <div className="attachment-deck" aria-label="Draft attachments">
-        {attachments.map((attachment, index) => (
-          <AttachmentCard
-            key={attachment.attachmentId}
-            client={client}
-            conversationId={conversationId}
-            label={labels[index]}
-            attachment={attachment}
-            disabled={disabled}
-            removing={removing.has(attachment.attachmentId)}
-            remove={() => remove(attachment.attachmentId)}
-          />
-        ))}
+    <div ref={frame} className="attachment-frame">
+      <div ref={content}>
+        {attachments.length > 0 && (
+          <>
+            <div className="attachment-deck" aria-label="Draft attachments">
+              {attachments.map((attachment, index) => (
+                <AttachmentCard
+                  key={attachment.attachmentId}
+                  client={client}
+                  conversationId={conversationId}
+                  label={labels[index]}
+                  attachment={attachment}
+                  disabled={disabled}
+                  removing={removing.has(attachment.attachmentId)}
+                  remove={() => remove(attachment.attachmentId)}
+                />
+              ))}
+            </div>
+            <ul
+              id="draft-references"
+              className="attachment-references"
+              aria-label="Attachment references"
+            >
+              {attachments.map((attachment, index) => (
+                <li key={attachment.attachmentId} title={labels[index]}>
+                  {labels[index]}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </div>
-      <ul
-        id="draft-references"
-        className="attachment-references"
-        aria-label="Attachment references"
-      >
-        {attachments.map((attachment, index) => (
-          <li key={attachment.attachmentId} title={labels[index]}>
-            {labels[index]}
-          </li>
-        ))}
-      </ul>
-    </>
+    </div>
   );
 }

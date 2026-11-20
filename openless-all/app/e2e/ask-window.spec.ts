@@ -139,6 +139,78 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
   expect(await page.evaluate(() => window.askFixture.submits)).toEqual([]);
 });
 
+test('attachment expansion moves the heading and composer together without a preview resize', async ({
+  page,
+}) => {
+  const geometry = await page.evaluate(async () => {
+    const root = document.querySelector('#ask-root')!;
+    const heading = root.querySelector('h1')!;
+    const composer = root.querySelector('[data-slot="prompt-box"]')!;
+    const measure = () => {
+      const box = composer.getBoundingClientRect();
+      return {
+        top: box.top,
+        height: box.height,
+        headingBottom: heading.getBoundingClientRect().bottom,
+        outerHeight: root.getBoundingClientRect().height,
+      };
+    };
+    const before = measure();
+    window.askFixture.push({
+      type: 'attachmentChanged',
+      attachment: {
+        attachmentId: 'dropped-image',
+        kind: 'image',
+        displayName: 'dropped.png',
+        state: 'processing',
+      },
+    });
+    const frames: ReturnType<typeof measure>[] = [];
+    const start = performance.now();
+    do {
+      await new Promise(requestAnimationFrame);
+      frames.push(measure());
+    } while (performance.now() - start < 510);
+    return { before, frames };
+  });
+  const { before, frames } = geometry;
+  const final = frames.at(-1)!;
+  expect(final.height - before.height).toBeGreaterThan(74);
+  const middleFrames = frames.filter(
+    (frame) => frame.height > before.height + 2 && frame.height < final.height - 2,
+  );
+  expect(middleFrames.length).toBeGreaterThan(1);
+  for (const frame of [...middleFrames, final]) {
+    expect(
+      Math.abs(frame.headingBottom - frame.top - (before.headingBottom - before.top)),
+    ).toBeLessThan(1);
+    expect(Math.abs(frame.top + frame.height / 2 - (before.top + before.height / 2))).toBeLessThan(
+      1,
+    );
+    expect(frame.outerHeight).toBe(before.outerHeight);
+  }
+
+  await page.evaluate(() =>
+    window.askFixture.push({
+      type: 'attachmentChanged',
+      attachment: {
+        attachmentId: 'dropped-image',
+        kind: 'image',
+        displayName: 'dropped.png',
+        state: 'ready',
+        preview: { kind: 'image', width: 1, height: 1, thumbnailAvailable: true },
+      },
+    }),
+  );
+  await expect(page.getByRole('img', { name: 'dropped.png' })).toHaveAttribute(
+    'data-loaded',
+    'true',
+  );
+  const box = page.locator('[data-slot="prompt-box"]');
+  expect((await box.boundingBox())!.height).toBe(final.height);
+  await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
+});
+
 test('model tool status is visible without query controls; replay and sources work', async ({
   page,
 }) => {
