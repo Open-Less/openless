@@ -1,11 +1,47 @@
-.ol-vocab-header-actions {
+.ol-vocab-toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-block-end: 14px;
+}
+
+.ol-vocab-search-actions,
+.ol-vocab-selection-tools,
+.ol-vocab-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.ol-vocab-selection-tools {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-inline-start: auto;
+}
+
+.ol-vocab-filter-actions {
+  justify-content: flex-end;
+}
+
+.ol-vocab-search-actions > .ol-search {
+  flex: 0 1 auto;
+  min-inline-size: 36px;
+}
+
+.ol-vocab-word-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  min-inline-size: 0;
   max-inline-size: 100%;
 }
 
-.ol-vocab-header-actions > button {
+.ol-vocab-word-actions > button {
   min-inline-size: 0;
   min-block-size: 36px;
   justify-content: center;
@@ -15,7 +51,7 @@
   overflow-wrap: anywhere;
 }
 
-.ol-vocab-header-actions > .ol-vocab-delete-selected {
+.ol-vocab-word-actions > .ol-vocab-delete-selected {
   display: grid;
   place-items: center;
   justify-content: stretch;
@@ -25,8 +61,8 @@
   font-size: 13.5px;
 }
 
-/* Keep the action grid in the header when nothing is selected. */
-.ol-vocab-header-actions > [data-empty] {
+/* Keep the search and add action stable while the selection count changes. */
+.ol-vocab-word-actions > [data-empty] {
   visibility: hidden;
 }
 
@@ -63,6 +99,13 @@
 .ol-vocab-filters > button {
   min-inline-size: 0;
   overflow-wrap: anywhere;
+}
+
+.ol-vocab-filter-actions > .ol-vocab-select-mode {
+  align-self: stretch;
+  justify-content: center;
+  min-inline-size: 0;
+  text-align: center;
 }
 
 [data-ol-theme='dark'] .ol-vocab-dialog {

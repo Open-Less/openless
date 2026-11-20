@@ -64,12 +64,29 @@ export function Vocab() {
   const selectAllLabel = t('vocab.selectAllVisible');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      <PageHeader
-        kicker={t('vocab.kicker')}
-        title={t('vocab.title')}
-        desc={t('vocab.desc')}
-        right={
-          <div className="ol-vocab-header-actions">
+      <PageHeader kicker={t('vocab.kicker')} title={t('vocab.title')} desc={t('vocab.desc')} />
+
+      <div className="ol-vocab-toolbar">
+        <div className="ol-vocab-search-actions">
+          <ExpandingSearch
+            value={query}
+            onChange={setQuery}
+            placeholder={t('vocab.searchPlaceholder')}
+            label={t('vocab.searchPlaceholder')}
+            expandTo="right"
+          />
+          <div className="ol-vocab-word-actions">
+            <Btn
+              variant="primary"
+              icon="plus"
+              onClick={() => {
+                setNewWordOpen(true);
+                setNewWordDraft('');
+                setNewWordTemplateIds([]);
+              }}
+            >
+              <span>{t('vocab.newWord')}</span>
+            </Btn>
             <button
               type="button"
               className="ol-vocab-delete-selected"
@@ -86,98 +103,80 @@ export function Vocab() {
                 <span>{t('vocab.deleteSelected', { count: selectedCount })}</span>
               </span>
             </button>
+          </div>
+        </div>
+        <div className="ol-vocab-selection-tools">
+          <label className="ol-vocab-select-all" hidden={!selecting}>
+            <input
+              type="checkbox"
+              disabled={batchBusy || visibleEntries.length === 0}
+              checked={allVisibleSelected}
+              ref={(element) => {
+                if (element)
+                  element.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected;
+              }}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setSelectedIds((current) => {
+                  const next = new Set(current);
+                  visibleEntries.forEach((entry) =>
+                    checked ? next.add(entry.id) : next.delete(entry.id),
+                  );
+                  return next;
+                });
+              }}
+            />
+            <span className="ol-vocab-reserved-label">
+              <span aria-hidden="true">{selectAllLabel}</span>
+              <span aria-hidden="true">{t('vocab.selectedCount', { count: layoutCount })}</span>
+              <span>
+                {selectedCount
+                  ? t('vocab.selectedCount', { count: selectedCount })
+                  : selectAllLabel}
+              </span>
+            </span>
+          </label>
+          <div className="ol-vocab-filter-actions">
+            <div className="ol-seg ol-vocab-filters" role="tablist" aria-label={t('vocab.title')}>
+              {(
+                [
+                  { id: 'all', icon: null },
+                  { id: 'auto', icon: 'sparkle' },
+                  { id: 'manual', icon: 'feather' },
+                ] as const
+              ).map((seg) => (
+                <button
+                  key={seg.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === seg.id}
+                  className={filter === seg.id ? 'ol-seg-item ol-seg-item-active' : 'ol-seg-item'}
+                  onClick={() => setFilter(seg.id)}
+                >
+                  {seg.icon && <Icon name={seg.icon} size={13} />}
+                  {t(`vocab.filter.${seg.id}`)}
+                </button>
+              ))}
+            </div>
             <Btn
-              variant="primary"
-              icon="plus"
+              size="sm"
+              className="ol-vocab-select-mode"
+              style={{ paddingInline: 14 }}
               onClick={() => {
-                setNewWordOpen(true);
-                setNewWordDraft('');
-                setNewWordTemplateIds([]);
+                setSelecting((current) => {
+                  if (current) setSelectedIds(new Set());
+                  return !current;
+                });
               }}
             >
-              <span>{t('vocab.newWord')}</span>
+              <span className="ol-vocab-reserved-label">
+                <span aria-hidden="true">{t('vocab.selecting')}</span>
+                <span aria-hidden="true">{t('vocab.doneSelecting')}</span>
+                <span>{selecting ? t('vocab.doneSelecting') : t('vocab.selecting')}</span>
+              </span>
             </Btn>
           </div>
-        }
-      />
-
-      {/* Toolbar: source segment filter + circular search (expands leftward on click). */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 14,
-          flexWrap: 'wrap',
-          flexShrink: 0,
-        }}
-      >
-        <div className="ol-seg ol-vocab-filters" role="tablist" aria-label={t('vocab.title')}>
-          {(
-            [
-              { id: 'all', icon: null },
-              { id: 'auto', icon: 'sparkle' },
-              { id: 'manual', icon: 'feather' },
-            ] as const
-          ).map((seg) => (
-            <button
-              key={seg.id}
-              type="button"
-              role="tab"
-              aria-selected={filter === seg.id}
-              className={filter === seg.id ? 'ol-seg-item ol-seg-item-active' : 'ol-seg-item'}
-              onClick={() => setFilter(seg.id)}
-            >
-              {seg.icon && <Icon name={seg.icon} size={13} />}
-              {t(`vocab.filter.${seg.id}`)}
-            </button>
-          ))}
         </div>
-        <Btn
-          size="sm"
-          onClick={() => {
-            setSelecting((current) => {
-              if (current) setSelectedIds(new Set());
-              return !current;
-            });
-          }}
-        >
-          {selecting ? t('vocab.doneSelecting') : t('vocab.selecting')}
-        </Btn>
-        <label className="ol-vocab-select-all" hidden={!selecting}>
-          <input
-            type="checkbox"
-            disabled={batchBusy || visibleEntries.length === 0}
-            checked={allVisibleSelected}
-            ref={(element) => {
-              if (element) element.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected;
-            }}
-            onChange={(event) => {
-              const checked = event.target.checked;
-              setSelectedIds((current) => {
-                const next = new Set(current);
-                visibleEntries.forEach((entry) =>
-                  checked ? next.add(entry.id) : next.delete(entry.id),
-                );
-                return next;
-              });
-            }}
-          />
-          <span className="ol-vocab-reserved-label">
-            <span aria-hidden="true">{selectAllLabel}</span>
-            <span aria-hidden="true">{t('vocab.selectedCount', { count: layoutCount })}</span>
-            <span>
-              {selectedCount ? t('vocab.selectedCount', { count: selectedCount }) : selectAllLabel}
-            </span>
-          </span>
-        </label>
-        <div style={{ flex: 1 }} />
-        <ExpandingSearch
-          value={query}
-          onChange={setQuery}
-          placeholder={t('vocab.searchPlaceholder')}
-          label={t('vocab.searchPlaceholder')}
-        />
       </div>
 
       {error && (

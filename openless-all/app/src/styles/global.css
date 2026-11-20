@@ -757,7 +757,13 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-field.ol-search-open > .ol-search-field {
   opacity: 1;
-  padding: 0 4px 0 12px;
+  padding-inline: 12px 4px;
+}
+.ol-field.ol-search-expand-right {
+  transform-origin: left center;
+}
+.ol-field.ol-search-expand-right.ol-search-open > .ol-search-field {
+  padding-inline: 4px 12px;
 }
 .ol-search-icon {
   flex-shrink: 0;

@@ -38,14 +38,27 @@ for (const narrow of [false, true]) {
       exact: true,
     });
     const filters = vocab.getByRole('tablist');
+    const select = vocab.getByRole('button', {
+      name: narrow ? 'Sélectionner' : '选择',
+      exact: true,
+    });
+    const done = vocab.locator('.ol-vocab-select-mode');
     const wordList = vocab.locator('.ol-thinscroll');
     const firstWord = wordList.locator('.ol-word-card').first();
     await expect(firstWord).toBeVisible();
 
     const addBefore = await bounds(add);
-    await vocab
-      .getByRole('button', { name: narrow ? 'Sélectionner' : '选择', exact: true })
-      .click();
+    const searchBefore = await bounds(search);
+    const filtersBefore = await bounds(filters);
+    const selectBefore = await bounds(select);
+    expect(addBefore.x).toBeGreaterThanOrEqual(searchBefore.x + searchBefore.width);
+    expect(selectBefore.x).toBeGreaterThanOrEqual(filtersBefore.x + filtersBefore.width);
+    expect(selectBefore.height).toBeCloseTo(filtersBefore.height, 0);
+    expect(selectBefore.y).toBeCloseTo(filtersBefore.y, 0);
+    if (!narrow) expect(filtersBefore.x).toBeGreaterThanOrEqual(addBefore.x + addBefore.width);
+    await select.click();
+    expect((await bounds(done)).height).toBeCloseTo(selectBefore.height, 0);
+    expect((await bounds(done)).width).toBeCloseTo(selectBefore.width, 0);
     await expect(remove).toHaveCount(0);
     const layout = async () =>
       Promise.all([bounds(add), bounds(filters), bounds(search), bounds(wordList)]);
@@ -93,6 +106,14 @@ for (const narrow of [false, true]) {
     await vocab.locator('.ol-vocab-select-all input').uncheck();
     await expect(remove).toHaveCount(0);
     expect(await layout()).toEqual(unselected);
+
+    await done.click();
+    await search.click();
+    const input = vocab.getByRole('textbox', { name: narrow ? 'Rechercher' : '搜索' });
+    await expect(input).toBeFocused();
+    await expect.poll(async () => (await bounds(input)).width).toBeGreaterThan(30);
+    expect((await bounds(input)).x).toBeGreaterThan(searchBefore.x);
+    expect((await bounds(search)).x).toBeCloseTo(searchBefore.x, 0);
   });
 }
 
