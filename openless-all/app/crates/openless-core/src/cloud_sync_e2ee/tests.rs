@@ -1064,6 +1064,75 @@ async fn lost_upload_response_reconciles_one_commit_without_another_put() {
 }
 
 #[tokio::test]
+async fn sync_now_cancellation_before_commit_does_not_submit_a_write() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(false).await.unwrap();
+    fixture.data.edit("private changes not yet uploaded");
+
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let allow = Arc::new(tokio::sync::Notify::new());
+    server.state.lock().unwrap().delay_metadata = Some((arrived.clone(), allow.clone()));
+    let service = fixture.service.clone();
+    let sync = tokio::spawn(async move { service.sync_now().await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), arrived.notified())
+        .await
+        .unwrap();
+
+    let task = fixture.service.status().task_id.unwrap();
+    let acknowledged = fixture.service.cancel(&task).unwrap();
+    assert_eq!(acknowledged.task_id.as_deref(), Some(task.as_str()));
+    assert_eq!(acknowledged.sync_state, SyncState::Syncing);
+    assert!(!sync.is_finished());
+    allow.notify_one();
+    assert_eq!(sync.await.unwrap().unwrap_err().message, "cancelled");
+    let status = fixture.service.status();
+    assert!(status.task_id.is_none());
+    assert!(status.pending_operation_id.is_none());
+    assert_eq!(status.sync_state, SyncState::Pending);
+    assert_eq!(server.state.lock().unwrap().put_attempts, 1);
+    assert_eq!(
+        fixture.service.cancel(&task).unwrap_err().message,
+        "stale_task"
+    );
+}
+
+#[tokio::test]
+async fn sync_now_cancellation_after_submit_keeps_the_committed_receipt() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(false).await.unwrap();
+    fixture.data.edit("private changes in flight");
+    server.state.lock().unwrap().delay_upload = true;
+    let service = fixture.service.clone();
+    let sync = tokio::spawn(async move { service.sync_now().await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.upload_arrived.notified(),
+    )
+    .await
+    .unwrap();
+
+    let task = fixture.service.status().task_id.unwrap();
+    let acknowledged = fixture.service.cancel(&task).unwrap();
+    assert!(acknowledged.pending_operation_id.is_some());
+    assert_eq!(acknowledged.sync_state, SyncState::Syncing);
+    assert!(!sync.is_finished());
+    server.allow_upload.notify_one();
+    let status = sync.await.unwrap().unwrap();
+    assert_eq!(status.sync_state, SyncState::Ready);
+    assert!(status.task_id.is_none());
+    assert!(status.pending_operation_id.is_none());
+    assert_eq!(status.remote_revision.as_deref(), Some("2"));
+    assert_eq!(status.last_synced_local_generation.as_deref(), Some("2"));
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.put_attempts, 2);
+    assert_eq!(remote.revision, 2);
+}
+
+#[tokio::test]
 async fn changes_during_upload_remain_pending_after_its_receipt() {
     let server = Server::start().await;
     let fixture = Fixture::new(&server).await;

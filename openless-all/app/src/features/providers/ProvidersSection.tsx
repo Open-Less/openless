@@ -40,6 +40,7 @@ import { emitSaved } from '../../lib/savedEvent';
 import { useConservativeLayout, useLayoutStack } from '../../lib/useMobileLayout';
 import { Card } from '../../ui/layout/Card';
 import { SectionTitle } from '../../ui/layout/SectionTitle';
+import { TextField } from '../../ui/controls/TextField';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { LocalModelPicker } from '../local-asr/settings/LocalModelPicker';
@@ -976,7 +977,7 @@ function AsrAdvancedOptions({
             label={t('settings.providers.asrAdvancedChunkLabel')}
             desc={t('settings.providers.asrAdvancedChunkHint')}
           >
-            <input
+            <TextField
               type="number"
               min={0}
               step={1000}
@@ -988,7 +989,7 @@ function AsrAdvancedOptions({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
               }}
-              style={inputStyle}
+              style={{ maxWidth: 360 }}
             />
           </SettingRow>
         </>

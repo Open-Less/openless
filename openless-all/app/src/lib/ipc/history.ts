@@ -16,6 +16,10 @@ export function getActivityApps(year: number): Promise<[string, number][]> {
   return invokeOrMock('get_activity_apps', { year }, () => previewHistory.getActivityApps(year));
 }
 
+export function getActivityAppIcons(year: number): Promise<Record<string, string>> {
+  return invokeOrMock('get_activity_app_icons', { year }, () => ({}));
+}
+
 export function deleteHistoryEntry(id: string): Promise<void> {
   return invokeOrMock('delete_history_entry', { id }, () => previewHistory.delete(id));
 }

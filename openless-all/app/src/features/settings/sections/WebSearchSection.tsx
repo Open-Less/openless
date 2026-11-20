@@ -1,3 +1,4 @@
+import { TextField } from '../../../ui/controls/TextField';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
@@ -122,11 +123,11 @@ export function WebSearchSection() {
           </SettingRow>
           {['tavily', 'brave'].includes(config.provider) && (
             <SettingRow label="API Key">
-              <input
+              <TextField
                 aria-label="Search API Key"
                 type="password"
                 autoComplete="off"
-                style={inputStyle}
+                style={{ maxWidth: 360 }}
                 value={config.apiKey}
                 onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
               />
@@ -140,11 +141,11 @@ export function WebSearchSection() {
                 'Enter a /search endpoint with JSON output enabled.',
               )}
             >
-              <input
+              <TextField
                 aria-label="SearXNG URL"
                 type="url"
                 placeholder="https://search.example.com/search"
-                style={inputStyle}
+                style={{ maxWidth: 360 }}
                 value={config.endpoint}
                 onChange={(e) => setConfig({ ...config, endpoint: e.target.value })}
               />

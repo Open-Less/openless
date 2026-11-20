@@ -18,6 +18,24 @@
   backdrop-filter: blur(8px) saturate(115%);
   -webkit-backdrop-filter: blur(8px) saturate(115%);
 }
+.ol-dialog-overlay[data-backdrop='blur-only'] {
+  background: transparent;
+}
+.ol-dialog-overlay[data-backdrop='blur-only']::before {
+  content: none;
+}
+/* Keep the page filtered until the card exits, independently of modal focus and hit testing. */
+.ol-app-viewport {
+  --ol-dialog-content-filter: blur(6px);
+}
+.ol-viewport-content:has(+ .ol-viewport-portals > .ol-dialog-overlay[data-backdrop='blur-only']) {
+  filter: var(--ol-dialog-content-filter);
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .ol-app-viewport {
+    --ol-dialog-content-filter: none;
+  }
+}
 .ol-dialog-card {
   color: var(--ol-ink);
   isolation: isolate;

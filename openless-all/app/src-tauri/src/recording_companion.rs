@@ -126,6 +126,26 @@ pub(crate) fn sync_fn(pressed: bool) {
     let mut route = route().lock().unwrap();
     route.state.sync_fn(pressed);
 }
+/// Only the default bare Fn+Space chord may capture Space before its anchor arrives.
+#[cfg(target_os = "macos")]
+pub(crate) fn can_wait_for_fn() -> bool {
+    let route = route().lock().unwrap();
+    !route.suspended
+        && route.action.is_some()
+        && route.state.held.is_empty()
+        && key(&route.state.auxiliary) == "space"
+        && route.state.recording.as_ref().is_some_and(|binding| {
+            binding.primary.eq_ignore_ascii_case("fn") && binding.modifiers.is_empty()
+        })
+}
+/// Replayed Space must not become a new chord on autorepeat after its grace window.
+#[cfg(target_os = "macos")]
+pub(crate) fn observe_space_down() {
+    let mut route = route().lock().unwrap();
+    if !route.suspended {
+        route.state.held.insert("space".into());
+    }
+}
 pub(crate) fn claimed() -> bool {
     route().lock().unwrap().state.consumed
 }

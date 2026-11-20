@@ -45,6 +45,8 @@ const bridge = {
   regionWrites: [] as any[],
   dictationActions: [] as string[],
   qaActions: [] as { command: string; args: unknown }[],
+  externalLinks: [] as string[],
+  qaDraftFocus: null as { token: string; focused: boolean } | null,
   pipelineMode: params.get('pipelineMode') === 'deepseek' ? 'deepseek' : 'traditional',
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
@@ -65,9 +67,9 @@ const bridge = {
     const host = document.querySelector<HTMLElement>('#native-host');
     if (!host) return;
     // Match the native window's nominal dimensions; tests can deliver a work-area clamp.
-    host.style.width = `${width ?? (expanded ? 720 : 480)}px`;
-    host.style.height = `${height ?? (expanded ? 380 : 80)}px`;
-    host.style.bottom = expanded ? '48px' : '8px';
+    host.style.width = `${width ?? (expanded ? 920 : 480)}px`;
+    host.style.height = `${height ?? (expanded ? 800 : 80)}px`;
+    host.style.bottom = expanded ? '16px' : '8px';
   },
   target: {
     sessionId: 'recording-a',
@@ -96,6 +98,14 @@ window.__TAURI_INTERNALS__ = {
     callbacks.delete(id);
   },
   async invoke(command: string, args: any) {
+    if (command === 'qa_set_draft_focus') {
+      bridge.qaDraftFocus = args;
+      return;
+    }
+    if (command === 'plugin:shell|open') {
+      bridge.externalLinks.push(args.path);
+      return;
+    }
     if (['qa_cancel_turn', 'qa_stop_recording', 'qa_submit_text'].includes(command)) {
       bridge.qaActions.push({ command, args });
     }
@@ -130,6 +140,7 @@ window.__TAURI_INTERNALS__ = {
       const settings = {
         translationTargetLanguage: bridge.target.targetLanguage,
         capsuleStyle: 'classic',
+        qaShortcutBehavior: params.get('qaBehavior') ?? 'record',
         pipelineMode: bridge.pipelineMode,
         capsuleTranscriptEnabled: params.has('transcript'),
         ...(themeSync ? { themeMode: bridge.theme } : {}),

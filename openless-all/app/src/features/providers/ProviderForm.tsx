@@ -24,6 +24,7 @@ export function useProviderForm() {
   const blockers = useRef<Record<string, boolean>>({});
   const flushers = useRef(new Map<string, () => Promise<boolean>>());
   const busy = useRef(false);
+  const isBusy = useCallback(() => busy.current, []);
   const lifetime = useRef<symbol | null>(null);
   useLayoutEffect(() => {
     lifetime.current = Symbol();
@@ -86,8 +87,8 @@ export function useProviderForm() {
   );
   useLayoutEffect(() => parent?.(id, () => finish(() => undefined)), [parent, id, finish]);
   return useMemo(
-    () => ({ version, revision, blocked, leaving, invalidate, track, register, finish }),
-    [revision, blocked, leaving, invalidate, track, register, finish],
+    () => ({ version, revision, blocked, leaving, isBusy, invalidate, track, register, finish }),
+    [revision, blocked, leaving, isBusy, invalidate, track, register, finish],
   );
 }
 

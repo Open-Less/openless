@@ -56,7 +56,7 @@ pub(crate) fn capture_focus_target() -> Option<usize> {
 /// context for LLM polish/translate so the model can adapt style per app. See issue #116.
 ///
 /// macOS uses NSWorkspace.frontmostApplication (public API, no extra permission);
-/// Windows reuses the foreground HWND for the window title; Linux and other platforms return None.
+/// Windows resolves the executable for the foreground HWND; other platforms return None.
 pub(crate) fn capture_frontmost_app() -> Option<String> {
     // This once held an NSWorkspace/Win32 implementation duplicated verbatim from
     // `selection.rs` (three cfg branches, even the nsstring conversion helper). Consolidated
@@ -134,7 +134,7 @@ pub(super) fn emit_capsule(
     elapsed_ms: u64,
     message: Option<String>,
     inserted_chars: Option<u32>,
-) -> u64 {
+) -> Option<u64> {
     emit_capsule_with_context(
         inner,
         state,
@@ -152,7 +152,7 @@ pub(super) fn emit_selection_polish_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
     message: impl Into<String>,
-) -> u64 {
+) -> Option<u64> {
     emit_capsule_with_context(inner, state, 0.0, 0, Some(message.into()), None, true)
 }
 
@@ -164,7 +164,7 @@ fn emit_capsule_with_context(
     message: Option<String>,
     inserted_chars: Option<u32>,
     selection_polish: bool,
-) -> u64 {
+) -> Option<u64> {
     let _event_guard = inner.capsule_event_lock.lock();
     emit_capsule_with_context_locked(
         inner,
@@ -192,7 +192,7 @@ fn emit_capsule_with_context_locked(
     message: Option<String>,
     inserted_chars: Option<u32>,
     selection_polish: bool,
-) -> u64 {
+) -> Option<u64> {
     let dictation = inner.backend.snapshot().dictation;
     let payload = CapsulePayload {
         session_id: dictation.session_id.map(|session| session.to_string()),
@@ -238,13 +238,13 @@ fn emit_capsule_at_epoch(
     event_lock: &Mutex<()>,
     current_epoch: &AtomicU64,
     expected_epoch: Option<u64>,
-    emit: impl FnOnce() -> u64,
+    emit: impl FnOnce() -> Option<u64>,
 ) -> Option<u64> {
     let _event_guard = event_lock.lock();
     if expected_epoch.is_some_and(|expected| current_epoch.load(Ordering::SeqCst) != expected) {
         return None;
     }
-    Some(emit())
+    emit()
 }
 
 pub(super) fn hide_core_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u64) {
@@ -252,7 +252,10 @@ pub(super) fn hide_core_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u
         &inner.capsule_event_lock,
         &inner.capsule_event_epoch,
         Some(expected_epoch),
-        || emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false),
+        || {
+            let idle = inner.host.expire_terminal_capsule()?;
+            Some(publish_capsule_payload_locked(inner, idle))
+        },
     );
 }
 
@@ -260,12 +263,24 @@ fn emit_capsule_payload_locked(
     inner: &Arc<Inner>,
     payload: CapsulePayload,
     captured_revision: u64,
-) -> u64 {
+) -> Option<u64> {
+    // A rejected projection must not replace the generation of a frame that
+    // is still on screen, or its only auto-hide timer will be invalidated.
+    if !inner
+        .host
+        .commit_capsule_payload(&payload, captured_revision)
+    {
+        log::debug!("[capsule] skipped stale payload commit at revision {captured_revision}");
+        return None;
+    }
+    Some(publish_capsule_payload_locked(inner, payload))
+}
+
+fn publish_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
     let state = payload.state;
     let selection_polish = payload.selection_polish;
-    // Advance the epoch on every payload. That way an old selection-polish terminal timer is
-    // invalidated by any later selection / voice / QA state and cannot force the new visible
-    // state back to Idle.
+    // Only accepted presentations advance the epoch. A later selection,
+    // voice or QA frame can supersede a timer; an attempted write cannot.
     let event_epoch = inner
         .capsule_event_epoch
         .fetch_add(1, Ordering::SeqCst)
@@ -275,7 +290,7 @@ fn emit_capsule_payload_locked(
         .store(selection_polish, Ordering::SeqCst);
     // Recorded before the app-handle check so headless tests can assert "hotkey pressed → which
     // capsule appeared". `replace` also fetches the previous frame's state, used to detect an
-    // entrance frame (see defer_capsule_emit below).
+    // entrance frame.
     let prev_state = inner.last_capsule_state.lock().replace(state);
     // Esc-exclusive window: while the capsule shows an in-progress state
     // (recording/transcribing/polishing) and this is really a dictation session (phase not
@@ -299,16 +314,6 @@ fn emit_capsule_payload_locked(
     // Keep the latest full feedback during a fallback card, even before the window handle is
     // validated; a re-show must not regress to an old preparing state.
     defer_capsule_payload_if_fallback_active(inner, &payload);
-    // Commit the replay frame before queueing any native window work. The
-    // snapshot lock therefore has one revision for payload and transcript even
-    // when run_on_main_thread is delayed.
-    if !inner
-        .host
-        .commit_capsule_payload(&payload, captured_revision)
-    {
-        log::debug!("[capsule] skipped stale payload commit at revision {captured_revision}");
-        return event_epoch;
-    }
     // On Windows, callers include the cpal audio callback (~30 Hz) and the backend event
     // task. Keep Tauri handle access on the event-loop thread there; other platforms retain
     // their existing presentation path.
@@ -333,6 +338,9 @@ fn present_capsule_payload(
     prev_state: Option<CapsuleState>,
 ) {
     let state = payload.state;
+    if terminal_dispatch_is_stale(inner, state, event_epoch) {
+        return;
+    }
     #[cfg(not(mobile))]
     if inner
         .host
@@ -341,8 +349,6 @@ fn present_capsule_payload(
         inner.host.emit_capsule_state_to_main(&payload);
         return;
     }
-    #[cfg(mobile)]
-    let _ = event_epoch;
     let Some(capsule) = inner.host.capsule_window() else {
         return;
     };
@@ -350,69 +356,52 @@ fn present_capsule_payload(
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);
 
-    // visible / translation are part of "this frame's capsule:state event payload" — they must
-    // be computed at the call site (i.e. when the audio thread triggers emit_capsule); reading
-    // them inside the main-thread closure would see the next frame's state, mismatching the
-    // payload actually delivered to JS.
-    let visible = !matches!(state, CapsuleState::Idle);
-    // 入场帧：胶囊从不可见第一次变可见。按平时的「同步 emit + 异步 show」，前端会在窗口
-    // 还隐藏时就起播 capsule-in，等窗口真 show 出来动画早已播完 → 用户看到胶囊「凭空出
-    // 现」而非「滑入」。修法：入场帧把发给 capsule 窗口的事件推迟到主线程闭包里、
-    // window.show 之后再 emit，保证前端起播入场动画时窗口已可见、动画完整可见。
-    let was_visible = matches!(prev_state, Some(s) if !matches!(s, CapsuleState::Idle));
-    let defer_capsule_emit = visible && !was_visible;
-
-    // emit_capsule is called from the cpal process_callback (audio callback thread) at ~30 Hz —
-    // calling NSWindow / HWND APIs on that thread hits the macOS dispatch_assert_queue_fail
-    // SIGTRAP or a Win32 SendMessage deadlock. Marshal window.show/hide + position updates to
-    // the main thread; app.emit_to uses Tauri's internal event bus, which is thread-safe, so it
-    // stays synchronous. See audit 3.2.2.
-    //
-    // show_capsule (user preference) is read on the main thread: users can change settings
-    // mid-recording, and the window between queueing the closure and running it is one or two
-    // frames (~16-33ms); the latest value avoids stale-pref flicker. pr_agent concern — see
-    // audit follow-up.
-    let host_for_main = inner.host.clone();
-    let backend_for_main = Arc::clone(&inner.backend);
-    // An entrance frame must re-send the state to the frontend after window.show, inside the
-    // closure, so it needs its own payload clone moved in; non-entrance frames use the
-    // immediate synchronous emit outside the closure (below), so this is None.
-    let payload_for_deferred_emit = if defer_capsule_emit {
-        Some(payload.clone())
-    } else {
-        None
-    };
-    let payload_for_window = payload.clone();
+    let entering = state != CapsuleState::Idle
+        && prev_state.is_none_or(|previous| previous == CapsuleState::Idle);
+    let inner_for_window = Arc::clone(inner);
+    let mut window_payload = payload.clone();
+    // Keep the WebView event and native visibility on the same queue. An
+    // entrance event follows show; an exit event precedes hide so it still
+    // reaches the visible mirrors. A queued terminal cannot resurrect or hide
+    // the capsule after a successor has taken its epoch.
     let _ = capsule.run_on_main_thread(move |capsule| {
-        if !capsule.is_available_for(state) {
+        if terminal_dispatch_is_stale(&inner_for_window, state, event_epoch)
+            || !capsule.is_available_for(state)
+        {
             return;
         }
-        let preferences = backend_for_main.get_preferences();
-        let show_capsule = payload_for_window.selection_polish || preferences.show_capsule;
+        let preferences = inner_for_window.backend.get_preferences();
+        if entering {
+            window_payload.capsule_style = preferences.capsule_style;
+        } else {
+            inner_for_window
+                .host
+                .emit_capsule_state_to_capsule(&window_payload);
+        }
+        let show_capsule = window_payload.selection_polish || preferences.show_capsule;
         capsule.apply_capsule_payload(
-            &payload_for_window,
+            &window_payload,
             show_capsule,
             preferences.capsule_style,
-            payload_for_deferred_emit.is_some(),
+            entering,
         );
-        // Entrance frame: the window has just shown (or the user disabled capsule display and we
-        // took the hide branch); only now send the state to the capsule frontend — the
-        // capsule-in animation starts while the window is visible and plays from the beginning.
-        if let Some(mut payload) = payload_for_deferred_emit {
-            payload.capsule_style = preferences.capsule_style;
-            host_for_main.emit_capsule_state_to_capsule(&payload);
+        if entering {
+            inner_for_window
+                .host
+                .emit_capsule_state_to_capsule(&window_payload);
         }
     });
 
-    // 非入场帧（录音中的 level 更新、离场/终态）保持即时同步 emit，最低延迟；
-    // 入场帧已在上面的主线程闭包里、window.show 之后 emit 过，这里跳过避免重复下发。
-    if !defer_capsule_emit {
-        inner.host.emit_capsule_state_to_capsule(&payload);
-    }
     // The main window also needs the capsule:state event: AudioCueListener uses it to trigger
     // recording cues. On Linux the cue must still work while the capsule is hidden, so it is
     // also sent to the main window. Always immediate, decoupled from capsule window show timing.
     inner.host.emit_capsule_state_to_main(&payload);
+}
+
+// A terminal show or hide can still be queued when a new recording takes over.
+fn terminal_dispatch_is_stale(inner: &Inner, state: CapsuleState, epoch: u64) -> bool {
+    (state == CapsuleState::Idle || core_capsule_hide_delay(state).is_some())
+        && inner.capsule_event_epoch.load(Ordering::SeqCst) != epoch
 }
 
 /// Whether a selection-polish terminal timer is still eligible to collapse the capsule.
@@ -468,6 +457,103 @@ pub(super) fn hide_selection_polish_capsule_if_current(inner: &Arc<Inner>, expec
 mod epoch_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn capsule_completion_expires_without_using_or_hiding_the_next_recording() {
+        use crate::capsule_feedback::dictation_completion_payload;
+        use openless_core::{BackendEventKind, DictationPhase};
+
+        for successor_already_presented in [false, true] {
+            let (coordinator, recorder, data_dir) =
+                super::super::hotkey_loops::less_computer_test_support::fixture_coordinator(
+                    crate::types::HotkeyMode::Toggle,
+                    std::time::Duration::ZERO,
+                );
+            let inner = &coordinator.inner;
+            inner.backend.start().await.unwrap();
+            let mut events = inner.backend.subscribe();
+            inner.backend.start_dictation().await.unwrap();
+            inner.backend.stop_dictation().await.unwrap();
+            let (result, epoch) = loop {
+                let event = events.try_recv().unwrap();
+                inner.host.record_backend_event(&event);
+                if let BackendEventKind::DictationCompleted(result) = event.kind {
+                    let receipt = dictation_completion_payload(
+                        &result,
+                        &inner.backend.snapshot().dictation,
+                        CapsuleStyle::Classic,
+                    )
+                    .unwrap();
+                    assert_eq!(receipt.message.as_deref(), Some("已输入"));
+                    let epoch = emit_core_capsule(inner, receipt, None, event.sequence).unwrap();
+                    break (result, epoch);
+                }
+            };
+            let next = inner.backend.start_dictation().await.unwrap();
+            let dictation = inner.backend.snapshot().dictation;
+            assert!(
+                dictation_completion_payload(&result, &dictation, CapsuleStyle::Classic).is_none()
+            );
+            while let Ok(event) = events.try_recv() {
+                inner.host.record_backend_event(&event);
+            }
+            let recording = CapsulePayload {
+                session_id: Some(next.to_string()),
+                state: CapsuleState::Recording,
+                level: dictation.level,
+                elapsed_ms: dictation.elapsed_ms,
+                message: None,
+                inserted_chars: None,
+                translation: false,
+                operating: false,
+                warming: !dictation.recording_ready,
+                selection_polish: false,
+                qa: false,
+                capsule_style: CapsuleStyle::Classic,
+            };
+            // A stale projection must not disarm the displayed receipt's timer.
+            assert!(emit_core_capsule(inner, recording.clone(), None, 0).is_none());
+            assert_eq!(inner.capsule_event_epoch.load(Ordering::SeqCst), epoch);
+
+            let revision = inner.host.capsule_revision();
+            if successor_already_presented {
+                emit_core_capsule(inner, recording.clone(), None, revision).unwrap();
+            }
+            hide_core_capsule_if_current(inner, epoch);
+            assert_eq!(
+                inner.backend.snapshot().dictation.phase,
+                DictationPhase::Recording
+            );
+            assert_eq!(inner.backend.snapshot().dictation.session_id, Some(next));
+            assert_eq!(
+                recorder.stop_count(),
+                1,
+                "only the completed recording was stopped"
+            );
+            if !successor_already_presented {
+                let idle_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
+                assert_eq!(*inner.last_capsule_state.lock(), Some(CapsuleState::Idle));
+                emit_core_capsule(inner, recording, None, revision).unwrap();
+                assert!(terminal_dispatch_is_stale(
+                    inner,
+                    CapsuleState::Idle,
+                    idle_epoch
+                ));
+            }
+            assert!(terminal_dispatch_is_stale(inner, CapsuleState::Done, epoch));
+            assert_eq!(
+                *inner.last_capsule_state.lock(),
+                Some(CapsuleState::Recording)
+            );
+            assert_eq!(
+                inner.host.capsule_snapshot().unwrap().payload.session_id,
+                Some(next.to_string())
+            );
+            inner.backend.cancel_dictation(Some(next)).await.unwrap();
+            drop(coordinator);
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
     #[test]
     fn queued_qa_terminal_and_timer_cannot_hide_direct_native_feedback() {
         for initial in [CapsuleState::Polishing, CapsuleState::Error] {
@@ -482,7 +568,8 @@ mod epoch_tests {
                 *visible.lock() = state;
                 epoch.fetch_add(1, Ordering::SeqCst) + 1
             };
-            let qa_epoch = emit_capsule_at_epoch(&lock, &epoch, None, || write(initial)).unwrap();
+            let qa_epoch =
+                emit_capsule_at_epoch(&lock, &epoch, None, || Some(write(initial))).unwrap();
             // Selection Voice publishes directly, then its Core phase is already
             // terminal when the queued QA Answer or error timer reaches the host.
             {
@@ -490,8 +577,10 @@ mod epoch_tests {
                 write(CapsuleState::Error);
             }
             assert!(
-                emit_capsule_at_epoch(&lock, &epoch, Some(qa_epoch), || write(CapsuleState::Idle))
-                    .is_none()
+                emit_capsule_at_epoch(&lock, &epoch, Some(qa_epoch), || {
+                    Some(write(CapsuleState::Idle))
+                })
+                .is_none()
             );
             assert_eq!(*visible.lock(), CapsuleState::Error);
             assert_eq!(epoch.load(Ordering::SeqCst), 2);

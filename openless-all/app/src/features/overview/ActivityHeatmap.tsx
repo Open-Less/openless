@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActivityDay } from '../../api/contracts';
-import { useActivityApps } from '../../data/history';
 import { formatLocaleDecimal, formatLocaleNumber } from '../../lib/localeFormat';
 import {
   GitHubActivity,
   type Contribution,
   type ContributionLevel,
 } from '../../ui/controls/GitHubActivity';
+import { useActivityAppRanking } from './useActivityAppRanking';
 import './overview.css';
 
 function localDateKey(date: Date): string {
@@ -16,22 +16,17 @@ function localDateKey(date: Date): string {
 
 export function ActivityHeatmap({
   activity,
+  pending = false,
   mobile = false,
 }: {
   activity: ActivityDay[];
+  pending?: boolean;
   mobile?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || 'en';
   const year = new Date().getFullYear();
-  const apps = useActivityApps(year);
-  const appRows =
-    apps.data?.status === 'available'
-      ? [...apps.data.rows]
-          .sort(([, left], [, right]) => right - left)
-          .slice(0, 5)
-          .map(([name, count]) => ({ name, count }))
-      : [];
+  const apps = useActivityAppRanking(year);
   const data = useMemo(() => {
     const first = new Date(year, 0, 1);
     const last = new Date(year, 11, 31);
@@ -74,15 +69,19 @@ export function ActivityHeatmap({
     [locale],
   );
 
-  const appStatus =
-    apps.error !== null
-      ? t('overview.activityAppsError')
-      : apps.data?.status === 'unsupported'
-        ? t('overview.activityAppsUnavailable')
-        : null;
+  const appStatus = apps.loadFailed
+    ? t('overview.activityAppsError')
+    : apps.unsupported
+      ? t('overview.activityAppsUnavailable')
+      : null;
 
   return (
-    <section className="ol-overview-heatmap" aria-label={t('overview.activityTitle')}>
+    <section
+      className="ol-overview-heatmap"
+      aria-label={t('overview.activityTitle')}
+      aria-busy={pending || undefined}
+      data-waiting={pending || undefined}
+    >
       <GitHubActivity
         className="ol-overview-activity"
         style={{ width: '100%' }}
@@ -117,12 +116,13 @@ export function ActivityHeatmap({
           )
         }
         inFlow={mobile}
+        reservePanel
         year={year}
         cellSize={11}
         fitToWidth
         showMonths
         contributions={data.contributions}
-        apps={appRows}
+        apps={apps.rows}
         accent="var(--ol-accent-solid-bg)"
         heading={`${t('overview.activityCount', { count: data.total })} · ${year}`}
         label={t('overview.activityAppsLabel')}

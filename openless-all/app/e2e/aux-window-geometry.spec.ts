@@ -9,6 +9,15 @@ test.use({ reducedMotion: 'reduce' });
 test('QA waits for observed geometry and reopens without the closed transcript', async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    // Some WebKit resizes update layout without reporting the new boundary.
+    const NativeResizeObserver = ResizeObserver;
+    window.ResizeObserver = class extends NativeResizeObserver {
+      observe(target: Element, options?: ResizeObserverOptions) {
+        if (!target.matches('.ol-app-viewport')) super.observe(target, options);
+      }
+    };
+  });
   await page.goto(fixture + '?qa');
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
   const host = page.locator('#native-host');
@@ -27,12 +36,13 @@ test('QA waits for observed geometry and reopens without the closed transcript',
   await expect(host).toHaveCSS('height', '80px');
   await expect(page.locator('.qa-answer-panel')).toBeHidden();
 
-  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 320, 220));
+  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 420, 179));
   const answer = page.locator('.qa-answer-panel');
   await expect(answer).toBeVisible();
   await expect(answer.getByText('Old result', { exact: true })).toBeVisible();
-  await expect(host).toHaveCSS('width', '320px');
-  await expect(host).toHaveCSS('height', '220px');
+  await expect(host).toHaveCSS('width', '420px');
+  await expect(host).toHaveCSS('height', '179px');
+  await expect(answer.locator('textarea')).toBeInViewport();
 
   await page.evaluate(() => {
     const bridge = (window as any).fixture;
@@ -45,6 +55,74 @@ test('QA waits for observed geometry and reopens without the closed transcript',
   await expect(answer).toHaveCount(0);
   await page.evaluate(() => (window as any).fixture.applyQaGeometry(false, 320));
   await expect(page.locator('.ol-default-capsule')).toBeVisible();
+});
+
+test('QA scales the frame and composer together on a large display', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.setViewportSize({ width: 1600, height: 1300 });
+  await page.goto(fixture + '?qa');
+  await expect(page.locator('.ol-default-capsule')).toBeVisible();
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.holdQaGeometry = true;
+    bridge.emit('qa:state', { kind: 'thinking', sessionId: 'large', messages: [] });
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.sizes.at(-1))).toBe(true);
+  await page.evaluate(() => (window as any).fixture.applyQaGeometry(true, 1380, 1200));
+  const panel = page.locator('.qa-conversation');
+  await expect(panel.locator('.qa-thought')).toBeVisible();
+  await page.evaluate(() => {
+    (window as any).fixture.emit('qa:state', { kind: 'answer', sessionId: 'large', messages: [] });
+  });
+  await expect(panel.locator('.qa-welcome-title')).toBeVisible();
+  await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
+  await expect(panel.locator('.qa-composer-position')).toHaveCSS('transform', 'none');
+  const prompt = panel.locator('.qa-prompt');
+  const frame = (await panel.boundingBox())!;
+  expect(frame.width).toBe(1380);
+  expect(frame.height).toBe(1200);
+  expect((await prompt.boundingBox())!.width).toBe(840);
+  await expect(panel.getByRole('button', { name: '关闭' })).toBeInViewport();
+
+  await prompt.locator('textarea').fill('Large display question');
+  const positions = await prompt.evaluate(async (el) => {
+    const top = () => el.getBoundingClientRect().y;
+    const start = top();
+    el.querySelector('textarea')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    (window as any).fixture.emit('qa:state', {
+      kind: 'thinking',
+      sessionId: 'large',
+      messages: [{ role: 'user', content: 'Large display question' }],
+    });
+    const frames: number[] = [];
+    const until = performance.now() + 320;
+    do {
+      await new Promise<void>((done) => requestAnimationFrame(() => done()));
+      frames.push(top());
+    } while (performance.now() < until);
+    return { start, frames };
+  });
+  // The spring must travel down from the welcome position, not jump upward at 1.5×.
+  expect(Math.min(...positions.frames)).toBeGreaterThan(positions.start - 16);
+  await expect
+    .poll(async () => (await prompt.boundingBox())!.y)
+    .toBeGreaterThan(positions.start + 180);
+
+  await page.evaluate(() => {
+    (window as any).fixture.emit('qa:state', {
+      kind: 'recording',
+      sessionId: 'next',
+      messages: [],
+    });
+  });
+  const strip = panel.locator('.qa-voice-strip');
+  await expect(strip).toBeVisible();
+  const recorded = (await strip.boundingBox())!;
+  expect(recorded.width).toBeCloseTo(340, 0);
+  expect(recorded.height).toBeCloseTo(52, 0);
+  await expect(panel).toHaveCSS('clip-path', 'none');
 });
 
 test('QA keeps a reachable close action when the host rejects expansion', async ({ page }) => {

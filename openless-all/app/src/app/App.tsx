@@ -8,6 +8,7 @@ import { AppViewport } from '../ui/layout/AppViewport';
 import { PreviewFrame } from '../ui/layout/PreviewFrame';
 import { InteractionProvider } from '../ui/overlays/InteractionProvider';
 import { CoreStartupScreen } from './CoreStartupScreen';
+import { MainWindowFirstFrame } from './MainWindowFirstFrame';
 import { isCompactWindow, isDormantWindow, WindowRoutes, type WindowKind } from './windowRoutes';
 
 const GlobalDownloadProgress = lazy(() =>
@@ -79,7 +80,10 @@ export function App({
       >
         <TooltipProvider>
           {renderStartup ? (
-            <CoreStartupScreen compact={compact} error={error} />
+            <>
+              <CoreStartupScreen compact={compact} error={error} />
+              {error && kind === 'main' && <MainWindowFirstFrame os={os} />}
+            </>
           ) : (
             <Suspense fallback={<CoreStartupScreen compact={compact} />}>
               <WindowRoutes kind={kind} os={os} previewOnboarding={previewOnboarding} />

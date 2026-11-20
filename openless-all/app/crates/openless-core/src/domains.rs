@@ -872,6 +872,9 @@ pub struct QaActivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaSnapshot {
+    /// Independent of the turn phase: a waiting composer is open but idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub panel_open: bool,
     pub phase: QaPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<QaActivity>,
@@ -899,6 +902,7 @@ pub struct QaSnapshot {
 impl Default for QaSnapshot {
     fn default() -> Self {
         Self {
+            panel_open: false,
             phase: QaPhase::Idle,
             activity: None,
             session_id: None,

@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 // Remote input: on the LAN, a phone/tablet browser opens a recording page and streams voice
 // back to the PC in real time, reusing the existing "record -> ASR -> polish -> insert at
 // cursor" pipeline. This is already a second-level page, so the controls stay expanded:
@@ -11,7 +12,6 @@ import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../../ui/layout/Card';
 import { SectionTitle } from '../../ui/layout/SectionTitle';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
-import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { copyTextToClipboard } from '../../api/files';
 import { useCopyFeedback } from '../../ui/feedback/useCopyFeedback';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
@@ -86,11 +86,11 @@ export function RemoteInputSection() {
       </SettingRow>
 
       <SettingRow label={t('settings.remoteInput.portLabel')}>
-        <input
+        <TextField
           type="number"
           min={1024}
           max={65535}
-          style={{ ...inputStyle, maxWidth: 140 }}
+          style={{ maxWidth: 140 }}
           value={portDraft ?? String(prefs.remoteInputPort)}
           onChange={(e) => setPortDraft(e.currentTarget.value)}
           onBlur={commitPort}
