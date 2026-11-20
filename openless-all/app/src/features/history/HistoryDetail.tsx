@@ -159,7 +159,12 @@ export function HistoryDetail({
         </div>
       )}
       {retranscriptionResult?.sessionId === item.id && (
-        <div className="ol-history-detail-aux">
+        <div
+          className="ol-history-retranscription ol-thinscroll"
+          role="region"
+          aria-label={t('history.retranscribe')}
+          tabIndex={0}
+        >
           <HistoryResultCard title={t('history.retranscribe')} text={retranscriptionResult.text} />
         </div>
       )}

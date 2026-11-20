@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectOverviewContained } from './support/overview';
+import { fixtureOrigin } from './support/server';
 
 async function navigate(page: Page, key: string, label: string) {
   await page.getByRole('button', { name: label, exact: true }).click();
@@ -117,6 +118,47 @@ test('history switches transcripts inside a fixed frame with copy below the text
     await expect(polished).toHaveAttribute('aria-pressed', 'true');
     await expect(content).toHaveText('Bring the notes to the planning meeting.');
   }
+});
+
+test('a long retranscription scrolls without hiding the original transcript controls', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 980, height: 640 });
+  await page.route('**/src/preview/history.ts*', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: `${await response.text()}
+previewHistory.retranscribe = () => ({
+  updatedEntry: null,
+  text: 'Long retranscription paragraph.\\n\\n'.repeat(35) + 'End of retranscription.'
+});`,
+    });
+  });
+  await page.goto(`${fixtureOrigin}/?os=mac`);
+  const surface = await navigate(page, 'history', '历史');
+  await surface.locator('[data-history-record="mock-quick-note"]').click();
+  await surface.getByRole('button', { name: '录音操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '重新转录', exact: true }).click();
+
+  const result = surface.getByRole('region', { name: '重新转录', exact: true });
+  await expect(result).toBeVisible();
+  expect(await result.evaluate((node) => node.scrollHeight - node.clientHeight)).toBeGreaterThan(
+    200,
+  );
+  await result.evaluate((node) => (node.scrollTop = node.scrollHeight));
+  await expect(result.getByText('End of retranscription.')).toBeInViewport({ ratio: 1 });
+
+  const frame = surface.locator('.ol-history-content-frame');
+  const original = frame.getByRole('button', { name: '原文', exact: true });
+  await expect(original).toBeInViewport({ ratio: 1 });
+  await original.click();
+  await expect(frame.locator('.ol-history-content-scroll')).toHaveText(
+    'Remember to bring the notes to the planning meeting.',
+  );
+  await expect(frame.getByRole('button', { name: '复制', exact: true })).toBeInViewport({
+    ratio: 1,
+  });
 });
 
 for (const [font, scale] of [

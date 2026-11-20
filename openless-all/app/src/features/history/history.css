@@ -137,6 +137,15 @@
   flex-shrink: 0;
 }
 
+.ol-history-retranscription {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(180px, 30dvh);
+  margin-bottom: 12px;
+  overflow: auto;
+  border-radius: var(--ol-radius);
+}
+
 /* Single-row ASR + Polish pipeline strip with horizontal overflow marquee */
 .ol-history-pipeline-row {
   display: grid;
