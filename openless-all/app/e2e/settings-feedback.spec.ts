@@ -195,7 +195,7 @@ test('style card lists mount and switch without the React 18 PopChild ref warnin
   await page.getByRole('button', { name: '风格', exact: true }).click();
   await page.getByRole('button', { name: '润色模式', exact: true }).click();
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
-  const switcher = page.locator('main .ol-segmented[data-sliding]');
+  const switcher = page.locator('main .ol-segmented[data-compact]');
   const tabs = switcher.getByRole('button');
   const indicator = switcher.locator('.ol-segmented-indicator');
   await expect(tabs).toHaveCount(2);
@@ -650,9 +650,9 @@ test('normal download cancellation is available only outside a modal and before 
     .poll(() => page.evaluate(() => window.settingsStatusFixture.hasDownloadListener()))
     .toBe(true);
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
-  const card = page.locator('[data-notification-key="download:qwen3:normal-model"]');
+  const card = page.locator('[data-notification-key="download:qwen3:normal-model"][data-type="loading"]');
   const cancel = card.getByRole('button', { name: '取消下载', exact: true });
-  const result = page.locator('[data-notification-key="download-result:qwen3:normal-model"]');
+  const result = page.locator('[data-notification-key="download:qwen3:normal-model"][data-type="success"]');
   await expect(card.getByRole('status')).toContainText('正在下载 normal-model');
   await expect(cancel).toBeEnabled();
   await expect(cancel).toHaveAttribute('title', '取消下载 normal-model');
@@ -664,49 +664,27 @@ test('normal download cancellation is available only outside a modal and before 
   await page.keyboard.press('Escape');
   await expect(cancel).toBeEnabled();
 
+  await card.locator('.ol-notification-body').evaluate((element) =>
+    element.setAttribute('data-same-job', 'true'),
+  );
   await page.evaluate(() => {
-    const observer = new MutationObserver(() => {
-      const exiting = document.querySelector<HTMLElement>(
-        '[data-notification-key="download:qwen3:normal-model"][inert]',
-      );
-      if (!exiting) return;
-      const button = exiting.querySelector<HTMLButtonElement>('[data-slot="toast-action"]')!;
-      document.body.dataset.downloadExit = JSON.stringify({
-        disabled: button.disabled,
-        pointerEvents: getComputedStyle(exiting).pointerEvents,
-      });
-      button.click();
-      observer.disconnect();
-    });
-    observer.observe(document.body, {
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['inert'],
-    });
     const button = document.querySelector<HTMLButtonElement>(
       '[data-notification-key="download:qwen3:normal-model"] [data-slot="toast-action"]',
     )!;
     const terminal = window.settingsStatusFixture.emitDownload('normal-model', 'finished');
-    // A host event may invalidate the job before React commits its exit.
+    // A host event may invalidate the job before React commits its result.
     button.click();
     return terminal;
   });
-  await expect(page.locator('body')).toHaveAttribute(
-    'data-download-exit',
-    JSON.stringify({ disabled: true, pointerEvents: 'none' }),
-  );
   await expect(card).toHaveCount(0);
   await expect(result).toHaveAttribute('data-type', 'success');
+  await expect(result.locator('.ol-notification-body')).toHaveAttribute('data-same-job', 'true');
+  await expect(result.locator('[data-slot="toast-action"]')).toHaveCount(0);
   expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
-  await card.getByRole('button', { name: '关闭', exact: true }).click();
-  await expect(card).toHaveCount(0);
-  expect(await page.evaluate(() => window.settingsStatusFixture.cancelledDownloads)).toEqual([]);
-  await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'progress'));
-  await expect(card).toHaveCount(0);
-
-  await page.evaluate(() => window.settingsStatusFixture.emitDownload('normal-model', 'started'));
+  await expect(result).toHaveCount(0);
+  await expect(card.locator('.ol-notification-body')).not.toHaveAttribute('data-same-job', 'true');
   await cancel.click();
   await expect(cancel).toBeDisabled();
   await expect
@@ -723,13 +701,13 @@ test('normal download cancellation is available only outside a modal and before 
 
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('broken-model', 'started'));
   await page.evaluate(() => window.settingsStatusFixture.emitDownload('broken-model', 'failed'));
-  await expect(page.locator('[data-notification-key="download:qwen3:broken-model"]')).toHaveCount(
+  await expect(page.locator('[data-notification-key="download:qwen3:broken-model"][data-type="loading"]')).toHaveCount(
     0,
   );
   await expect(page.getByRole('alert').filter({ hasText: '模型下载失败' })).toContainText(
     'broken-model',
   );
   await expect(
-    page.locator('[data-notification-key="download-result:qwen3:broken-model"]'),
+    page.locator('[data-notification-key="download:qwen3:broken-model"][data-type="warning"]'),
   ).toHaveAttribute('data-type', 'warning');
 });

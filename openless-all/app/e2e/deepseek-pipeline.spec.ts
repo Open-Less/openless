@@ -56,6 +56,10 @@ test('three pipelines retain separate credentials and the selected pipeline afte
         ),
       )
       .toBe(storedMode);
+    const savedRevision = await page.evaluate(async () => {
+      const { getSettingsSnapshot } = await import('/src/api/preferences.ts');
+      return (await getSettingsSnapshot()).revision;
+    });
     await dialog.getByRole('button', { name: '返回应用', exact: true }).click();
     await settleNavigation(page);
     await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -66,6 +70,10 @@ test('three pipelines retain separate credentials and the selected pipeline afte
       'aria-pressed',
       'true',
     );
+    expect(await page.evaluate(async () => {
+      const { getSettingsSnapshot } = await import('/src/api/preferences.ts');
+      return (await getSettingsSnapshot()).revision;
+    })).toBe(savedRevision);
   }
   await expect(page.getByLabel('DeepSeek suite API Key')).toHaveValue('dedicated-fixture-key');
   const after = await page.evaluate(async (id) => {

@@ -96,7 +96,7 @@ export function Usage() {
       <div className="ol-usage-controls">
         <nav aria-label={text('用量页面', 'Usage pages')} className="ol-usage-tabs">
           <Segmented
-            sliding
+            compact
             label={text('用量页面', 'Usage pages')}
             options={[
               { value: 'overview', label: text('概览', 'Overview') },
@@ -109,7 +109,7 @@ export function Usage() {
         </nav>
         <div className="ol-usage-toolbar">
           <Segmented
-            sliding
+            compact
             label={text('统计时段', 'Usage period')}
             options={[
               { value: '7', label: text('近 7 天', 'Last 7 days') },

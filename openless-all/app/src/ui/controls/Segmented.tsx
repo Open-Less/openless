@@ -6,6 +6,7 @@ export interface SegmentedOption<T extends string> {
   label: string;
   title?: string;
   icon?: ReactNode;
+  description?: string;
 }
 
 /** The selected chip moves under the stable button labels. */
@@ -15,7 +16,8 @@ export function Segmented<T extends string>({
   onChange,
   label,
   disabled = false,
-  sliding = false,
+  compact = false,
+  optionClassName,
   className,
   indicatorClassName,
 }: {
@@ -24,7 +26,8 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   label: string;
   disabled?: boolean;
-  sliding?: boolean;
+  compact?: boolean;
+  optionClassName?: string;
   className?: string;
   /** Extra hook for callers whose tests address the sliding chip directly. */
   indicatorClassName?: string;
@@ -38,7 +41,7 @@ export function Segmented<T extends string>({
       role="group"
       aria-label={label}
       className={['ol-segmented', className].filter(Boolean).join(' ')}
-      data-sliding={sliding || undefined}
+      data-compact={compact || undefined}
     >
       <span
         ref={indicatorRef}
@@ -49,7 +52,7 @@ export function Segmented<T extends string>({
         <button
           key={option.value}
           type="button"
-          className="ol-segmented-option"
+          className={['ol-segmented-option', optionClassName].filter(Boolean).join(' ')}
           aria-pressed={option.value === value}
           disabled={disabled}
           title={option.title}
@@ -58,7 +61,10 @@ export function Segmented<T extends string>({
           }}
         >
           {option.icon && <span className="ol-segmented-icon" aria-hidden>{option.icon}</span>}
-          <span>{option.label}</span>
+          <span className="ol-segmented-label">{option.label}</span>
+          {option.description && (
+            <span className="ol-segmented-description">{option.description}</span>
+          )}
         </button>
       ))}
     </div>

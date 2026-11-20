@@ -64,7 +64,7 @@ export function useDesktopGuide({ onComplete }: { onComplete: () => void | Promi
   const steps = guideSteps(os === 'mac', multimodal);
   const step = steps.includes(progress.step) ? progress.step : 'recognition';
   const index = steps.indexOf(step);
-  const currentMode = multimodal ? 'multimodal' : 'traditional';
+  const currentMode: 'traditional' | 'multimodal' = multimodal ? 'multimodal' : 'traditional';
 
   useEffect(() => {
     alive.current = true;

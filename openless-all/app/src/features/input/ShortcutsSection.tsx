@@ -1,4 +1,5 @@
 import { TextField } from '../../ui/controls/TextField';
+import { Segmented } from '../../ui/controls/Segmented';
 import { useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -236,29 +237,29 @@ export function ShortcutsSection() {
         <aside className="ol-shortcuts-filters">
           <nav aria-label={tr('category')}>
             <h3>{tr('category')}</h3>
-            {['all', 'recording', 'styles', 'system'].map((id) => (
-              <button
-                type="button"
-                key={id}
-                aria-pressed={category === id}
-                onClick={() => setCategory(id)}
-              >
-                {tr(id)}
-              </button>
-            ))}
+            <Segmented
+              className="ol-shortcut-filter-options"
+              label={tr('category')}
+              value={category}
+              onChange={setCategory}
+              options={['all', 'recording', 'styles', 'system'].map((value) => ({
+                value,
+                label: tr(value),
+              }))}
+            />
           </nav>
           <nav aria-label={tr('status')}>
             <h3>{tr('status')}</h3>
-            {['all', 'assigned', 'unassigned'].map((id) => (
-              <button
-                type="button"
-                key={id}
-                aria-pressed={status === id}
-                onClick={() => setStatus(id)}
-              >
-                {tr(id)}
-              </button>
-            ))}
+            <Segmented
+              className="ol-shortcut-filter-options"
+              label={tr('status')}
+              value={status}
+              onChange={setStatus}
+              options={['all', 'assigned', 'unassigned'].map((value) => ({
+                value,
+                label: tr(value),
+              }))}
+            />
           </nav>
         </aside>
         <div className="ol-shortcut-results">

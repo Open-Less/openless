@@ -13,6 +13,7 @@ import {
   type LocalAsrTestResult,
 } from '../../api/local-asr';
 import { Button as Btn } from '../../ui/controls/Button';
+import { Segmented } from '../../ui/controls/Segmented';
 import { Card } from '../../ui/layout/Card';
 import { Pill } from '../../ui/controls/Pill';
 import { Icon } from '../../components/Icon';
@@ -897,33 +898,26 @@ export function DownloadDialog({
                   <span>{visibleEntries.length}</span>
                 </div>
                 {engines.length > 1 && (
-                  <div
+                  <Segmented
                     className="ol-model-filters"
-                    role="group"
-                    aria-label={t('localAsr.engineLabel')}
-                  >
-                    {(['all', ...engines] as const).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={engine === value}
-                        onClick={() => {
-                          setEngine(value);
-                          const nextEntries =
-                            value === 'all'
-                              ? entries
-                              : entries.filter((entry) => entry.engine === value);
-                          if (!nextEntries.some((entry) => entry.id === selectedId)) {
-                            const next =
-                              nextEntries.find((entry) => !entry.isDownloaded) ?? nextEntries[0];
-                            if (next) onSelect(next.id);
-                          }
-                        }}
-                      >
-                        {value === 'all' ? t('localAsr.allEngines') : ENGINE_LABELS[value]}
-                      </button>
-                    ))}
-                  </div>
+                    label={t('localAsr.engineLabel')}
+                    value={engine}
+                    options={(['all', ...engines] as const).map((value) => ({
+                      value,
+                      label: value === 'all' ? t('localAsr.allEngines') : ENGINE_LABELS[value],
+                    }))}
+                    onChange={(value) => {
+                      setEngine(value);
+                      const nextEntries =
+                        value === 'all'
+                          ? entries
+                          : entries.filter((entry) => entry.engine === value);
+                      if (!nextEntries.some((entry) => entry.id === selectedId)) {
+                        const next = nextEntries.find((entry) => !entry.isDownloaded) ?? nextEntries[0];
+                        if (next) onSelect(next.id);
+                      }
+                    }}
+                  />
                 )}
               </div>
               <div className="ol-model-list ol-model-catalog-list">

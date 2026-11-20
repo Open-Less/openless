@@ -24,9 +24,19 @@ export type NotificationState = 'info' | 'saved' | 'failed' | 'deleting' | 'dele
 export type ToastVariant =
   'default' | 'success' | 'error' | 'warning' | 'info' | 'loading' | 'trash';
 
+export interface DownloadStatusContent {
+  beforeName: string;
+  modelName?: string;
+  afterName?: string;
+  locale?: string;
+  /** null reserves the percentage slot while the byte total is unknown. */
+  percent?: number | null;
+}
+
 export interface NotificationOptions {
   message: string;
   description?: string;
+  downloadStatus?: DownloadStatusContent;
   state?: NotificationState;
   variant?: ToastVariant;
   severity?: 'warning' | 'error';

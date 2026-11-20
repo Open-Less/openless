@@ -311,7 +311,7 @@ export function Style() {
                 label={t('style.pack.listTitle')}
                 value={workflowView}
                 onChange={setWorkflowView}
-                sliding
+                compact
                 options={[
                   { value: 'dictation', label: t('style.pack.dictationTab') },
                   { value: 'selection', label: t('style.pack.selectionTab') },

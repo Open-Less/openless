@@ -1,4 +1,5 @@
 import { TextField } from '../../ui/controls/TextField';
+import { Segmented } from '../../ui/controls/Segmented';
 import {
   ArrowRight,
   Check,
@@ -183,36 +184,28 @@ export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Pro
                           </>
                         )}
                         {id === 'mode' && (
-                          <>
-                            <div className="ol-guide-choices" role="group" aria-label={title(id)}>
-                              {(['traditional', 'multimodal'] as const).map((mode) => (
-                                <button
-                                  key={mode}
-                                  type="button"
-                                  className="ol-guide-choice"
-                                  aria-pressed={currentMode === mode}
-                                  disabled={busy || loading || !prefs}
-                                  onClick={() =>
-                                    void run(() =>
-                                      updatePrefs((current) => ({
-                                        ...current,
-                                        pipelineMode: mode,
-                                        multimodalPipelineEnabled: mode === 'multimodal',
-                                      })),
-                                    )
-                                  }
-                                >
-                                  {mode === 'traditional' ? (
-                                    <Volume2 size={23} />
-                                  ) : (
-                                    <Sparkles size={23} />
-                                  )}
-                                  <strong>{t(`desktopGuide.${mode}`)}</strong>
-                                  <span>{t(`desktopGuide.${mode}Hint`)}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </>
+                          <Segmented
+                            className="ol-guide-choices"
+                            optionClassName="ol-guide-choice"
+                            label={title(id)}
+                            value={currentMode}
+                            disabled={busy || loading || !prefs}
+                            onChange={(mode) =>
+                              void run(() =>
+                                updatePrefs((current) => ({
+                                  ...current,
+                                  pipelineMode: mode,
+                                  multimodalPipelineEnabled: mode === 'multimodal',
+                                })),
+                              )
+                            }
+                            options={(['traditional', 'multimodal'] as const).map((mode) => ({
+                              value: mode,
+                              label: t(`desktopGuide.${mode}`),
+                              description: t(`desktopGuide.${mode}Hint`),
+                              icon: mode === 'traditional' ? <Volume2 size={23} /> : <Sparkles size={23} />,
+                            }))}
+                          />
                         )}
                         {(id === 'recognition' || id === 'polish') && (
                           <>

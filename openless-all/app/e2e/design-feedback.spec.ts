@@ -238,9 +238,12 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await expect(page.getByRole('heading', { name: '用量', exact: true })).toBeVisible();
   const usageTab = page.locator('.ol-usage-tabs .ol-segmented-option[aria-pressed="true"]');
   await expect(usageTab).toBeVisible();
+  const surfaceColor = await page.locator('html').getAttribute('data-ol-theme') === 'dark'
+    ? 'rgb(42, 42, 46)'
+    : 'rgb(244, 244, 245)';
   const usageIndicator = page.locator('.ol-usage-tabs .ol-segmented-indicator');
   await expect(usageIndicator).toBeVisible();
-  await expect(usageIndicator).toHaveCSS('background-color', 'rgb(34, 34, 34)');
+  await expect(usageIndicator).toHaveCSS('background-color', surfaceColor);
   const usagePeriod = page.getByRole('group', { name: '统计时段' });
   const usageSelected = usagePeriod.locator('.ol-segmented-option[aria-pressed="true"]');
   await expect(usageSelected).toBeVisible();
@@ -262,12 +265,10 @@ test('selected segmented options and the overview heatmap stay visible', async (
   await expect(pipelineSelected).toBeVisible();
   await expect(pipelineSelected).toHaveCSS('clip-path', 'none');
   await expect(pipelineSelected).toHaveCSS('border-radius', '12px');
-  const pipelineStyle = await pipelineSelected.evaluate((node) => ({
-    color: getComputedStyle(node).color,
-    background: getComputedStyle(node).backgroundColor,
-  }));
-  expect(pipelineStyle.background).not.toBe('rgba(0, 0, 0, 0)');
-  expect(pipelineStyle.color).not.toBe(pipelineStyle.background);
+  await expect(page.locator('.ol-service-pipeline-indicator')).toHaveCSS(
+    'background-color',
+    surfaceColor,
+  );
 
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await expect(page.locator('.ol-settings-surface')).toBeHidden();
@@ -283,7 +284,7 @@ test('selected segmented options and the overview heatmap stay visible', async (
     .getByRole('group', { name: '统计周期' })
     .locator('.ol-segmented-indicator');
   await expect(overviewIndicator).toBeVisible();
-  await expect(overviewIndicator).toHaveCSS('background-color', 'rgb(34, 34, 34)');
+  await expect(overviewIndicator).toHaveCSS('background-color', surfaceColor);
   // The yearly card adapts the GitHub Activity component: its heading is the yearly
   // count line and its grid is made of real day cells.
   const dashboard = page.locator('.ol-overview-dashboard');

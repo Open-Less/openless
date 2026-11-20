@@ -188,8 +188,20 @@ button:disabled {
 .ol-shortcuts-filters nav + nav {
   margin-top: 24px;
 }
+.ol-shortcut-filter-options.ol-segmented {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.ol-shortcut-filter-options > .ol-segmented-indicator {
+  display: none;
+}
 .ol-shortcuts-filters button {
   display: flex;
+  justify-content: flex-start;
   width: 100%;
   padding: 8px 10px;
   margin: 2px 0;
@@ -432,31 +444,48 @@ button:disabled {
 .ol-switch[data-checked] .ol-switch-thumb {
   transform: translateX(calc(var(--ol-switch-width) - var(--ol-switch-knob) - 4px));
 }
-.ol-choice-chips {
+.ol-choice-chips.ol-segmented {
   display: flex;
-  flex-wrap: wrap;
   gap: 7px;
   align-items: center;
-  padding: 3px;
+  background: transparent;
+  box-shadow: none;
 }
-.ol-choice-chips button {
-  position: relative;
+.ol-choice-chips > .ol-segmented-indicator {
+  background: var(--ol-blue-soft);
+  box-shadow: inset 0 0 0 1px var(--ol-blue-ring);
+}
+.ol-choice-chips > .ol-segmented-option {
+  z-index: auto;
   padding: 7px 12px;
   font-size: 12.5px;
   white-space: nowrap;
   border-radius: var(--ol-control-radius);
   border: 1px solid var(--ol-line);
-  background: var(--ol-surface);
+  background: transparent;
   color: var(--ol-ink-2);
-  transition:
-    color var(--ol-choice-motion),
-    background-color var(--ol-choice-motion),
-    border-color var(--ol-choice-motion);
+  transition: color var(--ol-choice-motion), border-color var(--ol-choice-motion);
 }
-.ol-choice-chips button[aria-pressed='true'] {
+.ol-choice-chips > .ol-segmented-option::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--ol-surface);
+}
+.ol-choice-chips > .ol-segmented-option[aria-pressed='true'] {
   color: var(--ol-blue);
-  background: var(--ol-blue-soft);
-  border-color: var(--ol-blue-ring);
+  -webkit-text-fill-color: var(--ol-blue);
+  border-color: transparent;
+  font-weight: inherit;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ol-choice-chips > .ol-segmented-option:not([aria-pressed='true']):not(:disabled):hover {
+    background: transparent;
+    color: var(--ol-ink-2);
+  }
 }
 
 .ol-advanced-settings-detail > .ol-experimental-models {
@@ -715,9 +744,19 @@ button:disabled {
   .ol-shortcuts-filters h3 {
     margin: 0 6px 0 0;
   }
+  .ol-shortcut-filter-options.ol-segmented {
+    flex-direction: row;
+    gap: 4px;
+  }
+  .ol-shortcut-filter-options > .ol-segmented-indicator {
+    display: block;
+  }
   .ol-shortcuts-filters button {
     width: auto;
     padding: 6px 9px;
+  }
+  .ol-shortcuts-filters button[aria-pressed='true'] {
+    background: transparent;
   }
 }
 @media (max-width: 540px) {

@@ -438,10 +438,6 @@
   --ol-dialog-shadow: var(--ol-shadow-lg);
 }
 
-.ol-vocab-toolbar .ol-vocab-add {
+:root:not([data-ol-theme='dark']) .ol-vocab-add > .ol-vocab-add-icon {
   color: #000;
-}
-
-[data-ol-theme='dark'] .ol-vocab-toolbar .ol-vocab-add {
-  color: var(--ol-ink);
 }

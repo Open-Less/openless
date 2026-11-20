@@ -977,7 +977,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   line-height: 1.5;
 }
 
-/* Segmented controls with sliding enabled paint selection on the moving indicator. */
+/* Segmented controls paint selection on the moving indicator. */
 .ol-segmented {
   position: relative;
   isolation: isolate;
@@ -1070,9 +1070,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   pointer-events: none;
 }
 .ol-segmented-indicator {
-  z-index: -1;
+  z-index: 0;
   border-radius: var(--ol-r-sm);
-  background: transparent !important;
+  background: var(--ol-surface-2);
 }
 .ol-service-view-indicator {
   z-index: 1;
@@ -1081,6 +1081,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-segmented-option {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   z-index: 1;
   padding: 5px 12px;
   border: 0;
@@ -1102,29 +1106,16 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
      selection tokens could resolve to a near-invisible label/wash in WebKit. */
   color: var(--ol-ink);
   -webkit-text-fill-color: var(--ol-ink);
-  background: var(--ol-surface-2);
-  background-color: var(--ol-surface-2);
+  background: transparent;
   opacity: 1;
   font-weight: var(--ol-font-weight-semibold);
 }
-.ol-segmented[data-sliding] {
+.ol-segmented[data-compact] {
   flex-wrap: nowrap;
 }
-.ol-segmented[data-sliding] > .ol-segmented-indicator {
-  z-index: 0;
-  background: #222 !important;
-}
-.ol-segmented[data-sliding] > .ol-segmented-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.ol-segmented[data-compact] > .ol-segmented-option {
   padding-inline: 9px;
   font-weight: var(--ol-font-weight-medium);
-}
-.ol-segmented[data-sliding] > .ol-segmented-option[aria-pressed='true'] {
-  background: transparent;
-  color: #fff;
-  -webkit-text-fill-color: #fff;
 }
 @media (hover: hover) and (pointer: fine) {
   .ol-segmented-option:not([aria-pressed='true']):not(:disabled):hover {

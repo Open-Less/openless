@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { useReducedMotion } from '../../lib/motion';
 import { StatusNotice } from './StatusNotice';
+import { DownloadStatusText } from './DownloadStatusText';
 import { ToastIcon, ToastPanel } from './ToastPanel';
 import { toastVariant } from './toast';
 import { ViewportPortal, useAppViewport } from '../layout/AppViewport';
@@ -93,24 +94,37 @@ const NotificationCard = forwardRef<
             {variant !== 'default' && <ToastIcon type={variant} />}
             <div className="ol-notification-body">
               <div role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}>
-                <AnimatePresence initial={false} mode="wait">
-                  <motion.div
-                    key={JSON.stringify([item.message, item.description])}
-                    initial={{ opacity: 0, filter: reduced ? 'none' : 'blur(4px)' }}
-                    animate={{ opacity: 1, filter: 'none' }}
-                    exit={{ opacity: 0, filter: reduced ? 'none' : 'blur(4px)' }}
-                    transition={{ duration: reduced ? 0 : 0.12 }}
-                  >
+                {item.downloadStatus ? (
+                  <>
                     <span className="ol-notification-message" data-slot="toast-title">
-                      {item.message}
+                      <DownloadStatusText status={item.downloadStatus} />
                     </span>
                     {item.description && (
                       <span className="ol-notification-description" data-slot="toast-description">
                         {item.description}
                       </span>
                     )}
-                  </motion.div>
-                </AnimatePresence>
+                  </>
+                ) : (
+                  <AnimatePresence initial={false} mode="wait">
+                    <motion.div
+                      key={JSON.stringify([item.message, item.description])}
+                      initial={{ opacity: 0, filter: reduced ? 'none' : 'blur(4px)' }}
+                      animate={{ opacity: 1, filter: 'none' }}
+                      exit={{ opacity: 0, filter: reduced ? 'none' : 'blur(4px)' }}
+                      transition={{ duration: reduced ? 0 : 0.12 }}
+                    >
+                      <span className="ol-notification-message" data-slot="toast-title">
+                        {item.message}
+                      </span>
+                      {item.description && (
+                        <span className="ol-notification-description" data-slot="toast-description">
+                          {item.description}
+                        </span>
+                      )}
+                    </motion.div>
+                  </AnimatePresence>
+                )}
               </div>
               {item.progress && (
                 <span
