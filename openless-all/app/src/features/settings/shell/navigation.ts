@@ -15,6 +15,7 @@ export type SettingsSectionId =
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
   { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
+  { id: 'intentRouting', icon: 'sparkle', titleKey: 'askEntrySettings.routing', beta: true },
   {
     id: 'voiceEnhancement',
     icon: 'mic',
@@ -104,6 +105,7 @@ export function visibleGeneralPages(
 
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (page.id === 'intentRouting') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
     if (page.id === 'debug')

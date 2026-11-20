@@ -13,6 +13,9 @@ import '../../src/styles/refinements.css';
 
 const mode = new URLSearchParams(location.search).get('mode');
 const fresh = mode === 'fresh';
+const lifecycle = mode === 'sync-lifecycle';
+const syncRuns: string[] = [];
+let finishSync: ((outcome: 'success' | 'failure' | 'cancel') => void) | undefined;
 const cold = mode === 'renew-cold';
 const disabled = cold && sessionStorage.getItem('sync-fixture-disabled') === 'true';
 let failRefresh = cold && !disabled;
@@ -50,6 +53,8 @@ let restoreAttempts = 0;
 Object.assign(window, {
   syncDialogFixture: {
     attempts,
+    syncRuns,
+    finishSync: (outcome: 'success' | 'failure' | 'cancel') => finishSync?.(outcome),
     finish: (failed = false) => finish?.(failed),
     publishReview: () => publishReview?.(),
   },
@@ -84,7 +89,33 @@ mockIPC(
         return { ...status };
       case 'cloud_sync_e2ee_claim_setup_prompt':
         return false;
+      case 'cloud_sync_e2ee_cancel': {
+        attempts.push({ command, args });
+        if (!lifecycle || (args as { taskId: string }).taskId !== status.taskId || !finishSync)
+          throw new Error('Unexpected cancellation');
+        finishSync('cancel');
+        return { ...status };
+      }
       case 'cloud_sync_e2ee_sync_now':
+        if (lifecycle) {
+          attempts.push({ command, args });
+          const task = `sync-${syncRuns.length + 1}`;
+          syncRuns.push(task);
+          update({ syncState: 'syncing', taskId: task, lastError: null });
+          return new Promise((resolve, reject) => {
+            finishSync = (outcome) => {
+              finishSync = undefined;
+              const code = outcome === 'cancel' ? 'cancelled' : 'transport_failed';
+              const next = update({
+                syncState: outcome === 'success' ? 'ready' : outcome === 'cancel' ? 'pending' : 'failed',
+                taskId: null,
+                lastError: outcome === 'success' ? null : { code, retryAfterSeconds: null },
+              });
+              if (outcome === 'success') resolve(next);
+              else reject({ details: { reason: code } });
+            };
+          });
+        }
         if (mode !== 'review') throw new Error('Unexpected sync');
         attempts.push({ command, args });
         update({ syncState: 'syncing', taskId: 'sync-review' });

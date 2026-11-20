@@ -224,10 +224,7 @@ export function useStylePackWorkspace() {
     .filter((pack) => pack.kind === 'builtin' && pack.id !== BUILTIN_RAW_ID)
     .sort((a, b) => BUILTIN_BODY_ORDER.indexOf(a.id) - BUILTIN_BODY_ORDER.indexOf(b.id));
   const importedPacks = packs.filter((pack) => pack.kind === 'imported');
-  const bodyPacks =
-    workflowView === 'selection'
-      ? [...(rawPack ? [rawPack] : []), ...otherBuiltinPacks, ...importedPacks]
-      : [...otherBuiltinPacks, ...importedPacks];
+  const bodyPacks = [...otherBuiltinPacks, ...importedPacks];
   const selectionPolishPackId = marketplacePrefs?.selectionPolishStylePackId ?? 'builtin.light';
 
   useEffect(() => {

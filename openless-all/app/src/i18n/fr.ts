@@ -176,6 +176,7 @@ export const fr: typeof zhCN = {
     replace: 'Remplacer les données locales synchronisées par le cloud',
     replaceWarning:
       'Les données locales du périmètre seront remplacées. Choisissez la fusion pour conserver vos modifications locales.',
+    mergeOverwriteDirection: 'En cas de conflit, la version locale remplace la donnée cloud lors de la synchronisation. La version cloud remplace la donnée locale.',
     restoreCheck: 'J’ai vérifié le mode et mes choix pour les conflits.',
     applyRestore: 'Confirmer la restauration',
     conflictProgress: '{{selected}} conflits résolus sur {{total}}',
@@ -511,7 +512,7 @@ export const fr: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Mettre à jour',
+        update: 'Mettre à jour le pack',
         withdraw: 'Retirer',
       },
       loadFailed: 'Impossible de charger vos packs : {{err}}',

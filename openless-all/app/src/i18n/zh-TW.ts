@@ -162,6 +162,7 @@ export const zhTW: typeof zhCN = {
     merge: '合併，並逐項處理衝突',
     replace: '使用雲端資料取代本機同步資料',
     replaceWarning: '此操作會取代同步範圍內的本機資料。若要保留本機修改，請選擇合併。',
+    mergeOverwriteDirection: '發生衝突時，選擇本機版本會在合併同步時覆蓋對應的雲端項目，選擇雲端版本會覆蓋對應的本機項目。',
     restoreCheck: '我已檢查還原方式和衝突處理選擇。',
     applyRestore: '確認還原',
     conflictProgress: '已處理 {{selected}} / {{total}} 項衝突',
@@ -474,7 +475,7 @@ export const zhTW: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: '更新風格包',
         withdraw: '下架',
       },
       loadFailed: '我的發布載入失敗：{{err}}',

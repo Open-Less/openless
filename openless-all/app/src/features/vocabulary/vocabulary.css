@@ -437,3 +437,11 @@
 [data-ol-theme='dark'] .ol-vocab-dialog {
   --ol-dialog-shadow: var(--ol-shadow-lg);
 }
+
+.ol-vocab-toolbar .ol-vocab-add {
+  color: #000;
+}
+
+[data-ol-theme='dark'] .ol-vocab-toolbar .ol-vocab-add {
+  color: var(--ol-ink);
+}

@@ -31,7 +31,10 @@ export interface NotificationOptions {
   variant?: ToastVariant;
   severity?: 'warning' | 'error';
   durationMs?: number;
+  /** Replaces any previous notification in this group. */
   key?: string;
+  /** Repeated publications for one operation retain its notification identity. */
+  taskId?: string;
   align?: 'center';
   progress?: boolean;
   /** Percent complete when known; absent means indeterminate. */

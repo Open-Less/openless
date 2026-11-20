@@ -1,10 +1,11 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { useSelectionMotion } from '../../lib/motion';
 
 export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
   title?: string;
+  icon?: ReactNode;
 }
 
 /** The selected chip moves under the stable button labels. */
@@ -56,10 +57,8 @@ export function Segmented<T extends string>({
             if (option.value !== value) onChange(option.value);
           }}
         >
-          {/* data-label reserves the semibold width so selecting never nudges a neighbour. */}
-          <span className="ol-segmented-label" data-label={option.label}>
-            {option.label}
-          </span>
+          {option.icon && <span className="ol-segmented-icon" aria-hidden>{option.icon}</span>}
+          <span>{option.label}</span>
         </button>
       ))}
     </div>

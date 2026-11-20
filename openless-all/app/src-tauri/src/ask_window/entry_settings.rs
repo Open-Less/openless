@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum AskEntryIntentMode {
-    #[default]
     SemanticHybrid,
+    #[default]
     SeparateModel,
     MainModelTool,
 }
@@ -30,6 +30,13 @@ impl Default for AskEntrySettings {
             intent_mode: AskEntryIntentMode::default(),
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AskEntrySettingsPatch {
+    auto_voice_on_open: Option<bool>,
+    intent_mode: Option<AskEntryIntentMode>,
 }
 
 #[derive(Deserialize)]
@@ -99,8 +106,28 @@ impl AskEntrySettingsStore {
         self.committed.read().clone()
     }
 
-    pub(crate) fn write(&self, settings: AskEntrySettings) -> Result<AskEntrySettings, String> {
+    pub(crate) fn write(&self, patch: AskEntrySettingsPatch) -> Result<AskEntrySettings, String> {
         let _writer = self.writes.lock();
+        let previous = self.read();
+        let settings = match (patch.auto_voice_on_open, patch.intent_mode) {
+            (Some(auto_voice_on_open), Some(intent_mode)) => AskEntrySettings {
+                auto_voice_on_open,
+                intent_mode,
+            },
+            (auto_voice, mode) => {
+                let previous = *previous.as_ref().map_err(Clone::clone)?;
+                AskEntrySettings {
+                    auto_voice_on_open: auto_voice.unwrap_or(previous.auto_voice_on_open),
+                    intent_mode: mode.unwrap_or(previous.intent_mode),
+                }
+            }
+        };
+        if previous
+            .as_ref()
+            .is_ok_and(|previous| *previous == settings)
+        {
+            return Ok(settings);
+        }
         let path = self
             .path
             .as_deref()
@@ -115,6 +142,13 @@ impl AskEntrySettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn full(settings: AskEntrySettings) -> AskEntrySettingsPatch {
+        AskEntrySettingsPatch {
+            auto_voice_on_open: Some(settings.auto_voice_on_open),
+            intent_mode: Some(settings.intent_mode),
+        }
+    }
 
     #[test]
     fn missing_file_and_missing_keys_use_the_canonical_defaults() {
@@ -133,7 +167,7 @@ mod tests {
                 .unwrap(),
             AskEntrySettings {
                 auto_voice_on_open: false,
-                intent_mode: AskEntryIntentMode::SemanticHybrid,
+                intent_mode: AskEntryIntentMode::SeparateModel,
             }
         );
         fs::write(&path, br#"{"intentMode":"mainModelTool"}"#).unwrap();
@@ -153,7 +187,13 @@ mod tests {
         let path = directory.path().join(AskEntrySettingsStore::FILE_NAME);
         let store = AskEntrySettingsStore::load(Some(path.clone()));
         for (settings, mode) in [
-            (AskEntrySettings::default(), "semanticHybrid"),
+            (
+                AskEntrySettings {
+                    intent_mode: AskEntryIntentMode::SemanticHybrid,
+                    ..AskEntrySettings::default()
+                },
+                "semanticHybrid",
+            ),
             (
                 AskEntrySettings {
                     auto_voice_on_open: false,
@@ -169,7 +209,7 @@ mod tests {
                 "mainModelTool",
             ),
         ] {
-            assert_eq!(store.write(settings).unwrap(), settings);
+            assert_eq!(store.write(full(settings)).unwrap(), settings);
             assert_eq!(store.read().unwrap(), settings);
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap(),
@@ -185,6 +225,41 @@ mod tests {
     }
 
     #[test]
+    fn each_preference_patches_the_latest_committed_value() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(AskEntrySettingsStore::FILE_NAME);
+        fs::write(
+            &path,
+            br#"{"intentMode":"semanticHybrid","autoVoiceOnOpen":true}"#,
+        )
+        .unwrap();
+        let store = AskEntrySettingsStore::load(Some(path.clone()));
+        store
+            .write(AskEntrySettingsPatch {
+                auto_voice_on_open: Some(false),
+                intent_mode: None,
+            })
+            .unwrap();
+        assert_eq!(
+            store.read().unwrap().intent_mode,
+            AskEntryIntentMode::SemanticHybrid
+        );
+        store
+            .write(AskEntrySettingsPatch {
+                auto_voice_on_open: None,
+                intent_mode: Some(AskEntryIntentMode::MainModelTool),
+            })
+            .unwrap();
+        assert_eq!(
+            AskEntrySettingsStore::load(Some(path)).read().unwrap(),
+            AskEntrySettings {
+                auto_voice_on_open: false,
+                intent_mode: AskEntryIntentMode::MainModelTool,
+            }
+        );
+    }
+
+    #[test]
     fn failures_do_not_publish_uncommitted_values() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(AskEntrySettingsStore::FILE_NAME);
@@ -196,10 +271,10 @@ mod tests {
         let store = AskEntrySettingsStore::load(Some(path.clone()));
         fs::create_dir(&path).unwrap();
         assert!(store
-            .write(AskEntrySettings {
+            .write(full(AskEntrySettings {
                 auto_voice_on_open: false,
                 ..AskEntrySettings::default()
-            })
+            }))
             .is_err());
         assert_eq!(store.read().unwrap(), AskEntrySettings::default());
     }
@@ -225,7 +300,7 @@ mod tests {
                 let (store, barrier) = (&store, &barrier);
                 scope.spawn(move || {
                     barrier.wait();
-                    assert_eq!(store.write(value).unwrap(), value);
+                    assert_eq!(store.write(full(value)).unwrap(), value);
                 });
             }
         });

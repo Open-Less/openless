@@ -94,8 +94,8 @@
   background: #ff3b30;
 }
 .ol-notification-icon[data-tone='warning'] {
-  background: #ffcc00;
-  color: #342800;
+  background: #ff3b30;
+  color: #fff;
 }
 .ol-notification-icon[data-tone='info'] {
   background: #007aff;
@@ -107,7 +107,7 @@
   background: #ff453a;
 }
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='warning'] {
-  background: #ffd60a;
+  background: #ff453a;
 }
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='info'] {
   background: #0a84ff;

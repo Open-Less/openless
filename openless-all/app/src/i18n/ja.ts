@@ -177,6 +177,7 @@ export const ja: typeof zhCN = {
     replace: '同期対象のローカルデータをクラウドの内容で置換',
     replaceWarning:
       '同期範囲のローカルデータを置き換えます。ローカルの変更を残すにはマージを選んでください。',
+    mergeOverwriteDirection: '競合時に端末の項目を選ぶと、同期時にクラウドの項目を上書きします。クラウドを選ぶと端末の項目を上書きします。',
     restoreCheck: '復元方法と競合の選択を確認しました。',
     applyRestore: '復元を確認',
     conflictProgress: '競合を {{selected}} / {{total}} 件解決済み',
@@ -493,7 +494,7 @@ export const ja: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: 'パックを更新',
         withdraw: '取り下げ',
       },
       loadFailed: '自分の公開の読み込みに失敗：{{err}}',

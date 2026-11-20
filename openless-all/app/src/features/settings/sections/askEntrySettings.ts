@@ -26,6 +26,6 @@ export function readAskEntrySettings(): Promise<AskEntrySettings> {
   return serialize(() => invokeOrPreview('ask_get_entry_settings', undefined, nativeOnly));
 }
 
-export function writeAskEntrySettings(settings: AskEntrySettings): Promise<AskEntrySettings> {
+export function writeAskEntrySettings(settings: Partial<AskEntrySettings>): Promise<AskEntrySettings> {
   return serialize(() => invokeOrPreview('ask_set_entry_settings', { settings }, nativeOnly));
 }

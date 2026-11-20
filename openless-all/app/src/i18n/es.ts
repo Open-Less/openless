@@ -174,6 +174,7 @@ export const es: typeof zhCN = {
     replace: 'Reemplazar datos locales sincronizados por los de la nube',
     replaceWarning:
       'Se reemplazarán los datos locales incluidos. Elige combinar para conservar cambios locales.',
+    mergeOverwriteDirection: 'En un conflicto, la versión local reemplaza la entrada de la nube al sincronizar. La versión de la nube reemplaza la entrada local.',
     restoreCheck: 'He revisado el modo y las decisiones sobre conflictos.',
     applyRestore: 'Confirmar restauración',
     conflictProgress: '{{selected}} de {{total}} conflictos resueltos',
@@ -506,7 +507,7 @@ export const es: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Actualizar',
+        update: 'Actualizar paquete',
         withdraw: 'Retirar',
       },
       loadFailed: 'No se pudieron cargar tus paquetes: {{err}}',

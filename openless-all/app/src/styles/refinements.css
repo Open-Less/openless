@@ -841,3 +841,14 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   width: 0;
   height: 0;
 }
+
+.ol-intent-routing-options {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ol-intent-routing-options input {
+  margin: 0;
+  accent-color: var(--ol-blue);
+}

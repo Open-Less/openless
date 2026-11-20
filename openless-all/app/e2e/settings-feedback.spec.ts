@@ -285,7 +285,7 @@ for (const scale of ['small', 'medium', 'large'] as const) {
       await input.fill('  saved-key  ');
       const save = page.getByRole('button', { name: '保存配置', exact: true });
       await save.click();
-      const notice = page.locator('.ol-notification-card');
+      const notice = page.locator('.ol-notification-card:not([aria-hidden])');
       await expect(notice).toHaveCount(1);
       await expect(notice).toHaveAttribute('data-state', 'saving');
       await notice.evaluate((node) => node.setAttribute('data-same-operation', 'save'));
@@ -318,7 +318,15 @@ for (const scale of ['small', 'medium', 'large'] as const) {
       await page.screenshot({
         path: test.info().outputPath(`acceptance-save-status-${scale}-${theme}.png`),
       });
+      const priorSave = await notice.elementHandle();
       await save.click();
+      await expect(notice).toHaveAttribute('data-state', 'saving');
+      await expect(notice).not.toHaveAttribute('data-same-operation', 'save');
+      expect(
+        await priorSave!.evaluate(
+          (node) => !node.isConnected || node.getAttribute('aria-hidden') === 'true',
+        ),
+      ).toBe(true);
       await finishSettingsOperation(page, 'save', 2, true);
       await expect(notice).toHaveAttribute('data-variant', 'alert');
       await expect(notice).toContainText('操作失败');
