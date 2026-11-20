@@ -94,7 +94,7 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
-test('Android keeps one panel through failed and superseded dismissals, then Back closes it', async ({
+test('Android Back dismisses Voice Edit safely and ignores legacy Ask events', async ({
   page,
 }) => {
   await page.goto(`${fixture}?os=android`);
@@ -102,11 +102,14 @@ test('Android keeps one panel through failed and superseded dismissals, then Bac
   const voice = page.locator('.ol-voice-edit-window');
   await expect(app).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => (window as any).startupFixture.listening('qa:state')))
+    .poll(() => page.evaluate(() => (window as any).startupFixture.listening('voice-edit:show')))
     .toBe(true);
   await page.evaluate(() => (window as any).startupFixture.showVoice('old-draft'));
   await expect(voice).toBeVisible();
   await page.evaluate(() => (window as any).startupFixture.emit('qa:state', { kind: 'idle' }));
+  await expect(voice.getByText('old-draft').first()).toBeVisible();
+  expect(await page.evaluate(() => (window as any).startupFixture.pendingCancels())).toEqual([]);
+  await page.evaluate(() => history.back());
   await expect
     .poll(() => page.evaluate(() => (window as any).startupFixture.pendingCancels()))
     .toEqual(['old-draft']);
@@ -116,7 +119,7 @@ test('Android keeps one panel through failed and superseded dismissals, then Bac
   await expect(voice.getByText('new-draft').first()).toBeVisible();
 
   for (const succeed of [false, true]) {
-    await page.evaluate(() => (window as any).startupFixture.emit('qa:state', { kind: 'idle' }));
+    await page.evaluate(() => history.back());
     await expect
       .poll(() => page.evaluate(() => (window as any).startupFixture.pendingCancels()))
       .toEqual(['new-draft']);
@@ -127,12 +130,10 @@ test('Android keeps one panel through failed and superseded dismissals, then Bac
     }
   }
   await expect(voice).toHaveCount(0);
-  await expect(app).toHaveCount(0);
-  await expect(page.locator('.ol-embedded-panel')).toBeVisible();
-  await page.evaluate(() => history.back());
   await expect(app).toBeVisible();
   await page.evaluate(() =>
     (window as any).startupFixture.emit('qa:state', { kind: 'answer', sessionId: 'closed' }),
   );
   await expect(app).toBeVisible();
+  await expect(page.locator('.ol-embedded-panel')).toHaveCount(0);
 });
