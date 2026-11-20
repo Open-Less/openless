@@ -71,7 +71,28 @@ test('the optional-probe fallback never bypasses a failed backend contract hands
     'get_credentials',
   );
   await expect(page.getByRole('heading')).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).startupFixture.presentations))
+    .toEqual([expect.objectContaining({ recovering: true })]);
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`macOS first display waits for the shell with the selected ${theme} theme`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme: theme === 'light' ? 'dark' : 'light' });
+    await page.goto(`${fixture}?os=mac&credentials=configured&nativeTheme=${theme}`);
+    const app = page.getByRole('heading', { name: 'Startup reached the app' });
+    await expect(app).toBeVisible();
+    const presentations = () => page.evaluate(() => (window as any).startupFixture.presentations);
+    expect(await presentations()).toEqual([]);
+    await page.evaluate(() => (window as any).startupFixture.releaseTheme());
+    await expect
+      .poll(presentations)
+      .toEqual([{ theme, heading: 'Startup reached the app', recovering: false }]);
+    await expect(page.locator('.ol-startup')).toHaveCount(0);
+  });
+}
 
 test('Android keeps one panel through failed and superseded dismissals, then Back closes it', async ({
   page,

@@ -14,7 +14,7 @@ test('history writes update every page while recordings, activity and the usage 
   await page.goto('/?os=win');
   await expect(page.locator('html')).toHaveAttribute('data-ol-platform', 'win');
   const initialHeading = await page.locator('.ol-gha-heading').textContent();
-  const initialApps = await page.locator('.ol-gha-app-chips').textContent();
+  const initialApps = await page.locator('.ol-gha-app-preview').textContent();
   expect(initialHeading).toBeTruthy();
   expect(initialApps).toBeTruthy();
   await navigate(page, 'history', '历史');
@@ -49,7 +49,7 @@ test('history writes update every page while recordings, activity and the usage 
   await expect(page.locator(`[data-overview-record="${deletedId}"]`)).toHaveCount(0);
   await expect(page.locator('[data-overview-record]')).toHaveCount(8);
   await expect(page.locator('.ol-gha-heading')).toHaveText(initialHeading!);
-  await expect(page.locator('.ol-gha-app-chips')).toHaveText(initialApps!);
+  await expect(page.locator('.ol-gha-app-preview')).toHaveText(initialApps!);
 
   await navigate(page, 'history', '历史');
   await page.getByRole('button', { name: '清空', exact: true }).click();
@@ -69,7 +69,7 @@ test('history writes update every page while recordings, activity and the usage 
   await navigate(page, 'overview', '概览');
   await expect(page.locator('[data-overview-record]')).toHaveCount(1);
   await expect(page.locator('.ol-gha-heading')).toHaveText(initialHeading!);
-  await expect(page.locator('.ol-gha-app-chips')).toHaveText(initialApps!);
+  await expect(page.locator('.ol-gha-app-preview')).toHaveText(initialApps!);
 
   await navigate(page, 'usage', '用量');
   await page

@@ -7,24 +7,34 @@ const app = fileURLToPath(new URL('../', import.meta.url)),
   require = createRequire(resolve(app, 'package.json')),
   ts = require('typescript');
 const helpers = await import(pathToFileURL(resolve(app, 'src/lib/qaMessage.ts')));
-const source = readFileSync(resolve(app, 'src/features/qa/QaPanel.tsx'), 'utf8');
-const parsed = ts.createSourceFile(
-  'QaPanel.tsx',
-  source,
-  ts.ScriptTarget.ES2020,
-  true,
-  ts.ScriptKind.TSX,
-);
-const names = parsed.statements
-  .filter(ts.isImportDeclaration)
-  .flatMap((n) =>
-    n.importClause?.namedBindings && ts.isNamedImports(n.importClause.namedBindings)
-      ? n.importClause.namedBindings.elements.map((n) => n.name.text)
-      : [],
+const components = ['QaPanel', 'QaComposer', 'QaPromptBox'];
+const parsed = components.map((component) => {
+  const file = `${component}.tsx`;
+  return ts.createSourceFile(
+    file,
+    readFileSync(resolve(app, 'src/features/qa', file), 'utf8'),
+    ts.ScriptTarget.ES2020,
+    true,
+    ts.ScriptKind.TSX,
   );
-const body = parsed.statements
+});
+const statements = parsed.flatMap((module) => module.statements);
+const names = [
+  ...new Set(
+    statements
+      .filter(ts.isImportDeclaration)
+      .flatMap((n) =>
+        n.importClause?.namedBindings && ts.isNamedImports(n.importClause.namedBindings)
+          ? n.importClause.namedBindings.elements
+              .filter((binding) => !binding.isTypeOnly)
+              .map((binding) => binding.name.text)
+          : [],
+      ),
+  ),
+].filter((name) => !components.includes(name));
+const body = statements
   .filter((n) => !ts.isImportDeclaration(n))
-  .map((n) => n.getFullText(parsed))
+  .map((n) => n.getFullText())
   .join('\n');
 const compiled = ts.transpileModule(body, {
   compilerOptions: {
@@ -37,7 +47,7 @@ const factory = new Function(
   ...names,
   'exports',
   'require',
-  `${compiled};return {QaPanel,Composer,MessageRow,ErrorContent};`,
+  `${compiled};return {QaPanel,QaComposer,QaPromptBox,QaUserMessage};`,
 );
 function compileModule(file) {
   const ast = ts.createSourceFile(
@@ -205,6 +215,15 @@ function context(native = true, embedded = false) {
     useState: state,
     useRef: ref,
     useEffect: effect,
+    useLayoutEffect: effect,
+    useReducedMotion: () => true,
+    getSettings: async () => ({}),
+    QaVoiceStrip: 'qa-voice-strip',
+    useQaDraftDictation: () => ({ input: { current: null }, setFocused() {}, clearError() {} }),
+    useCallback: (callback) => callback,
+    MotionConfig: 'motion-config',
+    motion: { div: 'motion-div', span: 'motion-span' },
+    AnimatePresence: 'animate-presence',
     useTranslation: () => ({ t: (k) => k }),
     useGithubLogin: () => '',
     useChatPanelLifecycle: makeLifecycle(
@@ -222,7 +241,6 @@ function context(native = true, embedded = false) {
     stopDeepSeekReading: () => {
       calls.stopReading++;
     },
-    qaSources: (body) => ({ body, sources: [] }),
     qaCancelTurn: async () => {
       calls.cancelTurn++;
       return pending.cancelTurn?.promise;
@@ -241,7 +259,7 @@ function context(native = true, embedded = false) {
       resize,
       async (_boundary, _fits, signal) => {
         if (signal.aborted) throw new DOMException('Layout superseded', 'AbortError');
-        return {};
+        return { width: 920, height: 800 };
       },
       {},
     ),
@@ -300,7 +318,14 @@ function context(native = true, embedded = false) {
   const emit = (name, payload) => {
     for (const fn of events.get(name) ?? []) fn(payload);
   };
-  const composer = (tree) => find(tree, (n) => n.type === api.Composer).props;
+  const composer = (tree) => find(tree, (n) => n.type === api.QaComposer).props;
+  const responses = (tree) => nodes(tree).filter((node) => node.type === 'QaStreamingResponse');
+  const committedTurns = (tree) =>
+    nodes(tree).filter(
+      (node) =>
+        node.type === api.QaUserMessage ||
+        (node.type === 'QaStreamingResponse' && !node.props.streaming),
+    );
   const closePanel = () =>
     find(
       render(),
@@ -327,6 +352,8 @@ function context(native = true, embedded = false) {
     events,
     keys,
     composer,
+    responses,
+    committedTurns,
     closePanel,
     beginConversation,
   };
@@ -347,9 +374,8 @@ await test('browser compact has no demo conversations and cannot execute native 
   const compact = context(false);
   const tree = compact.render();
   assert(!tree.props.className.includes('is-expanded'));
-  assert(
-    !nodes(tree).some((n) => n.type === compact.api.Composer || n.type === compact.api.MessageRow),
-  );
+  assert(!nodes(tree).some((n) => n.type === compact.api.QaComposer));
+  assert.equal(compact.committedTurns(tree).length, 0);
   compact.hooks.unmount();
   const c = context(false, true);
   let p = c.composer(c.render());
@@ -364,9 +390,11 @@ await test('browser compact has no demo conversations and cannot execute native 
   assert.equal(c.calls.mic, 0);
   assert.deepEqual(c.calls.mode, []);
   const h = new Hooks(),
-    ui = h.render(() => c.api.Composer(p));
-  for (const button of nodes(ui).filter((n) => n.type === 'button'))
-    assert.equal(button.props.disabled, true);
+    ui = h.render(() => c.api.QaPromptBox(c.api.QaComposer(p).props));
+  assert.equal(find(ui, (n) => n.type === 'textarea').props.disabled, true);
+  const buttons = nodes(ui).filter((n) => n.type === 'button');
+  assert.equal(buttons.length, 3);
+  for (const button of buttons) assert.equal(button.props.disabled, true);
   c.hooks.unmount();
 });
 await test('polish preview expands native window after payload arrives', async () => {
@@ -485,7 +513,7 @@ await test('send failure preserves draft and exposes error without a fake user m
   const tree = c.render();
   assert.equal(c.composer(tree).value, 'keep this');
   assert.equal(c.composer(tree).status, 'error');
-  assert(!nodes(tree).some((n) => n.type === c.api.MessageRow));
+  assert.equal(c.committedTurns(tree).length, 0);
   c.hooks.unmount();
 });
 await test('cancel during resize prevents queued question and late layout failures do not overwrite reopened compact state', async () => {
@@ -571,7 +599,9 @@ await test('stale answer is ignored and final answer replaces streaming buffer e
   c.emit('qa:state', { kind: 'answer_delta', sessionId: 'new', chunk: 'real ' });
   c.emit('qa:state', { kind: 'answer_delta', sessionId: 'new', chunk: 'answer' });
   let tree = c.render();
-  assert.equal(find(tree, (n) => n.type === 'AssistantMarkdown').props.markdown, 'real answer');
+  const [live] = c.responses(tree);
+  assert.equal(live.props.markdown, 'real answer');
+  assert.equal(live.props.streaming, true);
   c.emit('qa:state', {
     kind: 'answer',
     sessionId: 'new',
@@ -581,8 +611,11 @@ await test('stale answer is ignored and final answer replaces streaming buffer e
     ],
   });
   tree = c.render();
-  assert(!nodes(tree).some((n) => n.type === 'AssistantMarkdown'));
-  assert.equal(nodes(tree).filter((n) => n.type === c.api.MessageRow).length, 2);
+  const [finalAnswer] = c.responses(tree);
+  assert.equal(c.responses(tree).length, 1);
+  assert(!finalAnswer.props.streaming);
+  assert.equal(finalAnswer.props.markdown, 'real answer');
+  assert.equal(c.committedTurns(tree).length, 2);
   c.hooks.unmount();
 });
 await test('Stop belongs to the presented turn, and repeated clicks cannot cancel a later turn', async () => {
@@ -613,7 +646,7 @@ await test('Stop belongs to the presented turn, and repeated clicks cannot cance
   const next = c.composer(c.render());
   assert.equal(next.status, 'thinking');
   assert.equal(next.cancelBusy, false);
-  assert.equal(nodes(c.render()).filter((n) => n.type === c.api.MessageRow).length, 2);
+  assert.equal(c.committedTurns(c.render()).length, 2);
   c.hooks.unmount();
 });
 await test('recording stop commits the recorded question without issuing a turn cancellation', async () => {
@@ -775,27 +808,16 @@ await test('composer IME enter, WebKit 229 and form submission guards; genuine e
   const c = context();
   const h = new Hooks();
   let sent = 0;
-  const p = {
-    value: '中文',
-    status: 'idle',
-    level: 0,
-    voiceActive: false,
-    selectionPreview: '',
-    busy: false,
-    micBusy: false,
-    embedded: false,
-    editInstructionMode: false,
-    onEditInstructionModeChange() {},
-    onChange() {},
-    onSubmit() {
-      sent++;
-    },
-    onToggleRecording() {},
-    onClose() {},
-    t: (k) => k,
-  };
-  const tree = h.render(() => c.api.Composer(p));
-  const input = find(tree, (n) => n.type === 'input');
+  const tree = h.render(() =>
+    c.api.QaPromptBox({
+      value: '中文',
+      sendDisabled: false,
+      onSubmit() {
+        sent++;
+      },
+    }),
+  );
+  const input = find(tree, (n) => n.type === 'textarea');
   const key = (extra = {}) => ({
     key: 'Enter',
     keyCode: 13,
@@ -809,6 +831,12 @@ await test('composer IME enter, WebKit 229 and form submission guards; genuine e
   input.props.onCompositionEnd();
   input.props.onKeyDown(key({ nativeEvent: { isComposing: true } }));
   input.props.onKeyDown(key({ keyCode: 229 }));
+  input.props.onKeyDown(
+    key({
+      shiftKey: true,
+      preventDefault: () => assert.fail('Shift+Enter must insert a new line'),
+    }),
+  );
   assert.equal(sent, 0);
   input.props.onKeyDown(key());
   assert.equal(sent, 1);

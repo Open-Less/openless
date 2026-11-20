@@ -121,44 +121,9 @@
   display: grid;
   gap: 14px;
 }
-.ol-sync-password-field {
+.ol-sync-form-field {
   display: grid;
   gap: 6px;
-}
-.ol-sync-password-input {
-  display: flex;
-  overflow: hidden;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: var(--ol-r-md);
-  background: var(--ol-control-solid);
-}
-.ol-sync-password-input input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--ol-ink);
-  padding: 10px 12px;
-  font: inherit;
-}
-.ol-sync-password-visibility {
-  display: grid;
-  flex: 0 0 40px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  color: var(--ol-ink-2);
-  background: transparent;
-}
-.ol-sync-password-visibility:hover:not(:disabled) {
-  color: var(--ol-ink);
-  background: var(--ol-choice-hover-bg);
-}
-.ol-sync-password-input :is(input, .ol-sync-password-visibility):focus-visible {
-  outline-offset: -2px;
-}
-.ol-sync-password-visibility:disabled {
-  opacity: 0.55;
 }
 @media (max-width: 440px) {
   .ol-dialog-header {

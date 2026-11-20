@@ -1,24 +1,11 @@
-// Fn+Space opens this conversation immediately. Closing dismisses the native
-// session, so the next press starts a new one; an open panel keeps it and can
-// take the next voice turn or a typed message.
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from 'react';
+// The recording shortcut plus the Ask companion key opens this conversation.
+// Closing dismisses the native session; an open panel retains it across turns.
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  ArrowUpIcon,
-  CheckIcon,
-  CopyIcon,
-  MicIcon,
-  PencilLineIcon,
-  QuoteIcon,
-  SquareIcon,
-  XIcon,
-} from 'lucide-react';
+import { motion, MotionConfig } from 'framer-motion';
+import { useReducedMotion } from '../../lib/motion';
+import { getSettings } from '../../api/preferences';
+import { CheckIcon, CopyIcon, XIcon } from 'lucide-react';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -29,8 +16,8 @@ import {
 } from './chat/ui/message-scroller';
 import { OpenLessPill } from '../capsule/OpenLessCapsule';
 import { QaSurface } from './QaSurface';
-import { VoiceWaveform } from './chat/VoiceWaveform';
-import { AssistantMarkdown } from './chat/markdown';
+import { QaComposer, type QaStatus } from './QaComposer';
+import { QaStreamingResponse } from './QaStreamingResponse';
 import { useChatPanelLifecycle } from './chat/lifecycle';
 import {
   chatPanelFocusKeyboard,
@@ -61,14 +48,11 @@ import { useQaWindowLayout } from './useQaWindowLayout';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../../lib/qaMessage';
 import { installMessageFollow } from '../../lib/messageFollow';
 import type { QaChatMessage, QaStatePayload } from '../../api/contracts';
-import { QaAnswerFooter } from './QaAnswerFooter';
-import { qaSources } from './qaSources';
 import { useQaPipeline } from './useQaPipeline';
 import { stopDeepSeekReading } from './DeepSeekReadAloud';
 import { copyTextToClipboard } from '../../api/files';
 import './qa-panel.css';
 
-type Status = 'idle' | 'recording' | 'thinking' | 'error';
 type Translate = ReturnType<typeof useTranslation>['t'];
 export interface QaPanelProps {
   embedded?: boolean;
@@ -79,13 +63,15 @@ export interface QaPanelProps {
 export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: QaPanelProps = {}) {
   const { t } = useTranslation();
   const modalActive = useModalActive();
+  const reduced = useReducedMotion();
   const pipelineMode = useQaPipeline();
   const isTauri = isTauriHost();
   const [messages, setMessages] = useState<QaChatMessage[]>([]);
-  const [status, setStatus] = useState<Status>('idle');
+  const [status, setStatus] = useState<QaStatus>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [selectionPreview, setSelectionPreview] = useState('');
   const [composerText, setComposerText] = useState('');
+  const [panelOpen, setPanelOpen] = useState(false);
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [editApplyAvailable, setEditApplyAvailable] = useState(false);
   const [editRevertAvailable, setEditRevertAvailable] = useState(false);
@@ -126,7 +112,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   };
   const loadPolishResultRef = useRef(loadPolishResult);
   loadPolishResultRef.current = loadPolishResult;
-  const statusRef = useRef<Status>('idle');
+  const statusRef = useRef<QaStatus>('idle');
   const panelEpoch = useRef(0);
   const nativeStateEpoch = useRef(0);
   const submissionRef = useRef<symbol | null>(null);
@@ -146,7 +132,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   const delegatedDismiss = useRef(onRequestDismiss);
   delegatedDismiss.current = onRequestDismiss;
 
-  const changeStatus = (next: Status) => {
+  const changeStatus = (next: QaStatus) => {
     statusRef.current = next;
     setStatus(next);
   };
@@ -178,6 +164,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     activeSessionIdRef.current = null;
     changeStatus('idle');
     setMessages([]);
+    setPanelOpen(false);
     setErrorMsg('');
     setStreamingAnswer('');
     setSelectionPreview('');
@@ -217,6 +204,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           const sessionEvent = acceptQaSessionEvent(activeSessionIdRef.current, payload);
           if (!sessionEvent.accepted) return;
           nativeStateEpoch.current += 1;
+          if (payload.panelOpen != null) setPanelOpen(payload.panelOpen);
           if (activeSessionIdRef.current !== sessionEvent.sessionId) {
             stopDeepSeekReading();
             cancelRequestRef.current = null;
@@ -371,6 +359,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
           activeSessionIdRef.current = null;
           setSelectionPreview('');
           setComposerText('');
+          setPanelOpen(false);
           setLevel(0);
           if (embeddedRef.current && !delegatedDismiss.current) onRequestCloseRef.current?.();
         });
@@ -449,6 +438,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
 
   const expanded =
     embedded ||
+    panelOpen ||
     polishResult !== null ||
     status !== 'idle' ||
     submitted ||
@@ -469,6 +459,33 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     blocked: presentationClosing,
     nativeWindow: isTauri && !embedded,
   });
+
+  const composerRegion = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isTauri || embedded || !panelOpen || !layout.ready || presentationClosing) return;
+    let current = true;
+    void getSettings()
+      .then((prefs) => {
+        if (current && prefs.qaShortcutBehavior === 'draft' && statusRef.current === 'idle') {
+          composerRegion.current?.querySelector('textarea')?.focus({ preventScroll: true });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [isTauri, embedded, panelOpen, layout.ready, presentationClosing, enterEpoch]);
+
+  const scaledStyle = layout.contentScale > 1 ? { zoom: layout.contentScale } : undefined;
+  // Motion measures projected bounds in viewport pixels but writes transforms
+  // in local CSS pixels. Do not apply the window's zoom to that delta twice.
+  const composerPoint = useCallback(
+    ({ x, y }: { x: number; y: number }) => ({
+      x: x / layout.contentScale,
+      y: y / layout.contentScale,
+    }),
+    [layout.contentScale],
+  );
 
   const onClose = async () => {
     if (dismissRef.current) return;
@@ -495,7 +512,8 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     }
   };
   const onSubmitText = async () => {
-    const text = composerText.trim();
+    const draft = composerText;
+    const text = draft.trim();
     if (
       !isTauri ||
       !text ||
@@ -530,7 +548,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
         submissionRef.current === request &&
         activeSessionIdRef.current === originSession
       ) {
-        setComposerText((current) => current || text);
+        setComposerText((current) => current || draft);
         setErrorMsg(t('qa.compact.sendError'));
         changeStatus('error');
       }
@@ -753,26 +771,15 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     return () => window.removeEventListener('keydown', onKey);
   }, [embedded, modalActive, onRequestDismiss]);
 
-  const lastRole = messages[messages.length - 1]?.role;
-  const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
+  const showWelcome =
+    !submitBusy && messages.length === 0 && status !== 'thinking' && status !== 'error';
   const firstQuestion = messages.find((message) => message.role === 'user');
   const heading = firstQuestion
     ? truncate(splitQaUserMessage(firstQuestion).question, 42)
     : t('qa.title');
-  const thoughtByIndex = new Map<number, number>();
-  let assistantCount = 0;
-  messages.forEach((message, index) => {
-    if (message.role !== 'assistant') return;
-    const seconds = thoughts[assistantCount];
-    if (seconds) thoughtByIndex.set(index, seconds);
-    assistantCount += 1;
-  });
   const liveActivity =
     status === 'thinking' && activity && !streamingAnswer ? activityLabel : undefined;
-  const voiceActive =
-    status === 'recording' ||
-    (status === 'thinking' && !questionLanded && !submitBusy) ||
-    (micBusy && status !== 'thinking');
+  const voiceActive = status === 'recording';
   const inputBusy =
     status === 'thinking' ||
     status === 'recording' ||
@@ -780,6 +787,42 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
     micBusy ||
     modeBusy ||
     editApplyBusy;
+
+  let assistantCount = 0;
+  const turns = messages.map((message, index) => {
+    const id = `m${index}`;
+    if (message.role === 'user') {
+      return (
+        <MessageScrollerItem key={id} messageId={id} scrollAnchor>
+          <QaUserMessage message={message} />
+        </MessageScrollerItem>
+      );
+    }
+    const elapsed = thoughts[assistantCount++];
+    return (
+      <MessageScrollerItem key={id} messageId={id}>
+        <QaStreamingResponse
+          markdown={message.content}
+          elapsedSeconds={elapsed}
+          canReadAloud={pipelineMode === 'deepseek'}
+        />
+      </MessageScrollerItem>
+    );
+  });
+  if (status === 'thinking') {
+    // Use the final answer's slot so finishing the stream doesn't replace the response element.
+    const id = `m${messages.length}`;
+    turns.push(
+      <MessageScrollerItem key={id} messageId={id}>
+        <QaStreamingResponse
+          markdown={streamingAnswer}
+          streaming
+          elapsedSeconds={thoughtSeconds}
+          activityLabel={liveActivity}
+        />
+      </MessageScrollerItem>,
+    );
+  }
 
   if (layout.failed && !presentationClosing) {
     return (
@@ -816,6 +859,7 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
       >
         <section
           className="qa-answer-panel"
+          style={scaledStyle}
           data-platform={getRuntimeOS()}
           aria-label={t('selectionPolishPreview.title')}
         >
@@ -904,11 +948,15 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
       {expanded && (
         <section
           className="qa-answer-panel qa-conversation"
+          style={scaledStyle}
+          data-welcome={showWelcome ? 'true' : undefined}
           data-platform={getRuntimeOS()}
           aria-label={t('capsule.asking')}
         >
           <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
-            <h1 data-tauri-drag-region={embedded ? undefined : true}>{heading}</h1>
+            {!showWelcome && (
+              <h1 data-tauri-drag-region={embedded ? undefined : true}>{heading}</h1>
+            )}
             <div className="qa-window-actions">
               <button
                 type="button"
@@ -938,47 +986,12 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
                     className="qa-messages"
                     aria-busy={status === 'thinking' || undefined}
                   >
-                    {messages.map((message, index) => (
-                      <MessageRow
-                        key={index}
-                        index={index}
-                        message={message}
-                        thoughtSeconds={thoughtByIndex.get(index)}
-                        t={t}
-                        canReadAloud={pipelineMode === 'deepseek'}
-                      />
-                    ))}
-                    {status === 'thinking' && (
-                      <MessageScrollerItem messageId="streaming">
-                        <div className="qa-assistant-message">
-                          <ThoughtStatus
-                            live
-                            seconds={thoughtSeconds}
-                            activityLabel={liveActivity}
-                            t={t}
-                          />
-                          {streamingAnswer && (
-                            <AssistantMarkdown markdown={streamingAnswer} streaming />
-                          )}
-                        </div>
-                      </MessageScrollerItem>
-                    )}
+                    {turns}
                     {status === 'error' && (
                       <MessageScrollerItem messageId="error">
                         <ErrorContent error={errorMsg} t={t} />
                       </MessageScrollerItem>
                     )}
-                    {messages.length === 0 &&
-                      !streamingAnswer &&
-                      status !== 'error' &&
-                      status !== 'thinking' && (
-                        <div className="qa-empty-answer">
-                          <p>{t('qa.emptyTitle')}</p>
-                          {status === 'idle' && (
-                            <span>{submitBusy ? t('qa.compact.sending') : t('qa.emptyDesc')}</span>
-                          )}
-                        </div>
-                      )}
                   </MessageScrollerContent>
                 </MessageScrollerViewport>
                 <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')}>
@@ -1009,25 +1022,38 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
               </button>
             </div>
           )}
-          <div className="qa-composer-dock">
-            <Composer
-              value={composerText}
-              status={status}
-              level={level}
-              voiceActive={voiceActive}
-              selectionPreview={selectionPreview}
-              busy={inputBusy}
-              micBusy={micBusy}
-              embedded={embedded}
-              editInstructionMode={editInstructionMode}
-              onEditInstructionModeChange={onEditInstructionModeChange}
-              onChange={setComposerText}
-              onSubmit={onSubmitText}
-              onToggleRecording={onToggleRecording}
-              onCancelTurn={() => void cancelTurnForSession(currentSession)}
-              cancelBusy={cancelBusy}
-              t={t}
-            />
+          <div className="qa-composer-dock" ref={composerRegion}>
+            {showWelcome && <h1 className="qa-welcome-title">{t('qa.emptyTitle')}</h1>}
+            <MotionConfig transformPagePoint={composerPoint}>
+              <motion.div
+                className="qa-composer-position"
+                layout={reduced ? false : 'position'}
+                transition={{ type: 'spring', duration: 0.5, bounce: 0.15 }}
+              >
+                <QaComposer
+                  value={composerText}
+                  status={status}
+                  level={level}
+                  voiceActive={voiceActive}
+                  selectionPreview={selectionPreview}
+                  busy={inputBusy}
+                  micBusy={micBusy}
+                  editInstructionMode={editInstructionMode}
+                  onEditInstructionModeChange={onEditInstructionModeChange}
+                  onChange={setComposerText}
+                  onSubmit={onSubmitText}
+                  onToggleRecording={onToggleRecording}
+                  onRequestKeyboard={() => {
+                    if (isTauri && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
+                  }}
+                  onCancelTurn={() => void cancelTurnForSession(currentSession)}
+                  cancelBusy={cancelBusy}
+                  available={isTauri}
+                  draftDictationEnabled={isTauri && !embedded}
+                  contentScale={layout.contentScale}
+                />
+              </motion.div>
+            </MotionConfig>
           </div>
         </section>
       )}
@@ -1035,217 +1061,14 @@ export function QaPanel({ embedded = false, onRequestClose, onRequestDismiss }: 
   );
 }
 
-function Composer({
-  value,
-  status,
-  level,
-  voiceActive,
-  selectionPreview,
-  busy,
-  micBusy,
-  embedded,
-  editInstructionMode,
-  onEditInstructionModeChange,
-  onChange,
-  onSubmit,
-  onToggleRecording,
-  onCancelTurn,
-  cancelBusy,
-  t,
-}: {
-  value: string;
-  status: Status;
-  level: number;
-  voiceActive: boolean;
-  selectionPreview: string;
-  busy: boolean;
-  micBusy: boolean;
-  embedded: boolean;
-  editInstructionMode: boolean;
-  onEditInstructionModeChange: (enabled: boolean) => void;
-  onChange: (value: string) => void;
-  onSubmit: () => void;
-  onToggleRecording: () => void;
-  onCancelTurn: () => void;
-  cancelBusy: boolean;
-  t: Translate;
-}) {
-  const isTauri = isTauriHost();
-  const composingRef = useRef(false);
-  const recording = status === 'recording';
-  const generating = status === 'thinking';
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (!busy && isTauri) onSubmit();
-  };
-  const label = recording
-    ? t('overview.inAppDictation.recording')
-    : micBusy
-      ? t('common.loading')
-      : t('overview.inAppDictation.processing');
+function QaUserMessage({ message }: { message: QaChatMessage }) {
+  const { selection, question } = splitQaUserMessage(message);
   return (
-    <form
-      className={`qa-prompt${voiceActive ? ' is-voice' : ''}`}
-      data-tauri-drag-region={embedded ? undefined : true}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!composingRef.current && !busy && isTauri) onSubmit();
-      }}
-    >
-      <div className="qa-input-stage">
-        <input
-          value={value}
-          disabled={!isTauri || recording || micBusy}
-          placeholder={t('qa.composerPlaceholder')}
-          aria-label={t('qa.composerPlaceholder')}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          onKeyDown={onKeyDown}
-          onCompositionStart={() => {
-            composingRef.current = true;
-          }}
-          onCompositionEnd={() => {
-            composingRef.current = false;
-          }}
-          onFocus={() => {
-            if (isTauri && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
-          }}
-          onPointerDown={() => {
-            if (isTauri && !embedded) void chatPanelFocusKeyboard().catch(() => undefined);
-          }}
-        />
-        {!isTauri && <span className="qa-browser-note">{t('qa.compact.browserUnavailable')}</span>}
-      </div>
-      <div className="qa-prompt-tools">
-        <div className="qa-voice-pod">
-          <div className="qa-voice-feedback" aria-hidden={!voiceActive}>
-            {voiceActive && (
-              <>
-                <VoiceWaveform
-                  level={recording ? level : 0}
-                  processing={!recording}
-                  label={label}
-                />
-                {selectionPreview && (
-                  <span className="qa-recording-selection" title={selectionPreview}>
-                    <QuoteIcon />
-                    {truncate(selectionPreview, 32)}
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-          <button
-            className={`qa-mic${recording ? ' is-recording' : ''}`}
-            type="button"
-            disabled={!isTauri || generating || micBusy || (busy && !recording)}
-            onClick={onToggleRecording}
-            aria-pressed={recording}
-            aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
-            title={recording ? t('qa.micStop') : t('qa.micLabel')}
-          >
-            {recording ? <SquareIcon /> : <MicIcon />}
-          </button>
-        </div>
-        <button
-          className={`qa-mode${editInstructionMode ? ' is-on' : ''}`}
-          type="button"
-          aria-pressed={editInstructionMode}
-          disabled={!isTauri || busy}
-          onClick={() => onEditInstructionModeChange(!editInstructionMode)}
-          aria-label={t('qa.editInstructionMode')}
-          title={t('qa.editInstructionMode')}
-        >
-          <PencilLineIcon />
-        </button>
-        {generating ? (
-          <button
-            className="qa-send is-stop"
-            type="button"
-            disabled={!isTauri || cancelBusy}
-            aria-label={t('qa.stop')}
-            title={t('qa.stop')}
-            onClick={onCancelTurn}
-          >
-            <SquareIcon />
-          </button>
-        ) : (
-          <button
-            className="qa-send"
-            type="submit"
-            disabled={!isTauri || busy || !value.trim()}
-            aria-label={t('qa.composerSend')}
-            title={t('qa.composerSend')}
-          >
-            <ArrowUpIcon />
-          </button>
-        )}
-      </div>
-    </form>
-  );
-}
-
-function ThoughtStatus({
-  live,
-  seconds,
-  activityLabel,
-  t,
-}: {
-  live: boolean;
-  seconds: number;
-  activityLabel?: string;
-  t: Translate;
-}) {
-  const elapsed = live ? t('qa.thoughtLive', { seconds }) : t('qa.thoughtDone', { seconds });
-  const label = live && activityLabel ? `${elapsed} · ${activityLabel}` : elapsed;
-  return (
-    <div className={`qa-thought${live ? ' is-live' : ''}`} role="status">
-      {live && <span className="qa-thinking-dot" />}
-      {label}
+    <div className="qa-user-turn">
+      {selection && <blockquote title={selection}>{truncate(selection, 120)}</blockquote>}
+      <p>{question}</p>
+      <CopyMessage text={question} />
     </div>
-  );
-}
-
-function MessageRow({
-  index,
-  message,
-  thoughtSeconds,
-  t,
-  canReadAloud = false,
-}: {
-  canReadAloud?: boolean;
-  index: number;
-  message: QaChatMessage;
-  thoughtSeconds?: number;
-  t: Translate;
-}) {
-  const answer = qaSources(message.content);
-  if (message.role === 'user') {
-    const { selection, question } = splitQaUserMessage(message);
-    return (
-      <MessageScrollerItem messageId={`m${index}`} scrollAnchor>
-        <div className="qa-user-turn">
-          {selection && <blockquote title={selection}>{truncate(selection, 120)}</blockquote>}
-          <p>{question}</p>
-          <CopyMessage text={question} />
-        </div>
-      </MessageScrollerItem>
-    );
-  }
-  return (
-    <MessageScrollerItem messageId={`m${index}`}>
-      <div className="qa-assistant-message" aria-label={t('qa.compact.answer')}>
-        {thoughtSeconds ? <ThoughtStatus live={false} seconds={thoughtSeconds} t={t} /> : null}
-        <AssistantMarkdown markdown={answer.body} />
-        <QaAnswerFooter
-          text={message.content}
-          sources={answer.sources}
-          speechText={answer.body}
-          canReadAloud={canReadAloud}
-        />
-      </div>
-    </MessageScrollerItem>
   );
 }
 function CopyMessage({ text }: { text: string }) {

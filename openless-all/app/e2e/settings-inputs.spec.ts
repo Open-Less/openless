@@ -18,7 +18,8 @@ test('channel fields stay editable right after the editor opens', async ({ page 
   await expect(dialog).toBeVisible();
 
   const name = dialog.locator('input[placeholder*="例如"]').first();
-  const apiKey = dialog.locator('input[type="password"]').first();
+  const apiKey = dialog.locator('input.ol-field-secret').first();
+  await expect(apiKey).toHaveAttribute('type', 'password');
   const endpoint = dialog.locator('input[placeholder*="https://"]').first();
   const model = dialog.locator('input[placeholder*="模型"], input[placeholder*="Qwen"]').first();
 
@@ -33,6 +34,22 @@ test('channel fields stay editable right after the editor opens', async ({ page 
     await field.fill(value);
     await expect(field).toHaveValue(value);
   }
+
+  for (const field of [name, endpoint, model]) {
+    const frame = field.locator('..');
+    await expect(frame).toHaveClass(/\bol-field\b/);
+    await expect(frame.getByRole('button')).toHaveCount(0);
+  }
+  const secretFrame = apiKey.locator('..');
+  const eye = secretFrame.getByRole('button');
+  await eye.focus();
+  await eye.press('Enter');
+  const revealed = secretFrame.locator('input');
+  await expect(revealed).toHaveAttribute('type', 'text');
+  await expect(revealed).toHaveValue('sk-input-test');
+  await expect(eye).toBeFocused();
+  await eye.press('Space');
+  await expect(revealed).toHaveAttribute('type', 'password');
 });
 
 for (const profile of [

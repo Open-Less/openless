@@ -2067,7 +2067,8 @@ mod core_capsule_tests {
 }
 
 #[cfg(not(mobile))]
-fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: u64, delay_ms: u64) {
+fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: Option<u64>, delay_ms: u64) {
+    let Some(epoch) = epoch else { return };
     let inner = Arc::clone(inner);
     let spawner = inner.host.clone();
     spawner.spawn(async move {

@@ -121,6 +121,7 @@ export const ko: typeof zhCN = {
     delete: '클라우드 백업 삭제',
     working: '처리 중…',
     cancelTask: '현재 작업 취소',
+    cancelSync: '동기화 취소',
     cancelRequested: '취소를 요청했습니다. 작업이 종료되기를 기다립니다.',
     done: '동기화 설정을 업데이트했습니다.',
     restored: '클라우드 데이터를 복원했습니다. 이 기기의 전용 설정을 확인하세요.',
@@ -148,7 +149,8 @@ export const ko: typeof zhCN = {
     confirmAndContinue: '확인하고 계속',
     revealPassword: '비밀번호 표시 ({{field}})',
     concealPassword: '비밀번호 숨기기 ({{field}})',
-    previewNotice: '클라우드 동기화 미리보기입니다. 예시 비밀번호를 사용하세요. 서버에 연결하거나 인증 정보를 저장하지 않습니다.',
+    previewNotice:
+      '클라우드 동기화 미리보기입니다. 예시 비밀번호를 사용하세요. 서버에 연결하거나 인증 정보를 저장하지 않습니다.',
     passwordPolicy: '12~128자로 영문 대문자, 소문자, 숫자를 포함하세요. 흔한 비밀번호는 피하세요.',
     rememberKey: '이 기기의 보안 저장소에 잠금 해제 키 기억',
     disableTitle: '암호화 동기화를 끌까요?',
@@ -240,7 +242,8 @@ export const ko: typeof zhCN = {
       cancelled: '작업이 취소되었습니다.',
       network: '동기화 서비스에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.',
       rateLimited: '요청이 너무 많습니다. 잠시 후 다시 시도하세요.',
-      deletePendingOperation: '이전 클라우드 작업의 결과가 확인되지 않았습니다. 나중에 상태를 새로 고친 뒤 다시 삭제하세요.',
+      deletePendingOperation:
+        '이전 클라우드 작업의 결과가 확인되지 않았습니다. 나중에 상태를 새로 고친 뒤 다시 삭제하세요.',
       outcomeUnknown:
         '클라우드 결과가 확인되지 않았습니다. 새 백업을 만들기 전에 대기 중인 결과를 확인하세요.',
       recovery:
@@ -395,6 +398,7 @@ export const ko: typeof zhCN = {
     mobileRecordStart: '녹음 시작',
     mobileRecordStop: '종료하고 제출',
     composerPlaceholder: '질문을 입력하세요. Enter로 보내기',
+    voiceInputPlaceholder: '음성으로 입력 중입니다',
     composerSend: '보내기',
     statusIdle: '{{recordHotkey}} 로 질문',
     statusRecording: '녹음 중',
@@ -832,7 +836,7 @@ export const ko: typeof zhCN = {
     dismiss: '닫기',
   },
   vocab: {
-    selectAllVisible: '현재 결과 선택',
+    selectAllVisible: '모든 결과 선택',
     selecting: '선택',
     doneSelecting: '완료',
     disabledWord: '꺼짐',
@@ -1132,6 +1136,14 @@ export const ko: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '질문 단축키 동작',
+      desc: '녹음 단축키와 보조 키를 함께 사용합니다. 녹음 단축키만 누르면 커서 위치에 받아씁니다.',
+      record: '열고 즉시 녹음',
+      open: '열기만 하고 다시 눌러 녹음',
+      draft: '열고 텍스트 입력란에 포커스',
+      failed: '단축키 동작을 저장하지 못했습니다.',
+    },
     dictation: '받아쓰기',
     translation: '번역',
     question: '무엇이든 질문',
@@ -1560,15 +1572,16 @@ export const ko: typeof zhCN = {
       voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
       voiceActivationLocalOnly:
         '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
-      voiceActivationHotkeyLinked: "녹음 단축키와 연동",
-      voiceActivationHotkeyLinkedDesc: "기존 녹음 동작 대신 한 번 눌러 깨우기 대기를 시작하거나 일시 중지합니다. 앱 시작 시에는 중지됩니다. 중지하면 대기 마이크 예열을 끄지만 다른 녹음은 중단하지 않습니다. 깨우기는 로컬에서 처리하며 받아쓰기는 현재 서비스를 사용합니다.",
-      voiceActivationDisabled: "음성 활성화 꺼짐",
-      voiceActivationPaused: "깨우기 대기 일시 중지됨",
-      voiceActivationPausing: "깨우기 대기 중지 중…",
-      voiceActivationStarting: "깨우기 대기 시작 중…",
-      voiceActivationListening: "깨우기 명령 대기 중",
-      voiceActivationDictating: "받아쓰기 또는 마무리 중",
-      voiceActivationError: "대기를 시작할 수 없습니다. 모델, 마이크 권한 및 장치를 확인하세요.",
+      voiceActivationHotkeyLinked: '녹음 단축키와 연동',
+      voiceActivationHotkeyLinkedDesc:
+        '기존 녹음 동작 대신 한 번 눌러 깨우기 대기를 시작하거나 일시 중지합니다. 앱 시작 시에는 중지됩니다. 중지하면 대기 마이크 예열을 끄지만 다른 녹음은 중단하지 않습니다. 깨우기는 로컬에서 처리하며 받아쓰기는 현재 서비스를 사용합니다.',
+      voiceActivationDisabled: '음성 활성화 꺼짐',
+      voiceActivationPaused: '깨우기 대기 일시 중지됨',
+      voiceActivationPausing: '깨우기 대기 중지 중…',
+      voiceActivationStarting: '깨우기 대기 시작 중…',
+      voiceActivationListening: '깨우기 명령 대기 중',
+      voiceActivationDictating: '받아쓰기 또는 마무리 중',
+      voiceActivationError: '대기를 시작할 수 없습니다. 모델, 마이크 권한 및 장치를 확인하세요.',
       voiceActivationMultimodalModels:
         '여기에서 음성 활성화 모델을 준비합니다. 받아쓰기는 현재 멀티모달 서비스를 계속 사용합니다.',
       voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',
@@ -1624,7 +1637,8 @@ export const ko: typeof zhCN = {
       validationTitle: '연결 확인',
       validationHint:
         '실제 요청을 보내 현재 설정을 확인합니다. 서비스 사용량이 차감될 수 있습니다. 설정을 저장해도 자동으로 확인하지 않습니다.',
-      validationHintOmni: '텍스트 연결 요청을 수동으로 보내며, 서버 사용량 한도를 소모할 수 있습니다.',
+      validationHintOmni:
+        '텍스트 연결 요청을 수동으로 보내며, 서버 사용량 한도를 소모할 수 있습니다.',
       autoSaveHint:
         '변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.',
       nameHint:
@@ -2669,6 +2683,10 @@ export const ko: typeof zhCN = {
     activePill: '현재 사용 중',
     setDefault: '기본값으로 설정',
     downloading: '다운로드 중',
+    cancelDownload: '다운로드 취소',
+    cancelDownloadTitle: '{{name}} 다운로드 취소',
+    cancellingDownload: '다운로드를 취소하는 중…',
+    downloadFailed: '모델 다운로드 실패',
     startDownload: '다운로드 시작',
     downloadNewModel: '새 모델 다운로드',
     activeModelLabel: '사용 중인 모델',

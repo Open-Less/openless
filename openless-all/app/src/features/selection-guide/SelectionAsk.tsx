@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatComboLabel } from '../../api/hotkeys';
+import type { QaShortcutBehavior } from '../../lib/types';
 import { setQaHotkey } from '../../api/qa';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { useHotkeySettings } from '../../data/preferences';
@@ -37,6 +38,26 @@ export function SelectionAsk({ onOpenShortcuts }: { onOpenShortcuts?: () => void
           }}
         />
       </div>
+      <label className="ol-ask-settings-row">
+        <div>
+          <strong>{t('askAnything.shortcutBehavior.title')}</strong>
+          <p>{t('askAnything.shortcutBehavior.desc')}</p>
+        </div>
+        <select
+          value={prefs.qaShortcutBehavior ?? 'record'}
+          onChange={(event) => {
+            const qaShortcutBehavior = event.currentTarget.value as QaShortcutBehavior;
+            setError('');
+            void updatePrefs((current) => ({ ...current, qaShortcutBehavior })).catch(() =>
+              setError(t('askAnything.shortcutBehavior.failed')),
+            );
+          }}
+        >
+          <option value="record">{t('askAnything.shortcutBehavior.record')}</option>
+          <option value="open">{t('askAnything.shortcutBehavior.open')}</option>
+          <option value="draft">{t('askAnything.shortcutBehavior.draft')}</option>
+        </select>
+      </label>
       <div className="ol-ask-settings-row">
         <div>
           <strong>{t('selectionAsk.history.title')}</strong>

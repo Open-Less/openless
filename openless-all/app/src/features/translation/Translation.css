@@ -6,50 +6,8 @@
 }
 
 .ol-language-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   flex: 1 1 240px;
   max-width: 440px;
-  min-height: 36px;
-  padding: 0 11px;
-  border: 1px solid var(--ol-line);
-  border-radius: var(--ol-r-md);
-  background: var(--ol-control-muted);
-  color: var(--ol-ink-4);
-  cursor: text;
-}
-
-.ol-language-search:focus-within {
-  border-color: var(--ol-ink-4);
-}
-
-/* The label is the one and only search field. The native input only supplies text
-   editing: it must not paint a second, smaller search box inside the label. */
-.ol-language-search input[type='search'] {
-  flex: 1;
-  align-self: stretch;
-  width: 100%;
-  height: auto;
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  outline: 0;
-  background-color: transparent;
-  box-shadow: none;
-  color: var(--ol-ink);
-  font: inherit;
-  font-size: 13px;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.ol-language-search input[type='search']::-webkit-search-decoration,
-.ol-language-search input[type='search']::-webkit-search-cancel-button {
-  appearance: none;
-  -webkit-appearance: none;
 }
 
 .ol-translation-count,

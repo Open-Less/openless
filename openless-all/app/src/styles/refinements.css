@@ -146,27 +146,6 @@ button:disabled {
   padding: 60px 32px 32px 254px;
 }
 
-/* Search and the command list share the right-hand settings pane. */
-.ol-settings-search-field {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  height: 36px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: var(--ol-control-radius);
-  color: var(--ol-ink);
-  background: var(--ol-surface-2);
-  box-shadow: inset 0 0 0 1px var(--ol-line-strong);
-  font: inherit;
-  font-size: 13px;
-}
-.ol-settings-search-field:focus-visible {
-  outline: 2px solid var(--ol-blue-ring);
-  outline-offset: 1px;
-  box-shadow: inset 0 0 0 1px var(--ol-blue);
-}
 .ol-expression-clear {
   --ol-corner-radius: var(--ol-button-radius);
 }
@@ -176,11 +155,8 @@ button:disabled {
   align-items: center;
   padding-bottom: 16px;
 }
-.ol-shortcuts-toolbar input {
+.ol-shortcuts-toolbar .ol-settings-search-field {
   max-width: 520px;
-}
-.ol-shortcuts .ol-settings-search-field[type='search'] {
-  background-color: var(--ol-surface-2);
 }
 .ol-shortcuts-count {
   white-space: nowrap;
@@ -546,61 +522,6 @@ button:disabled {
   border-radius: var(--ol-r-sm);
   color: var(--ol-blue);
 }
-.ol-global-downloads {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.ol-download-card {
-  pointer-events: auto;
-}
-.ol-download-card {
-  isolation: isolate;
-  padding: 10px 12px 12px;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: var(--ol-r-md);
-  background: var(--ol-surface-raised);
-  box-shadow:
-    0 18px 48px -18px rgba(15, 23, 42, 0.32),
-    0 4px 14px -6px rgba(15, 23, 42, 0.16);
-}
-.ol-download-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-}
-.ol-download-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ol-download-status {
-  color: var(--ol-ink-3);
-  font-variant-numeric: tabular-nums;
-}
-.ol-download-heading button {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border-radius: var(--ol-radius);
-}
-.ol-download-card progress {
-  display: block;
-  width: 100%;
-  height: 5px;
-  margin-top: 6px;
-  accent-color: var(--ol-blue);
-}
-.ol-download-card p {
-  color: var(--ol-warn);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
 .ol-experimental-model-status {
   display: block;
   line-height: 18px;
@@ -624,10 +545,8 @@ button:disabled {
   height: 100%;
   min-height: 100%;
   padding: 24px;
-  background: rgb(255 255 255 / 88%);
-  color: #18181b;
-  -webkit-backdrop-filter: blur(28px);
-  backdrop-filter: blur(28px);
+  background: var(--ol-surface);
+  color: var(--ol-ink);
 }
 .ol-startup-content {
   max-width: 420px;
@@ -641,7 +560,7 @@ button:disabled {
 }
 .ol-startup-content > p {
   margin: 8px 0;
-  color: #52525b;
+  color: var(--ol-ink-2);
   font-size: 12px;
 }
 .ol-startup-mark {
@@ -854,9 +773,6 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
-  .ol-startup {
-    background: #fff;
-  }
   .ol-dialog-card {
     background: var(--ol-surface) !important;
   }
@@ -924,13 +840,4 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   display: none;
   width: 0;
   height: 0;
-}
-
-/* Password fields live inside rounded dialog inputs: draw an inset ring that follows
-   the control radius instead of an outer outline that can escape the window clip. */
-.ol-sync-password input[type='password']:focus-visible,
-.ol-sync-password input[type='password']:focus {
-  outline: none;
-  border-color: var(--ol-blue);
-  box-shadow: inset 0 0 0 1px var(--ol-blue);
 }

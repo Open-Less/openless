@@ -247,7 +247,7 @@ assertMatch(
 
 assertMatch(
   coordinatorRs,
-  /let visible = !matches!\(state,\s*CapsuleState::Idle\);/,
+  /fn capsule_window_action\([\s\S]*?else if show_capsule && !matches!\(state,\s*CapsuleState::Idle\) \{\s*CapsuleWindowAction::ShowCapsule\s*\} else \{\s*CapsuleWindowAction::HideCapsule/,
   'capsule should stay visible until the unified idle hide path runs',
 );
 assertMatch(

@@ -45,8 +45,14 @@ let status: EncryptedSyncStatus = {
 };
 const attempts: Array<{ command: string; args: unknown }> = [];
 let finish: ((failed: boolean) => void) | undefined;
+let publishReview: (() => void) | undefined;
+let restoreAttempts = 0;
 Object.assign(window, {
-  syncDialogFixture: { attempts, finish: (failed = false) => finish?.(failed) },
+  syncDialogFixture: {
+    attempts,
+    finish: (failed = false) => finish?.(failed),
+    publishReview: () => publishReview?.(),
+  },
 });
 function update(change: Partial<EncryptedSyncStatus>) {
   status = { ...status, ...change, sequence: String(Number(status.sequence) + 1) };
@@ -78,6 +84,43 @@ mockIPC(
         return { ...status };
       case 'cloud_sync_e2ee_claim_setup_prompt':
         return false;
+      case 'cloud_sync_e2ee_sync_now':
+        if (mode !== 'review') throw new Error('Unexpected sync');
+        attempts.push({ command, args });
+        update({ syncState: 'syncing', taskId: 'sync-review' });
+        return new Promise((_resolve, reject) => {
+          publishReview = () => {
+            status = { ...status, sequence: String(Number(status.sequence) + 1) };
+            void emit('cloud-sync-e2ee:conflict', {
+              sequence: status.sequence,
+              serviceOrigin: status.serviceOrigin,
+              accountId: owner.githubId,
+              vaultId: status.vaultId,
+              taskId: status.taskId,
+              preview: {
+                previewId: 'restore-preview',
+                observedRevision: status.remoteRevision,
+                localGeneration: status.localGeneration,
+                counts: { history: 1 },
+                conflicts: [],
+                deviceSettingsToReview: [],
+              },
+            });
+          };
+          finish = () => {
+            update({
+              syncState: 'conflict',
+              taskId: null,
+              lastError: { code: 'conflict', retryAfterSeconds: null },
+            });
+            reject({ details: { reason: 'conflict' } });
+          };
+        });
+      case 'cloud_sync_e2ee_apply_restore':
+        if (mode !== 'review') throw new Error('Unexpected restore');
+        attempts.push({ command, args });
+        if (++restoreAttempts === 1) throw { details: { reason: 'busy' } };
+        return update({ syncState: 'ready', taskId: null, lastError: null });
       case 'cloud_sync_e2ee_get_ui_preferences_snapshot':
         return { preferences: { locale: 'en', fontScale: 'medium' }, revision: '1' };
       case 'cloud_sync_e2ee_set_enabled':
@@ -93,7 +136,15 @@ mockIPC(
           failRefresh = false;
           throw { details: { reason: 'transport_failed' } };
         }
-        return update({ account: owner, authState: 'signed_in', syncState: status.enabled ? 'unlock_required' : 'disabled', hasCloudSnapshot: true, vaultId: 'old-vault', keyId: 'old-key', remoteRevision: '7' });
+        return update({
+          account: owner,
+          authState: 'signed_in',
+          syncState: status.enabled ? 'unlock_required' : 'disabled',
+          hasCloudSnapshot: true,
+          vaultId: 'old-vault',
+          keyId: 'old-key',
+          remoteRevision: '7',
+        });
       case 'cloud_sync_e2ee_prepare_enable':
       case 'cloud_sync_e2ee_create':
       case 'cloud_sync_e2ee_delete_remote':
@@ -181,7 +232,9 @@ createRoot(document.getElementById('root')!).render(
         <HotkeySettingsProvider>
           <main style={{ height: '100%', overflow: 'auto', padding: 16 }}>
             <CloudSyncSection />
-            {(mode === 'renew' || cold) && <CloudSyncSetupPrompt blocked={false} onSetup={() => {}} />}
+            {(mode === 'renew' || cold) && (
+              <CloudSyncSetupPrompt blocked={false} onSetup={() => {}} />
+            )}
           </main>
         </HotkeySettingsProvider>
       </InteractionProvider>

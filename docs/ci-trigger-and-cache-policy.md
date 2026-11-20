@@ -6,13 +6,15 @@
 
 | 事件 | 行为 |
 |---|---|
-| `pull_request` → `main` / `beta` | 按改动范围门控：改动够不到的平台直接跳过（见下） |
+| `pull_request` → `main` / `beta` | 按改动范围门控。标记 `ci:desktop-only` 的 PR 仅跑 macOS 与 Windows 桌面检查，不分配 Ubuntu runner |
 | `push` → `main` / `beta` | 全量验证（合并后的基线必须有完整证据），不跳过任何 job；仅 beta 写入共享缓存，beta 手动/周期构建也可预热 |
 | `push` → 其他分支 | **不跑**。feature 分支由它的 PR 覆盖；两边都跑等于同一个 commit 交两遍完整矩阵（实测 42 次 run 里有 8 次是这种重复，每次 ~86 VM-min、峰值 12 台 VM） |
 | tag `v*-tauri` | 发布 Tauri 桌面与 Android；Linux 包不随标签自动发布 |
 | `workflow_dispatch` | 全量；`platform=macos` 只跑 macOS（仅 macOS 验证入口） |
 
 同一 PR 连续推送会取消旧运行（`concurrency.cancel-in-progress`）。CI 的相同 ref、platform、macos_runner、windows_build_jobs 手动请求也会取消旧运行，不同参数独立运行。桌面手动构建按 ref、platform、诊断开关区分；Android 按 ref、ABI、profile、签名模式区分。标签发布（包括手动选择标签）和修复发布不会被新运行中途取消。
+
+`ci:desktop-only` 在 PR 下次触发 CI 时生效；添加或移除标签本身不会重启作业。该模式显式跳过浏览器动效矩阵及 iOS、Android、鸿蒙作业，不改变改动范围判定、桌面门禁、默认分支基线或发布验证。
 
 ### 改动范围判定
 

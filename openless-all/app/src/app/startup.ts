@@ -79,9 +79,10 @@ async function selectNativeDestination(os: OS, caps: PlatformCapabilities, signa
   return next.gate;
 }
 
-function useNativeVisibility(caps: PlatformCapabilities | null) {
+function useNativeVisibility(os: OS, caps: PlatformCapabilities | null) {
   useEffect(() => {
-    if (!isTauriHost() || !caps) return;
+    // The macOS host owns visibility, including silent start and explicit reopen.
+    if (os === 'mac' || !isTauriHost() || !caps) return;
     let active = true;
     const frame = requestAnimationFrame(() => {
       void (async () => {
@@ -101,7 +102,7 @@ function useNativeVisibility(caps: PlatformCapabilities | null) {
       active = false;
       cancelAnimationFrame(frame);
     };
-  }, [caps]);
+  }, [caps, os]);
 }
 
 export function useMainStartup(os: OS, previewOnboarding: boolean, reducedMotion: boolean) {
@@ -132,7 +133,7 @@ export function useMainStartup(os: OS, previewOnboarding: boolean, reducedMotion
     };
   }, [tauri]);
 
-  useNativeVisibility(caps);
+  useNativeVisibility(os, caps);
   useEffect(() => {
     if (!tauri || !caps || destinationGeneration.current !== 0) return;
     const probe = new AbortController();
