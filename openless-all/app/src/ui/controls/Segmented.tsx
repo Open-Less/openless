@@ -22,7 +22,7 @@ export function Segmented<T extends string>({
   indicatorClassName,
 }: {
   options: readonly SegmentedOption<T>[];
-  value: T;
+  value: T | null;
   onChange: (value: T) => void;
   label: string;
   disabled?: boolean;
