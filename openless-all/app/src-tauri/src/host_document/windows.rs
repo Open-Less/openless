@@ -114,17 +114,9 @@ pub(super) fn read_qa_selection() -> Option<String> {
             return Ok(None);
         }
         let text = range
-            .GetText(if expected_pid.is_some() { 8_001 } else { 16_000 })
+            .GetText(16_000)
             .map_err(|_| "selectionUnavailable".to_string())?
             .to_string();
-        if expected_pid.is_some()
-            && !uia
-                .CompareElements(&element, &uia.GetFocusedElement().map_err(|_| unavailable())?)
-                .map_err(|_| unavailable())?
-                .as_bool()
-        {
-            return Ok(None);
-        }
         Ok((!text.trim().is_empty()).then_some(text))
     })
     .ok()
