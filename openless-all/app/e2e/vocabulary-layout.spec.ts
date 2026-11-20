@@ -33,6 +33,9 @@ for (const narrow of [false, true]) {
     const remove = vocab.getByRole('button', {
       name: narrow ? /^Supprimer la sélection/ : /^删除已选/,
     });
+    const selectAll = vocab.getByRole('button', {
+      name: narrow ? 'Sélectionner tous les résultats' : '选择所有结果',
+    });
     const search = vocab.getByRole('button', {
       name: narrow ? 'Rechercher' : '搜索',
       exact: true,
@@ -67,12 +70,11 @@ for (const narrow of [false, true]) {
         bounds(wordList),
         bounds(firstWord),
         bounds(firstWord.locator('.ol-word-card-label')),
+        bounds(firstWord.locator('.ol-word-card-hits')),
       ]);
     const layout = await stableLayout();
-    await expect(remove).toBeVisible();
-    await expect(remove).toBeDisabled();
-    const idleTrash = await bounds(remove);
-    const idleColor = await remove.locator('svg').evaluate((icon) => getComputedStyle(icon).color);
+    await expect(remove).toHaveCount(0);
+    await expect(selectAll).toHaveCount(0);
 
     await select.click();
     await expect(done).toHaveCSS('transition-property', 'inline-size, border-radius');
@@ -85,8 +87,11 @@ for (const narrow of [false, true]) {
     const close = await bounds(done);
     expect(close.x + close.width).toBeCloseTo(selectBefore.x + selectBefore.width, 0);
     await expect(done).toHaveCSS('border-radius', '18px');
-    expect(await bounds(remove)).toEqual(idleTrash);
+    await expect(remove).toBeVisible();
     await expect(remove).toBeDisabled();
+    await expect(selectAll).toBeVisible();
+    const idleTrash = await bounds(remove);
+    const idleColor = await remove.locator('svg').evaluate((icon) => getComputedStyle(icon).color);
     expect(await stableLayout()).toEqual(layout);
 
     const firstCheckbox = firstWord.getByRole('checkbox');
@@ -100,11 +105,9 @@ for (const narrow of [false, true]) {
     await expect(remove).toHaveAccessibleName(
       narrow ? 'Supprimer la sélection (1)' : '删除已选（1）',
     );
-    const selectAll = vocab.getByRole('button', {
-      name: narrow ? 'Sélectionner tous les résultats' : '选择所有结果',
-    });
     const all = await bounds(selectAll);
     const trash = await bounds(remove);
+    expect(trash).toEqual(idleTrash);
     expect(all.x + all.width).toBeLessThan(trash.x);
     expect(all.y + all.height / 2).toBeCloseTo(trash.y + trash.height / 2, 0);
     expect(trash.y).toBeGreaterThan(word.y);
@@ -134,8 +137,8 @@ for (const narrow of [false, true]) {
     }
 
     await done.click();
-    await expect(remove).toBeVisible();
-    await expect(remove).toBeDisabled();
+    await expect(remove).toHaveCount(0);
+    await expect(selectAll).toHaveCount(0);
     expect(await stableLayout()).toEqual(layout);
     await search.click();
     const input = vocab.getByRole('textbox', { name: narrow ? 'Rechercher' : '搜索' });
@@ -228,7 +231,8 @@ test('holding a vocabulary card opens the delete menu without toggling or deleti
   const originalCard = await bounds(card);
   const label = await bounds(card.locator('.ol-word-card-label'));
   const edit = await bounds(card.getByRole('button', { name: '编辑', exact: true }));
-  expect(normal.width).toBeCloseTo(normal.height, 0);
+  await expect(hits).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(hits).toHaveCSS('border-radius', '0px');
   expect(normal.x).toBeGreaterThan(label.x + label.width);
   expect(normal.x + normal.width).toBeLessThan(edit.x);
   const wide = await hits.evaluate((node) => {
@@ -238,7 +242,7 @@ test('holding a vocabulary card opens the delete menu without toggling or deleti
     node.textContent = original;
     return { x, y, width, height };
   });
-  expect(wide.x).toBeCloseTo(normal.x, 0);
+  expect(wide.x + wide.width).toBeCloseTo(normal.x + normal.width, 0);
   expect(wide.y).toBeCloseTo(normal.y, 0);
   expect(wide.height).toBeCloseTo(normal.height, 0);
   expect(wide.width).toBeGreaterThan(normal.width);

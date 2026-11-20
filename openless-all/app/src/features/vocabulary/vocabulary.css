@@ -113,8 +113,8 @@
   padding-block-start: 4px;
 }
 
-/* Reserve both positions so selections cannot move the grid or its controls. */
-.ol-vocab-selection-footer:not([data-selecting]) .ol-vocab-batch-all {
+/* Reserve the footer so entering selection mode does not move the grid. */
+.ol-vocab-selection-footer:not([data-selecting]) {
   visibility: hidden;
 }
 
@@ -259,7 +259,7 @@
 
 .ol-word-card-label {
   display: block;
-  flex: 0 1 auto;
+  flex: 1 1 0%;
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -289,18 +289,12 @@
 }
 
 .ol-word-card-hits {
-  display: grid;
   flex: none;
-  place-items: center;
-  box-sizing: border-box;
-  min-inline-size: 16px;
-  block-size: 16px;
-  padding-inline: 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ol-ink) 15%, var(--ol-surface));
-  color: var(--ol-ink-2);
+  min-inline-size: 2ch;
+  color: var(--ol-ink-3);
   font: var(--ol-font-weight-semibold) 10px/1 var(--ol-font-sans);
   font-variant-numeric: tabular-nums;
+  text-align: end;
 }
 
 .ol-word-card-edit {
