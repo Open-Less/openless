@@ -20,6 +20,18 @@ fn definitions(available: AskToolSet) -> impl Iterator<Item = (&'static str, &'s
         json!({"type":"object", "properties":properties, "required":[field], "additionalProperties":false})
     };
     [
+        available.resolve_intent.then(|| (
+            "resolve_intent",
+            "Resolve the user's final destination before answering. This decision does not authorize external effects.",
+            json!({
+                "type": "object",
+                "properties": {"route": {
+                    "type": "string", "enum": ["answer", "selectionAnswer", "write", "edit", "clarify"]
+                }},
+                "required": ["route"],
+                "additionalProperties": false
+            }),
+        )),
         available.search.then(|| (
             "web_search",
             "Search for public facts, especially time-sensitive or changeable information. Use only a short public query. Never include private material, identifiers, account data, or quotes.",
@@ -49,8 +61,19 @@ pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, tools: &AskM
                 })
                 .collect(),
         );
-        body["tool_choice"] = match format {
-            LlmRequestFormat::Messages => json!({"type":"auto","disable_parallel_tool_use":true}),
+        body["tool_choice"] = match (format, tools.available.resolve_intent) {
+            (LlmRequestFormat::ChatCompletions, true) => {
+                json!({"type":"function","function":{"name":"resolve_intent"}})
+            }
+            (LlmRequestFormat::Responses, true) => {
+                json!({"type":"function","name":"resolve_intent"})
+            }
+            (LlmRequestFormat::Messages, true) => {
+                json!({"type":"tool","name":"resolve_intent","disable_parallel_tool_use":true})
+            }
+            (LlmRequestFormat::Messages, false) => {
+                json!({"type":"auto","disable_parallel_tool_use":true})
+            }
             _ => json!("auto"),
         };
         if format == LlmRequestFormat::Responses {
@@ -58,7 +81,8 @@ pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, tools: &AskM
             body["parallel_tool_calls"] = json!(false);
         }
     }
-    if format == LlmRequestFormat::Responses && (tools.available.any() || !tools.results.is_empty())
+    if format == LlmRequestFormat::Responses
+        && (tools.available.any() || !tools.results.is_empty() || tools.intent.is_some())
     {
         body["store"] = json!(false);
     }
@@ -68,15 +92,31 @@ pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, tools: &AskM
         "messages"
     };
     if let Some(messages) = body[key].as_array_mut() {
-        for AskToolResult { call, output } in &tools.results {
-            messages.extend(call.resume.iter().cloned());
-            messages.push(match format {
-                LlmRequestFormat::ChatCompletions => json!({"role":"tool","tool_call_id":call.id,"content":output}),
-                LlmRequestFormat::Responses => json!({"type":"function_call_output","call_id":call.id,"output":output}),
-                LlmRequestFormat::Messages => json!({"role":"user","content":[{"type":"tool_result","tool_use_id":call.id,"content":output}]}),
-            });
+        if let Some(intent) = &tools.intent {
+            let offset = if format == LlmRequestFormat::Messages {
+                1
+            } else {
+                2
+            };
+            messages.splice(offset..offset, compatible_result(format, &intent.result));
+        }
+        for result in &tools.results {
+            messages.extend(compatible_result(format, result));
         }
     }
+}
+
+fn compatible_result(
+    format: LlmRequestFormat,
+    AskToolResult { call, output }: &AskToolResult,
+) -> Vec<Value> {
+    let mut messages = call.resume.clone();
+    messages.push(match format {
+        LlmRequestFormat::ChatCompletions => json!({"role":"tool","tool_call_id":call.id,"content":output}),
+        LlmRequestFormat::Responses => json!({"type":"function_call_output","call_id":call.id,"output":output}),
+        LlmRequestFormat::Messages => json!({"role":"user","content":[{"type":"tool_result","tool_use_id":call.id,"content":output}]}),
+    });
+    messages
 }
 
 pub(super) fn configure_gemini(body: &mut Value, tools: &AskModelTools) {
@@ -85,17 +125,30 @@ pub(super) fn configure_gemini(body: &mut Value, tools: &AskModelTools) {
             json!({"name":name,"description":description,"parametersJsonSchema":schema})
         }).collect();
         body["tools"] = json!([{"functionDeclarations":declarations}]);
-    }
-    if let Some(contents) = body["contents"].as_array_mut() {
-        for AskToolResult { call, output } in &tools.results {
-            contents.extend(call.resume.iter().cloned());
-            let mut response = json!({"name":call.tool.name(),"response":{"result":output}});
-            if let Some(id) = &call.id {
-                response["id"] = json!(id);
-            }
-            contents.push(json!({"role":"user","parts":[{"functionResponse":response}]}));
+        if tools.available.resolve_intent {
+            body["toolConfig"] = json!({
+                "functionCallingConfig": {"mode":"ANY","allowedFunctionNames":["resolve_intent"]}
+            });
         }
     }
+    if let Some(contents) = body["contents"].as_array_mut() {
+        if let Some(intent) = &tools.intent {
+            contents.splice(1..1, gemini_result(&intent.result));
+        }
+        for result in &tools.results {
+            contents.extend(gemini_result(result));
+        }
+    }
+}
+
+fn gemini_result(AskToolResult { call, output }: &AskToolResult) -> Vec<Value> {
+    let mut contents = call.resume.clone();
+    let mut response = json!({"name":call.tool.name(),"response":{"result":output}});
+    if let Some(id) = &call.id {
+        response["id"] = json!(id);
+    }
+    contents.push(json!({"role":"user","parts":[{"functionResponse":response}]}));
+    contents
 }
 
 pub(super) struct ToolStream {
@@ -141,6 +194,11 @@ impl ToolStream {
                 let output = &value["response"]["output"];
                 if value["response"]["status"] == "completed" {
                     let items = output.as_array().map(Vec::as_slice).unwrap_or_default();
+                    if self.available.resolve_intent
+                        && items.iter().any(|item| item["type"] == "message")
+                    {
+                        return Err(invalid());
+                    }
                     let mut calls = items.iter().filter(|item| item["type"] == "function_call");
                     if let Some(item) = calls.next() {
                         if calls.next().is_some() || self.call.is_some() {
@@ -392,6 +450,13 @@ fn finish_call(
             let Expression { expression } = serde_json::from_str(args).map_err(|_| invalid())?;
             AskToolCall::Calculate { expression }
         }
+        Some("resolve_intent") if available.resolve_intent => {
+            let decision: super::super::entry::Decision =
+                serde_json::from_str(args).map_err(|_| invalid())?;
+            AskToolCall::ResolveIntent {
+                route: decision.route,
+            }
+        }
         _ => return Err(invalid()),
     };
     Ok(AskModelToolCall {
@@ -404,7 +469,128 @@ fn finish_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ask::{AskIntentContinuation, AskModelMessage, AskModelRole, AskRoute};
     use crate::llm_protocol::TextEventStream;
+
+    #[test]
+    fn required_intent_call_resumes_before_private_generation_material_on_each_protocol() {
+        let cases = [
+            (
+                LlmRequestFormat::ChatCompletions,
+                false,
+                "messages",
+                2,
+                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"intent-1","function":{"name":"resolve_intent","arguments":"{\"route\":\"edit\"}"}}]},"finish_reason":"tool_calls"}]}),
+            ),
+            (
+                LlmRequestFormat::Responses,
+                false,
+                "input",
+                2,
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"intent-1","name":"resolve_intent","arguments":"{\"route\":\"edit\"}"}]}}),
+            ),
+            (
+                LlmRequestFormat::Messages,
+                false,
+                "messages",
+                1,
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"intent-1","name":"resolve_intent","input":{"route":"edit"}}}),
+            ),
+            (
+                LlmRequestFormat::ChatCompletions,
+                true,
+                "contents",
+                1,
+                json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"intent-1","name":"resolve_intent","args":{"route":"edit"}},"thoughtSignature":"intent-signature"}]},"finishReason":"STOP"}]}),
+            ),
+        ];
+        let available = AskToolSet {
+            resolve_intent: true,
+            ..Default::default()
+        };
+        let required = AskModelTools {
+            available,
+            ..Default::default()
+        };
+        for (format, gemini, key, offset, frame) in cases {
+            let configure_body = |body: &mut Value, tools: &AskModelTools| {
+                if gemini {
+                    configure_gemini(body, tools);
+                } else {
+                    configure(body, format, tools);
+                }
+            };
+            let mut body = json!({key: vec![json!("original sanitized input"); offset]});
+            configure_body(&mut body, &required);
+            let forced = if gemini {
+                &body["toolConfig"]
+            } else {
+                &body["tool_choice"]
+            };
+            assert!(forced.to_string().contains("resolve_intent"));
+            let mut observer = ToolStream::new(format, gemini, available);
+            observer
+                .observe(&frame, frame["type"].as_str().unwrap_or_default())
+                .unwrap();
+            if format == LlmRequestFormat::Messages {
+                observer
+                    .observe(
+                        &json!({"delta":{"stop_reason":"tool_use"}}),
+                        "message_delta",
+                    )
+                    .unwrap();
+            }
+            let call = observer.take().unwrap();
+            assert!(matches!(
+                call.tool,
+                AskToolCall::ResolveIntent {
+                    route: AskRoute::Edit
+                }
+            ));
+            body = json!({key: vec![json!("original sanitized input"); offset]});
+            body[key]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("private material"));
+            configure_body(
+                &mut body,
+                &AskModelTools {
+                    intent: Some(AskIntentContinuation {
+                        input: AskModelMessage {
+                            role: AskModelRole::User,
+                            parts: Vec::new(),
+                        },
+                        result: AskToolResult {
+                            call,
+                            output: r#"{"route":"edit"}"#.into(),
+                        },
+                    }),
+                    ..Default::default()
+                },
+            );
+            assert!(body.get("tool_choice").is_none() && body.get("toolConfig").is_none());
+            assert_eq!(body[key].as_array().unwrap().len(), offset + 3);
+            assert!(body[key][offset].to_string().contains("intent-1"));
+            assert!(body[key][offset + 1].to_string().contains("intent-1"));
+            assert_eq!(body[key][offset + 2], "private material");
+            if gemini {
+                assert!(body[key][offset].to_string().contains("intent-signature"));
+            }
+        }
+        for arguments in [
+            r#"{"route":"replaceAll"}"#,
+            r#"{"route":"edit","text":"unsafe"}"#,
+        ] {
+            assert!(finish_call(
+                available,
+                Some("intent-1"),
+                Some("resolve_intent"),
+                arguments,
+                Vec::new()
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn native_tool_calls_are_resumed_with_protocol_specific_results() {
@@ -453,6 +639,7 @@ mod tests {
                 AskToolSet {
                     search: true,
                     calculator: true,
+                    ..Default::default()
                 },
             );
             for frame in &frames {
@@ -478,11 +665,13 @@ mod tests {
                 available: AskToolSet {
                     search: false,
                     calculator: true,
+                    ..Default::default()
                 },
                 results: vec![AskToolResult {
                     call,
                     output: "tool evidence".into(),
                 }],
+                ..Default::default()
             };
             if gemini {
                 configure_gemini(&mut body, &resume);

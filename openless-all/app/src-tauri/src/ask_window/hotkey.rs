@@ -288,9 +288,9 @@ enum Origin {
     Ask(Option<voice::Target>),
 }
 
-enum Chord {
-    Open(capture::Trigger),
-    Voice(Option<voice::Target>),
+struct Chord {
+    trigger: Option<capture::Trigger>,
+    autostart: bool,
 }
 
 enum Message {
@@ -346,25 +346,28 @@ impl Native {
                     return false;
                 };
                 let foreground = capture::foreground();
-                let chord = match &held.stroke.origin {
-                    Origin::Ask(original) => {
+                let trigger = match &held.stroke.origin {
+                    Origin::Ask(_) => {
                         if !desktop.is_native_target(foreground.as_ref()) {
                             return false;
                         }
-                        Chord::Voice(original.clone())
+                        None
                     }
                     Origin::Ordinary => {
                         if desktop.is_native_target(foreground.as_ref()) {
                             return false;
                         }
-                        Chord::Open(capture::Trigger::at_key_event(foreground))
+                        Some(capture::Trigger::at_key_event(foreground))
                     }
+                };
+                let chord = Chord {
+                    trigger,
+                    autostart: !desktop.voice_is_pending(),
                 };
                 held.chord_taken = tx.send(Message::Chord(held.stroke.id, chord)).is_ok();
                 held.chord_taken
             });
             if down && !handled {
-                capture::mark_interaction();
                 self.abort_for_companion(tx);
             }
             return if handled {
@@ -379,7 +382,7 @@ impl Native {
             }
             if down
                 && (self.escape_captured
-                    || (!disabled && desktop.owns_capsule() && desktop.is_focused()))
+                    || (!disabled && desktop.voice_is_pending() && desktop.is_focused()))
             {
                 if !self.escape_captured {
                     let _ = tx.send(Message::Escape);
@@ -422,7 +425,6 @@ impl Native {
         };
         if !matches_binding {
             if modifier == 0 {
-                capture::mark_interaction();
                 self.abort_for_companion(tx);
             }
             return Disposition::Stock;
@@ -519,6 +521,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                     && !stroke.binding.fn_tap
                     && matches!(stroke.binding.mode, HotkeyMode::Hold | HotkeyMode::Auto)
                     && !active
+                    && (matches!(stroke.origin, Origin::Ordinary) || !desktop.voice_is_pending())
                 {
                     if let Some(runtime) = RUNTIME.get() {
                         let tx = runtime.tx.clone();
@@ -536,7 +539,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                     completed: false,
                 };
                 if preexisting_grace {
-                    next.start(&desktop, &edges);
+                    next.start(&desktop, &edges, false);
                 }
                 current = Some(next);
             }
@@ -548,7 +551,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                     if !matches!(state.stroke.origin, Origin::Ordinary)
                         || !desktop.ports.ordinary_dictation_is_active()
                     {
-                        state.start(&desktop, &edges);
+                        state.start(&desktop, &edges, false);
                     }
                 }
             }
@@ -566,7 +569,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                 {
                     continue;
                 }
-                state.start(&desktop, &edges);
+                state.start(&desktop, &edges, true);
                 state.release(&desktop, &edges, at);
             }
             Message::Chord(id, chord) => {
@@ -576,24 +579,23 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
                 else {
                     continue;
                 };
-                match chord {
-                    Chord::Open(trigger) => {
-                        state.abort(&desktop);
-                        let desktop = desktop.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(error) = desktop.open_with(Some(trigger)).await {
-                                log::warn!("[ask-window] could not open: {error}");
-                            }
-                        });
+                let cancel = chord.trigger.is_some() && state.started && !state.stop_only;
+                let autostart = chord.autostart && !desktop.voice_is_pending();
+                let desktop = desktop.clone();
+                tauri::async_runtime::spawn(async move {
+                    if cancel {
+                        desktop
+                            .ports
+                            .ordinary_dictation_edge(DictationHotkeyEdge::Combined {
+                                press_id: id,
+                                at: Instant::now(),
+                            })
+                            .await;
                     }
-                    Chord::Voice(target) => {
-                        if target.is_some() {
-                            desktop.voice.intent(voice::Mode::Submit, target, id, true);
-                        } else {
-                            desktop.notify_frontend("ask-window:focused");
-                        }
+                    if let Err(error) = desktop.open_with(chord.trigger, Some(autostart)).await {
+                        log::warn!("[ask-window] could not open: {error}");
                     }
-                }
+                });
                 state.completed = true;
             }
             Message::Abort(id) => {
@@ -615,7 +617,7 @@ async fn dispatch(desktop: Weak<Desktop>, mut receiver: mpsc::UnboundedReceiver<
 type EdgeSender = mpsc::UnboundedSender<(DictationHotkeyEdge, HotkeyMode)>;
 
 impl Dispatch {
-    fn start(&mut self, desktop: &Desktop, ordinary: &EdgeSender) {
+    fn start(&mut self, desktop: &Desktop, ordinary: &EdgeSender, toggle: bool) {
         if self.started {
             return;
         }
@@ -629,11 +631,10 @@ impl Dispatch {
                     at: self.stroke.at,
                 },
             ),
-            Origin::Ask(target) => desktop.voice.intent(
-                voice::Mode::Insert,
+            Origin::Ask(target) => desktop.voice.manual(
                 target.clone(),
                 self.stroke.id,
-                mode != HotkeyMode::Hold,
+                toggle && mode != HotkeyMode::Hold,
             ),
         }
     }

@@ -703,9 +703,6 @@ mod platform {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
             | (1u64 << KEY_DOWN)
             | (1u64 << KEY_UP)
-            | (1u64 << 1)
-            | (1u64 << 3)
-            | (1u64 << 25)
             | (1u64 << SYSTEM_DEFINED);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
@@ -770,7 +767,6 @@ mod platform {
         let ctx = unsafe { &*(user_info as *const CallbackContext) };
 
         match event_type {
-            1 | 3 | 25 => crate::ask_window::capture::mark_interaction(),
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
                 crate::ask_window::hotkey::reset_physical_state();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {

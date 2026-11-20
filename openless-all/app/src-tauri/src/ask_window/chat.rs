@@ -4,7 +4,7 @@ use openless_core::ask::{self, AskAttachmentMetadata, AskTurnKey, StandaloneQaSe
 use openless_core::ask_attachment::{
     AttachmentContent, AttachmentError, AttachmentKind, AttachmentMetadata,
     AttachmentPreviewSummary, AttachmentReader as _, AttachmentRegistry, AttachmentScope,
-    AttachmentState, ImageMime, SelectedText,
+    AttachmentState, ImageMime,
 };
 use openless_core::{BackendError, BackendErrorCode, OpenLessBackend};
 use parking_lot::Mutex;
@@ -16,7 +16,9 @@ use tauri_plugin_shell::ShellExt;
 use uuid::Uuid;
 
 use super::attachment_files::{decode_dropped_image, pick_attachment_file, NativeAttachmentFile};
-use super::{context::DesktopContext, wire, LABEL};
+use super::entry_settings::{AskEntryIntentMode, AskEntrySettings, AskEntrySettingsStore};
+use super::target::{self, TargetTracker};
+use super::{context::DesktopContext, wire, CONVERSATION_LABEL, LABEL};
 
 pub(crate) struct AskHost {
     service: StandaloneQaService,
@@ -25,16 +27,23 @@ pub(crate) struct AskHost {
     attachment_gate: Mutex<()>,
     backend: Arc<OpenLessBackend>,
     context_preference: Option<PathBuf>,
-    pending_notice: Mutex<Option<Value>>,
+    entry_settings: Arc<AskEntrySettingsStore>,
+    targets: Arc<TargetTracker>,
 }
 
 impl AskHost {
-    pub(crate) fn new(backend: Arc<OpenLessBackend>) -> Self {
+    pub(crate) fn new(app: &AppHandle, backend: Arc<OpenLessBackend>) -> Self {
         let registry = Arc::new(AttachmentRegistry::default());
         let context = Arc::new(DesktopContext::default());
         let context_preference = crate::persistence::data_dir()
             .ok()
             .map(|dir| dir.join("ask-app-context.json"));
+        let entry_settings = Arc::new(AskEntrySettingsStore::load(
+            app.path()
+                .app_local_data_dir()
+                .ok()
+                .map(|dir| dir.join(AskEntrySettingsStore::FILE_NAME)),
+        ));
         let allowed = context_preference
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
@@ -46,6 +55,10 @@ impl AskHost {
         });
         let service = backend
             .create_standalone_ask(context.clone(), Arc::new(AttachmentPort(registry.clone())));
+        let targets = Arc::new(TargetTracker::new());
+        if let Err(error) = targets.start() {
+            log::warn!("[ask] external target observation unavailable: {error}");
+        }
         Self {
             service,
             registry,
@@ -53,7 +66,8 @@ impl AskHost {
             attachment_gate: Mutex::new(()),
             backend,
             context_preference,
-            pending_notice: Mutex::new(None),
+            entry_settings,
+            targets,
         }
     }
 
@@ -93,25 +107,40 @@ impl AskHost {
             .map_err(attachment_error)
     }
 
-    pub(crate) fn register_selection(
-        &self,
-        id: Uuid,
-        text: String,
-        source_app: Option<String>,
-    ) -> Result<(), BackendError> {
-        let _guard = self.attachment_gate.lock();
-        let metadata = self
-            .scope(id)?
-            .register_selection(SelectedText::new(text, source_app).map_err(attachment_error)?)
-            .map_err(attachment_error)?;
-        self.service
-            .publish_attachment(id, attachment_metadata(&metadata)?, true)
+    async fn prepare_submission(&self) -> Result<ask::AskPreparation, BackendError> {
+        let committed_settings = self.entry_settings.read().map_err(|_| {
+            BackendError::new(BackendErrorCode::Persistence, "askEntrySettingsUnavailable")
+        })?;
+        let intent_mode = match committed_settings.intent_mode {
+            AskEntryIntentMode::SemanticHybrid => ask::AskIntentMode::SemanticHybrid,
+            AskEntryIntentMode::SeparateModel => ask::AskIntentMode::SeparateModel,
+            AskEntryIntentMode::MainModelTool => ask::AskIntentMode::MainModelTool,
+        };
+        let locked = self.targets.capture().await;
+        let selection = match locked.selection {
+            target::ExternalSelection::None => ask::ExternalSelection::None,
+            target::ExternalSelection::Selected(text) => ask::ExternalSelection::Selected(text),
+            target::ExternalSelection::Unavailable => ask::ExternalSelection::Unavailable,
+        };
+        let writer = locked.write_target.map(|target| {
+            Arc::new(TargetWriter {
+                tracker: self.targets.clone(),
+                target,
+            }) as Arc<dyn ask::AskWriter>
+        });
+        Ok(ask::AskPreparation {
+            intent_mode,
+            selection,
+            writer,
+            clipboard: Some(Arc::new(Clipboard)),
+        })
     }
 
     pub(crate) fn stop(&self) {
         let _guard = self.attachment_gate.lock();
         let current = self.current();
         self.service.end_all();
+        self.targets.stop();
         self.registry.clear();
         if let Some(id) = current {
             self.context.close_conversation(id);
@@ -131,11 +160,35 @@ impl AskHost {
                             return;
                         };
                         if host.current() == Some(event.conversation_id) {
-                            let _ = app.emit_to(
-                                EventTarget::webview_window(LABEL),
-                                "ask:event",
-                                wire::event(&event),
-                            );
+                            let packet = wire::event(&event);
+                            for label in [LABEL, CONVERSATION_LABEL] {
+                                let _ = app.emit_to(
+                                    EventTarget::webview_window(label),
+                                    "ask:event",
+                                    &packet,
+                                );
+                            }
+                            if matches!(
+                                &event.kind,
+                                ask::AskEventKind::RouteResolved {
+                                    route: ask::AskRoute::Answer | ask::AskRoute::SelectionAnswer,
+                                }
+                            ) {
+                                if let (Some(turn_id), Some(desktop)) =
+                                    (event.turn_id, app.try_state::<Arc<super::Desktop>>())
+                                {
+                                    let desktop = desktop.inner().clone();
+                                    let conversation_id = event.conversation_id;
+                                    tauri::async_runtime::spawn(async move {
+                                        if let Err(error) = desktop
+                                            .show_conversation_for_chat(conversation_id, turn_id)
+                                            .await
+                                        {
+                                            log::warn!("[ask] conversation window failed: {error}");
+                                        }
+                                    });
+                                }
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -169,6 +222,58 @@ impl AskHost {
             }
         });
         Ok(metadata)
+    }
+}
+
+struct TargetWriter {
+    tracker: Arc<TargetTracker>,
+    target: target::WriteTarget,
+}
+
+impl ask::AskWriter for TargetWriter {
+    fn write(
+        &self,
+        operation: ask::AskWriteOperation,
+        text: String,
+        claim: ask::AskWriteClaim,
+    ) -> futures_util::future::BoxFuture<'_, ask::AskWriteOutcome> {
+        let operation = match operation {
+            ask::AskWriteOperation::Insert => target::WriteOperation::Insert,
+            ask::AskWriteOperation::Replace => target::WriteOperation::Replace,
+        };
+        Box::pin(async move {
+            match self
+                .tracker
+                .deliver(&self.target, operation, text, claim)
+                .await
+            {
+                target::WriteOutcome::Written => ask::AskWriteOutcome::Written,
+                target::WriteOutcome::NotWritten => ask::AskWriteOutcome::NotWritten,
+                target::WriteOutcome::Unknown => ask::AskWriteOutcome::Unknown,
+                target::WriteOutcome::Declined => ask::AskWriteOutcome::Declined,
+            }
+        })
+    }
+}
+
+struct Clipboard;
+
+impl ask::AskClipboard for Clipboard {
+    fn copy(&self, text: String) -> futures_util::future::BoxFuture<'_, Result<(), BackendError>> {
+        Box::pin(async move {
+            let copy = tauri::async_runtime::spawn_blocking(move || {
+                crate::insertion::copy_text_to_clipboard(&text)
+            })
+            .await;
+            if matches!(copy, Ok(Ok(()))) {
+                Ok(())
+            } else {
+                Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "Could not copy the Ask result.",
+                ))
+            }
+        })
     }
 }
 
@@ -291,26 +396,62 @@ fn authorize(window: &WebviewWindow) -> Result<(), Value> {
     }
 }
 
+fn authorize_reader(window: &WebviewWindow) -> Result<(), Value> {
+    if window.label() == CONVERSATION_LABEL {
+        Ok(())
+    } else {
+        authorize(window)
+    }
+}
+
+pub(crate) fn restricted_command_allowed(label: &str, command: &str) -> bool {
+    if label != LABEL && label != CONVERSATION_LABEL {
+        return true;
+    }
+    let reader = matches!(
+        command,
+        "ask_current"
+            | "ask_snapshot"
+            | "ask_events"
+            | "ask_cancel"
+            | "ask_open_source"
+            | "ask_window_hide"
+    );
+    reader
+        || label == LABEL
+            && matches!(
+                command,
+                "ask_new_conversation"
+                    | "ask_end_conversation"
+                    | "ask_submit"
+                    | "ask_add_attachment"
+                    | "ask_add_dropped_image"
+                    | "ask_remove_attachment"
+                    | "ask_get_attachment_preview"
+                    | "ask_sync_editor"
+                    | "ask_ack_voice"
+            )
+}
+
 type AskState<'a> = State<'a, Arc<AskHost>>;
 type IpcResult = Result<Value, Value>;
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubmitEnvelope {
-    #[serde(flatten)]
-    request: ask::AskSubmit,
-    voice_recording_id: Option<openless_core::SessionId>,
-}
-
 #[tauri::command]
 pub fn ask_current(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
-    authorize(&window)?;
-    Ok(json!({
+    authorize_reader(&window)?;
+    let mut status = json!({
         "conversationId": host.current(),
         "themeMode": host.backend.get_preferences().theme_mode,
         "platform": std::env::consts::OS,
-        "notice": host.pending_notice.lock().take(),
-    }))
+    });
+    if window.label() == LABEL {
+        if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
+            let (epoch, request) = desktop.composer_focus();
+            status["focusEpoch"] = json!(epoch);
+            status["focusRequest"] = json!(request);
+        }
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -323,11 +464,6 @@ pub fn ask_new_conversation(window: WebviewWindow, host: AskState<'_>) -> IpcRes
     if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
         desktop.set_conversation(Some(conversation_id.to_string()));
     }
-    let _ = window.emit_to(
-        EventTarget::webview_window(LABEL),
-        "ask:window",
-        json!({"type":"activated"}),
-    );
     Ok(json!({"conversationId": conversation_id}))
 }
 
@@ -347,17 +483,12 @@ pub fn ask_end_conversation(
     if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
         desktop.set_conversation(None);
     }
-    let _ = window.emit_to(
-        EventTarget::webview_window(LABEL),
-        "ask:window",
-        json!({"type":"activated"}),
-    );
     Ok(Value::Null)
 }
 
 #[tauri::command]
 pub fn ask_snapshot(window: WebviewWindow, host: AskState<'_>, conversation_id: Uuid) -> IpcResult {
-    authorize(&window)?;
+    authorize_reader(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     host.service
         .snapshot(conversation_id)
@@ -372,7 +503,7 @@ pub fn ask_events(
     conversation_id: Uuid,
     after_sequence: u64,
 ) -> IpcResult {
-    authorize(&window)?;
+    authorize_reader(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     let replay = host
         .service
@@ -387,44 +518,16 @@ pub fn ask_events(
 pub async fn ask_submit(
     window: WebviewWindow,
     host: AskState<'_>,
-    request: SubmitEnvelope,
+    request: ask::AskSubmit,
 ) -> IpcResult {
     authorize(&window)?;
-    let SubmitEnvelope {
-        request,
-        voice_recording_id,
-    } = request;
     host.require_current(request.conversation_id)
         .map_err(wire::error)?;
     let conversation_id = request.conversation_id;
     let used_attachments = request.attachment_ids.clone();
-    let desktop = window
-        .try_state::<Arc<super::Desktop>>()
-        .map(|state| state.inner().clone());
-    let proof = voice_recording_id.map(|id| (id, request.clone()));
     let turn_id = host
         .service
-        .submit_guarded(request, || {
-            proof.as_ref().is_none_or(|(id, request)| {
-                desktop.as_ref().is_some_and(|desktop| {
-                    desktop.current_voice_delivery().is_some_and(|delivery| {
-                        let editor = delivery.target.editor;
-                        delivery.recording_id == *id
-                            && delivery.mode == super::voice::Mode::Submit
-                            && editor.conversation_id == request.conversation_id.to_string()
-                            && request.client_request_id == id.to_string()
-                            && delivery.text.trim() == request.text
-                            && editor.attachment_ids.iter().eq(request
-                                .attachment_ids
-                                .iter()
-                                .map(Uuid::to_string)
-                                .collect::<Vec<_>>()
-                                .iter())
-                            && editor.options.deep_thinking == request.options.deep_thinking
-                    })
-                })
-            })
-        })
+        .submit_prepared(request, || host.prepare_submission())
         .await
         .map_err(wire::error)?;
     let _guard = host.attachment_gate.lock();
@@ -443,7 +546,7 @@ pub fn ask_cancel(
     conversation_id: Uuid,
     turn_id: Uuid,
 ) -> IpcResult {
-    authorize(&window)?;
+    authorize_reader(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     host.service
         .cancel(AskTurnKey {
@@ -535,7 +638,7 @@ pub fn ask_open_source(
     turn_id: Uuid,
     source_id: String,
 ) -> IpcResult {
-    authorize(&window)?;
+    authorize_reader(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     let url = host
         .service
@@ -562,6 +665,13 @@ pub(crate) struct DesktopPorts {
 }
 
 impl super::Integration for DesktopPorts {
+    fn auto_voice_on_open(&self) -> bool {
+        self.ask
+            .entry_settings
+            .read()
+            .is_ok_and(|settings| settings.auto_voice_on_open)
+    }
+
     fn prepare_open(
         &self,
         invocation: super::capture::Invocation,
@@ -612,19 +722,6 @@ impl super::Integration for DesktopPorts {
                     }
                 }
             }
-            let source_app = invocation.foreground_app.and_then(|source| source.name);
-            let selection_result = match invocation.selection {
-                super::capture::Selection::Text(text) => {
-                    ask.register_selection(conversation, text, source_app)
-                }
-                super::capture::Selection::TooLarge => {
-                    Err(attachment_error(AttachmentError::SelectionTooLarge))
-                }
-                super::capture::Selection::None => Ok(()),
-            };
-            if let Err(error) = selection_result {
-                *ask.pending_notice.lock() = Some(wire::error(error));
-            }
             Ok(())
         })
     }
@@ -653,7 +750,7 @@ pub fn ask_window_hide(
     window: WebviewWindow,
     desktop: State<'_, Arc<super::Desktop>>,
 ) -> IpcResult {
-    authorize(&window)?;
+    authorize_reader(&window)?;
     desktop
         .hide(&window)
         .map_err(|message| json!({"code":"platform","message":message}))?;
@@ -664,18 +761,19 @@ pub fn ask_window_hide(
 pub fn ask_sync_editor(
     window: WebviewWindow,
     desktop: State<'_, Arc<super::Desktop>>,
+    focus_epoch: u64,
+    focus_request: u64,
     editor: super::voice::Editor,
 ) -> IpcResult {
     authorize(&window)?;
-    if editor.mount_id.len() > 128
-        || editor.editor_id.len() > 128
-        || editor.attachment_ids.len() > 4
-    {
+    if editor.mount_id.len() > 128 || editor.editor_id.len() > 128 {
         return Err(json!({"code":"invalid_argument","message":"Invalid Ask editor state."}));
     }
-    Ok(json!(
-        desktop.update_composer(desktop.focus_epoch(), Some(editor))
-    ))
+    Ok(json!(desktop.update_composer(
+        focus_epoch,
+        focus_request,
+        editor
+    )))
 }
 
 #[tauri::command]
@@ -735,25 +833,77 @@ pub fn ask_set_context_permission(
     Ok(Value::Null)
 }
 
+fn settings_reply(result: Result<AskEntrySettings, String>) -> IpcResult {
+    result
+        .map(|settings| json!(settings))
+        .map_err(|_| json!({"code":"persistence","message":"Could not access Ask settings."}))
+}
+
+#[tauri::command]
+pub fn ask_get_entry_settings(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    settings_reply(host.entry_settings.read())
+}
+
+#[tauri::command]
+pub async fn ask_set_entry_settings(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    settings: AskEntrySettings,
+) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    let store = host.entry_settings.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || store.write(settings))
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+    settings_reply(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn voice_submission_carries_separate_recording_and_conversation_ids() {
-        let conversation = Uuid::new_v4();
-        let recording = Uuid::new_v4();
-        let payload: SubmitEnvelope = serde_json::from_value(json!({
-            "conversationId": conversation,
-            "clientRequestId": recording,
-            "voiceRecordingId": recording,
-            "text": "hi",
-            "attachmentIds": [],
-            "options": { "deepThinking": false }
-        }))
-        .unwrap();
-        assert_eq!(payload.request.conversation_id, conversation);
-        assert_eq!(payload.request.client_request_id, recording.to_string());
-        assert_eq!(payload.voice_recording_id.unwrap().as_uuid(), recording);
+    fn conversation_window_can_read_and_cancel_but_cannot_submit_or_change_settings() {
+        for command in [
+            "ask_current",
+            "ask_snapshot",
+            "ask_events",
+            "ask_cancel",
+            "ask_open_source",
+            "ask_window_hide",
+        ] {
+            assert!(restricted_command_allowed(CONVERSATION_LABEL, command));
+            assert!(restricted_command_allowed(LABEL, command));
+        }
+        for command in [
+            "ask_submit",
+            "ask_new_conversation",
+            "ask_end_conversation",
+            "ask_add_attachment",
+            "ask_get_attachment_preview",
+            "ask_sync_editor",
+            "ask_ack_voice",
+        ] {
+            assert!(!restricted_command_allowed(CONVERSATION_LABEL, command));
+            assert!(restricted_command_allowed(LABEL, command));
+        }
+        for command in [
+            "ask_get_entry_settings",
+            "ask_set_entry_settings",
+            "copy_text_to_clipboard",
+        ] {
+            assert!(!restricted_command_allowed(CONVERSATION_LABEL, command));
+            assert!(!restricted_command_allowed(LABEL, command));
+            assert!(restricted_command_allowed("main", command));
+        }
     }
 }

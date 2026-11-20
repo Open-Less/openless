@@ -7,7 +7,10 @@ import {
   errorMessage,
   newRequestId,
   requestFingerprint,
+  submissionErrorMessage,
+  type AskError,
   type AskClient,
+  type AskFocus,
   type AskSnapshot,
   type AskVoiceEvent,
   type SubmitAsk,
@@ -62,10 +65,7 @@ type Selection = {
 };
 type Draft = { text: string; selection?: Selection };
 type PendingAsk = Omit<SubmitAsk, 'clientRequestId'>;
-type Recording = { id: string } & (
-  { mode: 'insert'; anchor: Draft } | { mode: 'submit'; request: Omit<SubmitAsk, 'text'> }
-);
-type VoiceRetry = { request: SubmitAsk };
+type Recording = { id: string; draft: string; input: HTMLTextAreaElement };
 
 function selectionOf(editor: HTMLTextAreaElement | null): Selection | undefined {
   if (!editor) return;
@@ -82,14 +82,16 @@ export function useComposer({
   connected,
   canDeliverVoice,
   check,
-  focusRevision,
+  focus,
+  activation,
 }: {
   client: AskClient;
   snapshot: AskSnapshot;
   connected: boolean;
   canDeliverVoice: () => boolean;
   check: () => void;
-  focusRevision: number;
+  focus?: AskFocus;
+  activation: number;
 }) {
   const { conversationId, attachments } = snapshot;
   const notice = useAskNotice();
@@ -102,18 +104,19 @@ export function useComposer({
   const draftIds = useRef(new Map<string, string>());
   const pendingRef = useRef(false);
   const activeRecording = useRef<Recording>();
-  const seenRecordings = useRef(new Set<string>());
   const receiveVoice = useRef<(event: AskVoiceEvent) => void>(() => {});
+  const currentVoiceEditor = useRef<(event: AskVoiceEvent) => HTMLTextAreaElement | undefined>();
+  const syncSelection = useRef(() => {});
   const mountId = useRef(newRequestId());
   const editorRevision = useRef(0);
   const editorFingerprint = useRef('');
+  const focusSeen = useRef('');
 
   const [draft, setDraft] = useState('');
-  const [focusSeen, setFocusSeen] = useState(-1);
   const [deepThinking, setDeepThinking] = useState(false);
   const [pending, setPending] = useState(false);
   const [acknowledgedTurn, setAcknowledgedTurn] = useState<string>();
-  const [voiceRetries, setVoiceRetries] = useState<VoiceRetry[]>([]);
+  const [voiceListening, setVoiceListening] = useState(false);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
   const [cancelling, setCancelling] = useState<string>();
@@ -121,7 +124,9 @@ export function useComposer({
 
   const turnId =
     snapshot.activeTurnId ??
-    (acknowledgedTurn && !snapshot.turns.some((turn) => turn.turnId === acknowledgedTurn)
+    (acknowledgedTurn &&
+    snapshot.submission?.currentTurnId !== acknowledgedTurn &&
+    !snapshot.turns.some((turn) => turn.turnId === acknowledgedTurn)
       ? acknowledgedTurn
       : undefined);
   const attachmentsReady = attachments.every((item) => item.state === 'ready');
@@ -141,39 +146,56 @@ export function useComposer({
     setDraft(text);
   }
 
-  function syncEditor(force = false) {
+  function syncEditor(editorBlurred = false) {
     const input = editor.current;
-    if (!connected || !input || !client.syncEditor || !canDeliverVoice()) return;
-    const editable = document.activeElement === input && !composing.current && !input.readOnly;
+    if (
+      !connected ||
+      !input ||
+      !focus ||
+      !voiceListening ||
+      !client.syncEditor ||
+      !canDeliverVoice()
+    )
+      return;
+    const editable =
+      !editorBlurred && document.activeElement === input && !composing.current && !input.readOnly;
     const selectionStart = input.selectionStart;
     const selectionEnd = input.selectionEnd;
-    const attachmentIds = attachments.map((attachment) => attachment.attachmentId);
-    const options = { deepThinking };
     const key = JSON.stringify([
+      focus.focusEpoch,
       editable,
       selectionStart,
       selectionEnd,
       draftRef.current,
-      attachmentIds,
-      options,
     ]);
-    if (!force && key === editorFingerprint.current) return;
-    editorFingerprint.current = key;
+    const changed = key !== editorFingerprint.current;
+    const requestKey = `${focus.focusEpoch}:${focus.focusRequest}:${activation}`;
+    if (!changed && requestKey === focusSeen.current) return;
+    if (changed) {
+      editorFingerprint.current = key;
+      editorRevision.current += 1;
+      activeRecording.current = undefined;
+    }
+    focusSeen.current = requestKey;
     void client
-      .syncEditor({
+      .syncEditor(focus, {
         conversationId,
         mountId: mountId.current,
         editorId: mountId.current,
-        revision: ++editorRevision.current,
+        revision: editorRevision.current,
         editable,
         selectionStart,
         selectionEnd,
-        attachmentIds,
-        options,
       })
-      .catch(() => {});
+      .then((accepted) => {
+        if (!accepted && focusSeen.current === requestKey) focusSeen.current = '';
+      })
+      .catch(() => {
+        if (focusSeen.current === requestKey) focusSeen.current = '';
+      });
   }
 
+  const focused = useRef('');
   useLayoutEffect(() => {
     const selection = nextSelection.current;
     if (selection && editor.current) {
@@ -184,30 +206,27 @@ export function useComposer({
       );
       nextSelection.current = undefined;
     }
-    if (connected && focusSeen !== focusRevision && editor.current) {
+    const token = focus ? `${focus.focusEpoch}:${focus.focusRequest}` : '';
+    if (connected && token !== focused.current && editor.current && canDeliverVoice()) {
+      focused.current = token;
       editor.current.focus({ preventScroll: true });
-      setFocusSeen(focusRevision);
-      syncEditor(true);
-    } else {
-      syncEditor();
     }
+    syncSelection.current = () => syncEditor();
+    syncEditor();
   });
 
-  function keepVoice(request: SubmitAsk, message: string, severity: 'warning' | 'error') {
-    sendNotice.current = notice(message, severity, 'ask-send');
-    setVoiceRetries((retries) => [
-      ...retries.filter((item) => item.request.clientRequestId !== request.clientRequestId),
-      { request },
-    ]);
-  }
+  useEffect(() => {
+    const input = editor.current;
+    const onSelectionChanged = () => syncSelection.current();
+    input?.addEventListener('select', onSelectionChanged);
+    document.addEventListener('selectionchange', onSelectionChanged);
+    return () => {
+      input?.removeEventListener('select', onSelectionChanged);
+      document.removeEventListener('selectionchange', onSelectionChanged);
+    };
+  }, []);
 
-  function discardVoice(request: SubmitAsk) {
-    setVoiceRetries((retries) =>
-      retries.filter((item) => item.request.clientRequestId !== request.clientRequestId),
-    );
-  }
-
-  function launch(request: SubmitAsk, restore?: Draft, fromVoice = false) {
+  function launch(request: SubmitAsk, restore?: Draft) {
     const attachmentIds = new Set(
       attachments
         .filter(
@@ -222,17 +241,7 @@ export function useComposer({
       adding ||
       request.attachmentIds.some((attachmentId) => !attachmentIds.has(attachmentId));
     if (blocked) {
-      if (request.voiceRecordingId) void client.acknowledgeVoice?.(request.voiceRecordingId);
       if (restore) replaceDraft(restore.text, restore.selection);
-      if (fromVoice) {
-        keepVoice(
-          request,
-          !connected || pendingRef.current || turnId
-            ? 'Ask is busy or reconnecting.'
-            : 'An attachment from this recording is no longer ready.',
-          'warning',
-        );
-      }
       return;
     }
 
@@ -244,14 +253,13 @@ export function useComposer({
       .submit(request)
       .then(({ turnId: acceptedTurnId }) => {
         setAcknowledgedTurn(acceptedTurnId);
-        if (fromVoice) {
-          discardVoice(request);
-        } else {
-          draftIds.current.delete(requestFingerprint(request));
-        }
+        draftIds.current.delete(requestFingerprint(request));
       })
       .catch((cause) => {
-        const message = errorMessage(cause, 'Ask could not send this message.');
+        const message =
+          typeof cause === 'object' && cause !== null && 'reason' in cause
+            ? (submissionErrorMessage(cause as AskError) ?? 'Ask could not send this message.')
+            : errorMessage(cause, 'Ask could not send this message.');
         const recoverable =
           typeof cause === 'object' &&
           cause !== null &&
@@ -259,14 +267,9 @@ export function useComposer({
           ['busy', 'invalid_argument', 'cancelled'].includes(String(cause.code));
         const severity = recoverable ? 'warning' : 'error';
         if (restore) replaceDraft(restore.text, restore.selection);
-        if (fromVoice) {
-          keepVoice(request, message, severity);
-        } else {
-          sendNotice.current = notice(message, severity, 'ask-send');
-        }
+        sendNotice.current = notice(message, severity, 'ask-send');
       })
       .finally(() => {
-        if (request.voiceRecordingId) void client.acknowledgeVoice?.(request.voiceRecordingId);
         pendingRef.current = false;
         setPending(false);
         check();
@@ -304,69 +307,59 @@ export function useComposer({
   }
 
   useLayoutEffect(() => {
-    receiveVoice.current = (event) => {
-      if (event.conversationId !== conversationId || !canDeliverVoice()) return;
+    currentVoiceEditor.current = (event) => {
       const input = editor.current;
+      if (
+        connected &&
+        canDeliverVoice() &&
+        event.conversationId === conversationId &&
+        event.focusEpoch === focus?.focusEpoch &&
+        event.mountId === mountId.current &&
+        event.editorId === mountId.current &&
+        event.revision === editorRevision.current &&
+        input &&
+        document.activeElement === input &&
+        !input.readOnly &&
+        !composing.current &&
+        input.value === draftRef.current &&
+        event.selectionStart === input.selectionStart &&
+        event.selectionEnd === input.selectionEnd
+      )
+        return input;
+    };
+    receiveVoice.current = (event) => {
       if (event.type === 'started') {
-        if (
-          seenRecordings.current.has(event.recordingId) ||
-          (activeRecording.current?.id === event.recordingId &&
-            activeRecording.current.mode === event.mode)
-        )
-          return;
-        activeRecording.current = undefined;
-        if (event.mode === 'insert') {
-          if (!input || document.activeElement !== input || input.readOnly || composing.current)
-            return;
-          activeRecording.current = {
-            id: event.recordingId,
-            mode: 'insert',
-            anchor: { text: draftRef.current, selection: selectionOf(input) },
-          };
-        } else {
-          activeRecording.current = {
-            id: event.recordingId,
-            mode: 'submit',
-            request: {
-              conversationId,
-              clientRequestId: event.recordingId,
-              voiceRecordingId: event.recordingId,
-              attachmentIds: attachments.map((attachment) => attachment.attachmentId),
-              options: { deepThinking },
-            },
-          };
+        const input = currentVoiceEditor.current?.(event);
+        if (input) {
+          activeRecording.current = { id: event.recordingId, draft: draftRef.current, input };
         }
         return;
       }
       const recording = activeRecording.current;
-      if (!recording || recording.id !== event.recordingId || recording.mode !== event.mode) {
-        if (event.type === 'transcribed') void client.acknowledgeVoice?.(event.recordingId);
+      if (event.type === 'cancelled') {
+        if (recording?.id === event.recordingId) activeRecording.current = undefined;
         return;
       }
-      activeRecording.current = undefined;
-      if (event.type !== 'transcribed' || !event.text.trim()) return;
-      seenRecordings.current.add(event.recordingId);
-      if (recording.mode === 'insert') void client.acknowledgeVoice?.(event.recordingId);
-      if (recording.mode === 'submit') {
-        launch({ ...recording.request, text: event.text.trim() }, undefined, true);
-      } else if (
-        input &&
-        document.activeElement === input &&
-        !input.readOnly &&
-        !composing.current
-      ) {
-        const { text: original, selection } = recording.anchor;
-        if (!selection || original !== draftRef.current) return;
-        const caret = selection.start + event.text.length;
-        replaceDraft(
-          original.slice(0, selection.start) + event.text + original.slice(selection.end),
-          {
-            start: caret,
-            end: caret,
-            direction: 'none',
-          },
-        );
-      }
+      void client
+        .acknowledgeVoice?.(event.recordingId)
+        .then((claimed) => {
+          if (activeRecording.current !== recording || recording?.id !== event.recordingId) return;
+          activeRecording.current = undefined;
+          if (
+            !claimed ||
+            !event.text.trim() ||
+            currentVoiceEditor.current?.(event) !== recording.input ||
+            draftRef.current !== recording.draft
+          )
+            return;
+          const offset = event.selectionEnd;
+          const caret = offset + event.text.length;
+          replaceDraft(
+            recording.draft.slice(0, offset) + event.text + recording.draft.slice(offset),
+            { start: caret, end: caret, direction: 'none' },
+          );
+        })
+        .catch(() => {});
     };
   });
 
@@ -383,7 +376,10 @@ export function useComposer({
       })
       .then((unsubscribe) => {
         if (stopped) unsubscribe();
-        else stop = unsubscribe;
+        else {
+          stop = unsubscribe;
+          setVoiceListening(true);
+        }
       })
       .catch((cause) => {
         if (!stopped)
@@ -395,6 +391,7 @@ export function useComposer({
       });
     return () => {
       stopped = true;
+      activeRecording.current = undefined;
       window.removeEventListener('blur', clearRecording);
       stop?.();
     };
@@ -440,11 +437,16 @@ export function useComposer({
         inputProps={{
           'aria-describedby': attachments.length ? 'draft-references' : undefined,
           readOnly: pending,
-          onFocus: () => syncEditor(true),
-          onBlur: () => syncEditor(true),
+          onFocus: () => syncEditor(),
+          onBlur: () => {
+            activeRecording.current = undefined;
+            syncEditor(true);
+          },
           onSelect: () => syncEditor(),
           onCompositionStart: () => {
+            activeRecording.current = undefined;
             composing.current = true;
+            syncEditor();
             setIsComposing(true);
           },
           onCompositionEnd: () => {
@@ -458,9 +460,7 @@ export function useComposer({
             value === ''
               ? { text: draftRef.current, selection: selectionOf(editor.current) }
               : undefined;
-          const recording = activeRecording.current;
-          if (recording?.mode === 'insert' && value !== draftRef.current)
-            activeRecording.current = undefined;
+          if (value !== draftRef.current) activeRecording.current = undefined;
           replaceDraft(value);
         }}
         onSubmit={submitDraft}
@@ -471,7 +471,7 @@ export function useComposer({
             .cancel(conversationId, turnId)
             .catch((cause) => {
               notice(
-                errorMessage(cause, 'Could not stop the current answer.'),
+                errorMessage(cause, 'Could not stop the current request.'),
                 'error',
                 'ask-stop',
               );
@@ -527,32 +527,7 @@ export function useComposer({
           </>
         }
       />
-      {voiceRetries.length > 0 && (
-        <div className="voice-retries">
-          {voiceRetries.map(({ request }) => (
-            <div key={request.clientRequestId} className="composer-notice">
-              <p className="voice-excerpt">{request.text}</p>
-              <button
-                className="text-button"
-                type="button"
-                disabled={!connected || pending || Boolean(turnId)}
-                onClick={() => launch({ ...request, voiceRecordingId: undefined }, undefined, true)}
-              >
-                Retry recording
-              </button>
-              <button
-                className="text-button"
-                type="button"
-                disabled={pending}
-                onClick={() => discardVoice(request)}
-              >
-                Discard
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
-  return { box, started: pending || Boolean(acknowledgedTurn) || snapshot.turns.length > 0 };
+  return box;
 }

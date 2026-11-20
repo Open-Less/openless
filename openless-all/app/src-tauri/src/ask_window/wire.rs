@@ -1,7 +1,8 @@
 //! Translate canonical Core events without dropping sequence numbers or reading ahead.
 
 use openless_core::ask::{
-    AskActivity, AskEvent, AskEventKind, AskMessage, AskSnapshot, AskTurn, AskTurnStatus,
+    AskActivity, AskEvent, AskEventKind, AskMessage, AskSnapshot, AskSubmission, AskTurn,
+    AskTurnStatus,
 };
 use openless_core::BackendError;
 use serde_json::{json, Value};
@@ -15,9 +16,29 @@ pub(super) fn error(error: BackendError) -> Value {
         "askImageInputUnsupported" => "The configured model does not support images in Ask.",
         "askRequestConflict" => "This request ID belongs to a different message.",
         "askConversationUnavailable" => "This conversation is no longer available.",
+        "askIntentInvalid" => {
+            "Could not determine what to do with this request. Try rephrasing it."
+        }
+        "askIntentToolUnsupported" => {
+            "The configured model does not support the selected intent tool."
+        }
+        "askIntentTimeout" => "Intent detection took too long. Please try again.",
+        "askEntrySettingsUnavailable" => {
+            "Could not read Ask settings. Check Settings and try again."
+        }
         _ => &error.message,
     };
-    json!({"code": error.code, "message": message})
+    let mut value = json!({"code": error.code, "message": message});
+    if matches!(
+        error.message.as_str(),
+        "askIntentInvalid"
+            | "askIntentToolUnsupported"
+            | "askIntentTimeout"
+            | "askEntrySettingsUnavailable"
+    ) {
+        value["reason"] = json!(error.message);
+    }
+    value
 }
 
 fn working(status: Option<AskActivity>) -> &'static str {
@@ -57,6 +78,23 @@ fn turn(turn: &AskTurn, user: &AskMessage, assistant: &AskMessage) -> Value {
     })
 }
 
+fn submission(value: &AskSubmission) -> Value {
+    json!({
+        "currentTurnId": value.current_turn_id,
+        "route": value.route,
+        "status": status(value.status, value.activity),
+        "activity": value.activity,
+        "searchStatus": value.search_status,
+        "searchError": value.search_error.clone().map(error),
+        "toolCallId": value.tool_call_id,
+        "sources": value.sources,
+        "resultText": value.result_text,
+        "delivery": value.delivery,
+        "copyStatus": value.copy_status,
+        "error": value.error.clone().map(error),
+    })
+}
+
 pub(super) fn snapshot(snapshot: AskSnapshot) -> Value {
     let messages: std::collections::HashMap<_, _> = snapshot
         .messages
@@ -74,11 +112,26 @@ pub(super) fn snapshot(snapshot: AskSnapshot) -> Value {
             ))
         })
         .collect::<Vec<_>>();
-    json!({"conversationId":snapshot.conversation_id,"sequence":snapshot.sequence,"activeTurnId":snapshot.current_turn_id,"turns":turns,"attachments":snapshot.attachments,"cache":snapshot.cache})
+    json!({
+        "conversationId": snapshot.conversation_id,
+        "sequence": snapshot.sequence,
+        "activeTurnId": snapshot.current_turn_id,
+        "turns": turns,
+        "attachments": snapshot.attachments,
+        "cache": snapshot.cache,
+        "submission": snapshot.submission.as_ref().map(submission),
+    })
 }
 
 pub(super) fn event(event: &AskEvent) -> Value {
     let mut packet = match &event.kind {
+        AskEventKind::Submitted { submission: value } => {
+            json!({"type":"submitted","submission":submission(value)})
+        }
+        AskEventKind::RouteResolved { route } => json!({"type":"routeResolved","route":route}),
+        AskEventKind::Delivery { submission: value } => {
+            json!({"type":"delivery","submission":submission(value)})
+        }
         AskEventKind::Accepted {
             user,
             assistant,
@@ -156,5 +209,15 @@ mod tests {
         assert_eq!(packet["type"], "sourceChanged");
         assert_eq!(packet["source"]["readStatus"], "blocked");
         assert!(packet.get("evidence").is_none());
+    }
+
+    #[test]
+    fn intent_error_can_be_localized_without_using_its_display_message() {
+        let result = error(BackendError::new(
+            openless_core::BackendErrorCode::Unsupported,
+            "askIntentToolUnsupported",
+        ));
+        assert_eq!(result["reason"], "askIntentToolUnsupported");
+        assert_ne!(result["message"], result["reason"]);
     }
 }

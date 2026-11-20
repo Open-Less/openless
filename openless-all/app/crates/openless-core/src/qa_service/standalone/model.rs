@@ -370,7 +370,7 @@ impl AskModel for PreparedModel {
 
 fn compatible_messages(format: LlmRequestFormat, request: &AskModelRequest) -> Vec<Value> {
     let mut messages = vec![json!({"role": "system", "content": request.instructions})];
-    messages.extend(request.messages.iter().map(|message| {
+    messages.extend(input_messages(request).map(|message| {
         let role = match message.role {
             AskModelRole::User => "user",
             AskModelRole::Assistant => "assistant",
@@ -467,9 +467,7 @@ fn tune_compatible(
 }
 
 fn gemini_body(request: &AskModelRequest, thinking: Thinking, temperature: f32) -> Value {
-    let contents = request
-        .messages
-        .iter()
+    let contents = input_messages(request)
         .map(|message| {
             let role = match message.role {
                 AskModelRole::User => "user",
@@ -508,6 +506,15 @@ fn gemini_body(request: &AskModelRequest, thinking: Thinking, temperature: f32) 
         "contents": contents,
         "generationConfig": generation,
     })
+}
+
+fn input_messages(request: &AskModelRequest) -> impl Iterator<Item = &AskModelMessage> {
+    request
+        .tools
+        .intent
+        .iter()
+        .map(|intent| &intent.input)
+        .chain(&request.messages)
 }
 
 fn nonempty_text(text: &str) -> &str {

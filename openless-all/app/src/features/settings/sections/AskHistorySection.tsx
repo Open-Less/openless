@@ -6,22 +6,30 @@ import { isDesktop } from '../../../lib/platform';
 import { invokeOrPreview } from '../../../runtime/transport';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { Card } from '../../../ui/layout/Card';
+import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 
-export function AskHistorySection() {
+export function AskHistorySection({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
+  const { notify } = useInteraction();
   const { prefs, updatePrefs } = useHotkeySettings();
-  const [saveFailed, setSaveFailed] = useState(false);
   const [contextAllowed, setContextAllowed] = useState<boolean>();
   const [contextSaving, setContextSaving] = useState(false);
-  const [contextError, setContextError] = useState(false);
   useEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
     void invokeOrPreview('ask_get_context_permission', undefined, () => false)
-      .then((allowed) => { if (!cancelled) setContextAllowed(allowed); })
-      .catch(() => { if (!cancelled) setContextError(true); });
-    return () => { cancelled = true; };
-  }, []);
+      .then((allowed) => {
+        if (!cancelled) setContextAllowed(allowed);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [t, notify]);
   if (!prefs) return <PageSkeleton rows={1} />;
 
   return (
@@ -29,19 +37,17 @@ export function AskHistorySection() {
       <SettingRow
         label={t('selectionAsk.history.title')}
         desc={t('selectionAsk.history.desc')}
-        descriptionPlacement="inline"
+        descriptionPlacement={compact ? 'hint' : 'inline'}
       >
         <Toggle
           on={prefs.qaSaveHistory}
           onToggle={(qaSaveHistory) => {
-            setSaveFailed(false);
             void updatePrefs((current) => ({ ...current, qaSaveHistory })).catch(() =>
-              setSaveFailed(true),
+              notify({ state: 'failed', message: t('selectionAsk.save.historySaveFailed') }),
             );
           }}
         />
       </SettingRow>
-      {saveFailed && <p role="alert">{t('selectionAsk.save.historySaveFailed')}</p>}
       {contextAllowed !== undefined && (
         <SettingRow
           label={t('selectionAsk.desktopContext.title', 'Share desktop app names with Ask')}
@@ -49,24 +55,22 @@ export function AskHistorySection() {
             'selectionAsk.desktopContext.description',
             'When you open Ask, include the focused app and the names of open apps in the answer request. Window contents are not included.',
           )}
-          descriptionPlacement="inline"
+          descriptionPlacement={compact ? 'hint' : 'inline'}
         >
           <Toggle
             on={contextAllowed}
             disabled={contextSaving}
             onToggle={(allowed) => {
               setContextSaving(true);
-              setContextError(false);
               void invokeOrPreview('ask_set_context_permission', { allowed }, () => undefined)
                 .then(() => setContextAllowed(allowed))
-                .catch(() => setContextError(true))
+                .catch(() =>
+                  notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') }),
+                )
                 .finally(() => setContextSaving(false));
             }}
           />
         </SettingRow>
-      )}
-      {contextError && (
-        <p role="alert">{t('selectionAsk.desktopContext.saveFailed', 'Could not update Ask’s desktop context permission.')}</p>
       )}
     </Card>
   );

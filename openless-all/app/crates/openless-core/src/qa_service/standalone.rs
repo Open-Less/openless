@@ -15,11 +15,13 @@ use crate::usage_ledger::{
 use crate::{Clock, TaskSpawner};
 
 mod calculator;
+mod entry;
 mod model;
 mod prompt;
 #[cfg(test)]
 mod tests;
 
+pub use entry::*;
 pub use model::ConfiguredAskModels;
 
 const MAX_ATTACHMENTS: usize = 4;
@@ -253,6 +255,7 @@ pub struct AskToolKey {
 pub enum AskToolCall {
     WebSearch { public_query: String },
     Calculate { expression: String },
+    ResolveIntent { route: AskRoute },
 }
 
 impl AskToolCall {
@@ -260,6 +263,7 @@ impl AskToolCall {
         match self {
             Self::WebSearch { .. } => "web_search",
             Self::Calculate { .. } => "calculator",
+            Self::ResolveIntent { .. } => "resolve_intent",
         }
     }
 }
@@ -346,17 +350,19 @@ pub struct AskModelRequest {
 pub struct AskToolSet {
     pub search: bool,
     pub calculator: bool,
+    pub resolve_intent: bool,
 }
 
 impl AskToolSet {
     fn any(self) -> bool {
-        self.search || self.calculator
+        self.search || self.calculator || self.resolve_intent
     }
 
     fn allows(self, call: &AskToolCall) -> bool {
         match call {
             AskToolCall::WebSearch { .. } => self.search,
             AskToolCall::Calculate { .. } => self.calculator,
+            AskToolCall::ResolveIntent { .. } => self.resolve_intent,
         }
     }
 }
@@ -365,6 +371,7 @@ impl AskToolSet {
 pub struct AskModelTools {
     pub available: AskToolSet,
     pub results: Vec<AskToolResult>,
+    pub intent: Option<AskIntentContinuation>,
 }
 
 #[derive(Clone)]
@@ -415,6 +422,9 @@ pub trait AskModel: Send + Sync {
     fn capabilities(&self) -> AskModelCapabilities;
     fn supports_tools(&self) -> bool {
         false
+    }
+    fn supports_intent_tool(&self) -> bool {
+        self.supports_tools()
     }
     fn stream(
         &self,
@@ -470,6 +480,8 @@ pub enum AskActivity {
 #[serde(rename_all = "camelCase")]
 pub enum AskCallPurpose {
     Answer,
+    Compose,
+    Intent,
     Compact,
     SearchDecision,
 }
@@ -561,6 +573,7 @@ pub struct AskSnapshot {
     pub conversation_id: Uuid,
     pub sequence: u64,
     pub current_turn_id: Option<Uuid>,
+    pub submission: Option<AskSubmission>,
     pub messages: Vec<AskMessage>,
     pub turns: Vec<AskTurn>,
     pub attachments: Vec<AskAttachmentMetadata>,
@@ -584,6 +597,15 @@ pub struct AskEvent {
     rename_all_fields = "camelCase"
 )]
 pub enum AskEventKind {
+    Submitted {
+        submission: Box<AskSubmission>,
+    },
+    RouteResolved {
+        route: AskRoute,
+    },
+    Delivery {
+        submission: Box<AskSubmission>,
+    },
     Accepted {
         user: AskMessage,
         assistant: AskMessage,
@@ -624,6 +646,18 @@ impl AskEventKind {
     fn bytes(&self) -> usize {
         match self {
             Self::Accepted { user, .. } => user.text.len(),
+            Self::Delivery { submission } => {
+                submission.result_text.as_ref().map_or(0, String::len)
+                    + submission
+                        .sources
+                        .iter()
+                        .map(|source| {
+                            source.url.len()
+                                + source.title.len()
+                                + source.snippet.as_ref().map_or(0, String::len)
+                        })
+                        .sum::<usize>()
+            }
             Self::AnswerDelta { delta, .. } => delta.len(),
             Self::Source { source, .. } => {
                 source.url.len()
@@ -680,6 +714,17 @@ struct Turn {
     snapshot: AskTurn,
     cancellation: AskCancellation,
     search_open: bool,
+    route: Option<AskRoute>,
+    result_text: Option<String>,
+    delivery: Option<AskDeliveryStatus>,
+    copy_status: AskCopyStatus,
+    effect_claimed: bool,
+    pending_body: Option<String>,
+}
+
+enum AskEffect {
+    Write,
+    Copy,
 }
 
 impl StandaloneQaService {
@@ -831,14 +876,17 @@ impl StandaloneQaService {
             current_turn_id: conversation
                 .active
                 .map(|index| conversation.turns[index].snapshot.turn_id),
+            submission: conversation.turns.last().map(Turn::submission),
             messages: conversation
                 .turns
                 .iter()
+                .filter(|turn| turn.is_chat())
                 .flat_map(|turn| [turn.user.clone(), turn.assistant.clone()])
                 .collect(),
             turns: conversation
                 .turns
                 .iter()
+                .filter(|turn| turn.is_chat())
                 .map(|turn| turn.snapshot.clone())
                 .collect(),
             attachments: conversation.attachments.clone(),
@@ -880,6 +928,38 @@ impl StandaloneQaService {
         request: AskSubmit,
         admit: impl FnOnce() -> bool + Send,
     ) -> Result<Uuid, BackendError> {
+        self.submit_inner(
+            request,
+            || async { Ok(AskPreparation::default()) },
+            admit,
+            true,
+        )
+        .await
+    }
+
+    pub async fn submit_prepared<F, Fut>(
+        &self,
+        request: AskSubmit,
+        prepare: F,
+    ) -> Result<Uuid, BackendError>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: std::future::Future<Output = Result<AskPreparation, BackendError>> + Send,
+    {
+        self.submit_inner(request, prepare, || true, false).await
+    }
+
+    async fn submit_inner<F, Fut>(
+        &self,
+        request: AskSubmit,
+        prepare: F,
+        admit: impl FnOnce() -> bool + Send,
+        answer_only: bool,
+    ) -> Result<Uuid, BackendError>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: std::future::Future<Output = Result<AskPreparation, BackendError>> + Send,
+    {
         let (admission, lifetime) = {
             let state = self.0.state.lock();
             let conversation = state.conversation(request.conversation_id)?;
@@ -915,6 +995,11 @@ impl StandaloneQaService {
         let key = AskTurnKey {
             conversation_id: request.conversation_id,
             turn_id: Uuid::new_v4(),
+        };
+        let preparation = tokio::select! {
+            biased;
+            _ = lifetime.cancelled() => return Err(no_conversation()),
+            preparation = async { prepare().await } => preparation?,
         };
         let model = tokio::select! {
             biased;
@@ -976,10 +1061,11 @@ impl StandaloneQaService {
                     .attachment_ids
                     .contains(&attachment.attachment_id)
             });
-            let event = AskEventKind::Accepted {
-                user: turn.user.clone(),
-                assistant: turn.assistant.clone(),
-                turn: Box::new(turn.snapshot.clone()),
+            if let Some(previous) = conversation.turns.last_mut() {
+                previous.result_text = None;
+            }
+            let event = AskEventKind::Submitted {
+                submission: Box::new(turn.submission()),
             };
             let index = conversation.turns.len();
             conversation
@@ -999,7 +1085,12 @@ impl StandaloneQaService {
             let result = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(cancelled()),
-                result = service.run(key, model, material, cancellation.clone()) => result,
+                result = service.run(key, model, material, &preparation, answer_only, cancellation.clone()) => result,
+            };
+            let result = match result {
+                Ok(Some((route, body))) => service.deliver(key, route, body, preparation).await,
+                Ok(None) => Ok(()),
+                Err(error) => Err(error),
             };
             service.finish(key, result);
         }));
@@ -1011,7 +1102,9 @@ impl StandaloneQaService {
         let conversation = state.conversation_mut(key.conversation_id)?;
         if let Some(turn) = conversation.active_turn(key.turn_id) {
             turn.cancellation.cancel();
-            conversation.finish(&self.0.events, key, Err(cancelled()));
+            if !turn.effect_claimed {
+                conversation.finish(&self.0.events, key, Err(cancelled()));
+            }
         } else if !conversation
             .turns
             .iter()
@@ -1069,26 +1162,202 @@ impl StandaloneQaService {
         }
     }
 
+    fn publish_route(&self, key: AskTurnKey, route: AskRoute) -> Result<(), BackendError> {
+        let mut state = self.0.state.lock();
+        let conversation = state.conversation_mut(key.conversation_id)?;
+        let turn = conversation
+            .active_turn(key.turn_id)
+            .ok_or_else(cancelled)?;
+        turn.route = Some(route);
+        let accepted = route.is_chat().then(|| AskEventKind::Accepted {
+            user: turn.user.clone(),
+            assistant: turn.assistant.clone(),
+            turn: Box::new(turn.snapshot.clone()),
+        });
+        conversation.emit_turn(&self.0.events, key, AskEventKind::RouteResolved { route });
+        if let Some(event) = accepted {
+            conversation.emit_turn(&self.0.events, key, event);
+        }
+        Ok(())
+    }
+
+    fn claim_effect(&self, key: AskTurnKey, effect: AskEffect) -> bool {
+        let mut state = self.0.state.lock();
+        let Some(turn) = state
+            .conversation_mut(key.conversation_id)
+            .ok()
+            .and_then(|conversation| conversation.active_turn(key.turn_id))
+        else {
+            return false;
+        };
+        let pending = match effect {
+            AskEffect::Write => turn.delivery == Some(AskDeliveryStatus::Pending),
+            AskEffect::Copy => turn.copy_status == AskCopyStatus::Pending,
+        };
+        if !pending || turn.cancellation.is_cancelled() || turn.effect_claimed {
+            return false;
+        }
+        turn.effect_claimed = true;
+        true
+    }
+
+    async fn deliver(
+        &self,
+        key: AskTurnKey,
+        route: AskRoute,
+        body: String,
+        preparation: AskPreparation,
+    ) -> Result<(), BackendError> {
+        let operation = match (route, &preparation.selection) {
+            (AskRoute::Write, ExternalSelection::None) => Some(AskWriteOperation::Insert),
+            (AskRoute::Edit, selection) if selection.verified().is_some() => {
+                Some(AskWriteOperation::Replace)
+            }
+            _ => None,
+        };
+        let mut active = false;
+        self.update(key, |turn| {
+            active = true;
+            turn.snapshot.activity = None;
+            turn.delivery = Some(AskDeliveryStatus::Pending);
+            turn.pending_body = Some(body.clone());
+            Some(turn.delivery_event())
+        });
+        if !active {
+            return Err(cancelled());
+        }
+        let outcome = if let (Some(operation), Some(writer)) = (operation, preparation.writer) {
+            let service = Arc::downgrade(&self.0);
+            let claim: AskWriteClaim = Box::new(move || {
+                service
+                    .upgrade()
+                    .map(StandaloneQaService)
+                    .is_some_and(|service| service.claim_effect(key, AskEffect::Write))
+            });
+            writer.write(operation, body.clone(), claim).await
+        } else {
+            AskWriteOutcome::NotWritten
+        };
+
+        let mut try_copy = false;
+        let mut observed = false;
+        self.update(key, |turn| {
+            observed = true;
+            turn.delivery = Some(match outcome {
+                AskWriteOutcome::Written if turn.effect_claimed => AskDeliveryStatus::Written,
+                AskWriteOutcome::Unknown | AskWriteOutcome::Written => AskDeliveryStatus::Unknown,
+                AskWriteOutcome::NotWritten | AskWriteOutcome::Declined => {
+                    AskDeliveryStatus::Retained
+                }
+            });
+            let retained = turn.delivery != Some(AskDeliveryStatus::Written);
+            let pending = turn.pending_body.take();
+            if retained {
+                turn.result_text = pending;
+                if !turn.cancellation.is_cancelled() {
+                    turn.copy_status = if preparation.clipboard.is_some() {
+                        try_copy = true;
+                        AskCopyStatus::Pending
+                    } else {
+                        AskCopyStatus::Failed
+                    };
+                }
+            }
+            turn.effect_claimed = false;
+            Some(turn.delivery_event())
+        });
+        if !observed {
+            return Err(cancelled());
+        }
+        if let Some(clipboard) = preparation.clipboard.filter(|_| try_copy) {
+            if self.claim_effect(key, AskEffect::Copy) {
+                let copied = clipboard.copy(body).await.is_ok();
+                self.update(key, |turn| {
+                    turn.copy_status = if copied {
+                        AskCopyStatus::Copied
+                    } else {
+                        AskCopyStatus::Failed
+                    };
+                    Some(turn.delivery_event())
+                });
+            }
+        }
+        Ok(())
+    }
+
     async fn run(
         &self,
         key: AskTurnKey,
         model: Arc<dyn AskModel>,
-        material: prompt::Material,
+        mut material: prompt::Material,
+        preparation: &AskPreparation,
+        answer_only: bool,
         cancellation: AskCancellation,
-    ) -> Result<(), BackendError> {
+    ) -> Result<Option<(AskRoute, String)>, BackendError> {
+        let question = material.question().to_owned();
+        let Resolved {
+            route,
+            missing_selection,
+            continuation,
+        } = if answer_only {
+            Resolved {
+                route: AskRoute::Answer,
+                missing_selection: false,
+                continuation: None,
+            }
+        } else {
+            self.resolve_intent(key, model.as_ref(), &question, preparation, &cancellation)
+                .await?
+        };
+        self.publish_route(key, route)?;
+        if route == AskRoute::Clarify {
+            let text = if let Some(continuation) = continuation {
+                let request = AskModelRequest {
+                    instructions: format!("{}\n{CLARIFY_RULE}", routing_instructions(true)),
+                    messages: Vec::new(),
+                    output_tokens: model.capabilities().output_tokens.min(256),
+                    deep_thinking: false,
+                    tools: AskModelTools {
+                        intent: Some(continuation),
+                        ..Default::default()
+                    },
+                };
+                prompt::check_tool_budget(&request, model.capabilities())?;
+                self.call(
+                    key,
+                    model.as_ref(),
+                    request,
+                    AskCallPurpose::Compose,
+                    cancellation,
+                )
+                .await?
+                .require_text()?
+            } else {
+                clarification(&question, missing_selection, &preparation.selection)
+            };
+            self.update(key, |turn| {
+                turn.result_text = Some(text);
+                Some(turn.delivery_event())
+            });
+            return Ok(None);
+        }
+        let related_selection = matches!(route, AskRoute::SelectionAnswer | AskRoute::Edit)
+            .then(|| preparation.selection.verified())
+            .flatten();
+        if let Some(selection) = related_selection {
+            material.add_selection(selection);
+        }
         let context = self
             .0
             .deps
             .context
             .context(key, cancellation.clone())
             .await?;
-        // Keep private turn materials out of the web-enabled request. The separate
-        // response request can still use the local calculator.
-        let question = material.question().to_owned();
         let search_enabled = !question.trim().is_empty()
             && model.supports_tools()
             && self.0.deps.search.enabled().await;
-        let private = material.has_attachments()
+        let private = related_selection.is_some()
+            || material.has_attachments()
             || context.facts.iter().any(|fact| fact.name != "local_time");
         let (history, summary, private) = {
             let mut state = self.0.state.lock();
@@ -1102,24 +1371,39 @@ impl StandaloneQaService {
             let history = conversation
                 .turns
                 .iter()
-                .filter(|turn| turn.snapshot.status == AskTurnStatus::Completed)
+                .filter(|turn| {
+                    route.is_chat()
+                        && turn.is_chat()
+                        && turn.snapshot.status == AskTurnStatus::Completed
+                })
                 .map(|turn| prompt::CompletedTurn {
                     user: turn.user.text.clone(),
                     assistant: turn.assistant.text.clone(),
                 })
                 .collect::<Vec<_>>();
-            conversation.contains_private_context |= private;
+            if route.is_chat() {
+                conversation.contains_private_context |= private;
+            }
+            let search_isolated = private
+                || (route.is_chat()
+                    && (conversation.contains_private_context || !history.is_empty()));
             (
                 history,
-                conversation.summary.clone(),
-                conversation.contains_private_context,
+                if route.is_chat() {
+                    conversation.summary.clone()
+                } else {
+                    None
+                },
+                search_isolated,
             )
         };
         let tools = AskToolSet {
             search: search_enabled,
             calculator: model.supports_tools(),
+            ..Default::default()
         };
-        let plan = prompt::Plan::new(material, context, tools, history, summary);
+        let plan = prompt::Plan::new(material, context, tools, history, summary)
+            .for_route(route, continuation);
         let (mut request, replacement) = plan
             .prepare(self, key, model.as_ref(), &cancellation)
             .await?;
@@ -1145,7 +1429,7 @@ impl StandaloneQaService {
                 output_tokens: request.output_tokens.min(512),
                 deep_thinking: false,
                 tools: AskModelTools {
-                    available: AskToolSet { search: true, calculator: false },
+                    available: AskToolSet { search: true, ..Default::default() },
                     ..Default::default()
                 },
             };
@@ -1161,7 +1445,11 @@ impl StandaloneQaService {
             {
                 Ok(CallResult::Tool(call)) => {
                     let output = self.run_tool(key, &call, &cancellation).await?;
-                    request.tools.results.push(AskToolResult { call, output });
+                    if let Some(current) = request.messages.last_mut() {
+                        current.parts.push(AskModelPart::Text(
+                            serde_json::json!({"publicSearchEvidence": output}).to_string(),
+                        ));
+                    }
                 }
                 Err(error) if error.code == BackendErrorCode::Cancelled => return Err(error),
                 _ => {}
@@ -1174,10 +1462,16 @@ impl StandaloneQaService {
             0
         };
         let base_instructions = request.instructions.clone();
+        let purpose = if route.is_chat() {
+            AskCallPurpose::Answer
+        } else {
+            AskCallPurpose::Compose
+        };
         loop {
             request.tools.available = AskToolSet {
                 search,
                 calculator: calculations > 0,
+                ..Default::default()
             };
             request.instructions.clone_from(&base_instructions);
             if search {
@@ -1195,23 +1489,27 @@ impl StandaloneQaService {
                     key,
                     model.as_ref(),
                     request.clone(),
-                    AskCallPurpose::Answer,
+                    purpose,
                     cancellation.clone(),
                 )
                 .await
             {
-                Ok(CallResult::Text(_)) => return Ok(()),
+                Ok(CallResult::Text(text)) => {
+                    return Ok((!route.is_chat()).then_some((route, text)));
+                }
                 Ok(CallResult::Tool(call)) => {
                     match &call.tool {
                         AskToolCall::WebSearch { .. } => search = false,
                         AskToolCall::Calculate { .. } => calculations -= 1,
+                        AskToolCall::ResolveIntent { .. } => return Err(invalid_intent()),
                     }
                     let output = self.run_tool(key, &call, &cancellation).await?;
                     request.tools.results.push(AskToolResult { call, output });
                 }
                 Err(error)
                     if error.message == "askModelRejectedTools"
-                        && request.tools.available.any() =>
+                        && request.tools.available.any()
+                        && request.tools.intent.is_none() =>
                 {
                     search = false;
                     calculations = 0;
@@ -1236,6 +1534,7 @@ impl StandaloneQaService {
                     .await
             }
             AskToolCall::Calculate { expression } => Ok(calculator::calculate(expression)),
+            AskToolCall::ResolveIntent { .. } => Err(invalid_intent()),
         }
     }
 
@@ -1349,9 +1648,11 @@ impl StandaloneQaService {
         let available = request.tools.available;
         let call_id = Uuid::new_v4();
         let label = model.label().clone();
-        let text = Arc::new(Mutex::new(Some(String::new())));
+        let text = Arc::new(Mutex::new(Some(Ok::<_, BackendError>(String::new()))));
         let service = Arc::downgrade(&self.0);
         let accumulated = text.clone();
+        let output_limit = AskCancellation::default();
+        let limit_reached = output_limit.clone();
         let limit = request.output_tokens.saturating_mul(16);
         let mut archive = self.0.deps.usage.as_ref().map(|usage| CallArchive {
             usage,
@@ -1370,16 +1671,18 @@ impl StandaloneQaService {
                 return;
             };
             let mut accumulator = accumulated.lock();
-            let Some(output) = accumulator.as_mut() else {
+            let Some(Ok(output)) = accumulator.as_mut() else {
                 return;
             };
             match progress {
                 AskModelProgress::Text(delta) if !delta.is_empty() => {
                     if output.len().saturating_add(delta.len()) > limit {
-                        service.finish(
-                            key,
-                            Err(ask_error(BackendErrorCode::Provider, "askOutputTooLarge")),
-                        );
+                        *accumulator = Some(Err(if purpose == AskCallPurpose::Intent {
+                            invalid_intent()
+                        } else {
+                            ask_error(BackendErrorCode::Provider, "askOutputTooLarge")
+                        }));
+                        limit_reached.cancel();
                         return;
                     }
                     output.push_str(&delta);
@@ -1395,7 +1698,8 @@ impl StandaloneQaService {
                     }
                 }
                 AskModelProgress::Thinking
-                    if purpose == AskCallPurpose::Answer && output.is_empty() =>
+                    if matches!(purpose, AskCallPurpose::Answer | AskCallPurpose::Compose)
+                        && output.is_empty() =>
                 {
                     service.activity(key, AskActivity::Thinking);
                 }
@@ -1441,13 +1745,26 @@ impl StandaloneQaService {
                 _ => {}
             }
         });
-        let completion = model.stream(request, cancellation.clone(), progress).await;
-        let output = text.lock().take().unwrap_or_default();
+        let completion = tokio::select! {
+            biased;
+            _ = output_limit.cancelled() => Ok(AskModelCompletion::Complete),
+            completion = model.stream(request, cancellation.clone(), progress) => completion,
+        };
+        let output = text
+            .lock()
+            .take()
+            .expect("model output accumulator is closed once");
         let result = completion.and_then(|completion| {
             if cancellation.is_cancelled() {
                 return Err(cancelled());
             }
+            let output = output?;
             match completion {
+                AskModelCompletion::ToolCall(_)
+                    if available.resolve_intent && !output.trim().is_empty() =>
+                {
+                    Err(invalid_intent())
+                }
                 AskModelCompletion::ToolCall(call) if available.allows(&call.tool) => {
                     Ok(CallResult::Tool(call))
                 }
@@ -1508,10 +1825,10 @@ impl Drop for CallArchive<'_> {
                 occurred_at_ms: self.occurred_at_ms,
                 kind: ServiceKind::Llm,
                 purpose: match self.purpose {
-                    AskCallPurpose::Answer => ServicePurpose::Question,
-                    AskCallPurpose::Compact | AskCallPurpose::SearchDecision => {
-                        ServicePurpose::Other
-                    }
+                    AskCallPurpose::Answer | AskCallPurpose::Compose => ServicePurpose::Question,
+                    AskCallPurpose::Compact
+                    | AskCallPurpose::SearchDecision
+                    | AskCallPurpose::Intent => ServicePurpose::Other,
                 },
                 outcome,
                 provider: None,
@@ -1625,11 +1942,29 @@ impl Conversation {
         } else {
             AskSearchStatus::Error
         };
-        let events = turn.finish_search(search_status, error.clone());
+        let mut events = turn.finish_search(search_status, error.clone());
         turn.snapshot.status = status;
         turn.snapshot.activity = None;
         turn.snapshot.error = error.clone();
-        let history = (status == AskTurnStatus::Completed)
+        if turn.delivery == Some(AskDeliveryStatus::Pending) {
+            if turn.effect_claimed {
+                turn.delivery = Some(AskDeliveryStatus::Unknown);
+                turn.result_text = turn.pending_body.take();
+            } else {
+                turn.delivery = None;
+                turn.pending_body = None;
+            }
+            events.push(turn.delivery_event());
+        }
+        if turn.copy_status == AskCopyStatus::Pending {
+            turn.copy_status = if turn.effect_claimed {
+                AskCopyStatus::Failed
+            } else {
+                AskCopyStatus::NotNeeded
+            };
+            events.push(turn.delivery_event());
+        }
+        let history = (status == AskTurnStatus::Completed && turn.is_chat())
             .then(|| (turn.user.text.clone(), turn.assistant.text.clone()));
         self.active = None;
         for event in events {
@@ -1715,6 +2050,39 @@ impl Turn {
             snapshot,
             cancellation,
             search_open: false,
+            route: None,
+            result_text: None,
+            delivery: None,
+            copy_status: AskCopyStatus::NotNeeded,
+            effect_claimed: false,
+            pending_body: None,
+        }
+    }
+
+    fn is_chat(&self) -> bool {
+        self.route.is_some_and(AskRoute::is_chat)
+    }
+
+    fn submission(&self) -> AskSubmission {
+        AskSubmission {
+            current_turn_id: self.snapshot.turn_id,
+            route: self.route,
+            status: self.snapshot.status,
+            activity: self.snapshot.activity,
+            search_status: self.snapshot.search_status.clone(),
+            search_error: self.snapshot.search_error.clone(),
+            tool_call_id: self.snapshot.tool_call_id,
+            sources: self.snapshot.sources.clone(),
+            result_text: self.result_text.clone(),
+            delivery: self.delivery,
+            copy_status: self.copy_status,
+            error: self.snapshot.error.clone(),
+        }
+    }
+
+    fn delivery_event(&self) -> AskEventKind {
+        AskEventKind::Delivery {
+            submission: Box::new(self.submission()),
         }
     }
 

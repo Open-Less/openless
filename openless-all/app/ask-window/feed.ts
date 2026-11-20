@@ -1,4 +1,36 @@
-import type { AskClient, AskEvent, AskSnapshot, AskTurn } from './client';
+import type { AskClient, AskEvent, AskSnapshot, AskSource, AskSubmission, AskTurn } from './client';
+
+function upsertSource(sources: AskSource[], source: AskSource) {
+  const index = sources.findIndex((item) => item.sourceId === source.sourceId);
+  return index < 0
+    ? [...sources, source]
+    : sources.map((item, offset) => (offset === index ? source : item));
+}
+
+function applySubmission(
+  submission: AskSubmission,
+  event: Extract<AskEvent, { turnId: string }>,
+): AskSubmission {
+  switch (event.type) {
+    case 'routeResolved':
+      return { ...submission, route: event.route };
+    case 'turnStatus':
+      return { ...submission, status: event.status };
+    case 'searchChanged':
+      return {
+        ...submission,
+        searchStatus: event.status,
+        sources: event.sources ?? submission.sources,
+        searchError: event.error,
+      };
+    case 'sourceChanged':
+      return { ...submission, sources: upsertSource(submission.sources, event.source) };
+    case 'turnFinished':
+      return { ...submission, status: event.status, error: event.error };
+    default:
+      return submission;
+  }
+}
 
 export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot | null {
   if (event.conversationId !== snapshot.conversationId || event.sequence <= snapshot.sequence) {
@@ -6,6 +38,10 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
   }
   if (event.sequence !== snapshot.sequence + 1) return null;
   const next = { ...snapshot, sequence: event.sequence };
+  function consumeAttachments(attachmentIds: string[]) {
+    const consumed = new Set(attachmentIds);
+    next.attachments = next.attachments.filter((item) => !consumed.has(item.attachmentId));
+  }
   switch (event.type) {
     case 'attachmentChanged': {
       const attachment = event.attachment;
@@ -23,19 +59,36 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
         (item) => item.attachmentId !== event.attachmentId,
       );
       return next;
+    case 'submitted':
+      if (next.activeTurnId) return null;
+      next.activeTurnId = event.submission.currentTurnId;
+      next.submission = event.submission;
+      if (event.attachmentIds) consumeAttachments(event.attachmentIds);
+      return next;
+    case 'delivery':
+      if (next.submission?.currentTurnId === event.submission.currentTurnId) {
+        next.submission = event.submission;
+      }
+      return next;
     case 'turnAccepted': {
-      if (next.activeTurnId || next.turns.some((turn) => turn.turnId === event.turn.turnId))
+      if (
+        (next.activeTurnId && next.activeTurnId !== event.turn.turnId) ||
+        next.turns.some((turn) => turn.turnId === event.turn.turnId)
+      )
         return null;
       next.turns = [...next.turns, event.turn];
       next.activeTurnId = event.turn.turnId;
-      const consumed = new Set(event.turn.attachments.map((item) => item.attachmentId));
-      next.attachments = next.attachments.filter((item) => !consumed.has(item.attachmentId));
+      consumeAttachments(event.turn.attachments.map((item) => item.attachmentId));
       return next;
     }
     default: {
-      const turn = next.turns.find((item) => item.turnId === event.turnId);
-      if (!turn) return null;
       if (next.activeTurnId !== event.turnId) return next;
+      const submission = next.submission?.currentTurnId === event.turnId ? next.submission : null;
+      if (submission) next.submission = applySubmission(submission, event);
+      if (event.type === 'turnFinished') next.activeTurnId = null;
+      if (event.type === 'routeResolved' || event.type === 'usageChanged') return next;
+      const turn = next.turns.find((item) => item.turnId === event.turnId);
+      if (!turn) return submission && event.type !== 'answerDelta' ? next : null;
       let updated: AskTurn;
       switch (event.type) {
         case 'answerDelta':
@@ -61,22 +114,14 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
             searchError: event.error,
           };
           break;
-        case 'sourceChanged': {
-          const index = turn.sources.findIndex((source) => source.sourceId === event.source.sourceId);
+        case 'sourceChanged':
           updated = {
             ...turn,
-            sources:
-              index < 0
-                ? [...turn.sources, event.source]
-                : turn.sources.map((source, offset) => (offset === index ? event.source : source)),
+            sources: upsertSource(turn.sources, event.source),
           };
           break;
-        }
-        case 'usageChanged':
-          return next;
         case 'turnFinished':
           updated = { ...turn, status: event.status, error: event.error };
-          next.activeTurnId = null;
           break;
         default:
           return null;
@@ -128,6 +173,7 @@ export function connectAskFeed(
     if (!snapshot) return;
     let eventKey = key(snapshot.conversationId, snapshot.sequence + 1);
     for (let event = buffer.get(eventKey); event; event = buffer.get(eventKey)) {
+      if (event.type === 'submitted' && !event.attachmentIds && snapshot.attachments.length) break;
       const next = applyEvent(snapshot, event);
       if (!next) break;
       snapshot = next;

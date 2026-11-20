@@ -11,25 +11,12 @@ use openless_core::{
     BackendError, BackendErrorCode, CapsulePayload, CapsuleState, SessionId,
 };
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use super::Desktop;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum Mode {
-    Insert,
-    Submit,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Options {
-    pub(crate) deep_thinking: bool,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Editor {
     pub(crate) conversation_id: String,
@@ -39,38 +26,26 @@ pub(crate) struct Editor {
     pub(crate) editable: bool,
     pub(crate) selection_start: u32,
     pub(crate) selection_end: u32,
-    pub(crate) attachment_ids: Vec<String>,
-    pub(crate) options: Options,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
 pub(crate) struct Target {
     pub(crate) focus_epoch: u64,
     pub(crate) editor: Editor,
 }
 
 impl Target {
-    pub(super) fn matches(&self, current: &Self, mode: Mode) -> bool {
+    pub(super) fn matches(&self, current: &Self) -> bool {
         self.focus_epoch == current.focus_epoch
-            && self.editor.conversation_id == current.editor.conversation_id
-            && self.editor.mount_id == current.editor.mount_id
-            && self.editor.editor_id == current.editor.editor_id
-            && (mode == Mode::Submit
-                || (self.editor.editable
-                    && current.editor.editable
-                    && self.editor.revision == current.editor.revision
-                    && self.editor.selection_start == current.editor.selection_start
-                    && self.editor.selection_end == current.editor.selection_end))
+            && self.editor.editable
+            && self.editor == current.editor
     }
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
 pub(crate) struct Delivery {
     pub(crate) recording_id: SessionId,
     pub(crate) target: Target,
-    pub(crate) mode: Mode,
     pub(crate) text: String,
 }
 
@@ -82,10 +57,8 @@ pub(super) struct Controller {
 
 enum Message {
     Intent {
-        mode: Mode,
+        origin: Origin,
         target: Option<Target>,
-        press: u64,
-        toggle: bool,
     },
     Release {
         press: u64,
@@ -102,11 +75,33 @@ enum Message {
     Finished(SessionId, Result<String, BackendError>),
 }
 
+#[derive(Clone, Copy)]
+enum Origin {
+    Chord { request: u64 },
+    Manual { press: u64, toggle: bool },
+}
+
+impl Origin {
+    fn may_stop(self, active: Self) -> bool {
+        let Self::Manual {
+            press,
+            toggle: true,
+        } = self
+        else {
+            return false;
+        };
+        !matches!(active, Self::Manual { press: active, .. } if press == active)
+    }
+
+    fn is_press(self, candidate: u64) -> bool {
+        matches!(self, Self::Manual { press, .. } if press == candidate)
+    }
+}
+
 struct Active {
     reservation: Arc<Reservation>,
     target: Target,
-    mode: Mode,
-    press: u64,
+    origin: Origin,
     capture: Option<Arc<Capture>>,
     finishing: bool,
 }
@@ -132,12 +127,17 @@ impl Controller {
         self.owner.lock().as_ref().map(|owner| owner.id())
     }
 
-    pub(super) fn intent(&self, mode: Mode, target: Option<Target>, press: u64, toggle: bool) {
+    pub(super) fn manual(&self, target: Option<Target>, press: u64, toggle: bool) {
         let _ = self.tx.send(Message::Intent {
-            mode,
             target,
-            press,
-            toggle,
+            origin: Origin::Manual { press, toggle },
+        });
+    }
+
+    pub(super) fn autostart(&self, request: u64, target: Target) {
+        let _ = self.tx.send(Message::Intent {
+            target: Some(target),
+            origin: Origin::Chord { request },
         });
     }
 
@@ -192,45 +192,32 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
             break;
         };
         match message {
-            Message::Intent {
-                mode,
-                target,
-                press,
-                toggle,
-            } => {
-                let Some(target) = target.filter(|target| desktop.target_is_current(target, mode))
-                else {
+            Message::Intent { origin, target } => {
+                let chord = match origin {
+                    Origin::Chord { request } if desktop.autostart_is_pending(request) => {
+                        Some(Autostart {
+                            desktop: &desktop,
+                            request,
+                        })
+                    }
+                    Origin::Chord { .. } => continue,
+                    Origin::Manual { .. } => None,
+                };
+                let Some(target) = target.filter(|target| desktop.target_is_current(target)) else {
                     continue;
                 };
                 if let Some(recording) = active.as_mut() {
-                    if mode == Mode::Submit
-                        && recording.mode == Mode::Insert
-                        && recording.press == press
-                        && !recording.finishing
-                        && desktop.target_is_current(&recording.target, Mode::Submit)
-                    {
-                        recording.mode = Mode::Submit;
-                        desktop.notify_voice(
-                            "started",
-                            recording.reservation.id(),
-                            &recording.target,
-                            recording.mode,
-                            None,
-                        );
-                        continue;
-                    }
-                    if toggle
-                        && recording.mode == mode
-                        && recording.press != press
-                        && desktop.target_is_current(&recording.target, mode)
+                    if origin.may_stop(recording.origin)
+                        && desktop.target_is_current(&recording.target)
                     {
                         recording.stop(&desktop);
                     }
                     continue;
                 }
                 if desktop.current_voice_delivery().is_some()
-                    || last_start
-                        .is_some_and(|at: Instant| at.elapsed() < Duration::from_millis(250))
+                    || (chord.is_none()
+                        && last_start
+                            .is_some_and(|at: Instant| at.elapsed() < Duration::from_millis(250)))
                 {
                     continue;
                 }
@@ -246,14 +233,18 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                     }
                 };
                 *desktop.voice.owner.lock() = Some(reservation.clone());
-                if !desktop.target_is_current(&target, mode) {
+                if !desktop.target_is_current(&target)
+                    || chord
+                        .as_ref()
+                        .is_some_and(|chord| !desktop.autostart_is_pending(chord.request))
+                {
                     reservation.cancel();
                     desktop.voice.owner.lock().take();
                     continue;
                 }
                 last_start = Some(Instant::now());
                 desktop.remember_recording(id);
-                desktop.notify_voice("started", id, &target, mode, None);
+                desktop.notify_voice("started", id, &target, None);
                 frame(&desktop, id, CapsuleState::Recording, 0.0, 0, true);
                 let backend = desktop.backend.clone();
                 let tx = desktop.voice.tx.clone();
@@ -281,8 +272,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                 active = Some(Active {
                     reservation,
                     target,
-                    mode,
-                    press,
+                    origin,
                     capture: None,
                     finishing: false,
                 });
@@ -295,7 +285,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                     (Some(recording), Ok(capture)) => {
                         recording.capture = Some(Arc::new(capture));
                         if recording.reservation.is_cancelled()
-                            || !desktop.target_is_current(&recording.target, recording.mode)
+                            || !desktop.target_is_current(&recording.target)
                         {
                             cancel(&desktop, &mut active, id, CapsuleState::Cancelled);
                         } else if recording.finishing {
@@ -320,8 +310,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                 auto,
             } => {
                 if let Some(recording) = active.as_mut().filter(|recording| {
-                    recording.mode == Mode::Insert
-                        && recording.press == press
+                    recording.origin.is_press(press)
                         && (hold || (auto && held >= Duration::from_millis(350)))
                 }) {
                     recording.stop(&desktop);
@@ -341,7 +330,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
             Message::CancelPress(press) => {
                 if let Some(id) = active
                     .as_ref()
-                    .filter(|recording| recording.press == press)
+                    .filter(|recording| recording.origin.is_press(press))
                     .map(|recording| recording.reservation.id())
                 {
                     cancel(&desktop, &mut active, id, CapsuleState::Cancelled);
@@ -350,9 +339,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
             Message::Revalidate => {
                 if let Some(id) = active
                     .as_ref()
-                    .filter(|recording| {
-                        !desktop.target_is_current(&recording.target, recording.mode)
-                    })
+                    .filter(|recording| !desktop.target_is_current(&recording.target))
                     .map(|recording| recording.reservation.id())
                 {
                     cancel(&desktop, &mut active, id, CapsuleState::Cancelled);
@@ -366,7 +353,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                     recording.reservation.id() == id
                         && !recording.finishing
                         && recording.capture.is_some()
-                        && desktop.target_is_current(&recording.target, recording.mode)
+                        && desktop.target_is_current(&recording.target)
                 }) {
                     frame(
                         &desktop,
@@ -386,6 +373,17 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
         if let Some(capture) = recording.capture {
             let _ = capture.cancel().await;
         }
+    }
+}
+
+struct Autostart<'a> {
+    desktop: &'a Desktop,
+    request: u64,
+}
+
+impl Drop for Autostart<'_> {
+    fn drop(&mut self) {
+        self.desktop.complete_autostart(self.request);
     }
 }
 
@@ -440,7 +438,7 @@ fn cancel(desktop: &Desktop, active: &mut Option<Active>, id: SessionId, state: 
         return;
     }
     if let Some(recording) = active.as_ref() {
-        desktop.notify_voice("cancelled", id, &recording.target, recording.mode, None);
+        desktop.notify_voice("cancelled", id, &recording.target, None);
     }
     frame(desktop, id, state, 0.0, 0, false);
     if let Some(capture) = take_owner(desktop, active, id).and_then(|recording| recording.capture) {
@@ -460,26 +458,19 @@ fn complete(
     else {
         return;
     };
-    let current = desktop.target_is_current(&recording.target, recording.mode)
-        && !recording.reservation.is_cancelled();
+    let current =
+        desktop.target_is_current(&recording.target) && !recording.reservation.is_cancelled();
     let state = match result {
         Ok(text) if current && !text.trim().is_empty() => {
             let mut delivery = desktop.voice_result.lock();
             *delivery = Some(Delivery {
                 recording_id: id,
                 target: recording.target.clone(),
-                mode: recording.mode,
                 text,
             });
             drop(delivery);
             if let Some(delivery) = desktop.current_voice_delivery() {
-                desktop.notify_voice(
-                    "transcribed",
-                    id,
-                    &delivery.target,
-                    delivery.mode,
-                    Some(&delivery.text),
-                );
+                desktop.notify_voice("transcribed", id, &delivery.target, Some(&delivery.text));
             } else {
                 desktop.voice_result.lock().take();
             }
@@ -492,7 +483,7 @@ fn complete(
         Err(_) => CapsuleState::Error,
     };
     if state != CapsuleState::Done {
-        desktop.notify_voice("cancelled", id, &recording.target, recording.mode, None);
+        desktop.notify_voice("cancelled", id, &recording.target, None);
     }
     frame(desktop, id, state, 0.0, 0, false);
     take_owner(desktop, active, id);
@@ -537,16 +528,12 @@ mod tests {
                 editable: true,
                 selection_start: 2,
                 selection_end: 3,
-                attachment_ids: vec![],
-                options: Options {
-                    deep_thinking: false,
-                },
             },
         }
     }
 
     #[test]
-    fn both_delivery_modes_reject_a_different_focus_generation_or_conversation() {
+    fn delivery_rejects_a_different_focus_generation_or_conversation() {
         let original = composer();
         let mut refocused = composer();
         refocused.focus_epoch += 1;
@@ -554,22 +541,34 @@ mod tests {
         other_conversation.editor.conversation_id = "another".into();
         let mut replaced_view = composer();
         replaced_view.editor.mount_id = "new-mount".into();
-        for mode in [Mode::Insert, Mode::Submit] {
-            assert!(original.matches(&original, mode));
-            for new_target in [&refocused, &other_conversation, &replaced_view] {
-                assert!(!original.matches(new_target, mode));
-            }
+        assert!(original.matches(&original));
+        for new_target in [&refocused, &other_conversation, &replaced_view] {
+            assert!(!original.matches(new_target));
         }
     }
 
     #[test]
-    fn changed_draft_or_caret_blocks_insert_but_not_the_frozen_submit() {
+    fn changed_draft_or_caret_blocks_insert() {
         let original = composer();
         let mut changed = composer();
         changed.editor.selection_end += 1;
-        assert!(!original.matches(&changed, Mode::Insert));
+        assert!(!original.matches(&changed));
+        changed = composer();
         changed.editor.revision += 1;
-        assert!(original.matches(&changed, Mode::Submit));
-        assert!(!original.matches(&changed, Mode::Insert));
+        assert!(!original.matches(&changed));
+    }
+
+    #[test]
+    fn an_autostart_can_neither_toggle_nor_accept_a_physical_release() {
+        let chord = Origin::Chord { request: 7 };
+        let manual = Origin::Manual {
+            press: 7,
+            toggle: true,
+        };
+        assert!(!chord.is_press(7));
+        assert!(!chord.may_stop(chord));
+        assert!(!chord.may_stop(manual));
+        assert!(manual.may_stop(chord));
+        assert!(!manual.may_stop(manual));
     }
 }

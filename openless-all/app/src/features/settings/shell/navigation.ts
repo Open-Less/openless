@@ -53,6 +53,12 @@ export const GENERAL_PAGES = [
     descriptionKey: 'settings.generalPages.recordingDesc',
   },
   {
+    id: 'askEntry',
+    icon: 'sparkle',
+    titleKey: 'askEntrySettings.title',
+    descriptionKey: 'askEntrySettings.description',
+  },
+  {
     id: 'askHistory',
     icon: 'history',
     titleKey: 'selectionAsk.history.title',
@@ -81,8 +87,15 @@ export const GENERAL_PAGES = [
 export type GeneralPage = (typeof GENERAL_PAGES)[number];
 export type GeneralPageId = GeneralPage['id'];
 
-export function visibleGeneralPages(platform: PlatformKind | undefined): GeneralPage[] {
+export function visibleGeneralPages(
+  platform: PlatformKind | undefined,
+  os?: OS,
+  native = false,
+): GeneralPage[] {
+  const unifiedAsk = native && platform === 'desktop' && (os === 'mac' || os === 'win');
   return GENERAL_PAGES.filter((page) => {
+    if (page.id === 'askEntry') return unifiedAsk;
+    if (page.id === 'askHistory') return !unifiedAsk;
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;

@@ -9,18 +9,25 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
 });
 
-test('first send moves the original composer and restores real state after gaps and hide', async ({
+test('only a live chat route shows the reader; gaps recover without moving or blurring the composer', async ({
   page,
 }) => {
   await expect(page.locator('#ask-root')).toHaveCSS('border-radius', '24px');
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   const box = page.locator('[data-slot="prompt-box"]');
-  expect((await box.boundingBox())!.y).toBeLessThan(500);
+  expect((await box.boundingBox())!.y).toBeGreaterThan(750);
+  await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toHaveCount(0);
+  await page.evaluate(() => {
+    window.askFixture.route = null;
+  });
   await prompt.fill('hi');
   await prompt.press('Enter');
+  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  await expect(page.locator('.user-bubble')).toHaveCount(0);
+  await page.evaluate(() => window.askFixture.resolve('answer'));
   await expect(page.locator('.user-bubble')).toHaveText('hi');
   await expect(page.locator('.effort-label')).toHaveCount(0);
-  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  await expect(prompt).toBeFocused();
   await expect.poll(async () => (await box.boundingBox())!.y).toBeGreaterThan(750);
   await page.evaluate(() => {
     const fixture = window.askFixture;
@@ -31,6 +38,10 @@ test('first send moves the original composer and restores real state after gaps 
   });
   await expect(page.locator('.assistant-text')).toHaveText('Hello there.');
   await prompt.fill('keep this draft');
+  await page.getByRole('button', { name: 'Close Ask Conversation' }).click();
+  await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(1);
+  await page.evaluate(() => window.askFixture.showTranscript('turn-1'));
+  await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toBeHidden();
   await page.getByRole('button', { name: 'Close Ask Anything' }).click();
   await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(0);
   await page.evaluate(() => {
@@ -43,8 +54,7 @@ test('first send moves the original composer and restores real state after gaps 
     });
     fixture.activate();
   });
-  await expect(page.getByText('Failed · Incomplete')).toBeVisible();
-  await expect(page.locator('.assistant-text')).toHaveText('Hello there.');
+  await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toBeHidden();
   await expect(prompt).toHaveValue('keep this draft');
   expect(
     await page.evaluate(() => [window.askFixture.hideCount, window.askFixture.submits.length]),
@@ -139,76 +149,16 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
   expect(await page.evaluate(() => window.askFixture.submits)).toEqual([]);
 });
 
-test('attachment expansion moves the heading and composer together without a preview resize', async ({
+test('attachment expansion keeps the bottom editor usable with a bounded viewport', async ({
   page,
 }) => {
-  const geometry = await page.evaluate(async () => {
-    const root = document.querySelector('#ask-root')!;
-    const heading = root.querySelector('h1')!;
-    const composer = root.querySelector('[data-slot="prompt-box"]')!;
-    const measure = () => {
-      const box = composer.getBoundingClientRect();
-      return {
-        top: box.top,
-        height: box.height,
-        headingBottom: heading.getBoundingClientRect().bottom,
-        outerHeight: root.getBoundingClientRect().height,
-      };
-    };
-    const before = measure();
-    window.askFixture.push({
-      type: 'attachmentChanged',
-      attachment: {
-        attachmentId: 'dropped-image',
-        kind: 'image',
-        displayName: 'dropped.png',
-        state: 'processing',
-      },
-    });
-    const frames: ReturnType<typeof measure>[] = [];
-    const start = performance.now();
-    do {
-      await new Promise(requestAnimationFrame);
-      frames.push(measure());
-    } while (performance.now() - start < 510);
-    return { before, frames };
-  });
-  const { before, frames } = geometry;
-  const final = frames.at(-1)!;
-  expect(final.height - before.height).toBeGreaterThan(74);
-  const middleFrames = frames.filter(
-    (frame) => frame.height > before.height + 2 && frame.height < final.height - 2,
-  );
-  expect(middleFrames.length).toBeGreaterThan(1);
-  for (const frame of [...middleFrames, final]) {
-    expect(
-      Math.abs(frame.headingBottom - frame.top - (before.headingBottom - before.top)),
-    ).toBeLessThan(1);
-    expect(Math.abs(frame.top + frame.height / 2 - (before.top + before.height / 2))).toBeLessThan(
-      1,
-    );
-    expect(frame.outerHeight).toBe(before.outerHeight);
-  }
-
-  await page.evaluate(() =>
-    window.askFixture.push({
-      type: 'attachmentChanged',
-      attachment: {
-        attachmentId: 'dropped-image',
-        kind: 'image',
-        displayName: 'dropped.png',
-        state: 'ready',
-        preview: { kind: 'image', width: 1, height: 1, thumbnailAvailable: true },
-      },
-    }),
-  );
-  await expect(page.getByRole('img', { name: 'dropped.png' })).toHaveAttribute(
-    'data-loaded',
-    'true',
-  );
-  const box = page.locator('[data-slot="prompt-box"]');
-  expect((await box.boundingBox())!.height).toBe(final.height);
-  await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
+  await page.setViewportSize({ width: 370, height: 242 });
+  await page.evaluate(() => window.askFixture.addInitialCards());
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  await expect(prompt).toBeFocused();
+  await expect(prompt).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Close Ask Anything' })).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Attach a file' })).toBeInViewport();
 });
 
 test('model tool status is visible without query controls; replay and sources work', async ({
@@ -266,7 +216,7 @@ test('model tool status is visible without query controls; replay and sources wo
   expect(await page.evaluate(() => window.askFixture.opened)).toEqual([
     ['conversation-1', 'turn-1', 'source-1'],
   ]);
-  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('button', { name: 'Stop answer', exact: true }).click();
   await expect(page.getByText('Stopped · Incomplete')).toBeVisible();
   expect(await page.evaluate(() => window.askFixture.cancelled)).toEqual([
     ['conversation-1', 'turn-1'],
@@ -335,66 +285,157 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   expect(requests[1]).toEqual(requests[0]);
 });
 
-test('normal voice preserves input geometry and selection, combo retries without overwriting draft', async ({
+test('voice claims only the original scoped editor and inserts without submitting or replacing text', async ({
   page,
 }) => {
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   await prompt.fill('one old three');
   await prompt.evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(4, 7));
+  await expect.poll(() => page.evaluate(() => window.askFixture.voiceSelection())).toEqual([4, 7]);
   const bounds = await prompt.boundingBox();
-  await page.evaluate(() =>
-    window.askFixture.voice({ type: 'started', mode: 'insert', recordingId: 'normal' }),
-  );
+  await page.evaluate(() => window.askFixture.voice({ type: 'started', recordingId: 'normal' }));
   expect(await prompt.boundingBox()).toEqual(bounds);
   await expect(prompt).toHaveValue('one old three');
   await page.evaluate(() =>
     window.askFixture.voice({
       type: 'transcribed',
-      mode: 'insert',
       recordingId: 'normal',
       text: 'new',
     }),
   );
-  await expect(prompt).toHaveValue('one new three');
-  expect(await prompt.evaluate((input: HTMLTextAreaElement) => input.selectionStart)).toBe(7);
+  await expect(prompt).toHaveValue('one oldnew three');
+  expect(await prompt.evaluate((input: HTMLTextAreaElement) => input.selectionStart)).toBe(10);
   expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
   await page.evaluate(() => {
-    window.askFixture.rejectNext = true;
-    window.askFixture.voice({ type: 'started', mode: 'submit', recordingId: 'combo' });
+    window.askFixture.activate();
+    window.askFixture.voice({ type: 'started', recordingId: 'combo' });
+  });
+  await page.evaluate(() => {
+    document.querySelector('textarea')!.setSelectionRange(0, 0);
     window.askFixture.voice({
       type: 'transcribed',
-      mode: 'submit',
       recordingId: 'combo',
-      text: 'spoken separately',
+      text: 'stale scope',
     });
   });
-  await expect(page.locator('.ol-toast-notification-card[data-type="error"]')).toContainText(
-    'Set up an Ask model first.',
-  );
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Retry recording' })).toBeEnabled();
-  await expect(prompt).toHaveValue('one new three');
-  await page.getByRole('button', { name: 'Retry recording' }).click();
-  await expect(page.locator('.user-bubble')).toHaveText('spoken separately');
-  await expect(prompt).toHaveValue('one new three');
-  expect(
-    await page.evaluate(() => {
-      const [failed, retried] = window.askFixture.submits;
-      return failed.clientRequestId === retried.clientRequestId;
-    }),
-  ).toBe(true);
+  await expect(prompt).toHaveValue('one oldnew three');
   await page.evaluate(() => {
-    window.askFixture.voice({ type: 'started', mode: 'submit', recordingId: 'late' });
+    window.askFixture.voice({ type: 'started', recordingId: 'late' });
     window.askFixture.switch();
   });
   await expect(prompt).toHaveValue('');
   await page.evaluate(() =>
     window.askFixture.voice({
       type: 'transcribed',
-      mode: 'submit',
       recordingId: 'late',
       text: 'not for the new conversation',
     }),
   );
-  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(2);
+  await expect(prompt).toHaveValue('');
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
+});
+
+test('write, edit, and clarify have no reader side effect and retain delivery outside the draft', async ({
+  page,
+}) => {
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  await page.evaluate(() => {
+    window.askFixture.route = 'write';
+  });
+  await prompt.fill('Write a short quote');
+  await prompt.press('Enter');
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    const turnId = fixture.active();
+    fixture.push({ type: 'searchChanged', turnId, status: 'searching' });
+    fixture.push({
+      type: 'sourceChanged',
+      turnId,
+      source: {
+        sourceId: 'price',
+        url: 'https://example.com/price',
+        title: 'Market price',
+        readStatus: 'read',
+      },
+    });
+    fixture.push({ type: 'searchChanged', turnId, status: 'done' });
+    fixture.push({
+      type: 'delivery',
+      submission: {
+        currentTurnId: turnId,
+        route: 'write',
+        status: 'writing',
+        searchStatus: 'done',
+        sources: [
+          {
+            sourceId: 'price',
+            url: 'https://example.com/price',
+            title: 'Market price',
+            readStatus: 'read',
+          },
+        ],
+        delivery: 'retained',
+        resultText: 'Total: $420',
+        copyStatus: 'failed',
+      },
+    });
+    fixture.push({ type: 'turnFinished', turnId, status: 'completed' });
+  });
+  const retained = page.getByRole('textbox', { name: 'Retained result' });
+  await expect(retained).toHaveValue('Total: $420');
+  await retained.fill('Total: $420 USD');
+  await expect(page.getByText('Could not copy to the clipboard.')).toBeVisible();
+  await expect(prompt).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Sources · 1' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close Ask Anything' }).click();
+  await page.evaluate(() => window.askFixture.activate());
+  await expect(retained).toHaveValue('Total: $420 USD');
+  await page.evaluate(() => {
+    window.askFixture.route = 'edit';
+  });
+  await prompt.fill('Make it shorter');
+  await expect(page.getByRole('button', { name: 'Send, hold to think harder' })).toBeEnabled();
+  await prompt.press('Enter');
+  await expect(retained).toHaveCount(0);
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    const turnId = fixture.active();
+    fixture.push({
+      type: 'delivery',
+      submission: {
+        currentTurnId: turnId,
+        route: 'edit',
+        status: 'writing',
+        searchStatus: 'idle',
+        sources: [],
+        delivery: 'written',
+        copyStatus: 'notNeeded',
+      },
+    });
+    fixture.push({ type: 'turnFinished', turnId, status: 'completed' });
+    fixture.route = 'clarify';
+  });
+  await expect(page.getByText('Replaced in the original editor.')).toBeVisible();
+  await prompt.fill('Fix it');
+  await prompt.press('Enter');
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    const turnId = fixture.active();
+    fixture.push({
+      type: 'delivery',
+      submission: {
+        currentTurnId: turnId,
+        route: 'clarify',
+        status: 'thinking',
+        searchStatus: 'idle',
+        sources: [],
+        resultText: 'Select what you want to change.',
+        copyStatus: 'notNeeded',
+      },
+    });
+    fixture.push({ type: 'turnFinished', turnId, status: 'completed' });
+  });
+  await expect(page.getByText('Select what you want to change.')).toBeVisible();
+  await expect(page.locator('.assistant-text')).toHaveCount(0);
+  expect(await page.evaluate(() => window.askFixture.showCount)).toBe(0);
 });

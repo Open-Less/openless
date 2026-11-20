@@ -379,6 +379,8 @@ macro_rules! app_invoke_handler_desktop {
             ask_window::chat::ask_ack_voice,
             ask_window::chat::ask_get_context_permission,
             ask_window::chat::ask_set_context_permission,
+            ask_window::chat::ask_get_entry_settings,
+            ask_window::chat::ask_set_entry_settings,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
             #[cfg(target_os = "macos")]
@@ -875,7 +877,7 @@ fn run_desktop() {
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
             log::info!("=== OpenLess 启动 ===");
-            let ask = Arc::new(ask_window::chat::AskHost::new(core_backend.clone()));
+            let ask = Arc::new(ask_window::chat::AskHost::new(app.handle(), core_backend.clone()));
             let desktop = ask_window::Desktop::install(
                 app.handle().clone(),
                 core_backend.clone(),
@@ -1084,9 +1086,10 @@ fn run_desktop() {
         .invoke_handler({
             let dispatch: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = app_invoke_handler_desktop!();
             move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
-                if invoke.message.webview().label() == ask_window::LABEL
-                    && !invoke.message.command().starts_with("ask_")
-                {
+                if !ask_window::chat::restricted_command_allowed(
+                    invoke.message.webview().label(),
+                    invoke.message.command(),
+                ) {
                     invoke.resolver.reject("This command is not available in Ask.");
                     return true;
                 }
@@ -1131,12 +1134,7 @@ fn run_desktop() {
                 }
             }
             RunEvent::Exit => {
-                if let Some(desktop) = app.try_state::<Arc<ask_window::Desktop>>() {
-                    desktop.shutdown();
-                }
-                if let Some(ask) = app.try_state::<Arc<ask_window::chat::AskHost>>() {
-                    ask.stop();
-                }
+                stop_ask_desktop(app);
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
@@ -1850,6 +1848,8 @@ fn restart_app(app: AppHandle) {
     if let Some(coordinator) = app.try_state::<Arc<coordinator::Coordinator>>() {
         coordinator.tauri_host().stop_native_capsule();
     }
+    #[cfg(not(mobile))]
+    stop_ask_desktop(&app);
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_for_beta_restart();
@@ -1884,10 +1884,22 @@ fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 #[tauri::command]
 fn reset_accessibility_permission_and_restart_app(app: AppHandle) {
+    #[cfg(not(mobile))]
+    stop_ask_desktop(&app);
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_service_for_restart("Accessibility", "accessibility recovery");
     app.restart();
+}
+
+#[cfg(not(mobile))]
+fn stop_ask_desktop(app: &AppHandle) {
+    if let Some(desktop) = app.try_state::<Arc<ask_window::Desktop>>() {
+        desktop.shutdown();
+    }
+    if let Some(ask) = app.try_state::<Arc<ask_window::chat::AskHost>>() {
+        ask.stop();
+    }
 }
 
 fn prepare_for_restart() {

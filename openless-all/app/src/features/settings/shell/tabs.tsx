@@ -6,7 +6,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../../components/Icon';
 import { isRetiredMacAsrProvider } from '../../../lib/experimentalAsr';
-import { getRuntimeOS } from '../../../runtime/environment';
+import { getRuntimeOS, isTauriHost } from '../../../runtime/environment';
 import {
   ExperimentalAsrSection,
   type ExperimentalAsrController,
@@ -39,6 +39,7 @@ import { BetaChannelSection } from '../sections/BetaChannelSection';
 import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
+import { AskEntrySettingsSection } from '../sections/AskEntrySettingsSection';
 import { AskHistorySection } from '../sections/AskHistorySection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
@@ -91,7 +92,7 @@ export function GeneralTab({
   page: GeneralPageId | 'root';
   onPageChange: (page: GeneralPageId | 'root') => void;
 }) {
-  const categories = visibleGeneralPages(platform);
+  const categories = visibleGeneralPages(platform, os, isTauriHost());
   const activePage = page;
   if (activePage !== 'root') {
     return (
@@ -102,6 +103,12 @@ export function GeneralTab({
             onOpenLocalModels={onOpenLocalModels}
             surface="microphone"
           />
+        )}
+        {activePage === 'askEntry' && (
+          <>
+            <AskEntrySettingsSection />
+            <AskHistorySection compact />
+          </>
         )}
         {activePage === 'askHistory' && <AskHistorySection />}
         {activePage === 'capsule' && <RecordingInputSection forcedOs={os} surface="capsule" />}

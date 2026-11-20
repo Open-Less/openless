@@ -1,9 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "ask-window",
-  "description": "Title-bar controls for the standalone Ask window",
+  "description": "Window and event controls for the Ask composer and conversation",
   "platforms": ["macOS", "windows", "linux"],
-  "windows": ["ask-anything"],
+  "windows": ["ask-anything", "ask-conversation"],
   "permissions": [
     "core:window:allow-start-dragging",
     "core:event:allow-listen",

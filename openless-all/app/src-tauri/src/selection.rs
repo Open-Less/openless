@@ -650,11 +650,6 @@ pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, Sele
     (selection, target)
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn read_native_ask_selection_for_pid(pid: u32) -> Result<Option<String>, ()> {
-    macos_ax::read_explicit_text(Some(pid as i32))
-}
-
 /// 捕获当前前台应用的选区；失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     capture_selection_with_status_diag().0

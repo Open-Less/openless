@@ -25,7 +25,7 @@ export const tauriAskClient: AskClient = {
   openSource: (conversationId, turnId, sourceId) =>
     invoke('ask_open_source', { conversationId, turnId, sourceId }),
   hide: () => invoke('ask_window_hide'),
-  syncEditor: (editor) => invoke('ask_sync_editor', { editor }),
+  syncEditor: (focus, editor) => invoke('ask_sync_editor', { ...focus, editor }),
   acknowledgeVoice: (recordingId) => invoke('ask_ack_voice', { recordingId }),
   onEvent: (handler) => onWindowMessage<AskEvent>('ask:event', handler),
   onWindowEvent: (handler) => onWindowMessage<AskWindowEvent>('ask:window', handler),

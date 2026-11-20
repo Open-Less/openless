@@ -2,8 +2,12 @@ import { createRoot } from 'react-dom/client';
 import { AskWindow } from '../../ask-window/ask-window';
 import type {
   AskClient,
+  AskEditor,
   AskEvent,
+  AskFocus,
+  AskRoute,
   AskSnapshot,
+  AskSubmission,
   AskTurn,
   AskVoiceEvent,
   AskWindowEvent,
@@ -48,6 +52,7 @@ const excerpt: AttachmentInfo = {
 const handlers = {
   event: new Set<(event: AskEvent) => void>(),
   window: new Set<(event: AskWindowEvent) => void>(),
+  reader: new Set<(event: AskWindowEvent) => void>(),
   voice: new Set<(event: AskVoiceEvent) => void>(),
 };
 
@@ -59,6 +64,16 @@ let current: AskSnapshot = {
   activeTurnId: null,
 };
 let events: AskEvent[] = [];
+let focus: AskFocus = { focusEpoch: 1, focusRequest: 1 };
+let lastEditor: AskEditor | undefined;
+const voiceScope = new Map<string, Omit<AskVoiceEvent, 'type'>>();
+const delivered = new Set<string>();
+const shownTurns = new Set<string>();
+let readerRoot: ReturnType<typeof createRoot>;
+const transcript = document.createElement('div');
+transcript.className = 'fixture-transcript';
+transcript.hidden = true;
+document.body.append(transcript);
 
 function push(event: PendingEvent, live = true, replayable = true) {
   const packet = {
@@ -71,6 +86,38 @@ function push(event: PendingEvent, live = true, replayable = true) {
   current = updated;
   if (replayable) events.push(packet);
   if (live) handlers.event.forEach((listener) => listener(packet));
+}
+
+function resolveRoute(route: AskRoute, request: SubmitAsk) {
+  const turnId = current.activeTurnId!;
+  push({ type: 'routeResolved', route, turnId });
+  if (route !== 'answer' && route !== 'selectionAnswer') return;
+  const turn: AskTurn = {
+    turnId,
+    userMessage: { messageId: `${turnId}-input`, text: request.text },
+    attachments: attachmentArchive.filter((item) =>
+      request.attachmentIds.includes(item.attachmentId),
+    ),
+    deepThinking: request.options.deepThinking,
+    status: 'queued',
+    searchStatus: 'idle',
+    sources: [],
+  };
+  push({ type: 'turnAccepted', turn });
+  showTranscript(turnId);
+}
+
+function showTranscript(turnId: string) {
+  if (shownTurns.has(turnId)) return;
+  shownTurns.add(turnId);
+  transcript.hidden = false;
+  fixture.showCount++;
+  if (!readerRoot) {
+    readerRoot = createRoot(transcript);
+    readerRoot.render(<AskWindow client={readerClient} surface="conversation" />);
+  } else {
+    handlers.reader.forEach((listener) => listener({ type: 'activated' }));
+  }
 }
 
 function reset(id: string) {
@@ -92,39 +139,61 @@ const fixture = {
   imageBase64,
   cancelled: [] as [string, string][],
   hideCount: 0,
+  hideReaderCount: 0,
+  showCount: 0,
   snapshotReads: 0,
   rejectNext: false,
+  route: 'answer' as AskRoute | null,
   truncate: false,
   liveListeners: () => handlers.event.size,
+  voiceSelection: () =>
+    lastEditor?.editable ? [lastEditor.selectionStart, lastEditor.selectionEnd] : null,
   active: () => current.activeTurnId!,
   push,
+  resolve(route: AskRoute) {
+    resolveRoute(route, fixture.submits.at(-1)!);
+  },
+  showTranscript,
   addInitialCards() {
     push({ type: 'attachmentChanged', attachment: image });
     push({ type: 'attachmentChanged', attachment: pdf });
     push({ type: 'attachmentChanged', attachment: excerpt });
   },
   activate() {
-    handlers.window.forEach((listener) => listener({ type: 'activated' }));
+    focus = { ...focus, focusRequest: focus.focusRequest + 1 };
+    handlers.window.forEach((listener) => listener({ type: 'activated', ...focus }));
   },
   voice(
     event:
-      | Omit<Extract<AskVoiceEvent, { type: 'transcribed' }>, 'conversationId'>
-      | Omit<Extract<AskVoiceEvent, { type: 'started' | 'cancelled' }>, 'conversationId'>,
+      | { type: 'transcribed'; recordingId: string; text: string }
+      | { type: 'started' | 'cancelled'; recordingId: string },
   ) {
-    handlers.voice.forEach((listener) =>
-      listener({ ...event, conversationId: current.conversationId }),
-    );
+    if (event.type === 'started' && lastEditor?.editable) {
+      voiceScope.set(event.recordingId, {
+        ...lastEditor,
+        ...focus,
+        recordingId: event.recordingId,
+      });
+    }
+    const target = voiceScope.get(event.recordingId);
+    if (target)
+      handlers.voice.forEach((listener) => listener({ ...target, ...event } as AskVoiceEvent));
   },
   switch() {
     reset('conversation-2');
-    fixture.activate();
+    lastEditor = undefined;
+    focus = { focusEpoch: focus.focusEpoch + 1, focusRequest: focus.focusRequest };
+    for (const listeners of [handlers.window, handlers.reader]) {
+      listeners.forEach((listener) => listener({ type: 'sessionChanged', ...focus }));
+    }
   },
 };
 
 const accepted = new Map<string, string>();
+let attachmentArchive: AttachmentInfo[] = [];
 const client: AskClient = {
   async current() {
-    return { conversationId: current.conversationId };
+    return { conversationId: current.conversationId, ...focus };
   },
   async newConversation() {
     reset('conversation-2');
@@ -151,19 +220,17 @@ const client: AskClient = {
     const previous = accepted.get(request.clientRequestId);
     if (previous) return { turnId: previous };
     const turnId = `turn-${fixture.submits.length}`;
-    const turn: AskTurn = {
-      turnId,
-      userMessage: { messageId: `${turnId}-input`, text: request.text },
-      attachments: current.attachments.filter((attachment) =>
-        request.attachmentIds.includes(attachment.attachmentId),
-      ),
-      deepThinking: request.options.deepThinking,
+    const submission: AskSubmission = {
+      currentTurnId: turnId,
       status: 'queued',
       searchStatus: 'idle',
       sources: [],
+      copyStatus: 'notNeeded',
     };
+    attachmentArchive = current.attachments;
     accepted.set(request.clientRequestId, turnId);
-    push({ type: 'turnAccepted', turn });
+    push({ type: 'submitted', submission, attachmentIds: request.attachmentIds });
+    if (fixture.route) resolveRoute(fixture.route, request);
     return { turnId };
   },
   async cancel(conversationId, turnId) {
@@ -196,12 +263,42 @@ const client: AskClient = {
     fixture.opened.push([conversationId, turnId, sourceId]);
   },
   async hide() {
+    focus = { ...focus, focusEpoch: focus.focusEpoch + 1 };
     fixture.hideCount++;
     handlers.window.forEach((listener) => listener({ type: 'hidden' }));
+  },
+  async syncEditor(scope, editor) {
+    if (scope.focusEpoch !== focus.focusEpoch || scope.focusRequest !== focus.focusRequest)
+      return false;
+    lastEditor = editor;
+    return true;
+  },
+  async acknowledgeVoice(id) {
+    const target = voiceScope.get(id);
+    if (
+      delivered.has(id) ||
+      !target ||
+      target.focusEpoch !== focus.focusEpoch ||
+      target.revision !== lastEditor?.revision ||
+      target.mountId !== lastEditor?.mountId
+    )
+      return false;
+    delivered.add(id);
+    return true;
   },
   onEvent: (receive) => subscribe(handlers.event, receive),
   onWindowEvent: (receive) => subscribe(handlers.window, receive),
   onVoiceEvent: (receive) => subscribe(handlers.voice, receive),
+};
+
+const readerClient: AskClient = {
+  ...client,
+  async hide() {
+    fixture.hideReaderCount++;
+    transcript.hidden = true;
+    handlers.reader.forEach((listener) => listener({ type: 'hidden' }));
+  },
+  onWindowEvent: (receive) => subscribe(handlers.reader, receive),
 };
 
 declare global {

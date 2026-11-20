@@ -6,6 +6,7 @@ struct TestModel {
     label: AskModelLabel,
     caps: AskModelCapabilities,
     calls: mpsc::UnboundedSender<Call>,
+    intent_tool: bool,
 }
 
 impl AskModel for TestModel {
@@ -19,6 +20,10 @@ impl AskModel for TestModel {
 
     fn supports_tools(&self) -> bool {
         true
+    }
+
+    fn supports_intent_tool(&self) -> bool {
+        self.intent_tool
     }
 
     fn stream(
@@ -49,6 +54,17 @@ struct Call {
 }
 
 impl Call {
+    fn tool(self, tool: AskToolCall) {
+        assert!(self
+            .finish
+            .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
+                tool,
+                id: Some("fixture-tool-id".into()),
+                resume: Vec::new(),
+            })))
+            .is_ok());
+    }
+
     fn delta(&self, text: &str) {
         (self.progress)(AskModelProgress::Text(text.to_owned()));
     }
@@ -134,33 +150,47 @@ impl SearchTool for Search {
             source.read_status = AskReadStatus::Read;
             progress(AskToolProgress::Source(source));
             Ok(AskSearchResult::Done {
-                evidence: "private-to-model source body".into(),
+                evidence: "private-to-model source body: 1 USD = 1.25 quoted currency".into(),
             })
         })
     }
 }
 
 #[derive(Default)]
-struct Attachments(Mutex<HashMap<Uuid, (Uuid, AskImage)>>);
+struct Attachments(
+    Mutex<HashMap<Uuid, (Uuid, AskImage)>>,
+    Mutex<HashMap<Uuid, (Uuid, Arc<str>)>>,
+);
 
 impl AttachmentReader for Attachments {
     fn acquire(&self, turn: AskTurnKey, ids: &[Uuid]) -> Result<Vec<AskAttachment>, BackendError> {
         let entries = self.0.lock();
+        let selections = self.1.lock();
         ids.iter()
-            .map(|id| match entries.get(id) {
-                Some((owner, image)) if *owner == turn.conversation_id => {
+            .map(|id| {
+                if let Some((_, image)) = entries
+                    .get(id)
+                    .filter(|(owner, _)| *owner == turn.conversation_id)
+                {
                     Ok(AskAttachment::Image(image.clone()))
+                } else if let Some((_, text)) = selections
+                    .get(id)
+                    .filter(|(owner, _)| *owner == turn.conversation_id)
+                {
+                    Ok(AskAttachment::Selection { text: text.clone() })
+                } else {
+                    Err(ask_error(
+                        BackendErrorCode::PermissionDenied,
+                        "testAttachmentScope",
+                    ))
                 }
-                _ => Err(ask_error(
-                    BackendErrorCode::PermissionDenied,
-                    "testAttachmentScope",
-                )),
             })
             .collect()
     }
 
     fn end_conversation(&self, id: Uuid) {
         self.0.lock().retain(|_, (owner, _)| *owner != id);
+        self.1.lock().retain(|_, (owner, _)| *owner != id);
     }
 }
 
@@ -170,14 +200,21 @@ struct Fixture {
     context: Arc<Context>,
     search: Arc<Search>,
     attachments: Arc<Attachments>,
+    history: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Fixture {
     fn new(window: usize) -> Self {
+        Self::with_intent_tool(window, true)
+    }
+
+    fn with_intent_tool(window: usize, intent_tool: bool) -> Self {
         let (sender, calls) = mpsc::unbounded_channel();
         let context = Arc::new(Context::default());
         let search = Arc::new(Search::default());
         let attachments = Arc::new(Attachments::default());
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let recorded = history.clone();
         let service = StandaloneQaService::new(StandaloneQaDependencies {
             models: Arc::new(Factory(Arc::new(TestModel {
                 label: AskModelLabel {
@@ -194,12 +231,15 @@ impl Fixture {
                     deep_thinking: false,
                 },
                 calls: sender,
+                intent_tool,
             }))),
             context: context.clone(),
             search: search.clone(),
             attachments: attachments.clone(),
             spawner: Arc::new(crate::TokioTaskSpawner),
-            history: None,
+            history: Some(Arc::new(move |question, answer| {
+                recorded.lock().push((question.into(), answer.into()));
+            })),
             usage: None,
         });
         Self {
@@ -208,6 +248,7 @@ impl Fixture {
             context,
             search,
             attachments,
+            history,
         }
     }
 
@@ -258,6 +299,735 @@ async fn terminal(
     })
     .await
     .expect("turn has a terminal event")
+}
+
+struct WriteAttempt {
+    operation: AskWriteOperation,
+    body: String,
+    claim: AskWriteClaim,
+    outcome: oneshot::Sender<AskWriteOutcome>,
+}
+
+struct TestWriter(mpsc::UnboundedSender<WriteAttempt>);
+
+impl AskWriter for TestWriter {
+    fn write(
+        &self,
+        operation: AskWriteOperation,
+        body: String,
+        claim: AskWriteClaim,
+    ) -> BoxFuture<'_, AskWriteOutcome> {
+        Box::pin(async move {
+            let (outcome, result) = oneshot::channel();
+            assert!(self
+                .0
+                .send(WriteAttempt {
+                    operation,
+                    body,
+                    claim,
+                    outcome
+                })
+                .is_ok());
+            result.await.unwrap()
+        })
+    }
+}
+
+struct TestClipboard {
+    copies: Mutex<Vec<String>>,
+    service: StandaloneQaService,
+    conversation_id: Uuid,
+    fail: bool,
+}
+
+impl AskClipboard for TestClipboard {
+    fn copy(&self, body: String) -> BoxFuture<'_, Result<(), BackendError>> {
+        Box::pin(async move {
+            let submission = self
+                .service
+                .snapshot(self.conversation_id)
+                .unwrap()
+                .submission
+                .unwrap();
+            assert_eq!(submission.result_text.as_deref(), Some(body.as_str()));
+            assert_eq!(submission.copy_status, AskCopyStatus::Pending);
+            assert!(matches!(
+                submission.delivery,
+                Some(AskDeliveryStatus::Retained | AskDeliveryStatus::Unknown)
+            ));
+            self.copies.lock().push(body);
+            if self.fail {
+                Err(ask_error(BackendErrorCode::Internal, "testClipboardFailed"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+fn clipboard(
+    service: &StandaloneQaService,
+    conversation_id: Uuid,
+    fail: bool,
+) -> Arc<TestClipboard> {
+    Arc::new(TestClipboard {
+        copies: Mutex::default(),
+        service: service.clone(),
+        conversation_id,
+        fail,
+    })
+}
+
+async fn prepared(
+    service: &StandaloneQaService,
+    conversation_id: Uuid,
+    text: &str,
+    prepare: AskPreparation,
+) -> AskTurnKey {
+    let turn_id = service
+        .submit_prepared(request(conversation_id, text, text), || async {
+            Ok(prepare)
+        })
+        .await
+        .unwrap();
+    AskTurnKey {
+        conversation_id,
+        turn_id,
+    }
+}
+
+fn assert_no_chat(service: &StandaloneQaService, key: AskTurnKey) {
+    let events = service.events(key.conversation_id, 0).unwrap();
+    for event in events
+        .events
+        .into_iter()
+        .filter(|event| event.turn_id == Some(key.turn_id))
+    {
+        assert!(!matches!(
+            event.kind,
+            AskEventKind::Accepted { .. } | AskEventKind::AnswerDelta { .. }
+        ));
+    }
+    let snapshot = service.snapshot(key.conversation_id).unwrap();
+    assert!(!snapshot
+        .turns
+        .iter()
+        .any(|turn| turn.turn_id == key.turn_id));
+    assert!(!snapshot
+        .messages
+        .iter()
+        .any(|message| message.turn_id == key.turn_id));
+}
+
+#[tokio::test]
+async fn lazy_capture_is_once_and_chat_acceptance_follows_isolated_hybrid_routing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut fixture = Fixture::new(32_768);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let captures = AtomicUsize::new(0);
+    let original = request(
+        conversation_id,
+        "first",
+        "Explain in simpler words why this passage is confusing",
+    );
+    let selected = Mutex::new("original external selection".to_owned());
+    let (entered, capture_started) = oneshot::channel();
+    let (resume, capture_resume) = oneshot::channel();
+    let submit = service.submit_prepared(original.clone(), || async {
+        captures.fetch_add(1, Ordering::SeqCst);
+        let frozen = selected.lock().clone();
+        entered.send(()).unwrap();
+        capture_resume.await.unwrap();
+        Ok(AskPreparation {
+            selection: ExternalSelection::Selected(frozen),
+            ..Default::default()
+        })
+    });
+    let verify = async {
+        capture_started.await.unwrap();
+        assert!(service
+            .snapshot(conversation_id)
+            .unwrap()
+            .submission
+            .is_none());
+        *selected.lock() = "later selection".to_owned();
+        resume.send(()).unwrap();
+        let duplicate = service
+            .submit_prepared(original.clone(), || async {
+                captures.fetch_add(1, Ordering::SeqCst);
+                Ok(AskPreparation::default())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .submit_prepared(request(conversation_id, "first", "conflicting"), || async {
+                    panic!("conflict must not capture");
+                })
+                .await
+                .unwrap_err()
+                .message,
+            "askRequestConflict"
+        );
+        assert_eq!(
+            service
+                .submit_prepared(request(conversation_id, "busy", "busy"), || async {
+                    panic!("busy must not capture");
+                })
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Busy
+        );
+        duplicate
+    };
+    let (first, duplicate) = tokio::join!(submit, verify);
+    let turn_id = first.unwrap();
+    assert_eq!(turn_id, duplicate);
+    assert_eq!(captures.load(Ordering::SeqCst), 1);
+    let pending = service.snapshot(conversation_id).unwrap();
+    assert!(pending.messages.is_empty());
+    assert!(pending.turns.is_empty());
+    assert!(pending.submission.unwrap().route.is_none());
+    assert!(matches!(
+        events.recv().await.unwrap().kind,
+        AskEventKind::Submitted { .. }
+    ));
+    let call = fixture.next().await;
+    assert!(model_text(&call.request).contains("\"selection\":\"present\""));
+    assert!(!model_text(&call.request).contains("external selection"));
+    assert!(!call.request.tools.available.any());
+    call.complete(r#"{"route":"selectionAnswer"}"#, None, None);
+    let call = fixture.next().await;
+    let replay = service.events(conversation_id, 0).unwrap();
+    let route = replay
+        .events
+        .iter()
+        .position(|event| {
+            matches!(
+                event.kind,
+                AskEventKind::RouteResolved {
+                    route: AskRoute::SelectionAnswer
+                }
+            )
+        })
+        .unwrap();
+    assert!(matches!(
+        replay.events[route + 1].kind,
+        AskEventKind::Accepted { .. }
+    ));
+    assert!(model_text(&call.request).contains("original external selection"));
+    assert!(!model_text(&call.request).contains("later selection"));
+    call.complete("inspection", None, None);
+    assert_eq!(
+        terminal(
+            &mut events,
+            AskTurnKey {
+                conversation_id,
+                turn_id
+            }
+        )
+        .await,
+        AskTurnStatus::Completed
+    );
+    let snapshot = service.snapshot(conversation_id).unwrap();
+    assert_eq!(snapshot.messages.len(), 2);
+    assert!(!serde_json::to_string(&snapshot)
+        .unwrap()
+        .contains("original external selection"));
+}
+
+#[tokio::test]
+async fn separate_classifier_never_sees_an_unrelated_selection_or_history() {
+    let mut fixture = Fixture::new(32_768);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let previous = prepared(
+        &service,
+        conversation_id,
+        "What is the capital of Japan?",
+        AskPreparation::default(),
+    )
+    .await;
+    fixture.next().await.complete("Tokyo", None, None);
+    assert_eq!(
+        terminal(&mut events, previous).await,
+        AskTurnStatus::Completed
+    );
+    let attachment_id = Uuid::new_v4();
+    fixture.attachments.1.lock().insert(
+        attachment_id,
+        (conversation_id, Arc::from("private attachment text")),
+    );
+    let mut submission = request(conversation_id, "second", "What is the capital of France?");
+    submission.attachment_ids.push(attachment_id);
+    let turn_id = service
+        .submit_prepared(submission, || async {
+            Ok(AskPreparation {
+                intent_mode: AskIntentMode::SeparateModel,
+                selection: ExternalSelection::Selected("private unrelated selection".into()),
+                ..Default::default()
+            })
+        })
+        .await
+        .unwrap();
+    let key = AskTurnKey {
+        conversation_id,
+        turn_id,
+    };
+    let classifier = fixture.next().await;
+    let input = model_text(&classifier.request);
+    assert!(input.contains("France") && input.contains("\"selection\":\"present\""));
+    assert!(
+        !input.contains("Tokyo")
+            && !input.contains("private unrelated")
+            && !input.contains("private attachment")
+    );
+    assert_eq!(classifier.request.messages.len(), 1);
+    assert!(!classifier.request.tools.available.any());
+    classifier.complete(r#"{"route":"answer"}"#, None, None);
+    let answer = fixture.next().await;
+    assert!(model_text(&answer.request).contains("Tokyo"));
+    assert!(model_text(&answer.request).contains("private attachment text"));
+    assert!(!model_text(&answer.request).contains("private unrelated"));
+    answer.complete("Paris", None, None);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+}
+
+#[tokio::test]
+async fn main_model_tool_continues_into_search_calculation_and_inserts_body_without_chat() {
+    let mut fixture = Fixture::new(32_768);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    fixture
+        .search
+        .1
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let (writer, mut attempts) = mpsc::unbounded_channel();
+    let clipboard = clipboard(&service, conversation_id, false);
+    let key = prepared(
+        &service,
+        conversation_id,
+        "Look up the exchange rate, calculate the price, then write a quote",
+        AskPreparation {
+            intent_mode: AskIntentMode::MainModelTool,
+            selection: ExternalSelection::None,
+            writer: Some(Arc::new(TestWriter(writer))),
+            clipboard: Some(clipboard.clone()),
+        },
+    )
+    .await;
+    let intent = fixture.next().await;
+    assert!(intent.request.tools.available.resolve_intent);
+    assert!(!intent.request.tools.available.search && !intent.request.tools.available.calculator);
+    let classifier_input = model_text(&intent.request);
+    intent.tool(AskToolCall::ResolveIntent {
+        route: AskRoute::Write,
+    });
+    let search = fixture.next().await;
+    let continuation = search.request.tools.intent.as_ref().unwrap();
+    let [AskModelPart::Text(input)] = continuation.input.parts.as_slice() else {
+        panic!("missing classifier input")
+    };
+    assert_eq!(input, &classifier_input);
+    assert_eq!(
+        continuation.result.call.id.as_deref(),
+        Some("fixture-tool-id")
+    );
+    assert!(continuation.result.output.contains("\"route\":\"write\""));
+    assert!(search
+        .request
+        .instructions
+        .contains("only the final ready-to-use body"));
+    assert!(search.request.tools.available.search);
+    assert!(!search.request.tools.available.resolve_intent);
+    search.tool(AskToolCall::WebSearch {
+        public_query: "USD exchange rate".into(),
+    });
+    let calc = fixture.next().await;
+    assert!(!calc.request.tools.available.search);
+    assert!(calc.request.tools.available.calculator && calc.request.tools.intent.is_some());
+    assert_eq!(fixture.search.0.lock().as_slice(), ["USD exchange rate"]);
+    assert!(calc.request.tools.results[0]
+        .output
+        .contains("1 USD = 1.25"));
+    calc.tool(AskToolCall::Calculate {
+        expression: "40 * 1.25".into(),
+    });
+    let compose = fixture.next().await;
+    assert!(compose.request.tools.results[1]
+        .output
+        .contains("\"decimal\":\"50\""));
+    compose.delta("Quote\n");
+    assert!(attempts.try_recv().is_err());
+    compose.complete("Total: $50", None, None);
+    let effect = tokio::time::timeout(Duration::from_secs(3), attempts.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(effect.operation, AskWriteOperation::Insert);
+    assert_eq!(effect.body, "Quote\nTotal: $50");
+    assert_eq!(
+        service
+            .snapshot(conversation_id)
+            .unwrap()
+            .submission
+            .unwrap()
+            .delivery,
+        Some(AskDeliveryStatus::Pending)
+    );
+    assert!((effect.claim)());
+    effect.outcome.send(AskWriteOutcome::Written).unwrap();
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    let result = service
+        .snapshot(conversation_id)
+        .unwrap()
+        .submission
+        .unwrap();
+    assert_eq!(result.delivery, Some(AskDeliveryStatus::Written));
+    assert_eq!(result.copy_status, AskCopyStatus::NotNeeded);
+    assert!(
+        result.result_text.is_none()
+            && clipboard.copies.lock().is_empty()
+            && fixture.history.lock().is_empty()
+    );
+    assert_no_chat(&service, key);
+}
+
+#[tokio::test]
+async fn write_with_incidental_selection_retains_once_before_failed_copy_and_never_becomes_history()
+{
+    let mut fixture = Fixture::new(32_768);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let (writer, mut attempts) = mpsc::unbounded_channel();
+    let clipboard = clipboard(&service, conversation_id, true);
+    let key = prepared(
+        &service,
+        conversation_id,
+        "写一封道歉邮件",
+        AskPreparation {
+            selection: ExternalSelection::Selected("incidental selected text".into()),
+            writer: Some(Arc::new(TestWriter(writer))),
+            clipboard: Some(clipboard.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let compose = fixture.next().await;
+    assert!(!model_text(&compose.request).contains("incidental selected"));
+    compose.complete("很抱歉。\n谢谢理解。", None, None);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    let snapshot = service.snapshot(conversation_id).unwrap();
+    let retained = snapshot.submission.unwrap();
+    assert_eq!(retained.route, Some(AskRoute::Write));
+    assert_eq!(retained.delivery, Some(AskDeliveryStatus::Retained));
+    assert_eq!(retained.copy_status, AskCopyStatus::Failed);
+    assert_eq!(
+        retained.result_text.as_deref(),
+        Some("很抱歉。\n谢谢理解。")
+    );
+    assert!(attempts.try_recv().is_err());
+    assert_no_chat(&service, key);
+    assert!(fixture.history.lock().is_empty());
+    let replay = service.events(conversation_id, 0).unwrap();
+    assert!(replay.events.iter().any(|event| matches!(&event.kind,
+        AskEventKind::Delivery { submission } if submission.copy_status == AskCopyStatus::Pending
+            && submission.result_text == retained.result_text)));
+    assert_eq!(clipboard.copies.lock().len(), 1);
+    let next = prepared(
+        &service,
+        conversation_id,
+        "What is the capital of Japan?",
+        AskPreparation::default(),
+    )
+    .await;
+    let answer = fixture.next().await;
+    assert!(!model_text(&answer.request).contains("谢谢理解"));
+    assert!(service
+        .snapshot(conversation_id)
+        .unwrap()
+        .submission
+        .unwrap()
+        .result_text
+        .is_none());
+    answer.complete("Tokyo", None, None);
+    assert_eq!(terminal(&mut events, next).await, AskTurnStatus::Completed);
+    assert_eq!(clipboard.copies.lock().len(), 1);
+}
+
+#[tokio::test]
+async fn edit_claim_cancellation_and_fallback_never_duplicate_live_effects() {
+    for (cancel_before, cancel_after, outcome, delivery) in [
+        (true, false, AskWriteOutcome::Declined, None),
+        (
+            false,
+            true,
+            AskWriteOutcome::Written,
+            Some(AskDeliveryStatus::Written),
+        ),
+        (
+            false,
+            true,
+            AskWriteOutcome::Unknown,
+            Some(AskDeliveryStatus::Unknown),
+        ),
+        (
+            false,
+            false,
+            AskWriteOutcome::Unknown,
+            Some(AskDeliveryStatus::Unknown),
+        ),
+        (
+            false,
+            false,
+            AskWriteOutcome::NotWritten,
+            Some(AskDeliveryStatus::Retained),
+        ),
+    ] {
+        let mut fixture = Fixture::new(32_768);
+        let service = fixture.service.clone();
+        let conversation_id = service.open();
+        let mut events = service.subscribe();
+        let (writer, mut attempts) = mpsc::unbounded_channel();
+        let clipboard = clipboard(&service, conversation_id, false);
+        let key = prepared(
+            &service,
+            conversation_id,
+            "Make this shorter, please?",
+            AskPreparation {
+                selection: ExternalSelection::Selected("original\nselection".into()),
+                writer: Some(Arc::new(TestWriter(writer))),
+                clipboard: Some(clipboard.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let model = fixture.next().await;
+        assert!(
+            model_text(&model.request).contains(r#"{"externalSelection":"original\nselection"}"#)
+        );
+        model.complete("shorter", None, None);
+        let effect = tokio::time::timeout(Duration::from_secs(3), attempts.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(effect.operation, AskWriteOperation::Replace);
+        if cancel_before {
+            service.cancel(key).unwrap();
+            assert!(!(effect.claim)());
+            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Cancelled);
+            effect.outcome.send(outcome).unwrap();
+        } else {
+            if outcome != AskWriteOutcome::NotWritten {
+                assert!((effect.claim)());
+            }
+            if cancel_after {
+                service.cancel(key).unwrap();
+                assert_eq!(service.turn(key).unwrap().status, AskTurnStatus::Running);
+            }
+            effect.outcome.send(outcome).unwrap();
+            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+        }
+        let result = service
+            .snapshot(conversation_id)
+            .unwrap()
+            .submission
+            .unwrap();
+        assert_eq!(result.delivery, delivery);
+        let retained = matches!(
+            delivery,
+            Some(AskDeliveryStatus::Unknown | AskDeliveryStatus::Retained)
+        );
+        assert_eq!(result.result_text.as_deref(), retained.then_some("shorter"));
+        assert_eq!(
+            clipboard.copies.lock().len(),
+            usize::from(retained && !cancel_after)
+        );
+        assert!(attempts.try_recv().is_err());
+        assert_no_chat(&service, key);
+    }
+}
+
+#[tokio::test]
+async fn missing_selection_and_invalid_or_unsupported_classifier_stay_in_composer() {
+    let mut fixture = Fixture::with_intent_tool(32_768, false);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let clipboard = clipboard(&service, conversation_id, false);
+    let key = prepared(
+        &service,
+        conversation_id,
+        "这段是什么意思？",
+        AskPreparation {
+            selection: ExternalSelection::Unavailable,
+            clipboard: Some(clipboard.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    let result = service
+        .snapshot(conversation_id)
+        .unwrap()
+        .submission
+        .unwrap();
+    assert_eq!(result.route, Some(AskRoute::Clarify));
+    assert!(result.result_text.unwrap().contains("无法确认外部选区"));
+    assert_no_chat(&service, key);
+    assert!(fixture.calls.try_recv().is_err() && clipboard.copies.lock().is_empty());
+    let key = prepared(
+        &service,
+        conversation_id,
+        "tool unsupported",
+        AskPreparation {
+            intent_mode: AskIntentMode::MainModelTool,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+    assert_eq!(
+        service.turn(key).unwrap().error.unwrap().message,
+        "askIntentToolUnsupported"
+    );
+    assert!(fixture.calls.try_recv().is_err());
+    let key = prepared(
+        &service,
+        conversation_id,
+        "invalid model output",
+        AskPreparation {
+            intent_mode: AskIntentMode::SeparateModel,
+            ..Default::default()
+        },
+    )
+    .await;
+    fixture
+        .next()
+        .await
+        .complete(r#"{"route":"edit","sideEffect":"replaceAll"}"#, None, None);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+    assert_eq!(
+        service.turn(key).unwrap().error.unwrap().message,
+        "askIntentInvalid"
+    );
+    assert!(fixture.calls.try_recv().is_err());
+    assert_no_chat(&service, key);
+}
+
+#[tokio::test]
+async fn beta_classifiers_cannot_turn_clear_non_insert_requests_into_writes() {
+    for intent_mode in [AskIntentMode::SeparateModel, AskIntentMode::MainModelTool] {
+        let mut fixture = Fixture::new(32_768);
+        let service = fixture.service.clone();
+        let conversation_id = service.open();
+        let mut events = service.subscribe();
+        let (writer, mut attempts) = mpsc::unbounded_channel();
+        let clipboard = clipboard(&service, conversation_id, false);
+        for text in [
+            "What is the capital of Japan?",
+            "What does this mean?",
+            "Make this shorter, please?",
+        ] {
+            let key = prepared(
+                &service,
+                conversation_id,
+                text,
+                AskPreparation {
+                    intent_mode,
+                    selection: ExternalSelection::None,
+                    writer: Some(Arc::new(TestWriter(writer.clone()))),
+                    clipboard: Some(clipboard.clone()),
+                },
+            )
+            .await;
+            let decision = fixture.next().await;
+            match intent_mode {
+                AskIntentMode::SeparateModel => {
+                    assert!(!decision.request.tools.available.any());
+                    decision.complete(r#"{"route":"write"}"#, None, None);
+                }
+                AskIntentMode::MainModelTool => {
+                    assert!(decision.request.tools.available.resolve_intent);
+                    decision.tool(AskToolCall::ResolveIntent {
+                        route: AskRoute::Write,
+                    });
+                }
+                AskIntentMode::SemanticHybrid => unreachable!(),
+            }
+            let status = tokio::select! {
+                status = terminal(&mut events, key) => status,
+                _ = fixture.calls.recv() => panic!("misrouting reached generation: {intent_mode:?}, {text}"),
+            };
+            assert_eq!(status, AskTurnStatus::Failed, "{intent_mode:?}, {text}");
+            let submission = service
+                .snapshot(conversation_id)
+                .unwrap()
+                .submission
+                .unwrap();
+            assert_eq!(submission.error.unwrap().message, "askIntentInvalid");
+            assert!(submission.route.is_none() && submission.delivery.is_none());
+            assert!(attempts.try_recv().is_err());
+            assert!(clipboard.copies.lock().is_empty());
+            assert_no_chat(&service, key);
+        }
+    }
+}
+
+#[tokio::test]
+async fn main_model_clarifies_after_tool_and_rejects_a_text_only_decision() {
+    let mut fixture = Fixture::new(32_768);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let prepare = || AskPreparation {
+        intent_mode: AskIntentMode::MainModelTool,
+        selection: ExternalSelection::None,
+        ..Default::default()
+    };
+    let key = prepared(
+        &service,
+        conversation_id,
+        "Please edit my selection",
+        prepare(),
+    )
+    .await;
+    fixture.next().await.tool(AskToolCall::ResolveIntent {
+        route: AskRoute::Edit,
+    });
+    let clarify = fixture.next().await;
+    let result = &clarify.request.tools.intent.as_ref().unwrap().result.output;
+    assert!(
+        result.contains("\"route\":\"clarify\"") && result.contains("\"missingSelection\":true")
+    );
+    assert!(clarify.request.messages.is_empty() && !clarify.request.tools.available.any());
+    clarify.complete("Please select the text you want to edit.", None, None);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    assert_no_chat(&service, key);
+    let key = prepared(
+        &service,
+        conversation_id,
+        "Please show me the result",
+        prepare(),
+    )
+    .await;
+    fixture
+        .next()
+        .await
+        .complete(r#"{"route":"answer"}"#, None, None);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+    assert_eq!(
+        service.turn(key).unwrap().error.unwrap().message,
+        "askIntentInvalid"
+    );
+    assert!(fixture.calls.try_recv().is_err());
+    assert_no_chat(&service, key);
 }
 
 #[tokio::test]
@@ -495,10 +1265,8 @@ async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
     let call = fixture.next().await;
     assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);
     assert!(model_text(&call.request).contains("private app metadata"));
-    assert!(!model_text(&call.request).contains("private-to-model source body"));
-    assert!(call.request.tools.results[0]
-        .output
-        .contains("private-to-model source body"));
+    assert!(model_text(&call.request).contains("private-to-model source body"));
+    assert!(call.request.tools.results.is_empty());
     assert!(!call.request.tools.available.search);
     assert!(call.request.tools.available.calculator);
     call.finish
@@ -512,8 +1280,8 @@ async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
         .ok()
         .unwrap();
     let call = fixture.next().await;
-    assert_eq!(call.request.tools.results.len(), 2);
-    assert!(call.request.tools.results[1]
+    assert_eq!(call.request.tools.results.len(), 1);
+    assert!(call.request.tools.results[0]
         .output
         .contains("\"decimal\":\"0.3\""));
     assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);

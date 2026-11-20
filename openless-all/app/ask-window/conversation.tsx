@@ -5,14 +5,16 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   errorMessage,
+  submissionErrorMessage,
   type AskClient,
   type AskSource,
+  type AskSubmission,
   type AskTurn,
   type SearchStatus,
 } from './client';
 
 const FADE =
-  'linear-gradient(to bottom, transparent 0, rgba(0,0,0,0.04) 20px, rgba(0,0,0,0.15) 48px, rgba(0,0,0,0.35) 80px, rgba(0,0,0,0.6) 112px, rgba(0,0,0,0.85) 144px, black 176px, black calc(100% - 28px), transparent 100%)';
+  'linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 16px), transparent 100%)';
 
 export const SPRING = { type: 'spring', duration: 0.5, bounce: 0.15 } as const;
 
@@ -35,14 +37,16 @@ const SOURCE_READ_LABEL: Record<AskSource['readStatus'], string> = {
   cancelled: 'Reading stopped',
 };
 
-function statusFor(turn: AskTurn): { state: AiStatusState; label?: string } {
+function statusFor(turn: Pick<AskTurn, 'status' | 'searchStatus'> & { deepThinking?: boolean }): {
+  state: AiStatusState;
+  label?: string;
+} {
   if (turn.status === 'failed') return { state: 'error', label: 'Failed · Incomplete' };
   if (turn.status === 'cancelled') return { state: 'error', label: 'Stopped · Incomplete' };
   if (turn.status === 'completed') return { state: 'done' };
   if (turn.searchStatus === 'searching')
     return { state: 'researching', label: SEARCH_LABEL.searching };
   if (turn.searchStatus === 'reading') return { state: 'analyzing', label: SEARCH_LABEL.reading };
-  if (turn.status === 'compacting') return { state: 'analyzing', label: 'Compact conversation' };
   if (turn.status === 'writing') return { state: 'writing' };
   if (turn.status === 'thinking') {
     return { state: 'thinking', label: turn.deepThinking ? 'Thinking deeply' : 'Working' };
@@ -51,12 +55,10 @@ function statusFor(turn: AskTurn): { state: AiStatusState; label?: string } {
 }
 
 export function ConversationLayout({
-  started,
   turns,
   children,
   showSources,
 }: {
-  started: boolean;
   turns: AskTurn[];
   children: ReactNode;
   showSources: (turnId: string) => void;
@@ -75,20 +77,14 @@ export function ConversationLayout({
 
   const latest = turns.at(-1);
   return (
-    <div className="relative flex h-full flex-col items-center px-6 pt-6 pb-8">
+    <main className="transcript-surface">
       <AskNotice
         key={latest?.turnId}
         severity={latest?.error ? 'error' : 'warning'}
         message={latest?.error?.message ?? latest?.searchError?.message}
       />
       <div className="flex min-h-0 w-[560px] max-w-full flex-1 flex-col">
-        {!started ? (
-          <div className="flex flex-1 flex-col items-center justify-end pb-6">
-            <h1 className="font-runde text-2xl font-semibold tracking-tight">
-              What should we think about?
-            </h1>
-          </div>
-        ) : (
+        {turns.length ? (
           <div
             ref={threadRef}
             className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scrollbar-width:none]"
@@ -101,7 +97,7 @@ export function ConversationLayout({
               lastScroll.current = thread.scrollTop;
             }}
           >
-            <div className="flex min-h-full flex-col justify-end gap-8 pt-40">
+            <div className="flex min-h-full flex-col justify-end gap-8 pt-12">
               {turns.map((turn) => {
                 const { state, label } = statusFor(turn);
                 return (
@@ -161,15 +157,68 @@ export function ConversationLayout({
               })}
             </div>
           </div>
+        ) : (
+          <p className="connection-notice">No chat messages yet.</p>
         )}
 
         <motion.div layout={reduced ? false : 'position'} transition={SPRING}>
           {children}
         </motion.div>
-
-        {!started && <div className="flex-1" />}
       </div>
-    </div>
+    </main>
+  );
+}
+
+export function SubmissionResult({
+  submission,
+  active,
+}: {
+  submission: AskSubmission;
+  active: boolean;
+}) {
+  const text =
+    submission.delivery === 'retained' ||
+    submission.delivery === 'unknown' ||
+    submission.route === 'clarify'
+      ? submission.resultText
+      : undefined;
+  const error = submissionErrorMessage(submission.error) ?? submission.searchError?.message;
+  const { state, label } = statusFor(submission);
+  const delivery =
+    submission.delivery === 'written'
+      ? submission.route === 'edit'
+        ? 'Replaced in the original editor.'
+        : 'Inserted in the original editor.'
+      : submission.delivery === 'unknown'
+        ? 'Ask could not confirm whether the editor changed. Check it before pasting.'
+        : submission.delivery === 'retained'
+          ? 'Kept here because Ask could not write to the original editor.'
+          : undefined;
+  return (
+    <section className="submission-result" aria-label="Ask result">
+      {active && <AiStatus state={state} label={label} />}
+      <AskNotice
+        key={submission.currentTurnId}
+        severity={submission.error ? 'error' : 'warning'}
+        message={error}
+      />
+      {delivery && <p role="status">{delivery}</p>}
+      {submission.copyStatus === 'copied' && <p role="status">Copied to the clipboard.</p>}
+      {submission.copyStatus === 'failed' && <p role="status">Could not copy to the clipboard.</p>}
+      {!active && submission.status === 'cancelled' && <p role="status">Request stopped.</p>}
+      {text &&
+        (submission.route === 'clarify' ? (
+          <p className="result-text">{text}</p>
+        ) : (
+          <textarea
+            key={submission.currentTurnId}
+            className="result-text retained-result"
+            aria-label="Retained result"
+            defaultValue={text}
+            rows={2}
+          />
+        ))}
+    </section>
   );
 }
 
@@ -181,9 +230,9 @@ export function Sources({
   show,
   close,
 }: {
-  client: AskClient;
+  client: Pick<AskClient, 'openSource'>;
   conversationId: string;
-  turns: AskTurn[];
+  turns: Pick<AskTurn, 'turnId' | 'searchStatus' | 'sources'>[];
   openedTurnId: string | undefined;
   show: (turnId: string) => void;
   close: () => void;

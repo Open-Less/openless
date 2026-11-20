@@ -5,11 +5,13 @@ import { siwcZhCN as siwc } from './siwc';
 
 import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsZhCN as askEntrySettings } from './askEntrySettings';
 
 export const zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: '语音编辑会话',
