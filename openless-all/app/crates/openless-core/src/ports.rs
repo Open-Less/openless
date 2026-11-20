@@ -118,6 +118,9 @@ pub struct VoiceDictationHandoff {
 /// decides lifecycle and stale-event policy; the host decides how local ASR and
 /// the native capture stream are implemented.
 pub trait VoiceActivationRuntime: Send + Sync + 'static {
+    /// Apply runtime-only standby intent even before a recognizer exists.
+    fn set_capture_paused(&self, _revision: u64, _paused: bool) {}
+
     fn configure(
         &self,
         config: VoiceActivationConfig,
@@ -799,6 +802,11 @@ pub trait TextInserter: Send + Sync {
         None
     }
 
+    /// Host-owned editors can bind feedback to this exact recording before Starting is emitted.
+    fn capture_target_for_session(&self, _session_id: SessionId) -> Option<CapturedTextTarget> {
+        self.capture_target()
+    }
+
     fn begin(
         &self,
         session_id: SessionId,
@@ -841,6 +849,14 @@ pub trait TextInsertionSession: Send + Sync {
 /// document baseline. Keeping that decision here prevents macOS AX code from
 /// owning vocabulary policy or accepting a report from a stale generation.
 pub trait EditObservationSink: Send + Sync {
+    fn observation_id(&self) -> Option<u64> {
+        None
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        None
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }

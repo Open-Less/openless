@@ -5,6 +5,29 @@ import { load } from 'js-yaml';
 const path = (name) => new URL(`../../../.github/workflows/${name}`, import.meta.url);
 const workflow = (name) => load(readFileSync(path(name), 'utf8'));
 const ci = workflow('ci.yml');
+const desktopOnly =
+  "github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only')";
+const detect = ci.jobs.changes.steps.find((s) => s.id === 'detect');
+assert.equal(ci.jobs.changes['runs-on'], `\${{ ${desktopOnly} && 'macos-latest' || 'ubuntu-latest' }}`);
+assert.equal(detect.env.DESKTOP_ONLY, `\${{ ${desktopOnly} }}`);
+assert.match(detect.run, /desktop-only=\$DESKTOP_ONLY.*\$GITHUB_OUTPUT/);
+assert.equal(ci.jobs.changes.outputs['desktop-only'], '${{ steps.detect.outputs.desktop-only }}');
+const includeNonDesktop = "needs.changes.outputs.desktop-only != 'true'";
+for (const [id, area] of [
+  ['ui-motion-browsers', 'frontend'],
+  ['android-check', 'android'],
+  ['harmony-check', 'harmony'],
+]) {
+  assert.equal(
+    ci.jobs[id].if,
+    `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.${area} != 'false'`,
+  );
+}
+assert.equal(ci.jobs['ui-motion'].if, `always() && !(${desktopOnly})`);
+assert.equal(
+  ci.jobs['windows-checks']['runs-on'],
+  "${{ needs.changes.outputs.desktop-only == 'false' && 'ubuntu-latest' || 'macos-latest' }}",
+);
 assert.equal(existsSync(path('check-ios.yml')), false, 'iOS must not run twice');
 assert.equal(ci.jobs.changes.outputs.ios, '${{ steps.detect.outputs.ios-device }}');
 assert.match(
@@ -19,7 +42,7 @@ for (const id of ['ios-test', 'ios-device-build']) {
   assert.equal(job.env.CARGO_PROFILE_TEST_DEBUG, 0);
   assert.equal(
     job.if,
-    "(github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'",
+    `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'`,
   );
   assert.ok(job.steps.some((s) => s.run?.includes('git diff --exit-code')));
 }

@@ -5,11 +5,13 @@ import type { zhCN } from './zh-CN';
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsZhTW as askEntrySettings } from './askEntrySettings';
 
 export const zhTW: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: '語音編輯工作階段',
@@ -101,6 +103,8 @@ export const zhTW: typeof zhCN = {
     noSnapshot: '雲端尚無加密備份。',
     snapshotUnknown: '尚未檢查雲端備份。',
     lastSync: '上次同步：{{time}}',
+    synced: '同步完成',
+    syncing: '正在同步雲端最新內容…',
     syncNow: '立即同步',
     checkPending: '核對待確認結果',
     unlock: '解鎖',
@@ -110,6 +114,7 @@ export const zhTW: typeof zhCN = {
     delete: '刪除雲端備份',
     working: '正在處理…',
     cancelTask: '取消目前工作',
+    cancelSync: '取消同步',
     cancelRequested: '已請求取消，正在等待目前工作結束。',
     done: '同步設定已更新。',
     restored: '已還原雲端資料，請核對此裝置的專屬設定。',
@@ -129,12 +134,21 @@ export const zhTW: typeof zhCN = {
     newPassword: '新同步密碼',
     currentPassword: '目前同步密碼',
     confirmPassword: '再次輸入新密碼',
+    setSyncPasswordTitle: '設定雲端同步密碼',
+    setSyncPasswordDescription:
+      'OpenLess 會用此密碼在本機加密資料並建立雲端備份。建立成功後才會開啟同步。',
+    confirmSyncPassword: '再次輸入同步密碼',
+    confirmAndContinue: '確認並繼續',
+    revealPassword: '顯示密碼（{{field}}）',
+    concealPassword: '隱藏密碼（{{field}}）',
+    previewNotice: '雲端同步示範。請使用範例密碼；不會連線到伺服器或儲存任何憑證。',
     passwordPolicy: '使用 12–128 個字元，包含大寫字母、小寫字母和數字，避免常見弱密碼。',
     rememberKey: '在此裝置的安全儲存空間記住解鎖金鑰',
     disableTitle: '關閉加密同步？',
     disableDescription:
       '關閉後停止後續同步，雲端備份和本機資料都會保留。刪除雲端備份是另一項獨立操作。',
     confirmDisable: '關閉同步',
+    refreshBackup: '查看或重新整理雲端備份',
     deleteTitle: '刪除雲端加密備份？',
     deleteDescription:
       '僅刪除目前帳號的雲端備份，本機資料保留。之後在其他裝置還原前，需要重新建立備份。',
@@ -212,6 +226,8 @@ export const zhTW: typeof zhCN = {
       cancelled: '工作已取消。',
       network: '暫時無法連線同步服務，請檢查網路後重試。',
       rateLimited: '請求過於頻繁，請稍後重試。',
+      deletePendingOperation:
+        '先前的雲端操作尚未確認，暫不能安全刪除備份。請稍後重新整理狀態並重試。',
       outcomeUnknown: '雲端結果尚未確認。請先核對待確認結果，不要重複建立備份。',
       recovery: '本機同步狀態需要復原。請保留本機資料，不要覆寫雲端備份。',
       rolledBack: '還原失敗，本機變更已回復。請重新整理狀態後重試。',
@@ -275,10 +291,13 @@ export const zhTW: typeof zhCN = {
     delete: '刪除',
     later: '稍後',
     cancel: '取消',
+    confirmAction: '確認',
     close: '關閉',
     show: '顯示',
     hide: '隱藏',
+    apiKeySaved: 'API 金鑰已儲存',
     saved: '已儲存',
+    deleted: '已刪除',
     refreshed: '已重新整理',
     saving: '儲存中',
     experimental: '實驗性',
@@ -290,6 +309,7 @@ export const zhTW: typeof zhCN = {
     durationMinutes: '{{value}} 分鐘',
   },
   capsule: {
+    asking: '隨便問',
     thinking: 'thinking',
     using: 'using',
     cancelled: '已取消',
@@ -344,9 +364,12 @@ export const zhTW: typeof zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '視窗展開失敗，請關閉後重新開啟。',
     },
-    title: '問任何問題',
+    title: '隨便問',
     headerHint: '隨時提問',
     thinking: '思考中…',
+    thoughtLive: '思考中（用時 {{seconds}} 秒）',
+    thoughtDone: '已思考（用時 {{seconds}} 秒）',
+    stop: '停止',
     error: '出錯了，請稍後再試。',
     errorRetry: '重試',
     errorRetryHint: '請再試一次。',
@@ -363,6 +386,7 @@ export const zhTW: typeof zhCN = {
     mobileRecordStart: '開始錄音',
     mobileRecordStop: '結束並提交',
     composerPlaceholder: '輸入問題，Enter 傳送',
+    voiceInputPlaceholder: '你正在進行語音輸入',
     composerSend: '傳送',
     statusIdle: '按 {{recordHotkey}} 提問',
     statusRecording: '錄音中',
@@ -381,7 +405,7 @@ export const zhTW: typeof zhCN = {
     style: '風格',
     marketplace: '風格市場',
     translation: '翻譯',
-    selectionAsk: '問任何問題',
+    selectionAsk: '隨便問',
     quickNote: '速記',
     corrections: '糾正規則',
     polishMode: '潤色模式',
@@ -499,6 +523,7 @@ export const zhTW: typeof zhCN = {
   shell: {
     shortcutLabel: '錄音快捷鍵',
     shortcutHint: '開始 / 停止',
+    homeLabel: '返回概覽',
     betaTag: 'BETA',
     betaNote: '所有資料都只儲存在本機。',
     navHint: {
@@ -522,6 +547,7 @@ export const zhTW: typeof zhCN = {
         tagline: '本地驅動的語音輸入層',
         releaseNotes: '檢視釋出日誌 ↗',
         docs: '幫助中心 ↗',
+        credits: '元件來源',
       },
     },
     providerPrompt: {
@@ -635,6 +661,12 @@ export const zhTW: typeof zhCN = {
     llmConfigured: '已配置 active LLM',
     llmNotConfigured: '未配置',
     statusConfigured: '已配置',
+    statusFailed: '未通過',
+    serviceHint: {
+      asr: '語音識別：查看是否已配置，點擊進入服務設定',
+      llm: '文字處理：查看是否已配置，點擊進入服務設定',
+      omni: '多模態語音：查看是否已配置，點擊進入服務設定',
+    },
     statusNotConfigured: '未配置',
     statusUnknown: '無法讀取',
     credentialsLoadError: '無法讀取憑據狀態',
@@ -649,6 +681,15 @@ export const zhTW: typeof zhCN = {
     metricTotalTrend: '本機存檔 (上限 200)',
     activityTitle: '年度活動',
     activityCount: '{{count}} 次聽寫',
+    activityAppsLabel: '語音輸入次數最多的軟體',
+    activityAppsShow: '展開常用軟體',
+    activityAppsHide: '收合常用軟體',
+    activityAppsUnavailable: '目前平台不支援依應用程式查看年度活動。',
+    activityAppsError: '無法載入依應用程式統計的年度活動。',
+    activityYearTitle: '今年',
+    activityActiveDays: '活躍天數',
+    activityPeakDay: '單日最多',
+    activityDailyAverage: '日均',
     activityLoadError: '活動資料讀取失敗',
     period: {
       ariaLabel: '統計週期',
@@ -774,7 +815,7 @@ export const zhTW: typeof zhCN = {
     dismiss: '關閉',
   },
   vocab: {
-    selectAllVisible: '選取目前結果',
+    selectAllVisible: '選取所有結果',
     selecting: '選取',
     doneSelecting: '完成',
     disabledWord: '已停用',
@@ -1067,19 +1108,33 @@ export const zhTW: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提問快捷鍵行為',
+      desc: '使用目前錄音快捷鍵加提問附加鍵。單獨按錄音快捷鍵仍會在游標處聽寫。',
+      record: '開啟並立即錄音',
+      open: '僅開啟，再按一次錄音',
+      draft: '開啟並聚焦文字框',
+      failed: '無法儲存提問快捷鍵行為。',
+    },
     dictation: '口述',
     translation: '翻譯',
-    question: '問任何問題',
+    question: '隨便問',
     dictationHint: '說出想法，直接輸入文字',
     translationHint: '錄音時切換目標語言',
     questionHint: '選取文字，或直接說出問題',
     description: '按組合鍵開始提問，再按一次送出。回答會顯示在螢幕下方。',
     auxiliaryKey: '提問附加鍵',
     auxiliaryHint: '與錄音鍵 {{key}} 一起按下；修改錄音鍵後會自動跟隨。',
-    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。每次組合鍵開始新問題。',
+    selectionHint:
+      '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。關閉對話視窗後開始新對話。',
   },
   selectionAsk: {
-    title: '問任何問題',
+    desktopContext: {
+      title: '向「隨便問」提供應用程式名稱',
+      description: '喚起「隨便問」時，記錄前景及已開啟的應用程式名稱，並在送出問題時提供給模型。不讀取視窗內容。',
+      saveFailed: '無法更新「隨便問」的桌面內容權限。',
+    },
+    title: '隨便問',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
     guide: {
@@ -1100,7 +1155,7 @@ export const zhTW: typeof zhCN = {
     },
     history: {
       title: '儲存歷史',
-      desc: '開啟後在本地儲存問答記錄，預設關閉。',
+      desc: '開啟後在此裝置上儲存「隨便問」的歷史記錄，預設關閉。',
     },
     howto: {
       title: '使用方法',
@@ -1136,6 +1191,8 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
@@ -1218,6 +1275,11 @@ export const zhTW: typeof zhCN = {
     vocabularyLearning: {
       title: '手改學詞',
       enabled: '啟用手改學詞',
+      suggestionPosition: '建議卡片位置',
+      positionNearInput: '輸入位置附近',
+      positionBottomRight: '固定右下角',
+      suggestionPositionHint:
+        '僅 Windows：預設靠近文字游標或輸入框；無法定位時退回原輸入目標所在螢幕的右下角。固定右下角一律使用該螢幕的工作區。',
       observationSeconds: '觀察時長',
       observationSecondsHint: '聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。',
       suggestionSeconds: '建議保留時長',
@@ -1443,11 +1505,6 @@ export const zhTW: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多數編輯器）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（聊天輸入框）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: '在鍵盤列表中顯示 OpenLess',
-      windowsShowOpenlessInKeyboardListDesc:
-        '關閉後 Win+Space 切換輸入法時不會出現 OpenLess；SendInput 與剪貼簿貼上插入不受影響。重新開啟本項可還原顯示。',
-      windowsShowOpenlessInKeyboardListError:
-        '無法更新鍵盤列表：系統拒絕更改 OpenLess 語言設定檔。',
       historyGroupTitle: '歷史與上下文',
       historyRetentionLabel: '歷史保留天數',
       historyRetentionDesc: '超過保留天數的歷史在寫入新條目時被清理；0 = 不按時間清理。',
@@ -1470,6 +1527,16 @@ export const zhTW: typeof zhCN = {
       voiceActivationLabel: '語音啟用',
       voiceActivationDesc: '在本機等待喚醒詞以開始聽寫。',
       voiceActivationLocalOnly: '辨識只在此裝置上進行；待機音訊不會上傳或封存。',
+      voiceActivationHotkeyLinked: '與錄音快捷鍵聯動',
+      voiceActivationHotkeyLinkedDesc:
+        '單擊錄音快捷鍵開啟或暫停喚醒監聽，取代原錄音手勢。啟動應用程式後先暫停；暫停時關閉背景預熱，其他錄音工作不受影響。等待喚醒僅在本機處理，正式聽寫仍使用目前服務。',
+      voiceActivationDisabled: '語音喚醒已關閉',
+      voiceActivationPaused: '喚醒監聽已暫停',
+      voiceActivationPausing: '正在停止喚醒監聽…',
+      voiceActivationStarting: '正在啟動喚醒監聽…',
+      voiceActivationListening: '正在等待喚醒命令',
+      voiceActivationDictating: '正在聽寫或完成處理',
+      voiceActivationError: '無法啟動喚醒監聽，請檢查模型、麥克風權限與裝置。',
       voiceActivationMultimodalModels: '在此準備語音喚醒模型，聽寫仍使用目前的多模態服務。',
       voiceActivationModelMissing: '請先在「AI 與模型」的本機模型頁準備 Zipformer。',
       voiceActivationDownloadZipformer: '前往 AI 與模型下載 Zipformer',
@@ -1523,8 +1590,7 @@ export const zhTW: typeof zhCN = {
       validationTitle: '連線驗證',
       validationHint:
         '手動發出一次實際請求，檢查目前設定；可能消耗服務額度。儲存設定不會自動驗證。',
-      validationHintOmni:
-        '手動發出一次文字連通性請求（不含錄音）。通過不代表音訊聽寫可用，請再做一次短錄音確認。可能消耗服務額度。',
+      validationHintOmni: '手動發出文字連線請求，可能消耗伺服器額度',
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',
@@ -1577,10 +1643,11 @@ export const zhTW: typeof zhCN = {
       omniDesc: '一個模型直接接收「提示詞 + 音訊」一步輸出最終文字（實驗性管線）。',
       pipelineModeLabel: '識別管線',
       pipelineModeHint: '傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。',
+      pipelineModeDeepseek: 'DeepSeek 大统一',
       pipelineModeTraditional: '傳統模式',
       pipelineModeMultimodal: '多模態模式',
       pipelineIsolationNotice:
-        '兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即還原。',
+        '三種管線分別儲存設定。所選管線在關閉設定、關閉視窗和重新啟動應用程式後保持不變；切回即可還原原設定。',
       presets: {
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
@@ -2226,6 +2293,7 @@ export const zhTW: typeof zhCN = {
     experimentsTitle: '實驗與擴充',
     experimentsDescription: '設定實驗功能與擴充選項。',
     serviceViews: {
+      deepseek: 'DeepSeek 大统一',
       label: '服務設定分類',
       llm: '語言模型',
       asr: '語音辨識',
@@ -2233,9 +2301,10 @@ export const zhTW: typeof zhCN = {
       models: '本機模型',
       connections: '連線與擴充',
       inactive: '目前模式未使用',
+      unavailable: '無法使用',
       inactiveDetail: '此頁設定已保留，但目前的辨識管線不會使用。',
-      statusConfigured: '綠點：已有啟用的渠道。請求使用列表中第一個啟用的渠道。',
-      statusMissing: '紅點：還沒有啟用的渠道。',
+      statusConfigured: '已有啟用的渠道。請求使用列表中第一個啟用的渠道。',
+      statusMissing: '還沒有啟用的渠道。',
     },
     searchPlaceholder: '尋找設定分類…',
     clearSearch: '清除搜尋',
@@ -2247,6 +2316,8 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInput: '設定即時原文在輸入框中的顯示。',
       experiments: '設定實驗功能與擴充選項。',
       customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',
@@ -2519,6 +2590,10 @@ export const zhTW: typeof zhCN = {
     activePill: '目前使用',
     setDefault: '設為預設',
     downloading: '下載中',
+    cancelDownload: '取消下載',
+    cancelDownloadTitle: '取消下載 {{name}}',
+    cancellingDownload: '正在取消下載…',
+    downloadFailed: '模型下載失敗',
     startDownload: '開始下載',
     downloadNewModel: '下載新模型',
     activeModelLabel: '使用中的模型',

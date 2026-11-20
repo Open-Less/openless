@@ -16,30 +16,30 @@
         background: #fff;
         color: #18181b;
         font:
-          500 16px/1.5 system-ui,
+          500 calc(16px * var(--ol-interface-scale, 1))/1.5 system-ui,
           sans-serif;
       }
       .ol-first-frame i {
-        width: 28px;
-        height: 28px;
+        width: calc(28px * var(--ol-interface-scale, 1));
+        height: calc(28px * var(--ol-interface-scale, 1));
         border: 3px solid currentColor;
         border-right-color: transparent;
         border-radius: 9px;
         margin: auto;
       }
-      @media (prefers-color-scheme: dark) {
-        .ol-first-frame {
-          background: #18181b;
-          color: #fafafa;
-        }
-      }
       html[data-ol-theme='dark'] .ol-first-frame {
         background: #18181b;
         color: #fafafa;
       }
-      html[data-ol-initial-light] .ol-first-frame {
-        background: #fff;
-        color: #18181b;
+      @media (prefers-color-scheme: dark) {
+        html:not([data-ol-theme]) .ol-first-frame {
+          background: #18181b;
+          color: #fafafa;
+        }
+      }
+      html[data-ol-aux],
+      html[data-ol-aux] body {
+        background: transparent;
       }
       html[data-ol-aux] .ol-first-frame {
         display: none;

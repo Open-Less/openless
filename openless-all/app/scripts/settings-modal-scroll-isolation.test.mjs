@@ -13,7 +13,7 @@ function assertMatch(source, pattern, name) {
 }
 
 const floatingShellTsx = await readFile(
-  new URL('../src/components/FloatingShell.tsx', import.meta.url),
+  new URL('../src/app/shell/FloatingShell.tsx', import.meta.url),
   'utf-8',
 );
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');

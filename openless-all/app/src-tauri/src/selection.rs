@@ -64,6 +64,8 @@ pub struct SelectionContext {
 pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
+    #[cfg(target_os = "windows")]
+    windows_app: Option<String>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -342,9 +344,15 @@ fn capture_selection_source_app_hint() -> Option<String> {
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     {
-        return SelectionInsertionTarget {
-            windows: capture_windows_selection_target(),
-        };
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+        let foreground = unsafe { GetForegroundWindow() };
+        let windows = capture_windows_selection_target_for_window(foreground);
+        let windows_app = windows.map_or_else(
+            || windows_app_for_window(foreground),
+            |target| crate::activity_app_icons::app_name_for_pid(target.foreground_process_id),
+        );
+        return SelectionInsertionTarget { windows, windows_app };
     }
 
     #[cfg(target_os = "macos")]
@@ -626,6 +634,28 @@ pub(crate) fn selection_target_still_front(target: &SelectionInsertionTarget) ->
         }
     }
     true
+}
+
+/// Q&A accepts only an explicit native selection. Copy shortcuts can copy an
+/// entire editor line with no selection, so they are not evidence for this path.
+pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, SelectionInsertionTarget)
+{
+    let target = capture_selection_insertion_target();
+    #[cfg(target_os = "macos")]
+    let text = macos_ax::read_explicit_qa_text();
+    #[cfg(target_os = "windows")]
+    let text = crate::host_document::read_qa_selection();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let text: Option<String> = None;
+    let selection = text.filter(|text| !text.trim().is_empty()).map(|text| {
+        let (text, omits_middle) = stored_selection_text(text.trim());
+        SelectionContext {
+            text,
+            omits_middle,
+            source_app: current_front_app(),
+        }
+    });
+    (selection, target)
 }
 
 /// 捕获当前前台应用的选区；失败统一视为无选区。
@@ -948,12 +978,19 @@ fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
 
 #[cfg(target_os = "windows")]
 fn capture_windows_selection_target() -> Option<WindowsSelectionTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    capture_windows_selection_target_for_window(unsafe { GetForegroundWindow() })
+}
+
+#[cfg(target_os = "windows")]
+fn capture_windows_selection_target_for_window(
+    foreground: windows::Win32::Foundation::HWND,
+) -> Option<WindowsSelectionTarget> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+        GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
     unsafe {
-        let foreground = GetForegroundWindow();
         if foreground.0.is_null() {
             return None;
         }
@@ -1038,18 +1075,37 @@ mod macos_ax {
 
     const AX_ERROR_SUCCESS: AxError = 0;
 
+    #[repr(C)]
+    struct CfRange {
+        location: isize,
+        length: isize,
+    }
+
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+        fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+        fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
+        fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
         fn AXUIElementCopyAttributeValue(
             element: AxUiElementRef,
             attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> AxError;
+        fn AXUIElementCopyParameterizedAttributeValue(
+            element: AxUiElementRef,
+            attribute: CFStringRef,
+            parameter: CFTypeRef,
             value: *mut CFTypeRef,
         ) -> AxError;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
+        fn CFEqual(left: CFTypeRef, right: CFTypeRef) -> u8;
+        fn CFRetain(value: CFTypeRef) -> CFTypeRef;
+        fn CFGetTypeID(value: CFTypeRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
         fn CFRelease(cf: CFTypeRef);
         fn CFStringCreateWithCString(
             allocator: CFAllocatorRef,
@@ -1064,6 +1120,7 @@ mod macos_ax {
             encoding: u32,
         ) -> u8;
         fn CFStringGetLength(s: CFStringRef) -> isize;
+        fn CFStringGetCharacters(s: CFStringRef, range: CfRange, buffer: *mut u16);
         fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
     }
 
@@ -1120,6 +1177,158 @@ mod macos_ax {
 
             let result = cfstring_to_rust(selected);
             CFRelease(selected);
+            result
+        }
+    }
+
+    unsafe fn attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<CFTypeRef> {
+        let key = cfstring_from_static(name)?;
+        let mut value = std::ptr::null();
+        let result = AXUIElementCopyAttributeValue(element, key, &mut value);
+        CFRelease(key);
+        if result == AX_ERROR_SUCCESS && !value.is_null() {
+            Some(value)
+        } else {
+            if !value.is_null() {
+                CFRelease(value);
+            }
+            None
+        }
+    }
+    unsafe fn string_attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<String> {
+        let value = attribute(element, name)?;
+        let text = if CFGetTypeID(value) == CFStringGetTypeID() {
+            cfstring_to_rust(value)
+        } else {
+            None
+        };
+        CFRelease(value);
+        text
+    }
+    /// Web content may expose its selection through text markers on an ancestor.
+    /// This path reads selected ranges only and never falls back to document text or Copy.
+    pub fn read_explicit_qa_text() -> Option<String> {
+        read_explicit_text(None).ok().flatten()
+    }
+
+    unsafe fn selected_string(value: CFTypeRef, bounded: bool) -> Result<Option<String>, ()> {
+        if CFGetTypeID(value) != CFStringGetTypeID() {
+            return Ok(None);
+        }
+        if !bounded {
+            return Ok(cfstring_to_rust(value));
+        }
+        let length = CFStringGetLength(value);
+        if length > 8_000 {
+            return Err(());
+        }
+        if length <= 0 {
+            return Ok(None);
+        }
+        let mut units = vec![0u16; length as usize];
+        CFStringGetCharacters(value, CfRange { location: 0, length }, units.as_mut_ptr());
+        Ok(String::from_utf16(&units).ok())
+    }
+
+    pub fn read_explicit_text(expected_pid: Option<i32>) -> Result<Option<String>, ()> {
+        unsafe {
+            let system = match expected_pid {
+                Some(pid) => AXUIElementCreateApplication(pid),
+                None => AXUIElementCreateSystemWide(),
+            };
+            if system.is_null() {
+                return Ok(None);
+            }
+            let _timeout = expected_pid.map(|_| AXUIElementSetMessagingTimeout(system, 0.12));
+            let focused = attribute(system, b"AXFocusedUIElement\0");
+            let Some(focused) = focused else {
+                CFRelease(system as CFTypeRef);
+                return Ok(None);
+            };
+            let mut pid = 0;
+            if expected_pid.is_some_and(|expected| {
+                AXUIElementGetPid(focused as AxUiElementRef, &mut pid) != AX_ERROR_SUCCESS
+                    || pid != expected
+            }) || string_attribute(focused as AxUiElementRef, b"AXSubrole\0").as_deref()
+                == Some("AXSecureTextField")
+                || (expected_pid.is_some()
+                    && string_attribute(focused as AxUiElementRef, b"AXRole\0").as_deref()
+                        == Some("AXSecureTextField"))
+            {
+                CFRelease(focused);
+                CFRelease(system as CFTypeRef);
+                return Ok(None);
+            }
+            if expected_pid.is_some() {
+                CFRetain(focused);
+            }
+            let mut current = focused;
+            let mut result = Ok(None);
+            for _ in 0..8 {
+                if expected_pid.is_some_and(|expected| {
+                    AXUIElementGetPid(current as AxUiElementRef, &mut pid) != AX_ERROR_SUCCESS
+                        || pid != expected
+                }) {
+                    break;
+                }
+                if expected_pid.is_some() {
+                    let _ = AXUIElementSetMessagingTimeout(current as AxUiElementRef, 0.12);
+                }
+                if let Some(value) = attribute(current as AxUiElementRef, b"AXSelectedText\0") {
+                    result = selected_string(value, expected_pid.is_some())
+                        .map(|text| text.filter(|text| !text.trim().is_empty()));
+                    CFRelease(value);
+                    if !matches!(result, Ok(None)) {
+                        break;
+                    }
+                }
+                if let Some(range) =
+                    attribute(current as AxUiElementRef, b"AXSelectedTextMarkerRange\0")
+                {
+                    if let Some(key) = cfstring_from_static(b"AXStringForTextMarkerRange\0") {
+                        let mut value = std::ptr::null();
+                        if AXUIElementCopyParameterizedAttributeValue(
+                            current as AxUiElementRef,
+                            key,
+                            range,
+                            &mut value,
+                        ) == AX_ERROR_SUCCESS
+                            && !value.is_null()
+                        {
+                            result = selected_string(value, expected_pid.is_some())
+                                .map(|text| text.filter(|text| !text.trim().is_empty()));
+                            CFRelease(value);
+                        }
+                        CFRelease(key);
+                    }
+                    CFRelease(range);
+                    if !matches!(result, Ok(None)) {
+                        break;
+                    }
+                }
+                let Some(parent) = attribute(current as AxUiElementRef, b"AXParent\0") else {
+                    break;
+                };
+                if parent == current {
+                    CFRelease(parent);
+                    break;
+                }
+                CFRelease(current);
+                current = parent;
+            }
+            CFRelease(current);
+            if expected_pid.is_some() {
+                let same = attribute(system, b"AXFocusedUIElement\0").is_some_and(|now| {
+                    let same = CFEqual(focused, now) != 0;
+                    CFRelease(now);
+                    same
+                });
+                CFRelease(focused);
+                if !same {
+                    result = Ok(None);
+                }
+            }
+            CFRelease(system as CFTypeRef);
             result
         }
     }
@@ -1422,32 +1631,8 @@ pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_window_title(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
-
-    unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        (!title.is_empty()).then_some(title)
-    }
-}
-
-#[cfg(target_os = "windows")]
 pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
-    use windows::Win32::Foundation::HWND;
-
-    target
-        .windows
-        .as_ref()
-        .and_then(|captured| windows_window_title(HWND(captured.foreground_window as *mut _)))
+    target.windows_app.clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -1472,17 +1657,21 @@ pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option
 }
 
 #[cfg(target_os = "windows")]
+fn windows_app_for_window(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    crate::activity_app_icons::app_name_for_pid(pid)
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    // Windows has no bundle id concept; the window title is the only identity we get for free.
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return (None, None);
-        }
-        (windows_window_title(hwnd), None)
-    }
+    (windows_app_for_window(unsafe { GetForegroundWindow() }), None)
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -1490,7 +1679,7 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the window title on
+/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the executable name on
 /// Windows). For display / prompt use only; for decisions use [`current_front_app_parts`].
 pub(crate) fn current_front_app() -> Option<String> {
     match current_front_app_parts() {
@@ -1694,11 +1883,12 @@ mod tests {
     #[test]
     fn windows_requires_a_captured_target_before_contacting_the_provider() {
         assert!(!selection_insertion_target_is_captured(
-            &SelectionInsertionTarget { windows: None }
+            &SelectionInsertionTarget::default()
         ));
         assert!(selection_insertion_target_is_captured(
             &SelectionInsertionTarget {
                 windows: Some(windows_target(10)),
+                windows_app: None,
             }
         ));
     }

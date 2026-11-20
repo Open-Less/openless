@@ -6,7 +6,15 @@ const adapters = await readFile(
   'utf8',
 );
 const events = await readFile(new URL('../src-tauri/src/tauri_events.rs', import.meta.url), 'utf8');
-const capsule = await readFile(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf8');
+const capsuleFeedback = await readFile(
+  new URL('../src-tauri/src/capsule_feedback.rs', import.meta.url),
+  'utf8',
+);
+const capsule = await readFile(
+  new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
+  'utf8',
+);
+const dictationApi = await readFile(new URL('../src/api/dictation.ts', import.meta.url), 'utf8');
 const finalInsert = adapters.match(
   /async fn insert_final\([\s\S]*?(?=\n    async fn copy_fallback)/,
 )?.[0];
@@ -43,6 +51,15 @@ assert.match(
 );
 assert.match(
   events,
+  /BackendEventKind::DictationCompleted\(result\) => \{[\s\S]*?dictation_completion_payload\(\s*&result,[\s\S]*?present_core_capsule\(payload\)/,
+  'the completion event must present the payload produced by the capsule feedback policy',
+);
+const completionPayload = capsuleFeedback.match(
+  /fn dictation_completion_payload\([\s\S]*?(?=\n#\[derive)/,
+)?.[0];
+assert.ok(completionPayload, 'the capsule feedback policy must build a completion payload');
+assert.match(
+  completionPayload,
   /DictationInsertStatus::CopiedFallback => "已复制，请手动粘贴"/,
   'copied output must not be reported as an insertion failure',
 );
@@ -52,13 +69,18 @@ assert.match(
   'the fallback event must reach the native card',
 );
 assert.match(
+  dictationApi,
+  /fallback:[\s\S]*?events\.listen\('insert:fallback', onPayload, 'window'\)/,
+  'fallback events must remain bound to the current capsule window',
+);
+assert.match(
   capsule,
-  /subscribe<InsertFallbackCardPayload \| null>\([\s\S]*?'insert:fallback'[\s\S]*?setInsertFallback\(payload \?\? null\)/,
+  /events\.fallback\([\s\S]*?setInsertFallback\(payload \?\? null\)/,
   'the capsule must consume the fallback card payload',
 );
 assert.match(
   capsule,
-  /return <InsertFallbackCard payload=\{insertFallback\} \/>/,
+  /return <InsertFallbackCard key=\{insertFallback.presentationId\} payload=\{insertFallback\} \/>/,
   'the copied text must remain visible in the fallback card',
 );
 

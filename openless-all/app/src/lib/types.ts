@@ -31,7 +31,7 @@ export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 /** Recognition pipeline mode (issue #902): traditional = two-stage ASR + LLM;
  *  multimodal = one multimodal model turns audio + prompt into final text in a single step.
  *  The two configurations are fully isolated in the credentials vault; runtime reads only the current mode. */
-export type PipelineMode = 'traditional' | 'multimodal';
+export type PipelineMode = 'traditional' | 'multimodal' | 'deepseek';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
@@ -124,6 +124,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  observationId?: number;
   expiresAtMs: number;
   id: string;
   pattern: string;
@@ -400,6 +401,7 @@ export interface UserPreferences {
   /** Desktop resource policy, applied after restarting the application. */
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
+  voiceActivationHotkeyLinked: boolean;
   voiceActivationWakeEnabled: boolean;
   voiceActivationFinishEnabled: boolean;
   voiceActivationWakePhrase: string;
@@ -443,7 +445,7 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** Legacy compat: `true` is equivalent to `windowsInsertionMode === 'sendInput'`. */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows: whether to show OpenLess in the system keyboard list (Win+Space) for non-TSF insertion. */
+  /** Legacy wire compatibility only; the Windows speech TIP never appears in Win+Space. */
   windowsShowOpenlessInKeyboardList: boolean;
   /** User's working languages (multi-select, native names); injected as a premise at the head of LLM polish/translate prompts. */
   workingLanguages: string[];
@@ -456,6 +458,7 @@ export interface UserPreferences {
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
   qaCompanionKey: string;
+  qaShortcutBehavior?: QaShortcutBehavior;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
   /** Selection polish hotkey. null = disabled. */
@@ -580,6 +583,7 @@ export interface UserPreferences {
     observationSeconds: number;
     suggestionSeconds: number;
     maxPhraseChars: number;
+    suggestionPosition: 'nearInput' | 'bottomRight';
   };
   /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;
@@ -698,7 +702,10 @@ export interface QaActivity {
   toolName?: string;
 }
 
+export type QaShortcutBehavior = 'record' | 'open' | 'draft';
+
 export interface QaStatePayload {
+  panelOpen?: boolean;
   activity?: QaActivity;
   kind: QaStateKind;
   /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */
@@ -792,6 +799,7 @@ export type CapsuleState =
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
+  qa?: boolean;
   /** Session generation that owns this capsule frame. */
   sessionId?: string | null;
   state: CapsuleState;

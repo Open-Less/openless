@@ -5,6 +5,8 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { zhCN } from './zh-CN';
+import { withDeletionMessages } from './deletionMessages';
+import { modelDownloadMessages } from './modelDownloads';
 import { setRemoteLocale } from '../lib/ipc';
 
 export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'] as const;
@@ -52,10 +54,14 @@ const localeLoaders: Record<Exclude<SupportedLocale, 'zh-CN'>, () => Promise<typ
   de: () => import('./de').then((module) => module.de),
 };
 
+function localeResources(messages: typeof zhCN, lng: SupportedLocale) {
+  return { ...withDeletionMessages(messages, lng), modelDownloads: modelDownloadMessages[lng] };
+}
+
 async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
   if (lng === 'zh-CN' || i18n.hasResourceBundle(lng, 'translation')) return;
   try {
-    i18n.addResourceBundle(lng, 'translation', await localeLoaders[lng]());
+    i18n.addResourceBundle(lng, 'translation', localeResources(await localeLoaders[lng](), lng));
   } catch (e) {
     console.warn('[i18n] load locale failed, staying on zh-CN fallback:', lng, e);
   }
@@ -63,7 +69,7 @@ async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
 
 const initialReady = i18n.use(initReactI18next).init({
   // Simplified Chinese is the canonical fallback; the selected chunk loads before rendering.
-  resources: { 'zh-CN': { translation: zhCN } },
+  resources: { 'zh-CN': { translation: localeResources(zhCN, 'zh-CN') } },
   lng: initialLng,
   fallbackLng: 'zh-CN',
   supportedLngs: SUPPORTED_LOCALES as unknown as string[],

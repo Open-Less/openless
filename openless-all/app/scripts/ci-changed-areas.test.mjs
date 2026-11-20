@@ -168,7 +168,10 @@ try {
   // The rendered bundle is embedded by every shell that paints it; the Linux
   // host draws a native egui UI and never reads `dist/`, and the Android job only
   // compiles Rust, so neither is in scope.
-  commit({ 'openless-all/app/src/pages/Style.tsx': 'export const x = 1;\n' }, 'frontend only');
+  commit(
+    { 'openless-all/app/src/features/style-packs/Style.tsx': 'export const x = 1;\n' },
+    'frontend only',
+  );
   expect('frontend only', {
     tauri: 'true',
     msrv: 'false',
@@ -328,7 +331,9 @@ check('Linux CI is paused', workflow.includes('\n  linux-egui-package:'), false)
 // existing stable runner; Linux tests and packaging remain parallel.
 check(
   'windows contracts reuse the stable job',
-  /  cross-platform:[\s\S]*?name: Run the platform-sensitive contracts\n[\s\S]*?if: runner\.os == 'Windows'\n\s+timeout-minutes: 10\n\s+run: node scripts\/frontend-test-runner\.mjs --platform-only windows/.test(workflow),
+  /  cross-platform:[\s\S]*?name: Run the platform-sensitive contracts\n[\s\S]*?if: runner\.os == 'Windows'\n\s+timeout-minutes: 10\n\s+run: node scripts\/frontend-test-runner\.mjs --platform-only windows/.test(
+    workflow,
+  ),
   true,
 );
 check('no duplicate Windows frontend VM', workflow.includes('\n  windows-frontend:'), false);
@@ -368,7 +373,10 @@ for (const [label, changed] of [
   ],
   [
     'missing Windows contracts in the stable job',
-    workflow.replace('node scripts/frontend-test-runner.mjs --platform-only windows', 'echo missing-windows-contracts'),
+    workflow.replace(
+      'node scripts/frontend-test-runner.mjs --platform-only windows',
+      'echo missing-windows-contracts',
+    ),
   ],
 ]) {
   check(label + ': mutation applied', changed !== workflow, true);

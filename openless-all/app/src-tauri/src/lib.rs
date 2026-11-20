@@ -24,6 +24,8 @@ compile_error!(
 );
 
 mod android;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod activity_app_icons;
 mod asr;
 mod audio_mute;
 #[cfg(test)]
@@ -49,7 +51,6 @@ mod native_audio_cue;
 #[cfg(not(mobile))]
 mod native_capsule;
 mod qa_adapter;
-mod recording_companion;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // 仅桌面端。详见 issue #470。
@@ -87,10 +88,7 @@ mod permissions;
 mod persistence;
 mod polish;
 #[cfg(not(mobile))]
-mod qa_hotkey;
-#[cfg(mobile)]
-#[path = "mobile_stubs/qa_hotkey.rs"]
-mod qa_hotkey;
+mod ask_window;
 mod recorder;
 #[cfg(not(mobile))]
 mod remote_server;
@@ -141,44 +139,14 @@ const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
 
-/// Positions the QA window at the bottom-center of the screen on first show only, so the
-/// user-dragged position survives hide → show cycles. See issue #118 v2.
-static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
-/// 「润色结果」模式的事件名。该模式复用选区助手（qa）面板，不再有独立预览窗。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) const SELECTION_POLISH_PREVIEW_SHOWN: &str = "selection-polish-preview:shown";
-/// 让面板自行决定退出「润色结果」模式（它可能正处在提问对话中）。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) const SELECTION_POLISH_PREVIEW_HIDE: &str = "selection-polish-preview:hide";
-/// 是否处于「润色结果」模式。`get_selection_polish_preview` 只在它为 true 时
-/// 返回负载：面板懒创建后挂载时也会拉一次，不能把残留的快照当成新请求。
-static SELECTION_POLISH_PREVIEW_PENDING: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn selection_polish_preview_pending() -> bool {
-    SELECTION_POLISH_PREVIEW_PENDING.load(Ordering::SeqCst)
-}
-
-pub(crate) fn clear_selection_polish_preview_pending() {
-    SELECTION_POLISH_PREVIEW_PENDING.store(false, Ordering::SeqCst);
-}
-
 #[cfg(target_os = "macos")]
 static LESS_COMPUTER_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
 
 /// 聊天面板退场动画的世代计数：hide 先发 `chat-panel:closing` 让前端播 220ms
 /// 退场动画、240ms 后才真正 hide；期间再次 show 会推进世代，作废挂起的 hide。
-static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-static QA_WINDOW_CREATE_LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> =
-    std::sync::OnceLock::new();
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn qa_window_create_lock() -> &'static parking_lot::Mutex<()> {
-    QA_WINDOW_CREATE_LOCK.get_or_init(|| parking_lot::Mutex::new(()))
-}
 
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
@@ -218,6 +186,10 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(not(mobile))]
+    if let Some(code) = ask_window::attachment_files::run_pdf_worker_if_requested() {
+        std::process::exit(code);
+    }
     issue1266_debug::initialize();
     tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
@@ -268,6 +240,8 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            #[cfg(target_os = "macos")]
+            main_window_frame_ready,
             get_capsule_auxiliary_snapshot,
             commands::get_capsule_snapshot,
             commands::get_dictation_translation_target,
@@ -275,6 +249,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_capsule_language_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
+            commands::get_voice_activation_state,
             commands::update_setting_fields,
             commands::get_default_style_system_prompts,
             commands::set_settings,
@@ -316,6 +291,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::delete_history_entry,
             commands::clear_history,
             commands::get_activity_stats,
+            commands::get_activity_apps,
+            commands::get_activity_app_icons,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -338,6 +315,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::cloud_sync_restore,
             commands::cloud_sync_delete,
             commands::cloud_sync_e2ee_status,
+            commands::cloud_sync_e2ee_refresh_backup_metadata,
             commands::cloud_sync_e2ee_claim_setup_prompt,
             commands::cloud_sync_e2ee_prepare_enable,
             commands::cloud_sync_e2ee_create,
@@ -388,6 +366,27 @@ macro_rules! app_invoke_handler_desktop {
             commands::cancel_voice_edit_session,
             commands::get_voice_edit_state,
             commands::voice_edit_window_open,
+            ask_window::ask_window_open,
+            ask_window::chat::ask_current,
+            ask_window::chat::ask_new_conversation,
+            ask_window::chat::ask_end_conversation,
+            ask_window::chat::ask_snapshot,
+            ask_window::chat::ask_events,
+            ask_window::chat::ask_submit,
+            ask_window::chat::ask_cancel,
+            ask_window::chat::ask_add_attachment,
+            ask_window::chat::ask_add_dropped_image,
+            ask_window::chat::ask_remove_attachment,
+            ask_window::chat::ask_get_attachment_preview,
+            ask_window::chat::ask_open_source,
+            ask_window::chat::ask_window_hide,
+            ask_window::chat::ask_expand_chat,
+            ask_window::chat::ask_sync_editor,
+            ask_window::chat::ask_ack_voice,
+            ask_window::chat::ask_get_context_permission,
+            ask_window::chat::ask_set_context_permission,
+            ask_window::chat::ask_get_entry_settings,
+            ask_window::chat::ask_set_entry_settings,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
             #[cfg(target_os = "macos")]
@@ -397,12 +396,6 @@ macro_rules! app_invoke_handler_desktop {
             commands::inject_hotkey_click_for_dev,
             #[cfg(debug_assertions)]
             commands::run_selection_polish_for_dev,
-            #[cfg(not(mobile))]
-            commands::get_selection_polish_preview,
-            #[cfg(not(mobile))]
-            commands::confirm_selection_polish_preview,
-            #[cfg(not(mobile))]
-            commands::cancel_selection_polish_preview,
             commands::repolish,
             commands::list_style_packs,
             commands::create_style_pack_from_template,
@@ -437,8 +430,6 @@ macro_rules! app_invoke_handler_desktop {
             commands::reorder_channels,
             commands::record_channel_test,
             commands::set_active_omni_provider,
-            commands::get_qa_hotkey_label,
-            commands::set_qa_hotkey,
             commands::set_selection_polish_hotkey,
             #[cfg(all(not(mobile), target_os = "windows"))]
             commands::get_selection_voice_intent_prompt,
@@ -460,12 +451,6 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_open_app_hotkey,
             commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
-            commands::qa_window_dismiss,
-            commands::qa_window_set_expanded,
-            commands::qa_get_snapshot,
-            commands::qa_toggle_recording,
-            commands::qa_submit_text,
-            commands::qa_set_edit_instruction_mode,
             commands::chat_panel_focus_keyboard,
             commands::validate_combo_hotkey,
             commands::set_combo_hotkey,
@@ -570,6 +555,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_audio_effects_status,
             $crate::commands::set_android_audio_monitoring,
             $crate::commands::get_settings_snapshot,
+            $crate::commands::get_voice_activation_state,
             $crate::commands::update_setting_fields,
             $crate::commands::get_default_style_system_prompts,
             $crate::commands::set_settings,
@@ -618,6 +604,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::delete_history_entry,
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
+            $crate::commands::get_activity_apps,
+            $crate::commands::get_activity_app_icons,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -640,6 +628,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::cloud_sync_restore,
             $crate::commands::cloud_sync_delete,
             $crate::commands::cloud_sync_e2ee_status,
+            $crate::commands::cloud_sync_e2ee_refresh_backup_metadata,
             $crate::commands::cloud_sync_e2ee_claim_setup_prompt,
             $crate::commands::cloud_sync_e2ee_prepare_enable,
             $crate::commands::cloud_sync_e2ee_create,
@@ -692,12 +681,6 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_voice_edit_state,
             $crate::commands::voice_edit_window_open,
             $crate::commands::voice_edit_window_close,
-            $crate::commands::qa_window_dismiss,
-            $crate::commands::qa_window_set_expanded,
-            $crate::commands::qa_get_snapshot,
-            $crate::commands::qa_toggle_recording,
-            $crate::commands::qa_submit_text,
-            $crate::commands::qa_set_edit_instruction_mode,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
             $crate::commands::create_style_pack_from_template,
@@ -901,6 +884,19 @@ fn run_desktop() {
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
             log::info!("=== OpenLess 启动 ===");
+            let ask = Arc::new(ask_window::chat::AskHost::new(app.handle(), core_backend.clone()));
+            let desktop = ask_window::Desktop::install(
+                app.handle().clone(),
+                core_backend.clone(),
+                Arc::new(ask_window::chat::DesktopPorts {
+                    app: app.handle().clone(),
+                    ask: ask.clone(),
+                    coordinator: coordinator.clone(),
+                }),
+            );
+            app.manage(ask);
+            app.manage(desktop);
+            ask_window::chat::AskHost::bind_feed(app.handle().clone());
 
             // Position the capsule at the bottom-center of the screen and hide it at
             // startup; the coordinator shows it on demand. Same semantics as Swift
@@ -946,18 +942,10 @@ fn run_desktop() {
                 let _ = capsule.hide();
             }
 
-            // QA / Less Computer windows are lazily created (not eagerly declared in
-            // tauri.conf.json): they are built on first use (ensure_qa_window /
-            // ensure_less_computer_window), so there is no extra WebKit process while idle
-            // — saving 3 resident webviews. Positioning and the QA drag fix are applied in
-            // the creation/show paths.
+            // Auxiliary windows are created only on demand.
 
-            // Main-window material: Mica on Windows. macOS deliberately applies no
-            // NSVisualEffectView: the React shell (WindowChrome, --ol-window-bg) paints a fully
-            // opaque surface over the whole content view, so a HudWindow/Active effect view would
-            // be invisible yet keep a live behind-window blur compositing on every frame. The
-            // native title bar style (Overlay + traffic lights) comes from tauri.conf.json at
-            // window creation; do not call set_decorations here (tao no-ops it when unchanged).
+            // Windows keeps Mica. macOS uses transient launch glass before the
+            // opaque React shell, not a persistent behind-window effect.
             //
             // decorations is decided per-platform at runtime: macOS keeps true for the
             // system traffic lights; Windows disables native chrome so the React
@@ -997,6 +985,9 @@ fn run_desktop() {
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
+                    #[cfg(target_os = "macos")]
+                    desktop_resources::request_main_presentation(&main, false);
+                    #[cfg(not(target_os = "macos"))]
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }
@@ -1098,7 +1089,19 @@ fn run_desktop() {
 
             Ok(())
         })
-        .invoke_handler(app_invoke_handler_desktop!())
+        .invoke_handler({
+            let dispatch: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = app_invoke_handler_desktop!();
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                if !ask_window::chat::restricted_command_allowed(
+                    invoke.message.webview().label(),
+                    invoke.message.command(),
+                ) {
+                    invoke.resolver.reject("This command is not available in Ask.");
+                    return true;
+                }
+                dispatch(invoke)
+            }
+        })
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
@@ -1137,12 +1140,12 @@ fn run_desktop() {
                 }
             }
             RunEvent::Exit => {
+                stop_ask_desktop(app);
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.tauri_host().stop_native_capsule();
                 coordinator.stop_hotkey_listener();
-                coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
                 coordinator.stop_coding_agent_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
@@ -1176,7 +1179,6 @@ fn observe_issue1266_lifecycle(event: &RunEvent) {
             };
             let kind = match label.as_str() {
                 "main" => Kind::MainWindow,
-                "qa" => Kind::QaWindow,
                 "capsule" => Kind::CapsuleWindow,
                 "less-computer" => Kind::LessWindow,
                 _ => Kind::OtherWindow,
@@ -1852,6 +1854,8 @@ fn restart_app(app: AppHandle) {
     if let Some(coordinator) = app.try_state::<Arc<coordinator::Coordinator>>() {
         coordinator.tauri_host().stop_native_capsule();
     }
+    #[cfg(not(mobile))]
+    stop_ask_desktop(&app);
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_for_beta_restart();
@@ -1886,10 +1890,22 @@ fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 #[tauri::command]
 fn reset_accessibility_permission_and_restart_app(app: AppHandle) {
+    #[cfg(not(mobile))]
+    stop_ask_desktop(&app);
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_service_for_restart("Accessibility", "accessibility recovery");
     app.restart();
+}
+
+#[cfg(not(mobile))]
+fn stop_ask_desktop(app: &AppHandle) {
+    if let Some(desktop) = app.try_state::<Arc<ask_window::Desktop>>() {
+        desktop.shutdown();
+    }
+    if let Some(ask) = app.try_state::<Arc<ask_window::chat::AskHost>>() {
+        ask.stop();
+    }
 }
 
 fn prepare_for_restart() {
@@ -2094,13 +2110,28 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     };
     #[cfg(mobile)]
     let main = app.get_webview_window("main");
-    if let Some(w) = main {
-        let _ = w.show();
-        #[cfg(not(mobile))]
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+    #[cfg(target_os = "macos")]
+    if let Some(window) = main {
+        desktop_resources::request_main_presentation(&window, true);
     }
-    activate_app(app);
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(w) = main {
+            let _ = w.show();
+            #[cfg(not(mobile))]
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+        activate_app(app);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn main_window_frame_ready(window: tauri::WebviewWindow) {
+    if window.label() == "main" {
+        desktop_resources::main_frame_ready(&window);
+    }
 }
 
 /// Routes a CLI intent to the shared Core or the QA host still owned by Tauri. Two entry
@@ -2110,7 +2141,6 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 /// Async actions spawn on the Tauri runtime and never block the callback thread:
 /// - ToggleDictation enters the shared Core facade; CancelDictation releases the Less Host
 ///   capture first, then cancels Core
-/// - ToggleQa forwards to handle_qa_hotkey_pressed (same semantics as pressing the QA hotkey)
 fn dispatch_cli_intent<R: Runtime>(app: &AppHandle<R>, intent: cli::CliIntent) {
     match intent {
         cli::CliIntent::ToggleDictation => {
@@ -2148,20 +2178,7 @@ fn dispatch_cli_intent<R: Runtime>(app: &AppHandle<R>, intent: cli::CliIntent) {
                 }
             });
         }
-        cli::CliIntent::ToggleQa => {
-            let coordinator = app
-                .try_state::<Arc<coordinator::Coordinator>>()
-                .map(|state| Arc::clone(&*state));
-            let Some(coordinator) = coordinator else {
-                log::warn!("[cli] coordinator not yet managed; dropping QA intent");
-                return;
-            };
-            let coord = Arc::clone(&coordinator);
-            tauri::async_runtime::spawn(async move {
-                log::info!("[cli] toggle-qa: dispatching to qa hotkey handler");
-                coord.cli_toggle_qa_panel().await;
-            });
-        }
+        cli::CliIntent::ToggleQa => log::info!("[cli] Ask is unavailable"),
     }
 }
 
@@ -2176,9 +2193,11 @@ pub(crate) fn request_microphone_from_foreground<R: Runtime>(
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(not(mobile))]
     {
-        // The main editor is an infrequent surface. Destroy its WebView when the
-        // user closes it so WebKit can release its content process and memory;
-        // tray/menu actions recreate it through ensure_main on the next open.
+        // Let a quick macOS reopen reuse the page. Once the grace expires, release
+        // the WebView's content and let ensure_main recreate it on the next open.
+        #[cfg(target_os = "macos")]
+        desktop_resources::hide_main_with_grace(app);
+        #[cfg(not(target_os = "macos"))]
         desktop_resources::close_main(app);
         let app_for_preview = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -2245,7 +2264,14 @@ fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
 #[cfg(target_os = "macos")]
 pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) {
     let main = app.get_webview_window("main");
+    let app_handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        if app_handle
+            .try_state::<Arc<ask_window::Desktop>>()
+            .is_some_and(|desktop| desktop.is_focused())
+        {
+            return;
+        }
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject, Bool};
         unsafe {
@@ -2301,16 +2327,6 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
-
-/// QA records in a compact bottom-anchored capsule, then reveals a wide result card.
-const QA_WINDOW_WIDTH: f64 = 480.0;
-const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 760.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 416.0;
-/// Gap between the capsule and the QA window; matches the design spec.
-const QA_WINDOW_BOTTOM_INSET: f64 = 8.0;
-const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
-/// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct LogicalMonitorFrame {
@@ -2830,220 +2846,7 @@ fn clamp_to_monitor(
     (clamped_x, clamped_y)
 }
 
-/// Places the QA window at the bottom-center of the screen just above the capsule. Called
-/// once during Tauri startup and before each show, so positions stay correct after the user
-/// switches monitors.
-fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
-    let Some((frame, scale)) = chat_window_work_area(window, true)? else {
-        return Ok(());
-    };
-    let (x, y) = bottom_center_position(
-        frame,
-        QA_WINDOW_WIDTH,
-        QA_WINDOW_HEIGHT,
-        QA_WINDOW_BOTTOM_INSET,
-    );
-    window.set_position(tauri::PhysicalPosition::new(
-        (x * scale).round() as i32,
-        (y * scale).round() as i32,
-    ))?;
-    window.set_size(tauri::PhysicalSize::new(
-        (QA_WINDOW_WIDTH * scale).round() as u32,
-        (QA_WINDOW_HEIGHT * scale).round() as u32,
-    ))?;
-    Ok(())
-}
-
-// Preserve a dragged window's centre and baseline; repeated result events must not drift.
-fn qa_resize_origin(
-    x: f64,
-    y: f64,
-    old_width: f64,
-    old_height: f64,
-    width: f64,
-    height: f64,
-    was_expanded: bool,
-    expanded: bool,
-) -> (f64, f64) {
-    let lift = if expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 }
-        - if was_expanded {
-            QA_RESULT_BOTTOM_LIFT
-        } else {
-            0.0
-        };
-    (
-        x + (old_width - width) / 2.0,
-        y + old_height - height - lift,
-    )
-}
-
-/// Called on the native main thread by the restricted QA command. The compact
-/// state has a genuinely small native frame, so hidden content cannot eat clicks.
-pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    expanded: bool,
-) -> Result<(), String> {
-    let window = app
-        .get_webview_window("qa")
-        .ok_or_else(|| "qa_window_unavailable".to_string())?;
-    let area = chat_window_work_area(&window, false).map_err(|_| "qa_geometry_unavailable")?;
-    let scale = area.map(|(_, scale)| scale).unwrap_or(
-        window
-            .scale_factor()
-            .map_err(|_| "qa_geometry_unavailable")?,
-    );
-    let position = window
-        .inner_position()
-        .map_err(|_| "qa_geometry_unavailable")?
-        .to_logical::<f64>(scale);
-    let current_size = window
-        .inner_size()
-        .map_err(|_| "qa_geometry_unavailable")?
-        .to_logical::<f64>(scale);
-    let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
-    let mut width = if expanded {
-        QA_WINDOW_EXPANDED_WIDTH
-    } else {
-        QA_WINDOW_WIDTH
-    };
-    let mut height = if expanded {
-        QA_WINDOW_EXPANDED_HEIGHT
-    } else {
-        QA_WINDOW_HEIGHT
-    };
-    if let Some((frame, _)) = area {
-        width = width.min((frame.width - 32.0).max(240.0));
-        height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
-    }
-    let (mut x, mut y) = qa_resize_origin(
-        position.x,
-        position.y,
-        current_size.width,
-        current_size.height,
-        width,
-        height,
-        was_expanded,
-        expanded,
-    );
-    if let Some((frame, _)) = area {
-        x = x.clamp(
-            frame.x + 16.0,
-            (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
-        );
-        y = y.clamp(
-            frame.y + 32.0,
-            (frame.y + frame.height - height - QA_WINDOW_BOTTOM_INSET).max(frame.y + 32.0),
-        );
-    }
-    window
-        .set_position(tauri::PhysicalPosition::new(
-            (x * scale).round() as i32,
-            (y * scale).round() as i32,
-        ))
-        .map_err(|_| "qa_position_failed")?;
-    window
-        .set_size(tauri::PhysicalSize::new(
-            (width * scale).round() as u32,
-            (height * scale).round() as u32,
-        ))
-        .map_err(|_| "qa_resize_failed")?;
-    Ok(())
-}
-
-/// Shows the QA window and emits a state event (the frontend subscribes to `qa:state`).
-/// `content_kind` is an opaque string ("loading" / "answer" / "idle", etc.); the frontend
-/// React view decides which to render. **Never** steals focus from the frontmost app
-/// (keeps the Cmd+C fallback able to read the selection from the original app).
-pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
-    #[cfg(target_os = "android")]
-    {
-        match crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::open_qa_host(env, context)
-        }) {
-            Ok(()) => log::info!("[qa] android requested WarmupActivity foreground for QA"),
-            Err(error) => log::warn!("[qa] android failed to foreground WarmupActivity: {error}"),
-        }
-        log::info!("[qa] android publish qa:state to main kind={content_kind}");
-        tauri_events::publish(
-            app,
-            None,
-            openless_core::BackendEventKind::QaState(openless_core::QaStateEvent::simple(
-                openless_core::QaStateKind::Idle,
-            )),
-        );
-        return;
-    }
-
-    let Some(window) = ensure_qa_window(app) else {
-        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
-        return;
-    };
-    // Center only on first show; afterwards keep the user-dragged position.
-    if !QA_WINDOW_POSITIONED.load(Ordering::Relaxed) {
-        if let Err(e) = position_qa_window(&window) {
-            log::warn!("[qa] position before first show failed: {e}");
-        }
-        QA_WINDOW_POSITIONED.store(true, Ordering::Relaxed);
-    }
-    // macOS: don't use window.show() (it does makeKeyAndOrderFront, pushing OpenLess to
-    // frontmost; the subsequent capture_selection AX read / Cmd+C fallback would then run
-    // against OpenLess's own webview → can't grab the original app's selection). Use
-    // orderFrontRegardless so the window is visible but **not** key; the user's app stays
-    // frontmost and AX can still read the selection. Standard Spotlight / Raycast approach.
-    //
-    // ⚠️ Critical: every NSWindow operation must run on the main thread; macOS 26 asserts
-    // this hard (violations SIGTRAP immediately). show_qa_window is often called from a
-    // tokio worker (qa_hotkey_bridge_loop), so raw ObjC msg_send must be dispatched via
-    // `app.run_on_main_thread`. See issue #118 v2.
-    #[cfg(target_os = "macos")]
-    {
-        let window_clone = window.clone();
-        let _ = app.run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            match window_clone.ns_window() {
-                Ok(handle) => {
-                    let ns = handle as *mut AnyObject;
-                    if ns.is_null() {
-                        log::warn!("[qa] ns_window null; falling back to window.show()");
-                        let _ = window_clone.show();
-                    } else {
-                        unsafe {
-                            let _: () = msg_send![ns, orderFrontRegardless];
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[qa] ns_window unavailable: {e}; falling back to window.show()");
-                    let _ = window_clone.show();
-                }
-            }
-        });
-    }
-    #[cfg(target_os = "windows")]
-    if !show_qa_window_no_activate(&window) {
-        log::warn!("[qa] show_no_activate failed; falling back to window.show()");
-        if let Err(e) = window.show() {
-            log::warn!("[qa] show fallback failed: {e}");
-        }
-    }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    if let Err(e) = window.show() {
-        log::warn!("[qa] show failed: {e}");
-    }
-    // Cancel the pending exit-hide (fast close-open) and replay the entrance animation.
-    QA_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let _ = app.emit_to("qa", "chat-panel:shown", serde_json::json!({}));
-    tauri_events::publish(
-        app,
-        None,
-        openless_core::BackendEventKind::QaState(openless_core::QaStateEvent::simple(
-            openless_core::QaStateKind::Idle,
-        )),
-    );
-}
-
-/// Converts the chat-panel floating windows (qa / less-computer) into non-activating
+/// Converts the floating preview and Less Computer windows into non-activating
 /// NSPanels (macOS; same technique as the capsule).
 ///
 /// Goal: the panel can become key window **without OpenLess being activated** (Spotlight
@@ -3128,67 +2931,6 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
             log::error!("[{tag}] drag setup raised ObjC exception (caught, drag disabled): {e:?}")
         }
     }
-}
-
-/// Lazily creates the QA window: it used to be created eagerly in tauri.conf.json (keeping
-/// a resident WebKit process); now it is built on first show — nonexistent while idle →
-/// saves one resident webview. Config matches the old tauri.conf qa block item by item
-/// ("center": false ⇒ **don't** call .center(); "focus": false ⇒ focused(false)).
-/// Key: make_qa_window_draggable_macos used to run once at startup; it must be re-applied
-/// at creation time here, otherwise the lazily created QA window can't be dragged on macOS.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
-    // ShowQa can arrive concurrently from independent Core workflows. Keep the existing-window
-    // lookup and first build in one critical section so two callers cannot create two qa HWNDs.
-    let _creation_guard = qa_window_create_lock().lock();
-    if let Some(w) = app.get_webview_window("qa") {
-        return Some(w);
-    }
-    let built =
-        WebviewWindowBuilder::new(app, "qa", WebviewUrl::App("index.html?window=qa".into()))
-            .title("OpenLess QA")
-            .inner_size(QA_WINDOW_WIDTH, QA_WINDOW_HEIGHT)
-            .decorations(false)
-            .transparent(true)
-            .shadow(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .focused(false)
-            .visible(false)
-            .accept_first_mouse(true)
-            .build();
-    match built {
-        Ok(w) => {
-            // ⚠️ NSWindow operations must run on the main thread (macOS 26 hard
-            // requirement). ensure_qa_window is often entered from a tokio worker (hotkey
-            // bridge loop); calling setMovable directly on the worker thread makes AppKit
-            // throw an NSException from _postWindowNeedsToResetDragMargins and crash the
-            // whole app (root cause of four same-stack crashes on 2026-07-03) — dispatch
-            // back to the main thread.
-            #[cfg(target_os = "macos")]
-            {
-                let w_clone = w.clone();
-                let _ = app.run_on_main_thread(move || {
-                    make_chat_window_panel_macos(&w_clone, "qa");
-                    make_chat_window_draggable_macos(&w_clone, "qa");
-                });
-            }
-            Some(w)
-        }
-        Err(e) => {
-            log::warn!("[qa] lazy window create failed: {e}");
-            None
-        }
-    }
-}
-
-// Mobile routes QA to the main window (show_qa_window returns early on Android); Android's
-// WebviewWindowBuilder lacks the desktop methods, so this stub just returns the existing
-// window (compiles, but unreachable at runtime).
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
-    app.get_webview_window("qa")
 }
 
 /// Lazily creates the Less Computer window. On macOS it is additionally converted into a
@@ -3300,42 +3042,6 @@ fn hide_chat_window_animated<R: tauri::Runtime>(
             let _ = window.hide();
         }
     });
-}
-
-/// Hides the QA window. Shared by commands::qa_window_dismiss and coordinator session teardown.
-pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    #[cfg(target_os = "android")]
-    {
-        let _ = app.emit_to("main", "qa:dismiss", serde_json::json!({}));
-        return;
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
-}
-
-/// 「润色结果」不再有独立窗口：复用选区助手（qa）面板切到润色模式。核心在
-/// 「预览确认」输出模式下照旧只发 `HostAction::ShowSelectionPreview`。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    SELECTION_POLISH_PREVIEW_PENDING.store(true, Ordering::SeqCst);
-    show_qa_window(app, "polish-preview");
-    // 面板可能是本次才懒创建（刚挂载，订阅还没装上）——它在挂载时也会自己
-    // 拉一次负载（见 `get_selection_polish_preview` 的 pending 门禁）。
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, ());
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
-
-/// 退出「润色结果」模式。是否顺带关掉面板交给前端：面板可能正处在提问对话中，
-/// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
-pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    clear_selection_polish_preview_pending();
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let _ = app;
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
 }
 
 const VOICE_EDIT_WINDOW_WIDTH: f64 = 480.0;
@@ -3695,49 +3401,11 @@ pub(crate) fn hide_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn hide_less_computer_glow<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
-/// Hands focus back to the QA window after the selection is captured (second half of the
-/// Windows focus-dance). Called by begin_qa_session when capture_selection finishes;
-/// no-op on non-Windows. issue #466.
-#[cfg(target_os = "windows")]
-pub(crate) fn refocus_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("qa") {
-        let _ = show_qa_window_no_activate(&window);
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn refocus_qa_window<R: tauri::Runtime>(_app: &AppHandle<R>) {}
-
-#[cfg(target_os = "windows")]
-fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
-    // The name is historical; the actual behavior is now "show + focus" — the QA webview
-    // must really get keyboard focus so ESC reaches the React listener and the X button's
-    // first click isn't swallowed by the OS as an activation click.
-    //
-    // Why Tauri's show() / set_focus() instead of Win32 SetForegroundWindow + SetFocus:
-    //   - SetFocus(host_hwnd) alone doesn't guarantee the WebView2 child receives keyboard
-    //     events; WebView2 child windows have their own focus model. Tauri's internal
-    //     webview-specific path actually delivers focus to the webview.
-    //   - SetForegroundWindow can be rejected under Win11 focus-stealing prevention.
-    //     Tauri 2.x has fallbacks in its cross-platform abstraction (temporary SPI
-    //     adjustment / input queue attach).
-    //
-    // Trade-off vs issue #164 "QA window must not steal the frontmost app's focus": the
-    // window briefly becomes foreground when it appears, but begin_qa_session's focus-dance
-    // temporarily returns focus to the user's original app before capturing the selection
-    // (see the same-issue comment in coordinator.rs), and refocus_qa_window takes it back
-    // afterwards — the selection path still works; issue #164 being briefly violated for
-    // "the frame the QA window appears" is the cost of the #466 fix.
-    if window.show().is_err() {
-        return false;
-    }
-    let _ = window.set_focus();
-    true
-}
-
 /// Pure multi-monitor capsule helpers (tests run on every CI host). Window creation
 /// inside the module stays `cfg(windows)`.
 mod capsule_mirrors;
+mod capsule_feedback;
+mod vocab_card_placement;
 
 /// Init and card-return paths use the default stage; the recording display path passes the
 /// current style explicitly.
@@ -4258,21 +3926,6 @@ mod tests {
     #[test]
     fn capsule_visual_height_keeps_the_qa_anchor_reference() {
         assert_eq!(capsule_visual_height(true), 140.0);
-    }
-
-    #[test]
-    fn qa_resize_preserves_centre_baseline_and_user_position() {
-        let expanded =
-            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
-        assert_eq!(expanded, (-840.0, 324.0));
-        assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true),
-            expanded
-        );
-        assert_eq!(
-            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false),
-            (-700.0, 700.0)
-        );
     }
 
     #[test]

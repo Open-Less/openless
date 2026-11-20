@@ -142,12 +142,10 @@ async fn forward_legacy_event(
             }
         }
     }
-    if cfg!(mobile)
-        && matches!(
-            kind,
-            BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
-        )
-    {
+    if matches!(
+        kind,
+        BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
+    ) {
         let selection = backend.services().selection.snapshot().await.ok();
         let selection_voice = backend.services().selection_voice.snapshot().await.ok();
         // Read QA after the other async snapshots. Queued levels/terminals from
@@ -211,38 +209,28 @@ async fn forward_legacy_event(
             emit_dictation_state(app, backend, snapshot)
         }
         BackendEventKind::VoiceActivationStateChanged(state) => {
+            if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+                coordinator.present_voice_activation_feedback(&state);
+            }
             let _ = app.emit("voice-activation:state-changed", state);
         }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
-            capsule_owners.transcription_notice = None;
-            capsule_owners.qa_voice = None;
-            capsule_owners.qa_capsule = None;
             if selection_voice_blocks_dictation_capsule(app) {
                 return;
             }
+            let Some(payload) = crate::capsule_feedback::dictation_completion_payload(
+                &result,
+                &backend.snapshot().dictation,
+                backend.get_preferences().capsule_style,
+            ) else {
+                return;
+            };
+            capsule_owners.transcription_notice = None;
+            capsule_owners.qa_voice = None;
+            capsule_owners.qa_capsule = None;
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
-                let message = match &result.inserted {
-                    openless_core::DictationInsertStatus::Inserted => "已输入",
-                    openless_core::DictationInsertStatus::PasteSent => "已发送粘贴，请确认",
-                    openless_core::DictationInsertStatus::CopiedFallback => "已复制，请手动粘贴",
-                    openless_core::DictationInsertStatus::NotRequested => "处理完成",
-                };
-                coordinator.present_core_capsule(CapsulePayload {
-                    session_id: Some(result.session_id.to_string()),
-                    state: CapsuleState::Done,
-                    level: 0.0,
-                    elapsed_ms: result.duration_ms,
-                    message: Some(message.to_string()),
-                    inserted_chars: Some(
-                        u32::try_from(result.polished_text.chars().count()).unwrap_or(u32::MAX),
-                    ),
-                    translation: false,
-                    operating: false,
-                    warming: false,
-                    capsule_style: backend.get_preferences().capsule_style,
-                    selection_polish: false,
-                });
+                coordinator.present_core_capsule(payload);
             }
         }
         BackendEventKind::RecordingControlRequested(request) => {
@@ -323,6 +311,7 @@ async fn forward_legacy_event(
                             warming: *phase == LessComputerVoicePhase::Starting,
                             capsule_style: backend.get_preferences().capsule_style,
                             selection_polish: false,
+                            qa: false,
                         });
                     }
                 }
@@ -392,6 +381,7 @@ async fn forward_legacy_event(
                         warming: false,
                         capsule_style: backend.get_preferences().capsule_style,
                         selection_polish: false,
+                        qa: false,
                     });
                 }
             }
@@ -572,6 +562,7 @@ fn map_dictation_state(
         ) && !snapshot.recording_ready,
         capsule_style,
         selection_polish: false,
+        qa: false,
     }
 }
 
@@ -597,6 +588,12 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
         coordinator.tauri_host().refresh_native_capsule_theme();
     }
     let _ = app.emit("prefs:changed", &preferences);
+    #[cfg(not(mobile))]
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window(crate::ask_window::LABEL),
+        "ask:window",
+        serde_json::json!({"type": "themeChanged", "themeMode": preferences.theme_mode}),
+    );
 }
 
 fn transcription_notice_payload(
@@ -652,6 +649,7 @@ fn transcription_notice_payload(
         warming: false,
         capsule_style: style,
         selection_polish: false,
+        qa: false,
     })
 }
 
@@ -770,6 +768,7 @@ fn mobile_qa_capsule_payload(
         warming: state == CapsuleState::Recording && !matches!(event, BackendEventKind::QaLevel(_)),
         capsule_style: style,
         selection_polish: false,
+        qa: true,
     })
 }
 
@@ -823,6 +822,9 @@ fn present_qa_capsule(
 }
 
 async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut CapsuleOwners) {
+    if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+        coordinator.reset_voice_activation_feedback();
+    }
     emit_preferences(app, backend);
     let snapshot = backend.snapshot();
     if let Some((owner, _)) = owners
@@ -981,7 +983,7 @@ mod tests {
         )
         .expect("mobile QA recording uses the overlay capsule");
         assert_eq!(payload.state, CapsuleState::Recording);
-        assert!(payload.warming);
+        assert!(payload.warming && payload.qa);
         assert_eq!(owners.qa_voice, Some(session_id));
         for expected_level in [0.0, 0.35] {
             let level = mobile_qa_capsule_payload(

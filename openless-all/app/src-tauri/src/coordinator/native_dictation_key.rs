@@ -106,6 +106,7 @@ impl Coordinator {
                         keys: None,
                     });
                 }
+                crate::ask_window::hotkey::set_binding(&target.dictation, target.dictation_mode);
                 Ok(())
             })();
             let _ = done_tx.send(result);

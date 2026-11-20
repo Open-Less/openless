@@ -1,9 +1,10 @@
+import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 async function openSettings(page: Page) {
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -14,7 +15,7 @@ test('110% is the fresh default; explicit 100% survives reload and the settings 
   page,
 }) => {
   const dialog = await openSettings(page);
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await expect(dialog.getByRole('button', { name: '返回应用', exact: true })).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0);
   expect(
@@ -27,9 +28,9 @@ test('110% is the fresh default; explicit 100% survives reload and the settings 
   await expect(interfaceSize).toContainText('110%');
   await interfaceSize.click();
   await page.getByRole('option', { name: '100%', exact: true }).click();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1');
   await page.reload();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   expect(
     await page.evaluate(
@@ -87,6 +88,94 @@ test('returning to recording at 100% has stable control geometry and one shortcu
   expect(errors).toEqual([]);
 });
 
+test('returning to General retires Appearance when its animation finishes during the click', async ({
+  page,
+}) => {
+  const dialog = await openSettings(page);
+  const viewport = dialog.locator('.ol-settings-content-pane .ol-transition-viewport');
+  const surfaces = viewport.locator(':scope > [data-transition-phase]');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (
+        this.matches('.ol-transition-page-with-header[data-transition-phase="enter"]') &&
+        this.querySelector('[data-section="appearance"]')
+      ) {
+        Element.prototype.animate = animate;
+        // Finish the painted entrance while the real return click is being handled.
+        animation.pause();
+        const duration = animation.effect?.getComputedTiming().activeDuration ?? 0;
+        animation.currentTime = duration / 2;
+        document.addEventListener('click', () => animation.finish(), { capture: true, once: true });
+      }
+      return animation;
+    };
+  });
+
+  const rail = dialog.getByRole('navigation', { name: '设置分类' });
+  const appearance = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
+  await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await expect(appearance).toHaveAttribute('data-transition-phase', 'enter');
+  await rail.getByRole('button', { name: '通用', exact: true }).click();
+  await settleNavigation(dialog);
+  await expect(surfaces).toHaveCount(1);
+  await expect(surfaces.locator('[data-section="appearance"]')).toHaveCount(0);
+  const recording = dialog.getByRole('button', { name: /^麦克风与录音/ });
+  await recording.click();
+  await expect(dialog.getByRole('heading', { name: '麦克风与录音', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(recording).toBeFocused();
+  await expect(surfaces).toHaveCount(1);
+});
+
+test('settings retains the old title with its form and focuses a subpage after deblurring', async ({
+  page,
+}) => {
+  const dialog = await openSettings(page);
+  const viewport = dialog.locator('.ol-settings-content-pane .ol-transition-viewport').first();
+  const surfaces = viewport.locator(':scope > [data-transition-phase]');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this.matches('.ol-transition-page-with-header[data-transition-phase="exit"]')) {
+        Element.prototype.animate = animate;
+        animation.pause();
+        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
+      }
+      return animation;
+    };
+  });
+  const rail = dialog.getByRole('navigation', { name: '设置分类' });
+  await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
+  const outgoing = surfaces.filter({ has: page.locator('[data-section="general"]') });
+  const incoming = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
+  await expect(outgoing).toHaveAttribute('data-transition-phase', 'exit');
+  await expect(outgoing.locator('h2')).toHaveText('通用');
+  await expect(incoming.locator('h2')).toHaveText('外观与语言');
+  await expect(incoming).toHaveCSS('opacity', '0');
+  await expect(outgoing).toHaveCSS('filter', /blur\(/);
+  expect(await outgoing.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
+  expect(await incoming.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
+  await outgoing.evaluate((el) =>
+    el
+      .getAnimations()
+      .find((a) => a.id === 'ol-page-exit')!
+      .play(),
+  );
+  await settleNavigation(dialog);
+  await expect(surfaces).toHaveCount(1);
+  await expect(incoming).toHaveCSS('filter', 'none');
+  await rail.getByRole('button', { name: '通用', exact: true }).click();
+  await settleNavigation(dialog);
+  const entry = dialog.getByRole('button', { name: /^麦克风与录音/ });
+  await entry.click();
+  await expect(dialog.getByRole('heading', { name: '麦克风与录音', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(entry).toBeFocused();
+});
+
 for (const scale of [1, 1.1]) {
   test(`long official menus keep user scroll through live option updates at ${Math.round(scale * 100)}%`, async ({
     page,
@@ -94,7 +183,6 @@ for (const scale of [1, 1.1]) {
     await page.setViewportSize({ width: 1100, height: 1200 });
     await page.goto(fixture);
     await page.evaluate((scale) => {
-      document.documentElement.style.zoom = String(scale);
       document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
     }, scale);
     const trigger = page.getByRole('combobox', { name: 'Long menu', exact: true });
@@ -127,7 +215,7 @@ for (const scale of [1, 1.1]) {
   });
 }
 
-test('experimental download cancel and switch-off share state, do not reappear, and do not push later rows', async ({
+test('experimental download cancels from its Settings page without pushing later rows', async ({
   page,
 }) => {
   await openSettings(page);
@@ -139,12 +227,15 @@ test('experimental download cancel and switch-off share state, do not reappear, 
   // Native WebViews retain CSS from previously visited model pages. Load it
   // late, as on device, rather than testing only the first clean browser entry.
   await page.addStyleTag({
-    content: readFileSync(new URL('../src/pages/LocalAsr/local-asr.css', import.meta.url), 'utf8'),
+    content: readFileSync(
+      new URL('../src/features/local-asr/local-asr.css', import.meta.url),
+      'utf8',
+    ),
   });
   await expect(toggle).toBeEnabled();
   const before = (await next.boundingBox())!.y;
   await toggle.click();
-  const card = page.locator('.ol-download-card[data-download-id="sense-voice"]');
+  const card = page.locator('[data-notification-key="download:experimental:sense-voice"]');
   await expect(card).toBeVisible();
   expect(Math.abs((await next.boundingBox())!.y - before)).toBeLessThan(1);
   const statusText = await sense.locator('.ol-experimental-model-status').evaluate((element) => {
@@ -155,12 +246,10 @@ test('experimental download cancel and switch-off share state, do not reappear, 
     return { right: text.right, progressRight: progress.right };
   });
   expect(Math.abs(statusText.right - statusText.progressRight)).toBeLessThan(2);
-  await card.getByRole('button', { name: '取消', exact: true }).click();
-  await expect(toggle).toHaveAttribute('aria-checked', 'false');
-  await expect(card).toHaveCount(0);
-  await toggle.click();
-  await expect(card).toBeVisible();
-  await toggle.click();
+  const cancel = card.getByRole('button', { name: '取消下载', exact: true });
+  await expect(cancel).toBeEnabled();
+  await expect(cancel).toHaveAttribute('data-action-style', 'cancel-icon');
+  await cancel.click();
   await expect(card).toHaveCount(0);
   await page.waitForTimeout(2100);
   await expect(card).toHaveCount(0);
@@ -186,7 +275,7 @@ test('shared modal Escape retains an inert exit and restores focus', async ({ pa
             const card = document.querySelector<HTMLElement>('.ol-dialog-card');
             document.body.dataset.modalExit = JSON.stringify({
               present: !!card,
-              inert: card?.inert,
+              inert: !!card?.closest('[inert]'),
             });
           }
         });
@@ -254,7 +343,7 @@ test('voice activation opens model setup without leaving the multimodal pipeline
       get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     });
   });
-  await page.goto('http://127.0.0.1:5326/?os=win');
+  await page.goto(`${fixtureOrigin}/?os=win`);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   const categories = dialog.getByRole('navigation', { name: '设置分类' });
@@ -329,4 +418,48 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   await page.screenshot({ path: testInfo.outputPath('playback-echo-cancellation.png') });
   await cancellation.click();
   await expect(cancellation).not.toBeChecked();
+});
+
+test('Windows wake shortcut linkage is opt-in, keyboard accessible and preserves recording mode', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'userAgent', {
+      get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    });
+  });
+  await page.goto(`${fixtureOrigin}/?os=win`);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const categories = dialog.getByRole('navigation', { name: '设置分类' });
+  await openMicrophoneSettings(dialog);
+  const linkage = dialog.getByRole('switch', { name: '与录音快捷键联动', exact: true });
+  await expect(linkage).toHaveCount(0);
+  await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
+  await expect(linkage).not.toBeChecked();
+  const mode = await page.evaluate(
+    async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
+  );
+  await linkage.focus();
+  await page.keyboard.press('Space');
+  await expect(linkage).toBeChecked();
+  await expect(dialog.getByText('已临时暂停唤醒监听', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
+    ),
+  ).toBe(mode);
+  await categories.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'AI 与模型', exact: true })).toBeVisible();
+  await settleNavigation(dialog);
+  await openMicrophoneSettings(dialog);
+  await expect(linkage).toBeChecked();
+  await linkage.click();
+  await expect(linkage).not.toBeChecked();
+  expect(
+    await page.evaluate(
+      async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
+    ),
+  ).toBe(mode);
 });

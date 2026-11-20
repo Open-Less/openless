@@ -1,13 +1,31 @@
 // Small synchronous, same-origin bootstrap. Allowed by the native script-src 'self' CSP.
 performance.mark('openless:html');
+let theme = 'system';
 try {
-  const theme = localStorage.getItem('ol.theme');
-  if (theme === 'dark') document.documentElement.dataset.olTheme = 'dark';
-  if (theme === 'light') document.documentElement.dataset.olInitialLight = '';
+  theme = localStorage.getItem('ol.theme');
 } catch {
   /* Storage can be disabled; the OS color scheme is the fallback. */
 }
-if (new URLSearchParams(location.search).has('window')) {
+const resolvedTheme =
+  theme === 'dark' || theme === 'light'
+    ? theme
+    : matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light';
+document.documentElement.dataset.olTheme = resolvedTheme;
+document.documentElement.style.colorScheme = resolvedTheme;
+const kind = new URLSearchParams(location.search).get('window');
+if (
+  [
+    'capsule',
+    'capsule-rail',
+    'qa',
+    'voice-edit',
+    'selection-voice-intent',
+    'less-computer',
+    'less-computer-glow',
+  ].includes(kind)
+) {
   document.documentElement.dataset.olAux = '';
 } else {
   // Match fontScale.ts before the first HTML frame, not only after React loads.
@@ -20,6 +38,5 @@ if (new URLSearchParams(location.search).has('window')) {
   } catch {
     /* Keep the shared 110% default when storage is unavailable. */
   }
-  document.documentElement.style.zoom = String(scale);
   document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
 }

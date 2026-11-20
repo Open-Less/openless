@@ -11,8 +11,11 @@
   --ol-danger-solid-bg: var(--ol-err);
   --ol-danger-solid-ink: #ffffff;
   --ol-control-radius: var(--ol-radius);
+  --ol-button-radius: 12px;
   --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
+  --ol-field-bg: var(--ol-select-trigger-bg);
+  --ol-field-icon-size: 36px;
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
   /* Shared palette（shadcn zinc） */
@@ -74,6 +77,8 @@
 
   /* One radius for every rounded interface surface and control. */
   --ol-radius: 16px;
+  /* Text/action buttons use this; cards, inputs, dialogs and toasts stay at --ol-radius. */
+  --ol-button-radius: 12px;
   --ol-shell-radius: var(--ol-radius);
   --ol-surface-radius: var(--ol-radius);
   --ol-panel-radius: var(--ol-radius);
@@ -103,6 +108,11 @@
   --ol-font-body: var(--ol-font-sans);
   --ol-font-numeric: var(--ol-font-sans);
   --ol-reading-width: 72ch;
+  /* Content panes use a 12-column grid. Sidebars stay fixed chrome outside it. */
+  --ol-grid-columns: 12;
+  --ol-grid-gutter: 16px;
+  --ol-grid-margin: 24px;
+  --ol-grid-margin-compact: 16px;
   --ol-font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --ol-font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
 
@@ -134,6 +144,9 @@
   /* （参考 Codex 侧栏）：侧栏底色与右侧纯白内容区拉开明确层次，
      此前 #fafafa 对白底几乎无区分。 */
   --ol-sidebar-bg: #f0f0f1;
+  /* Opaque equivalents of the choice fills over the sidebar surface. */
+  --ol-sidebar-hover-bg: #e6e6e7;
+  --ol-sidebar-active-bg: #dededf;
   --ol-sidebar-border: #e4e4e7;
   --ol-sidebar-brand-bg: linear-gradient(
     180deg,
@@ -249,6 +262,7 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-field-bg: #26262a;
   --ol-font-weight-offset: -40;
   --ol-font-weight-regular: 360;
   --ol-font-weight-bold: 660;
@@ -320,6 +334,8 @@
   --ol-card-shadow: 0 18px 42px -30px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
   --ol-sidebar-bg: #141417;
+  --ol-sidebar-hover-bg: #1c1c1f;
+  --ol-sidebar-active-bg: #2c2c2e;
   --ol-sidebar-border: #27272a;
   --ol-sidebar-brand-bg: transparent;
   --ol-sidebar-brand-border: transparent;

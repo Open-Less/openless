@@ -7,6 +7,10 @@
 pub mod activity;
 pub mod android_types;
 pub mod api;
+#[cfg(feature = "ask-attachments")]
+pub mod ask_attachment;
+pub mod ask_context;
+pub mod ask_search;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
@@ -30,6 +34,7 @@ pub mod config;
 pub mod correction;
 pub mod credentials;
 pub mod credentials_legacy;
+pub mod deepseek_suite;
 pub mod dictation_context;
 pub mod dictation_engine;
 pub mod domains;
@@ -63,6 +68,8 @@ pub mod prompts;
 pub mod provider_registry;
 mod provider_resolution;
 pub mod provider_rules;
+pub mod web_search;
+pub mod deepseek_tts;
 mod provider_service;
 pub mod provider_transport;
 pub mod providers;
@@ -84,6 +91,7 @@ pub mod types;
 pub mod usage_ledger;
 pub mod vocabulary;
 pub mod voice_activation;
+mod voice_activation_hotkey;
 pub mod voice_edit_session;
 mod voice_session;
 
@@ -336,6 +344,7 @@ pub use providers::{
     OpenAiTranscriptionConfig,
 };
 pub use qa_service::QaService;
+pub use qa_service::standalone as ask;
 pub use remote_input_service::{
     constant_time_eq, finish_remote_input_connection, validate_pairing_pin, RemoteFrameCodec,
     RemoteInputService, RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES,

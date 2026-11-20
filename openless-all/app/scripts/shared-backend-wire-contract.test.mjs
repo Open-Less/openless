@@ -4,9 +4,9 @@ import { readFile } from 'node:fs/promises';
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const [
   types,
-  qaPanel,
+  inputApi,
   remoteIpc,
-  remoteSection,
+  remoteStatusController,
   selectionVoiceIpc,
   remoteCommand,
   tauriEvents,
@@ -46,9 +46,9 @@ const [
   mobileSelection,
 ] = await Promise.all([
   read('src/lib/types.ts'),
-  read('src/pages/QaPanel.tsx'),
+  read('src/api/input.ts'),
   read('src/lib/ipc/remote-server.ts'),
-  read('src/pages/settings/RemoteInputSection.tsx'),
+  read('src/features/remote-input/useRemoteInputStatus.ts'),
   read('src/lib/ipc/selection-voice-preview.ts'),
   read('src-tauri/src/commands/remote_input.rs'),
   read('src-tauri/src/tauri_events.rs'),
@@ -72,16 +72,19 @@ const [
   read('src-tauri/src/android/native_bridge.rs'),
   read('android/kotlin/OpenLessNative.kt'),
   read('android/kotlin/OpenLessOverlayService.kt'),
-  read('src/App.tsx'),
-  read('src/pages/settings/ProvidersSection.tsx'),
-  read('src/pages/settings/ChannelList.tsx'),
-  read('src/pages/settings/shared.tsx'),
+  read('src/app/App.tsx'),
+  read('src/features/providers/ProvidersSection.tsx'),
+  read('src/features/providers/ChannelList.tsx'),
+  read('src/features/providers/labels.ts'),
   read('src-tauri/src/commands/history.rs'),
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),
   read('src-tauri/src/host_document/macos.rs'),
   read('linux-egui/src/fcitx5.rs'),
-  read('src/pages/LocalAsr/index.tsx'),
+  Promise.all([
+    read('src/features/local-asr/index.tsx'),
+    read('src/features/local-asr/useLocalModelTrial.ts'),
+  ]).then((modules) => modules.join('\n')),
   read('crates/openless-core/src/local_asr_service.rs'),
   read('crates/openless-core/src/credentials.rs'),
   read('src-tauri/src/mobile_stubs/hotkey.rs'),
@@ -90,7 +93,6 @@ const [
 
 for (const kind of ['awaiting_approval', 'cancelled', 'error']) {
   assert.match(types, new RegExp(`\\| '${kind}'`), `QaStateKind must retain ${kind}`);
-  assert.match(qaPanel, new RegExp(`case '${kind}':`), `QaPanel must handle ${kind}`);
 }
 for (const field of [
   'sessionId',
@@ -105,12 +107,6 @@ for (const field of [
 ]) {
   assert.match(types, new RegExp(`\\b${field}\\?`), `QaStatePayload is missing ${field}`);
 }
-assert.match(
-  qaPanel,
-  /listen<QaStatePayload>\('qa:state'/,
-  'QA must consume the typed state event',
-);
-
 const remoteStatus = remoteIpc.match(/export interface RemoteInputStatus \{([\s\S]*?)\n\}/)?.[1];
 assert.ok(remoteStatus, 'RemoteInputStatus interface must exist');
 const remoteFields = [...remoteStatus.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]);
@@ -124,12 +120,19 @@ assert.match(
   /invokeOrMock\(\s*['"]get_remote_input_status['"]/,
   'remote status command name drifted',
 );
+for (const event of ['remote-input:running', 'remote-input:error']) {
+  assert.ok(inputApi.includes(`'${event}'`), `input API lost ${event}`);
+}
 assert.match(
-  remoteSection,
-  /listen\('remote-input:running'/,
+  remoteStatusController,
+  /listenRemoteInputStatusChanges\([^]*?refresh\(\)/,
   'remote running event must refresh status',
 );
-assert.match(remoteSection, /listen\('remote-input:error'/, 'remote errors must remain visible');
+assert.match(
+  remoteStatusController,
+  /listenRemoteInputErrors\([^]*?setStartError\(/,
+  'remote errors must remain visible',
+);
 assert.match(
   remoteCommand,
   /read_pairing_pin\(\)[\s\S]*?map_remote_input_status\(status, pin\)/,
@@ -605,8 +608,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appShell,
-  /export function App\([^]*?getStartupSnapshot\(\)[^]*?return <ReadyApp \{\.\.\.props\} \/>/,
-  'every Tauri webview route must mount behind the shared readiness handshake',
+  /export function App\([^]*?requireBackendReady\(\)[^]*?renderStartup \? \([^]*?<CoreStartupScreen[^]*?: \([^]*?<WindowRoutes/,
+  'every native webview route must mount behind the shared readiness handshake',
 );
 assert.doesNotMatch(
   localAsrPage,

@@ -4,11 +4,13 @@ import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const es: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Sesión de edición por voz',
@@ -106,6 +108,8 @@ export const es: typeof zhCN = {
     noSnapshot: 'Todavía no hay una copia cifrada en la nube.',
     snapshotUnknown: 'La copia en la nube aún no se ha comprobado.',
     lastSync: 'Última sincronización: {{time}}',
+    synced: 'Sincronización completada',
+    syncing: 'Sincronizando los datos más recientes de la nube…',
     syncNow: 'Sincronizar ahora',
     checkPending: 'Comprobar resultado pendiente',
     unlock: 'Desbloquear',
@@ -115,6 +119,7 @@ export const es: typeof zhCN = {
     delete: 'Eliminar copia en la nube',
     working: 'Procesando…',
     cancelTask: 'Cancelar tarea actual',
+    cancelSync: 'Cancelar sincronización',
     cancelRequested: 'Cancelación solicitada. Esperando a que termine la tarea.',
     done: 'Configuración de sincronización actualizada.',
     restored: 'Datos restaurados. Revisa los ajustes específicos de este dispositivo.',
@@ -135,6 +140,15 @@ export const es: typeof zhCN = {
     newPassword: 'Nueva contraseña de sincronización',
     currentPassword: 'Contraseña actual',
     confirmPassword: 'Confirmar nueva contraseña',
+    setSyncPasswordTitle: 'Establecer una contraseña de sincronización',
+    setSyncPasswordDescription:
+      'OpenLess usa esta contraseña para cifrar los datos en el dispositivo y crear una copia de seguridad en la nube. La sincronización se activa al terminar.',
+    confirmSyncPassword: 'Confirmar contraseña de sincronización',
+    confirmAndContinue: 'Confirmar y continuar',
+    revealPassword: 'Mostrar contraseña ({{field}})',
+    concealPassword: 'Ocultar contraseña ({{field}})',
+    previewNotice:
+      'Vista previa de la sincronización en la nube. Usa una contraseña de ejemplo: no se conecta a un servidor ni guarda credenciales.',
     passwordPolicy:
       'Usa 12–128 caracteres con mayúsculas, minúsculas y un número. Evita contraseñas comunes.',
     rememberKey: 'Recordar la clave en el almacenamiento seguro del dispositivo',
@@ -142,6 +156,7 @@ export const es: typeof zhCN = {
     disableDescription:
       'Se detiene la sincronización. Se conservan la copia en la nube y los datos locales. Eliminar la copia es una acción separada.',
     confirmDisable: 'Desactivar sincronización',
+    refreshBackup: 'Ver o actualizar copia en la nube',
     deleteTitle: '¿Eliminar la copia cifrada en la nube?',
     deleteDescription:
       'Solo se elimina la copia en la nube de esta cuenta. Los datos locales permanecen. Necesitarás una nueva copia para restaurar en otro dispositivo.',
@@ -227,6 +242,8 @@ export const es: typeof zhCN = {
       cancelled: 'Tarea cancelada.',
       network: 'No se pudo conectar con el servicio. Comprueba la conexión y vuelve a intentarlo.',
       rateLimited: 'Demasiadas solicitudes. Espera antes de reintentar.',
+      deletePendingOperation:
+        'No se ha confirmado una operación anterior en la nube. Actualiza el estado más tarde e intenta eliminar la copia de nuevo.',
       outcomeUnknown:
         'Resultado sin confirmar. Comprueba la operación pendiente antes de crear otra copia.',
       recovery:
@@ -302,10 +319,13 @@ export const es: typeof zhCN = {
     delete: 'Eliminar',
     later: 'Más tarde',
     cancel: 'Cancelar',
+    confirmAction: 'Confirmar',
     close: 'Cerrar',
     show: 'Mostrar',
     hide: 'Ocultar',
+    apiKeySaved: 'Clave API guardada',
     saved: 'Guardado',
+    deleted: 'Eliminado',
     refreshed: 'Actualizado',
     saving: 'Guardando…',
     experimental: 'Experimental',
@@ -317,6 +337,7 @@ export const es: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    asking: 'Pregunta lo que quieras',
     thinking: 'pensando',
     using: 'actuando',
     cancelled: 'Cancelado',
@@ -375,6 +396,9 @@ export const es: typeof zhCN = {
     title: 'Preguntar',
     headerHint: 'Pregunta cuando quieras',
     thinking: 'Pensando…',
+    thoughtLive: 'Pensando ({{seconds}} s)',
+    thoughtDone: 'Pensado durante {{seconds}} s',
+    stop: 'Detener',
     error: 'Se ha producido un error. Inténtalo de nuevo.',
     errorRetry: 'Reintentar',
     errorRetryHint: 'Inténtalo de nuevo.',
@@ -392,6 +416,7 @@ export const es: typeof zhCN = {
     mobileRecordStart: 'Iniciar grabación',
     mobileRecordStop: 'Detener y enviar',
     composerPlaceholder: 'Escribe una pregunta. Pulsa Intro para enviar',
+    voiceInputPlaceholder: 'Estás usando la entrada por voz',
     composerSend: 'Enviar',
     statusIdle: 'Pulsa {{recordHotkey}} para preguntar',
     statusRecording: 'Grabando',
@@ -532,6 +557,7 @@ export const es: typeof zhCN = {
   shell: {
     shortcutLabel: 'Atajo de grabación',
     shortcutHint: 'Iniciar / Detener',
+    homeLabel: 'Volver al resumen',
     betaTag: 'BETA',
     betaNote: 'Almacenamiento local y copia en la nube opcional',
     navHint: {
@@ -556,6 +582,7 @@ export const es: typeof zhCN = {
         tagline: 'Entrada de voz centrada en tu dispositivo',
         releaseNotes: 'Notas de la versión ↗',
         docs: 'Centro de ayuda ↗',
+        credits: 'Componentes',
       },
     },
     providerPrompt: {
@@ -682,6 +709,12 @@ export const es: typeof zhCN = {
     llmConfigured: 'LLM activo configurado',
     llmNotConfigured: 'Sin configurar',
     statusConfigured: 'Configurado',
+    statusFailed: 'No superado',
+    serviceHint: {
+      asr: 'Reconocimiento de voz: ver si está configurado y abrir los ajustes del servicio',
+      llm: 'Procesamiento de texto: ver si está configurado y abrir los ajustes del servicio',
+      omni: 'Voz multimodal: ver si está configurada y abrir los ajustes del servicio',
+    },
     statusNotConfigured: 'Sin configurar',
     statusUnknown: 'No disponible',
     credentialsLoadError: 'No se pudo consultar el estado de las credenciales',
@@ -696,6 +729,16 @@ export const es: typeof zhCN = {
     metricTotalTrend: 'Archivo local (máx. 200)',
     activityTitle: 'Actividad anual',
     activityCount: '{{count}} dictados',
+    activityAppsLabel: 'Apps con más dictados',
+    activityAppsShow: 'Mostrar apps principales',
+    activityAppsHide: 'Ocultar apps principales',
+    activityAppsUnavailable:
+      'La actividad anual por aplicación no está disponible en esta plataforma.',
+    activityAppsError: 'No se pudo cargar la actividad anual por aplicación.',
+    activityYearTitle: 'Este año',
+    activityActiveDays: 'Días activos',
+    activityPeakDay: 'Día más activo',
+    activityDailyAverage: 'Media diaria',
     activityLoadError: 'No se pudieron cargar los datos de actividad',
     period: {
       ariaLabel: 'Periodo del informe',
@@ -823,7 +866,7 @@ export const es: typeof zhCN = {
     dismiss: 'Descartar',
   },
   vocab: {
-    selectAllVisible: 'Seleccionar resultados actuales',
+    selectAllVisible: 'Seleccionar todos los resultados',
     selecting: 'Seleccionar',
     doneSelecting: 'Listo',
     disabledWord: 'Desactivado',
@@ -1129,6 +1172,14 @@ export const es: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Comportamiento del atajo de preguntas',
+      desc: 'Usa el atajo de grabación junto con la tecla auxiliar. El atajo de grabación solo sigue dictando en el cursor.',
+      record: 'Abrir y grabar inmediatamente',
+      open: 'Abrir y pulsar de nuevo para grabar',
+      draft: 'Abrir y enfocar el campo de texto',
+      failed: 'No se pudo guardar el comportamiento del atajo.',
+    },
     dictation: 'Dictar',
     translation: 'Traducir',
     question: 'Pregunta lo que quieras',
@@ -1143,6 +1194,11 @@ export const es: typeof zhCN = {
       'El texto seleccionado sirve de contexto. La selección es opcional. Cada combinación inicia una pregunta nueva.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Compartir los nombres de las aplicaciones con Ask',
+      description: 'Al abrir Ask, registra los nombres de la aplicación activa y de las abiertas para enviarlos al modelo junto con la pregunta. No se lee el contenido de las ventanas.',
+      saveFailed: 'No se pudo actualizar el permiso para compartir el contexto del escritorio.',
+    },
     title: 'Pregunta lo que quieras',
     desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
     shortcutSettings: 'Ajustes de atajos',
@@ -1165,7 +1221,7 @@ export const es: typeof zhCN = {
     },
     history: {
       title: 'Guardar historial',
-      desc: 'Guarda las conversaciones en este dispositivo. Desactivado de forma predeterminada.',
+      desc: 'Guarda el historial de Preguntar en este dispositivo. Desactivado de forma predeterminada.',
     },
     howto: {
       title: 'Cómo usarlo',
@@ -1202,6 +1258,8 @@ export const es: typeof zhCN = {
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Inserción de texto',
       experiments: 'Configura funciones experimentales y extensiones.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
@@ -1294,6 +1352,11 @@ export const es: typeof zhCN = {
     vocabularyLearning: {
       title: 'Aprender de las correcciones',
       enabled: 'Activar aprendizaje de correcciones',
+      suggestionPosition: 'Posición de la tarjeta',
+      positionNearInput: 'Cerca de la entrada',
+      positionBottomRight: 'Fija abajo a la derecha',
+      suggestionPositionHint:
+        'Solo Windows: cerca del cursor de texto o del campo; si no es posible, abajo a la derecha en la pantalla de entrada original. La posición fija siempre usa el área de trabajo de esa pantalla.',
       observationSeconds: 'Tiempo de observación',
       observationSecondsHint:
         'Observar el campo actual durante un máximo de 10–60 segundos después del dictado.',
@@ -1536,11 +1599,6 @@ export const es: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (mayoría de editores)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (campos de chat)',
       windowsSendInputNewlineModeCrLf: 'Unicode CR+LF',
-      windowsShowOpenlessInKeyboardListLabel: 'Mostrar OpenLess en la lista de teclados',
-      windowsShowOpenlessInKeyboardListDesc:
-        'Al desactivarlo, Win+Space no pasará por OpenLess. No afecta a SendInput ni al pegado. Vuelve a activarlo para restaurar la entrada.',
-      windowsShowOpenlessInKeyboardListError:
-        'No se pudo actualizar la lista de teclados: el sistema rechazó el cambio del perfil de idioma de OpenLess.',
       historyGroupTitle: 'Historial y contexto',
       historyRetentionLabel: 'Conservación del historial (días)',
       historyRetentionDesc:
@@ -1570,6 +1628,17 @@ export const es: typeof zhCN = {
       voiceActivationDesc: 'Escucha localmente una frase de activación para iniciar el dictado.',
       voiceActivationLocalOnly:
         'El reconocimiento permanece en este dispositivo; el audio de espera no se sube ni se archiva.',
+      voiceActivationHotkeyLinked: 'Vincular atajo de grabación',
+      voiceActivationHotkeyLinkedDesc:
+        'Pulsa el atajo para activar o pausar la escucha en vez de grabar. Inicia en pausa. Pausar desactiva el precalentamiento del micrófono, no otras grabaciones. La escucha es local; el dictado usa el servicio actual.',
+      voiceActivationDisabled: 'Activación por voz desactivada',
+      voiceActivationPaused: 'Escucha en pausa temporal',
+      voiceActivationPausing: 'Deteniendo la escucha…',
+      voiceActivationStarting: 'Iniciando la escucha…',
+      voiceActivationListening: 'Esperando la frase de activación',
+      voiceActivationDictating: 'Dictando o finalizando',
+      voiceActivationError:
+        'No se puede iniciar la escucha. Revisa el modelo, los permisos y el micrófono.',
       voiceActivationMultimodalModels:
         'Prepara aquí el modelo de activación por voz. El dictado sigue usando el servicio multimodal actual.',
       voiceActivationModelMissing: 'El modelo local Zipformer no está instalado.',
@@ -1627,7 +1696,7 @@ export const es: typeof zhCN = {
       validationHint:
         'Envía manualmente una solicitud real para comprobar la configuración. Puede consumir saldo del servicio. Guardar los ajustes no ejecuta esta comprobación.',
       validationHintOmni:
-        'Envía manualmente una solicitud solo de texto (sin grabación). Pasar no significa que el dictado de audio funcione: confirma con una grabación corta. Puede consumir saldo del servicio.',
+        'Envía manualmente una solicitud de conexión solo de texto. Puede consumir saldo del servidor.',
       autoSaveHint:
         'Los cambios se guardan automáticamente. Después de configurar el servicio, puedes comprobar la conexión.',
       nameHint:
@@ -1687,10 +1756,11 @@ export const es: typeof zhCN = {
       pipelineModeLabel: 'Modo de procesamiento',
       pipelineModeHint:
         'Tradicional: dos etapas, ASR + LLM. Multimodal: una sola pasada con un modelo que admite audio.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Tradicional',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Cada modo conserva sus propias credenciales. Al cambiar, las del otro modo se guardan sin usarse y se restauran cuando vuelves.',
+        'Las tres canalizaciones guardan su configuración por separado. La selección se conserva al cerrar los ajustes o la ventana y al reiniciar la aplicación. Al volver se recupera la configuración anterior.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
@@ -2404,6 +2474,7 @@ export const es: typeof zhCN = {
     experimentsTitle: 'Experimentos y extensiones',
     experimentsDescription: 'Configura funciones experimentales y extensiones.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Ajustes de servicios',
       llm: 'Modelos de lenguaje',
       asr: 'Reconocimiento de voz',
@@ -2411,11 +2482,11 @@ export const es: typeof zhCN = {
       models: 'Modelos locales',
       connections: 'Conexiones',
       inactive: 'No se usa en este modo',
+      unavailable: 'No disponible',
       inactiveDetail:
         'Esta configuración se conserva, pero el modo de reconocimiento actual no la utiliza.',
-      statusConfigured:
-        'Punto verde: hay al menos un servicio activado. Las solicitudes usan el primero.',
-      statusMissing: 'Punto rojo: todavía no hay ningún servicio activado.',
+      statusConfigured: 'Hay al menos un servicio activado. Las solicitudes usan el primero.',
+      statusMissing: 'Todavía no hay ningún servicio activado.',
     },
     searchPlaceholder: 'Buscar una categoría de ajustes…',
     clearSearch: 'Borrar búsqueda',
@@ -2427,6 +2498,8 @@ export const es: typeof zhCN = {
     backToAdvanced: 'Volver a funciones avanzadas',
     back: 'Atrás',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configurar la transcripción en directo en el campo.',
       experiments: 'Configura funciones experimentales y extensiones.',
       customSyncServer:
@@ -2730,6 +2803,10 @@ export const es: typeof zhCN = {
     activePill: 'Activo',
     setDefault: 'Usar como predeterminado',
     downloading: 'Descargando',
+    cancelDownload: 'Cancelar descarga',
+    cancelDownloadTitle: 'Cancelar la descarga de {{name}}',
+    cancellingDownload: 'Cancelando descarga…',
+    downloadFailed: 'Error al descargar el modelo',
     startDownload: 'Iniciar descarga',
     downloadNewModel: 'Descargar nuevo modelo',
     activeModelLabel: 'Modelo en uso',

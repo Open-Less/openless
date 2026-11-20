@@ -4,14 +4,14 @@ import { createRoot } from 'react-dom/client';
 import type { CapsuleState, ThemeMode } from '../../src/lib/types';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
+import { AppViewport } from '../../src/ui/layout/AppViewport';
 
 const callbacks = new Map<number, (value: unknown) => void>();
 const listeners = new Map<string, Set<number>>();
 const listenerTargets = new Map<number, { kind: string; label?: string }>();
 let callbackId = 0;
-const qa = new URLSearchParams(location.search).has('qa');
 const params = new URLSearchParams(location.search);
-const windowLabel = params.get('label') ?? (qa ? 'qa' : 'capsule');
+const windowLabel = params.get('label') ?? 'capsule';
 const themeSync = params.has('themeSync');
 const holdThemeRead = params.has('holdThemeRead');
 let releaseThemeRead: (() => void) | undefined;
@@ -34,6 +34,7 @@ const bridge = {
   inputRegions: [] as any[],
   regionWrites: [] as any[],
   dictationActions: [] as string[],
+  pipelineMode: params.get('pipelineMode') === 'deepseek' ? 'deepseek' : 'traditional',
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
   theme: 'light' as ThemeMode,
@@ -44,7 +45,8 @@ const bridge = {
     bridge.theme = themeMode;
     bridge.emit('prefs:changed', { themeMode });
   },
-  sizes: [] as boolean[],
+  fallbackReports: [] as { presentationId: number; height: number }[],
+  copiedFallback: [] as string[],
   target: {
     sessionId: 'recording-a',
     targetLanguage: 'English',
@@ -77,7 +79,11 @@ window.__TAURI_INTERNALS__ = {
       bridge.regionWrites.push(args.rects);
       return;
     }
-    if (command === 'stop_dictation' || command === 'cancel_dictation') {
+    if (
+      ['stop_dictation', 'cancel_dictation'].includes(
+        command,
+      )
+    ) {
       bridge.dictationActions.push(command);
       return;
     }
@@ -99,6 +105,7 @@ window.__TAURI_INTERNALS__ = {
       const settings = {
         translationTargetLanguage: bridge.target.targetLanguage,
         capsuleStyle: 'classic',
+        pipelineMode: bridge.pipelineMode,
         capsuleTranscriptEnabled: params.has('transcript'),
         ...(themeSync ? { themeMode: bridge.theme } : {}),
       };
@@ -145,29 +152,25 @@ window.__TAURI_INTERNALS__ = {
       bridge.emit('prefs:changed', {});
       return { ...bridge.target };
     }
-    if (command === 'qa_get_snapshot') return { kind: 'idle', messages: [] };
-    if (command === 'qa_window_set_expanded') {
-      bridge.sizes.push(args.expanded);
-      const host = document.querySelector<HTMLElement>('#native-host');
-      if (host) {
-        host.style.width = args.expanded ? '760px' : '480px';
-        host.style.height = args.expanded ? '416px' : '80px';
-        host.style.bottom = args.expanded ? '48px' : '8px';
-      }
+    if (command === 'report_insert_fallback_card_height') {
+      bridge.fallbackReports.push(args);
       return;
     }
-    if (command === 'qa_window_dismiss') bridge.emit('chat-panel:closing', {});
+    if (command === 'copy_text_to_clipboard') {
+      bridge.copiedFallback.push(args.text);
+      return;
+    }
     return null;
   },
 };
 Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} } });
 const { i18nReady } = await import('../../src/i18n');
 await i18nReady;
-const { OpenLessPill } = await import('../../src/components/OpenLessCapsule');
+const { InsertFallbackCard } = await import('../../src/features/capsule/InsertFallbackCard');
+const { OpenLessPill } = await import('../../src/features/capsule/OpenLessCapsule');
 const { CapsuleTranslationBadge, CapsuleTranscriptOverlay } =
-  await import('../../src/components/LiveTranscriptPill');
-const { QaPanel } = await import('../../src/pages/QaPanel');
-const { Capsule } = await import('../../src/components/Capsule');
+  await import('../../src/features/capsule/LiveTranscriptPill');
+const { Capsule } = await import('../../src/features/capsule/Capsule');
 if (themeSync) {
   localStorage.setItem('ol.theme', 'light');
   const { initThemeMode } = await import('../../src/lib/themeMode');
@@ -211,7 +214,17 @@ function CapsuleFixture() {
 }
 document.body.style.background = '#0b1215';
 createRoot(document.getElementById('root')!).render(
-  params.has('rail') ? (
+  params.has('fallback') ? (
+    <AppViewport scale={false}>
+      <InsertFallbackCard
+        payload={{
+          presentationId: 23,
+          text: '待复制的长文本。\n'.repeat(36),
+          reason: 'insertFailed',
+        }}
+      />
+    </AppViewport>
+  ) : params.has('rail') ? (
     <CapsuleTranscriptOverlay />
   ) : params.has('full') ? (
     <div
@@ -226,21 +239,9 @@ createRoot(document.getElementById('root')!).render(
     >
       <Capsule os={params.get('os') === 'mac' ? 'mac' : undefined} />
     </div>
-  ) : qa ? (
-    <div
-      id="native-host"
-      style={{
-        position: 'absolute',
-        width: 480,
-        height: 80,
-        bottom: 8,
-        left: '50%',
-        transform: 'translateX(-50%)',
-      }}
-    >
-      <QaPanel />
-    </div>
   ) : (
-    <CapsuleFixture />
+    <AppViewport scale={false}>
+      <CapsuleFixture />
+    </AppViewport>
   ),
 );

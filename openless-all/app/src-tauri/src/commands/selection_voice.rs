@@ -79,6 +79,9 @@ pub async fn confirm_selection_voice_intent_prompt(
     coord: CoordinatorState<'_>,
     intent: String,
 ) -> Result<(), String> {
+    if !matches!(intent.as_str(), "edit" | "compose") {
+        return Err("selectionVoiceInvalidIntent".into());
+    }
     let session_id = core
         .services()
         .selection_voice

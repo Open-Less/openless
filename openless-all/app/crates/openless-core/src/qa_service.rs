@@ -17,6 +17,8 @@ use crate::types::{
 };
 use crate::{Clock, HistoryStore, PreferencesStore};
 
+pub mod standalone;
+
 #[derive(Default)]
 struct QaState {
     snapshot: QaSnapshot,
@@ -46,6 +48,8 @@ pub struct QaService {
     // Hosts may inspect snapshot() during a window action, so this is distinct
     // from the state mutex and is always released before native async cleanup.
     presentation: Arc<Mutex<()>>,
+    // The UI can stop immediately after it sees Recording, before native startup returns.
+    recording_start: Arc<tokio::sync::Mutex<()>>,
     persistence: Option<Arc<QaPersistence>>,
     selection_voice: Option<Arc<dyn SelectionVoiceApi>>,
     voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
@@ -83,6 +87,17 @@ impl QaPersistence {
 }
 
 impl QaService {
+    pub fn standalone_history_sink(&self) -> Arc<standalone::AskHistorySink> {
+        let service = self.clone();
+        Arc::new(move |question, answer| {
+            service.persist_history(
+                question.to_owned(),
+                answer,
+                crate::domains::QaRuntimeCompletion::default(),
+            );
+        })
+    }
+
     pub fn new(runtime: Arc<dyn QaRuntimeAdapter>, host_actions: Arc<dyn HostActions>) -> Self {
         Self {
             runtime,
@@ -91,6 +106,7 @@ impl QaService {
             state: Arc::new(Mutex::new(QaState::default())),
             runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             presentation: Arc::new(Mutex::new(())),
+            recording_start: Arc::new(tokio::sync::Mutex::new(())),
             persistence: None,
             selection_voice: None,
             voice_sessions: Arc::new(crate::voice_session::VoiceSessionGate::default()),
@@ -111,6 +127,7 @@ impl QaService {
             state: Arc::new(Mutex::new(QaState::default())),
             runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
             presentation: Arc::new(Mutex::new(())),
+            recording_start: Arc::new(tokio::sync::Mutex::new(())),
             persistence: Some(Arc::new(persistence)),
             selection_voice: Some(selection_voice),
             voice_sessions,
@@ -160,6 +177,10 @@ impl QaService {
     }
 
     fn fail_if_current(&self, session_id: SessionId, error: &BackendError) {
+        let _presentation = self
+            .presentation
+            .lock()
+            .expect("QA presentation lock poisoned");
         let message = public_qa_error(error);
         {
             let mut state = self.state.lock().expect("QA state lock poisoned");
@@ -175,7 +196,6 @@ impl QaService {
             state.snapshot.activity = None;
             state.snapshot.pending_approval_token = None;
             state.snapshot.last_error = Some(message.clone());
-            state.snapshot.conversation_id = None;
             if state
                 .snapshot
                 .messages
@@ -184,6 +204,11 @@ impl QaService {
             {
                 state.snapshot.messages.pop();
             }
+            drop(state);
+            if let Err(error) = self.host_actions.request(HostAction::ShowQa) {
+                log::warn!("failed to show QA error: {error}");
+            }
+            let state = self.state.lock().expect("QA state lock poisoned");
             publish_qa_snapshot(
                 &self.event_publisher(),
                 &state.snapshot,
@@ -194,7 +219,8 @@ impl QaService {
         }
     }
 
-    async fn begin_recording(&self, fresh: bool) -> Result<(), BackendError> {
+    async fn begin_recording(&self) -> Result<(), BackendError> {
+        let _startup = self.recording_start.lock().await;
         let _runtime = self.begin_runtime_work()?;
         let session_id = SessionId::new();
         {
@@ -208,7 +234,7 @@ impl QaService {
                 self.voice_sessions
                     .acquire(session_id, crate::voice_session::VoiceSessionKind::Qa)?;
                 let previous = state.snapshot.clone();
-                if fresh { state.snapshot = QaSnapshot::default(); }
+                state.snapshot.panel_open = true;
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
                 state.snapshot.phase = QaPhase::Recording;
                 state.snapshot.activity = None;
@@ -222,12 +248,7 @@ impl QaService {
                 previous
             };
             if let Err(error) = self.host_actions.request(HostAction::ShowQa) {
-                let mut state = self.state.lock().expect("QA state lock poisoned");
-                if state.snapshot.session_id == Some(session_id)
-                    && state.snapshot.phase == QaPhase::Recording
-                {
-                    state.snapshot = previous;
-                }
+                self.state.lock().expect("QA state lock poisoned").snapshot = previous;
                 self.voice_sessions.release(session_id);
                 return Err(error);
             }
@@ -250,6 +271,7 @@ impl QaService {
     }
 
     async fn finish_recording(&self, session_id: SessionId) -> Result<(), BackendError> {
+        let startup = self.recording_start.lock().await;
         let _runtime = {
             let mut state = self.state.lock().expect("QA state lock poisoned");
             // Validate the callback's generation and claim the finish under
@@ -260,6 +282,7 @@ impl QaService {
             state.snapshot.activity = Some(crate::domains::QaActivity { kind: crate::domains::QaActivityKind::Thinking, tool_name: None });
             self.runtime_work.existing_work()
         };
+        drop(startup);
         self.publish_snapshot(QaStateKind::Loading, Some((session_id, QaPhase::Thinking)));
 
         let input = match self.runtime.finish_recording(session_id).await {
@@ -330,6 +353,7 @@ impl QaService {
                 }
                 let previous = state.snapshot.clone();
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
+                state.snapshot.panel_open = true;
                 state.snapshot.phase = QaPhase::Thinking;
             state.snapshot.activity = Some(crate::domains::QaActivity { kind: crate::domains::QaActivityKind::Thinking, tool_name: None });
                 state.snapshot.session_id = Some(session_id);
@@ -509,6 +533,10 @@ impl QaService {
         };
 
         {
+            let _presentation = self
+                .presentation
+                .lock()
+                .expect("QA presentation lock poisoned");
             let mut state = self.state.lock().expect("QA state lock poisoned");
             if state.snapshot.session_id != Some(session_id)
                 || !matches!(
@@ -534,13 +562,11 @@ impl QaService {
             state.snapshot.last_error = None;
             state.snapshot.edit_apply_available = edit_apply_available;
             state.snapshot.edit_revert_available = edit_revert_available;
-            publish_qa_snapshot(
-                &self.event_publisher(),
-                &state.snapshot,
-                QaStateKind::Answer,
-                None,
-                None,
-            );
+            drop(state);
+            if let Err(error) = self.host_actions.request(HostAction::ShowQa) {
+                log::warn!("failed to show QA answer: {error}");
+            }
+            self.publish_snapshot(QaStateKind::Answer, Some((session_id, QaPhase::Completed)));
         }
         self.persist_history(history_input.text, &answer, completion);
         Ok(())
@@ -671,7 +697,11 @@ impl QaService {
             }
             state.snapshot.pending_approval_token = None;
             state.snapshot.last_error = None;
-            let conversation_id = state.snapshot.conversation_id.take();
+            let conversation_id = if clear {
+                state.snapshot.conversation_id.take()
+            } else {
+                None
+            };
             (runtime_session_id, conversation_id, publish_cancelled)
         };
         if let Some(session_id) = requested_session_id.or(runtime_session_id) {
@@ -750,6 +780,10 @@ impl QaService {
 }
 
 impl QaApi for QaService {
+    fn ask_history_sink(&self) -> Option<Arc<standalone::AskHistorySink>> {
+        Some(self.standalone_history_sink())
+    }
+
     fn bind_runtime_restore_guard(
         &self,
         guard: crate::domains::RuntimeRestoreGuard,
@@ -782,7 +816,12 @@ impl QaApi for QaService {
                 .lock()
                 .expect("QA presentation lock poisoned");
             service.host_actions.request(HostAction::ShowQa)?;
-            service.publish_snapshot(QaStateKind::Idle, None);
+            let mut state = service.state.lock().expect("QA state lock poisoned");
+            state.snapshot.panel_open = true;
+            service.event_publisher().publish(
+                state.snapshot.session_id,
+                BackendEventKind::QaState(QaStateEvent::from_snapshot(&state.snapshot)),
+            );
             Ok(())
         })
     }
@@ -800,7 +839,7 @@ impl QaApi for QaService {
 
     fn start_question(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
-        Box::pin(async move { service.begin_recording(true).await })
+        Box::pin(async move { service.begin_recording().await })
     }
 
     fn toggle_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -817,7 +856,7 @@ impl QaApi for QaService {
                     service.finish_recording(session_id).await
                 }
                 (QaPhase::Idle | QaPhase::Completed | QaPhase::Cancelled | QaPhase::Failed, _) => {
-                    service.begin_recording(false).await
+                    service.begin_recording().await
                 }
                 _ => Err(BackendError::new(
                     BackendErrorCode::Busy,

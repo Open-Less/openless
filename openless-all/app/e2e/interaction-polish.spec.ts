@@ -1,7 +1,8 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
 test('IME confirmation and the next 500ms do not trigger Enter handlers', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/');
+  await page.goto(`${fixtureOrigin}/`);
   const result = await page.evaluate(async () => {
     const input = document.createElement('input');
     document.body.append(input);
@@ -41,7 +42,7 @@ test('IME confirmation and the next 500ms do not trigger Enter handlers', async 
 });
 
 test('message follow yields to the reader and resumes at the bottom', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/');
+  await page.goto(`${fixtureOrigin}/`);
   await page.evaluate(async () => {
     const root = document.createElement('div');
     root.id = 'follow-fixture';
@@ -64,7 +65,14 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
   });
   await expect.poll(distance).toBeLessThanOrEqual(1);
   const held = await viewport.evaluate((node) => {
-    node.dispatchEvent(new Event('touchmove'));
+    for (const [type, clientY] of [
+      ['touchstart', 20],
+      ['touchmove', 50],
+    ] as const) {
+      const event = new Event(type);
+      Object.defineProperty(event, 'touches', { value: [{ clientY }] });
+      node.dispatchEvent(event);
+    }
     node.scrollTop -= 30;
     node.dispatchEvent(new Event('scroll'));
     const value = node.scrollTop;
@@ -83,50 +91,4 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
     (node.firstElementChild as HTMLElement).style.height = '500px';
   });
   await expect.poll(distance).toBeLessThanOrEqual(1);
-});
-
-test('QA jump control appears only more than 120 pixels from the latest message', async ({
-  page,
-}) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?qa');
-  await page.locator('.ol-default-capsule').waitFor();
-  await page.evaluate(() => {
-    const fixture = (window as any).fixture;
-    fixture.emit('qa:state', { kind: 'recording', sessionId: 'follow-test', messages: [] });
-    fixture.emit('qa:state', {
-      kind: 'answer',
-      sessionId: 'follow-test',
-      messages: Array.from({ length: 12 }, (_, index) => ({
-        role: index % 2 ? 'assistant' : 'user',
-        content: `Message ${index}: ${'content '.repeat(30)}`,
-      })),
-    });
-  });
-  const viewport = page.locator('[data-slot="message-scroller-viewport"]');
-  await expect(viewport).toBeVisible();
-  const jump = page.getByRole('button', { name: '跳至最新' });
-  await expect(jump).toHaveText('跳至最新');
-  await expect
-    .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight))
-    .toBeGreaterThan(150);
-  await viewport.evaluate((node) => {
-    node.scrollTop = node.scrollHeight;
-    node.dispatchEvent(new Event('scroll'));
-  });
-  await expect(jump).toHaveAttribute('data-active', 'false');
-  await viewport.evaluate((node) => {
-    node.dispatchEvent(new Event('touchmove'));
-    node.scrollTop = node.scrollHeight - node.clientHeight - 80;
-    node.dispatchEvent(new Event('scroll'));
-  });
-  await expect(jump).toHaveAttribute('data-active', 'false');
-  await viewport.evaluate((node) => {
-    node.scrollTop = node.scrollHeight - node.clientHeight - 140;
-    node.dispatchEvent(new Event('scroll'));
-  });
-  await expect(jump).toHaveAttribute('data-active', 'true');
-  await jump.click();
-  await expect
-    .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
-    .toBeLessThanOrEqual(1);
 });

@@ -231,6 +231,8 @@ pub enum QaStateKind {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaStateEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_open: Option<bool>,
     pub kind: QaStateKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<crate::domains::QaActivity>,
@@ -257,6 +259,7 @@ pub struct QaStateEvent {
 impl QaStateEvent {
     pub fn simple(kind: QaStateKind) -> Self {
         Self {
+            panel_open: None,
             kind,
             activity: None,
             session_id: None,
@@ -333,6 +336,7 @@ impl QaStateEvent {
                     || snapshot.edit_apply_available
                     || snapshot.edit_revert_available));
         Self {
+            panel_open: Some(snapshot.panel_open),
             kind,
             activity: snapshot.activity.clone(),
             session_id: snapshot.session_id.map(|session_id| session_id.to_string()),
@@ -909,6 +913,7 @@ mod tests {
     #[test]
     fn migration_events_are_typed_and_keep_legacy_payload_fields() {
         let qa = QaStateEvent {
+            panel_open: None,
             activity: None,
             kind: QaStateKind::AnswerDelta,
             session_id: Some("qa-session".into()),

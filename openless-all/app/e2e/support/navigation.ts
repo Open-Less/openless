@@ -3,7 +3,12 @@ import { expect, type Locator, type Page } from '@playwright/test';
 /** Geometry and control tests start after the explicit two-surface handoff;
  * transition tests sample that handoff separately. */
 export async function settleNavigation(scope: Page | Locator) {
-  await expect(scope.locator('.ol-transition-viewport[aria-busy="true"]')).toHaveCount(0);
+  // The destination can already look ready while a stale outgoing surface still paints over it.
+  await expect(
+    scope.locator(
+      '.ol-transition-viewport [data-transition-phase]:not([data-transition-phase="settled"])',
+    ),
+  ).toHaveCount(0);
 }
 
 /** Microphone controls live on a subpage. Opening that category unmounts its
@@ -32,9 +37,7 @@ async function openGeneralSubpage(scope: Page | Locator, name: string) {
   // An in-flight section handoff keeps the incoming page inert until it settles.
   await settleNavigation(scope);
   if ((await entry.count()) > 0) {
-    await expect(entry).toBeVisible();
-    // locator.click() retries the entry after this click unmounts it.
-    await entry.dispatchEvent('click');
+    await entry.click();
   }
   await expect(heading).toBeVisible();
 }

@@ -1,3 +1,4 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
 
 const active = (page: Page) =>
@@ -109,7 +110,7 @@ test('a narrow reduced-motion guide preserves controls, answers, and keyboard fo
   await expect(active(page).getByRole('textbox')).toBeVisible();
 });
 
-const fixtureUrl = 'http://127.0.0.1:5326/e2e/fixtures/desktop-onboarding.html?os=mac';
+const fixtureUrl = `${fixtureOrigin}/e2e/fixtures/desktop-onboarding.html?os=mac`;
 test('Windows opens microphone settings, refreshes on return, and permits deferral without a device', async ({
   page,
 }) => {
@@ -222,13 +223,18 @@ test('the main action stays in place while the current step moves to the center'
   expect(Math.abs((await button.boundingBox())!.y - before.y)).toBeLessThan(1);
 });
 
-test('text reveals progressively without shifting layout and input focus uses an underline', async ({
+test('text reveals progressively without shifting layout while the name field uses a single focus surface', async ({
   page,
 }) => {
   await page.goto('/?onboarding=1&os=mac');
   const input = page.getByRole('textbox', { name: '怎么称呼你？（选填）' });
   await input.click();
   await expect(input).toHaveCSS('outline-style', 'none');
+  await expect(input).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const frame = input.locator('..');
+  await expect(frame).toHaveClass(/\bol-field\b/);
+  await expect(frame).toHaveCSS('padding-inline-start', '11px');
+  await expect(frame).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
   const before = (await input.boundingBox())!;
   const reveal = await page.locator('.ol-reveal-glyph').evaluateAll((elements) =>
     elements
@@ -250,6 +256,29 @@ test('text reveals progressively without shifting layout and input focus uses an
     .toBe('1');
   const after = (await input.boundingBox())!;
   expect(Math.abs(before.y - after.y)).toBeLessThan(1);
+});
+
+test('onboarding uses the shared searchable language popup above the footer', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.goto('/?onboarding=1&os=mac');
+  const footer = page.locator('.ol-guide-footer');
+  const trigger = footer.locator('.ol-select-trigger');
+  await expect(footer.getByText('Language:', { exact: true })).toBeVisible();
+  await expect(trigger).toHaveAccessibleName('Language');
+  await expect(trigger).toContainText('简体中文');
+  await trigger.click();
+  const popup = page.locator('.ol-select-positioner[data-side="top"] .ol-select-popup');
+  const search = popup.getByPlaceholder('搜索语言…');
+  await expect(popup).toBeInViewport({ ratio: 1 });
+  await expect(search).toBeFocused();
+  await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await search.fill('English');
+  await expect(popup.getByRole('option')).toHaveCount(1);
+  await popup.getByRole('option', { name: 'English' }).click();
+  await expect(page.getByRole('heading', { name: 'Hi, this is OpenLess' })).toBeVisible();
+  await expect(trigger).toContainText('English');
+  await page.reload();
+  await expect(trigger).toContainText('English');
 });
 
 test('model setup stays in its own dialog and returns to the unchanged centered step', async ({

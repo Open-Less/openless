@@ -44,12 +44,26 @@ pub(crate) fn less_computer_event_replay_after(
     }
 }
 
-async fn dispatch(
+pub(super) async fn dispatch(
     inner: &Arc<Inner>,
     edge: openless_core::DictationHotkeyEdge,
 ) -> Result<openless_core::CliDispatchOutcome, openless_core::BackendError> {
     if !inner.backend.snapshot().running {
         inner.backend.start().await?;
+    }
+    if let Some(changed) = inner.backend.accept_voice_activation_hotkey_edge(edge) {
+        if changed {
+            inner.voice_activation_feedback.lock().request(
+                inner.backend.voice_activation_hotkey_intent(),
+            );
+            let backend = Arc::clone(&inner.backend);
+            inner.host.spawn(async move {
+                if let Err(error) = backend.reconcile_voice_activation_hotkey().await {
+                    log::warn!("[voice-activation] linked hotkey failed: {error}");
+                }
+            });
+        }
+        return Ok(openless_core::CliDispatchOutcome::Noop);
     }
     inner.backend.dispatch_dictation_hotkey_edge(edge).await
 }
@@ -59,14 +73,6 @@ pub(super) async fn handle_pressed_edge(
     pressed_at: std::time::Instant,
     press_id: u64,
 ) {
-    if crate::recording_companion::claimed() || inner.qa_context.is_panel_visible() {
-        // Result/recording windows never hijack the recording key into the old
-        // second-stage follow-up flow. Only the explicit companion chord asks.
-        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if crate::recording_companion::claimed() || matches!(qa.phase,
-                openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
-        }
-    }
     match dispatch(
         inner,
         openless_core::DictationHotkeyEdge::Pressed {
@@ -86,11 +92,6 @@ pub(super) async fn handle_released_edge(
     released_at: std::time::Instant,
     press_id: u64,
 ) {
-    if inner.qa_context.is_panel_visible() {
-        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if matches!(qa.phase, openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
-        }
-    }
     match dispatch(
         inner,
         openless_core::DictationHotkeyEdge::Released {

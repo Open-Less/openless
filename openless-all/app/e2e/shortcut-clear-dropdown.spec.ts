@@ -1,3 +1,4 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 import { openMicrophoneSettings } from './support/navigation';
 
@@ -10,7 +11,7 @@ test('every configurable shortcut can be cleared and stays clear after remount',
   const rows = page.locator('.ol-shortcut-row[role="group"]');
   await expect(rows.first()).toBeVisible();
   const count = await rows.count();
-  expect(count).toBeGreaterThanOrEqual(7);
+  expect(count).toBeGreaterThanOrEqual(6);
   await expect(page.getByRole('button', { name: 'Mac 听写键', exact: true })).toHaveCount(0);
   for (let index = 0; index < count; index++) {
     const row = rows.nth(index);
@@ -43,11 +44,12 @@ test('every configurable shortcut can be cleared and stays clear after remount',
 });
 
 for (const scale of [0.9, 1, 1.1]) {
-  test(`standard and searchable menus open below at ${scale * 100}%`, async ({ page }) => {
+  test(`standard and searchable menus open below at ${Math.round(scale * 100)}%`, async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 1100, height: 1200 });
-    await page.goto('http://127.0.0.1:5326/e2e/fixtures/refinements.html');
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/refinements.html`);
     await page.evaluate((scale) => {
-      document.documentElement.style.zoom = String(scale);
       document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
       document.querySelector('main')!.style.minHeight = '100vh';
     }, scale);

@@ -1,8 +1,8 @@
 {
-  "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 188,
-  "wired": 103,
-  "missing": 85,
+  "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
+  "total": 185,
+  "wired": 108,
+  "missing": 77,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -66,13 +66,6 @@
         "src/lib/ipc/dictation.ts"
       ],
       "implementation": "arkts"
-    },
-    {
-      "name": "cancel_selection_polish_preview",
-      "calledFrom": [
-        "src/lib/ipc/selection-polish-preview.ts"
-      ],
-      "implementation": "unimplemented"
     },
     {
       "name": "cancel_selection_voice_intent_prompt",
@@ -222,6 +215,13 @@
       "implementation": "unimplemented"
     },
     {
+      "name": "cloud_sync_e2ee_refresh_backup_metadata",
+      "calledFrom": [
+        "src/lib/ipc/cloud-sync-e2ee.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "cloud_sync_e2ee_set_enabled",
       "calledFrom": [
         "src/lib/ipc/cloud-sync-e2ee.ts"
@@ -288,13 +288,6 @@
       "name": "commit_voice_edit",
       "calledFrom": [
         "src/lib/ipc/voice-edit-session.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "confirm_selection_polish_preview",
-      "calledFrom": [
-        "src/lib/ipc/selection-polish-preview.ts"
       ],
       "implementation": "unimplemented"
     },
@@ -397,6 +390,13 @@
       "implementation": "arkts"
     },
     {
+      "name": "export_harmony_error_log",
+      "calledFrom": [
+        "src/lib/ipc/utils.ts"
+      ],
+      "implementation": "arkts"
+    },
+    {
       "name": "export_style_pack_to_zip",
       "calledFrom": [
         "src/lib/ipc/style-packs.ts"
@@ -416,6 +416,20 @@
         "src/lib/ipc/voice-edit-session.ts"
       ],
       "implementation": "unimplemented"
+    },
+    {
+      "name": "get_activity_app_icons",
+      "calledFrom": [
+        "src/lib/ipc/history.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "get_activity_apps",
+      "calledFrom": [
+        "src/lib/ipc/history.ts"
+      ],
+      "implementation": "rust"
     },
     {
       "name": "get_activity_stats",
@@ -481,23 +495,16 @@
       "implementation": "frontend mobile capability adapter"
     },
     {
-      "name": "get_qa_hotkey_label",
+      "name": "get_platform_capabilities",
       "calledFrom": [
-        "src/lib/ipc/qa.ts"
+        "src/runtime/platform.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "get_remote_input_status",
       "calledFrom": [
         "src/lib/ipc/remote-server.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "get_selection_polish_preview",
-      "calledFrom": [
-        "src/lib/ipc/selection-polish-preview.ts"
       ],
       "implementation": "unimplemented"
     },
@@ -539,7 +546,7 @@
     {
       "name": "get_startup_snapshot",
       "calledFrom": [
-        "src/lib/ipc/shared.ts"
+        "src/runtime/transport.ts"
       ],
       "implementation": "rust"
     },
@@ -547,6 +554,13 @@
       "name": "get_update_channel",
       "calledFrom": [
         "src/lib/ipc/updater.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "get_voice_activation_state",
+      "calledFrom": [
+        "src/lib/ipc/settings.ts"
       ],
       "implementation": "unimplemented"
     },
@@ -782,53 +796,25 @@
       "implementation": "arkts"
     },
     {
+      "name": "pick_style_pack_zip",
+      "calledFrom": [
+        "src/runtime/files.ts"
+      ],
+      "implementation": "arkts"
+    },
+    {
+      "name": "pick_style_pack_zip_target",
+      "calledFrom": [
+        "src/runtime/files.ts"
+      ],
+      "implementation": "arkts"
+    },
+    {
       "name": "preview_style_pack_runtime",
       "calledFrom": [
         "src/lib/ipc/style-packs.ts"
       ],
       "implementation": "rust"
-    },
-    {
-      "name": "qa_get_snapshot",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_set_edit_instruction_mode",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_submit_text",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_toggle_recording",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_window_dismiss",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_window_set_expanded",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
     },
     {
       "name": "read_audio_recording",
@@ -1090,13 +1076,6 @@
       "implementation": "unimplemented"
     },
     {
-      "name": "set_qa_hotkey",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
       "name": "set_quick_note_hotkey",
       "calledFrom": [
         "src/lib/ipc/hotkeys.ts"
@@ -1239,7 +1218,8 @@
     {
       "name": "stop_dictation",
       "calledFrom": [
-        "src/lib/ipc/dictation.ts"
+        "src/lib/ipc/dictation.ts",
+        "src/api/in-app-dictation.ts"
       ],
       "implementation": "arkts"
     },

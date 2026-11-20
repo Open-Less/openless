@@ -73,8 +73,6 @@ mod qa;
 mod remote_input;
 #[cfg(all(not(mobile), debug_assertions))]
 mod selection_polish;
-#[cfg(not(mobile))]
-mod selection_polish_preview;
 #[cfg(all(not(mobile), target_os = "windows"))]
 mod selection_voice;
 mod settings;
@@ -108,8 +106,6 @@ pub use qa::*;
 pub use remote_input::*;
 #[cfg(all(not(mobile), debug_assertions))]
 pub use selection_polish::*;
-#[cfg(not(mobile))]
-pub use selection_polish_preview::*;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub use selection_voice::*;
 pub(crate) use settings::sync_low_latency_capture_preferences;

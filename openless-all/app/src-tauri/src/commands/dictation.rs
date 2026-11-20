@@ -35,7 +35,14 @@ pub async fn start_dictation(core: CoreState<'_>) -> Result<(), String> {
 pub async fn stop_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    window: tauri::WebviewWindow,
+    session_id: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    if ask_capsule_action(&window, session_id.as_deref(), false) {
+        return Ok(());
+    }
+    let _ = (window, session_id);
     ensure_core_started(&core).await?;
     if coord.stop_less_computer_recording().await? {
         return Ok(());
@@ -50,10 +57,28 @@ pub async fn stop_dictation(
 pub async fn cancel_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    window: tauri::WebviewWindow,
+    session_id: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    if ask_capsule_action(&window, session_id.as_deref(), true) {
+        return Ok(());
+    }
+    let _ = (window, session_id);
     ensure_core_started(&core).await?;
     coord.cancel_active_voice().await;
     Ok(())
+}
+
+#[cfg(not(mobile))]
+fn ask_capsule_action(window: &tauri::WebviewWindow, session_id: Option<&str>, cancel: bool) -> bool {
+    window.label() == "capsule"
+        && session_id.is_some_and(|id| {
+            window.try_state::<Arc<crate::ask_window::Desktop>>().is_some_and(|ask| {
+                (if cancel { ask.capsule_cancel(id) } else { ask.capsule_stop(id) })
+                    || ask.recognizes_capsule(id)
+            })
+        })
 }
 
 #[cfg(not(mobile))]

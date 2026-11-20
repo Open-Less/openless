@@ -46,6 +46,8 @@ pub enum HotkeyEvent {
     Released {
         at: Instant,
         press_id: u64,
+        /// Native per-press verdict, independent of the asynchronous abort bridge.
+        combined: bool,
     },
     // Combo abort is not in this enum: it goes through the separate `combo_abort` channel to avoid
     // being queued behind the Pressed → begin_session synchronous mic-open flow (see module docs).
@@ -766,18 +768,42 @@ mod platform {
 
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
-                crate::recording_companion::reset_held();
+                crate::ask_window::hotkey::reset_physical_state();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
                 return event;
             }
-            FLAGS_CHANGED => handle_flags_changed(ctx, event),
+            FLAGS_CHANGED => {
+                let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+                let flags = unsafe { CGEventGetFlags(event) };
+                if keycode == 63 || crate::side_aware_combo::platform::side_from_keycode(keycode).is_some() {
+                    let down = if keycode == 63 {
+                        flags & FLAG_MASK_SECONDARY_FN != 0
+                    } else {
+                        crate::side_aware_combo::platform::resolve_side_pressed_from_flags(keycode, flags)
+                            .unwrap_or_else(|| crate::side_aware_combo::platform::keycode_is_down(keycode))
+                    };
+                    if ask_key_edge(ctx, event, keycode, down).is_some() {
+                        return event;
+                    }
+                }
+                handle_flags_changed(ctx, event);
+            }
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
+                if let Some(result) = ask_key_edge(ctx, event, keycode, true) {
+                    return result;
+                }
                 if !ctx.shared.recording_active.load(Ordering::SeqCst)
-                    && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {
+                    && crate::side_aware_combo::platform::dispatch_keycode(
+                        keycode,
+                        false,
+                        unsafe { CGEventGetFlags(event) },
+                        true,
+                    )
+                {
                     crate::side_aware_combo::handle_companion_key_down();
                     note_companion_key_down(ctx);
                     return std::ptr::null_mut();
@@ -792,7 +818,15 @@ mod platform {
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false) {
+                if let Some(result) = ask_key_edge(ctx, event, keycode, false) {
+                    return result;
+                }
+                if crate::side_aware_combo::platform::dispatch_keycode(
+                    keycode,
+                    false,
+                    unsafe { CGEventGetFlags(event) },
+                    false,
+                ) {
                     return std::ptr::null_mut();
                 }
             }
@@ -800,11 +834,39 @@ mod platform {
             // systemDefined. While the Fn trigger is held, treat these as function-layer combos —
             // dictation must not start at the same time.
             SYSTEM_DEFINED => {
-                handle_system_defined_event(ctx, || system_defined_event_payload(event));
+                if crate::ask_window::hotkey::fn_is_held() {
+                    if system_defined_event_payload(event)
+                        .is_some_and(|(subtype, data)| is_auxiliary_function_key_event(subtype, data))
+                    {
+                        crate::ask_window::hotkey::abort_fn_companion();
+                    }
+                } else {
+                    handle_system_defined_event(ctx, || system_defined_event_payload(event));
+                }
             }
             _ => {}
         }
         event
+    }
+
+    fn ask_key_edge(ctx: &CallbackContext, event: CgEventRef, keycode: i64, down: bool) -> Option<CgEventRef> {
+        use crate::ask_window::hotkey::{keyboard_edge, Disposition};
+        const AUTOREPEAT_FIELD: CgEventField = 8;
+        const SOURCE_PID_FIELD: CgEventField = 41;
+        if unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } != 0 {
+            return None;
+        }
+        let repeat = down && unsafe { CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) } != 0;
+        match keyboard_edge(
+            u16::try_from(keycode).ok()?,
+            down,
+            repeat,
+            ctx.shared.recording_active.load(Ordering::SeqCst),
+        ) {
+            Disposition::Stock => None,
+            Disposition::Pass => Some(event),
+            Disposition::Consume => Some(std::ptr::null_mut()),
+        }
     }
 
     fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
@@ -929,7 +991,8 @@ mod platform {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
             let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
             if !tap_only_fn {
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
                 return;
             }
 
@@ -946,7 +1009,8 @@ mod platform {
                         press_id,
                     },
                 );
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
             } else {
                 log::info!(
                     "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
@@ -1476,8 +1540,8 @@ mod platform {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
-        WH_KEYBOARD_LL, WM_QUIT,
+        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+        MSG, WH_KEYBOARD_LL, WM_QUIT,
     };
 
     use super::{
@@ -1675,7 +1739,27 @@ mod platform {
                 // dispatch path. As long as the event's virtual key matches the current
                 // configuration, the existing edge dedup and combo-abort logic still decide
                 // whether OpenLess fires; no filtering by synthetic-input source here.
-                if dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0) {
+                let vk_code = crate::side_aware_combo::normalize_windows_vk(
+                    keyboard.vkCode,
+                    keyboard.scanCode,
+                    keyboard.flags.0 & LLKHF_EXTENDED.0 != 0,
+                );
+                const INJECTED: u32 = 0x10;
+                if keyboard.flags.0 & INJECTED == 0 {
+                    use crate::ask_window::hotkey::{keyboard_edge, Disposition};
+                    let down = matches!(wparam.0, WM_KEYDOWN | WM_SYSKEYDOWN);
+                    let disabled = ctx.shared.recording_active.load(Ordering::SeqCst);
+                    if (down || matches!(wparam.0, WM_KEYUP | WM_SYSKEYUP))
+                        && !(down && vk_code == VK_ESCAPE && super::capsule_menu_open())
+                    {
+                        match keyboard_edge(vk_code as u16, down, false, disabled) {
+                            Disposition::Consume => return LRESULT(1),
+                            Disposition::Pass => return CallNextHookEx(None, code, wparam, lparam),
+                            Disposition::Stock => {}
+                        }
+                    }
+                }
+                if dispatch_keyboard_event(ctx, vk_code, wparam.0) {
                     return LRESULT(1);
                 }
             }
@@ -1814,6 +1898,7 @@ mod platform {
                         HotkeyEvent::Released {
                             at: std::time::Instant::now(),
                             press_id,
+                            combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id,
                         },
                     );
                 }
@@ -2128,6 +2213,23 @@ mod platform {
                 replacement_rx.recv_timeout(std::time::Duration::from_secs(2)),
                 Err(mpsc::RecvTimeoutError::Disconnected)
             );
+        }
+
+        #[test]
+        fn windows_release_carries_combo_verdict_even_when_abort_bridge_has_not_drained() {
+            let (ctx, rx, abort_rx) = callback_context_with_combo(shared(HotkeyTrigger::RightControl));
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            let press_id = match rx.recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                other => panic!("expected press, got {other:?}"),
+            };
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP);
+            // Intentionally read Released before the independently queued Combined.
+            assert!(matches!(rx.recv().unwrap(), HotkeyEvent::Released {
+                press_id: released_id, combined: true, ..
+            } if released_id == press_id));
+            assert_eq!(abort_rx.recv().unwrap().press_id, press_id);
         }
 
         #[test]

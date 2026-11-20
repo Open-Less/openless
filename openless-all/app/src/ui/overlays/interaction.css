@@ -1,0 +1,99 @@
+.ol-confirm-dialog,
+.ol-interaction-dialog {
+  display: grid;
+  gap: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+:is(.ol-confirm-dialog, .ol-interaction-dialog) h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: var(--ol-font-weight-semibold);
+  color: var(--ol-ink);
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.ol-confirm-dialog-description {
+  margin: 0;
+  color: var(--ol-ink-3);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.ol-confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  --ol-confirm-ink: var(--ol-accent-solid-bg);
+  --ol-confirm-soft: var(--ol-blue-soft);
+}
+
+.ol-confirm-dialog[data-tone='danger'] {
+  --ol-confirm-ink: var(--ol-err);
+  --ol-confirm-soft: rgba(220, 38, 38, 0.1);
+}
+
+.ol-confirm-dialog[data-tone='warning'] {
+  --ol-confirm-ink: var(--ol-warn);
+  --ol-confirm-soft: var(--ol-warn-soft);
+}
+
+.ol-confirm-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ol-radius);
+  color: var(--ol-confirm-ink);
+  background: var(--ol-confirm-soft);
+}
+
+.ol-confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  width: 100%;
+  align-items: center;
+}
+
+.ol-confirm-dialog-actions button {
+  max-width: 100%;
+  padding: 7px 14px;
+  min-height: 34px;
+  border-radius: var(--ol-button-radius);
+  --ol-corner-radius: var(--ol-button-radius);
+  font-size: 13.5px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ol-confirm-primary {
+  color: var(--ol-accent-solid-ink);
+  background: var(--ol-accent-solid-bg);
+}
+.ol-confirm-danger {
+  color: var(--ol-danger-solid-ink);
+  background: var(--ol-danger-solid-bg);
+}
+.ol-confirm-cancel {
+  color: var(--ol-ink-2);
+  background: var(--ol-control-solid);
+  border: 0.5px solid var(--ol-line-strong);
+}
+
+.ol-structured-dialog .ol-confirm-dialog {
+  align-items: stretch;
+  gap: 0;
+}
+.ol-structured-dialog .ol-confirm-dialog-icon {
+  margin-bottom: 12px;
+}
+.ol-confirm-dialog-error {
+  margin: 12px 0 0;
+  color: var(--ol-err);
+}

@@ -72,7 +72,7 @@ button:disabled {
 .ol-thinscroll {
   overflow-anchor: auto;
 }
-.ol-dialog-overlay {
+.ol-dialog-overlay::before {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -121,13 +121,15 @@ button:disabled {
 }
 .ol-settings-sections > .ol-card {
   border: 0 !important;
-  border-radius: var(--ol-radius);
+  border-radius: 0 !important;
   box-shadow: none !important;
+  clip-path: none !important;
+  corner-shape: unset !important;
   background: transparent !important;
   padding: 0 0 20px !important;
 }
 .ol-settings-sections > .ol-card + .ol-card {
-  border-top: 1px solid var(--ol-line) !important;
+  border: 0 !important;
   padding-top: 20px !important;
 }
 .ol-setting-row {
@@ -144,29 +146,8 @@ button:disabled {
   padding: 60px 32px 32px 254px;
 }
 
-/* Search and the command list share the right-hand settings pane. */
-.ol-settings-search-field {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  height: 36px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: var(--ol-control-radius);
-  color: var(--ol-ink);
-  background: var(--ol-surface-2);
-  box-shadow: inset 0 0 0 1px var(--ol-line-strong);
-  font: inherit;
-  font-size: 13px;
-}
-.ol-settings-search-field:focus-visible {
-  outline: 2px solid var(--ol-blue-ring);
-  outline-offset: 1px;
-  box-shadow: inset 0 0 0 1px var(--ol-blue);
-}
 .ol-expression-clear {
-  --ol-corner-radius: 8px;
+  --ol-corner-radius: var(--ol-button-radius);
 }
 .ol-shortcuts-toolbar {
   display: flex;
@@ -174,11 +155,8 @@ button:disabled {
   align-items: center;
   padding-bottom: 16px;
 }
-.ol-shortcuts-toolbar input {
+.ol-shortcuts-toolbar .ol-settings-search-field {
   max-width: 520px;
-}
-.ol-shortcuts .ol-settings-search-field[type='search'] {
-  background-color: var(--ol-surface-2);
 }
 .ol-shortcuts-count {
   white-space: nowrap;
@@ -187,9 +165,15 @@ button:disabled {
 }
 .ol-shortcuts-layout {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
   align-items: start;
+}
+.ol-shortcuts-filters {
+  grid-column: span 3;
+}
+.ol-shortcut-results {
+  grid-column: span 9;
 }
 .ol-shortcuts-filters {
   position: sticky;
@@ -220,8 +204,8 @@ button:disabled {
     background-color var(--ol-choice-motion);
 }
 .ol-shortcuts-filters button[aria-pressed='true'] {
-  background: var(--ol-choice-active-bg);
-  color: var(--ol-choice-active-ink);
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
   font-weight: var(--ol-font-weight-semibold);
 }
 .ol-shortcut-results {
@@ -229,13 +213,21 @@ button:disabled {
 }
 .ol-shortcut-row {
   display: grid;
-  grid-template-columns: minmax(100px, 1fr) minmax(150px, 260px);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: center;
-  gap: 20px;
+  gap: var(--ol-grid-gutter);
   min-height: 64px;
   padding: 12px 0;
   border-bottom: 1px solid var(--ol-line-soft);
   font-size: 13.5px;
+}
+.ol-shortcut-row > :first-child {
+  grid-column: span 8;
+}
+.ol-shortcut-row > :nth-child(2) {
+  grid-column: span 4;
+  justify-self: end;
+  min-width: 0;
 }
 .ol-shortcut-row small {
   display: block;
@@ -246,9 +238,16 @@ button:disabled {
 .ol-shortcut-row > kbd {
   justify-self: end;
 }
-.ol-shortcut-pack {
-  grid-template-columns: minmax(100px, 1fr) minmax(140px, 240px) 24px;
-  gap: 12px;
+.ol-shortcut-pack > :first-child {
+  grid-column: span 7;
+}
+.ol-shortcut-pack > :nth-child(2) {
+  grid-column: span 4;
+  justify-self: stretch;
+}
+.ol-shortcut-pack > :nth-child(3) {
+  grid-column: span 1;
+  justify-self: end;
 }
 .ol-shortcut-recorder {
   min-width: 0;
@@ -272,6 +271,11 @@ button:disabled {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.ol-shortcut-popup {
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  min-width: 0;
+}
 .ol-shortcut-recording {
   background: var(--ol-blue-soft);
   border: 1px solid var(--ol-blue);
@@ -280,6 +284,7 @@ button:disabled {
   color: var(--ol-ink);
   font-size: 12px;
   line-height: 1.5;
+  text-align: center;
 }
 .ol-shortcut-recording small {
   display: block;
@@ -420,6 +425,10 @@ button:disabled {
     0 0 0 0.5px rgba(0, 0, 0, 0.04);
   transition: transform 180ms var(--ol-motion-spring);
 }
+.ol-switch[data-variant='flat'],
+.ol-switch[data-variant='flat'] .ol-switch-thumb {
+  box-shadow: none;
+}
 .ol-switch[data-checked] .ol-switch-thumb {
   transform: translateX(calc(var(--ol-switch-width) - var(--ol-switch-knob) - 4px));
 }
@@ -450,10 +459,6 @@ button:disabled {
   border-color: var(--ol-blue-ring);
 }
 
-.ol-typography .ol-select-trigger {
-  width: 280px;
-  background: var(--ol-surface-2);
-}
 .ol-advanced-settings-detail > .ol-experimental-models {
   border: 0 !important;
   border-radius: var(--ol-radius);
@@ -469,6 +474,19 @@ button:disabled {
 .ol-experimental-model-row {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
+}
+.ol-experimental-model-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.ol-experimental-model-action-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 72px;
+  min-width: 72px;
 }
 .ol-model-state {
   position: relative;
@@ -504,60 +522,6 @@ button:disabled {
   border-radius: var(--ol-r-sm);
   color: var(--ol-blue);
 }
-.ol-global-downloads {
-  position: fixed;
-  top: 14px;
-  right: 14px;
-  z-index: 900;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: min(320px, calc(100vw - 28px));
-}
-.ol-download-card {
-  padding: 10px 12px;
-  border: 0.5px solid var(--ol-line-strong);
-  border-radius: var(--ol-r-md);
-  background: var(--ol-surface);
-  box-shadow: var(--ol-shadow-lg);
-}
-.ol-download-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-}
-.ol-download-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ol-download-status {
-  color: var(--ol-ink-3);
-  font-variant-numeric: tabular-nums;
-}
-.ol-download-heading button {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border-radius: var(--ol-radius);
-}
-.ol-download-card progress {
-  display: block;
-  width: 100%;
-  height: 5px;
-  margin-top: 6px;
-  accent-color: var(--ol-blue);
-}
-.ol-download-card p {
-  color: var(--ol-warn);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
 .ol-experimental-model-status {
   display: block;
   line-height: 18px;
@@ -569,11 +533,16 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-/* An honest first frame: finite, pure CSS mark. No video, sound, fixed delay or fake percentage. */
+/* Startup only. This covers the whole window until the first page can paint.
+   Page navigation keeps the previous surface and does not use this mask. */
 .ol-startup {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
   display: grid;
   place-items: center;
   width: 100%;
+  height: 100%;
   min-height: 100%;
   padding: 24px;
   background: var(--ol-surface);
@@ -591,7 +560,7 @@ button:disabled {
 }
 .ol-startup-content > p {
   margin: 8px 0;
-  color: var(--ol-ink-3);
+  color: var(--ol-ink-2);
   font-size: 12px;
 }
 .ol-startup-mark {
@@ -721,8 +690,12 @@ button:disabled {
 }
 @media (max-width: 840px) {
   .ol-shortcuts-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
+  }
+  .ol-shortcuts-filters,
+  .ol-shortcut-results {
+    grid-column: 1 / -1;
   }
   .ol-shortcuts-filters {
     position: static;
@@ -752,6 +725,10 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
+  .ol-shortcut-row > * {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
   .ol-shortcut-row > kbd {
     justify-self: start;
   }
@@ -760,6 +737,10 @@ button:disabled {
   }
   .ol-shortcut-pack > :first-child {
     grid-column: 1 / -1;
+  }
+  .ol-shortcut-pack > :nth-child(2),
+  .ol-shortcut-pack > :nth-child(3) {
+    grid-column: auto;
   }
   .ol-settings-placeholder {
     padding: 32px 16px;
@@ -787,7 +768,8 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .ol-dialog-overlay,
-  .ol-glass {
+  .ol-glass,
+  .ol-startup {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -810,34 +792,17 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   min-height: 0;
   overflow: hidden;
 }
-.ol-transition-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  opacity: 0;
-  background: color-mix(in srgb, var(--ol-surface) 18%, transparent);
-  transition: opacity 120ms var(--ol-motion-quick);
-}
-.ol-transition-viewport[aria-busy='true'] .ol-transition-mask {
-  opacity: 1;
-}
 .ol-main-arrival {
   width: 100%;
   height: 100%;
-  transform-origin: 50% 40%;
-  animation: ol-main-arrive 280ms var(--ol-motion-soft);
+  animation: ol-main-arrive 160ms var(--ol-motion-soft);
 }
 @keyframes ol-main-arrive {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.97);
-    filter: blur(7px);
   }
   to {
     opacity: 1;
-    transform: none;
-    filter: blur(0px);
   }
 }
 .ol-shell-depth {
@@ -851,9 +816,6 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   opacity: 0.72;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ol-transition-mask {
-    transition: none;
-  }
   .ol-main-arrival {
     animation: none;
   }

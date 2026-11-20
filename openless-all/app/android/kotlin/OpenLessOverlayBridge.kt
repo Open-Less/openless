@@ -37,7 +37,7 @@ object OpenLessOverlayBridge {
     fun showToast(message: String) {
         mainHandler.post {
             val service = OpenLessOverlayService.instance ?: return@post
-            android.widget.Toast.makeText(
+            OpenLessNativeNotice.makeText(
                     service.applicationContext,
                     message,
                     android.widget.Toast.LENGTH_SHORT,

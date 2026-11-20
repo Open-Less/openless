@@ -46,9 +46,10 @@ jobs:
   # true。push / tag / 手动运行不带基线，因此始终全量验证。
   changes:
     name: Changed areas
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only') && 'macos-latest' || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
+      desktop-only: ${{ steps.detect.outputs.desktop-only }}
       tauri: ${{ steps.detect.outputs.tauri }}
       msrv: ${{ steps.detect.outputs.msrv }}
       harmony: ${{ steps.detect.outputs.harmony }}
@@ -67,8 +68,10 @@ jobs:
         working-directory: openless-all/app
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DESKTOP_ONLY: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only') }}
         run: |
           set -euo pipefail
+          echo "desktop-only=$DESKTOP_ONLY" | tee -a "$GITHUB_OUTPUT"
           for area in tauri msrv harmony frontend android capsule ios-device; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
@@ -84,7 +87,7 @@ jobs:
     # Keep existing check-run names for branch protection compatibility.
     name: test
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -146,7 +149,7 @@ jobs:
     # same two VMs instead of adding ~8 minutes of tests before a ~15 minute build.
     # Both checks still have to pass; this workflow does not publish the IPA.
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -222,7 +225,7 @@ jobs:
     needs: [changes]
     # One worker per browser keeps timing-sensitive tests isolated; the two
     # engines run on separate runners instead of serialising ~15 minutes.
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     # A hung Chromium/WebKit process must not hold the runner after the step cap.
     # Includes cold browser setup and leaves time to upload a failed trace.
@@ -262,12 +265,12 @@ jobs:
         timeout-minutes: 12
         run: |
           # Keep regional mirror stalls from blocking browser validation indefinitely.
-          # ubuntu.sources uses mirror+file:/etc/apt/apt-mirrors.txt, so the Azure
-          # host is not in *.list or *.sources.
+          # Hosted runners can use Azure or regional EC2 archive mirrors, often
+          # via mirror+file:/etc/apt/apt-mirrors.txt in ubuntu.sources.
           printf '%s\n' 'Acquire::Retries "2";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' |
             sudo tee /etc/apt/apt.conf.d/80-openless-ci-network >/dev/null
           while IFS= read -r -d '' apt_source; do
-            sudo sed -i -E 's#https?://azure[.]archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
+            sudo sed -i -E 's#https?://([a-z0-9-]+[.])*archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
           done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' -o -name 'apt-mirrors.txt' \) -print0)
           npx playwright install-deps "${{ matrix.browser }}"
       - name: Install Playwright browsers on cache miss
@@ -291,13 +294,21 @@ jobs:
           path: |
             openless-all/app/test-results/
             openless-all/app/playwright-report/
+      - name: Upload UI acceptance screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-acceptance-${{ matrix.browser }}
+          path: openless-all/app/test-results/**/acceptance-*.png
+          retention-days: 7
+          if-no-files-found: ignore
 
   # Preserve the existing required-check name. A skipped browser matrix is only
-  # acceptable when the change classifier explicitly says it is out of scope.
+  # acceptable when the classifier or the requested CI scope excludes it.
   ui-motion:
     name: UI motion (Chromium + WebKit)
     needs: [changes, ui-motion-browsers]
-    if: always()
+    if: always() && !(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -318,7 +329,7 @@ jobs:
   android-check:
     needs: [changes]
     # Android compiles its own Rust graph: a bundle-only change cannot break it.
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -661,7 +672,7 @@ jobs:
   #     real HAP, which is what actually type-checks the ArkTS sources.
   harmony-check:
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
     name: Harmony (ArkTS contracts, Rust host, HAP)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1178,7 +1189,7 @@ jobs:
     name: Windows checks
     needs: [changes, cross-platform, windows-msrv]
     if: always() && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos')
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.desktop-only == 'false' && 'ubuntu-latest' || 'macos-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require stable and MSRV results
