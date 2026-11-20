@@ -276,6 +276,12 @@ impl SearchRun<'_> {
                     message: "The configured Web Search provider needs an API key".into(),
                 });
             }
+            SearchProvider::Hybrid if config.api_key.trim().is_empty() => {
+                return Err(SearchError {
+                    code: SearchErrorCode::Configuration,
+                    message: "Mixed Search needs a DeepSeek Search API key".into(),
+                });
+            }
             SearchProvider::Searxng if config.endpoint.trim().is_empty() => {
                 return Err(SearchError {
                     code: SearchErrorCode::Configuration,
