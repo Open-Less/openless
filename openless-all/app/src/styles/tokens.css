@@ -14,8 +14,7 @@
   --ol-button-radius: 12px;
   --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
-  --ol-field-bg: #f4f4f9;
-  --ol-field-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 2px 8px rgb(0 0 0 / 5%);
+  --ol-field-bg: var(--ol-select-trigger-bg);
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
   /* Shared palette（shadcn zinc） */
@@ -263,7 +262,6 @@
 
 [data-ol-theme='dark'] {
   --ol-field-bg: #26262a;
-  --ol-field-shadow: 0 0 #0000;
   --ol-font-weight-offset: -40;
   --ol-font-weight-regular: 360;
   --ol-font-weight-bold: 660;

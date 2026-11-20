@@ -712,9 +712,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   padding: 0;
   gap: 0;
   border: 0;
-  box-shadow:
-    inset 0 0 0 1px transparent,
-    var(--ol-field-shadow, 0 0 #0000);
   transform-origin: right center;
   transition:
     width 0.34s cubic-bezier(0.34, 1.35, 0.64, 1),

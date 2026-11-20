@@ -12,7 +12,6 @@
   border-radius: var(--ol-corner-radius);
   background: var(--ol-field-bg);
   color: var(--ol-ink);
-  box-shadow: var(--ol-field-shadow);
   font-size: 13.5px;
   cursor: text;
   transition:
