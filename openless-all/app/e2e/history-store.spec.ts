@@ -18,7 +18,11 @@ test('history writes update every page while recordings, activity and the usage 
   const initialApps = await page.locator('.ol-gha-app-preview').textContent();
   expect(initialHeading).toBeTruthy();
   expect(initialApps).toBeTruthy();
-  await navigate(page, 'history', '历史');
+  const history = await navigate(page, 'history', '历史');
+  await expect(history.getByRole('button', { name: '刷新', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Control+r');
+  await expect(history).toHaveAttribute('data-transition-phase', 'settled');
+  await expect(page.getByText('已刷新', { exact: true })).toHaveCount(0);
   const records = page.locator('[data-history-record]');
   await expect(records).toHaveCount(9);
   await page.keyboard.press('Control+k');

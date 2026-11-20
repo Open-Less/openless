@@ -149,7 +149,7 @@ test('a new save replaces the previous receipt in place and draws a full success
   await expect(savedIcon).toHaveAttribute('data-tone', 'trash');
 });
 
-test('repeated history refresh keeps receipts at the top under desktop CSP', async ({ page }) => {
+test('repeated quick-note refresh keeps receipts at the top under desktop CSP', async ({ page }) => {
   const url = `${previewOrigin}/?os=mac`;
   await page.route(url, async (route) => {
     const response = await route.fetch();
@@ -163,7 +163,10 @@ test('repeated history refresh keeps receipts at the top under desktop CSP', asy
     });
   });
   await page.goto(url);
-  await page.getByRole('button', { name: '历史', exact: true }).click();
+  const tools = page.getByRole('button', { name: '工具', exact: true });
+  await tools.click();
+  await expect(tools).toHaveAttribute('aria-expanded', 'true');
+  await page.getByRole('button', { name: '速记', exact: true }).click();
   await settleNavigation(page);
   const refresh = page.getByRole('button', { name: '刷新', exact: true });
   const active = page.locator('.ol-notification-slot:not([data-exiting]) .ol-notification-card');
@@ -220,7 +223,7 @@ test('save bridge and independent in-flight saves keep their own lifecycle', asy
   await expect(page.getByText('Second saving')).toBeVisible();
 });
 
-for (const kind of ['qa', 'voice-edit', 'selection-voice-intent']) {
+for (const kind of ['voice-edit', 'selection-voice-intent']) {
   test(`auxiliary ${kind} window has its own notification host`, async ({ page }) => {
     await page.goto(`/?window=${kind}&os=mac`);
     await expect(page.locator('.ol-notification-center')).toHaveCount(1);

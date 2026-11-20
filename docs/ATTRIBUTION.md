@@ -26,5 +26,9 @@ The shared toast surface adapts Rare UI's [Toast](https://www.rareui.com/compone
 interaction references for OpenLess Ask Anything. The OpenLess implementation uses
 its own native shortcut, voice, and streaming contracts rather than the demo's mock backend.
 
-The blue Ask recording strip also uses [Rare UI Voice Note](https://www.rareui.com/components/voicenote)
-as its visual reference, retaining the medium 340×52 layout with 40 bars while replacing playback with live microphone levels and elapsed time.
+The upstream Prompt Box files in `openless-all/app/third_party/rare-ui` come from
+[`33f7ce51`](https://github.com/swamimalode07/rare-ui/tree/33f7ce51e5a41fb7caef66b7aad0812b5bb2ab17)
+and are included as part of the app, not offered as a component library.
+
+- Rare UI code: Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt).
+- Open Runde fonts: [SIL Open Font License 1.1](../openless-all/app/public/licenses/open-runde-OFL.txt).

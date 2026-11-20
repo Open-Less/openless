@@ -919,6 +919,29 @@ impl OpenAICompatibleLLMProvider {
         body
     }
 
+    pub(crate) fn ask_config(&self) -> &OpenAICompatibleConfig {
+        &self.config
+    }
+
+    pub(crate) fn ask_request(
+        &self,
+        messages: Vec<Value>,
+        configure: impl FnOnce(&mut Value),
+    ) -> Result<reqwest::RequestBuilder, LLMError> {
+        self.config
+            .protocol
+            .validate()
+            .and_then(|_| self.config.protocol.validate_headers(&self.config.extra_headers))
+            .map_err(|error| LLMError::ParseError(error.message))?;
+        let url = self.config.protocol.format.url(&self.config.base_url)?;
+        let mut body = self.chat_body(true, messages);
+        configure(&mut body);
+        Ok(self
+            .authorize(crate::net::credential_http_for_url(&url).post(url), &body)
+            .header("Accept", "text/event-stream")
+            .json(&body))
+    }
+
     /// Shared HTTP send + body parsing. chat_completion / chat_completion_with_polish_history
     /// both call here after building their body, avoiding a 30-line send/parse duplication.
     /// `budget` is the total budget for this call, chosen by the caller: polish scales

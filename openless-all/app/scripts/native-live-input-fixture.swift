@@ -28,4 +28,13 @@ Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
     field.setSelectedRange(NSRange(location: 7, length: 2))
 }
 Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { _ in app.terminate(nil) }
+if CommandLine.arguments.contains("--ask-selected") {
+    Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { timer in
+        if field.string != "before 原文 after" {
+            timer.invalidate()
+            return
+        }
+        field.setSelectedRange(NSRange(location: 7, length: 2))
+    }
+}
 app.run()

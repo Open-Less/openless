@@ -163,7 +163,6 @@ fn reconcile_hotkeys(
     target: openless_core::HotkeyRuntimeTarget,
 ) -> Result<(), BackendError> {
     *coord.inner.hotkey_runtime_target.lock() = target.clone();
-    crate::recording_companion::configure(target.dictation.clone(), target.qa_companion_key.clone());
     let trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.dictation);
     let binding = crate::types::HotkeyBinding {
         trigger: trigger.unwrap_or(crate::types::HotkeyTrigger::Custom),
@@ -195,6 +194,8 @@ fn reconcile_hotkeys(
     coord
         .update_coding_agent_hotkey_binding()
         .map_err(|_| failure("restore_agent_hotkey_failed"))?;
+    let target = hotkey_runtime_target(&coord.inner);
+    crate::ask_window::hotkey::set_binding(&target.dictation, target.dictation_mode);
     Ok(())
 }
 
@@ -206,7 +207,6 @@ fn reconcile_hotkeys_on_main(
     // Release old combinations together before applying an absolute target;
     // this also permits swapping two bindings during a restore.
     inner.combo_hotkey.lock().take();
-    inner.qa_hotkey.lock().take();
     inner.translation_hotkey.lock().take();
     inner.switch_style_hotkey.lock().take();
     inner.open_app_hotkey.lock().take();
@@ -256,20 +256,6 @@ fn reconcile_hotkeys_on_main(
             .spawn(move || combo_hotkey_bridge_loop(owned, receive))
             .map_err(|error| error.to_string())?;
         *inner.combo_hotkey.lock() = Some(monitor);
-    }
-    if let Some(binding) = target.qa.as_ref().filter(|binding| {
-        crate::shortcut_binding::legacy_modifier_trigger(binding).is_none()
-            && !is_unconfigured_shortcut(binding)
-    }) {
-        let (send, receive) = mpsc::channel();
-        let monitor =
-            QaHotkeyMonitor::start(binding.clone(), send).map_err(|error| error.to_string())?;
-        let owned = Arc::clone(inner);
-        std::thread::Builder::new()
-            .name("openless-qa-hotkey-bridge".into())
-            .spawn(move || qa_hotkey_bridge_loop(owned, receive))
-            .map_err(|error| error.to_string())?;
-        *inner.qa_hotkey.lock() = Some(monitor);
     }
     if !is_builtin_translation_shift(&target.translation)
         && crate::shortcut_binding::legacy_modifier_trigger(&target.translation).is_none()

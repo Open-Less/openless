@@ -1042,6 +1042,10 @@ pub trait QaRuntimeAdapter: Send + Sync {
 }
 
 pub trait QaApi: Send + Sync {
+    fn ask_history_sink(&self) -> Option<Arc<crate::ask::AskHistorySink>> {
+        None
+    }
+
     /// Bind restore admission before the service is exposed to runtime callers.
     /// Legacy custom services remain source compatible, but conservatively do
     /// not report restore-safe idleness until they implement both methods.

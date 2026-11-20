@@ -615,6 +615,9 @@ async fn continue_selection_voice_disposition(
     inner: &Arc<Inner>,
     disposition: SelectionVoiceDisposition,
 ) -> Result<EndWorkflowOutcome, String> {
+    if matches!(&disposition, SelectionVoiceDisposition::Question { .. }) {
+        return Err("随便问暂不可用，未更改选中的内容".into());
+    }
     let route = inner
         .backend
         .services()

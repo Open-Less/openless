@@ -1157,6 +1157,11 @@ export const ko: typeof zhCN = {
       '선택한 텍스트를 문맥으로 사용합니다. 선택 없이도 질문할 수 있으며 매번 새 질문을 시작합니다.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Ask에 데스크톱 앱 이름 공유',
+      description: 'Ask를 열 때 활성 앱과 열려 있는 앱의 이름을 기록하고, 질문을 보낼 때 모델에 전달합니다. 창의 내용은 읽지 않습니다.',
+      saveFailed: 'Ask의 데스크톱 정보 공유 설정을 업데이트하지 못했습니다.',
+    },
     title: '무엇이든 질문',
     desc: '텍스트 선택 후 음성으로 질문. 다중 라운드 후속 질문 지원.',
     shortcutSettings: '단축키 설정',
@@ -1178,7 +1183,7 @@ export const ko: typeof zhCN = {
     },
     history: {
       title: '기록 저장',
-      desc: '활성화 시 Q&A 기록을 로컬에 저장. 기본 OFF.',
+      desc: '이 기기에 ‘무엇이든 질문’ 기록을 저장합니다. 기본값은 꺼짐입니다.',
     },
     howto: {
       title: '사용 방법',

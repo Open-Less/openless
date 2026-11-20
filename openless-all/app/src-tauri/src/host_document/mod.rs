@@ -32,7 +32,7 @@
 //! host document body.
 
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 mod uia_text;
 #[cfg(target_os = "windows")]
@@ -802,6 +802,9 @@ mod tests {
         assert_ne!(result.status, HostDocumentStatus::Unsupported);
     }
 }
+
+#[cfg(target_os = "windows")]
+pub(crate) use windows::{is_blocked_process_name, runtime_id as uia_runtime_id};
 
 #[cfg(target_os = "windows")]
 pub(crate) fn read_qa_selection() -> Option<String> {

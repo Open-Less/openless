@@ -40,7 +40,7 @@ import {
   useNavigation,
   type AppTab,
 } from './navigation';
-import { getPage, preloadPage, Overview, SelectionAsk } from './pages';
+import { getPage, preloadPage, Overview } from './pages';
 
 interface FloatingShellProps {
   os?: OS;
@@ -313,17 +313,11 @@ function FloatingShellBody({
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
-                    // Keep the usage-guide content height so the outer scroll area's
-                    // bottom-nav spacing applies.
-                    flex: displayTab === 'selectionAsk' ? '1 0 auto' : 1,
+                    flex: 1,
                     minHeight: 0,
                   }}
                 >
-                  {displayTab === 'selectionAsk' ? (
-                    <SelectionAsk onOpenShortcuts={() => openSettings('shortcuts')} />
-                  ) : (
-                    <Page />
-                  )}
+                  <Page />
                 </div>
               )}
             </TransitionViewport>

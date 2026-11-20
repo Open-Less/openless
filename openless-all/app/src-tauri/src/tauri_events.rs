@@ -142,7 +142,7 @@ async fn forward_legacy_event(
             }
         }
     }
-    if cfg!(mobile) && matches!(
+    if matches!(
         kind,
         BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
     ) {
@@ -216,9 +216,6 @@ async fn forward_legacy_event(
         }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
-            if crate::qa_draft::owns(result.session_id) {
-                return;
-            }
             if selection_voice_blocks_dictation_capsule(app) {
                 return;
             }
@@ -404,9 +401,6 @@ async fn forward_legacy_event(
                 });
             // Recheck the current owner after awaiting QA. A queued callback
             // from a cancelled native operation must not replace a new capsule.
-            if session_id.is_some_and(crate::qa_draft::owns) {
-                return;
-            }
             let qa_notice =
                 session_id.is_some() && qa.as_ref().is_some_and(|qa| qa.session_id == session_id);
             if let Some(payload) = (!qa_notice || cfg!(mobile))
@@ -490,9 +484,6 @@ fn emit_dictation_state(
     backend: &OpenLessBackend,
     snapshot: DictationStateSnapshot,
 ) {
-    if crate::qa_draft::present(app, &snapshot) {
-        return;
-    }
     if snapshot.phase == DictationPhase::Completed {
         return;
     }
@@ -597,6 +588,12 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
         coordinator.tauri_host().refresh_native_capsule_theme();
     }
     let _ = app.emit("prefs:changed", &preferences);
+    #[cfg(not(mobile))]
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window(crate::ask_window::LABEL),
+        "ask:window",
+        serde_json::json!({"type": "themeChanged", "themeMode": preferences.theme_mode}),
+    );
 }
 
 fn transcription_notice_payload(

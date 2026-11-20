@@ -1,188 +1,16 @@
 use super::*;
 
-#[tauri::command]
-pub fn get_qa_hotkey_label(core: CoreState<'_>) -> String {
-    let prefs = core.get_preferences();
-    if prefs.qa_companion_key.is_empty() {
-        return String::new();
-    }
-    format!(
-        "{} + {}",
-        prefs.dictation_hotkey.display_label(),
-        prefs.qa_companion_key
-    )
-}
-
-/// Sets the auxiliary key for recording-key + Ask. Null disables this chord;
-/// the retired independent follow-up shortcut is never registered.
-#[tauri::command]
-pub fn set_qa_hotkey(
-    coord: CoordinatorState<'_>,
-    binding: Option<ShortcutBinding>,
-) -> Result<(), String> {
-    if binding
-        .as_ref()
-        .is_some_and(|binding| !binding.modifiers.is_empty())
-    {
-        return Err("只需设置提问附加键，录音主键会自动跟随当前选择".into());
-    }
-    let mut prefs = coord.backend().get_preferences();
-    prefs.qa_hotkey = None;
-    prefs.qa_companion_key = binding.map(|binding| binding.primary).unwrap_or_default();
-    reject_hotkey_collisions(&prefs)?;
-    super::settings::persist_strict_settings(&coord, prefs)
-}
-
-/// User clicks ✕ or presses Esc to close the QA panel.
-#[tauri::command]
-pub async fn qa_window_dismiss(core: CoreState<'_>) -> Result<(), String> {
-    core.services()
-        .qa
-        .dismiss()
-        .await
-        .map_err(|error| error.message)
-}
-
-/// Mobile QA panel record button: Idle -> begin_qa_session, Recording ->
-/// end_qa_session.
-#[tauri::command]
-pub async fn qa_toggle_recording(core: CoreState<'_>) -> Result<(), String> {
-    core.services()
-        .qa
-        .toggle_recording()
-        .await
-        .map_err(|error| error.message)
-}
-
-/// QA panel keyboard input: reuses the voice-QA LLM pipeline, replacing only
-/// the question source.
-#[tauri::command]
-pub async fn qa_submit_text(
-    core: CoreState<'_>,
-    text: String,
-    expected_session_id: Option<openless_core::SessionId>,
-    enforce_context: Option<bool>,
-) -> Result<(), String> {
-    if enforce_context.unwrap_or(false) {
-        core.services()
-            .qa
-            .submit_text_in_context(text, expected_session_id)
-            .await
-            .map_err(|error| error.message)
-    } else {
-        core.services()
-            .qa
-            .submit_text(text)
-            .await
-            .map_err(|error| error.message)
-    }
-}
-
-#[tauri::command]
-pub async fn qa_get_snapshot(
-    window: Window,
-    core: CoreState<'_>,
-) -> Result<openless_core::events::QaStateEvent, String> {
-    if !matches!(window.label(), "qa" | "main") {
-        return Err("qa_window_required".into());
-    }
-    let snapshot = core
-        .services()
-        .qa
-        .snapshot()
-        .await
-        .map_err(|_| "qa_snapshot_unavailable")?;
-    let mut event = openless_core::events::QaStateEvent::from_snapshot(&snapshot);
-    event.edit_instruction_mode = Some(snapshot.edit_instruction_mode);
-    event.edit_apply_available = Some(snapshot.edit_apply_available);
-    event.edit_revert_available = Some(snapshot.edit_revert_available);
-    Ok(event)
-}
-
-/// Register only the local Ask textarea as a dictation destination.
-#[tauri::command]
-pub fn qa_set_draft_focus(window: Window, token: String, focused: bool) -> Result<(), String> {
-    if window.label() != "qa" || uuid::Uuid::parse_str(&token).is_err() {
-        return Err("qa_window_required".into());
-    }
-    crate::qa_draft::set_focus(token, focused);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn qa_stop_draft_recording(
-    window: Window,
-    core: CoreState<'_>,
-    session_id: openless_core::SessionId,
-) -> Result<(), String> {
-    if window.label() != "qa" || !crate::qa_draft::owns(session_id) {
-        return Err("qa_draft_session_required".into());
-    }
-    core.stop_dictation_session(session_id).await.map(|_| ()).map_err(|error| error.message)
-}
-
-#[tauri::command]
-pub async fn qa_window_set_expanded(window: Window, expanded: bool) -> Result<(), String> {
-    use tauri::Manager;
-    if window.label() != "qa" {
-        return Err("qa_window_required".into());
-    }
-    let app = window.app_handle().clone();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    window
-        .app_handle()
-        .run_on_main_thread(move || {
-            let result = crate::set_qa_window_expanded(&app, expanded);
-            if expanded {
-                // If sizing fails, the webview still needs to show its close/error affordance.
-                crate::present_pending_qa_window(&app);
-            }
-            let _ = sender.send(result);
-        })
-        .map_err(|_| "qa_main_thread_unavailable".to_string())?;
-    receiver
-        .await
-        .map_err(|_| "qa_resize_cancelled".to_string())?
-}
-
-/// Selection QA panel "edit instruction" checkbox.
-#[tauri::command]
-pub async fn qa_set_edit_instruction_mode(
-    core: CoreState<'_>,
-    enabled: bool,
-) -> Result<(), String> {
-    core.services()
-        .qa
-        .set_edit_instruction_mode(enabled)
-        .await
-        .map_err(|error| error.message)
-}
-
 /// User clicks ✕ or presses Esc to close the Less Computer panel.
 #[tauri::command]
 pub async fn less_computer_window_dismiss(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.dismiss_less_computer().await
 }
 
-/// Chat panels (qa / less-computer) request keyboard focus.
-///
-/// Both panels display without stealing the foreground (macOS
-/// orderFrontRegardless, never makeKey), so keystrokes never reach the webview
-/// while the window is not the key window — the root cause of "clicked the
-/// input box but cannot type".
-///
-/// macOS: the window is already a non-activating NSPanel
-/// (make_chat_window_panel_macos), so makeKeyAndOrderFront gives the panel
-/// keyboard focus without activating the app (same as Spotlight) — the earlier
-/// window.set_focus() activated the whole app, dragged the main window
-/// (settings) to the front, and made OpenLess frontmost so AX could not read
-/// the original app's selection. Other platforms still use set_focus. Only the
-/// two chat panel windows may call this (same tightening as
-/// less_computer_approve).
+/// Gives the non-activating Less Computer panel keyboard focus.
 #[tauri::command]
 pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
     let label = window.label();
-    if label != "qa" && label != "less-computer" {
+    if label != "less-computer" {
         return Err("chat_panel_focus_keyboard is only available to chat panels".to_string());
     }
     #[cfg(target_os = "macos")]
@@ -212,11 +40,8 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
             // closure frame preserves memory safety.
             let result = unsafe {
                 objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
-                    let key: bool = msg_send![ns, isKeyWindow];
-                    if !key {
-                        let nil: *mut AnyObject = std::ptr::null_mut();
-                        let _: () = msg_send![ns, makeKeyAndOrderFront: nil];
-                    }
+                    let nil: *mut AnyObject = std::ptr::null_mut();
+                    let _: () = msg_send![ns, makeKeyAndOrderFront: nil];
                 }))
             };
             if let Err(e) = result {
@@ -227,11 +52,7 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        if window.is_focused().unwrap_or(false) {
-            Ok(())
-        } else {
-            window.set_focus().map_err(|e| e.to_string())
-        }
+        window.set_focus().map_err(|e| e.to_string())
     }
 }
 
@@ -376,34 +197,4 @@ pub async fn less_computer_approve(
         .approve(token, approved)
         .await
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn qa_cancel_turn(core: CoreState<'_>) -> Result<(), String> {
-    core.services()
-        .qa
-        .cancel(None)
-        .await
-        .map_err(|error| error.message)
-}
-
-#[tauri::command]
-pub async fn qa_stop_recording(core: CoreState<'_>) -> Result<(), String> {
-    let snapshot = core
-        .services()
-        .qa
-        .snapshot()
-        .await
-        .map_err(|error| error.message)?;
-    if snapshot.phase != openless_core::QaPhase::Recording {
-        return Ok(());
-    }
-    if let Some(id) = snapshot.session_id {
-        core.services()
-            .qa
-            .stop_recording(id)
-            .await
-            .map_err(|error| error.message)?;
-    }
-    Ok(())
 }

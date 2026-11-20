@@ -2,7 +2,6 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CapsuleState, ThemeMode } from '../../src/lib/types';
-import type { QaStatePayload } from '../../src/api/contracts';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
 import { AppViewport } from '../../src/ui/layout/AppViewport';
@@ -11,9 +10,8 @@ const callbacks = new Map<number, (value: unknown) => void>();
 const listeners = new Map<string, Set<number>>();
 const listenerTargets = new Map<number, { kind: string; label?: string }>();
 let callbackId = 0;
-const qa = new URLSearchParams(location.search).has('qa');
 const params = new URLSearchParams(location.search);
-const windowLabel = params.get('label') ?? (qa ? 'qa' : 'capsule');
+const windowLabel = params.get('label') ?? 'capsule';
 const themeSync = params.has('themeSync');
 const holdThemeRead = params.has('holdThemeRead');
 let releaseThemeRead: (() => void) | undefined;
@@ -21,16 +19,8 @@ let themeReadStarted!: () => void;
 const firstThemeRead = new Promise<void>((resolve) => {
   themeReadStarted = resolve;
 });
-let qaSnapshot: QaStatePayload = { kind: 'idle', messages: [] };
 const bridge = {
   emit(event: string, payload: unknown) {
-    if (event === 'chat-panel:closing') qaSnapshot = { kind: 'idle', messages: [] };
-    if (event === 'qa:state') {
-      const state = payload as QaStatePayload;
-      // Stream chunks, activity and the host's lightweight idle are not snapshots.
-      if (state.kind !== 'answer_delta' && state.kind !== 'activity' && state.messages)
-        qaSnapshot = state;
-    }
     for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload });
   },
   emitTo(label: string, event: string, payload: unknown) {
@@ -44,9 +34,6 @@ const bridge = {
   inputRegions: [] as any[],
   regionWrites: [] as any[],
   dictationActions: [] as string[],
-  qaActions: [] as { command: string; args: unknown }[],
-  externalLinks: [] as string[],
-  qaDraftFocus: null as { token: string; focused: boolean } | null,
   pipelineMode: params.get('pipelineMode') === 'deepseek' ? 'deepseek' : 'traditional',
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
@@ -58,19 +45,8 @@ const bridge = {
     bridge.theme = themeMode;
     bridge.emit('prefs:changed', { themeMode });
   },
-  sizes: [] as boolean[],
-  holdQaGeometry: false,
   fallbackReports: [] as { presentationId: number; height: number }[],
   copiedFallback: [] as string[],
-  rejectQaExpansion: false,
-  applyQaGeometry(expanded: boolean, width?: number, height?: number) {
-    const host = document.querySelector<HTMLElement>('#native-host');
-    if (!host) return;
-    // Match the native window's nominal dimensions; tests can deliver a work-area clamp.
-    host.style.width = `${width ?? (expanded ? 920 : 480)}px`;
-    host.style.height = `${height ?? (expanded ? 800 : 80)}px`;
-    host.style.bottom = expanded ? '16px' : '8px';
-  },
   target: {
     sessionId: 'recording-a',
     targetLanguage: 'English',
@@ -98,24 +74,13 @@ window.__TAURI_INTERNALS__ = {
     callbacks.delete(id);
   },
   async invoke(command: string, args: any) {
-    if (command === 'qa_set_draft_focus') {
-      bridge.qaDraftFocus = args;
-      return;
-    }
-    if (command === 'plugin:shell|open') {
-      bridge.externalLinks.push(args.path);
-      return;
-    }
-    if (['qa_cancel_turn', 'qa_stop_recording', 'qa_submit_text'].includes(command)) {
-      bridge.qaActions.push({ command, args });
-    }
     if (command === 'set_capsule_interactive_regions') {
       bridge.inputRegions = args.rects;
       bridge.regionWrites.push(args.rects);
       return;
     }
     if (
-      ['stop_dictation', 'cancel_dictation', 'qa_stop_recording', 'qa_cancel_turn'].includes(
+      ['stop_dictation', 'cancel_dictation'].includes(
         command,
       )
     ) {
@@ -140,7 +105,6 @@ window.__TAURI_INTERNALS__ = {
       const settings = {
         translationTargetLanguage: bridge.target.targetLanguage,
         capsuleStyle: 'classic',
-        qaShortcutBehavior: params.get('qaBehavior') ?? 'record',
         pipelineMode: bridge.pipelineMode,
         capsuleTranscriptEnabled: params.has('transcript'),
         ...(themeSync ? { themeMode: bridge.theme } : {}),
@@ -196,14 +160,6 @@ window.__TAURI_INTERNALS__ = {
       bridge.copiedFallback.push(args.text);
       return;
     }
-    if (command === 'qa_get_snapshot') return structuredClone(qaSnapshot);
-    if (command === 'qa_window_set_expanded') {
-      bridge.sizes.push(args.expanded);
-      if (args.expanded && bridge.rejectQaExpansion) throw new Error('native resize failed');
-      if (!bridge.holdQaGeometry) bridge.applyQaGeometry(args.expanded);
-      return;
-    }
-    if (command === 'qa_window_dismiss') bridge.emit('chat-panel:closing', {});
     return null;
   },
 };
@@ -214,7 +170,6 @@ const { InsertFallbackCard } = await import('../../src/features/capsule/InsertFa
 const { OpenLessPill } = await import('../../src/features/capsule/OpenLessCapsule');
 const { CapsuleTranslationBadge, CapsuleTranscriptOverlay } =
   await import('../../src/features/capsule/LiveTranscriptPill');
-const { QaPanel } = await import('../../src/features/qa/QaPanel');
 const { Capsule } = await import('../../src/features/capsule/Capsule');
 if (themeSync) {
   localStorage.setItem('ol.theme', 'light');
@@ -283,22 +238,6 @@ createRoot(document.getElementById('root')!).render(
       }}
     >
       <Capsule os={params.get('os') === 'mac' ? 'mac' : undefined} />
-    </div>
-  ) : qa ? (
-    <div
-      id="native-host"
-      style={{
-        position: 'absolute',
-        width: 480,
-        height: 80,
-        bottom: 8,
-        left: '50%',
-        transform: 'translateX(-50%)',
-      }}
-    >
-      <AppViewport scale={false}>
-        <QaPanel />
-      </AppViewport>
     </div>
   ) : (
     <AppViewport scale={false}>

@@ -13,7 +13,8 @@ function isInteractive(element: HTMLElement | null) {
 }
 
 export interface WebSearchConfig {
-  provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';
+  provider:
+    'auto' | 'free' | 'hybrid' | 'free_serp' | 'bing' | 'tavily' | 'brave' | 'searxng' | 'off';
   apiKey: string;
   endpoint: string;
 }
@@ -94,8 +95,14 @@ export function WebSearchSection() {
       </p>
       <p>
         {text(
-          '仅用于传统和多模态管线。默认使用免费 Bing 网页搜索，无需 API Key；可改用自己的搜索服务。DeepSeek 大统一使用独立的原生搜索。免费网页接口可能受网络或限流影响。',
-          'For traditional and multimodal pipelines. Auto uses free Bing web search without an API key, or choose your own search service. DeepSeek suite uses its separate native search. Free search availability depends on connectivity and rate limits.',
+          '「免费搜索」默认从此设备查询 FreeSerp 和 Keenable，并合并结果，无需注册、API Key 或部署。服务会看到搜索词和请求 IP，并可能限流。「混合搜索」还会查询 DeepSeek，需要你自己的 API Key，可能产生费用。',
+          'Free Search queries FreeSerp and Keenable from this device and merges the results. No account, API key, or setup is required. Providers can see the query and request IP and may rate-limit it. Hybrid Search also queries DeepSeek using your API key and may incur charges.',
+        )}
+      </p>
+      <p>
+        {text(
+          'DeepSeek 大统一的旧问答仍使用其独立的原生搜索；这里的混合搜索不要求使用 DeepSeek 聊天模型。',
+          'Legacy Q&A in DeepSeek Suite keeps its separate native search. Hybrid Search does not require a DeepSeek chat model.',
         )}
       </p>
       {config && (
@@ -114,15 +121,20 @@ export function WebSearchSection() {
                 })
               }
             >
-              <option value="free">{text('Bing 免费网页搜索', 'Bing free web search')}</option>
+              <option value="free">{text('免费搜索', 'Free Search')}</option>
+              <option value="hybrid">
+                {text('混合搜索（免费 + DeepSeek）', 'Hybrid Search (Free + DeepSeek)')}
+              </option>
+              <option value="free_serp">FreeSerp</option>
+              <option value="bing">Bing (RSS)</option>
               <option value="tavily">Tavily</option>
               <option value="brave">Brave Search</option>
               <option value="searxng">SearXNG</option>
               <option value="off">{text('关闭', 'Off')}</option>
             </select>
           </SettingRow>
-          {['tavily', 'brave'].includes(config.provider) && (
-            <SettingRow label="API Key">
+          {['tavily', 'brave', 'hybrid'].includes(config.provider) && (
+            <SettingRow label={config.provider === 'hybrid' ? 'DeepSeek API Key' : 'API Key'}>
               <TextField
                 aria-label="Search API Key"
                 type="password"
@@ -137,8 +149,8 @@ export function WebSearchSection() {
             <SettingRow
               label="SearXNG URL"
               desc={text(
-                '填写已启用 JSON 输出的 /search 地址。',
-                'Enter a /search endpoint with JSON output enabled.',
+                '可填写允许自动查询且已启用 JSON 的公开 /search 地址，不要求自建。',
+                'You can use a public /search endpoint that permits automated queries and enables JSON. Self-hosting is not required.',
               )}
             >
               <TextField
@@ -155,7 +167,7 @@ export function WebSearchSection() {
             variant="primary"
             disabled={
               busy ||
-              (['tavily', 'brave'].includes(config.provider) && !config.apiKey.trim()) ||
+              (['tavily', 'brave', 'hybrid'].includes(config.provider) && !config.apiKey.trim()) ||
               (config.provider === 'searxng' && !/^https?:\/\//.test(config.endpoint))
             }
             onClick={async () => {

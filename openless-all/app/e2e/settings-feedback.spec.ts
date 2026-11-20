@@ -587,6 +587,13 @@ test('Web Search reports failures on its page and completes a departed save quie
   const provider = page.getByRole('combobox', { name: 'Web Search' });
   const save = page.getByRole('button', { name: '保存', exact: true });
   const notice = page.locator('.ol-notification-card');
+  const key = page.getByLabel('Search API Key');
+  await expect(provider).toHaveValue('free');
+  await expect(key).toHaveCount(0);
+  await provider.selectOption('hybrid');
+  await expect(save).toBeDisabled();
+  await key.fill('test-deepseek-key');
+  await expect(save).toBeEnabled();
   await provider.selectOption('off');
   await save.click();
   await finishSettingsOperation(page, 'save', 1, true);

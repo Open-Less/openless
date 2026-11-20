@@ -1076,7 +1076,7 @@ impl Drop for PolishRegistration {
     }
 }
 
-enum CloudPolisherProvider {
+pub(crate) enum CloudPolisherProvider {
     OpenAi(crate::polish::ActiveLLMProvider),
     Gemini(crate::llm_gemini::GeminiProvider),
 }
@@ -1539,7 +1539,22 @@ async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<CloudPolisherProvider, BackendError> {
-    if context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+    build_cloud_channel_provider(
+        credentials,
+        &context.llm,
+        context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek,
+        context.polish.llm_thinking_enabled,
+    )
+    .await
+}
+
+pub(crate) async fn build_cloud_channel_provider(
+    credentials: &dyn CredentialStore,
+    route: &crate::dictation_context::ProviderInvocation,
+    deepseek_suite: bool,
+    thinking: bool,
+) -> Result<CloudPolisherProvider, BackendError> {
+    if deepseek_suite {
         let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
         require_configured(&suite.api_key, "DeepSeek suite API key")?;
         let config = crate::polish::OpenAICompatibleConfig::new(
@@ -1549,23 +1564,22 @@ async fn build_cloud_polisher_provider(
             suite.api_key,
             crate::deepseek_suite::MODEL,
         )
-        .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        .with_thinking_enabled(thinking);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::OpenAI(
                 crate::polish::OpenAICompatibleLLMProvider::new(config),
             ),
         ));
     }
-    let channel_id = context.llm.provider_id.trim();
-    let provider_type = context.llm.provider_type.trim();
+    let channel_id = route.provider_id.trim();
+    let provider_type = route.provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
         return Err(BackendError::new(
             BackendErrorCode::InvalidArgument,
             "LLM channel id and provider type must not be empty",
         ));
     }
-    let model = context
-        .llm
+    let model = route
         .model
         .clone()
         .and_then(non_blank_owned)
@@ -1598,7 +1612,7 @@ async fn build_cloud_polisher_provider(
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
         let provider = crate::polish::CodexOAuthLLMProvider::new(
             crate::polish::CodexOAuthConfig::new(model)
-                .with_thinking_enabled(context.polish.llm_thinking_enabled),
+                .with_thinking_enabled(thinking),
         );
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::Codex(provider),
@@ -1638,7 +1652,7 @@ async fn build_cloud_polisher_provider(
     if provider_type == "gemini" {
         let provider = crate::llm_gemini::GeminiProvider::new(
             crate::llm_gemini::GeminiConfig::new(api_key, model, endpoint.trim_end_matches('/'))
-                .with_thinking_enabled(context.polish.llm_thinking_enabled),
+                .with_thinking_enabled(thinking),
         );
         return Ok(CloudPolisherProvider::Gemini(provider));
     }
@@ -1676,7 +1690,7 @@ async fn build_cloud_polisher_provider(
         model,
     )
     .with_protocol(protocol)
-    .with_thinking_enabled(context.polish.llm_thinking_enabled)
+    .with_thinking_enabled(thinking)
     .with_temperature(crate::polish::openai_compatible_temperature_for_provider(
         provider_type,
         temperature,
@@ -3014,7 +3028,7 @@ mod tests {
             PipelineMode::Traditional
         ));
         let search = crate::web_search::WebSearchConfig::default();
-        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, false).contains("FreeSerp 与 Keenable"));
         assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
     }
 

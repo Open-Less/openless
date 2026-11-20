@@ -4227,13 +4227,6 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
-    fn capture_target_for_session(&self, session_id: SessionId) -> Option<CapturedTextTarget> {
-        let app = self.app.lock().clone();
-        app.as_ref()
-            .and_then(|app| crate::qa_draft::capture(app, session_id))
-            .or_else(|| self.capture_target())
-    }
-
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
@@ -5712,26 +5705,16 @@ impl HostActions for TauriHostActions {
         match action {
             HostAction::ShowMain | HostAction::FocusMain => crate::show_main_window(&app),
             HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
-            HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
-            HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
+            HostAction::ShowSelectionPreview => {
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "Selection polish preview is unavailable"));
+            }
+            HostAction::HideSelectionPreview => {}
             HostAction::ShowQa => {
-                // Logical presentation includes a cold webview waiting for its first frame.
-                let was_visible = self.qa_context.is_panel_visible()
-                    && (cfg!(mobile) || app.get_webview_window("qa").is_some());
-                self.qa_context.set_voice_surface_active(true);
-                self.qa_context.prepare_show();
-                if !was_visible {
-                    if let Err(error) = crate::show_qa_window(&app, "idle") {
-                        self.qa_context.set_voice_surface_active(false);
-                        self.qa_context.clear();
-                        return Err(map_tauri_error(error));
-                    }
-                }
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "Ask is unavailable"));
             }
             HostAction::HideQa => {
                 self.qa_context.set_voice_surface_active(false);
                 self.qa_context.clear();
-                crate::hide_qa_window(&app);
             }
             HostAction::ShowLessComputer => {
                 crate::show_less_computer_window(&app).map_err(map_tauri_error)?;

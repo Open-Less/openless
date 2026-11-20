@@ -328,24 +328,39 @@ impl GeminiProvider {
         })
     }
 
-    async fn post(
+    pub(crate) fn ask_config(&self) -> &GeminiConfig {
+        &self.config
+    }
+
+    pub(crate) fn ask_request(&self, body: &Value) -> reqwest::RequestBuilder {
+        let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
+        self.build_request(&crate::net::credential_http_for_url(&url), &url, body, true)
+    }
+
+    fn build_request(
         &self,
+        client: &reqwest::Client,
         url: &str,
         body: &Value,
         sse: bool,
-    ) -> Result<reqwest::Response, LLMError> {
-        let mut request = self
-            .client
-            .post(url)
-            .header("Content-Type", "application/json");
+    ) -> reqwest::RequestBuilder {
+        let mut request = client.post(url).header("Content-Type", "application/json");
         if sse {
             request = request.header("Accept", "text/event-stream");
         }
         if !self.config.api_key.trim().is_empty() {
             request = request.header("x-goog-api-key", self.config.api_key.as_str());
         }
-        request
-            .json(body)
+        request.json(body)
+    }
+
+    async fn post(
+        &self,
+        url: &str,
+        body: &Value,
+        sse: bool,
+    ) -> Result<reqwest::Response, LLMError> {
+        self.build_request(&self.client, url, body, sse)
             .send()
             .await
             .map_err(llm_error_from_reqwest)

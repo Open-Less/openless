@@ -36,6 +36,7 @@ video-materials/
 node_modules/
 dist/
 target/
+!/openless-all/app/src-tauri/src/ask_window/target/
 # 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
 ci-artifacts/
 *.apk

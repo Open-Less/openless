@@ -9,7 +9,6 @@ import { getRuntimeOS } from '../../runtime/environment';
 import {
   defaultDictationHotkey,
   defaultOpenAppShortcut,
-  defaultQaShortcut,
   defaultSelectionPolishShortcut,
   defaultSwitchStyleShortcut,
   formatComboLabel,
@@ -25,7 +24,6 @@ import {
   setSwitchStyleHotkey,
   setTranslationHotkey,
 } from '../../api/hotkeys';
-import { setQaHotkey } from '../../api/qa';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 import type { ShortcutBinding, StylePack, StylePackHotkey } from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
@@ -97,26 +95,6 @@ export function ShortcutsSection() {
       },
       disable: async () => {
         await setTranslationHotkey(null);
-        await refresh();
-      },
-    },
-    {
-      id: 'qa',
-      label: t('selectionAsk.title'),
-      group: 'recording',
-      desc: t('askAnything.auxiliaryHint', { key: formatComboLabel(prefs.dictationHotkey) }),
-      binding: prefs.qaCompanionKey ? { primary: prefs.qaCompanionKey, modifiers: [] } : null,
-      save: async (binding) => {
-        await setQaHotkey(binding);
-        await refresh();
-      },
-      disable: async () => {
-        await setQaHotkey(null);
-        await refresh();
-      },
-      reset: async () => {
-        const binding = defaultQaShortcut();
-        await setQaHotkey(binding);
         await refresh();
       },
     },

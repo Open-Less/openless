@@ -627,15 +627,6 @@ mod platform {
     const FLAG_MASK_COMMAND: CgEventFlags = 0x0010_0000;
     const FLAG_MASK_SECONDARY_FN: CgEventFlags = 0x0080_0000;
 
-    const SPACE_KEYCODE: i64 = 49;
-    const FN_KEYCODE: i64 = 63;
-    const AUTOREPEAT_FIELD: CgEventField = 8;
-    const SOURCE_USER_DATA_FIELD: CgEventField = 42;
-    const REPLAYED_SPACE: i64 = 0x4F4C_5350_4143_4501;
-    const CHORD_GRACE_MS: u64 = 45;
-    const OTHER_MODIFIERS: CgEventFlags =
-        FLAG_MASK_SHIFT | FLAG_MASK_CONTROL | FLAG_MASK_ALTERNATE | FLAG_MASK_COMMAND;
-
     const ESC_KEYCODE: i64 = 53;
     // IOKit hidsystem/IOLLEvent.h + ev_keymap.h. systemDefined subtype 8 carries
     // auxiliary control keys in data1's high 16 bits; 0..=23 are the scanned
@@ -668,12 +659,6 @@ mod platform {
         fn CGEventTapEnable(tap: CfMachPortRef, enable: bool);
         fn CGEventGetIntegerValueField(event: CgEventRef, field: CgEventField) -> i64;
         fn CGEventGetFlags(event: CgEventRef) -> CgEventFlags;
-        fn CGEventGetTimestamp(event: CgEventRef) -> u64;
-        fn CGEventCreateCopy(event: CgEventRef) -> CgEventRef;
-        fn CGEventPost(tap: CgEventTapLocation, event: CgEventRef);
-        fn CGEventTapPostEvent(proxy: *mut c_void, event: CgEventRef);
-        fn CGEventSetIntegerValueField(event: CgEventRef, field: CgEventField, value: i64);
-
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -690,73 +675,6 @@ mod platform {
         static kCFRunLoopCommonModes: CfStringRef;
     }
 
-    use core_foundation::{base::CFRelease, runloop as cf};
-    use std::cell::{Cell, RefCell};
-
-    struct BufferedSpace(CgEventRef);
-
-    impl Drop for BufferedSpace {
-        fn drop(&mut self) {
-            unsafe { CFRelease(self.0.cast()) };
-        }
-    }
-
-    fn is_fn_rollover(space_at: u64, fn_at: u64, flags: CgEventFlags) -> bool {
-        flags & (FLAG_MASK_SECONDARY_FN | OTHER_MODIFIERS) == FLAG_MASK_SECONDARY_FN
-            && fn_at.abs_diff(space_at) <= CHORD_GRACE_MS * 1_000_000
-    }
-
-    // Its timer and event tap are serviced on the same run loop. The timeout
-    // posts once; a subsequent key flushes directly downstream ahead of that key.
-    #[derive(Default)]
-    struct FnSpaceInput {
-        pending: RefCell<Option<BufferedSpace>>,
-        timer: Cell<cf::CFRunLoopTimerRef>,
-        fn_edge_down: Cell<bool>,
-        owns_fn: Cell<bool>,
-    }
-
-    impl FnSpaceInput {
-        fn hold(&self, event: CgEventRef) -> bool {
-            let timer = self.timer.get();
-            if timer.is_null() {
-                return false;
-            }
-            let buffered = unsafe { CGEventCreateCopy(event) };
-            if buffered.is_null() {
-                return false;
-            }
-            *self.pending.borrow_mut() = Some(BufferedSpace(buffered));
-            unsafe {
-                cf::CFRunLoopTimerSetNextFireDate(
-                    timer,
-                    core_foundation::date::CFAbsoluteTimeGetCurrent() + CHORD_GRACE_MS as f64 / 1000.0,
-                );
-            }
-            true
-        }
-
-        fn replay(&self, proxy: Option<*mut c_void>) {
-            let pending = self.pending.borrow_mut().take();
-            if let Some(space) = pending {
-                crate::recording_companion::observe_space_down();
-                unsafe {
-                    if let Some(proxy) = proxy {
-                        CGEventTapPostEvent(proxy, space.0);
-                    } else {
-                        CGEventSetIntegerValueField(space.0, SOURCE_USER_DATA_FIELD, REPLAYED_SPACE);
-                        CGEventPost(SESSION_EVENT_TAP, space.0);
-                    }
-                }
-            }
-        }
-    }
-
-    extern "C" fn space_timeout(_: cf::CFRunLoopTimerRef, context: *mut c_void) {
-        let ctx = unsafe { &*(context.cast::<CallbackContext>()) };
-        ctx.fn_space.replay(None);
-    }
-
     struct CallbackContext {
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
@@ -767,13 +685,11 @@ mod platform {
         /// Under Auto / Toggle, Fn dispatch is deferred until release: short press dispatches,
         /// long press or function-layer combos are dropped.
         fn_pressed_at: parking_lot::Mutex<Option<std::time::Instant>>,
-        fn_space: FnSpaceInput,
         /// (tap, runloop) refs shared with MacHotkeyAdapter. Tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT goes through handles.tap; adapter shutdown uses both locks.
         handles: Arc<MacShutdownHandles>,
     }
 
-    // The callback context and its keyboard state are only dereferenced on the owning run loop.
     unsafe impl Send for CallbackContext {}
     unsafe impl Sync for CallbackContext {}
 
@@ -798,7 +714,6 @@ mod platform {
             cancel_tx,
             combo_tx,
             fn_pressed_at: parking_lot::Mutex::new(None),
-            fn_space: FnSpaceInput::default(),
             handles: Arc::clone(&handles),
         }));
 
@@ -828,26 +743,6 @@ mod platform {
             let runloop = CFRunLoopGetCurrent();
             *handles.runloop.lock().unwrap() = Some(runloop);
             CFRunLoopAddSource(runloop, source, kCFRunLoopCommonModes);
-            let mut timer_context = cf::CFRunLoopTimerContext {
-                version: 0,
-                info: context.cast(),
-                retain: None,
-                release: None,
-                copyDescription: None,
-            };
-            let timer = cf::CFRunLoopTimerCreate(
-                std::ptr::null(),
-                core_foundation::date::CFAbsoluteTimeGetCurrent() + 86_400.0,
-                86_400.0,
-                0,
-                0,
-                space_timeout,
-                &mut timer_context,
-            );
-            if !timer.is_null() {
-                (*context).fn_space.timer.set(timer);
-                cf::CFRunLoopAddTimer(runloop.cast(), timer, cf::kCFRunLoopCommonModes);
-            }
             CGEventTapEnable(tap, true);
 
             log::info!("[hotkey] CGEventTap 已启动");
@@ -856,17 +751,12 @@ mod platform {
             // MacHotkeyAdapter::shutdown). After it returns, the listener thread drops the context
             // and exits naturally.
             CFRunLoopRun();
-            if !timer.is_null() {
-                cf::CFRunLoopTimerInvalidate(timer);
-                CFRelease(timer.cast());
-            }
-            (*context).fn_space.replay(None);
             let _ = Box::from_raw(context);
         }
     }
 
     extern "C" fn tap_callback(
-        proxy: *mut c_void,
+        _proxy: *mut c_void,
         event_type: CgEventType,
         event: CgEventRef,
         user_info: *mut c_void,
@@ -878,10 +768,7 @@ mod platform {
 
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
-                ctx.fn_space.replay(None);
-                ctx.fn_space.fn_edge_down.set(false);
-                ctx.fn_space.owns_fn.set(false);
-                crate::recording_companion::reset_held();
+                crate::ask_window::hotkey::reset_physical_state();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
@@ -890,59 +777,33 @@ mod platform {
             FLAGS_CHANGED => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 let flags = unsafe { CGEventGetFlags(event) };
-                let fn_down = flags & FLAG_MASK_SECONDARY_FN != 0;
-                let late_anchor = keycode == FN_KEYCODE
-                    && ctx.fn_space.pending.borrow().as_ref().is_some_and(|space| unsafe {
-                        is_fn_rollover(CGEventGetTimestamp(space.0), CGEventGetTimestamp(event), flags)
-                    })
-                    && crate::recording_companion::can_wait_for_fn();
-                if !late_anchor {
-                    ctx.fn_space.replay(Some(proxy));
-                }
-                if keycode == FN_KEYCODE {
-                    ctx.fn_space.fn_edge_down.set(fn_down);
-                    if !fn_down {
-                        ctx.fn_space.owns_fn.set(false);
+                if keycode == 63 || crate::side_aware_combo::platform::side_from_keycode(keycode).is_some() {
+                    let down = if keycode == 63 {
+                        flags & FLAG_MASK_SECONDARY_FN != 0
+                    } else {
+                        crate::side_aware_combo::platform::resolve_side_pressed_from_flags(keycode, flags)
+                            .unwrap_or_else(|| crate::side_aware_combo::platform::keycode_is_down(keycode))
+                    };
+                    if ask_key_edge(ctx, event, keycode, down).is_some() {
+                        return event;
                     }
                 }
-                handle_flags_changed(ctx, keycode, flags, late_anchor);
-                ctx.fn_space.replay(Some(proxy));
+                handle_flags_changed(ctx, event);
             }
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if keycode == SPACE_KEYCODE
-                    && unsafe { CGEventGetIntegerValueField(event, SOURCE_USER_DATA_FIELD) }
-                        == REPLAYED_SPACE
+                if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
+                if let Some(result) = ask_key_edge(ctx, event, keycode, true) {
+                    return result;
+                }
+                if !ctx.shared.recording_active.load(Ordering::SeqCst)
+                    && crate::side_aware_combo::platform::dispatch_keycode(
+                        keycode,
+                        false,
+                        unsafe { CGEventGetFlags(event) },
+                        true,
+                    )
                 {
-                    return event;
-                }
-                ctx.fn_space.replay(Some(proxy));
-                if keycode == ESC_KEYCODE && super::capsule_menu_open() {
-                    return event;
-                }
-                let mut flags = unsafe { CGEventGetFlags(event) };
-                if keycode == SPACE_KEYCODE && ctx.fn_space.fn_edge_down.get() {
-                    flags |= FLAG_MASK_SECONDARY_FN;
-                }
-                let recording_shortcut = ctx.shared.recording_active.load(Ordering::SeqCst);
-                if !recording_shortcut
-                    && keycode == SPACE_KEYCODE
-                    && flags & (FLAG_MASK_SECONDARY_FN | OTHER_MODIFIERS) == 0
-                    && unsafe { CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) } == 0
-                    && crate::recording_companion::can_wait_for_fn()
-                    && ctx.fn_space.hold(event)
-                {
-                    return std::ptr::null_mut();
-                }
-                if !recording_shortcut
-                    && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, flags, true)
-                {
-                    if keycode == SPACE_KEYCODE
-                        && flags & FLAG_MASK_SECONDARY_FN != 0
-                        && crate::recording_companion::claimed()
-                    {
-                        ctx.fn_space.owns_fn.set(true);
-                    }
                     crate::side_aware_combo::handle_companion_key_down();
                     note_companion_key_down(ctx);
                     return std::ptr::null_mut();
@@ -956,8 +817,10 @@ mod platform {
                 }
             }
             KEY_UP => {
-                ctx.fn_space.replay(Some(proxy));
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+                if let Some(result) = ask_key_edge(ctx, event, keycode, false) {
+                    return result;
+                }
                 if crate::side_aware_combo::platform::dispatch_keycode(
                     keycode,
                     false,
@@ -971,20 +834,44 @@ mod platform {
             // systemDefined. While the Fn trigger is held, treat these as function-layer combos —
             // dictation must not start at the same time.
             SYSTEM_DEFINED => {
-                ctx.fn_space.replay(Some(proxy));
-                handle_system_defined_event(ctx, || system_defined_event_payload(event));
+                if crate::ask_window::hotkey::fn_is_held() {
+                    if system_defined_event_payload(event)
+                        .is_some_and(|(subtype, data)| is_auxiliary_function_key_event(subtype, data))
+                    {
+                        crate::ask_window::hotkey::abort_fn_companion();
+                    }
+                } else {
+                    handle_system_defined_event(ctx, || system_defined_event_payload(event));
+                }
             }
             _ => {}
         }
         event
     }
 
-    fn handle_flags_changed(
-        ctx: &CallbackContext,
-        keycode: i64,
-        flags: CgEventFlags,
-        late_anchor: bool,
-    ) {
+    fn ask_key_edge(ctx: &CallbackContext, event: CgEventRef, keycode: i64, down: bool) -> Option<CgEventRef> {
+        use crate::ask_window::hotkey::{keyboard_edge, Disposition};
+        const AUTOREPEAT_FIELD: CgEventField = 8;
+        const SOURCE_PID_FIELD: CgEventField = 41;
+        if unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } != 0 {
+            return None;
+        }
+        let repeat = down && unsafe { CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) } != 0;
+        match keyboard_edge(
+            u16::try_from(keycode).ok()?,
+            down,
+            repeat,
+            ctx.shared.recording_active.load(Ordering::SeqCst),
+        ) {
+            Disposition::Stock => None,
+            Disposition::Pass => Some(event),
+            Disposition::Consume => Some(std::ptr::null_mut()),
+        }
+    }
+
+    fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
+        let flags = unsafe { CGEventGetFlags(event) };
+
         // Recording mode: the browser never delivers Fn keydown to the web layer (the system
         // modifier is hidden), so ShortcutRecorder cannot capture it. Here the CGEventTap detects
         // the Fn press edge (keycode 63 + kCGEventFlagMaskSecondaryFn), reports
@@ -1022,11 +909,8 @@ mod platform {
                 .store(false, Ordering::SeqCst);
         }
 
+        let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         crate::side_aware_combo::platform::dispatch_keycode(keycode, true, flags, false);
-        if late_anchor && crate::recording_companion::event("Space", true) {
-            drop(ctx.fn_space.pending.borrow_mut().take());
-            ctx.fn_space.owns_fn.set(true);
-        }
         handle_optional_modifier_trigger(
             ctx,
             keycode,
@@ -1055,10 +939,7 @@ mod platform {
             None,
         );
 
-        // If Space owned the chord before this Fn edge, do not start a bare dictation press.
-        if keycode != FN_KEYCODE || !ctx.fn_space.owns_fn.get() {
-            handle_dictation_trigger_flags_changed(ctx, keycode, flags, std::time::Instant::now());
-        }
+        handle_dictation_trigger_flags_changed(ctx, keycode, flags, std::time::Instant::now());
     }
 
     fn fn_uses_tap_only_semantics(trigger: HotkeyTrigger, mode: HotkeyMode) -> bool {
@@ -1372,7 +1253,6 @@ mod platform {
                     cancel_tx,
                     combo_tx,
                     fn_pressed_at: parking_lot::Mutex::new(None),
-                    fn_space: FnSpaceInput::default(),
                     handles: Arc::new(MacShutdownHandles {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
@@ -1487,15 +1367,6 @@ mod platform {
             // The abort never touches the serial Pressed/Released channel — it is stuck in
             // begin_session at this moment.
             assert!(drain(&rx).is_empty());
-        }
-
-        #[test]
-        fn space_first_rollover_requires_a_nearby_bare_fn_edge() {
-            let space = 500_000_000;
-            assert!(is_fn_rollover(space, space + 10_000_000, FLAG_MASK_SECONDARY_FN));
-            assert!(!is_fn_rollover(space, space + 46_000_000, FLAG_MASK_SECONDARY_FN));
-            assert!(!is_fn_rollover(space, space + 1, FLAG_MASK_SECONDARY_FN | FLAG_MASK_SHIFT));
-            assert!(!is_fn_rollover(space, space + 1, 0));
         }
 
         #[test]
@@ -1873,6 +1744,21 @@ mod platform {
                     keyboard.scanCode,
                     keyboard.flags.0 & LLKHF_EXTENDED.0 != 0,
                 );
+                const INJECTED: u32 = 0x10;
+                if keyboard.flags.0 & INJECTED == 0 {
+                    use crate::ask_window::hotkey::{keyboard_edge, Disposition};
+                    let down = matches!(wparam.0, WM_KEYDOWN | WM_SYSKEYDOWN);
+                    let disabled = ctx.shared.recording_active.load(Ordering::SeqCst);
+                    if (down || matches!(wparam.0, WM_KEYUP | WM_SYSKEYUP))
+                        && !(down && vk_code == VK_ESCAPE && super::capsule_menu_open())
+                    {
+                        match keyboard_edge(vk_code as u16, down, false, disabled) {
+                            Disposition::Consume => return LRESULT(1),
+                            Disposition::Pass => return CallNextHookEx(None, code, wparam, lparam),
+                            Disposition::Stock => {}
+                        }
+                    }
+                }
                 if dispatch_keyboard_event(ctx, vk_code, wparam.0) {
                     return LRESULT(1);
                 }
