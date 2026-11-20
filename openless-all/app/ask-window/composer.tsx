@@ -84,6 +84,7 @@ export function useComposer({
   check,
   focus,
   activation,
+  captureSubmitReceipt,
 }: {
   client: AskClient;
   snapshot: AskSnapshot;
@@ -92,6 +93,7 @@ export function useComposer({
   check: () => void;
   focus?: AskFocus;
   activation: number;
+  captureSubmitReceipt: () => (turnId: string) => void;
 }) {
   const { conversationId, attachments } = snapshot;
   const notice = useAskNotice();
@@ -246,6 +248,7 @@ export function useComposer({
     }
 
     pendingRef.current = true;
+    const reportAccepted = captureSubmitReceipt();
     sendNotice.current?.dismiss();
     sendNotice.current = undefined;
     setPending(true);
@@ -253,6 +256,7 @@ export function useComposer({
       .submit(request)
       .then(({ turnId: acceptedTurnId }) => {
         setAcknowledgedTurn(acceptedTurnId);
+        reportAccepted(acceptedTurnId);
         draftIds.current.delete(requestFingerprint(request));
       })
       .catch((cause) => {

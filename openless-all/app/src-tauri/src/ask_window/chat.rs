@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::attachment_files::{decode_dropped_image, pick_attachment_file, NativeAttachmentFile};
 use super::entry_settings::{AskEntryIntentMode, AskEntrySettings, AskEntrySettingsStore};
 use super::target::{self, TargetTracker};
-use super::{context::DesktopContext, wire, CONVERSATION_LABEL, LABEL};
+use super::{context::DesktopContext, wire, LABEL};
 
 pub(crate) struct AskHost {
     service: StandaloneQaService,
@@ -160,35 +160,11 @@ impl AskHost {
                             return;
                         };
                         if host.current() == Some(event.conversation_id) {
-                            let packet = wire::event(&event);
-                            for label in [LABEL, CONVERSATION_LABEL] {
-                                let _ = app.emit_to(
-                                    EventTarget::webview_window(label),
-                                    "ask:event",
-                                    &packet,
-                                );
-                            }
-                            if matches!(
-                                &event.kind,
-                                ask::AskEventKind::RouteResolved {
-                                    route: ask::AskRoute::Answer | ask::AskRoute::SelectionAnswer,
-                                }
-                            ) {
-                                if let (Some(turn_id), Some(desktop)) =
-                                    (event.turn_id, app.try_state::<Arc<super::Desktop>>())
-                                {
-                                    let desktop = desktop.inner().clone();
-                                    let conversation_id = event.conversation_id;
-                                    tauri::async_runtime::spawn(async move {
-                                        if let Err(error) = desktop
-                                            .show_conversation_for_chat(conversation_id, turn_id)
-                                            .await
-                                        {
-                                            log::warn!("[ask] conversation window failed: {error}");
-                                        }
-                                    });
-                                }
-                            }
+                            let _ = app.emit_to(
+                                EventTarget::webview_window(LABEL),
+                                "ask:event",
+                                wire::event(&event),
+                            );
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -396,41 +372,27 @@ fn authorize(window: &WebviewWindow) -> Result<(), Value> {
     }
 }
 
-fn authorize_reader(window: &WebviewWindow) -> Result<(), Value> {
-    if window.label() == CONVERSATION_LABEL {
-        Ok(())
-    } else {
-        authorize(window)
-    }
-}
-
 pub(crate) fn restricted_command_allowed(label: &str, command: &str) -> bool {
-    if label != LABEL && label != CONVERSATION_LABEL {
-        return true;
-    }
-    let reader = matches!(
-        command,
-        "ask_current"
-            | "ask_snapshot"
-            | "ask_events"
-            | "ask_cancel"
-            | "ask_open_source"
-            | "ask_window_hide"
-    );
-    reader
-        || label == LABEL
-            && matches!(
-                command,
-                "ask_new_conversation"
-                    | "ask_end_conversation"
-                    | "ask_submit"
-                    | "ask_add_attachment"
-                    | "ask_add_dropped_image"
-                    | "ask_remove_attachment"
-                    | "ask_get_attachment_preview"
-                    | "ask_sync_editor"
-                    | "ask_ack_voice"
-            )
+    label != LABEL
+        || matches!(
+            command,
+            "ask_current"
+                | "ask_snapshot"
+                | "ask_events"
+                | "ask_cancel"
+                | "ask_open_source"
+                | "ask_window_hide"
+                | "ask_expand_chat"
+                | "ask_new_conversation"
+                | "ask_end_conversation"
+                | "ask_submit"
+                | "ask_add_attachment"
+                | "ask_add_dropped_image"
+                | "ask_remove_attachment"
+                | "ask_get_attachment_preview"
+                | "ask_sync_editor"
+                | "ask_ack_voice"
+        )
 }
 
 type AskState<'a> = State<'a, Arc<AskHost>>;
@@ -438,7 +400,7 @@ type IpcResult = Result<Value, Value>;
 
 #[tauri::command]
 pub fn ask_current(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
-    authorize_reader(&window)?;
+    authorize(&window)?;
     let mut status = json!({
         "conversationId": host.current(),
         "themeMode": host.backend.get_preferences().theme_mode,
@@ -488,7 +450,7 @@ pub fn ask_end_conversation(
 
 #[tauri::command]
 pub fn ask_snapshot(window: WebviewWindow, host: AskState<'_>, conversation_id: Uuid) -> IpcResult {
-    authorize_reader(&window)?;
+    authorize(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     host.service
         .snapshot(conversation_id)
@@ -503,7 +465,7 @@ pub fn ask_events(
     conversation_id: Uuid,
     after_sequence: u64,
 ) -> IpcResult {
-    authorize_reader(&window)?;
+    authorize(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     let replay = host
         .service
@@ -546,7 +508,7 @@ pub fn ask_cancel(
     conversation_id: Uuid,
     turn_id: Uuid,
 ) -> IpcResult {
-    authorize_reader(&window)?;
+    authorize(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     host.service
         .cancel(AskTurnKey {
@@ -638,7 +600,7 @@ pub fn ask_open_source(
     turn_id: Uuid,
     source_id: String,
 ) -> IpcResult {
-    authorize_reader(&window)?;
+    authorize(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
     let url = host
         .service
@@ -746,11 +708,44 @@ impl super::Integration for DesktopPorts {
 }
 
 #[tauri::command]
+pub async fn ask_expand_chat(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    desktop: State<'_, Arc<super::Desktop>>,
+    conversation_id: Uuid,
+    turn_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    let snapshot = host
+        .service
+        .snapshot(conversation_id)
+        .map_err(wire::error)?;
+    if !snapshot.submission.is_some_and(|submission| {
+        submission.current_turn_id == turn_id
+            && matches!(
+                submission.route,
+                Some(ask::AskRoute::Answer | ask::AskRoute::SelectionAnswer)
+            )
+    }) {
+        return Err(
+            json!({"code":"invalid_state","message":"This request is not an Ask conversation."}),
+        );
+    }
+    desktop
+        .inner()
+        .expand_chat(window, conversation_id)
+        .await
+        .map_err(|message| json!({"code":"platform","message":message}))?;
+    Ok(Value::Null)
+}
+
+#[tauri::command]
 pub fn ask_window_hide(
     window: WebviewWindow,
     desktop: State<'_, Arc<super::Desktop>>,
 ) -> IpcResult {
-    authorize_reader(&window)?;
+    authorize(&window)?;
     desktop
         .hide(&window)
         .map_err(|message| json!({"code":"platform","message":message}))?;
@@ -872,28 +867,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conversation_window_can_read_and_cancel_but_cannot_submit_or_change_settings() {
+    fn ask_window_is_limited_to_its_own_commands() {
         for command in [
-            "ask_current",
             "ask_snapshot",
-            "ask_events",
-            "ask_cancel",
-            "ask_open_source",
+            "ask_expand_chat",
             "ask_window_hide",
-        ] {
-            assert!(restricted_command_allowed(CONVERSATION_LABEL, command));
-            assert!(restricted_command_allowed(LABEL, command));
-        }
-        for command in [
             "ask_submit",
-            "ask_new_conversation",
-            "ask_end_conversation",
-            "ask_add_attachment",
-            "ask_get_attachment_preview",
-            "ask_sync_editor",
-            "ask_ack_voice",
         ] {
-            assert!(!restricted_command_allowed(CONVERSATION_LABEL, command));
             assert!(restricted_command_allowed(LABEL, command));
         }
         for command in [
@@ -901,7 +881,6 @@ mod tests {
             "ask_set_entry_settings",
             "copy_text_to_clipboard",
         ] {
-            assert!(!restricted_command_allowed(CONVERSATION_LABEL, command));
             assert!(!restricted_command_allowed(LABEL, command));
             assert!(restricted_command_allowed("main", command));
         }

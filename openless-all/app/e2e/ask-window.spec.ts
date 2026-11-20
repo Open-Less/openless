@@ -9,15 +9,16 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
 });
 
-test('only a live chat route shows the reader; gaps recover without moving or blurring the composer', async ({
+test('a recovered question route expands one frame without replacing the editor', async ({
   page,
 }) => {
   await expect(page.locator('#ask-root')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(page.getByRole('button', { name: 'Close Ask Anything' })).toHaveCount(0);
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   const box = page.locator('[data-slot="prompt-box"]');
-  expect((await box.boundingBox())!.y).toBeGreaterThan(750);
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toHaveCount(0);
+  const originalEditor = await prompt.elementHandle();
+  const collapsed = (await box.boundingBox())!;
   await page.evaluate(() => {
     window.askFixture.route = null;
   });
@@ -25,44 +26,60 @@ test('only a live chat route shows the reader; gaps recover without moving or bl
   await prompt.press('Enter');
   await expect(page.getByText('Working', { exact: true })).toBeVisible();
   await expect(page.locator('.user-bubble')).toHaveCount(0);
-  await page.evaluate(() => window.askFixture.resolve('answer'));
-  await expect(page.locator('.ask-viewport-conversation')).toHaveCSS('border-radius', '24px');
+  await page.evaluate(() => window.askFixture.resolve('answer', false));
+  const backdrop = page.locator('.ask-expansion-backdrop');
+  const frame = page.locator('.ask-presentation');
+  await expect(frame).toHaveAttribute('data-expanded', 'true');
+  await expect(backdrop).toHaveCSS('border-radius', '24px');
+  expect(
+    await frame.evaluate((e) => parseFloat(e.style.getPropertyValue('--ask-start-width'))),
+  ).toBeCloseTo(collapsed.width);
   await expect(page.locator('.user-bubble')).toHaveText('hi');
   await expect(page.locator('.effort-label')).toHaveCount(0);
   await expect(prompt).toBeFocused();
-  await expect.poll(async () => (await box.boundingBox())!.y).toBeGreaterThan(750);
+  expect(await prompt.evaluate((node, original) => node === original, originalEditor)).toBe(true);
+  await expect.poll(async () => (await backdrop.boundingBox())!.height).toBeGreaterThan(900);
   await page.evaluate(() => {
     const fixture = window.askFixture;
     const turnId = fixture.active();
-    fixture.push({ type: 'turnStatus', turnId, status: 'thinking' }, false);
     fixture.push({ type: 'answerDelta', turnId, messageId: 'answer', text: 'Hello' }, false);
     fixture.push({ type: 'answerDelta', turnId, messageId: 'answer', text: ' there.' });
   });
   await expect(page.locator('.assistant-text')).toHaveText('Hello there.');
   await prompt.fill('keep this draft');
-  await page.getByRole('button', { name: 'Close Ask Conversation' }).click();
-  await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(1);
-  await page.evaluate(() => window.askFixture.showTranscript('turn-1'));
-  await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toBeHidden();
   await prompt.dispatchEvent('keydown', { key: 'Escape', isComposing: true });
   expect(await page.evaluate(() => window.askFixture.hideCount)).toBe(0);
   await prompt.press('Escape');
   await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(0);
   await page.evaluate(() => {
     const fixture = window.askFixture;
-    fixture.push({
-      type: 'turnFinished',
-      turnId: fixture.active(),
-      status: 'failed',
-      error: { code: 'provider', message: 'Disconnected.' },
-    });
+    fixture.push({ type: 'turnFinished', turnId: fixture.active(), status: 'completed' });
     fixture.activate();
   });
-  await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toBeHidden();
+  await expect(backdrop).toHaveCount(0);
   await expect(prompt).toHaveValue('keep this draft');
   expect(
-    await page.evaluate(() => [window.askFixture.hideCount, window.askFixture.submits.length]),
+    await page.evaluate(() => [window.askFixture.hideCount, window.askFixture.expandCount]),
   ).toEqual([1, 1]);
+});
+
+test('selection does not expand Ask until the user submits a selected-text question', async ({
+  page,
+}) => {
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  await page.evaluate(() => {
+    window.askFixture.route = 'selectionAnswer';
+    window.askFixture.activate();
+  });
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  await prompt.fill('What does the selected sentence mean?');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(1);
+  await expect(page.locator('.user-bubble')).toHaveText('What does the selected sentence mean?');
+  await expect(prompt).toBeFocused();
+  await page.getByRole('button', { name: 'Close Ask Conversation' }).click();
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  expect(await page.evaluate(() => window.askFixture.cancelled)).toHaveLength(0);
 });
 
 test('same-frame attachment references, full selection, IME, caret, and attachment-only retry', async ({
@@ -219,11 +236,16 @@ test('model tool status is visible without query controls; replay and sources wo
   expect(await page.evaluate(() => window.askFixture.opened)).toEqual([
     ['conversation-1', 'turn-1', 'source-1'],
   ]);
-  await page.getByRole('button', { name: 'Stop answer', exact: true }).click();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
   await expect(page.getByText('Stopped · Incomplete')).toBeVisible();
   expect(await page.evaluate(() => window.askFixture.cancelled)).toEqual([
     ['conversation-1', 'turn-1'],
   ]);
+  await prompt.press('Escape');
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  await page.evaluate(() => window.askFixture.activate());
+  await expect(prompt).toBeFocused();
+  await expect(sources).toHaveCount(0);
   await prompt.fill('Another question');
   await prompt.press('Enter');
   expect(await page.evaluate(() => window.askFixture.submits[1].options)).toEqual({
@@ -440,5 +462,5 @@ test('write, edit, and clarify have no reader side effect and retain delivery ou
   });
   await expect(page.getByText('Select what you want to change.')).toBeVisible();
   await expect(page.locator('.assistant-text')).toHaveCount(0);
-  expect(await page.evaluate(() => window.askFixture.showCount)).toBe(0);
+  expect(await page.evaluate(() => window.askFixture.expandCount)).toBe(0);
 });

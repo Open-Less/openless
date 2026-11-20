@@ -14,7 +14,7 @@ import {
 } from './client';
 
 const FADE =
-  'linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 16px), transparent 100%)';
+  'linear-gradient(to bottom, transparent 0, rgba(0,0,0,0.04) 20px, rgba(0,0,0,0.15) 48px, rgba(0,0,0,0.35) 80px, rgba(0,0,0,0.6) 112px, rgba(0,0,0,0.85) 144px, black 176px, black calc(100% - 28px), transparent 100%)';
 
 export const SPRING = { type: 'spring', duration: 0.5, bounce: 0.15 } as const;
 
@@ -55,10 +55,12 @@ function statusFor(turn: Pick<AskTurn, 'status' | 'searchStatus'> & { deepThinki
 }
 
 export function ConversationLayout({
+  expanded,
   turns,
   children,
   showSources,
 }: {
+  expanded: boolean;
   turns: AskTurn[];
   children: ReactNode;
   showSources: (turnId: string) => void;
@@ -73,21 +75,23 @@ export function ConversationLayout({
     if (thread && follow.current) {
       thread.scrollTo({ top: thread.scrollHeight, behavior: reduced ? 'auto' : 'smooth' });
     }
-  }, [turns, reduced]);
+  }, [expanded, turns, reduced]);
 
   const latest = turns.at(-1);
   return (
-    <main className="transcript-surface">
-      <AskNotice
-        key={latest?.turnId}
-        severity={latest?.error ? 'error' : 'warning'}
-        message={latest?.error?.message ?? latest?.searchError?.message}
-      />
-      <div className="flex min-h-0 w-[560px] max-w-full flex-1 flex-col">
-        {turns.length ? (
+    <main className={expanded ? 'transcript-surface' : 'composer-surface'}>
+      {expanded && (
+        <AskNotice
+          key={latest?.turnId}
+          severity={latest?.error ? 'error' : 'warning'}
+          message={latest?.error?.message ?? latest?.searchError?.message}
+        />
+      )}
+      <div className="ask-layout-column">
+        {expanded && turns.length > 0 && (
           <div
             ref={threadRef}
-            className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scrollbar-width:none]"
+            className="ask-thread -mx-2 min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scrollbar-width:none]"
             style={{ maskImage: FADE, WebkitMaskImage: FADE }}
             onScroll={(event) => {
               const thread = event.currentTarget;
@@ -97,7 +101,7 @@ export function ConversationLayout({
               lastScroll.current = thread.scrollTop;
             }}
           >
-            <div className="flex min-h-full flex-col justify-end gap-8 pt-12">
+            <div className="flex min-h-full flex-col justify-end gap-8 pt-40">
               {turns.map((turn) => {
                 const { state, label } = statusFor(turn);
                 return (
@@ -157,13 +161,9 @@ export function ConversationLayout({
               })}
             </div>
           </div>
-        ) : (
-          <p className="connection-notice">No chat messages yet.</p>
         )}
 
-        <motion.div layout={reduced ? false : 'position'} transition={SPRING}>
-          {children}
-        </motion.div>
+        <div className="composer-content">{children}</div>
       </div>
     </main>
   );

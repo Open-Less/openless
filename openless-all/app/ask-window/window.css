@@ -51,10 +51,54 @@ body,
     sans-serif;
 }
 
-.ask-viewport-conversation {
+.ask-presentation {
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  overflow: hidden;
+}
+
+.ask-expansion-backdrop {
+  position: absolute;
+  z-index: -1;
+  bottom: 0;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translateX(-50%);
   background: var(--ol-canvas);
   border-radius: 24px;
-  overflow: hidden;
+  pointer-events: none;
+  animation: ask-grow 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ask-grow {
+  from {
+    bottom: var(--ask-start-bottom);
+    width: min(100%, var(--ask-start-width));
+    height: var(--ask-start-height);
+    background: var(--ol-surface);
+  }
+}
+
+@keyframes ask-reveal-chat {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+.ask-thread,
+.ask-presentation[data-expanded='true'] .window-bar {
+  animation: ask-reveal-chat 270ms 190ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-expansion-backdrop,
+  .ask-thread,
+  .ask-presentation[data-expanded='true'] .window-bar {
+    animation: none;
+  }
 }
 
 .ask-viewport .ol-viewport-content {
@@ -67,19 +111,26 @@ body,
   height: 100%;
   align-items: center;
   flex-direction: column;
-  padding: 48px clamp(12px, 4vw, 24px) 30px;
+  padding: 24px clamp(12px, 4vw, 24px) 32px;
 }
 
 .composer-surface {
   padding-block: 8px 18px;
   overflow-y: auto;
-  align-items: start;
+}
+
+.ask-layout-column {
+  display: flex;
+  width: min(560px, 100%);
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
 }
 
 .composer-content {
   display: flex;
   flex-direction: column;
-  width: min(560px, 100%);
+  width: 100%;
   max-height: 100%;
   margin: auto auto 0;
 }
@@ -91,16 +142,6 @@ body,
 .composer-content [data-slot='prompt-box'] textarea {
   max-height: clamp(44px, 32vh, 112px);
   overflow-y: auto;
-}
-
-.transcript-surface > div:last-child {
-  height: 100%;
-}
-
-.stop-answer {
-  display: block;
-  margin-inline-start: auto;
-  min-height: 30px;
 }
 
 .submission-result {

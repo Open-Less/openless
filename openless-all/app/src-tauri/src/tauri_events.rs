@@ -603,13 +603,11 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
     }
     let _ = app.emit("prefs:changed", &preferences);
     #[cfg(not(mobile))]
-    for label in [crate::ask_window::LABEL, crate::ask_window::CONVERSATION_LABEL] {
-        let _ = app.emit_to(
-            tauri::EventTarget::webview_window(label),
-            "ask:window",
-            serde_json::json!({"type": "themeChanged", "themeMode": preferences.theme_mode}),
-        );
-    }
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window(crate::ask_window::LABEL),
+        "ask:window",
+        serde_json::json!({"type": "themeChanged", "themeMode": preferences.theme_mode}),
+    );
 }
 
 fn transcription_notice_payload(

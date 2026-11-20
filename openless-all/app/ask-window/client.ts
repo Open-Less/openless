@@ -155,6 +155,7 @@ export interface AskClient {
   ): Promise<AttachmentPreview | null>;
   openSource(conversationId: string, turnId: string, sourceId: string): Promise<void>;
   hide(): Promise<void>;
+  expandChat?(conversationId: string, turnId: string): Promise<void>;
   syncEditor?(focus: AskFocus, editor: AskEditor): Promise<boolean>;
   acknowledgeVoice?(recordingId: string): Promise<boolean>;
   onEvent(handler: (event: AskEvent) => void): Promise<() => void>;

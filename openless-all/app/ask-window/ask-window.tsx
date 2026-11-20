@@ -1,7 +1,7 @@
 import { ToastNotificationCenter } from '../src/ui/feedback/ToastNotificationCenter';
 import { AppViewport } from '../src/ui/layout/AppViewport';
 import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { errorMessage, type AskClient, type AskFocus, type AskSnapshot } from './client';
 import { useComposer } from './composer';
 import { ConversationLayout, Sources, SubmissionResult } from './conversation';
@@ -9,8 +9,6 @@ import { connectAskFeed } from './feed';
 import { useAskNotice } from './notices';
 import { watchTheme } from './theme';
 import './window.css';
-
-export type AskSurface = 'composer' | 'conversation';
 
 type SessionProps = {
   client: AskClient;
@@ -20,7 +18,11 @@ type SessionProps = {
   focus?: AskFocus;
   activation: number;
   canDeliverVoice: () => boolean;
+  expanded: boolean;
+  captureSubmitReceipt: () => (turnId: string) => void;
 };
+
+type Expansion = { width: number; height: number; bottom: number };
 
 function ComposerSession(props: SessionProps) {
   const box = useComposer(props);
@@ -29,8 +31,9 @@ function ComposerSession(props: SessionProps) {
   const current = submission?.currentTurnId === snapshot.activeTurnId;
   const chatRoute = submission?.route === 'answer' || submission?.route === 'selectionAnswer';
   const [sourcesTurn, setSourcesTurn] = useState<string>();
-  const sourceTurns =
-    submission && !chatRoute
+  const sourceTurns = [
+    ...(props.expanded ? snapshot.turns : []),
+    ...(submission && !chatRoute
       ? [
           {
             turnId: submission.currentTurnId,
@@ -38,17 +41,18 @@ function ComposerSession(props: SessionProps) {
             sources: submission.sources,
           },
         ]
-      : [];
+      : []),
+  ];
   return (
     <>
-      <main className="composer-surface">
-        <div className="composer-content">
-          {submission && !chatRoute && (
-            <SubmissionResult submission={submission} active={current} />
-          )}
-          {box}
-        </div>
-      </main>
+      <ConversationLayout
+        expanded={props.expanded}
+        turns={snapshot.turns}
+        showSources={setSourcesTurn}
+      >
+        {submission && !chatRoute && <SubmissionResult submission={submission} active={current} />}
+        {box}
+      </ConversationLayout>
       <Sources
         client={client}
         conversationId={snapshot.conversationId}
@@ -61,71 +65,27 @@ function ComposerSession(props: SessionProps) {
   );
 }
 
-function ConversationSession({ client, snapshot, connected, check }: SessionProps) {
-  const { conversationId, turns, activeTurnId } = snapshot;
-  const [sourcesTurn, setSourcesTurn] = useState<string>();
-  const [cancelling, setCancelling] = useState<string>();
-  const notice = useAskNotice();
-  const active = turns.some((turn) => turn.turnId === activeTurnId) ? activeTurnId : null;
+export function AskWindow({ client }: { client: AskClient }) {
   return (
-    <>
-      <ConversationLayout turns={turns} showSources={setSourcesTurn}>
-        {active && (
-          <button
-            type="button"
-            className="text-button stop-answer"
-            disabled={!connected || cancelling === active}
-            onClick={() => {
-              setCancelling(active);
-              void client
-                .cancel(conversationId, active)
-                .catch((error) =>
-                  notice(errorMessage(error, 'Could not stop the answer.'), 'error', 'ask-stop'),
-                )
-                .finally(() => {
-                  setCancelling(undefined);
-                  check();
-                });
-            }}
-          >
-            Stop answer
-          </button>
-        )}
-      </ConversationLayout>
-      <Sources
-        client={client}
-        conversationId={conversationId}
-        turns={turns}
-        openedTurnId={sourcesTurn}
-        show={setSourcesTurn}
-        close={() => setSourcesTurn(undefined)}
-      />
-    </>
-  );
-}
-
-export function AskWindow({
-  client,
-  surface = 'composer',
-}: {
-  client: AskClient;
-  surface?: AskSurface;
-}) {
-  return (
-    <AppViewport scale={false} className={`ask-viewport ask-viewport-${surface}`}>
+    <AppViewport scale={false} className="ask-viewport">
       <InteractionProvider notificationHost={ToastNotificationCenter}>
-        <AskScreen client={client} surface={surface} />
+        <AskScreen client={client} />
       </InteractionProvider>
     </AppViewport>
   );
 }
 
-function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface }) {
+function AskScreen({ client }: { client: AskClient }) {
   const notice = useAskNotice();
   const feed = useRef<ReturnType<typeof connectAskFeed>>();
   const shown = useRef(true);
   const hiding = useRef(false);
   const reconnect = useRef<() => void>(() => {});
+  const presentation = useRef<HTMLDivElement>(null);
+  const visibilityGeneration = useRef(0);
+  const expanding = useRef<string>();
+  const [receipt, setReceipt] = useState<{ conversationId: string; turnId: string }>();
+  const [expansion, setExpansion] = useState<Expansion>();
   const [snapshot, setSnapshot] = useState<AskSnapshot | null>();
   const [connected, setConnected] = useState(false);
   const [windowFocused, setWindowFocused] = useState(() => document.hasFocus());
@@ -142,12 +102,21 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
     setConnected(false);
   }, []);
 
+  const clearPresentation = useCallback(() => {
+    visibilityGeneration.current++;
+    expanding.current = undefined;
+    setReceipt(undefined);
+    setExpansion(undefined);
+  }, []);
+
   const dismiss = useCallback(() => {
     if (hiding.current || !shown.current) return;
     hiding.current = true;
+    visibilityGeneration.current++;
     suspend();
     void client
       .hide()
+      .then(clearPresentation)
       .catch((cause) => {
         shown.current = true;
         notice(errorMessage(cause, 'Could not hide Ask.'), 'error', 'ask-hide');
@@ -156,10 +125,9 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
       .finally(() => {
         hiding.current = false;
       });
-  }, [client, notice, suspend]);
+  }, [clearPresentation, client, notice, suspend]);
 
   useEffect(() => {
-    if (surface !== 'composer') return;
     function onEscape(event: KeyboardEvent) {
       if (
         event.key !== 'Escape' ||
@@ -174,7 +142,7 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
     }
     window.addEventListener('keydown', onEscape);
     return () => window.removeEventListener('keydown', onEscape);
-  }, [dismiss, surface]);
+  }, [dismiss]);
 
   useEffect(() => {
     let destroyed = false;
@@ -182,7 +150,7 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
     let unlisten: (() => void) | undefined;
     const theme = watchTheme();
     const updateFocus = ({ focusEpoch, focusRequest }: Partial<AskFocus>) => {
-      if (surface !== 'composer' || focusEpoch === undefined || focusRequest === undefined) return;
+      if (focusEpoch === undefined || focusRequest === undefined) return;
       setFocus((previous) =>
         previous &&
         (previous.focusEpoch > focusEpoch ||
@@ -242,14 +210,17 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
     void client
       .onWindowEvent((event) => {
         if (destroyed) return;
-        if (event.type === 'hidden') suspend();
+        if (event.type === 'hidden') {
+          clearPresentation();
+          suspend();
+        }
         if (event.type === 'activated' || event.type === 'sessionChanged') {
           updateFocus(event);
           if (event.type === 'activated') {
             const wasHidden = !shown.current;
             shown.current = true;
             hiding.current = false;
-            if (surface === 'composer') setActivation((previous) => previous + 1);
+            setActivation((previous) => previous + 1);
             setWindowFocused(document.hasFocus());
             if (wasHidden || !feed.current) connect();
             else feed.current.check();
@@ -298,12 +269,68 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
       window.removeEventListener('drop', preventFileNavigation);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [client, notice, surface, suspend]);
+  }, [clearPresentation, client, notice, suspend]);
 
-  const Session = surface === 'composer' ? ComposerSession : ConversationSession;
+  const route = snapshot?.submission?.route;
+  const routedTurn = snapshot?.submission?.currentTurnId;
+  const conversationId = snapshot?.conversationId;
+  useEffect(() => {
+    if (
+      expansion ||
+      !connected ||
+      !shown.current ||
+      !conversationId ||
+      !receipt ||
+      receipt.conversationId !== conversationId ||
+      receipt.turnId !== routedTurn ||
+      (route !== 'answer' && route !== 'selectionAnswer') ||
+      expanding.current === routedTurn
+    )
+      return;
+    const frame = presentation.current;
+    const box = frame?.querySelector<HTMLElement>('[data-slot="prompt-box"]');
+    if (!frame || !box) return;
+    const start = box.getBoundingClientRect();
+    const bounds = frame.getBoundingClientRect();
+    const from = { width: start.width, height: start.height, bottom: bounds.bottom - start.bottom };
+    const generation = visibilityGeneration.current;
+    expanding.current = receipt.turnId;
+    void (client.expandChat?.(conversationId, receipt.turnId) ?? Promise.resolve())
+      .then(() => {
+        if (shown.current && visibilityGeneration.current === generation) setExpansion(from);
+      })
+      .catch((cause) => {
+        if (shown.current && visibilityGeneration.current === generation) {
+          notice(errorMessage(cause, 'Could not expand Ask.'), 'error', 'ask-expand');
+        }
+      });
+  }, [client, connected, conversationId, expansion, notice, receipt, route, routedTurn]);
+
+  function captureSubmitReceipt() {
+    const generation = visibilityGeneration.current;
+    return (turnId: string) => {
+      if (shown.current && visibilityGeneration.current === generation && conversationId) {
+        setReceipt({ conversationId, turnId });
+      }
+    };
+  }
+
+  const expansionStyle =
+    expansion &&
+    ({
+      '--ask-start-width': `${expansion.width}px`,
+      '--ask-start-height': `${expansion.height}px`,
+      '--ask-start-bottom': `${Math.max(0, expansion.bottom)}px`,
+    } as CSSProperties);
   return (
-    <>
-      {surface === 'conversation' && (
+    <div
+      className="ask-presentation"
+      ref={presentation}
+      data-expanded={Boolean(expansion)}
+      style={expansionStyle}
+    >
+      {expansion && <div className="ask-expansion-backdrop" aria-hidden="true" />}
+      {expansion && (
         <div className="window-bar" data-tauri-drag-region data-windows={onWindows}>
           <button
             type="button"
@@ -323,13 +350,15 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
         </div>
       )}
       {snapshot ? (
-        <Session
+        <ComposerSession
           key={snapshot.conversationId}
           client={client}
           snapshot={snapshot}
           connected={connected}
           focus={focus}
           activation={activation}
+          expanded={Boolean(expansion)}
+          captureSubmitReceipt={captureSubmitReceipt}
           canDeliverVoice={() =>
             shown.current &&
             windowFocused &&
@@ -357,6 +386,6 @@ function AskScreen({ client, surface }: { client: AskClient; surface: AskSurface
           Reconnect
         </button>
       )}
-    </>
+    </div>
   );
 }

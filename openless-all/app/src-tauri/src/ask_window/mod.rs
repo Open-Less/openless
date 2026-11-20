@@ -9,7 +9,7 @@ pub(crate) mod voice;
 mod wire;
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::{
@@ -29,11 +29,11 @@ use tauri::{
 use capture::{Invocation, Trigger};
 
 pub(crate) const LABEL: &str = "ask-anything";
-pub(crate) const CONVERSATION_LABEL: &str = "ask-conversation";
 const PAGE: &str = "ask-window/index.html";
-const WIDTH: f64 = 640.0;
+const COMPOSER_WIDTH: f64 = 640.0;
+const CONVERSATION_WIDTH: f64 = 800.0;
 const COMPOSER_HEIGHT: f64 = 300.0;
-const CONVERSATION_HEIGHT: f64 = 600.0;
+const CONVERSATION_HEIGHT: f64 = 920.0;
 const WINDOW_GAP: f64 = 12.0;
 static OPEN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -58,7 +58,7 @@ pub(crate) struct Desktop {
     #[cfg(target_os = "windows")]
     native_window: std::sync::atomic::AtomicUsize,
     current_conversation: Mutex<Option<String>>,
-    revealed_turns: Mutex<HashSet<uuid::Uuid>>,
+    expanded: AtomicBool,
     placement: Mutex<Option<Placement>>,
     composer: Mutex<ComposerFocus>,
     voice_result: Mutex<Option<voice::Delivery>>,
@@ -140,7 +140,7 @@ impl Desktop {
             #[cfg(target_os = "windows")]
             native_window: std::sync::atomic::AtomicUsize::new(0),
             current_conversation: Mutex::new(None),
-            revealed_turns: Mutex::new(HashSet::new()),
+            expanded: AtomicBool::new(false),
             placement: Mutex::new(None),
             composer: Mutex::new(ComposerFocus::default()),
             voice_result: Mutex::new(None),
@@ -159,20 +159,17 @@ impl Desktop {
                 return;
             }
             *current = conversation_id.clone();
-            self.revealed_turns.lock().clear();
             self.revoke_target();
         }
         let (focus_epoch, focus_request) = self.composer_focus();
-        for label in [LABEL, CONVERSATION_LABEL] {
-            let _ = self.app.emit_to(
-                EventTarget::webview_window(label),
-                "ask:window",
-                serde_json::json!({
-                    "type": "sessionChanged", "conversationId": conversation_id,
-                    "focusEpoch": focus_epoch, "focusRequest": focus_request
-                }),
-            );
-        }
+        let _ = self.app.emit_to(
+            EventTarget::webview_window(LABEL),
+            "ask:window",
+            serde_json::json!({
+                "type": "sessionChanged", "conversationId": conversation_id,
+                "focusEpoch": focus_epoch, "focusRequest": focus_request
+            }),
+        );
     }
 
     pub(crate) fn composer_focus(&self) -> (u64, u64) {
@@ -353,19 +350,15 @@ impl Desktop {
     }
 
     pub(crate) fn hide(&self, window: &WebviewWindow) -> Result<(), String> {
-        let label = window.label();
-        if !matches!(label, LABEL | CONVERSATION_LABEL) {
+        if window.label() != LABEL {
             return Err("Not an Ask window.".into());
         }
-        if label == LABEL {
-            self.invocation_epoch.fetch_add(1, Ordering::AcqRel);
-        }
+        self.invocation_epoch.fetch_add(1, Ordering::AcqRel);
         window.hide().map_err(|error| error.to_string())?;
-        if label == LABEL {
-            self.mark_unfocused();
-        }
+        self.expanded.store(false, Ordering::Release);
+        self.mark_unfocused();
         let _ = self.app.emit_to(
-            EventTarget::webview_window(label),
+            EventTarget::webview_window(LABEL),
             "ask:window",
             serde_json::json!({"type":"hidden"}),
         );
@@ -462,18 +455,19 @@ impl Desktop {
             return Ok(());
         }
         let chord = chord.map(|start| start && self.ports.auto_voice_on_open());
-        let window = ensure_window(&self.app, self, LABEL)?;
+        let window = ensure_window(&self.app, self)?;
         let desktop = self.clone();
         on_ui_thread(window, move |window| {
             if desktop.invocation_epoch.load(Ordering::Acquire) != generation {
                 return Ok(());
             }
+            let was_visible = window.is_visible().map_err(|error| error.to_string())?;
             if let Some(placement) = placement {
-                placement.position(&window, LABEL)?;
-                if let Some(reader) = desktop.app.get_webview_window(CONVERSATION_LABEL) {
-                    placement.position(&reader, CONVERSATION_LABEL)?;
-                }
                 *desktop.placement.lock() = Some(placement);
+            }
+            if !was_visible || !desktop.is_focused() {
+                let placement = desktop.placement.lock().clone().unwrap_or_default();
+                placement.position(&window, desktop.expanded.load(Ordering::Acquire))?;
             }
             desktop
                 .composer
@@ -491,39 +485,31 @@ impl Desktop {
         .await
     }
 
-    pub(crate) async fn show_conversation_for_chat(
+    pub(crate) async fn expand_chat(
         self: &Arc<Self>,
+        window: WebviewWindow,
         conversation_id: uuid::Uuid,
-        turn_id: uuid::Uuid,
     ) -> Result<(), String> {
         let conversation_id = conversation_id.to_string();
-        let _opening = OPEN.lock().await;
-        {
-            let current = self.current_conversation.lock();
-            if current.as_ref() != Some(&conversation_id)
-                || !self.revealed_turns.lock().insert(turn_id)
-            {
-                return Ok(());
-            }
-        }
-        let window = ensure_window(&self.app, self, CONVERSATION_LABEL)?;
+        let generation = self.invocation_epoch.load(Ordering::Acquire);
         let desktop = self.clone();
         on_ui_thread(window, move |window| {
-            if desktop.current_conversation.lock().as_ref() != Some(&conversation_id) {
+            if desktop.invocation_epoch.load(Ordering::Acquire) != generation
+                || desktop.current_conversation.lock().as_ref() != Some(&conversation_id)
+                || !window.is_visible().map_err(|error| error.to_string())?
+            {
+                return Err("Ask is no longer shown for this request.".into());
+            }
+            if desktop.expanded.load(Ordering::Acquire) {
                 return Ok(());
             }
-            let placement = desktop
+            desktop
                 .placement
                 .lock()
                 .clone()
-                .unwrap_or_else(|| Placement::at_cursor(&desktop.app));
-            placement.position(&window, CONVERSATION_LABEL)?;
-            reveal_without_focus(&window)?;
-            let _ = desktop.app.emit_to(
-                EventTarget::webview_window(CONVERSATION_LABEL),
-                "ask:window",
-                serde_json::json!({"type": "activated"}),
-            );
+                .unwrap_or_default()
+                .position(&window, true)?;
+            desktop.expanded.store(true, Ordering::Release);
             Ok(())
         })
         .await
@@ -547,27 +533,30 @@ impl Placement {
         )
     }
 
-    fn position(&self, window: &WebviewWindow, label: &str) -> Result<(), String> {
+    fn position(&self, window: &WebviewWindow, expanded: bool) -> Result<(), String> {
+        let (nominal_width, nominal_height) = if expanded {
+            (CONVERSATION_WIDTH, CONVERSATION_HEIGHT)
+        } else {
+            (COMPOSER_WIDTH, COMPOSER_HEIGHT)
+        };
         let Some(monitor) = &self.0 else {
-            return Ok(());
+            return window
+                .set_size(LogicalSize::new(nominal_width, nominal_height))
+                .map_err(|error| error.to_string());
         };
         let work = monitor.work_area();
         let scale = monitor.scale_factor();
         let size: LogicalSize<f64> = work.size.to_logical(scale);
         let gap = WINDOW_GAP.min(size.height / 24.0);
-        let width = WIDTH.min(size.width - gap * 2.0);
-        let composer_height = COMPOSER_HEIGHT.min((size.height - gap * 3.0) * 0.5);
-        let conversation_height =
-            CONVERSATION_HEIGHT.min(size.height - composer_height - gap * 3.0);
-        let (height, bottom) = if label == LABEL {
-            (composer_height, gap)
-        } else {
-            (conversation_height, composer_height + gap * 2.0)
-        };
+        let fit = ((size.width - gap * 2.0) / nominal_width)
+            .min((size.height - gap * 2.0) / nominal_height)
+            .clamp(0.01, 1.0);
+        let width = nominal_width * fit;
+        let height = nominal_height * fit;
         window
             .set_position(PhysicalPosition::new(
                 work.position.x + ((size.width - width) * scale / 2.0).round() as i32,
-                work.position.y + ((size.height - bottom - height) * scale).round() as i32,
+                work.position.y + ((size.height - gap - height) * scale).round() as i32,
             ))
             .and_then(|()| {
                 window.set_size(PhysicalSize::new(
@@ -579,30 +568,14 @@ impl Placement {
     }
 }
 
-fn ensure_window(
-    app: &AppHandle,
-    desktop: &Arc<Desktop>,
-    label: &str,
-) -> Result<WebviewWindow, String> {
-    if let Some(window) = app.get_webview_window(label) {
+fn ensure_window(app: &AppHandle, desktop: &Arc<Desktop>) -> Result<WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(LABEL) {
         return Ok(window);
     }
-    let composer = label == LABEL;
     let page_owner = Arc::downgrade(desktop);
-    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(PAGE.into()))
-        .title(if composer {
-            "OpenLess — Ask Anything"
-        } else {
-            "OpenLess — Ask Conversation"
-        })
-        .inner_size(
-            WIDTH,
-            if composer {
-                COMPOSER_HEIGHT
-            } else {
-                CONVERSATION_HEIGHT
-            },
-        )
+    let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(PAGE.into()))
+        .title("OpenLess — Ask Anything")
+        .inner_size(COMPOSER_WIDTH, COMPOSER_HEIGHT)
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -612,7 +585,7 @@ fn ensure_window(
         .visible(false)
         .focused(false)
         .on_page_load(move |_window, payload| {
-            if composer && payload.event() == PageLoadEvent::Started {
+            if payload.event() == PageLoadEvent::Started {
                 if let Some(desktop) = page_owner.upgrade() {
                     let has_editor = desktop.composer.lock().target.is_some();
                     if has_editor {
@@ -624,12 +597,10 @@ fn ensure_window(
         .build()
         .map_err(|error| error.to_string())?;
     #[cfg(target_os = "windows")]
-    if composer {
-        if let Ok(hwnd) = window.hwnd() {
-            desktop
-                .native_window
-                .store(hwnd.0 as usize, Ordering::Release);
-        }
+    if let Ok(hwnd) = window.hwnd() {
+        desktop
+            .native_window
+            .store(hwnd.0 as usize, Ordering::Release);
     }
     let desktop = Arc::downgrade(desktop);
     let handle = window.clone();
@@ -644,10 +615,8 @@ fn ensure_window(
             }
             return;
         }
-        if composer {
-            if let Some(desktop) = desktop {
-                desktop.on_window_event(event);
-            }
+        if let Some(desktop) = desktop {
+            desktop.on_window_event(event);
         }
     });
     Ok(window)
@@ -686,41 +655,6 @@ fn focus_composer(window: &WebviewWindow) -> Result<(), String> {
         .unminimize()
         .and_then(|()| window.set_focus())
         .map_err(|error| error.to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn reveal_without_focus(window: &WebviewWindow) -> Result<(), String> {
-    let handle = window.ns_window().map_err(|error| error.to_string())?;
-    if handle.is_null() {
-        return Err("Ask conversation window is unavailable.".into());
-    }
-    unsafe {
-        let _: () = objc2::msg_send![
-            handle.cast::<objc2::runtime::AnyObject>(),
-            orderFrontRegardless
-        ];
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn reveal_without_focus(window: &WebviewWindow) -> Result<(), String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    };
-    let handle = window.hwnd().map_err(|error| error.to_string())?;
-    unsafe {
-        SetWindowPos(
-            windows::Win32::Foundation::HWND(handle.0),
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        )
-    }
-    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

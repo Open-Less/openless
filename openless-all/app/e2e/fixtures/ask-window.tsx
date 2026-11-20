@@ -52,7 +52,6 @@ const excerpt: AttachmentInfo = {
 const handlers = {
   event: new Set<(event: AskEvent) => void>(),
   window: new Set<(event: AskWindowEvent) => void>(),
-  reader: new Set<(event: AskWindowEvent) => void>(),
   voice: new Set<(event: AskVoiceEvent) => void>(),
 };
 
@@ -68,13 +67,6 @@ let focus: AskFocus = { focusEpoch: 1, focusRequest: 1 };
 let lastEditor: AskEditor | undefined;
 const voiceScope = new Map<string, Omit<AskVoiceEvent, 'type'>>();
 const delivered = new Set<string>();
-const shownTurns = new Set<string>();
-let readerRoot: ReturnType<typeof createRoot>;
-const transcript = document.createElement('div');
-transcript.className = 'fixture-transcript';
-transcript.hidden = true;
-document.body.append(transcript);
-
 function push(event: PendingEvent, live = true, replayable = true) {
   const packet = {
     ...event,
@@ -88,9 +80,9 @@ function push(event: PendingEvent, live = true, replayable = true) {
   if (live) handlers.event.forEach((listener) => listener(packet));
 }
 
-function resolveRoute(route: AskRoute, request: SubmitAsk) {
+function resolveRoute(route: AskRoute, request: SubmitAsk, live = true) {
   const turnId = current.activeTurnId!;
-  push({ type: 'routeResolved', route, turnId });
+  push({ type: 'routeResolved', route, turnId }, live);
   if (route !== 'answer' && route !== 'selectionAnswer') return;
   const turn: AskTurn = {
     turnId,
@@ -104,20 +96,6 @@ function resolveRoute(route: AskRoute, request: SubmitAsk) {
     sources: [],
   };
   push({ type: 'turnAccepted', turn });
-  showTranscript(turnId);
-}
-
-function showTranscript(turnId: string) {
-  if (shownTurns.has(turnId)) return;
-  shownTurns.add(turnId);
-  transcript.hidden = false;
-  fixture.showCount++;
-  if (!readerRoot) {
-    readerRoot = createRoot(transcript);
-    readerRoot.render(<AskWindow client={readerClient} surface="conversation" />);
-  } else {
-    handlers.reader.forEach((listener) => listener({ type: 'activated' }));
-  }
 }
 
 function reset(id: string) {
@@ -139,8 +117,7 @@ const fixture = {
   imageBase64,
   cancelled: [] as [string, string][],
   hideCount: 0,
-  hideReaderCount: 0,
-  showCount: 0,
+  expandCount: 0,
   snapshotReads: 0,
   rejectNext: false,
   route: 'answer' as AskRoute | null,
@@ -150,10 +127,9 @@ const fixture = {
     lastEditor?.editable ? [lastEditor.selectionStart, lastEditor.selectionEnd] : null,
   active: () => current.activeTurnId!,
   push,
-  resolve(route: AskRoute) {
-    resolveRoute(route, fixture.submits.at(-1)!);
+  resolve(route: AskRoute, live = true) {
+    resolveRoute(route, fixture.submits.at(-1)!, live);
   },
-  showTranscript,
   addInitialCards() {
     push({ type: 'attachmentChanged', attachment: image });
     push({ type: 'attachmentChanged', attachment: pdf });
@@ -183,9 +159,7 @@ const fixture = {
     reset('conversation-2');
     lastEditor = undefined;
     focus = { focusEpoch: focus.focusEpoch + 1, focusRequest: focus.focusRequest };
-    for (const listeners of [handlers.window, handlers.reader]) {
-      listeners.forEach((listener) => listener({ type: 'sessionChanged', ...focus }));
-    }
+    handlers.window.forEach((listener) => listener({ type: 'sessionChanged', ...focus }));
   },
 };
 
@@ -267,6 +241,9 @@ const client: AskClient = {
     fixture.hideCount++;
     handlers.window.forEach((listener) => listener({ type: 'hidden' }));
   },
+  async expandChat() {
+    fixture.expandCount++;
+  },
   async syncEditor(scope, editor) {
     if (scope.focusEpoch !== focus.focusEpoch || scope.focusRequest !== focus.focusRequest)
       return false;
@@ -289,16 +266,6 @@ const client: AskClient = {
   onEvent: (receive) => subscribe(handlers.event, receive),
   onWindowEvent: (receive) => subscribe(handlers.window, receive),
   onVoiceEvent: (receive) => subscribe(handlers.voice, receive),
-};
-
-const readerClient: AskClient = {
-  ...client,
-  async hide() {
-    fixture.hideReaderCount++;
-    transcript.hidden = true;
-    handlers.reader.forEach((listener) => listener({ type: 'hidden' }));
-  },
-  onWindowEvent: (receive) => subscribe(handlers.reader, receive),
 };
 
 declare global {

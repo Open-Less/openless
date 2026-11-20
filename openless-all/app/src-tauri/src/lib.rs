@@ -375,6 +375,7 @@ macro_rules! app_invoke_handler_desktop {
             ask_window::chat::ask_get_attachment_preview,
             ask_window::chat::ask_open_source,
             ask_window::chat::ask_window_hide,
+            ask_window::chat::ask_expand_chat,
             ask_window::chat::ask_sync_editor,
             ask_window::chat::ask_ack_voice,
             ask_window::chat::ask_get_context_permission,
