@@ -42,7 +42,13 @@ const gapFor = (cellSize: number) => Math.max(2, Math.round(cellSize / 4));
 // never zero: weeks.slice(-0) would hand back the whole history instead of nothing
 const weeksFor = (months: number) => Math.max(1, Math.ceil(months * WEEKS_PER_MONTH));
 
-const SPRING = { type: 'spring', bounce: 0.2, duration: 0.62 } as const;
+const PANEL_CURVE = [0.32, 0.72, 0, 1] as const;
+const PANEL_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)';
+const PANEL_DURATION_MS = 360;
+const PANEL_TRANSITION: Transition = {
+  duration: PANEL_DURATION_MS / 1000,
+  ease: PANEL_CURVE,
+};
 const TOOLTIP_EDGE = 8;
 
 const LEVELS = [0, 1, 2, 3, 4] as const;
@@ -445,8 +451,8 @@ const GitHubActivity = ({
         return;
       }
       const animation = panel.animate([{ height: `${from}px` }, { height: `${target}px` }], {
-        duration: 280,
-        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        duration: PANEL_DURATION_MS,
+        easing: PANEL_EASING,
       });
       panelMotion.current = animation;
       animation.onfinish = () => {
@@ -475,7 +481,7 @@ const GitHubActivity = ({
   const apps = appsProp;
   const hasPanel = reservePanel || apps.length > 0;
   const scale = React.useMemo(() => toScale(accent), [accent]);
-  const transition = reduceMotion ? { duration: 0 } : SPRING;
+  const transition = reduceMotion ? { duration: 0 } : PANEL_TRANSITION;
 
   const total = React.useMemo(
     () => contributions.reduce((sum, day) => sum + day.count, 0),
@@ -535,13 +541,15 @@ const GitHubActivity = ({
 
             {apps.length > 0 && (
               <div className="ol-gha-panel-actions">
-                {!open && (
-                  <div className="ol-gha-app-preview">
-                    {apps.slice(0, STACK_LIMIT).map((app) => (
-                      <AppPreview key={app.name} app={app} />
-                    ))}
-                  </div>
-                )}
+                <div
+                  className="ol-gha-app-preview"
+                  data-hidden={open || undefined}
+                  aria-hidden={open || undefined}
+                >
+                  {apps.slice(0, STACK_LIMIT).map((app) => (
+                    <AppPreview key={app.name} app={app} />
+                  ))}
+                </div>
 
                 <button
                   type="button"
@@ -557,17 +565,19 @@ const GitHubActivity = ({
             )}
           </div>
 
-          <ul
-            className="ol-gha-app-list"
-            aria-hidden={open ? undefined : true}
-            tabIndex={open && !inFlow ? 0 : undefined}
-          >
-            {apps.map((app) => (
-              <li key={app.name}>
-                <AppRow app={app} />
-              </li>
-            ))}
-          </ul>
+          <div className="ol-gha-app-list-wrap">
+            <ul
+              className="ol-gha-app-list"
+              aria-hidden={open ? undefined : true}
+              tabIndex={open && !inFlow ? 0 : undefined}
+            >
+              {apps.map((app) => (
+                <li key={app.name}>
+                  <AppRow app={app} />
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
     </div>

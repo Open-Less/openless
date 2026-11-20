@@ -1,5 +1,6 @@
 import {
   AnimatePresence,
+  MotionConfig,
   motion,
   useIsPresent,
   usePresence,
@@ -146,19 +147,22 @@ export function NotificationCenter({ controller }: { controller: InteractionCont
     controller.getNotifications,
     controller.getNotifications,
   );
+  const styleNonce = document.head.querySelector<HTMLStyleElement>('style[nonce]')?.nonce;
   return (
     <ViewportPortal>
       <div className="ol-notification-center">
         <div className="ol-notification-stack">
-          <AnimatePresence initial={false} mode="popLayout">
-            {items.map((item) => (
-              <NotificationCard
-                key={item.id}
-                item={item}
-                dismiss={() => controller.dismiss(item.id)}
-              />
-            ))}
-          </AnimatePresence>
+          <MotionConfig nonce={styleNonce}>
+            <AnimatePresence initial={false} mode="popLayout">
+              {items.map((item) => (
+                <NotificationCard
+                  key={item.id}
+                  item={item}
+                  dismiss={() => controller.dismiss(item.id)}
+                />
+              ))}
+            </AnimatePresence>
+          </MotionConfig>
         </div>
       </div>
     </ViewportPortal>

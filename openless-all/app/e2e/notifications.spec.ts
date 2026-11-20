@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { fixtureOrigin } from './support/server';
+import { fixtureOrigin, previewOrigin } from './support/server';
 import { settleNavigation } from './support/navigation';
 import type { NotificationOptions } from '../src/api/interaction';
 
@@ -147,6 +147,58 @@ test('a new save replaces the previous receipt in place and draws a full success
   await expect(message).toHaveText('已删除');
   expect(await message.evaluate((node) => node.clientHeight)).toBe(20);
   await expect(savedIcon).toHaveAttribute('data-tone', 'trash');
+});
+
+test('repeated history refresh keeps receipts at the top under desktop CSP', async ({ page }) => {
+  const url = `${previewOrigin}/?os=mac`;
+  await page.route(url, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: {
+        ...response.headers(),
+        'content-security-policy': "style-src 'self' 'unsafe-inline' 'nonce-desktop-test'",
+      },
+      body: (await response.text()).replace('<style>', '<style nonce="desktop-test">'),
+    });
+  });
+  await page.goto(url);
+  await page.getByRole('button', { name: '历史', exact: true }).click();
+  await settleNavigation(page);
+  const refresh = page.getByRole('button', { name: '刷新', exact: true });
+  const active = page.locator('.ol-notification-slot:not([data-exiting]) .ol-notification-card');
+  const retiring = page.locator('.ol-notification-slot[data-exiting]');
+  await refresh.click();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await expect(active).toHaveText('已刷新');
+    await expect(active).toHaveCSS('transform', 'none');
+    const anchor = (await active.boundingBox())!;
+    await active.evaluate((node) => {
+      const animate = node.animate.bind(node);
+      node.animate = (frames, options) => {
+        const animation = animate(frames, options);
+        animation.pause();
+        animation.currentTime = 0;
+        return animation;
+      };
+    });
+    await refresh.click();
+    await expect(retiring).toHaveCSS('position', 'absolute', { timeout: 2000 });
+    const oldCard = retiring.locator('.ol-notification-card');
+    const leaving = (await oldCard.boundingBox())!;
+    expect(leaving.y).toBeCloseTo(anchor.y, 0);
+    expect(leaving.x).toBeCloseTo(anchor.x, 0);
+    await expect(active).toHaveCSS('transform', 'none');
+    expect((await active.boundingBox())!.y).toBeCloseTo(anchor.y, 0);
+    await oldCard.evaluate((node) => {
+      node
+        .getAnimations()
+        .find((animation) => animation.id === 'ol-notice-exit')
+        ?.play();
+    });
+    await expect(retiring).toHaveCount(0);
+  }
 });
 
 test('save bridge and independent in-flight saves keep their own lifecycle', async ({ page }) => {

@@ -60,9 +60,12 @@ test('history writes update every page while recordings, activity and the usage 
   const tools = page.getByRole('button', { name: '工具', exact: true });
   await tools.click();
   await expect(tools).toHaveAttribute('aria-expanded', 'true');
-  await tools.locator('..').locator('.ol-sidebar-nav-group').evaluate(async (group) => {
-    await Promise.all(group.getAnimations().map((animation) => animation.finished));
-  });
+  await tools
+    .locator('..')
+    .locator('.ol-sidebar-nav-group')
+    .evaluate(async (group) => {
+      await Promise.all(group.getAnimations().map((animation) => animation.finished));
+    });
   await navigate(page, 'quickNote', '速记');
   await expect(records).toHaveAttribute('data-history-record', 'mock-quick-note');
 
@@ -78,6 +81,41 @@ test('history writes update every page while recordings, activity and the usage 
     .click();
   await expect(page.getByRole('region', { name: '模型用量列表' })).toContainText('deepseek-v3-2');
   await expect(page.getByRole('region', { name: '最近记录列表' }).locator('time')).toHaveCount(0);
+});
+
+test('history switches transcripts inside a fixed frame with copy below the text', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 980, height: 640 });
+  await page.goto('/?os=mac');
+  const surface = await navigate(page, 'history', '历史');
+  await surface.locator('[data-history-record="mock-quick-note"]').click();
+
+  const steps = surface.locator('.ol-history-pipeline-chip');
+  await expect(steps).toHaveCount(2);
+  expect((await steps.first().boundingBox())!.y).toBeCloseTo(
+    (await steps.last().boundingBox())!.y,
+    0,
+  );
+  const frame = surface.locator('.ol-history-content-frame');
+  const content = frame.locator('.ol-history-content-scroll');
+  const copy = frame.getByRole('button', { name: '复制', exact: true });
+  const raw = frame.getByRole('button', { name: '原文', exact: true });
+  const polished = frame.getByRole('button', { name: /^润色 · / });
+  await expect(content).toHaveText('Bring the notes to the planning meeting.');
+  await expect(content).toHaveCSS('overflow-y', 'auto');
+  const anchor = (await copy.boundingBox())!;
+  expect(anchor.y).toBeGreaterThan((await content.boundingBox())!.y);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await raw.click();
+    await expect(raw).toHaveAttribute('aria-pressed', 'true');
+    await expect(content).toHaveText('Remember to bring the notes to the planning meeting.');
+    expect((await copy.boundingBox())!.y).toBeCloseTo(anchor.y, 0);
+    await polished.click();
+    await expect(polished).toHaveAttribute('aria-pressed', 'true');
+    await expect(content).toHaveText('Bring the notes to the planning meeting.');
+  }
 });
 
 for (const [font, scale] of [
@@ -164,8 +202,8 @@ test('a 375px desktop preview keeps one vertical scroll owner', async ({ page })
     recent,
     dashboard.locator('.ol-gha-app-list'),
   ]) {
-    expect(
-      await owner.evaluate((node) => node.scrollHeight - node.clientHeight),
-    ).toBeLessThanOrEqual(1);
+    await expect
+      .poll(() => owner.evaluate((node) => node.scrollHeight - node.clientHeight))
+      .toBeLessThanOrEqual(1);
   }
 });

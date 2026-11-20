@@ -111,7 +111,8 @@ for (const [platform, icons] of [
     const toggle = page.locator('.ol-gha-toggle');
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(preview).toHaveCount(0);
+    await expect(preview).toHaveAttribute('aria-hidden', 'true');
+    await expect(preview).toHaveCSS('opacity', '0');
     const rows = page.locator('.ol-gha-app-row');
     await expect(rows.locator('.ol-gha-app-name')).toHaveText(['Editor', 'Terminal', 'Browser']);
     await expect(rows.locator('.ol-gha-app-count')).toHaveText(['2', '1', '1']);
