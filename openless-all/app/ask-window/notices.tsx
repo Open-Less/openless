@@ -1,28 +1,62 @@
-import { useCallback, useEffect, useRef } from 'react';
-import { useToast } from '../src/ui/overlays/InteractionProvider';
+import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 type Severity = 'warning' | 'error';
+type Notice = { id: number; message: string; severity: Severity };
+type Report = (message: string, severity: Severity, key?: string) => { dismiss(): void };
+const AskNoticeContext = createContext<{
+  notice?: Notice;
+  report: Report;
+  clear(): void;
+  scope(): number;
+}>({ report: () => ({ dismiss() {} }), clear() {}, scope: () => 0 });
+
+export function AskNoticeProvider({ children }: { children: ReactNode }) {
+  const [notice, setNotice] = useState<Notice>();
+  const next = useRef(0);
+  const session = useRef(0);
+  const scope = useCallback(() => session.current, []);
+  const clear = useCallback(() => {
+    session.current++;
+    setNotice(undefined);
+  }, []);
+  const report = useCallback<Report>((message, severity) => {
+    const id = ++next.current;
+    setNotice({ id, message, severity });
+    return { dismiss: () => setNotice((current) => (current?.id === id ? undefined : current)) };
+  }, []);
+  return <AskNoticeContext.Provider value={{ notice, report, clear, scope }}>{children}</AskNoticeContext.Provider>;
+}
 
 export function useAskNotice() {
-  const toast = useToast();
-  return useCallback(
-    (message: string, severity: Severity, key?: string) =>
-      toast[severity](message, {
-        key,
-        durationMs: severity === 'warning' ? 6000 : 0,
-      }),
-    [toast],
-  );
+  const { report } = useContext(AskNoticeContext);
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  return useCallback<Report>((...args) =>
+    mounted.current ? report(...args) : { dismiss() {} }, [report]);
+}
+
+export function useClearAskNotice() {
+  return useContext(AskNoticeContext).clear;
+}
+
+export function useScopedAskNotice() {
+  const report = useAskNotice();
+  const { scope } = useContext(AskNoticeContext);
+  const generation = useRef(scope());
+  return useCallback<Report>((...args) =>
+    scope() === generation.current ? report(...args) : { dismiss() {} }, [report, scope]);
+}
+
+export function AskCurrentNotice() {
+  const notice = useContext(AskNoticeContext).notice;
+  return <AskNotice message={notice?.message} severity={notice?.severity ?? 'warning'} />;
 }
 
 export function AskNotice({ message, severity }: { message?: string; severity: Severity }) {
-  const notice = useAskNotice();
-  const last = useRef<{ message?: string; severity?: Severity }>({});
-  useEffect(() => {
-    if (!message || (message === last.current.message && severity === last.current.severity))
-      return;
-    last.current = { message, severity };
-    notice(message, severity, 'ask-notice');
-  }, [message, severity, notice]);
-  return null;
+  return message ? (
+    <p className="ask-inline-notice" data-severity={severity} role="alert">{message}</p>
+  ) : null;
 }

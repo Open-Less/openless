@@ -9024,7 +9024,7 @@ impl OpenLessBackend {
     }
 
     fn persist_recording_started(&self, context: &DictationContext, session_id: SessionId) {
-        if context.output_target == DictationOutputTarget::CloudNote
+        if matches!(context.output_target, DictationOutputTarget::CloudNote | DictationOutputTarget::AskComposer)
             || self.is_cloud_note(session_id)
         {
             return;
@@ -15070,6 +15070,45 @@ mod tests {
         assert!(!contexts.last().unwrap().insertion.streaming);
         assert!(backend.list_history().unwrap().is_empty());
         backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ask_composer_has_no_draft_or_terminal_history_side_effect_at_cap() {
+        use crate::testing::FixtureDictationEngine;
+        let data = TestDataDir::new("ask-composer-history-cap");
+        let backend = backend_with_dictation_engine(
+            data.path().to_owned(),
+            Arc::new(FixtureDictationEngine::successful("spoken sentinel", "ordinary polish")),
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.history_max_entries = Some(5);
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        for _ in 0..5 {
+            let id = backend.start_dictation().await.unwrap();
+            backend.stop_dictation_session(id).await.unwrap();
+        }
+        let original = backend.list_history().unwrap();
+        assert_eq!(original.len(), 5);
+        backend.shutdown().await.unwrap();
+
+        for (engine, succeeds) in [
+            (FixtureDictationEngine::successful("Ask-only speech", "Ask-only composer text"), true),
+            (FixtureDictationEngine::failing(BackendError::new(BackendErrorCode::Provider, "fixture failure")), false),
+        ] {
+            let backend = backend_with_dictation_engine(data.path().to_owned(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let id = SessionId::new();
+            backend.start_dictation_for_ask_composer(id, || true).await.unwrap();
+            assert_eq!(backend.list_history().unwrap(), original);
+            assert_eq!(backend.stop_dictation_session(id).await.is_ok(), succeeds);
+            assert_eq!(backend.list_history().unwrap(), original);
+            let cancelled_id = SessionId::new();
+            backend.start_dictation_for_ask_composer(cancelled_id, || true).await.unwrap();
+            backend.cancel_dictation(Some(cancelled_id)).await.unwrap();
+            assert_eq!(backend.list_history().unwrap(), original);
+            backend.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test]

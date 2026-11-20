@@ -29,6 +29,34 @@ extern "C" {
     ) -> i32;
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceCounterForEventType(state: i32, kind: u32) -> u32;
+}
+
+#[derive(Clone)]
+pub(in crate::ask_window) struct FocusRecovery {
+    pid: i32,
+    space: u64,
+    input: [u32; 6],
+}
+
+impl FocusRecovery {
+    fn event_counts() -> [u32; 6] {
+        [1, 3, 25, 10, 12, 22].map(|kind| unsafe { CGEventSourceCounterForEventType(1, kind) })
+    }
+
+    fn before_activation(pid: i32) -> Self {
+        Self { pid, space: super::super::active_space_epoch(), input: Self::event_counts() }
+    }
+
+    pub(in crate::ask_window) fn is_current(&self) -> bool {
+        super::super::foreground_pid() == Some(self.pid as u32)
+            && super::super::active_space_epoch() == self.space
+            && Self::event_counts() == self.input
+    }
+}
+
 #[link(name = "AppKit", kind = "framework")]
 extern "C" {
     static NSWorkspaceDidActivateApplicationNotification: *const AnyObject;
@@ -218,7 +246,10 @@ impl Platform {
             if self.watch.is_none() {
                 self.watch = FocusWatch::new(expected_pid, self.epoch.clone());
             }
-            let ax_app = self.watch.as_ref()?.app.clone();
+            let ax_app = match self.watch.as_ref() {
+                Some(watch) => watch.app.clone(),
+                None => ax(AXUIElementCreateApplication(expected_pid), expected_pid)?,
+            };
             let window = element_attr(&ax_app, "AXFocusedWindow", expected_pid)?;
             let element = element_attr(&ax_app, "AXFocusedUIElement", expected_pid)?;
             Some(Identity {
@@ -237,18 +268,20 @@ impl Platform {
     ) -> Option<(ExternalSelection, Option<Baseline>)> {
         autoreleasepool(|_| {
             identity.verify()?;
-            let range = selected_range(&identity.element)?;
-            let units = text_for_range(&identity.element, range.clone(), MAX_SELECTION_UTF16)?;
-            let selection = selection_from_units(&units)?;
-            let baseline = settable(&identity.element)
-                .then(|| identity.baseline())
-                .flatten()
-                .filter(|baseline| baseline.selection == range && baseline.selected() == units);
-            if selected_range(&identity.element)? != range {
-                return None;
-            }
+            let snapshot = identity.selection()?;
             identity.verify()?;
-            Some((selection, baseline))
+            Some(snapshot)
+        })
+    }
+
+    pub(super) fn capture_retained(
+        &self, identity: &Identity,
+    ) -> Option<(ExternalSelection, Option<Baseline>)> {
+        autoreleasepool(|_| {
+            identity.verify()?;
+            let snapshot = identity.selection()?;
+            identity.verify()?;
+            Some(snapshot)
         })
     }
 
@@ -257,6 +290,8 @@ impl Platform {
         identity: &Identity,
         baseline: &Baseline,
         text: &str,
+        eligible: impl Fn() -> bool,
+        recover: impl Fn(FocusRecovery),
         claim: impl FnOnce() -> Result<(), WriteOutcome>,
     ) -> WriteOutcome {
         autoreleasepool(|_| {
@@ -265,13 +300,24 @@ impl Platform {
                 return WriteOutcome::NotWritten;
             };
             if identity.verify().is_none()
-                || !settable(&identity.element)
                 || identity.baseline().as_ref() != Some(baseline)
-                || !identity.restore_front()
-                || identity.verify().is_none()
-                || identity.baseline().as_ref() != Some(baseline)
+                || !matches!(self.foreground(), Foreground::Own | Foreground::External(_))
+                || matches!(self.foreground(), Foreground::External(pid) if pid != identity.pid)
+                || !eligible()
             {
                 return WriteOutcome::NotWritten;
+            }
+            let proof = (self.foreground() == Foreground::Own).then(|| FocusRecovery::before_activation(identity.pid));
+            let fail = |outcome| {
+                if let Some(proof) = proof.as_ref().filter(|proof| proof.is_current()) { recover(proof.clone()); }
+                outcome
+            };
+            if !identity.restore_front()
+                || identity.verify().is_none()
+                || !settable(&identity.element)
+                || identity.baseline().as_ref() != Some(baseline)
+            {
+                return fail(WriteOutcome::NotWritten);
             }
             let name = CFString::new("AXSelectedText");
             let value = CFString::new(text);
@@ -280,10 +326,10 @@ impl Platform {
                 || selected_range(&identity.element).as_ref() != Some(&baseline.selection)
                 || secure_input()
             {
-                return WriteOutcome::NotWritten;
+                return fail(WriteOutcome::NotWritten);
             }
             if let Err(outcome) = claim() {
-                return outcome;
+                return fail(outcome);
             }
             let status = unsafe {
                 AXUIElementSetAttributeValue(
@@ -295,7 +341,7 @@ impl Platform {
             if status == 0 && document(&identity.element).as_ref() == Some(&expected) {
                 WriteOutcome::Written
             } else {
-                WriteOutcome::Unknown
+                fail(WriteOutcome::Unknown)
             }
         })
     }
@@ -310,9 +356,9 @@ impl Drop for Platform {
 }
 
 impl Identity {
-    fn verify(&self) -> Option<()> {
+    fn verify_control(&self) -> Option<()> {
         let terminated: Bool = unsafe { msg_send![&*self.application, isTerminated] };
-        if terminated.as_bool() || secure_input() {
+        if terminated.as_bool() || secure_input() || !unsafe { AXIsProcessTrusted() } {
             return None;
         }
         let role = attr(&self.element, "AXRole")
@@ -331,13 +377,51 @@ impl Identity {
             ..GateInputs::default()
         })
         .is_some()
-            || element_attr(&self.ax_app, "AXFocusedWindow", self.pid)? != self.window
-            || element_attr(&self.ax_app, "AXFocusedUIElement", self.pid)? != self.element
-            || element_attr(&self.element, "AXWindow", self.pid)? != self.window
+            || element_attr(&self.element, "AXWindow", self.pid)
+                .or_else(|| element_attr(&self.element, "AXTopLevelUIElement", self.pid))? != self.window
         {
             return None;
         }
         Some(())
+    }
+
+    fn verify(&self) -> Option<()> {
+        self.verify_control()?;
+        (element_attr(&self.ax_app, "AXFocusedWindow", self.pid)? == self.window
+            && element_attr(&self.ax_app, "AXFocusedUIElement", self.pid)? == self.element)
+            .then_some(())
+    }
+
+    fn selection(&self) -> Option<(ExternalSelection, Option<Baseline>)> {
+        let range = selected_range(&self.element);
+        let exposed = string_units(attr(&self.element, "AXSelectedText").ok(), MAX_SELECTION_UTF16);
+        let exact = range.clone().and_then(|range| {
+            let units = text_for_range(&self.element, range.clone(), MAX_SELECTION_UTF16)
+                .or_else(|| exposed.clone().filter(|units| units.len() == range.len()))?;
+            if exposed.as_ref().is_some_and(|text| text != &units)
+                || selected_range(&self.element)? != range
+            {
+                return None;
+            }
+            Some((range, units))
+        });
+        if let Some((range, units)) = exact {
+            let selection = selection_from_units(&units)?;
+            let baseline = settable(&self.element)
+                .then(|| self.baseline()).flatten()
+                .filter(|baseline| baseline.selection == range && baseline.selected() == units);
+            if selected_range(&self.element)? != range {
+                return None;
+            }
+            return Some((selection, baseline));
+        }
+        if range.is_some() {
+            return None;
+        }
+        let exposed = exposed.filter(|units| !units.is_empty())?;
+        (string_units(attr(&self.element, "AXSelectedText").ok(), MAX_SELECTION_UTF16)? == exposed)
+            .then(|| selection_from_units(&exposed).map(|selection| (selection, None)))
+            .flatten()
     }
 
     fn restore_front(&self) -> bool {
@@ -462,10 +546,31 @@ fn settable(element: &CFType) -> bool {
 
 fn document(element: &CFType) -> Option<Vec<u16>> {
     let count = attr(element, "AXNumberOfCharacters")
-        .ok()?
-        .downcast_into::<CFNumber>()?
-        .to_i64()?;
-    text_for_range(element, 0..usize::try_from(count).ok()?, MAX_DOCUMENT_UTF16)
+        .ok().and_then(|value| value.downcast_into::<CFNumber>())
+        .and_then(|value| value.to_i64())
+        .and_then(|count| usize::try_from(count).ok());
+    count.and_then(|count| text_for_range(element, 0..count, MAX_DOCUMENT_UTF16))
+        .or_else(|| {
+            string_units(attr(element, "AXValue").ok(), MAX_DOCUMENT_UTF16)
+                .filter(|units| count.is_none_or(|count| count == units.len()))
+        })
+}
+
+fn string_units(value: Option<CFType>, cap: usize) -> Option<Vec<u16>> {
+    let value = value?.downcast_into::<CFString>()?;
+    let string = value.as_concrete_TypeRef();
+    let len = unsafe { CFStringGetLength(string) };
+    let length = usize::try_from(len).ok()?;
+    if length > cap {
+        return None;
+    }
+    let mut units = vec![0; length];
+    unsafe {
+        if length > 0 {
+            CFStringGetCharacters(string, CFRange { location: 0, length: len }, units.as_mut_ptr());
+        }
+    }
+    Some(units)
 }
 
 fn text_for_range(element: &CFType, range: Range<usize>, cap: usize) -> Option<Vec<u16>> {

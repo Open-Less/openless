@@ -122,6 +122,12 @@ impl Material {
             serde_json::json!({"externalSelection": text}).to_string(),
         ));
     }
+
+    pub(super) fn add_search_evidence(&mut self, status: &AskSearchStatus, evidence: &str) {
+        self.attachment_parts.push(AskModelPart::Text(
+            serde_json::json!({"publicSearch": {"status": status, "evidence": evidence}}).to_string(),
+        ));
+    }
 }
 
 pub(super) struct Plan {
@@ -136,6 +142,7 @@ pub(super) struct Plan {
     deep_thinking: bool,
     tools: AskToolSet,
     intent: Option<AskIntentContinuation>,
+    results: Vec<AskToolResult>,
 }
 
 impl Plan {
@@ -146,7 +153,7 @@ impl Plan {
         history: Vec<CompletedTurn>,
         summary: Option<Summary>,
     ) -> Self {
-        let instructions = format!("{}\n\n{DATA_RULE}", context.static_instructions);
+        let instructions = ASK_COMMON.to_owned();
         let mut parts = vec![AskModelPart::Text(material.user_text)];
         if !context.facts.is_empty() || !context.missing.is_empty() {
             parts.push(AskModelPart::Text(
@@ -173,6 +180,7 @@ impl Plan {
             deep_thinking: material.deep_thinking,
             tools,
             intent: None,
+            results: Vec::new(),
         }
     }
 
@@ -180,19 +188,27 @@ impl Plan {
         mut self,
         route: AskRoute,
         intent: Option<AskIntentContinuation>,
+        evidence_rule: Option<&str>,
+        search_result: Option<AskToolResult>,
     ) -> Self {
-        if !route.is_chat() {
-            self.instructions.push_str("\n\n");
-            self.instructions.push_str(BODY_RULE);
-        } else if route == AskRoute::SelectionAnswer {
-            self.instructions.push_str(
-                "\n\nAnswer for inspection only, using the provided external selection as reference data. Do not claim to edit or replace it.",
-            );
+        self.instructions.push_str("\n\n");
+        self.instructions.push_str(execution_rule(route));
+        self.instructions.push_str("\n\n");
+        self.instructions.push_str(FULFILLMENT_RULE);
+        if let Some(rule) = evidence_rule {
+            self.instructions.push('\n');
+            self.instructions.push_str(rule);
         }
         if intent.is_some() {
-            self.instructions = format!("{}\n\n{}", routing_instructions(true), self.instructions);
+            self.current.parts.remove(0);
+            if self.current.parts.is_empty() {
+                self.current.parts.push(AskModelPart::Text(
+                    "Execute the instruction in the preceding resolved turn; no extra materials.".into(),
+                ));
+            }
         }
         self.intent = intent;
+        self.results.extend(search_result);
         self
     }
 
@@ -205,15 +221,11 @@ impl Plan {
     ) -> Result<(AskModelRequest, Option<Summary>), BackendError> {
         let available = budget(self.total_window, self.output_tokens)?
             .checked_sub(
-                if self.tools.search { SEARCH_BUDGET } else { 0 } + tool_overhead(self.tools),
+                if self.tools.search { SEARCH_BUDGET } else { 0 } + conditional_tool_instructions(self.tools),
             )
             .ok_or_else(context_limit)?;
-        let fixed = self
-            .instructions
-            .len()
-            .saturating_add(MESSAGE_OVERHEAD)
-            .saturating_add(message_cost(&self.current, self.image_token_reserve))
-            .saturating_add(intent_cost(self.intent.as_ref())?);
+        let fixed = request_overhead(&self.instructions, self.tools, self.intent.as_ref(), &self.results)?
+            .saturating_add(message_cost(&self.current, self.image_token_reserve));
         let compact_until = self.history.len().saturating_sub(KEEP_RECENT);
         let recent = self.history[compact_until..]
             .iter()
@@ -311,6 +323,7 @@ impl Plan {
                 deep_thinking: self.deep_thinking,
                 tools: AskModelTools {
                     intent: self.intent,
+                    results: self.results,
                     ..Default::default()
                 },
             },
@@ -334,13 +347,9 @@ pub(super) fn check_tool_budget(
         caps.context_window.unwrap_or(UNKNOWN_WINDOW).min(TOTAL_CAP),
         request.output_tokens,
     )?;
-    let tool_cost = request.tools.results.iter().try_fold(
-        intent_cost(request.tools.intent.as_ref())?,
-        |total, result| Ok(total + result_cost(result)?),
-    )?;
-    let input = request.instructions.len()
-        + definitions_overhead(request.tools.available)
-        + tool_cost
+    let input = request_overhead(
+        &request.instructions, request.tools.available, request.tools.intent.as_ref(), &request.tools.results,
+    )?
         + request
             .messages
             .iter()
@@ -351,6 +360,15 @@ pub(super) fn check_tool_budget(
     } else {
         Ok(())
     }
+}
+
+fn request_overhead(
+    instructions: &str, tools: AskToolSet, intent: Option<&AskIntentContinuation>, results: &[AskToolResult],
+) -> Result<usize, BackendError> {
+    results.iter().try_fold(
+        instructions.len() + definitions_overhead(tools) + intent_cost(intent)?,
+        |cost, result| Ok(cost + result_cost(result)?),
+    )
 }
 
 fn intent_cost(intent: Option<&AskIntentContinuation>) -> Result<usize, BackendError> {
@@ -376,13 +394,12 @@ fn definitions_overhead(tools: AskToolSet) -> usize {
         + usize::from(tools.resolve_intent))
 }
 
-fn tool_overhead(tools: AskToolSet) -> usize {
-    definitions_overhead(tools)
-        + if tools.search {
+fn conditional_tool_instructions(tools: AskToolSet) -> usize {
+    (if tools.search {
             WEB_SEARCH_GUIDANCE.len() + 1
         } else {
             0
-        }
+        })
         + if tools.calculator {
             CALCULATOR_GUIDANCE.len() + 1
         } else {
@@ -429,13 +446,10 @@ fn history_messages(turn: &CompletedTurn) -> [AskModelMessage; 2] {
 fn summary_messages(summary: Option<&Summary>) -> Vec<AskModelMessage> {
     summary
         .map(|summary| {
-            vec![
-                text_message(
-                    AskModelRole::User,
-                    "Earlier completed conversation summary (reference data):".into(),
-                ),
-                text_message(AskModelRole::Assistant, summary.text.clone()),
-            ]
+            vec![text_message(
+                AskModelRole::User,
+                serde_json::json!({"conversationSummary": summary.text}).to_string(),
+            )]
         })
         .unwrap_or_default()
 }

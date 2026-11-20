@@ -1,9 +1,10 @@
 import { AskNotice } from './notices';
 import { AiStatus, type AiStatusState } from '@/components/ui/ai-status';
-import { ArrowUpRight, BookOpen } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, BookOpen } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  askLocale,
   errorMessage,
   submissionErrorMessage,
   type AskClient,
@@ -20,6 +21,10 @@ export const SPRING = { type: 'spring', duration: 0.5, bounce: 0.15 } as const;
 
 const SEARCH_LABEL: Record<SearchStatus, string> = {
   idle: 'Not searched',
+  disabled: 'Web Search is off',
+  unsupported: 'Search is unsupported by this model',
+  rejected: 'Search call was not accepted',
+  snippet_only: 'Only unverified snippets',
   searching: 'Websearch · Searching…',
   reading: 'Websearch · Reading sources…',
   done: 'Search complete',
@@ -32,6 +37,7 @@ const SOURCE_READ_LABEL: Record<AskSource['readStatus'], string> = {
   not_attempted: 'Not opened',
   reading: 'Reading',
   read: 'Read',
+  not_relevant: 'Not relevant',
   blocked: 'Page blocked',
   failed: 'Could not read',
   cancelled: 'Reading stopped',
@@ -59,23 +65,48 @@ export function ConversationLayout({
   turns,
   children,
   showSources,
+  latestQuestion,
 }: {
   expanded: boolean;
   turns: AskTurn[];
   children: ReactNode;
   showSources: (turnId: string) => void;
+  latestQuestion?: string;
 }) {
   const threadRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
-  const lastScroll = useRef(0);
+  const [jumpVisible, setJumpVisible] = useState(false);
   const reduced = useReducedMotion();
+  const refreshScroll = useCallback(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    if (follow.current) thread.scrollTop = thread.scrollHeight;
+    setJumpVisible(!follow.current && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 24);
+  }, []);
 
+  useLayoutEffect(() => {
+    if (!expanded) {
+      setJumpVisible(false);
+      return;
+    }
+    follow.current = true;
+    refreshScroll();
+  }, [expanded, latestQuestion, refreshScroll]);
+
+  const hasTurns = turns.length > 0;
   useEffect(() => {
     const thread = threadRef.current;
-    if (thread && follow.current) {
-      thread.scrollTo({ top: thread.scrollHeight, behavior: reduced ? 'auto' : 'smooth' });
-    }
-  }, [expanded, turns, reduced]);
+    const list = listRef.current;
+    if (!expanded || !hasTurns || !thread || !list) return;
+    const observer = new ResizeObserver(refreshScroll);
+    observer.observe(thread);
+    observer.observe(list);
+    refreshScroll();
+    return () => observer.disconnect();
+  }, [expanded, hasTurns, refreshScroll]);
+  const jumpLabel = /^zh-(TW|HK|Hant)\b/i.test(askLocale()) ? '跳到最新訊息'
+    : /^zh\b/i.test(askLocale()) ? '跳到最新消息' : 'Jump to latest';
 
   const latest = turns.at(-1);
   return (
@@ -95,13 +126,12 @@ export function ConversationLayout({
             style={{ maskImage: FADE, WebkitMaskImage: FADE }}
             onScroll={(event) => {
               const thread = event.currentTarget;
-              if (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 72)
-                follow.current = true;
-              else if (thread.scrollTop < lastScroll.current) follow.current = false;
-              lastScroll.current = thread.scrollTop;
+              const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight <= 24;
+              follow.current = atBottom;
+              setJumpVisible(!atBottom);
             }}
           >
-            <div className="flex min-h-full flex-col justify-end gap-8 pt-40">
+            <div ref={listRef} className="flex min-h-full flex-col justify-end gap-8 pt-40">
               {turns.map((turn) => {
                 const { state, label } = statusFor(turn);
                 return (
@@ -144,15 +174,15 @@ export function ConversationLayout({
                         )}
                       </AnimatePresence>
 
-                      {turn.searchStatus !== 'idle' && (
+                      {turn.sources.length > 0 && (
                         <button
                           className="text-button turn-sources"
                           type="button"
                           onClick={() => showSources(turn.turnId)}
                         >
-                          {turn.sources.length
-                            ? `${turn.sources.length} sources`
-                            : SEARCH_LABEL[turn.searchStatus]}
+                          {turn.sources.some((source) => source.readStatus === 'read')
+                            ? `${turn.sources.filter((source) => source.readStatus === 'read').length} sources`
+                            : 'Sources'}
                         </button>
                       )}
                     </div>
@@ -163,7 +193,21 @@ export function ConversationLayout({
           </div>
         )}
 
-        <div className="composer-content">{children}</div>
+        <div className="composer-content">
+          {expanded && jumpVisible && (
+            <button className="ask-jump-latest" type="button" onClick={(event) => {
+              follow.current = true;
+              event.currentTarget.parentElement
+                ?.querySelector<HTMLTextAreaElement>('[data-slot="prompt-box-input"]')
+                ?.focus({ preventScroll: true });
+              refreshScroll();
+            }}>
+              <ArrowDown aria-hidden="true" size={14} />
+              {jumpLabel}
+            </button>
+          )}
+          {children}
+        </div>
       </div>
     </main>
   );
@@ -176,13 +220,11 @@ export function SubmissionResult({
   submission: AskSubmission;
   active: boolean;
 }) {
-  const text =
-    submission.delivery === 'retained' ||
-    submission.delivery === 'unknown' ||
-    submission.route === 'clarify'
-      ? submission.resultText
-      : undefined;
-  const error = submissionErrorMessage(submission.error) ?? submission.searchError?.message;
+  const text = submission.resultText;
+  const unreviewedAnswer = submission.route === 'answer' || submission.route === 'selectionAnswer';
+  const error = submission.status === 'cancelled' && submission.error?.code === 'cancelled'
+    ? undefined
+    : submissionErrorMessage(submission.error) ?? submission.searchError?.message;
   const { state, label } = statusFor(submission);
   const delivery =
     submission.delivery === 'written'
@@ -191,14 +233,13 @@ export function SubmissionResult({
         : 'Inserted in the original editor.'
       : submission.delivery === 'unknown'
         ? 'Ask could not confirm whether the editor changed. Check it before pasting.'
-        : submission.delivery === 'retained'
+        : submission.delivery === 'retained' && !error
           ? 'Kept here because Ask could not write to the original editor.'
           : undefined;
   return (
     <section className="submission-result" aria-label="Ask result">
       {active && <AiStatus state={state} label={label} />}
       <AskNotice
-        key={submission.currentTurnId}
         severity={submission.error ? 'error' : 'warning'}
         message={error}
       />
@@ -207,7 +248,12 @@ export function SubmissionResult({
       {submission.copyStatus === 'failed' && <p role="status">Could not copy to the clipboard.</p>}
       {!active && submission.status === 'cancelled' && <p role="status">Request stopped.</p>}
       {text &&
-        (submission.route === 'clarify' ? (
+        (unreviewedAnswer ? (
+          <details key={submission.currentTurnId}>
+            <summary>{/^zh\b/i.test(askLocale()) ? '查看未核验的答复' : 'Show unreviewed response'}</summary>
+            <textarea className="result-text retained-result" aria-label="Unreviewed response" defaultValue={text} rows={2} />
+          </details>
+        ) : submission.route === 'clarify' ? (
           <p className="result-text">{text}</p>
         ) : (
           <textarea
@@ -242,6 +288,7 @@ export function Sources({
   const turn = open ?? searched[searched.length - 1];
   const [failure, setFailure] = useState<{ turnId: string; message: string }>();
   if (!turn) return null;
+  const readable = turn.sources.filter((source) => source.readStatus === 'read').length;
   return (
     <div className="sources">
       <button
@@ -255,7 +302,7 @@ export function Sources({
         }}
       >
         <BookOpen size={15} aria-hidden="true" />
-        Sources{turn.sources.length ? ` · ${turn.sources.length}` : ''}
+        Sources{readable ? ` · ${readable}` : ''}
       </button>
       {open && (
         <section id="ask-sources" aria-label="Web search sources" className="source-panel">

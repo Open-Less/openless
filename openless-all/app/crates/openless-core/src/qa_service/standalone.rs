@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use crate::errors::{BackendError, BackendErrorCode};
@@ -25,19 +25,55 @@ pub use entry::*;
 pub use model::ConfiguredAskModels;
 
 const MAX_ATTACHMENTS: usize = 4;
-const WEB_SEARCH_GUIDANCE: &str = "Consider web_search for every question. Prefer to verify time-sensitive or changeable public facts before answering, including news, weather, prices, schedules, rules, and current software versions or documentation. Also use it to verify relevant public facts or find sources when useful, even if you think you know the answer. Skip greetings, purely creative requests, and questions with no useful public query. Send only a short public query, never private data. If you also need a calculation based on current information, verify the inputs first.";
+const WEB_SEARCH_GUIDANCE: &str = "用户明确要求联网查询，或问题依赖时效性公开事实时，先调用 web_search。\
+    查询保留本轮公开主题、日期和限定条件，不夹带私人内容。根据工具实际返回的证据作答，不虚构来源。";
+const WEB_SEARCH_EVIDENCE: &str = "本轮搜索已由应用处理。以下是搜索状态和参考资料；仅据实际可核实的内容作答。\
+    区分已读正文与未核实摘要；抓取时间不是发布日期。无法读取、无关或检索失败时说明限制，不把链接数当作证据。";
+const NO_WEB_EVIDENCE: &str = "本轮没有联网证据；不声称已搜索，不虚构时效性事实。";
+#[cfg(not(test))]
+const DELIVERY_REVIEW_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+#[cfg(test)]
+const DELIVERY_REVIEW_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 const CALCULATOR_GUIDANCE: &str = "Use calculator for precise arithmetic, including large numbers, fractions, percentages (write them as /100), and integer powers. Call one tool at a time. Use the exact result where useful and label rounded decimals as approximate. If the tool reports an error, correct the expression or explain the limitation; do not invent a result.";
 const MAX_CALCULATIONS: usize = 3;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const EVENT_LIMIT: usize = 512;
 const EVENT_BYTES: usize = 2 * 1024 * 1024;
 
+fn includes_any(text: &str, cues: &[&str]) -> bool {
+    cues.iter().any(|cue| text.contains(cue))
+}
+
+fn explicit_app_reference(instruction: &str) -> bool {
+    includes_any(&instruction.to_lowercase(), &[
+        "this app", "current app", "this page", "current page", "当前应用", "这个应用",
+        "當前應用", "这个页面", "這個頁面", "当前网页", "这里的页面",
+    ])
+}
+
+fn calculation_requested(instruction: &str) -> bool {
+    let text = instruction.to_lowercase();
+    includes_any(&text, &["calculate", "compute", "算一下", "计算", "算出", "多少钱"])
+        || (text.chars().any(|character| character.is_ascii_digit())
+            && text.contains(['+', '×', '÷', '=', '/', '*']))
+}
+
+fn search_payload(status: &AskSearchStatus, evidence: &str) -> String {
+    let evidence = serde_json::from_str::<serde_json::Value>(evidence)
+        .unwrap_or_else(|_| serde_json::json!(evidence));
+    serde_json::json!({"status":status, "evidence":evidence}).to_string()
+}
+
 #[derive(Clone)]
-pub struct AskCancellation(watch::Sender<bool>);
+pub struct AskCancellation(
+    watch::Sender<bool>,
+    Option<watch::Sender<bool>>,
+    Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+);
 
 impl Default for AskCancellation {
     fn default() -> Self {
-        Self(watch::channel(false).0)
+        Self(watch::channel(false).0, None, None)
     }
 }
 
@@ -47,12 +83,40 @@ impl AskCancellation {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        *self.0.borrow()
+        *self.0.borrow() || self.1.as_ref().is_some_and(|scope| *scope.borrow())
+            || self.2.as_ref().is_some_and(|permitted| !permitted())
     }
 
     pub async fn cancelled(&self) {
+        if self.is_cancelled() { return; }
         let mut receiver = self.0.subscribe();
-        let _ = receiver.wait_for(|cancelled| *cancelled).await;
+        if let Some(scope) = &self.1 {
+            let mut scope = scope.subscribe();
+            tokio::select! {
+                _ = receiver.wait_for(|cancelled| *cancelled) => {}
+                _ = scope.wait_for(|revoked| *revoked) => {}
+            }
+        } else {
+            let _ = receiver.wait_for(|cancelled| *cancelled).await;
+        }
+    }
+
+    pub fn requiring(mut self, permitted: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        self.2 = Some(Arc::new(permitted));
+        self
+    }
+}
+
+#[derive(Default)]
+pub struct AskSessionFence(Mutex<AskCancellation>);
+
+impl AskSessionFence {
+    pub fn issue(&self) -> AskCancellation {
+        AskCancellation(watch::channel(false).0, Some(self.0.lock().0.clone()), None)
+    }
+
+    pub fn revoke(&self) {
+        std::mem::take(&mut *self.0.lock()).cancel();
     }
 }
 
@@ -151,6 +215,8 @@ pub trait AttachmentReader: Send + Sync {
         attachment_ids: &[Uuid],
     ) -> Result<Vec<AskAttachment>, BackendError>;
 
+    fn consume(&self, _conversation_id: Uuid, _attachment_ids: &[Uuid]) {}
+
     fn end_conversation(&self, conversation_id: Uuid);
 }
 
@@ -206,6 +272,10 @@ pub struct AskAttachmentMetadata {
 #[serde(rename_all = "snake_case")]
 pub enum AskSearchStatus {
     Idle,
+    Disabled,
+    Unsupported,
+    Rejected,
+    SnippetOnly,
     Searching,
     Reading,
     Done,
@@ -227,6 +297,7 @@ pub enum AskReadStatus {
     Discovered,
     Reading,
     Read,
+    NotRelevant,
     Blocked,
     #[serde(rename = "failed")]
     Error,
@@ -283,13 +354,14 @@ pub enum AskSearchResult {
     Disabled,
     Done { evidence: String },
     NoResults,
+    SnippetOnly,
 }
 
 pub type AskToolSink = Arc<dyn Fn(AskToolProgress) + Send + Sync>;
 
 pub trait SearchTool: Send + Sync {
-    fn enabled(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async { true })
+    fn enabled(&self) -> BoxFuture<'_, Result<bool, BackendError>> {
+        Box::pin(async { Ok(true) })
     }
 
     fn search(
@@ -473,6 +545,7 @@ pub enum AskActivity {
     Preparing,
     Compacting,
     Generating,
+    Polishing,
     Thinking,
 }
 
@@ -484,6 +557,43 @@ pub enum AskCallPurpose {
     Intent,
     Compact,
     SearchDecision,
+    DeliveryCheck,
+}
+
+enum SearchDecision {
+    Query(AskModelToolCall),
+    NotNeeded,
+    MissingTopic,
+    Unavailable(AskSearchStatus),
+}
+
+enum DeliveryReview {
+    Approved,
+    Rejected,
+    Unavailable,
+}
+
+struct ReviewedPrefix {
+    text: String,
+    verdict: DeliveryReview,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum SearchDecisionReply {
+    NotNeeded,
+    MissingPublicTopic,
+}
+
+fn native_write_operation(route: AskRoute, preparation: &AskPreparation) -> Option<AskWriteOperation> {
+    match (route, &preparation.selection) {
+        (AskRoute::Write, ExternalSelection::None) => Some(AskWriteOperation::Insert),
+        (AskRoute::Write, _) if preparation.writer.as_ref().is_some_and(|writer| writer.has_original_caret()) => {
+            Some(AskWriteOperation::Insert)
+        }
+        (AskRoute::Edit, selection) if selection.verified().is_some() => Some(AskWriteOperation::Replace),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -694,6 +804,9 @@ struct State {
 
 #[derive(Default)]
 struct Conversation {
+    transient: bool,
+    chat_locked: bool,
+    public_search_topic: Option<String>,
     admission: Arc<tokio::sync::Mutex<()>>,
     lifetime: AskCancellation,
     sequence: u64,
@@ -703,7 +816,6 @@ struct Conversation {
     requests: HashMap<String, usize>,
     active: Option<usize>,
     summary: Option<prompt::Summary>,
-    contains_private_context: bool,
     attachments: Vec<AskAttachmentMetadata>,
 }
 
@@ -739,6 +851,20 @@ impl StandaloneQaService {
     pub fn open(&self) -> Uuid {
         let mut state = self.0.state.lock();
         state.current.unwrap_or_else(|| state.new_conversation())
+    }
+
+    pub fn open_transient(&self) -> Uuid {
+        self.end_all();
+        let mut state = self.0.state.lock();
+        let id = state.new_conversation();
+        state.conversations.get_mut(&id).unwrap().transient = true;
+        id
+    }
+
+    pub fn current_is_transient(&self) -> bool {
+        let state = self.0.state.lock();
+        state.current.and_then(|id| state.conversations.get(&id))
+            .is_some_and(|conversation| conversation.transient)
     }
 
     pub fn current(&self) -> Option<Uuid> {
@@ -933,6 +1059,7 @@ impl StandaloneQaService {
             || async { Ok(AskPreparation::default()) },
             admit,
             true,
+            AskCancellation::default(),
         )
         .await
     }
@@ -946,7 +1073,18 @@ impl StandaloneQaService {
         F: FnOnce() -> Fut + Send,
         Fut: std::future::Future<Output = Result<AskPreparation, BackendError>> + Send,
     {
-        self.submit_inner(request, prepare, || true, false).await
+        self.submit_inner(request, prepare, || true, false, AskCancellation::default()).await
+    }
+
+    pub async fn submit_prepared_guarded<F, Fut>(
+        &self, request: AskSubmit, prepare: F, admit: impl FnOnce() -> bool + Send,
+        cancellation: AskCancellation,
+    ) -> Result<Uuid, BackendError>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: std::future::Future<Output = Result<AskPreparation, BackendError>> + Send,
+    {
+        self.submit_inner(request, prepare, admit, false, cancellation).await
     }
 
     async fn submit_inner<F, Fut>(
@@ -955,6 +1093,7 @@ impl StandaloneQaService {
         prepare: F,
         admit: impl FnOnce() -> bool + Send,
         answer_only: bool,
+        cancellation: AskCancellation,
     ) -> Result<Uuid, BackendError>
     where
         F: FnOnce() -> Fut + Send,
@@ -971,6 +1110,7 @@ impl StandaloneQaService {
         let _admission = tokio::select! {
             biased;
             _ = lifetime.cancelled() => return Err(no_conversation()),
+            _ = cancellation.cancelled() => return Err(cancelled()),
             guard = admission.lock() => guard,
         };
         {
@@ -992,18 +1132,24 @@ impl StandaloneQaService {
             }
         }
         validate_submit(&request)?;
+        let answer_only = answer_only || self.0.state.lock()
+            .conversation(request.conversation_id)?.chat_locked;
         let key = AskTurnKey {
             conversation_id: request.conversation_id,
             turn_id: Uuid::new_v4(),
         };
-        let preparation = tokio::select! {
+        let preparation = if answer_only {
+            AskPreparation::default()
+        } else { tokio::select! {
             biased;
             _ = lifetime.cancelled() => return Err(no_conversation()),
+            _ = cancellation.cancelled() => return Err(cancelled()),
             preparation = async { prepare().await } => preparation?,
-        };
+        }};
         let model = tokio::select! {
             biased;
             _ = lifetime.cancelled() => return Err(no_conversation()),
+            _ = cancellation.cancelled() => return Err(cancelled()),
             model = self.0.deps.models.prepare(request.options.deep_thinking) => model?,
         };
         let caps = model.capabilities();
@@ -1028,11 +1174,10 @@ impl StandaloneQaService {
             ));
         }
         let material = prompt::Material::new(&request.text, attachments, caps, &request.options)?;
-        let cancellation = AskCancellation::default();
         {
             let mut state = self.0.state.lock();
             let conversation = state.conversation_mut(key.conversation_id)?;
-            if !admit() {
+            if cancellation.is_cancelled() || !admit() {
                 return Err(ask_error(
                     BackendErrorCode::Cancelled,
                     "askVoiceTargetChanged",
@@ -1055,12 +1200,6 @@ impl StandaloneQaService {
                         })
                 })
                 .collect();
-            conversation.attachments.retain(|attachment| {
-                !turn
-                    .request
-                    .attachment_ids
-                    .contains(&attachment.attachment_id)
-            });
             if let Some(previous) = conversation.turns.last_mut() {
                 previous.result_text = None;
             }
@@ -1137,9 +1276,18 @@ impl StandaloneQaService {
     }
 
     fn update(&self, key: AskTurnKey, update: impl FnOnce(&mut Turn) -> Option<AskEventKind>) {
+        self.update_scoped(key, false, update);
+    }
+
+    fn update_scoped(
+        &self, key: AskTurnKey, accept_claimed_effect: bool,
+        update: impl FnOnce(&mut Turn) -> Option<AskEventKind>,
+    ) {
         let mut state = self.0.state.lock();
         if let Ok(conversation) = state.conversation_mut(key.conversation_id) {
-            if let Some(event) = conversation.active_turn(key.turn_id).and_then(update) {
+            if let Some(event) = conversation.active_turn(key.turn_id)
+                .filter(|turn| !turn.cancellation.is_cancelled() || (accept_claimed_effect && turn.effect_claimed))
+                .and_then(update) {
                 conversation.emit_turn(&self.0.events, key, event);
             }
         }
@@ -1149,16 +1297,63 @@ impl StandaloneQaService {
         self.update(key, |turn| turn.activity(activity));
     }
 
+    fn publish_answer_text(&self, key: AskTurnKey, text: &str) {
+        self.update(key, |turn| {
+            if text.is_empty() { return None; }
+            turn.assistant.text.push_str(text);
+            Some(AskEventKind::AnswerDelta { message_id: turn.assistant.message_id, delta: text.into() })
+        });
+    }
+
+    fn stage_candidate(&self, key: AskTurnKey, route: AskRoute, body: &str) -> Result<(), BackendError> {
+        let mut staged = false;
+        self.update(key, |turn| {
+            staged = true;
+            turn.pending_body = Some(body.trim().to_owned());
+            if route.is_chat() {
+                return None;
+            }
+            turn.snapshot.activity = None;
+            turn.delivery = Some(AskDeliveryStatus::Pending);
+            Some(turn.delivery_event())
+        });
+        if staged { Ok(()) } else { Err(cancelled()) }
+    }
+
+    fn clear_candidate(&self, key: AskTurnKey) {
+        self.update(key, |turn| {
+            turn.pending_body = None;
+            turn.delivery.take().map(|_| turn.delivery_event())
+        });
+    }
+
     fn finish(&self, key: AskTurnKey, result: Result<(), BackendError>) {
-        let completed = self
-            .0
-            .state
-            .lock()
-            .conversation_mut(key.conversation_id)
-            .ok()
-            .and_then(|conversation| conversation.finish(&self.0.events, key, result));
-        if let (Some(history), Some((question, answer))) = (&self.0.deps.history, completed) {
-            history(&question, &answer);
+        let completed = {
+            let mut state = self.0.state.lock();
+            let Ok(conversation) = state.conversation_mut(key.conversation_id) else { return };
+            let permission = conversation.active_turn(key.turn_id).map(|turn| turn.cancellation.clone());
+            let consumed = conversation.active_turn(key.turn_id)
+                .filter(|turn| result.is_ok() && !turn.cancellation.is_cancelled()
+                    && (turn.is_chat() || turn.delivery == Some(AskDeliveryStatus::Written)))
+                .map(|turn| turn.request.attachment_ids.clone())
+                .unwrap_or_default();
+            if !consumed.is_empty() {
+                self.0.deps.attachments.consume(key.conversation_id, &consumed);
+                conversation.attachments.retain(|attachment| !consumed.contains(&attachment.attachment_id));
+                for attachment_id in consumed {
+                    conversation.emit_turn(&self.0.events, key, AskEventKind::AttachmentRemoved { attachment_id });
+                }
+            }
+            let cancelled_turn = conversation.active_turn(key.turn_id)
+                .is_some_and(|turn| turn.cancellation.is_cancelled() && !turn.effect_claimed
+                    && !matches!(turn.delivery, Some(AskDeliveryStatus::Written | AskDeliveryStatus::Unknown)));
+            let completed = conversation.finish(&self.0.events, key, if cancelled_turn { Err(cancelled()) } else { result });
+            if conversation.transient { None } else { completed.zip(permission) }
+        };
+        if let (Some(history), Some(((question, answer), permission))) = (&self.0.deps.history, completed) {
+            if !permission.is_cancelled() {
+                history(&question, &answer);
+            }
         }
     }
 
@@ -1167,6 +1362,7 @@ impl StandaloneQaService {
         let conversation = state.conversation_mut(key.conversation_id)?;
         let turn = conversation
             .active_turn(key.turn_id)
+            .filter(|turn| !turn.cancellation.is_cancelled())
             .ok_or_else(cancelled)?;
         turn.route = Some(route);
         let accepted = route.is_chat().then(|| AskEventKind::Accepted {
@@ -1174,6 +1370,7 @@ impl StandaloneQaService {
             assistant: turn.assistant.clone(),
             turn: Box::new(turn.snapshot.clone()),
         });
+        conversation.chat_locked |= route.is_chat();
         conversation.emit_turn(&self.0.events, key, AskEventKind::RouteResolved { route });
         if let Some(event) = accepted {
             conversation.emit_turn(&self.0.events, key, event);
@@ -1208,43 +1405,37 @@ impl StandaloneQaService {
         body: String,
         preparation: AskPreparation,
     ) -> Result<(), BackendError> {
-        let operation = match (route, &preparation.selection) {
-            (AskRoute::Write, ExternalSelection::None) => Some(AskWriteOperation::Insert),
-            (AskRoute::Write, _) if preparation.writer.as_ref().is_some_and(|writer| writer.has_original_caret()) => {
-                Some(AskWriteOperation::Insert)
-            }
-            (AskRoute::Edit, selection) if selection.verified().is_some() => {
-                Some(AskWriteOperation::Replace)
-            }
-            _ => None,
-        };
-        let mut active = false;
+        let operation = native_write_operation(route, &preparation);
+        let mut ready = false;
         self.update(key, |turn| {
-            active = true;
-            turn.snapshot.activity = None;
-            turn.delivery = Some(AskDeliveryStatus::Pending);
-            turn.pending_body = Some(body.clone());
-            Some(turn.delivery_event())
+            ready = turn.delivery == Some(AskDeliveryStatus::Pending);
+            None
         });
-        if !active {
-            return Err(cancelled());
-        }
+        if !ready { return Err(cancelled()); }
         let outcome = if let (Some(operation), Some(writer)) = (operation, preparation.writer) {
             let service = Arc::downgrade(&self.0);
-            let claim: AskWriteClaim = Box::new(move || {
+            let current_service = service.clone();
+            let still_current = Arc::new(move || {
+                current_service.upgrade().is_some_and(|service| {
+                    service.state.lock().conversation_mut(key.conversation_id).ok()
+                        .and_then(|conversation| conversation.active_turn(key.turn_id))
+                        .is_some_and(|turn| !turn.cancellation.is_cancelled() && !turn.effect_claimed)
+                })
+            });
+            let claim = Box::new(move || {
                 service
                     .upgrade()
                     .map(StandaloneQaService)
                     .is_some_and(|service| service.claim_effect(key, AskEffect::Write))
             });
-            writer.write(operation, body.clone(), claim).await
+            writer.write(operation, body.clone(), AskWriteClaim { still_current, claim }).await
         } else {
             AskWriteOutcome::NotWritten
         };
 
         let mut try_copy = false;
         let mut observed = false;
-        self.update(key, |turn| {
+        self.update_scoped(key, true, |turn| {
             observed = true;
             turn.delivery = Some(match outcome {
                 AskWriteOutcome::Written if turn.effect_claimed => AskDeliveryStatus::Written,
@@ -1299,7 +1490,7 @@ impl StandaloneQaService {
     ) -> Result<Option<(AskRoute, String)>, BackendError> {
         let question = material.question().to_owned();
         let Resolved {
-            route,
+            mut route,
             missing_selection,
             continuation,
         } = if answer_only {
@@ -1312,59 +1503,52 @@ impl StandaloneQaService {
             self.resolve_intent(key, model.as_ref(), &question, preparation, &cancellation)
                 .await?
         };
-        self.publish_route(key, route)?;
-        if route == AskRoute::Clarify {
-            let text = if let Some(continuation) = continuation {
-                let request = AskModelRequest {
-                    instructions: format!("{}\n{CLARIFY_RULE}", routing_instructions(true)),
-                    messages: Vec::new(),
-                    output_tokens: model.capabilities().output_tokens.min(256),
-                    deep_thinking: false,
-                    tools: AskModelTools {
-                        intent: Some(continuation),
-                        ..Default::default()
-                    },
-                };
-                prompt::check_tool_budget(&request, model.capabilities())?;
-                self.call(
-                    key,
-                    model.as_ref(),
-                    request,
-                    AskCallPurpose::Compose,
-                    cancellation,
-                )
-                .await?
-                .require_text()?
-            } else {
-                clarification(&question, missing_selection, &preparation.selection)
-            };
-            self.update(key, |turn| {
-                turn.result_text = Some(text);
-                Some(turn.delivery_event())
-            });
-            return Ok(None);
+        if missing_selection {
+            self.publish_route(key, AskRoute::Clarify)?;
+            return Err(ask_error(BackendErrorCode::InvalidState,
+                if matches!(preparation.selection, ExternalSelection::Unavailable) {
+                    "askSelectionUnavailable"
+                } else {
+                    "askSelectionRequired"
+                },
+            ));
         }
+        if route == AskRoute::Clarify { route = AskRoute::Answer; }
+        self.publish_route(key, route)?;
         let related_selection = matches!(route, AskRoute::SelectionAnswer | AskRoute::Edit)
             .then(|| preparation.selection.verified())
             .flatten();
         if let Some(selection) = related_selection {
             material.add_selection(selection);
         }
-        let context = self
-            .0
-            .deps
-            .context
-            .context(key, cancellation.clone())
-            .await?;
-        let search_enabled = !question.trim().is_empty()
-            && model.supports_tools()
-            && self.0.deps.search.enabled().await;
-        let private = related_selection.is_some()
-            || material.has_attachments()
-            || context.facts.iter().any(|fact| fact.name != "local_time");
-        let (history, summary, private) = {
-            let mut state = self.0.state.lock();
-            let conversation = state.conversation_mut(key.conversation_id)?;
+        let mut context = self.0.deps.context.context(key, cancellation.clone()).await?;
+        let refers_to_current_app = explicit_app_reference(&question);
+        let local_time = context.facts.iter().find(|fact| fact.name == "local_time");
+        let prior_topic = route.is_chat().then(|| self.public_search_topic(key)).flatten();
+        let search_decision = if route == AskRoute::Edit || question.trim().is_empty() {
+            SearchDecision::NotNeeded
+        } else {
+            match self.0.deps.search.enabled().await {
+                Ok(false) => SearchDecision::Unavailable(AskSearchStatus::Disabled),
+                Err(_) => SearchDecision::Unavailable(AskSearchStatus::Error),
+                Ok(true) if !model.supports_tools() => SearchDecision::Unavailable(AskSearchStatus::Unsupported),
+                Ok(true) => self.choose_public_query(
+                    key, model.as_ref(), &question, prior_topic.as_deref(), local_time, &cancellation,
+                ).await?,
+            }
+        };
+        let search_planned = matches!(&search_decision, SearchDecision::Query(_));
+        context.facts.retain(|fact| match fact.name.as_str() {
+            "foreground_app" => route == AskRoute::Write || (route.is_chat() && refers_to_current_app),
+            "local_time" => search_planned,
+            _ => false,
+        });
+        context.missing.clear();
+        let isolated_search = related_selection.is_some() || material.has_attachments()
+            || prior_topic.is_some() || explicit_app_reference(&question);
+        let (history, summary) = {
+            let state = self.0.state.lock();
+            let conversation = state.conversation(key.conversation_id)?;
             if conversation
                 .active
                 .is_none_or(|index| conversation.turns[index].snapshot.turn_id != key.turn_id)
@@ -1384,12 +1568,6 @@ impl StandaloneQaService {
                     assistant: turn.assistant.text.clone(),
                 })
                 .collect::<Vec<_>>();
-            if route.is_chat() {
-                conversation.contains_private_context |= private;
-            }
-            let search_isolated = private
-                || (route.is_chat()
-                    && (conversation.contains_private_context || !history.is_empty()));
             (
                 history,
                 if route.is_chat() {
@@ -1397,16 +1575,57 @@ impl StandaloneQaService {
                 } else {
                     None
                 },
-                search_isolated,
             )
         };
+        let isolated_search = isolated_search || !history.is_empty() || continuation.is_some();
+        let mut search_result = None;
+        let search_status = match search_decision {
+            SearchDecision::Query(call) => {
+                let AskToolCall::WebSearch { public_query } = &call.tool else { return Err(invalid_intent()); };
+                let (status, evidence) = self.search_web(key, public_query.clone(), cancellation.clone()).await?;
+                if route.is_chat() {
+                    self.set_public_search_topic(key, public_query.clone());
+                }
+                if status != AskSearchStatus::Done {
+                    if route.is_chat() {
+                        self.answer_search_unavailable(key, &question, status);
+                        return Ok(None);
+                    }
+                    return Err(ask_error(BackendErrorCode::Provider, "askDraftSearchUnavailable"));
+                }
+                if isolated_search {
+                    material.add_search_evidence(&status, &evidence);
+                } else {
+                    search_result = Some(AskToolResult { call, output: search_payload(&status, &evidence) });
+                }
+                AskSearchStatus::Done
+            }
+            SearchDecision::NotNeeded => AskSearchStatus::Idle,
+            SearchDecision::MissingTopic if route.is_chat() => {
+                self.answer_search_unavailable(key, &question, AskSearchStatus::Idle);
+                return Ok(None);
+            }
+            SearchDecision::MissingTopic => {
+                return Err(ask_error(BackendErrorCode::Provider, "askDraftSearchUnavailable"));
+            }
+            SearchDecision::Unavailable(status) => {
+                material.add_search_evidence(&status, "");
+                status
+            }
+        };
         let tools = AskToolSet {
-            search: search_enabled,
-            calculator: model.supports_tools(),
+            calculator: model.supports_tools() && route != AskRoute::Edit && calculation_requested(&question),
             ..Default::default()
         };
+        let evidence_rule = if search_status == AskSearchStatus::Done {
+            Some(WEB_SEARCH_EVIDENCE)
+        } else if route != AskRoute::Edit {
+            Some(NO_WEB_EVIDENCE)
+        } else {
+            None
+        };
         let plan = prompt::Plan::new(material, context, tools, history, summary)
-            .for_route(route, continuation);
+            .for_route(route, continuation, evidence_rule, search_result);
         let (mut request, replacement) = plan
             .prepare(self, key, model.as_ref(), &cancellation)
             .await?;
@@ -1418,47 +1637,6 @@ impl StandaloneQaService {
             }
             conversation.summary = Some(replacement);
         }
-        self.activity(key, AskActivity::Generating);
-        let mut search = search_enabled && !private;
-        if search_enabled && private {
-            let decision = AskModelRequest {
-                instructions: format!(
-                    "{WEB_SEARCH_GUIDANCE}\nIf no useful public search applies, reply no_search. Do not answer the question in this pass."
-                ),
-                messages: vec![AskModelMessage {
-                    role: AskModelRole::User,
-                    parts: vec![AskModelPart::Text(question)],
-                }],
-                output_tokens: request.output_tokens.min(512),
-                deep_thinking: false,
-                tools: AskModelTools {
-                    available: AskToolSet { search: true, ..Default::default() },
-                    ..Default::default()
-                },
-            };
-            match self
-                .call(
-                    key,
-                    model.as_ref(),
-                    decision,
-                    AskCallPurpose::SearchDecision,
-                    cancellation.clone(),
-                )
-                .await
-            {
-                Ok(CallResult::Tool(call)) => {
-                    let output = self.run_tool(key, &call, &cancellation).await?;
-                    if let Some(current) = request.messages.last_mut() {
-                        current.parts.push(AskModelPart::Text(
-                            serde_json::json!({"publicSearchEvidence": output}).to_string(),
-                        ));
-                    }
-                }
-                Err(error) if error.code == BackendErrorCode::Cancelled => return Err(error),
-                _ => {}
-            }
-        }
-
         let mut calculations = if tools.calculator {
             MAX_CALCULATIONS
         } else {
@@ -1472,39 +1650,65 @@ impl StandaloneQaService {
         };
         loop {
             request.tools.available = AskToolSet {
-                search,
+                search: false,
                 calculator: calculations > 0,
                 ..Default::default()
             };
             request.instructions.clone_from(&base_instructions);
-            if search {
-                request.instructions.push('\n');
-                request.instructions.push_str(WEB_SEARCH_GUIDANCE);
-            }
             if calculations > 0 {
                 request.instructions.push('\n');
                 request.instructions.push_str(CALCULATOR_GUIDANCE);
             }
             prompt::check_tool_budget(&request, model.capabilities())?;
-            self.activity(key, AskActivity::Generating);
-            match self
-                .call(
-                    key,
-                    model.as_ref(),
-                    request.clone(),
-                    purpose,
-                    cancellation.clone(),
-                )
-                .await
-            {
+            self.activity(key, if route == AskRoute::Edit { AskActivity::Polishing } else { AskActivity::Generating });
+            let streaming = route.is_chat() && !request.tools.available.any();
+            let (generated, leading) = if streaming {
+                self.stream_reviewed_answer(
+                    key, model.as_ref(), route, &question, request.clone(), &cancellation,
+                ).await?
+            } else {
+                let generated = self.call(
+                    key, model.as_ref(), request.clone(), purpose, cancellation.clone(),
+                ).await;
+                (generated, None)
+            };
+            match generated {
                 Ok(CallResult::Text(text)) => {
-                    return Ok((!route.is_chat()).then_some((route, text)));
+                    return match fulfillment(&text) {
+                        Fulfillment::Direct(body) if !body.trim().is_empty() => {
+                            if !streaming { self.stage_candidate(key, route, body)?; }
+                            if route.is_chat() {
+                                self.complete_reviewed_answer(key, model.as_ref(), route, &question, body, leading, &cancellation).await?;
+                                return Ok(None);
+                            }
+                            match self.review_delivery(key, model.as_ref(), route, &question, body, None, &cancellation).await? {
+                                DeliveryReview::Approved => Ok(Some((route, body.trim().to_owned()))),
+                                DeliveryReview::Rejected => {
+                                    self.clear_candidate(key);
+                                    Err(ask_error(BackendErrorCode::Provider, "askDraftUnusable"))
+                                }
+                                DeliveryReview::Unavailable => Err(ask_error(BackendErrorCode::Provider, "askDraftReviewUnavailable")),
+                            }
+                        }
+                        Fulfillment::NeedsPublicEvidence if search_status != AskSearchStatus::Done && route != AskRoute::Edit => {
+                            if search_status != AskSearchStatus::Idle {
+                                self.update(key, |turn| turn.search_event(Uuid::new_v4(), search_status.clone(), None));
+                            }
+                            if route.is_chat() {
+                                self.answer_search_unavailable(key, &question, search_status);
+                                Ok(None)
+                            } else {
+                                Err(ask_error(BackendErrorCode::Provider, "askDraftSearchUnavailable"))
+                            }
+                        }
+                        _ if route.is_chat() => Err(ask_error(BackendErrorCode::Provider, "askAnswerUnusable")),
+                        _ => Err(ask_error(BackendErrorCode::Provider, "askDraftUnusable")),
+                    };
                 }
                 Ok(CallResult::Tool(call)) => {
                     match &call.tool {
-                        AskToolCall::WebSearch { .. } => search = false,
                         AskToolCall::Calculate { .. } => calculations -= 1,
-                        AskToolCall::ResolveIntent { .. } => return Err(invalid_intent()),
+                        _ => return Err(invalid_intent()),
                     }
                     let output = self.run_tool(key, &call, &cancellation).await?;
                     request.tools.results.push(AskToolResult { call, output });
@@ -1514,11 +1718,108 @@ impl StandaloneQaService {
                         && request.tools.available.any()
                         && request.tools.intent.is_none() =>
                 {
-                    search = false;
                     calculations = 0;
                 }
                 Err(error) => return Err(error),
             }
+        }
+    }
+
+    async fn stream_reviewed_answer(
+        &self, key: AskTurnKey, model: &dyn AskModel, route: AskRoute, question: &str,
+        request: AskModelRequest, cancellation: &AskCancellation,
+    ) -> Result<(Result<CallResult, BackendError>, Option<ReviewedPrefix>), BackendError> {
+        let (sender, receiver) = oneshot::channel();
+        let generate = async {
+            let result = self.call_with_preview(
+                key, model, request, AskCallPurpose::Answer, cancellation.clone(), Some(sender),
+            ).await;
+            if let Ok(CallResult::Text(output)) = &result {
+                if let Fulfillment::Direct(body) = fulfillment(output) {
+                    if !body.trim().is_empty() {
+                        self.stage_candidate(key, route, body)?;
+                    }
+                }
+            }
+            Ok(result)
+        };
+        let inspect = async {
+            let Ok(text) = receiver.await else { return Ok(None); };
+            let verdict = self.review_delivery(key, model, route, question, &text, None, cancellation).await?;
+            if matches!(verdict, DeliveryReview::Approved) {
+                self.publish_answer_text(key, &text);
+            }
+            Ok(Some(ReviewedPrefix { text, verdict }))
+        };
+        tokio::try_join!(generate, inspect)
+    }
+
+    async fn complete_reviewed_answer(
+        &self, key: AskTurnKey, model: &dyn AskModel, route: AskRoute, question: &str, body: &str,
+        leading: Option<ReviewedPrefix>, cancellation: &AskCancellation,
+    ) -> Result<(), BackendError> {
+        let (remaining, preceding) = match leading.as_ref() {
+            Some(leading) => match leading.verdict {
+                DeliveryReview::Approved => (
+                    body.strip_prefix(&leading.text).ok_or_else(|| ask_error(BackendErrorCode::Provider, "askAnswerReviewUnavailable"))?,
+                    Some(leading.text.as_str()),
+                ),
+                DeliveryReview::Rejected => {
+                    self.clear_candidate(key);
+                    return Err(ask_error(BackendErrorCode::Provider, "askAnswerUnusable"));
+                }
+                DeliveryReview::Unavailable => {
+                    return Err(ask_error(BackendErrorCode::Provider, "askAnswerReviewUnavailable"));
+                }
+            },
+            None => (body, None),
+        };
+        let verdict = if remaining.trim().is_empty() {
+            DeliveryReview::Approved
+        } else {
+            self.review_delivery(key, model, route, question, remaining, preceding, cancellation).await?
+        };
+        match verdict {
+            DeliveryReview::Approved => {
+                self.publish_answer_text(key, remaining);
+                self.clear_candidate(key);
+                Ok(())
+            }
+            DeliveryReview::Rejected => {
+                self.clear_candidate(key);
+                Err(ask_error(BackendErrorCode::Provider, "askAnswerUnusable"))
+            }
+            DeliveryReview::Unavailable => Err(ask_error(BackendErrorCode::Provider, "askAnswerReviewUnavailable")),
+        }
+    }
+
+    async fn review_delivery(
+        &self, key: AskTurnKey, model: &dyn AskModel, route: AskRoute, question: &str, body: &str,
+        preceding: Option<&str>, cancellation: &AskCancellation,
+    ) -> Result<DeliveryReview, BackendError> {
+        let request = AskModelRequest {
+            instructions: DELIVERY_REVIEW_RULE.to_owned(),
+            messages: vec![AskModelMessage {
+                role: AskModelRole::User,
+                parts: vec![AskModelPart::Text(serde_json::json!({
+                    "route": route, "currentInstruction": question, "candidateBody": body, "approvedPrefix": preceding,
+                }).to_string())],
+            }],
+            output_tokens: model.capabilities().output_tokens.min(512),
+            deep_thinking: false,
+            tools: AskModelTools::default(),
+        };
+        if prompt::check_tool_budget(&request, model.capabilities()).is_err() {
+            return Ok(DeliveryReview::Unavailable);
+        }
+        match tokio::time::timeout(
+            DELIVERY_REVIEW_WAIT,
+            self.call(key, model, request, AskCallPurpose::DeliveryCheck, cancellation.clone()),
+        ).await {
+            Ok(Ok(CallResult::Text(verdict))) if verdict.trim() == "deliver" => Ok(DeliveryReview::Approved),
+            Ok(Ok(CallResult::Text(verdict))) if verdict.trim() == "reject" => Ok(DeliveryReview::Rejected),
+            Ok(Err(error)) if error.code == BackendErrorCode::Cancelled => Err(error),
+            _ => Ok(DeliveryReview::Unavailable),
         }
     }
 
@@ -1533,8 +1834,12 @@ impl StandaloneQaService {
         }
         match &call.tool {
             AskToolCall::WebSearch { public_query } => {
-                self.search_web(key, public_query.clone(), cancellation.clone())
-                    .await
+                let (status, evidence) = self.search_web(key, public_query.clone(), cancellation.clone()).await?;
+                if evidence.is_empty() {
+                    Ok(serde_json::json!({"status":status, "message":"No verified search evidence was returned."}).to_string())
+                } else {
+                    Ok(evidence)
+                }
             }
             AskToolCall::Calculate { expression } => Ok(calculator::calculate(expression)),
             AskToolCall::ResolveIntent { .. } => Err(invalid_intent()),
@@ -1546,7 +1851,7 @@ impl StandaloneQaService {
         key: AskTurnKey,
         public_query: String,
         cancellation: AskCancellation,
-    ) -> Result<String, BackendError> {
+    ) -> Result<(AskSearchStatus, String), BackendError> {
         let tool_call_id = Uuid::new_v4();
         self.update(key, |turn| {
             turn.search_open = true;
@@ -1619,9 +1924,13 @@ impl StandaloneQaService {
             )
             .await;
         let (status, evidence, error) = match result {
-            Ok(AskSearchResult::Disabled) => (AskSearchStatus::Idle, String::new(), None),
-            Ok(AskSearchResult::Done { evidence }) => (AskSearchStatus::Done, evidence, None),
+            Ok(AskSearchResult::Disabled) => (AskSearchStatus::Disabled, String::new(), None),
+            Ok(AskSearchResult::Done { evidence }) if !matches!(evidence.trim(), "" | "[]") => {
+                (AskSearchStatus::Done, evidence, None)
+            }
+            Ok(AskSearchResult::Done { .. }) => (AskSearchStatus::NoResults, String::new(), None),
             Ok(AskSearchResult::NoResults) => (AskSearchStatus::NoResults, String::new(), None),
+            Ok(AskSearchResult::SnippetOnly) => (AskSearchStatus::SnippetOnly, String::new(), None),
             Err(error) if error.code == BackendErrorCode::Cancelled => return Err(error),
             Err(error) => (AskSearchStatus::Error, String::new(), Some(error)),
         };
@@ -1633,11 +1942,90 @@ impl StandaloneQaService {
                 }
             }
         }
-        if !evidence.is_empty() {
-            Ok(evidence)
-        } else {
-            Ok(serde_json::json!({"status":status, "message":"No verified search evidence was returned."}).to_string())
+        Ok((status, evidence))
+    }
+
+    async fn choose_public_query(
+        &self, key: AskTurnKey, model: &dyn AskModel, question: &str, prior: Option<&str>,
+        local_time: Option<&AskContextFact>, cancellation: &AskCancellation,
+    ) -> Result<SearchDecision, BackendError> {
+        let request = AskModelRequest {
+            instructions: format!(
+                "{WEB_SEARCH_GUIDANCE}\n只判定本轮是否真的需要公开检索，不回答本轮任务。\
+                 引述搜索词、例句、介绍搜索功能、无需查证的任务或明确不联网时返回 JSON 字符串 \"notNeeded\"，不要调用工具。\
+                 只有本轮确实指向同次开窗的公开主题才继续用它，保留地点、时间及限定；已有明确新主题就忽略旧主题。\
+                 需要查询却没有可辨认的公开主题时返回 JSON 字符串 \"missingPublicTopic\"。\
+                 不把附件、选区、私人指代或联系方式当作公开主题。仅输出一个工具调用或上述 JSON 字符串。"
+            ),
+            messages: vec![AskModelMessage {
+                role: AskModelRole::User,
+                parts: vec![AskModelPart::Text(serde_json::json!({
+                    "currentInstruction": question, "precedingPublicQuery": prior, "localTime": local_time,
+                }).to_string())],
+            }],
+            output_tokens: model.capabilities().output_tokens.min(512),
+            deep_thinking: false,
+            tools: AskModelTools {
+                available: AskToolSet { search: true, ..Default::default() },
+                ..Default::default()
+            },
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            self.call(key, model, request, AskCallPurpose::SearchDecision, cancellation.clone()),
+        ).await;
+        match result {
+            Ok(Ok(CallResult::Tool(call))) if matches!(&call.tool, AskToolCall::WebSearch { .. }) => Ok(SearchDecision::Query(call)),
+            Ok(Ok(CallResult::Text(reply))) => Ok(match serde_json::from_str(reply.trim()) {
+                Ok(SearchDecisionReply::NotNeeded) => SearchDecision::NotNeeded,
+                Ok(SearchDecisionReply::MissingPublicTopic) => SearchDecision::MissingTopic,
+                Err(_) => SearchDecision::Unavailable(AskSearchStatus::Rejected),
+            }),
+            Ok(Err(error)) if error.code == BackendErrorCode::Cancelled => Err(error),
+            Ok(Err(error)) if !matches!(error.message.as_str(),
+                "askModelRejectedTools" | "askInvalidToolCall" | "askUnexpectedToolCall" | "askEmptyModelOutput") =>
+                Ok(SearchDecision::Unavailable(AskSearchStatus::Error)),
+            Err(_) => Ok(SearchDecision::Unavailable(AskSearchStatus::Error)),
+            _ => Ok(SearchDecision::Unavailable(AskSearchStatus::Rejected)),
         }
+    }
+
+    fn public_search_topic(&self, key: AskTurnKey) -> Option<String> {
+        self.0.state.lock().conversation(key.conversation_id).ok()?.public_search_topic.clone()
+    }
+
+    fn set_public_search_topic(&self, key: AskTurnKey, topic: String) {
+        if let Ok(conversation) = self.0.state.lock().conversation_mut(key.conversation_id) {
+            if conversation.active_turn(key.turn_id).is_some_and(|turn| !turn.cancellation.is_cancelled()) {
+                conversation.public_search_topic = Some(topic);
+            }
+        }
+    }
+
+    fn answer_search_unavailable(&self, key: AskTurnKey, question: &str, status: AskSearchStatus) {
+        let chinese = question.chars().any(|character| matches!(character, '\u{3400}'..='\u{9fff}'));
+        let message = match (chinese, status) {
+            (true, AskSearchStatus::Idle) => "本次开窗没有可继续核查的公开主题，无法确定所指的更新。",
+            (false, AskSearchStatus::Idle) => "There is no public topic from this opening to check for updates.",
+            (true, AskSearchStatus::Unsupported) => "当前模型接口不能调用网页搜索，无法核实实时消息。",
+            (false, AskSearchStatus::Unsupported) => "The current model endpoint cannot call Web Search, so I couldn’t verify current information.",
+            (true, AskSearchStatus::Rejected) => "本次查询未能形成有效的公开搜索请求，没有核实结果。",
+            (false, AskSearchStatus::Rejected) => "The search call was not accepted. There are no verified results from this turn.",
+            (true, AskSearchStatus::SnippetOnly) => "本次搜索只返回了未核实的摘要，无法确认实际报道。",
+            (false, AskSearchStatus::SnippetOnly) => "Search returned only unverified snippets, not readable evidence.",
+            (true, AskSearchStatus::Disabled) => "网页搜索目前已关闭，无法核实实时消息。可以在设置里开启后重试。",
+            (false, AskSearchStatus::Disabled) => "Web Search is off, so I can’t verify current news. Enable it in Settings and retry.",
+            (true, AskSearchStatus::Error) => "这次网页搜索未能完成，没有可核实的结果。",
+            (false, AskSearchStatus::Error) => "Web Search could not complete. There are no verified results from this turn.",
+            (true, _) => "网页搜索已运行，但没有找到可核实的结果。我不会把未经核实的消息当作事实。",
+            (false, _) => "Web Search ran but returned no verifiable results. I won’t present unverified news as fact.",
+        };
+        self.update(key, |turn| {
+            turn.assistant.text.push_str(message);
+            Some(AskEventKind::AnswerDelta {
+                message_id: turn.assistant.message_id, delta: message.into(),
+            })
+        });
     }
 
     async fn call(
@@ -1648,6 +2036,16 @@ impl StandaloneQaService {
         purpose: AskCallPurpose,
         cancellation: AskCancellation,
     ) -> Result<CallResult, BackendError> {
+        self.call_with_preview(key, model, request, purpose, cancellation, None).await
+    }
+
+    async fn call_with_preview(
+        &self, key: AskTurnKey, model: &dyn AskModel, request: AskModelRequest,
+        purpose: AskCallPurpose, cancellation: AskCancellation, preview: Option<oneshot::Sender<String>>,
+    ) -> Result<CallResult, BackendError> {
+        if cancellation.is_cancelled() {
+            return Err(cancelled());
+        }
         let available = request.tools.available;
         let call_id = Uuid::new_v4();
         let label = model.label().clone();
@@ -1669,7 +2067,11 @@ impl StandaloneQaService {
             outcome: None,
         });
         let observed = archive.as_ref().map(|archive| archive.observed.clone());
+        let callback_lifetime = cancellation.clone();
+        let preview = Arc::new(Mutex::new(preview));
+        let first_boundary = preview.clone();
         let progress: AskModelSink = Arc::new(move |progress| {
+            if callback_lifetime.is_cancelled() { return; }
             let Some(service) = service.upgrade().map(StandaloneQaService) else {
                 return;
             };
@@ -1689,20 +2091,24 @@ impl StandaloneQaService {
                         return;
                     }
                     output.push_str(&delta);
-                    if purpose == AskCallPurpose::Answer {
+                    if purpose == AskCallPurpose::Answer && !available.any() {
                         service.activity(key, AskActivity::Generating);
-                        service.update(key, |turn| {
-                            turn.assistant.text.push_str(&delta);
-                            Some(AskEventKind::AnswerDelta {
-                                message_id: turn.assistant.message_id,
-                                delta,
-                            })
-                        });
+                        let mut sender = first_boundary.lock();
+                        if sender.is_some() {
+                            if let Fulfillment::Direct(body) = fulfillment(output) {
+                                if let Some((paragraph, _)) = body.split_once("\n\n") {
+                                    if !paragraph.trim().is_empty() && paragraph.len() <= 4_096 {
+                                        if let Some(sender) = sender.take() {
+                                            let _ = sender.send(format!("{paragraph}\n\n"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 AskModelProgress::Thinking
-                    if matches!(purpose, AskCallPurpose::Answer | AskCallPurpose::Compose)
-                        && output.is_empty() =>
+                    if purpose == AskCallPurpose::Answer && output.is_empty() =>
                 {
                     service.activity(key, AskActivity::Thinking);
                 }
@@ -1750,9 +2156,11 @@ impl StandaloneQaService {
         });
         let completion = tokio::select! {
             biased;
+            _ = cancellation.cancelled() => Err(cancelled()),
             _ = output_limit.cancelled() => Ok(AskModelCompletion::Complete),
             completion = model.stream(request, cancellation.clone(), progress) => completion,
         };
+        preview.lock().take();
         let output = text
             .lock()
             .take()
@@ -1831,6 +2239,7 @@ impl Drop for CallArchive<'_> {
                     AskCallPurpose::Answer | AskCallPurpose::Compose => ServicePurpose::Question,
                     AskCallPurpose::Compact
                     | AskCallPurpose::SearchDecision
+                    | AskCallPurpose::DeliveryCheck
                     | AskCallPurpose::Intent => ServicePurpose::Other,
                 },
                 outcome,
@@ -1953,11 +2362,18 @@ impl Conversation {
             if turn.effect_claimed {
                 turn.delivery = Some(AskDeliveryStatus::Unknown);
                 turn.result_text = turn.pending_body.take();
+            } else if let Some(body) = turn.pending_body.take() {
+                turn.delivery = Some(AskDeliveryStatus::Retained);
+                turn.result_text = Some(body);
             } else {
                 turn.delivery = None;
-                turn.pending_body = None;
             }
             events.push(turn.delivery_event());
+        } else if status != AskTurnStatus::Completed && turn.is_chat() {
+            if let Some(body) = turn.pending_body.take() {
+                turn.result_text = Some(body);
+                events.push(turn.delivery_event());
+            }
         }
         if turn.copy_status == AskCopyStatus::Pending {
             turn.copy_status = if turn.effect_claimed {

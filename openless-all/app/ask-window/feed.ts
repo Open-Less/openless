@@ -78,7 +78,6 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
         return null;
       next.turns = [...next.turns, event.turn];
       next.activeTurnId = event.turn.turnId;
-      consumeAttachments(event.turn.attachments.map((item) => item.attachmentId));
       return next;
     }
     default: {

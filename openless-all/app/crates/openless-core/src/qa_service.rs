@@ -94,6 +94,7 @@ impl QaService {
                 question.to_owned(),
                 answer,
                 crate::domains::QaRuntimeCompletion::default(),
+                HistorySource::Qa,
             );
         })
     }
@@ -568,7 +569,7 @@ impl QaService {
             }
             self.publish_snapshot(QaStateKind::Answer, Some((session_id, QaPhase::Completed)));
         }
-        self.persist_history(history_input.text, &answer, completion);
+        self.persist_history(history_input.text, &answer, completion, HistorySource::Voice);
         Ok(())
     }
 
@@ -577,6 +578,7 @@ impl QaService {
         question: String,
         answer: &str,
         completion: crate::domains::QaRuntimeCompletion,
+        source: HistorySource,
     ) {
         let Some(persistence) = &self.persistence else {
             return;
@@ -592,7 +594,7 @@ impl QaService {
             // preview owner remains stable across successful turns.
             id: SessionId::new().to_string(),
             created_at: persistence.clock.now_utc().to_rfc3339(),
-            source: HistorySource::Voice,
+            source,
             raw_transcript: completion.raw_transcript_override.unwrap_or(question),
             asr_transcript: None,
             final_text: answer.to_string(),

@@ -9,11 +9,13 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
 });
 
+const promptInput = '[data-slot="prompt-box-input"]';
+
 test('a recovered question route expands one frame without replacing the editor', async ({
   page,
 }) => {
   await expect(page.locator('#ask-root')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  const prompt = page.locator(promptInput);
   const box = page.locator('[data-slot="prompt-box"]');
   await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Close Ask Conversation' })).toHaveCount(0);
@@ -116,9 +118,7 @@ test('same-frame attachment references, full selection, IME, caret, and attachme
     window.askFixture.rejectNext = true;
   });
   await prompt.press('Enter');
-  const errorNotice = page.locator('.ol-toast-notification-card[data-type="error"]');
-  await expect(errorNotice.getByRole('alert')).toHaveText('Set up an Ask model first.');
-  await expect(errorNotice.locator('[data-tone="error"]')).toHaveCSS('width', '36px');
+  await expect(box.getByRole('alert')).toHaveText('Set up an Ask model first.');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(prompt).toBeFocused();
   await expect(box.getByText('PDF · 3 pages')).toBeVisible();
@@ -144,9 +144,8 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
       );
     }, invalid);
     expect(prevented).toBe(true);
-    const warning = page.locator('.ol-toast-notification-card[data-type="warning"]');
-    await expect(warning.locator('[data-tone="warning"]')).toHaveCSS('width', '36px');
-    await expect(warning.getByRole('alert')).toContainText(
+    const warning = page.locator('[data-slot="prompt-box"]').getByRole('alert');
+    await expect(warning).toContainText(
       invalid === 'oversize'
         ? 'This image is too large to prepare safely.'
         : 'Drop a valid PNG or JPEG image.',
@@ -230,6 +229,13 @@ test('model tool status is visible without query controls; replay and sources wo
   });
   await expect.poll(() => page.evaluate(() => window.askFixture.snapshotReads)).toBeGreaterThan(1);
   await expect(page.getByText('Websearch · Reading sources…')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sources · 1' })).toHaveCount(0);
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'sourceChanged', turnId: fixture.active(), source: {
+      sourceId: 'source-1', url: 'https://example.com/result', title: 'Verified result', readStatus: 'read',
+    } });
+  });
   const sources = page.getByRole('button', { name: 'Sources · 1' });
   await sources.click();
   await expect(page.getByRole('region', { name: 'Web search sources' })).toBeVisible();
@@ -293,8 +299,8 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await prompt.fill('  private draft  ');
   await prompt.evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(2, 9, 'backward'));
   await prompt.press('Enter');
-  const errorNotice = page.locator('.ol-toast-notification-card[data-type="error"]');
-  await expect(errorNotice.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  const errorNotice = page.locator('[data-slot="prompt-box"]').getByRole('alert');
+  await expect(errorNotice).toHaveText('Set up an Ask model first.');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(prompt).toBeFocused();
   await expect(prompt).toHaveValue('  private draft  ');
@@ -312,22 +318,23 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
 });
 
 test('compact rewrite uses only the placeholder and restores it on cancellation', async ({ page }) => {
-  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  const prompt = page.locator(promptInput);
   const composer = page.locator('.composer');
   const placeholder = page.locator('[data-slot="prompt-box-placeholder"]');
   await page.evaluate(() => {
     window.askFixture.route = 'edit';
     localStorage.setItem('ol.locale', 'zh-CN');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'ol.locale' }));
   });
   await prompt.fill('Make this shorter');
   await prompt.press('Enter');
   await expect.poll(() => page.evaluate(() => window.askFixture.active())).toBeTruthy();
   await page.evaluate(() => {
     const fixture = window.askFixture;
-    fixture.push({ type: 'turnStatus', turnId: fixture.active(), status: 'writing' });
+    fixture.push({ type: 'turnStatus', turnId: fixture.active(), status: 'polishing' });
   });
   await expect(composer).toHaveAttribute('data-polishing', 'true');
-  await expect(placeholder).toHaveText('正在润色…');
+  await expect(placeholder).toHaveText('正在润色');
   await expect(page.getByRole('region', { name: 'Ask result' })).toHaveCount(0);
   await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
   await prompt.fill('My next draft');
@@ -338,7 +345,7 @@ test('compact rewrite uses only the placeholder and restores it on cancellation'
     fixture.push({ type: 'turnFinished', turnId: fixture.active(), status: 'cancelled' });
   });
   await prompt.fill('');
-  await expect(placeholder).not.toHaveText('正在润色…');
+  await expect(placeholder).toHaveText('问任何问题');
 });
 
 test('voice claims only the original scoped editor and inserts without submitting or replacing text', async ({
@@ -388,6 +395,50 @@ test('voice claims only the original scoped editor and inserts without submittin
     }),
   );
   await expect(prompt).toHaveValue('');
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
+});
+
+test('only a current voice failure appears inside the composer; a previous opening and cancellation are silent', async ({
+  page,
+}) => {
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  const composer = page.locator('[data-slot="prompt-box"]');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect.poll(() => page.evaluate(() => window.askFixture.voiceSelection())).not.toBeNull();
+  await page.evaluate(() => {
+    window.askFixture.voice({ type: 'started', recordingId: 'old-startup' });
+    window.askFixture.freshOpen();
+  });
+  await expect(prompt).toBeFocused();
+  await prompt.fill('Fresh draft sentinel');
+  await expect.poll(() => page.evaluate(() => window.askFixture.voiceSelection())).toEqual([20, 20]);
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.voice({ type: 'failed', recordingId: 'old-startup', stage: 'start' });
+    fixture.voice({ type: 'started', recordingId: 'cancelled-recording' });
+    fixture.voice({ type: 'cancelled', recordingId: 'cancelled-recording' });
+  });
+  await expect(composer.getByRole('alert')).toHaveCount(0);
+  await expect(prompt).toHaveValue('Fresh draft sentinel');
+  for (const [stage, message, scheme] of [
+    ['start', 'Could not start voice input.', 'light'],
+    ['processing', 'Voice input did not finish.', 'dark'],
+  ] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.evaluate((stage) => {
+      const fixture = window.askFixture;
+      fixture.voice({ type: 'started', recordingId: stage });
+      fixture.voice({ type: 'failed', recordingId: stage, stage });
+      fixture.voice({ type: 'failed', recordingId: stage, stage });
+    }, stage);
+    const notice = composer.getByText(message, { exact: false });
+    await expect(notice).toHaveCount(1);
+    await expect(notice).toBeVisible();
+    const noticeBounds = (await notice.boundingBox())!;
+    expect(noticeBounds.y + noticeBounds.height).toBeLessThanOrEqual((await prompt.boundingBox())!.y);
+    await expect(prompt).toHaveValue('Fresh draft sentinel');
+    await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  }
   expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
 });
 
@@ -441,8 +492,8 @@ test('write, edit, and clarify have no reader side effect and retain delivery ou
   await expect(retained).toHaveValue('Total: $420');
   await retained.fill('Total: $420 USD');
   await expect(page.getByText('Could not copy to the clipboard.')).toBeVisible();
-  await expect(prompt).toHaveValue('');
-  await expect(page.getByRole('button', { name: 'Sources · 1' })).toBeVisible();
+  await expect(prompt).toHaveValue('Write a short quote');
+  await expect(page.getByRole('button', { name: 'Sources · 1' })).toHaveCount(0);
   await retained.press('Escape');
   await page.evaluate(() => window.askFixture.activate());
   await expect(retained).toHaveValue('Total: $420 USD');
@@ -494,4 +545,195 @@ test('write, edit, and clarify have no reader side effect and retain delivery ou
   await expect(page.getByText('Select what you want to change.')).toBeVisible();
   await expect(page.locator('.assistant-text')).toHaveCount(0);
   expect(await page.evaluate(() => window.askFixture.expandCount)).toBe(0);
+});
+
+test('an unconfirmed edit preserves the result and sent instruction without overwriting a newer draft or retrying', async ({
+  page,
+}) => {
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  await page.evaluate(() => { window.askFixture.route = 'edit'; });
+  await prompt.fill('Make it shorter');
+  await prompt.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.askFixture.active())).toBeTruthy();
+  await prompt.fill('A newer draft');
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    const turnId = fixture.active();
+    fixture.push({
+      type: 'delivery',
+      submission: {
+        currentTurnId: turnId,
+        route: 'edit',
+        status: 'writing',
+        searchStatus: 'idle',
+        sources: [],
+        delivery: 'unknown',
+        resultText: 'Candidate shortened text',
+        copyStatus: 'notNeeded',
+      },
+    });
+    fixture.push({ type: 'turnFinished', turnId, status: 'completed' });
+  });
+  const composer = page.locator('[data-slot="prompt-box"]');
+  await expect(prompt).toHaveValue('A newer draft');
+  await expect(composer.getByRole('textbox', { name: 'Retained result' })).toHaveValue('Candidate shortened text');
+  await expect(composer.getByText('Ask could not confirm whether the editor changed.', { exact: false })).toBeVisible();
+  const previous = composer.locator('details').filter({ hasText: 'Previous instruction' });
+  await previous.locator('summary').click();
+  await expect(previous.getByText('Make it shorter', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(1);
+});
+
+test('a failed delivery review keeps the original instruction, reference, and copyable result in compact Ask', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 300 });
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  const composer = page.locator('[data-slot="prompt-box"]');
+  await page.evaluate(() => {
+    window.askFixture.route = 'write';
+    window.askFixture.addInitialCards();
+  });
+  await prompt.fill('Write an email');
+  await prompt.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.askFixture.active())).toBeTruthy();
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    const turnId = fixture.active();
+    fixture.push({
+      type: 'delivery',
+      submission: {
+        currentTurnId: turnId,
+        route: 'write',
+        status: 'writing',
+        searchStatus: 'idle',
+        sources: [],
+        delivery: 'retained',
+        resultText: 'Subject: [Subject]\n\nHello,\n\nMay we meet on [date]?',
+        copyStatus: 'notNeeded',
+      },
+    });
+    fixture.push({
+      type: 'turnFinished',
+      turnId,
+      status: 'failed',
+      error: { code: 'provider', message: 'The generated text could not be reviewed and was not written.', reason: 'askDraftReviewUnavailable' },
+    });
+  });
+  await expect(prompt).toHaveValue('Write an email');
+  const copyable = composer.getByRole('textbox', { name: 'Retained result' });
+  const alert = composer.getByRole('alert');
+  await expect(copyable).toHaveValue(/May we meet/);
+  await expect(alert).toHaveCount(1);
+  await expect(alert).toContainText('Ask could not review the generated text');
+  await expect(alert).toBeInViewport();
+  await expect(copyable).toBeInViewport();
+  await expect(prompt).toBeInViewport();
+  await expect(composer.locator('.attachment-card')).toHaveCount(3);
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(1);
+});
+
+test('an expanded attached question retains a failed review as a scoped unreviewed copy, not a chat answer', async ({ page }) => {
+  const prompt = page.getByRole('textbox', { name: 'Ask anything' });
+  const composer = page.locator('[data-slot="prompt-box"]');
+  await page.evaluate(() => window.askFixture.addInitialCards());
+  await prompt.fill('Describe the attached image');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-expansion-backdrop')).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'answerDelta', turnId: fixture.active(), messageId: 'approved-first', text: 'An approved first detail.' });
+  });
+  await expect(page.locator('.assistant-text')).toHaveText('An approved first detail.');
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    const turnId = fixture.active();
+    fixture.push({
+      type: 'delivery',
+      submission: {
+        currentTurnId: turnId,
+        route: 'answer',
+        status: 'thinking',
+        searchStatus: 'idle',
+        sources: [],
+        resultText: 'An approved first detail.\n\nUnreviewed tail sentinel.',
+        copyStatus: 'notNeeded',
+      },
+    });
+    fixture.push({
+      type: 'turnFinished',
+      turnId,
+      status: 'failed',
+      error: { code: 'provider', message: 'askAnswerReviewUnavailable' },
+    });
+  });
+  await expect(page.locator('.assistant-text')).toHaveText('An approved first detail.');
+  await expect(composer.getByRole('alert')).toHaveCount(1);
+  await expect(composer.getByRole('alert')).toContainText('Ask could not review the complete answer.');
+  await expect(prompt).toHaveValue('Describe the attached image');
+  await expect(composer.locator('.attachment-card')).toHaveCount(3);
+  await expect(composer.getByRole('textbox', { name: 'Unreviewed response' })).toHaveCount(0);
+  await composer.getByText('Show unreviewed response', { exact: true }).click();
+  await expect(composer.getByRole('textbox', { name: 'Unreviewed response' })).toHaveValue(/Unreviewed tail sentinel/);
+  await page.evaluate(() => window.askFixture.freshOpen());
+  await expect(prompt).toHaveValue('');
+  await expect(page.getByRole('textbox', { name: 'Unreviewed response' })).toHaveCount(0);
+  await expect(page.locator('.assistant-text')).toHaveCount(0);
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(1);
+});
+
+test('expanded voice follow-up waits for Send and a fresh opening clears the old chat', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('Opening A sentinel');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-expansion-backdrop')).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'turnFinished', turnId: fixture.active(), status: 'completed' });
+    fixture.route = 'edit';
+  });
+  await expect(prompt).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.askFixture.voiceSelection())).toEqual([0, 0]);
+  await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.voice({ type: 'started', recordingId: 'chat-recording' });
+    fixture.voice({ type: 'transcribed', recordingId: 'chat-recording', text: 'Make this shorter' });
+  });
+  await expect(prompt).toHaveValue('Make this shorter');
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(1);
+  await prompt.press('Enter');
+  await expect(page.locator('.user-bubble').last()).toHaveText('Make this shorter');
+  expect(await page.evaluate(() => window.askFixture.expandCount)).toBe(1);
+  await prompt.press('Escape');
+  await page.evaluate(() => window.askFixture.freshOpen());
+  await expect(page.locator('.user-bubble')).toHaveCount(0);
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+  await expect(prompt).toHaveValue('');
+  await expect(prompt).toBeFocused();
+});
+
+test('expanded scroll follows growth only while pinned and jump returns to the composer', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('Give me a long answer');
+  await prompt.press('Enter');
+  const thread = page.locator('.ask-thread');
+  await expect(thread).toBeVisible();
+  const bottom = () => thread.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  const delta = async () => page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'answerDelta', turnId: fixture.active(), messageId: 'long-answer',
+      text: 'Disposable paragraph for scrolling.\n\n'.repeat(90) });
+  });
+  await delta();
+  await expect.poll(bottom).toBeLessThan(25);
+  await thread.evaluate((element) => { element.scrollTop = 0; });
+  const jump = page.getByRole('button', { name: 'Jump to latest' });
+  await expect(jump).toBeVisible();
+  const position = await thread.evaluate((element) => element.scrollTop);
+  await delta();
+  await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(position);
+  await jump.focus();
+  await jump.press('Enter');
+  await expect(jump).toHaveCount(0);
+  await expect(prompt).toBeFocused();
+  await expect.poll(bottom).toBeLessThan(25);
 });

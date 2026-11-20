@@ -128,7 +128,13 @@ impl PreparedModel {
             match &wire {
                 Wire::Compatible(provider) => {
                     let config = provider.ask_config();
-                    let (service, protocol) = provider.usage_metadata();
+                    let (mut service, protocol) = provider.usage_metadata();
+                    let official_deepseek = official_deepseek_route(&config.base_url, config.protocol.format);
+                    if official_deepseek {
+                        service = "deepseek".into();
+                    } else if service == "deepseek" {
+                        service = "custom".into();
+                    }
                     let (thinking, images, context_window) =
                         compatible_caps(&service, &config.model, &config.protocol);
                     (
@@ -205,6 +211,28 @@ impl PreparedModel {
             thinking,
         }
     }
+
+    fn request_builder(
+        &self, request: &AskModelRequest,
+    ) -> Result<(reqwest::RequestBuilder, LlmRequestFormat, bool), BackendError> {
+        match &self.wire {
+            Wire::Compatible(provider) => {
+                let config = provider.ask_config();
+                let format = config.protocol.format;
+                let messages = compatible_messages(format, request);
+                let builder = provider.ask_request(messages, |body| {
+                    tune_compatible(body, format, &self.label.service, self.thinking, request, config);
+                    tools::configure(body, format, &request.tools);
+                }).map_err(public_model_error)?;
+                Ok((builder, format, false))
+            }
+            Wire::Gemini(provider) => {
+                let mut body = gemini_body(request, self.thinking, provider.ask_config().temperature);
+                tools::configure_gemini(&mut body, &request.tools);
+                Ok((provider.ask_request(&body), LlmRequestFormat::ChatCompletions, true))
+            }
+        }
+    }
 }
 
 fn service_key(service: String, endpoint: &str) -> String {
@@ -218,6 +246,22 @@ fn service_key(service: String, endpoint: &str) -> String {
     let path = url.path().trim_end_matches('/');
     let digest = Sha256::digest(format!("{origin}{path}"));
     format!("custom.{}", hex::encode(&digest[..12]))
+}
+
+fn official_deepseek_route(endpoint: &str, format: LlmRequestFormat) -> bool {
+    let Ok(url) = format.url(endpoint).and_then(|url| {
+        url::Url::parse(&url).map_err(|_| LLMError::ParseError("invalid Ask endpoint".into()))
+    }) else { return false };
+    url.scheme() == "https"
+        && url.host_str() == Some("api.deepseek.com")
+        && url.port().is_none()
+        && url.username().is_empty() && url.password().is_none()
+        && url.query().is_none() && url.fragment().is_none()
+        && match format {
+            LlmRequestFormat::ChatCompletions => matches!(url.path(), "/chat/completions" | "/v1/chat/completions"),
+            LlmRequestFormat::Responses => matches!(url.path(), "/responses" | "/v1/responses"),
+            LlmRequestFormat::Messages => matches!(url.path(), "/anthropic/messages" | "/anthropic/v1/messages"),
+        }
 }
 
 fn compatible_caps(
@@ -247,8 +291,16 @@ fn compatible_caps(
         ),
         (
             "deepseek",
-            ChatCompletions,
-            "deepseek-v4-flash" | "deepseek-v4-pro" | "deepseek-flash" | "deepseek-pro",
+            ChatCompletions | Messages,
+            "deepseek-flash" | "deepseek-v4-flash" | "deepseek-v4-flash-vision-exp",
+        ) => (Thinking::DeepSeek, true, Some(1_000_000)),
+        (
+            "deepseek",
+            Responses,
+            "deepseek-flash" | "deepseek-v4-flash" | "deepseek-v4-flash-vision-exp",
+        ) => (Thinking::Unverified, true, Some(1_000_000)),
+        (
+            "deepseek", ChatCompletions, "deepseek-v4-pro" | "deepseek-pro",
         ) => (Thinking::DeepSeek, false, Some(1_000_000)),
         ("anthropic", Messages, "claude-sonnet-4-6" | "claude-opus-4-6") => {
             (Thinking::ClaudeAdaptive, true, Some(1_000_000))
@@ -325,37 +377,7 @@ impl AskModel for PreparedModel {
                     "askImageUnsupported",
                 ));
             }
-            let (builder, format, gemini) = match &self.wire {
-                Wire::Compatible(provider) => {
-                    let config = provider.ask_config();
-                    let format = config.protocol.format;
-                    let messages = compatible_messages(format, &request);
-                    let builder = provider
-                        .ask_request(messages, |body| {
-                            tune_compatible(
-                                body,
-                                format,
-                                &self.label.service,
-                                self.thinking,
-                                &request,
-                                config,
-                            );
-                            tools::configure(body, format, &request.tools);
-                        })
-                        .map_err(public_model_error)?;
-                    (builder, format, false)
-                }
-                Wire::Gemini(provider) => {
-                    let mut body =
-                        gemini_body(&request, self.thinking, provider.ask_config().temperature);
-                    tools::configure_gemini(&mut body, &request.tools);
-                    (
-                        provider.ask_request(&body),
-                        LlmRequestFormat::ChatCompletions,
-                        true,
-                    )
-                }
-            };
+            let (builder, format, gemini) = self.request_builder(&request)?;
             let available = request.tools.available;
             tokio::select! {
                 biased;

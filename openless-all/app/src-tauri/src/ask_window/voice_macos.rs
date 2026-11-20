@@ -31,10 +31,17 @@ enum Message {
 struct Active {
     id: SessionId,
     target: Target,
+    opening: u64,
     press: Option<u64>,
     cancelled: Arc<AtomicBool>,
     stopping: bool,
     stop_dispatched: bool,
+}
+
+enum Completion {
+    Transcribed(String),
+    Failed(&'static str),
+    Cancelled,
 }
 
 impl Controller {
@@ -104,7 +111,7 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                 let Some(recording) = active.as_mut() else { continue };
                 let Ok(event) = event else {
                     recording.cancel(&desktop);
-                    complete(&desktop, &mut active, None);
+                    complete(&desktop, &mut active, Completion::Cancelled);
                     continue;
                 };
                 if event.session_id != Some(recording.id) {
@@ -112,17 +119,17 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                 }
                 match event.kind {
                     BackendEventKind::DictationCompleted(result) => {
-                        complete(&desktop, &mut active, Some(result.polished_text));
+                        complete(&desktop, &mut active, Completion::Transcribed(result.polished_text));
                     }
                     BackendEventKind::DictationStateChanged(state) => match state.phase {
                         DictationPhase::Starting if recording.stopping => {
                             recording.request_stop(&desktop);
                         }
-                        DictationPhase::Polishing => {
-                            desktop.notify_voice("polishing", recording.id, &recording.target, None);
+                        DictationPhase::Failed => {
+                            complete(&desktop, &mut active, Completion::Failed("processing"));
                         }
-                        DictationPhase::Failed | DictationPhase::Cancelled => {
-                            complete(&desktop, &mut active, None);
+                        DictationPhase::Cancelled => {
+                            complete(&desktop, &mut active, Completion::Cancelled);
                         }
                         _ => {}
                     },
@@ -153,7 +160,8 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                                 *desktop.voice.owner.lock() = Some(id);
                                 desktop.notify_voice("started", id, &target, None);
                                 active = Some(Active {
-                                    id, target: target.clone(), press, cancelled: cancelled.clone(),
+                                    id, target: target.clone(), opening: desktop.invocation_epoch.load(Ordering::Acquire),
+                                    press, cancelled: cancelled.clone(),
                                     stopping: false, stop_dispatched: false,
                                 });
                                 let desktop = desktop.clone();
@@ -197,10 +205,12 @@ async fn listen(desktop: Weak<Desktop>, mut inbox: mpsc::UnboundedReceiver<Messa
                     }
                     Message::StartFailed(id, code) => {
                         if active.as_ref().is_some_and(|recording| recording.id == id) {
-                            if !matches!(code, BackendErrorCode::Cancelled | BackendErrorCode::Busy) {
-                                desktop.notify_frontend("ask-window:voice-unavailable");
-                            }
-                            complete(&desktop, &mut active, None);
+                            let completion = if matches!(code, BackendErrorCode::Cancelled | BackendErrorCode::Busy) {
+                                Completion::Cancelled
+                            } else {
+                                Completion::Failed("start")
+                            };
+                            complete(&desktop, &mut active, completion);
                         }
                     }
                 }
@@ -246,25 +256,28 @@ impl Active {
     }
 }
 
-fn complete(desktop: &Desktop, active: &mut Option<Active>, text: Option<String>) {
+fn complete(desktop: &Desktop, active: &mut Option<Active>, completion: Completion) {
     let Some(recording) = active.take() else { return };
-    if let Some(text) = text.filter(|text| {
-        !text.trim().is_empty()
-            && !recording.cancelled.load(Ordering::Acquire)
-            && desktop.target_is_current(&recording.target)
-    }) {
-        *desktop.voice_result.lock() = Some(Delivery {
-            recording_id: recording.id,
-            target: recording.target.clone(),
-            text,
-        });
-        if let Some(delivery) = desktop.current_voice_delivery() {
-            desktop.notify_voice("transcribed", recording.id, &recording.target, Some(&delivery.text));
-        } else {
-            desktop.voice_result.lock().take();
+    let current = !recording.cancelled.load(Ordering::Acquire)
+        && recording.opening == desktop.invocation_epoch.load(Ordering::Acquire)
+        && desktop.target_is_current(&recording.target);
+    match completion {
+        Completion::Transcribed(text) if current && !text.trim().is_empty() => {
+            *desktop.voice_result.lock() = Some(Delivery {
+                recording_id: recording.id,
+                target: recording.target.clone(),
+                text,
+            });
+            if let Some(delivery) = desktop.current_voice_delivery() {
+                desktop.notify_voice("transcribed", recording.id, &recording.target, Some(&delivery.text));
+            } else {
+                desktop.voice_result.lock().take();
+            }
         }
-    } else {
-        desktop.notify_voice("cancelled", recording.id, &recording.target, None);
+        Completion::Failed(stage) if current => {
+            desktop.notify_voice("failed", recording.id, &recording.target, Some(stage));
+        }
+        _ => desktop.notify_voice("cancelled", recording.id, &recording.target, None),
     }
     desktop.voice.owner.lock().take();
 }

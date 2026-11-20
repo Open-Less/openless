@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum AskEntryIntentMode {
-    #[default]
     SemanticHybrid,
+    #[default]
     SeparateModel,
     MainModelTool,
 }
@@ -124,7 +124,10 @@ mod tests {
             AskEntrySettingsStore::load(Some(path.clone()))
                 .read()
                 .unwrap(),
-            AskEntrySettings::default()
+            AskEntrySettings {
+                auto_voice_on_open: true,
+                intent_mode: AskEntryIntentMode::SeparateModel,
+            }
         );
         fs::write(&path, br#"{"autoVoiceOnOpen":false}"#).unwrap();
         assert_eq!(
@@ -133,7 +136,7 @@ mod tests {
                 .unwrap(),
             AskEntrySettings {
                 auto_voice_on_open: false,
-                intent_mode: AskEntryIntentMode::SemanticHybrid,
+                intent_mode: AskEntryIntentMode::SeparateModel,
             }
         );
         fs::write(&path, br#"{"intentMode":"mainModelTool"}"#).unwrap();
@@ -153,7 +156,13 @@ mod tests {
         let path = directory.path().join(AskEntrySettingsStore::FILE_NAME);
         let store = AskEntrySettingsStore::load(Some(path.clone()));
         for (settings, mode) in [
-            (AskEntrySettings::default(), "semanticHybrid"),
+            (
+                AskEntrySettings {
+                    intent_mode: AskEntryIntentMode::SemanticHybrid,
+                    ..AskEntrySettings::default()
+                },
+                "semanticHybrid",
+            ),
             (
                 AskEntrySettings {
                     auto_voice_on_open: false,

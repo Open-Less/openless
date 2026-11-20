@@ -1,10 +1,11 @@
-import { useAskNotice } from './notices';
+import { AskCurrentNotice, useScopedAskNotice } from './notices';
 import { PromptBox, type PromptEffort } from '@/components/ui/prompt-box';
 import { Brain, Paperclip } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { AttachmentDeck } from './attachments';
 import {
   askLocale,
+  askIdleLabel,
   errorMessage,
   newRequestId,
   requestFingerprint,
@@ -17,13 +18,6 @@ import {
   type SubmitAsk,
 } from './client';
 import { readDroppedImage } from './drop-image';
-
-const PLACEHOLDERS = [
-  'Ask anything',
-  'Plan a weekend in Kyoto',
-  "Explain springs like I'm five",
-  'Draft a launch tweet',
-];
 
 const EFFORTS: PromptEffort[] = [
   { id: 'quick', label: 'Quick' },
@@ -85,7 +79,7 @@ export function useComposer({
   check,
   focus,
   activation,
-  expanded,
+  result,
   captureSubmitReceipt,
 }: {
   client: AskClient;
@@ -95,15 +89,17 @@ export function useComposer({
   check: () => void;
   focus?: AskFocus;
   activation: number;
-  expanded: boolean;
+  result?: ReactNode;
   captureSubmitReceipt: () => (turnId: string) => void;
 }) {
   const { conversationId, attachments } = snapshot;
-  const notice = useAskNotice();
+  const notice = useScopedAskNotice();
   const sendNotice = useRef<ReturnType<typeof notice>>();
   const editor = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef('');
   const lastClear = useRef<Draft>();
+  const sentDraft = useRef<{ turnId: string; draft: Draft }>();
+  const [recoverDraft, setRecoverDraft] = useState<Draft>();
   const nextSelection = useRef<Selection>();
   const composing = useRef(false);
   const draftIds = useRef(new Map<string, string>());
@@ -122,7 +118,7 @@ export function useComposer({
   const [pending, setPending] = useState(false);
   const [acknowledgedTurn, setAcknowledgedTurn] = useState<string>();
   const [voiceListening, setVoiceListening] = useState(false);
-  const [voicePolishing, setVoicePolishing] = useState(false);
+  const [language, setLanguage] = useState(askLocale);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
   const [cancelling, setCancelling] = useState<string>();
@@ -138,18 +134,32 @@ export function useComposer({
   const attachmentsReady = attachments.every((item) => item.state === 'ready');
   const cannotSubmit = !connected || pending || adding || removing.size > 0 || !attachmentsReady;
   const submission = snapshot.submission;
-  const showPolish =
-    !expanded &&
-    (voicePolishing ||
-      (submission?.currentTurnId === turnId &&
-        submission?.route === 'edit' &&
-        submission.status === 'writing'));
-  const language = askLocale();
+  const current = submission?.currentTurnId === snapshot.activeTurnId ? submission : undefined;
+  const showPolish = current?.route === 'edit' && current.status === 'polishing';
+  const showWorking = current && (!current.route || current.route === 'write' || current.route === 'edit')
+    && (current.status === 'thinking' || current.status === 'writing');
+  const idleLabel = askIdleLabel(language);
   const polishLabel = /^zh-(TW|HK|Hant)\b/i.test(language)
-    ? '正在潤飾…'
+    ? '正在潤飾'
     : /^zh\b/i.test(language)
-      ? '正在润色…'
+      ? '正在润色'
       : 'Polishing…';
+  const workingLabel = /^zh-(TW|HK|Hant)\b/i.test(language) ? '處理中…'
+    : /^zh\b/i.test(language) ? '处理中…' : 'Working…';
+  const placeholder = !draft && showPolish ? polishLabel
+    : !draft && showWorking ? workingLabel : idleLabel;
+
+  useEffect(() => {
+    const update = () => setLanguage(askLocale());
+    window.addEventListener('storage', update);
+    window.addEventListener('languagechange', update);
+    window.addEventListener('focus', update);
+    return () => {
+      window.removeEventListener('storage', update);
+      window.removeEventListener('languagechange', update);
+      window.removeEventListener('focus', update);
+    };
+  }, []);
 
   function replaceDraft(text: string, selection?: Selection) {
     if (selection && text === draftRef.current && editor.current) {
@@ -164,6 +174,21 @@ export function useComposer({
     draftRef.current = text;
     setDraft(text);
   }
+
+  function restoreDraft(draft: Draft) {
+    if (!draftRef.current) replaceDraft(draft.text, draft.selection);
+    else setRecoverDraft(draft);
+  }
+
+  useLayoutEffect(() => {
+    const sent = sentDraft.current;
+    if (!sent || submission?.currentTurnId !== sent.turnId || snapshot.activeTurnId === sent.turnId) return;
+    sentDraft.current = undefined;
+    const writeUnconfirmed = submission.delivery === 'retained' || submission.delivery === 'unknown';
+    if (!writeUnconfirmed && submission.status !== 'failed' && submission.status !== 'cancelled'
+      && submission.route !== 'clarify') return;
+    restoreDraft(sent.draft);
+  }, [acknowledgedTurn, submission, snapshot.activeTurnId]);
 
   function syncEditor(editorBlurred = false) {
     const input = editor.current;
@@ -194,7 +219,6 @@ export function useComposer({
       editorFingerprint.current = key;
       editorRevision.current += 1;
       activeRecording.current = undefined;
-      setVoicePolishing(false);
     }
     focusSeen.current = requestKey;
     void client
@@ -273,6 +297,7 @@ export function useComposer({
     void client
       .submit(request)
       .then(({ turnId: acceptedTurnId }) => {
+        if (restore) sentDraft.current = { turnId: acceptedTurnId, draft: restore };
         setAcknowledgedTurn(acceptedTurnId);
         reportAccepted(acceptedTurnId);
         draftIds.current.delete(requestFingerprint(request));
@@ -288,7 +313,7 @@ export function useComposer({
           'code' in cause &&
           ['busy', 'invalid_argument', 'cancelled'].includes(String(cause.code));
         const severity = recoverable ? 'warning' : 'error';
-        if (restore) replaceDraft(restore.text, restore.selection);
+        if (restore) restoreDraft(restore);
         sendNotice.current = notice(message, severity, 'ask-send');
       })
       .finally(() => {
@@ -358,13 +383,21 @@ export function useComposer({
         return;
       }
       const recording = activeRecording.current;
-      if (event.type === 'polishing') {
-        if (recording?.id === event.recordingId) setVoicePolishing(true);
-        return;
-      }
-      setVoicePolishing(false);
-      if (event.type === 'cancelled') {
-        if (recording?.id === event.recordingId) activeRecording.current = undefined;
+      if (recording?.id !== event.recordingId) return;
+      if (event.type === 'cancelled' || event.type === 'failed') {
+        activeRecording.current = undefined;
+        if (event.type === 'failed' && currentVoiceEditor.current?.(event) === recording.input) {
+          const failedToStart = event.stage === 'start';
+          const message = /^zh-(TW|HK|Hant)\b/i.test(language)
+            ? (failedToStart ? '無法開始語音輸入。草稿已保留，仍可直接輸入。'
+              : '語音輸入未完成。草稿已保留，仍可直接輸入。')
+            : /^zh\b/i.test(language)
+              ? (failedToStart ? '无法开始语音输入。草稿已保留，仍可直接输入。'
+                : '语音输入未完成。草稿已保留，仍可直接输入。')
+              : (failedToStart ? 'Could not start voice input. Your draft was kept; you can still type.'
+                : 'Voice input did not finish. Your draft was kept; you can still type.');
+          notice(message, 'error', 'ask-voice');
+        }
         return;
       }
       void client
@@ -395,7 +428,6 @@ export function useComposer({
     let stop: (() => void) | undefined;
     const clearRecording = () => {
       activeRecording.current = undefined;
-      setVoicePolishing(false);
     };
     window.addEventListener('blur', clearRecording);
     void client
@@ -428,7 +460,6 @@ export function useComposer({
   useLayoutEffect(() => {
     if (!connected) {
       activeRecording.current = undefined;
-      setVoicePolishing(false);
     }
   }, [connected]);
 
@@ -459,7 +490,7 @@ export function useComposer({
     >
       <PromptBox
         className="w-full"
-        placeholder={showPolish ? polishLabel : PLACEHOLDERS}
+        placeholder={placeholder}
         status={turnId ? 'streaming' : 'idle'}
         efforts={EFFORTS}
         value={draft}
@@ -467,13 +498,12 @@ export function useComposer({
         submitDisabled={cannotSubmit || isComposing}
         canSubmitEmpty={attachments.length > 0 && attachmentsReady}
         inputProps={{
-          'aria-label': PLACEHOLDERS[0],
+          'aria-label': placeholder,
           'aria-describedby': attachments.length ? 'draft-references' : undefined,
           readOnly: pending,
           onFocus: () => syncEditor(),
           onBlur: () => {
             activeRecording.current = undefined;
-            setVoicePolishing(false);
             syncEditor(true);
           },
           onSelect: () => syncEditor(),
@@ -515,7 +545,13 @@ export function useComposer({
               check();
             });
         }}
-        beforeInput={
+        beforeInput={<>
+          <AskCurrentNotice />
+          {result}
+          {recoverDraft && <details className="ask-inline-notice">
+            <summary>Previous instruction</summary>
+            <p className="result-text">{recoverDraft.text}</p>
+          </details>}
           <AttachmentDeck
             client={client}
             conversationId={conversationId}
@@ -541,7 +577,7 @@ export function useComposer({
                 });
             }}
           />
-        }
+        </>}
         actions={
           <>
             <ActionButton

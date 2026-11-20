@@ -14,6 +14,12 @@ pub(super) fn error(error: BackendError) -> Value {
         }
         "askDeepThinkingUnsupported" => "The configured model does not support deep thinking.",
         "askImageInputUnsupported" => "The configured model does not support images in Ask.",
+        "askImageUnsupported" => "This model and endpoint cannot accept the image. The draft and image were kept.",
+        "askDraftUnusable" => "The model did not produce usable text. Nothing was written.",
+        "askDraftReviewUnavailable" => "The generated text could not be reviewed and was not written.",
+        "askDraftSearchUnavailable" => "No verifiable search evidence was available. Nothing was written.",
+        "askSelectionUnavailable" => "The selection could not be verified. The original text was not changed.",
+        "askSelectionRequired" => "No verified selection was available. The original text was not changed.",
         "askRequestConflict" => "This request ID belongs to a different message.",
         "askConversationUnavailable" => "This conversation is no longer available.",
         "askIntentInvalid" => {
@@ -35,6 +41,12 @@ pub(super) fn error(error: BackendError) -> Value {
             | "askIntentToolUnsupported"
             | "askIntentTimeout"
             | "askEntrySettingsUnavailable"
+            | "askImageUnsupported"
+            | "askDraftUnusable"
+            | "askDraftReviewUnavailable"
+            | "askDraftSearchUnavailable"
+            | "askSelectionUnavailable"
+            | "askSelectionRequired"
     ) {
         value["reason"] = json!(error.message);
     }
@@ -46,6 +58,7 @@ fn working(status: Option<AskActivity>) -> &'static str {
         Some(AskActivity::Thinking) => "thinking",
         Some(AskActivity::Compacting) => "compacting",
         Some(AskActivity::Generating) => "thinking",
+        Some(AskActivity::Polishing) => "polishing",
         Some(AskActivity::Preparing) | None => "queued",
     }
 }
@@ -213,11 +226,10 @@ mod tests {
 
     #[test]
     fn intent_error_can_be_localized_without_using_its_display_message() {
-        let result = error(BackendError::new(
-            openless_core::BackendErrorCode::Unsupported,
-            "askIntentToolUnsupported",
-        ));
-        assert_eq!(result["reason"], "askIntentToolUnsupported");
-        assert_ne!(result["message"], result["reason"]);
+        for reason in ["askIntentToolUnsupported", "askSelectionUnavailable", "askDraftReviewUnavailable", "askImageUnsupported"] {
+            let result = error(BackendError::new(openless_core::BackendErrorCode::Unsupported, reason));
+            assert_eq!(result["reason"], reason);
+            assert_ne!(result["message"], result["reason"]);
+        }
     }
 }

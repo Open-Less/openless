@@ -1,11 +1,12 @@
 import { AppViewport } from '../src/ui/layout/AppViewport';
 import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { PromptBox } from '@/components/ui/prompt-box';
 import { errorMessage, type AskClient, type AskFocus, type AskSnapshot } from './client';
 import { useComposer } from './composer';
 import { ConversationLayout, Sources, SubmissionResult } from './conversation';
 import { connectAskFeed } from './feed';
-import { useAskNotice } from './notices';
+import { AskCurrentNotice, AskNoticeProvider, useAskNotice, useClearAskNotice } from './notices';
 import { watchTheme } from './theme';
 import './window.css';
 
@@ -19,12 +20,13 @@ type SessionProps = {
   canDeliverVoice: () => boolean;
   expanded: boolean;
   captureSubmitReceipt: () => (turnId: string) => void;
+  streamError?: string;
+  reconnect: () => void;
 };
 
 type Expansion = { width: number; height: number; bottom: number };
 
 function ComposerSession(props: SessionProps) {
-  const box = useComposer(props);
   const { client, snapshot } = props;
   const submission = snapshot.submission;
   const current = submission?.currentTurnId === snapshot.activeTurnId;
@@ -42,26 +44,38 @@ function ComposerSession(props: SessionProps) {
         ]
       : []),
   ];
+  const result = submission && (!current || props.expanded)
+    && (!chatRoute || submission.error || submission.resultText || (!props.expanded && submission.searchError)) ? (
+      <SubmissionResult submission={submission} active={current} />
+    ) : null;
+  const box = useComposer({
+    ...props,
+    result: <>
+      {props.streamError && <div className="ask-inline-notice" role="alert">
+        {props.streamError}
+        <button className="text-button" type="button" onClick={props.reconnect}>Reconnect</button>
+      </div>}
+      {result}
+    </>,
+  });
   return (
     <>
       <ConversationLayout
         expanded={props.expanded}
         turns={snapshot.turns}
         showSources={setSourcesTurn}
+        latestQuestion={snapshot.turns.at(-1)?.turnId}
       >
-        {submission && !chatRoute && (!current || props.expanded) && (
-          <SubmissionResult submission={submission} active={current} />
-        )}
         {box}
       </ConversationLayout>
-      <Sources
+      {props.expanded && <Sources
         client={client}
         conversationId={snapshot.conversationId}
         turns={sourceTurns}
         openedTurnId={sourcesTurn}
         show={setSourcesTurn}
         close={() => setSourcesTurn(undefined)}
-      />
+      />}
     </>
   );
 }
@@ -70,7 +84,7 @@ export function AskWindow({ client }: { client: AskClient }) {
   return (
     <AppViewport scale={false} className="ask-viewport">
       <InteractionProvider>
-        <AskScreen client={client} />
+        <AskNoticeProvider><AskScreen client={client} /></AskNoticeProvider>
       </InteractionProvider>
     </AppViewport>
   );
@@ -78,6 +92,7 @@ export function AskWindow({ client }: { client: AskClient }) {
 
 function AskScreen({ client }: { client: AskClient }) {
   const notice = useAskNotice();
+  const clearNotice = useClearAskNotice();
   const feed = useRef<ReturnType<typeof connectAskFeed>>();
   const shown = useRef(true);
   const hiding = useRef(false);
@@ -85,6 +100,7 @@ function AskScreen({ client }: { client: AskClient }) {
   const presentation = useRef<HTMLDivElement>(null);
   const visibilityGeneration = useRef(0);
   const expanding = useRef<string>();
+  const sessionId = useRef<string | null>();
   const [receipt, setReceipt] = useState<{ conversationId: string; turnId: string }>();
   const [expansion, setExpansion] = useState<Expansion>();
   const [snapshot, setSnapshot] = useState<AskSnapshot | null>();
@@ -179,6 +195,7 @@ function AskScreen({ client }: { client: AskClient }) {
           },
         },
         (view) => {
+          sessionId.current = view?.conversationId ?? null;
           setSnapshot(view);
           setStreamError(undefined);
           setConnected(true);
@@ -217,6 +234,13 @@ function AskScreen({ client }: { client: AskClient }) {
         }
         if (event.type === 'activated' || event.type === 'sessionChanged') {
           updateFocus(event);
+          if (event.type === 'sessionChanged' && event.conversationId !== sessionId.current) {
+            sessionId.current = event.conversationId;
+            clearPresentation();
+            clearNotice();
+            setSnapshot(null);
+            setStreamError(undefined);
+          }
           if (event.type === 'activated') {
             const wasHidden = !shown.current;
             shown.current = true;
@@ -270,7 +294,7 @@ function AskScreen({ client }: { client: AskClient }) {
       window.removeEventListener('drop', preventFileNavigation);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [clearPresentation, client, notice, suspend]);
+  }, [clearNotice, clearPresentation, client, notice, suspend]);
 
   const route = snapshot?.submission?.route;
   const routedTurn = snapshot?.submission?.currentTurnId;
@@ -359,6 +383,8 @@ function AskScreen({ client }: { client: AskClient }) {
           focus={focus}
           activation={activation}
           expanded={Boolean(expansion)}
+          streamError={streamError}
+          reconnect={() => reconnect.current()}
           captureSubmitReceipt={captureSubmitReceipt}
           canDeliverVoice={() =>
             shown.current &&
@@ -369,23 +395,23 @@ function AskScreen({ client }: { client: AskClient }) {
           check={() => feed.current?.check()}
         />
       ) : (
-        <p className="connection-notice" role="status">
-          {snapshot === null
-            ? 'No active conversation.'
-            : streamError
-              ? 'Ask is unavailable.'
-              : 'Connecting…'}
-        </p>
-      )}
-      {streamError && (
-        <button
-          title={streamError}
-          className="text-button ask-reconnect"
-          type="button"
-          onClick={() => reconnect.current()}
-        >
-          Reconnect
-        </button>
+        <div className="composer-surface">
+          <div className="ask-layout-column"><div className="composer-content">
+            <PromptBox
+              className="w-full"
+              placeholder={snapshot === null ? 'No active conversation.' : 'Connecting…'}
+              submitDisabled
+              inputProps={{ readOnly: true }}
+              beforeInput={<>
+                <AskCurrentNotice />
+                {streamError && <div className="ask-inline-notice" role="alert">
+                  {streamError}
+                  <button className="text-button" type="button" onClick={() => reconnect.current()}>Reconnect</button>
+                </div>}
+              </>}
+            />
+          </div></div>
+        </div>
       )}
     </div>
   );

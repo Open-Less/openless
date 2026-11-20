@@ -51,6 +51,10 @@ pub(crate) trait Integration: Send + Sync {
     fn auto_voice_on_open(&self) -> bool {
         true
     }
+    fn private_session(&self) -> bool {
+        false
+    }
+    fn revoke_requests(&self) {}
     fn ordinary_dictation_edge(&self, edge: DictationHotkeyEdge, fn_commit: Option<hotkey::FnCommit>) -> Task<()>;
     fn ordinary_dictation_is_active(&self) -> bool;
     fn capsule(&self, frame: CapsulePayload);
@@ -366,6 +370,7 @@ impl Desktop {
                     "type": "activated", "focusEpoch": focus_epoch, "focusRequest": focus_request
                 })
             }
+            #[cfg(not(target_os = "macos"))]
             "ask-window:voice-unavailable" => serde_json::json!({"type": "notice", "error": {
                 "code": "voice_unavailable", "message": "Could not start voice input."
             }}),
@@ -383,7 +388,12 @@ impl Desktop {
         self.invocation_epoch.fetch_add(1, Ordering::AcqRel);
         self.pending_open.store(0, Ordering::Release);
         self.external_target_epoch.store(0, Ordering::Release);
-        window.hide().map_err(|error| error.to_string())?;
+        self.ports.revoke_requests();
+        let hidden = window.hide().map_err(|error| error.to_string());
+        if self.app.try_state::<Arc<chat::AskHost>>().is_some_and(|host| host.clear_on_hide()) {
+            self.set_conversation(None);
+        }
+        hidden?;
         self.expanded.store(false, Ordering::Release);
         self.mark_unfocused();
         let _ = self.app.emit_to(
@@ -426,7 +436,7 @@ impl Desktop {
             "selectionEnd": target.editor.selection_end
         });
         if let Some(text) = text {
-            payload["text"] = serde_json::json!(text);
+            payload[if event == "failed" { "stage" } else { "text" }] = serde_json::json!(text);
         }
         let _ = self
             .app
@@ -454,7 +464,13 @@ impl Desktop {
     fn begin_open(&self) -> u64 {
         let generation = self.invocation_epoch.fetch_add(1, Ordering::AcqRel) + 1;
         self.pending_open.fetch_max(generation, Ordering::AcqRel);
+        self.external_target_epoch.store(0, Ordering::Release);
+        self.ports.revoke_requests();
         generation
+    }
+
+    pub(super) fn opening(&self) -> bool {
+        self.pending_open.load(Ordering::Acquire) != 0
     }
 
     fn cancel_pending_open(&self) {
@@ -468,6 +484,23 @@ impl Desktop {
 
     pub(crate) fn external_target_generation(&self) -> Option<u64> {
         Some(self.external_target_epoch.load(Ordering::Acquire)).filter(|epoch| *epoch != 0)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn recover_after_write(self: &Arc<Self>, generation: u64, proof: target::FocusRecovery) {
+        let desktop = self.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            if desktop.external_target_generation() != Some(generation) || desktop.opening()
+                || !proof.is_current()
+            {
+                return;
+            }
+            if let Some(window) = desktop.app.get_webview_window(LABEL)
+                .filter(|window| window.is_visible().unwrap_or(false))
+            {
+                let _ = focus_composer(&window);
+            }
+        });
     }
 
     fn warm_dictation(&self) {
@@ -497,17 +530,29 @@ impl Desktop {
             .or_else(|| self.placement.lock().is_none().then(|| Placement::at_cursor(&self.app)));
         #[cfg(target_os = "macos")]
         let original_foreground = trigger.as_ref().and_then(|trigger| trigger.foreground.as_ref().map(|app| app.pid));
-        if let Some(trigger) = trigger {
+        let reset = chord.is_some() || trigger.is_some() || self.ports.private_session();
+        if reset {
+            self.expanded.store(false, Ordering::Release);
+        }
+        if trigger.is_some() || reset {
             self.external_target_epoch.store(generation, Ordering::Release);
-            let captured_at = trigger.captured_at;
-            let invocation = match tokio::time::timeout(
-                Duration::from_millis(450),
-                tauri::async_runtime::spawn_blocking(move || trigger.read()),
-            )
-            .await
-            {
-                Ok(Ok(invocation)) => invocation,
-                _ => Invocation::empty(captured_at),
+            let invocation = if let Some(trigger) = trigger {
+                let captured_at = trigger.captured_at;
+                let captured_pid = trigger.foreground.as_ref().map(|app| app.pid);
+                match tokio::time::timeout(
+                    Duration::from_millis(450),
+                    tauri::async_runtime::spawn_blocking(move || trigger.read()),
+                ).await {
+                    Ok(Ok(invocation)) => invocation,
+                    _ => {
+                        let mut invocation = Invocation::empty(captured_at);
+                        invocation.foreground_pid = captured_pid
+                            .filter(|pid| *pid != std::process::id());
+                        invocation
+                    }
+                }
+            } else {
+                Invocation::empty(chrono::Utc::now())
             };
             if !is_latest() {
                 return Ok(());
@@ -535,7 +580,7 @@ impl Desktop {
             if let Some(placement) = placement {
                 *desktop.placement.lock() = Some(placement);
             }
-            if !was_visible || !desktop.is_focused() {
+            if reset || !was_visible || !desktop.is_focused() {
                 let placement = desktop.placement.lock().clone().unwrap_or_default();
                 placement.position(&window, desktop.expanded.load(Ordering::Acquire))?;
             }
