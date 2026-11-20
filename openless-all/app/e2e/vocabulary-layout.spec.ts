@@ -123,6 +123,56 @@ for (const narrow of [false, true]) {
   });
 }
 
+test('vocabulary fits five cards and scrolls only the overflowing phrase', async ({ page }) => {
+  await page.setViewportSize({ width: 1300, height: 835 });
+  await page.goto('/?os=mac');
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  const vocab = page.locator('[data-ol-page="vocab"]');
+  await expect(vocab).toHaveAttribute('data-transition-phase', 'settled');
+  const cards = vocab.locator('.ol-word-card');
+  await expect(cards.nth(5)).toBeVisible();
+  const grid = vocab.locator('.ol-vocab-grid');
+  expect(
+    await grid.evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(' ').length),
+  ).toBe(5);
+  const first = await bounds(cards.nth(0));
+  const fifth = await bounds(cards.nth(4));
+  expect(first.y).toBeCloseTo(fifth.y, 0);
+  expect(first.width).toBeCloseTo(fifth.width, 0);
+  expect((await bounds(cards.nth(5))).y).toBeGreaterThan(first.y);
+
+  const phrase = '一条非常长的词条用于验证收窄之后仍然能够完整查看其中的所有文字';
+  await vocab.getByRole('button', { name: '新词' }).click();
+  const dialog = page.getByRole('dialog', { name: '添加新词' });
+  await dialog.getByRole('textbox').fill(phrase);
+  await dialog.getByRole('button', { name: '添加', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  const longWord = vocab.getByRole('button', { name: phrase, exact: true });
+  const label = longWord.locator('.ol-word-card-label');
+  const card = longWord.locator('..');
+  const before = await bounds(card);
+  await expect(label).toHaveCSS('text-overflow', 'ellipsis');
+  await longWord.focus();
+  await expect(label).toHaveAttribute('data-scrolling', '');
+  const delta = await label.locator('.ol-word-card-phrase').evaluate((node: HTMLElement) => {
+    const animation = node.getAnimations()[0];
+    const effect = animation?.effect as KeyframeEffect;
+    const frames = effect.getKeyframes();
+    animation.pause();
+    animation.currentTime = frames[2].offset! * Number(effect.getTiming().duration);
+    const actual = new DOMMatrix(getComputedStyle(node).transform).m41;
+    return { actual, expected: node.parentElement!.clientWidth - node.offsetWidth };
+  });
+  expect(delta.expected).toBeLessThan(0);
+  expect(delta.actual).toBeCloseTo(delta.expected, 0);
+  expect((await bounds(card)).width).toBeCloseTo(before.width, 0);
+  expect((await bounds(card)).height).toBeCloseTo(before.height, 0);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(label).not.toHaveAttribute('data-scrolling', '');
+  await expect(label).toHaveCSS('text-overflow', 'ellipsis');
+});
+
 test('add-word dialog keeps one blur through dismissal and retains the input focus ring', async ({
   page,
 }) => {

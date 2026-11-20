@@ -105,6 +105,172 @@
   text-align: center;
 }
 
+.ol-vocab-scroll {
+  container: vocab-words / inline-size;
+}
+
+.ol-grid-12.ol-vocab-grid {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 10px;
+  min-height: 80px;
+}
+
+@container vocab-words (min-width: 350px) {
+  .ol-grid-12.ol-vocab-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container vocab-words (min-width: 520px) {
+  .ol-grid-12.ol-vocab-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container vocab-words (min-width: 690px) {
+  .ol-grid-12.ol-vocab-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container vocab-words (min-width: 850px) {
+  .ol-grid-12.ol-vocab-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.ol-word-card {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-inline-size: 0;
+  min-block-size: 38px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--ol-line);
+  border-radius: var(--ol-r-lg);
+  background: var(--ol-surface);
+  transition:
+    background 0.16s var(--ol-motion-quick),
+    border-color 0.16s var(--ol-motion-quick);
+}
+
+.ol-word-card:hover,
+.ol-word-card:focus-within,
+.ol-word-card[data-disabled='true'],
+.ol-word-card[data-selected='true'] {
+  background: var(--ol-surface-2);
+}
+
+.ol-word-card:hover,
+.ol-word-card:focus-within {
+  border-color: var(--ol-line-strong);
+}
+
+.ol-word-card[data-selected='true'] {
+  border-color: var(--ol-ink-3);
+}
+
+.ol-word-card-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ol-ink-4);
+}
+
+.ol-word-card[data-disabled='true'] .ol-word-card-icon {
+  opacity: 0.55;
+}
+
+.ol-word-card-text {
+  flex: 1 1 0%;
+  min-inline-size: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ol-ink);
+  font-family: var(--ol-font-mono);
+  font-size: 13px;
+  text-align: start;
+  cursor: default;
+}
+
+.ol-word-card[data-disabled='true'] .ol-word-card-text {
+  color: var(--ol-ink-2);
+}
+
+.ol-word-card-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.ol-word-card-label[data-scrolling] {
+  text-overflow: clip;
+}
+
+.ol-word-card-label[data-scrolling] .ol-word-card-phrase {
+  display: inline-block;
+  inline-size: max-content;
+}
+
+.ol-word-card-hits {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 18px;
+  max-inline-size: 45px;
+  block-size: 18px;
+  padding-inline: 4px;
+  overflow: hidden;
+  border-radius: var(--ol-radius);
+  background: var(--ol-control-muted);
+  color: var(--ol-ink-4);
+  font-size: 10.5px;
+  font-weight: var(--ol-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.ol-word-card-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.16s var(--ol-motion-quick);
+}
+
+.ol-word-card:hover .ol-word-card-actions,
+.ol-word-card:focus-within .ol-word-card-actions {
+  opacity: 1;
+}
+
+.ol-word-card[data-selecting='true'] .ol-word-card-actions {
+  display: none;
+}
+
+.ol-word-card-action {
+  display: grid;
+  place-items: center;
+  inline-size: 22px;
+  block-size: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ol-control-radius);
+  background: transparent;
+  color: var(--ol-ink-3);
+  cursor: default;
+}
+
+.ol-word-card-action:hover {
+  background: var(--ol-control-muted-strong);
+  color: var(--ol-ink);
+}
+
+.ol-word-card-select {
+  margin: 0 0 0 4px;
+}
+
 [data-ol-theme='dark'] .ol-vocab-dialog {
   --ol-dialog-shadow: var(--ol-shadow-lg);
 }

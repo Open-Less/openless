@@ -955,106 +955,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
 }
 
-/* 词条卡片：默认安静（图标+文字+命中数）；hover/focus-within 变灰并从右侧
-   浮现编辑/删除操作。操作按钮常驻 DOM，只过渡 opacity，布局不跳动。 */
-.ol-word-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 9px 12px;
-  border-radius: var(--ol-r-lg);
-  border: 0.5px solid var(--ol-line);
-  background: var(--ol-surface);
-  transition:
-    background 0.16s var(--ol-motion-quick),
-    border-color 0.16s var(--ol-motion-quick),
-    opacity 0.18s var(--ol-motion-soft);
-  animation: ol-chip-in 0.22s var(--ol-motion-spring);
-}
-.ol-word-card:hover,
-.ol-word-card:focus-within {
-  background: var(--ol-surface-2);
-  border-color: var(--ol-line-strong);
-}
-.ol-word-card[data-disabled='true'] {
-  background: var(--ol-surface-2);
-}
-.ol-word-card[data-disabled='true'] .ol-word-card-text {
-  color: var(--ol-ink-2);
-}
-.ol-word-card-state {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--ol-ink-2);
-}
-.ol-word-card-icon {
-  flex-shrink: 0;
-  display: inline-flex;
-  color: var(--ol-ink-4);
-}
-.ol-word-card-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  color: var(--ol-ink);
-  font-family: var(--ol-font-mono);
-  font-size: 13px;
-  cursor: default;
-}
-.ol-word-card-hits {
-  flex-shrink: 0;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: var(--ol-radius);
-  font-size: 10.5px;
-  font-weight: var(--ol-font-weight-semibold);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--ol-control-muted);
-  color: var(--ol-ink-4);
-  font-variant-numeric: tabular-nums;
-}
-.ol-word-card-actions {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 0.16s var(--ol-motion-quick);
-}
-.ol-word-card:hover .ol-word-card-actions,
-.ol-word-card:focus-within .ol-word-card-actions {
-  opacity: 1;
-}
-.ol-word-card-action {
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: var(--ol-control-radius);
-  background: transparent;
-  color: var(--ol-ink-3);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: default;
-  transition:
-    background 0.14s var(--ol-motion-quick),
-    color 0.14s var(--ol-motion-quick);
-}
-.ol-word-card-action:hover {
-  background: var(--ol-control-muted-strong);
-  color: var(--ol-ink);
-}
-
 .ol-service-pipeline-mode {
   padding: 4px 0;
 }
@@ -2097,17 +1997,6 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-word-card:not([data-selecting='true']) .ol-word-card-select,
 .ol-vocab-select-all[hidden] {
   display: none;
-}
-.ol-word-card-select {
-  margin: 0 0 0 8px;
-}
-.ol-word-card[data-selected='true'] {
-  background: var(--ol-surface-2);
-  border-color: var(--ol-ink-3);
-}
-.ol-word-card {
-  border-radius: var(--ol-r-lg);
-  animation: none;
 }
 .ol-vocab-delete-selected {
   display: inline-flex;

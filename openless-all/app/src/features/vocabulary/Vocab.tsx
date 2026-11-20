@@ -1,20 +1,18 @@
 import { TextField } from '../../ui/controls/TextField';
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DictionaryEntry } from '../../api/contracts';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { Icon } from '../../components/Icon';
-import { Tooltip } from '../../components/Tooltip';
 import { Button as Btn } from '../../ui/controls/Button';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Modal } from '../../ui/overlays/Modal';
 import { useVocabularyWorkspace } from './useVocabularyWorkspace';
+import { VocabularyWordCard } from './VocabularyWordCard';
 import './vocabulary.css';
 
 export function Vocab() {
   const {
     t,
-    mobile,
     loading,
     error,
     presets,
@@ -222,15 +220,10 @@ export function Vocab() {
           the previous glitch where the grid, as a page-root flex item, got squashed and its
           content overflowed behind the section below. */}
       <div
-        className="ol-thinscroll"
+        className="ol-thinscroll ol-vocab-scroll"
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2, paddingBottom: 12 }}
       >
-        {/* Word grid: hover dims cards and reveals edit/delete on the right. */}
-        <div
-          className="ol-grid-12 ol-grid-cards"
-          data-columns={mobile ? '1' : undefined}
-          style={{ minHeight: 80, alignContent: 'start' }}
-        >
+        <div className="ol-grid-12 ol-vocab-grid">
           {loading && (
             <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
           )}
@@ -240,7 +233,7 @@ export function Vocab() {
             </div>
           )}
           {visibleEntries.map((entry) => (
-            <WordCard
+            <VocabularyWordCard
               key={entry.id}
               entry={entry}
               auto={sourceOf(entry) === 'auto'}
@@ -422,96 +415,6 @@ export function Vocab() {
           </div>
         </ModalShell>
       )}
-
-      <style>{`
-        @keyframes ol-chip-in {
-          from { opacity: 0; transform: scale(.97); }
-          to   { opacity: 1; transform: scale(1); }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-interface WordCardProps {
-  entry: DictionaryEntry;
-  auto: boolean;
-  /** Delete exit animation in progress: block interaction to prevent repeated clicks. */
-  removing: boolean;
-  cardRef: (element: HTMLDivElement | null) => void;
-  onToggle: () => void;
-  onEdit: () => void;
-  onRemove: () => void;
-  selected: boolean;
-  selecting: boolean;
-  onSelect: () => void;
-}
-
-/** Word card: shows icon + text + hit count by default; hover/focus-within dims it and
-    reveals edit/delete. */
-function WordCard({
-  entry,
-  auto,
-  removing,
-  selected,
-  selecting,
-  cardRef,
-  onToggle,
-  onEdit,
-  onRemove,
-  onSelect,
-}: WordCardProps) {
-  const { t } = useTranslation();
-  const enabled = entry.enabled;
-  return (
-    <div
-      ref={cardRef}
-      className="ol-word-card"
-      data-disabled={enabled ? undefined : 'true'}
-      data-selected={selected ? 'true' : undefined}
-      data-selecting={selecting ? 'true' : undefined}
-      style={removing ? { pointerEvents: 'none' } : undefined}
-    >
-      <span className="ol-word-card-icon" aria-hidden>
-        <Icon name={auto ? 'sparkle' : 'feather'} size={14} />
-      </span>
-      <button type="button" className="ol-word-card-text" onClick={onToggle} title={entry.phrase}>
-        {entry.phrase}
-      </button>
-      {!enabled && <span className="ol-word-card-state">{t('vocab.disabledWord')}</span>}
-      <span className="ol-word-card-hits">{entry.hits}</span>
-      <span className="ol-word-card-actions">
-        <Tooltip content={t('vocab.edit')} placement="top">
-          <button
-            type="button"
-            className="ol-word-card-action"
-            aria-label={t('vocab.edit')}
-            disabled={removing}
-            onClick={onEdit}
-          >
-            <Icon name="pencil" size={14} />
-          </button>
-        </Tooltip>
-        <Tooltip content={t('common.delete')} placement="top">
-          <button
-            type="button"
-            className="ol-word-card-action"
-            aria-label={t('vocab.deleteWord', { phrase: entry.phrase })}
-            disabled={removing}
-            onClick={onRemove}
-          >
-            <Icon name="trash" size={14} />
-          </button>
-        </Tooltip>
-      </span>
-      <input
-        type="checkbox"
-        className="ol-word-card-select"
-        checked={selected}
-        disabled={removing}
-        aria-label={t('vocab.selectWord', { phrase: entry.phrase })}
-        onChange={onSelect}
-      />
     </div>
   );
 }
