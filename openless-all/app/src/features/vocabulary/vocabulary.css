@@ -62,10 +62,41 @@
   white-space: nowrap;
 }
 
+.ol-vocab-select-slot > .ol-vocab-select-mode {
+  --ol-vocab-select-transition:
+    inline-size 220ms var(--ol-motion-quick), border-radius 220ms var(--ol-motion-quick);
+  position: relative;
+  inline-size: 100%;
+  overflow: hidden;
+}
+
 .ol-vocab-select-slot[data-selecting] > .ol-vocab-select-mode {
-  --ol-button-radius: 50%;
+  --ol-button-radius: calc(var(--ol-field-icon-size) / 2);
   inline-size: var(--ol-field-icon-size);
-  justify-content: center;
+}
+
+.ol-vocab-select-mode > span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  white-space: nowrap;
+  transition: opacity 140ms ease-out;
+}
+
+.ol-vocab-select-slot:not([data-selecting]) .ol-vocab-select-close,
+.ol-vocab-select-slot[data-selecting] .ol-vocab-select-caption {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ol-vocab-select-slot > .ol-vocab-select-mode {
+    --ol-vocab-select-transition: none;
+  }
+
+  .ol-vocab-select-mode > span {
+    transition: none;
+  }
 }
 
 .ol-vocab-select-slot > .ol-vocab-select-mode:active:not(:disabled) {
@@ -83,8 +114,7 @@
 }
 
 /* Reserve both positions so selections cannot move the grid or its controls. */
-.ol-vocab-selection-footer:not([data-selecting]),
-.ol-vocab-batch-remove[data-empty] {
+.ol-vocab-selection-footer:not([data-selecting]) .ol-vocab-batch-all {
   visibility: hidden;
 }
 
@@ -93,15 +123,15 @@
 }
 
 .ol-vocab-batch-remove {
-  display: flex;
-}
-
-.ol-vocab-batch-remove > button {
   inline-size: var(--ol-field-icon-size);
   justify-content: center;
 }
 
 .ol-vocab-batch-remove svg {
+  color: var(--ol-ink-3);
+}
+
+.ol-vocab-batch-remove:not(:disabled) svg {
   color: var(--ol-err);
 }
 
@@ -229,7 +259,7 @@
 
 .ol-word-card-label {
   display: block;
-  flex: 1 1 0%;
+  flex: 0 1 auto;
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -259,11 +289,8 @@
 }
 
 .ol-word-card-hits {
-  position: absolute;
-  z-index: 1;
-  inset-block-start: -5px;
-  inset-inline-start: -5px;
   display: grid;
+  flex: none;
   place-items: center;
   box-sizing: border-box;
   min-inline-size: 16px;

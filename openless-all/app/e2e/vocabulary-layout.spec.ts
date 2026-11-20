@@ -69,13 +69,24 @@ for (const narrow of [false, true]) {
         bounds(firstWord.locator('.ol-word-card-label')),
       ]);
     const layout = await stableLayout();
+    await expect(remove).toBeVisible();
+    await expect(remove).toBeDisabled();
+    const idleTrash = await bounds(remove);
+    const idleColor = await remove.locator('svg').evaluate((icon) => getComputedStyle(icon).color);
 
     await select.click();
+    await expect(done).toHaveCSS('transition-property', 'inline-size, border-radius');
+    await expect
+      .poll(async () => {
+        const rect = await bounds(done);
+        return Math.abs(rect.width - rect.height);
+      })
+      .toBeLessThan(0.5);
     const close = await bounds(done);
-    expect(close.height).toBeCloseTo(close.width, 0);
     expect(close.x + close.width).toBeCloseTo(selectBefore.x + selectBefore.width, 0);
-    await expect(done).toHaveCSS('border-radius', '50%');
-    await expect(remove).toHaveCount(0);
+    await expect(done).toHaveCSS('border-radius', '18px');
+    expect(await bounds(remove)).toEqual(idleTrash);
+    await expect(remove).toBeDisabled();
     expect(await stableLayout()).toEqual(layout);
 
     const firstCheckbox = firstWord.getByRole('checkbox');
@@ -97,12 +108,15 @@ for (const narrow of [false, true]) {
     expect(all.x + all.width).toBeLessThan(trash.x);
     expect(all.y + all.height / 2).toBeCloseTo(trash.y + trash.height / 2, 0);
     expect(trash.y).toBeGreaterThan(word.y);
+    await expect(remove).toBeEnabled();
+    await expect(remove.locator('svg')).not.toHaveCSS('color', idleColor);
     expect(await stableLayout()).toEqual(layout);
 
     await firstCheckbox.click();
     await expect(firstCheckbox).not.toBeChecked();
     await expect(badge).toHaveCount(0);
-    await expect(remove).toHaveCount(0);
+    await expect(remove).toBeDisabled();
+    await expect(remove.locator('svg')).toHaveCSS('color', idleColor);
     expect(await stableLayout()).toEqual(layout);
 
     if (!narrow) {
@@ -120,6 +134,8 @@ for (const narrow of [false, true]) {
     }
 
     await done.click();
+    await expect(remove).toBeVisible();
+    await expect(remove).toBeDisabled();
     expect(await stableLayout()).toEqual(layout);
     await search.click();
     const input = vocab.getByRole('textbox', { name: narrow ? 'Rechercher' : '搜索' });
@@ -210,9 +226,11 @@ test('holding a vocabulary card opens the delete menu without toggling or deleti
   await expect(hits).toHaveText('8');
   const normal = await bounds(hits);
   const originalCard = await bounds(card);
+  const label = await bounds(card.locator('.ol-word-card-label'));
+  const edit = await bounds(card.getByRole('button', { name: '编辑', exact: true }));
   expect(normal.width).toBeCloseTo(normal.height, 0);
-  expect(Math.abs(normal.x + normal.width / 2 - originalCard.x)).toBeLessThan(5);
-  expect(Math.abs(normal.y + normal.height / 2 - originalCard.y)).toBeLessThan(5);
+  expect(normal.x).toBeGreaterThan(label.x + label.width);
+  expect(normal.x + normal.width).toBeLessThan(edit.x);
   const wide = await hits.evaluate((node) => {
     const original = node.textContent;
     node.textContent = '1234';

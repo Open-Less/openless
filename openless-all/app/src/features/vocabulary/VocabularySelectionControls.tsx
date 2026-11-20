@@ -32,11 +32,16 @@ export function VocabularySelectionToggle({
         size="sm"
         className="ol-vocab-select-mode"
         ariaLabel={selecting ? t('vocab.doneSelecting') : t('vocab.selecting')}
-        style={selecting ? { padding: 0 } : undefined}
+        style={{ padding: 0, transition: 'var(--ol-vocab-select-transition)' }}
         disabled={disabled}
         onClick={onToggle}
       >
-        {selecting ? <Icon name="x" size={16} /> : t('vocab.selecting')}
+        <span className="ol-vocab-select-caption" aria-hidden="true">
+          {t('vocab.selecting')}
+        </span>
+        <span className="ol-vocab-select-close" aria-hidden="true">
+          <Icon name="x" size={16} />
+        </span>
       </Button>
     </div>
   );
@@ -60,11 +65,7 @@ export function VocabularySelectionFooter({
   const { t } = useTranslation();
   const removeLabel = t('vocab.deleteSelected', { count: selectedCount });
   return (
-    <div
-      className="ol-vocab-selection-footer"
-      data-selecting={selecting ? '' : undefined}
-      aria-hidden={!selecting}
-    >
+    <div className="ol-vocab-selection-footer" data-selecting={selecting ? '' : undefined}>
       <Button
         size="sm"
         className="ol-vocab-batch-all"
@@ -74,16 +75,15 @@ export function VocabularySelectionFooter({
       >
         {t('vocab.selectAllVisible')}
       </Button>
-      <span className="ol-vocab-batch-remove" data-empty={selectedCount === 0 ? '' : undefined}>
-        <Button
-          size="sm"
-          icon="trash"
-          ariaLabel={removeLabel}
-          title={removeLabel}
-          disabled={!selecting || batchBusy || selectedCount === 0}
-          onClick={onRemove}
-        />
-      </span>
+      <Button
+        size="sm"
+        className="ol-vocab-batch-remove"
+        icon="trash"
+        ariaLabel={removeLabel}
+        title={removeLabel}
+        disabled={!selecting || batchBusy || selectedCount === 0}
+        onClick={onRemove}
+      />
     </div>
   );
 }
