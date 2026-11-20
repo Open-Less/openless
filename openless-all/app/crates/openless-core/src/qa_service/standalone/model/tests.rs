@@ -18,7 +18,7 @@ fn request() -> AskModelRequest {
         }],
         output_tokens: 123,
         deep_thinking: true,
-        search: AskModelSearch::Disabled,
+        tools: AskModelTools::default(),
     }
 }
 

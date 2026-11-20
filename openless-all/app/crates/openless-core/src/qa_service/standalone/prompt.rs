@@ -127,14 +127,14 @@ pub(super) struct Plan {
     output_tokens: usize,
     image_token_reserve: usize,
     deep_thinking: bool,
-    reserve_search: bool,
+    tools: AskToolSet,
 }
 
 impl Plan {
     pub(super) fn new(
         material: Material,
         context: AskContext,
-        reserve_search: bool,
+        tools: AskToolSet,
         history: Vec<CompletedTurn>,
         summary: Option<Summary>,
     ) -> Self {
@@ -163,7 +163,7 @@ impl Plan {
             output_tokens: material.output_tokens,
             image_token_reserve: material.image_token_reserve,
             deep_thinking: material.deep_thinking,
-            reserve_search,
+            tools,
         }
     }
 
@@ -175,11 +175,9 @@ impl Plan {
         cancellation: &AskCancellation,
     ) -> Result<(AskModelRequest, Option<Summary>), BackendError> {
         let available = budget(self.total_window, self.output_tokens)?
-            .checked_sub(if self.reserve_search {
-                SEARCH_BUDGET + 1024
-            } else {
-                0
-            })
+            .checked_sub(
+                if self.tools.search { SEARCH_BUDGET } else { 0 } + tool_overhead(self.tools),
+            )
             .ok_or_else(context_limit)?;
         let fixed = self
             .instructions
@@ -246,7 +244,7 @@ impl Plan {
                         messages,
                         output_tokens,
                         deep_thinking: false,
-                        search: AskModelSearch::Disabled,
+                        tools: AskModelTools::default(),
                     },
                     AskCallPurpose::Compact,
                     cancellation.clone(),
@@ -281,7 +279,7 @@ impl Plan {
                 messages,
                 output_tokens: self.output_tokens,
                 deep_thinking: self.deep_thinking,
-                search: AskModelSearch::Disabled,
+                tools: AskModelTools::default(),
             },
             self.summary.filter(|_| through > original_through),
         ))
@@ -299,22 +297,23 @@ pub(super) fn check_tool_budget(
     request: &AskModelRequest,
     caps: AskModelCapabilities,
 ) -> Result<(), BackendError> {
-    let AskModelSearch::Result { call, output } = &request.search else {
-        return Ok(());
-    };
     let available = budget(
         caps.context_window.unwrap_or(UNKNOWN_WINDOW).min(TOTAL_CAP),
         request.output_tokens,
     )?;
-    let tool_cost = serde_json::to_string(&call.resume)
-        .map_err(|_| context_limit())?
-        .len()
-        + serde_json::to_string(output)
+    let mut tool_cost = 0;
+    for AskToolResult { call, output } in &request.tools.results {
+        tool_cost += serde_json::to_string(&call.resume)
             .map_err(|_| context_limit())?
             .len()
-        + call.id.len()
-        + MESSAGE_OVERHEAD * 4;
+            + serde_json::to_string(output)
+                .map_err(|_| context_limit())?
+                .len()
+            + call.id.as_ref().map_or(0, String::len)
+            + MESSAGE_OVERHEAD * 4;
+    }
     let input = request.instructions.len()
+        + definitions_overhead(request.tools.available)
         + tool_cost
         + request
             .messages
@@ -326,6 +325,24 @@ pub(super) fn check_tool_budget(
     } else {
         Ok(())
     }
+}
+
+fn definitions_overhead(tools: AskToolSet) -> usize {
+    512 * (usize::from(tools.search) + usize::from(tools.calculator))
+}
+
+fn tool_overhead(tools: AskToolSet) -> usize {
+    definitions_overhead(tools)
+        + if tools.search {
+            WEB_SEARCH_GUIDANCE.len() + 1
+        } else {
+            0
+        }
+        + if tools.calculator {
+            CALCULATOR_GUIDANCE.len() + 1
+        } else {
+            0
+        }
 }
 
 fn context_limit() -> BackendError {

@@ -17,7 +17,7 @@ impl AskModel for TestModel {
         self.caps
     }
 
-    fn supports_search_tool(&self) -> bool {
+    fn supports_tools(&self) -> bool {
         true
     }
 
@@ -363,7 +363,7 @@ async fn submit_is_idempotent_and_late_cancellation_stays_with_its_owner() {
 
 #[tokio::test]
 async fn compact_never_receives_old_facts() {
-    let mut fixture = Fixture::new(4_300);
+    let mut fixture = Fixture::new(5_200);
     let service = fixture.service.clone();
     let mut events = service.subscribe();
     let conversation_id = service.open();
@@ -477,14 +477,17 @@ async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
         turn_id,
     };
     let decision = fixture.next().await;
-    assert!(matches!(decision.request.search, AskModelSearch::Available));
+    assert!(decision.request.tools.available.search);
+    assert!(!decision.request.tools.available.calculator);
     assert!(!model_text(&decision.request).contains("private app metadata"));
     assert!(fixture.search.0.lock().is_empty());
     decision
         .finish
         .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
-            id: "call1".into(),
-            query: "public query".into(),
+            id: Some("call1".into()),
+            tool: AskToolCall::WebSearch {
+                public_query: "public query".into(),
+            },
             resume: Vec::new(),
         })))
         .ok()
@@ -493,10 +496,27 @@ async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
     assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);
     assert!(model_text(&call.request).contains("private app metadata"));
     assert!(!model_text(&call.request).contains("private-to-model source body"));
-    assert!(
-        matches!(&call.request.search, AskModelSearch::Result { output, .. }
-        if output.contains("private-to-model source body"))
-    );
+    assert!(call.request.tools.results[0]
+        .output
+        .contains("private-to-model source body"));
+    assert!(!call.request.tools.available.search);
+    assert!(call.request.tools.available.calculator);
+    call.finish
+        .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
+            id: Some("math-call".into()),
+            tool: AskToolCall::Calculate {
+                expression: "0.1 + 0.2".into(),
+            },
+            resume: Vec::new(),
+        })))
+        .ok()
+        .unwrap();
+    let call = fixture.next().await;
+    assert_eq!(call.request.tools.results.len(), 2);
+    assert!(call.request.tools.results[1]
+        .output
+        .contains("\"decimal\":\"0.3\""));
+    assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);
     let search_replay =
         serde_json::to_string(&service.events(conversation_id, 0).unwrap()).unwrap();
     assert!(!search_replay.contains("private-to-model source body"));
@@ -534,6 +554,51 @@ async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
         events.try_recv(),
         Err(broadcast::error::TryRecvError::Lagged(_))
     ));
+}
+
+#[tokio::test]
+async fn calculator_runs_without_web_search_and_stops_at_its_call_budget() {
+    let mut fixture = Fixture::new(32_000);
+    let service = fixture.service.clone();
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let turn_id = service
+        .submit(request(conversation_id, "calc", "What is 1/3?"))
+        .await
+        .unwrap();
+    let key = AskTurnKey {
+        conversation_id,
+        turn_id,
+    };
+    for index in 0..MAX_CALCULATIONS {
+        let call = fixture.next().await;
+        assert!(!call.request.tools.available.search);
+        assert!(call.request.tools.available.calculator);
+        assert_eq!(call.request.tools.results.len(), index);
+        call.finish
+            .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
+                id: Some(format!("calc-{index}")),
+                tool: AskToolCall::Calculate {
+                    expression: if index == 0 { "1/0" } else { "1/3" }.into(),
+                },
+                resume: Vec::new(),
+            })))
+            .ok()
+            .unwrap();
+    }
+    let final_call = fixture.next().await;
+    assert!(!final_call.request.tools.available.any());
+    let results = &final_call.request.tools.results;
+    assert_eq!(results.len(), MAX_CALCULATIONS);
+    assert!(results[0].output.contains("division_by_zero"));
+    assert!(results[1].output.contains("\"exact\":\"1/3\""));
+    assert!(fixture.search.0.lock().is_empty());
+    assert_eq!(
+        service.turn(key).unwrap().search_status,
+        AskSearchStatus::Idle
+    );
+    final_call.complete("1/3 exactly.", None, None);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
 }
 
 #[tokio::test]

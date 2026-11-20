@@ -286,7 +286,7 @@ impl AskModel for PreparedModel {
         self.capabilities
     }
 
-    fn supports_search_tool(&self) -> bool {
+    fn supports_tools(&self) -> bool {
         match &self.wire {
             Wire::Compatible(_) => true,
             Wire::Gemini(_) => self.label.service == "gemini",
@@ -340,7 +340,7 @@ impl AskModel for PreparedModel {
                                 &request,
                                 config,
                             );
-                            tools::configure(body, format, &request.search);
+                            tools::configure(body, format, &request.tools);
                         })
                         .map_err(public_model_error)?;
                     (builder, format, false)
@@ -348,7 +348,7 @@ impl AskModel for PreparedModel {
                 Wire::Gemini(provider) => {
                     let mut body =
                         gemini_body(&request, self.thinking, provider.ask_config().temperature);
-                    tools::configure_gemini(&mut body, &request.search);
+                    tools::configure_gemini(&mut body, &request.tools);
                     (
                         provider.ask_request(&body),
                         LlmRequestFormat::ChatCompletions,
@@ -356,11 +356,11 @@ impl AskModel for PreparedModel {
                     )
                 }
             };
-            let search = matches!(request.search, AskModelSearch::Available);
+            let available = request.tools.available;
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(cancelled()),
-                result = tokio::time::timeout(STREAM_TOTAL, stream_with_tools(builder, format, gemini, search, progress)) => {
+                result = tokio::time::timeout(STREAM_TOTAL, stream_with_tools(builder, format, gemini, available, progress)) => {
                     result.map_err(|_| public_model_error(LLMError::Timeout))?
                 }
             }
@@ -529,14 +529,14 @@ async fn stream(
     gemini: bool,
     progress: AskModelSink,
 ) -> Result<AskModelCompletion, BackendError> {
-    stream_with_tools(builder, format, gemini, false, progress).await
+    stream_with_tools(builder, format, gemini, AskToolSet::default(), progress).await
 }
 
 async fn stream_with_tools(
     builder: reqwest::RequestBuilder,
     format: LlmRequestFormat,
     gemini: bool,
-    search: bool,
+    available: AskToolSet,
     progress: AskModelSink,
 ) -> Result<AskModelCompletion, BackendError> {
     let start = tokio::time::Instant::now();
@@ -546,7 +546,7 @@ async fn stream_with_tools(
         .map_err(|error| public_model_error(crate::polish::llm_error_from_reqwest(error)))?;
     if !response.status().is_success() {
         let status = response.status();
-        if search && matches!(status.as_u16(), 400 | 422 | 501) {
+        if available.any() && matches!(status.as_u16(), 400 | 422 | 501) {
             return Err(ask_error(
                 BackendErrorCode::Provider,
                 "askModelRejectedTools",
@@ -558,7 +558,7 @@ async fn stream_with_tools(
         );
     }
     let mut parser = TextEventStream::new(format).for_ask(gemini);
-    let mut tools = tools::SearchStream::new(format, gemini, search);
+    let mut tools = tools::ToolStream::new(format, gemini, available);
     let mut usage = ReportedTokens::default();
     let mut bytes = 0usize;
     let mut has_answer = false;

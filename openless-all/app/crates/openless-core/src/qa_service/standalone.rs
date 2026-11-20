@@ -14,6 +14,7 @@ use crate::usage_ledger::{
 };
 use crate::{Clock, TaskSpawner};
 
+mod calculator;
 mod model;
 mod prompt;
 #[cfg(test)]
@@ -22,7 +23,9 @@ mod tests;
 pub use model::ConfiguredAskModels;
 
 const MAX_ATTACHMENTS: usize = 4;
-const WEB_SEARCH_GUIDANCE: &str = "Consider using the web_search tool for every user question; prefer calling it to check relevant public facts, even if you think you already know the answer. Skip it for requests with no useful public query, such as a greeting or a purely creative task, or when searching would reveal private information. Send only a short public query, never private data.";
+const WEB_SEARCH_GUIDANCE: &str = "Consider web_search for every question. Prefer to verify time-sensitive or changeable public facts before answering, including news, weather, prices, schedules, rules, and current software versions or documentation. Also use it to verify relevant public facts or find sources when useful, even if you think you know the answer. Skip greetings, purely creative requests, and questions with no useful public query. Send only a short public query, never private data. If you also need a calculation based on current information, verify the inputs first.";
+const CALCULATOR_GUIDANCE: &str = "Use calculator for precise arithmetic, including large numbers, fractions, percentages (write them as /100), and integer powers. Call one tool at a time. Use the exact result where useful and label rounded decimals as approximate. If the tool reports an error, correct the expression or explain the limitation; do not invent a result.";
+const MAX_CALCULATIONS: usize = 3;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const EVENT_LIMIT: usize = 512;
 const EVENT_BYTES: usize = 2 * 1024 * 1024;
@@ -246,8 +249,19 @@ pub struct AskToolKey {
     pub tool_call_id: Uuid,
 }
 
+#[derive(Clone)]
 pub enum AskToolCall {
     WebSearch { public_query: String },
+    Calculate { expression: String },
+}
+
+impl AskToolCall {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::WebSearch { .. } => "web_search",
+            Self::Calculate { .. } => "calculator",
+        }
+    }
 }
 
 pub struct AskSearchRequest {
@@ -325,24 +339,44 @@ pub struct AskModelRequest {
     pub messages: Vec<AskModelMessage>,
     pub output_tokens: usize,
     pub deep_thinking: bool,
-    pub search: AskModelSearch,
+    pub tools: AskModelTools,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct AskToolSet {
+    pub search: bool,
+    pub calculator: bool,
+}
+
+impl AskToolSet {
+    fn any(self) -> bool {
+        self.search || self.calculator
+    }
+
+    fn allows(self, call: &AskToolCall) -> bool {
+        match call {
+            AskToolCall::WebSearch { .. } => self.search,
+            AskToolCall::Calculate { .. } => self.calculator,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
-pub enum AskModelSearch {
-    #[default]
-    Disabled,
-    Available,
-    Result {
-        call: AskModelToolCall,
-        output: String,
-    },
+pub struct AskModelTools {
+    pub available: AskToolSet,
+    pub results: Vec<AskToolResult>,
+}
+
+#[derive(Clone)]
+pub struct AskToolResult {
+    pub call: AskModelToolCall,
+    pub output: String,
 }
 
 #[derive(Clone)]
 pub struct AskModelToolCall {
-    pub query: String,
-    pub id: String,
+    pub tool: AskToolCall,
+    pub id: Option<String>,
     pub resume: Vec<serde_json::Value>,
 }
 
@@ -379,7 +413,7 @@ impl CallResult {
 pub trait AskModel: Send + Sync {
     fn label(&self) -> &AskModelLabel;
     fn capabilities(&self) -> AskModelCapabilities;
-    fn supports_search_tool(&self) -> bool {
+    fn supports_tools(&self) -> bool {
         false
     }
     fn stream(
@@ -1048,11 +1082,11 @@ impl StandaloneQaService {
             .context
             .context(key, cancellation.clone())
             .await?;
-        // Only a user-authored question may reach a model while its search tool is enabled.
-        // Sensitive material is supplied to the separate response request, with tools disabled.
+        // Keep private turn materials out of the web-enabled request. The separate
+        // response request can still use the local calculator.
         let question = material.question().to_owned();
         let search_enabled = !question.trim().is_empty()
-            && model.supports_search_tool()
+            && model.supports_tools()
             && self.0.deps.search.enabled().await;
         let private = material.has_attachments()
             || context.facts.iter().any(|fact| fact.name != "local_time");
@@ -1081,7 +1115,11 @@ impl StandaloneQaService {
                 conversation.contains_private_context,
             )
         };
-        let plan = prompt::Plan::new(material, context, search_enabled, history, summary);
+        let tools = AskToolSet {
+            search: search_enabled,
+            calculator: model.supports_tools(),
+        };
+        let plan = prompt::Plan::new(material, context, tools, history, summary);
         let (mut request, replacement) = plan
             .prepare(self, key, model.as_ref(), &cancellation)
             .await?;
@@ -1094,76 +1132,119 @@ impl StandaloneQaService {
             conversation.summary = Some(replacement);
         }
         self.activity(key, AskActivity::Generating);
-        if !search_enabled {
-            self.call(
-                key,
-                model.as_ref(),
-                request,
-                AskCallPurpose::Answer,
-                cancellation,
-            )
-            .await?
-            .require_text()?;
-            return Ok(());
-        }
-        let (first, purpose) = if private {
-            (AskModelRequest {
-                instructions: format!("{WEB_SEARCH_GUIDANCE}\nIf no useful public search applies, reply no_search. Do not answer the question in this pass."),
-                messages: vec![AskModelMessage { role: AskModelRole::User, parts: vec![AskModelPart::Text(question)] }],
+        let mut search = search_enabled && !private;
+        if search_enabled && private {
+            let decision = AskModelRequest {
+                instructions: format!(
+                    "{WEB_SEARCH_GUIDANCE}\nIf no useful public search applies, reply no_search. Do not answer the question in this pass."
+                ),
+                messages: vec![AskModelMessage {
+                    role: AskModelRole::User,
+                    parts: vec![AskModelPart::Text(question)],
+                }],
                 output_tokens: request.output_tokens.min(512),
                 deep_thinking: false,
-                search: AskModelSearch::Available,
-            }, AskCallPurpose::SearchDecision)
-        } else {
-            let mut first = request.clone();
-            first.instructions.push('\n');
-            first.instructions.push_str(WEB_SEARCH_GUIDANCE);
-            first.search = AskModelSearch::Available;
-            (first, AskCallPurpose::Answer)
-        };
-        match self
-            .call(key, model.as_ref(), first, purpose, cancellation.clone())
-            .await
-        {
-            Ok(CallResult::Tool(call)) => {
-                let output = self
-                    .dispatch_tool(
-                        key,
-                        AskToolCall::WebSearch {
-                            public_query: call.query.clone(),
-                        },
-                        cancellation.clone(),
-                    )
-                    .await?;
-                request.search = AskModelSearch::Result { call, output };
+                tools: AskModelTools {
+                    available: AskToolSet { search: true, calculator: false },
+                    ..Default::default()
+                },
+            };
+            match self
+                .call(
+                    key,
+                    model.as_ref(),
+                    decision,
+                    AskCallPurpose::SearchDecision,
+                    cancellation.clone(),
+                )
+                .await
+            {
+                Ok(CallResult::Tool(call)) => {
+                    let output = self.run_tool(key, &call, &cancellation).await?;
+                    request.tools.results.push(AskToolResult { call, output });
+                }
+                Err(error) if error.code == BackendErrorCode::Cancelled => return Err(error),
+                _ => {}
             }
-            Ok(CallResult::Text(_)) if !private => return Ok(()),
-            Ok(CallResult::Text(_)) => {}
-            Err(error) if error.message == "askModelRejectedTools" => {}
-            Err(error) if private && error.code != BackendErrorCode::Cancelled => {}
-            Err(error) => return Err(error),
         }
-        prompt::check_tool_budget(&request, model.capabilities())?;
-        self.activity(key, AskActivity::Generating);
-        self.call(
-            key,
-            model.as_ref(),
-            request,
-            AskCallPurpose::Answer,
-            cancellation,
-        )
-        .await?
-        .require_text()?;
-        Ok(())
+
+        let mut calculations = if tools.calculator {
+            MAX_CALCULATIONS
+        } else {
+            0
+        };
+        let base_instructions = request.instructions.clone();
+        loop {
+            request.tools.available = AskToolSet {
+                search,
+                calculator: calculations > 0,
+            };
+            request.instructions.clone_from(&base_instructions);
+            if search {
+                request.instructions.push('\n');
+                request.instructions.push_str(WEB_SEARCH_GUIDANCE);
+            }
+            if calculations > 0 {
+                request.instructions.push('\n');
+                request.instructions.push_str(CALCULATOR_GUIDANCE);
+            }
+            prompt::check_tool_budget(&request, model.capabilities())?;
+            self.activity(key, AskActivity::Generating);
+            match self
+                .call(
+                    key,
+                    model.as_ref(),
+                    request.clone(),
+                    AskCallPurpose::Answer,
+                    cancellation.clone(),
+                )
+                .await
+            {
+                Ok(CallResult::Text(_)) => return Ok(()),
+                Ok(CallResult::Tool(call)) => {
+                    match &call.tool {
+                        AskToolCall::WebSearch { .. } => search = false,
+                        AskToolCall::Calculate { .. } => calculations -= 1,
+                    }
+                    let output = self.run_tool(key, &call, &cancellation).await?;
+                    request.tools.results.push(AskToolResult { call, output });
+                }
+                Err(error)
+                    if error.message == "askModelRejectedTools"
+                        && request.tools.available.any() =>
+                {
+                    search = false;
+                    calculations = 0;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
-    async fn dispatch_tool(
+    async fn run_tool(
         &self,
         key: AskTurnKey,
-        call: AskToolCall,
+        call: &AskModelToolCall,
+        cancellation: &AskCancellation,
+    ) -> Result<String, BackendError> {
+        if cancellation.is_cancelled() {
+            return Err(cancelled());
+        }
+        match &call.tool {
+            AskToolCall::WebSearch { public_query } => {
+                self.search_web(key, public_query.clone(), cancellation.clone())
+                    .await
+            }
+            AskToolCall::Calculate { expression } => Ok(calculator::calculate(expression)),
+        }
+    }
+
+    async fn search_web(
+        &self,
+        key: AskTurnKey,
+        public_query: String,
         cancellation: AskCancellation,
     ) -> Result<String, BackendError> {
-        let AskToolCall::WebSearch { public_query } = call;
         let tool_call_id = Uuid::new_v4();
         self.update(key, |turn| {
             turn.search_open = true;
@@ -1265,7 +1346,7 @@ impl StandaloneQaService {
         purpose: AskCallPurpose,
         cancellation: AskCancellation,
     ) -> Result<CallResult, BackendError> {
-        let tool_allowed = matches!(request.search, AskModelSearch::Available);
+        let available = request.tools.available;
         let call_id = Uuid::new_v4();
         let label = model.label().clone();
         let text = Arc::new(Mutex::new(Some(String::new())));
@@ -1367,7 +1448,9 @@ impl StandaloneQaService {
                 return Err(cancelled());
             }
             match completion {
-                AskModelCompletion::ToolCall(call) if tool_allowed => Ok(CallResult::Tool(call)),
+                AskModelCompletion::ToolCall(call) if available.allows(&call.tool) => {
+                    Ok(CallResult::Tool(call))
+                }
                 AskModelCompletion::ToolCall(_) => Err(ask_error(
                     BackendErrorCode::Provider,
                     "askUnexpectedToolCall",

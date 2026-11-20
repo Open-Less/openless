@@ -1,13 +1,11 @@
-//! Provider-native function calling. Search output is returned as a tool result, not prompt text.
+//! Provider-native function calls and turn-scoped results.
 
 use serde_json::{json, Value};
 
-use crate::ask::{AskModelSearch, AskModelToolCall};
+use crate::ask::{AskModelToolCall, AskModelTools, AskToolCall, AskToolResult, AskToolSet};
 use crate::llm_protocol::LlmRequestFormat;
 use crate::polish::LLMError;
 
-const FUNCTION: &str = "web_search";
-const DESCRIPTION: &str = "Search the public web when current or external facts are needed. Only use a short public query. Do not include private material, identifiers, account data, passwords, or quoted content in the query.";
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_RESUME_BYTES: usize = 32 * 1024;
 
@@ -15,78 +13,95 @@ fn invalid() -> LLMError {
     LLMError::ParseError("askInvalidToolCall".into())
 }
 
-pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, search: &AskModelSearch) {
-    match (format, search) {
-        (LlmRequestFormat::ChatCompletions, AskModelSearch::Available) => {
-            body["tools"] = json!([{"type":"function","function":{
-                "name":FUNCTION,"description":DESCRIPTION,"parameters":schema()
-            }}]);
-            body["tool_choice"] = json!("auto");
-        }
-        (LlmRequestFormat::Responses, AskModelSearch::Available) => {
-            body["store"] = json!(false);
+fn definitions(available: AskToolSet) -> impl Iterator<Item = (&'static str, &'static str, Value)> {
+    let schema = |field: &str| {
+        let mut properties = serde_json::Map::new();
+        properties.insert(field.to_owned(), json!({"type":"string"}));
+        json!({"type":"object", "properties":properties, "required":[field], "additionalProperties":false})
+    };
+    [
+        available.search.then(|| (
+            "web_search",
+            "Search for public facts, especially time-sensitive or changeable information. Use only a short public query. Never include private material, identifiers, account data, or quotes.",
+            schema("query"),
+        )),
+        available.calculator.then(|| (
+            "calculator",
+            "Evaluate exact arithmetic locally. Use decimal or scientific notation, parentheses, + - * / and ^ with integer exponents. Write percentages as /100. Returns an exact integer or fraction and up to 50 decimal places; no functions, variables, units or code.",
+            schema("expression"),
+        )),
+    ].into_iter().flatten()
+}
+
+pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, tools: &AskModelTools) {
+    if tools.available.any() {
+        body["tools"] = Value::Array(
+            definitions(tools.available)
+                .map(|(name, description, schema)| match format {
+                    LlmRequestFormat::ChatCompletions => json!({"type":"function","function":{
+                        "name":name,"description":description,"parameters":schema
+                    }}),
+                    LlmRequestFormat::Responses => json!({"type":"function","name":name,
+                    "description":description,"parameters":schema,"strict":true}),
+                    LlmRequestFormat::Messages => {
+                        json!({"name":name,"description":description,"input_schema":schema})
+                    }
+                })
+                .collect(),
+        );
+        body["tool_choice"] = match format {
+            LlmRequestFormat::Messages => json!({"type":"auto","disable_parallel_tool_use":true}),
+            _ => json!("auto"),
+        };
+        if format == LlmRequestFormat::Responses {
             body["include"] = json!(["reasoning.encrypted_content"]);
-            body["tools"] = json!([{"type":"function","name":FUNCTION,"description":DESCRIPTION,
-                "parameters":schema(), "strict":true}]);
-            body["tool_choice"] = json!("auto");
             body["parallel_tool_calls"] = json!(false);
         }
-        (LlmRequestFormat::ChatCompletions, AskModelSearch::Result { call, output }) => {
-            if let Some(messages) = body["messages"].as_array_mut() {
-                messages.extend(call.resume.iter().cloned());
-                messages.push(json!({"role":"tool","tool_call_id":call.id,"content":output}));
-            }
+    }
+    if format == LlmRequestFormat::Responses && (tools.available.any() || !tools.results.is_empty())
+    {
+        body["store"] = json!(false);
+    }
+    let key = if format == LlmRequestFormat::Responses {
+        "input"
+    } else {
+        "messages"
+    };
+    if let Some(messages) = body[key].as_array_mut() {
+        for AskToolResult { call, output } in &tools.results {
+            messages.extend(call.resume.iter().cloned());
+            messages.push(match format {
+                LlmRequestFormat::ChatCompletions => json!({"role":"tool","tool_call_id":call.id,"content":output}),
+                LlmRequestFormat::Responses => json!({"type":"function_call_output","call_id":call.id,"output":output}),
+                LlmRequestFormat::Messages => json!({"role":"user","content":[{"type":"tool_result","tool_use_id":call.id,"content":output}]}),
+            });
         }
-        (LlmRequestFormat::Responses, AskModelSearch::Result { call, output }) => {
-            body["store"] = json!(false);
-            if let Some(input) = body["input"].as_array_mut() {
-                input.extend(call.resume.iter().cloned());
-                input
-                    .push(json!({"type":"function_call_output","call_id":call.id,"output":output}));
-            }
-        }
-        (LlmRequestFormat::Messages, AskModelSearch::Available) => {
-            body["tools"] =
-                json!([{"name":FUNCTION,"description":DESCRIPTION,"input_schema":schema()}]);
-            body["tool_choice"] = json!({"type":"auto","disable_parallel_tool_use":true});
-        }
-        (LlmRequestFormat::Messages, AskModelSearch::Result { call, output }) => {
-            if let Some(messages) = body["messages"].as_array_mut() {
-                messages.extend(call.resume.iter().cloned());
-                messages.push(json!({"role":"user","content":[{"type":"tool_result","tool_use_id":call.id,"content":output}]}));
-            }
-        }
-        _ => {}
     }
 }
 
-pub(super) fn configure_gemini(body: &mut Value, search: &AskModelSearch) {
-    match search {
-        AskModelSearch::Available => {
-            body["tools"] = json!([{"functionDeclarations":[{"name":FUNCTION,"description":DESCRIPTION,"parametersJsonSchema":schema()}]}]);
-        }
-        AskModelSearch::Result { call, output } => {
-            if let Some(contents) = body["contents"].as_array_mut() {
-                contents.extend(call.resume.iter().cloned());
-                let mut response = json!({"name":FUNCTION,"response":{"result":output}});
-                if call.id != FUNCTION {
-                    response["id"] = json!(call.id);
-                }
-                contents.push(json!({"role":"user","parts":[{"functionResponse":response}]}));
+pub(super) fn configure_gemini(body: &mut Value, tools: &AskModelTools) {
+    if tools.available.any() {
+        let declarations: Vec<_> = definitions(tools.available).map(|(name, description, schema)| {
+            json!({"name":name,"description":description,"parametersJsonSchema":schema})
+        }).collect();
+        body["tools"] = json!([{"functionDeclarations":declarations}]);
+    }
+    if let Some(contents) = body["contents"].as_array_mut() {
+        for AskToolResult { call, output } in &tools.results {
+            contents.extend(call.resume.iter().cloned());
+            let mut response = json!({"name":call.tool.name(),"response":{"result":output}});
+            if let Some(id) = &call.id {
+                response["id"] = json!(id);
             }
+            contents.push(json!({"role":"user","parts":[{"functionResponse":response}]}));
         }
-        AskModelSearch::Disabled => {}
     }
 }
 
-fn schema() -> Value {
-    json!({"type":"object", "properties":{"query":{"type":"string"}}, "required":["query"], "additionalProperties":false})
-}
-
-pub(super) struct SearchStream {
+pub(super) struct ToolStream {
     format: LlmRequestFormat,
     gemini: bool,
-    enabled: bool,
+    available: AskToolSet,
     id: String,
     name: String,
     args: String,
@@ -96,12 +111,12 @@ pub(super) struct SearchStream {
     call: Option<AskModelToolCall>,
 }
 
-impl SearchStream {
-    pub(super) fn new(format: LlmRequestFormat, gemini: bool, enabled: bool) -> Self {
+impl ToolStream {
+    pub(super) fn new(format: LlmRequestFormat, gemini: bool, available: AskToolSet) -> Self {
         Self {
             format,
             gemini,
-            enabled,
+            available,
             id: String::new(),
             name: String::new(),
             args: String::new(),
@@ -113,7 +128,7 @@ impl SearchStream {
     }
 
     pub(super) fn observe(&mut self, value: &Value, kind: &str) -> Result<bool, LLMError> {
-        if !self.enabled {
+        if !self.available.any() {
             return Ok(false);
         }
         if self.gemini {
@@ -140,7 +155,8 @@ impl SearchStream {
                             .cloned()
                             .collect();
                         self.call = Some(finish_call(
-                            item["call_id"].as_str(),
+                            self.available,
+                            Some(item["call_id"].as_str().ok_or_else(invalid)?),
                             item["name"].as_str(),
                             args,
                             resume,
@@ -162,7 +178,8 @@ impl SearchStream {
                         return Err(invalid());
                     }
                     self.call = Some(finish_call(
-                        func["id"].as_str().or(Some(FUNCTION)),
+                        self.available,
+                        func["id"].as_str(),
                         func["name"].as_str(),
                         &func["args"].to_string(),
                         vec![json!({"role":"model","parts":[part]})],
@@ -236,6 +253,7 @@ impl SearchStream {
                 let name = block["name"].as_str().ok_or_else(invalid)?.to_owned();
                 let args = block["input"].to_string();
                 self.call = Some(finish_call(
+                    self.available,
                     Some(&id),
                     Some(&name),
                     &args,
@@ -311,6 +329,7 @@ impl SearchStream {
             assistant["reasoning_content"] = json!(self.reasoning);
         }
         self.call = Some(finish_call(
+            self.available,
             Some(&self.id),
             Some(&self.name),
             &self.args,
@@ -333,15 +352,13 @@ fn append_bounded(current: &mut String, chunk: Option<&str>, max: usize) {
 }
 
 fn finish_call(
+    available: AskToolSet,
     id: Option<&str>,
     name: Option<&str>,
     args: &str,
     resume: Vec<Value>,
 ) -> Result<AskModelToolCall, LLMError> {
-    let id = id
-        .filter(|id| !id.is_empty() && id.len() <= 256)
-        .ok_or_else(invalid)?;
-    if name != Some(FUNCTION)
+    if id.is_some_and(|id| id.is_empty() || id.len() > 256)
         || args.len() > MAX_ARGUMENT_BYTES
         || json!(&resume).to_string().len() > MAX_RESUME_BYTES
     {
@@ -349,20 +366,37 @@ fn finish_call(
     }
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Arguments {
+    struct Query {
         query: String,
     }
-    let args: Arguments = serde_json::from_str(args).map_err(|_| invalid())?;
-    let query = args.query.trim();
-    if query.is_empty()
-        || query.chars().count() > crate::ask_search::MAX_PUBLIC_QUERY_CHARS
-        || query.chars().any(char::is_control)
-    {
-        return Err(invalid());
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Expression {
+        expression: String,
     }
+    let tool = match name {
+        Some("web_search") if available.search => {
+            let Query { query } = serde_json::from_str(args).map_err(|_| invalid())?;
+            let query = query.trim();
+            if query.is_empty()
+                || query.chars().count() > crate::ask_search::MAX_PUBLIC_QUERY_CHARS
+                || query.chars().any(char::is_control)
+            {
+                return Err(invalid());
+            }
+            AskToolCall::WebSearch {
+                public_query: query.to_owned(),
+            }
+        }
+        Some("calculator") if available.calculator => {
+            let Expression { expression } = serde_json::from_str(args).map_err(|_| invalid())?;
+            AskToolCall::Calculate { expression }
+        }
+        _ => return Err(invalid()),
+    };
     Ok(AskModelToolCall {
-        query: query.to_owned(),
-        id: id.to_owned(),
+        tool,
+        id: id.map(str::to_owned),
         resume,
     })
 }
@@ -413,8 +447,15 @@ mod tests {
         ];
         for (format, gemini, frames, key) in cases {
             let mut parser = TextEventStream::new(format).for_ask(gemini);
-            let mut observer = SearchStream::new(format, gemini, true);
-            for frame in frames {
+            let mut observer = ToolStream::new(
+                format,
+                gemini,
+                AskToolSet {
+                    search: true,
+                    calculator: true,
+                },
+            );
+            for frame in &frames {
                 parser
                     .push(format!("data: {frame}\n\n").as_bytes())
                     .unwrap();
@@ -429,11 +470,19 @@ mod tests {
             {}
             parser.finish().unwrap();
             let call = observer.take().unwrap();
-            assert_eq!(call.query, "public facts");
+            assert!(
+                matches!(&call.tool, AskToolCall::WebSearch { public_query } if public_query == "public facts")
+            );
             let mut body = json!({key:[]});
-            let resume = AskModelSearch::Result {
-                call,
-                output: "tool evidence".into(),
+            let resume = AskModelTools {
+                available: AskToolSet {
+                    search: false,
+                    calculator: true,
+                },
+                results: vec![AskToolResult {
+                    call,
+                    output: "tool evidence".into(),
+                }],
             };
             if gemini {
                 configure_gemini(&mut body, &resume);
@@ -443,6 +492,50 @@ mod tests {
             assert_eq!(body[key].as_array().unwrap().len(), 2);
             let last = body[key][1].to_string();
             assert!(last.contains("call-a") && last.contains("tool evidence"));
+            let mut calculator_only = ToolStream::new(format, gemini, resume.available);
+            let mut parser = TextEventStream::new(format).for_ask(gemini);
+            for frame in &frames {
+                let frame = frame
+                    .to_string()
+                    .replace("web_search", "calculator")
+                    .replace("query", "expression")
+                    .replace("public facts", "0.1 + 0.2");
+                parser
+                    .push(format!("data: {frame}\n\n").as_bytes())
+                    .unwrap();
+            }
+            if format == LlmRequestFormat::ChatCompletions && !gemini {
+                parser.push(b"data: [DONE]\n\n").unwrap();
+            }
+            while parser
+                .next_with_observer(|value, kind| calculator_only.observe(value, kind))
+                .unwrap()
+                .is_some()
+            {}
+            parser.finish().unwrap();
+            let call = calculator_only.take().unwrap();
+            assert!(
+                matches!(&call.tool, AskToolCall::Calculate { expression } if expression == "0.1 + 0.2")
+            );
+            let mut body = json!({key:[]});
+            let mut end = resume;
+            end.available = AskToolSet::default();
+            end.results.push(AskToolResult {
+                call,
+                output: "0.3".into(),
+            });
+            if gemini {
+                configure_gemini(&mut body, &end);
+                assert_eq!(
+                    body[key][3]["parts"][0]["functionResponse"]["name"],
+                    "calculator"
+                );
+            } else {
+                configure(&mut body, format, &end);
+            }
+            assert_eq!(body[key].as_array().unwrap().len(), 4);
+            assert!(body[key][3].to_string().contains("0.3"));
+            assert!(body.get("tools").is_none());
         }
     }
 }
