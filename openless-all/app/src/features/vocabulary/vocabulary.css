@@ -30,28 +30,25 @@
 
 .ol-vocab-search-actions > .ol-search {
   flex: 0 1 auto;
-  min-inline-size: 36px;
+  min-inline-size: var(--ol-field-icon-size);
 }
 
 .ol-vocab-word-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: var(--ol-field-icon-size) minmax(0, 1fr);
+  align-items: center;
   gap: 8px;
   min-inline-size: 0;
   max-inline-size: 100%;
 }
 
-.ol-vocab-word-actions > button {
+.ol-vocab-word-actions > .ol-vocab-delete-selected {
   min-inline-size: 0;
-  min-block-size: 36px;
-  justify-content: center;
+  min-block-size: var(--ol-field-icon-size);
   text-align: center;
   line-height: 1.25;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-
-.ol-vocab-word-actions > .ol-vocab-delete-selected {
   display: grid;
   place-items: center;
   justify-content: stretch;

@@ -15,6 +15,7 @@
   --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
   --ol-field-bg: var(--ol-select-trigger-bg);
+  --ol-field-icon-size: 36px;
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
   /* Shared palette（shadcn zinc） */

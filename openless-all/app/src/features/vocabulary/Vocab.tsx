@@ -76,17 +76,19 @@ export function Vocab() {
             expandTo="right"
           />
           <div className="ol-vocab-word-actions">
-            <Btn
-              variant="primary"
-              icon="plus"
+            <button
+              type="button"
+              className="ol-field ol-field-icon-action ol-pressable"
+              aria-label={t('vocab.newWord')}
+              title={t('vocab.newWord')}
               onClick={() => {
                 setNewWordOpen(true);
                 setNewWordDraft('');
                 setNewWordTemplateIds([]);
               }}
             >
-              <span>{t('vocab.newWord')}</span>
-            </Btn>
+              <Icon name="plus" size={15} />
+            </button>
             <button
               type="button"
               className="ol-vocab-delete-selected"
@@ -523,7 +525,6 @@ interface ModalShellProps {
   children: React.ReactNode;
 }
 
-/** Page-level mini modal: backdrop fade-in + card spring pop-out; closes on Esc or backdrop click. */
 function ModalShell({ title, desc, closing = false, onClose, children }: ModalShellProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -535,6 +536,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
       width="min(440px, 100%)"
       style={{ padding: 20 }}
       motionVariant="pop"
+      backdrop="blur-only"
       cardClassName="ol-vocab-dialog"
       labelledBy={titleId}
       describedBy={desc ? descId : undefined}

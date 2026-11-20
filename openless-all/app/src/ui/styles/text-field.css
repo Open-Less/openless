@@ -21,6 +21,20 @@
 .ol-field:focus-within {
   border-color: var(--ol-blue);
 }
+.ol-field.ol-field-icon-action {
+  --ol-corner-radius: calc(var(--ol-field-icon-size) / 2);
+  inline-size: var(--ol-field-icon-size);
+  block-size: var(--ol-field-icon-size);
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  corner-shape: round;
+  cursor: pointer;
+}
+.ol-field-icon-action:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: -2px;
+}
 .ol-field:has(.ol-field-control[aria-invalid='true']) {
   border-color: var(--ol-err);
 }

@@ -51,6 +51,13 @@ for (const narrow of [false, true]) {
     const searchBefore = await bounds(search);
     const filtersBefore = await bounds(filters);
     const selectBefore = await bounds(select);
+    expect(addBefore.width).toBeCloseTo(searchBefore.width, 0);
+    expect(addBefore.height).toBeCloseTo(searchBefore.height, 0);
+    await expect(add).toHaveText('');
+    await expect(add).toHaveCSS(
+      'background-color',
+      await search.locator('..').evaluate((node) => getComputedStyle(node).backgroundColor),
+    );
     expect(addBefore.x).toBeGreaterThanOrEqual(searchBefore.x + searchBefore.width);
     expect(selectBefore.x).toBeGreaterThanOrEqual(filtersBefore.x + filtersBefore.width);
     expect(selectBefore.height).toBeCloseTo(filtersBefore.height, 0);
@@ -74,9 +81,8 @@ for (const narrow of [false, true]) {
     );
     const a = await bounds(add);
     const b = await bounds(remove);
-    expect(a.width).toBeCloseTo(b.width, 0);
-    expect(a.height).toBeCloseTo(b.height, 0);
-    expect(a.y).toBeCloseTo(b.y, 0);
+    expect(a).toEqual(addBefore);
+    expect(a.y + a.height / 2).toBeCloseTo(b.y + b.height / 2, 0);
     expect(b.x).toBeGreaterThanOrEqual(0);
     expect(a.x + a.width).toBeLessThanOrEqual(rightEdge);
     for (const button of [add, remove]) {
@@ -117,9 +123,7 @@ for (const narrow of [false, true]) {
   });
 }
 
-test('dark add-word dialog uses a muted card shadow and retains the input focus ring', async ({
-  page,
-}) => {
+test('dark add-word dialog blurs directly and retains the input focus ring', async ({ page }) => {
   await page.goto('/?os=mac');
   await page
     .locator('.ol-sidebar-surface nav')
@@ -132,6 +136,15 @@ test('dark add-word dialog uses a muted card shadow and retains the input focus 
 
   const dialog = page.getByRole('dialog', { name: '添加新词' });
   await expect(dialog).toBeVisible();
+  const overlay = dialog.locator('..');
+  await expect(overlay).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(overlay).toHaveCSS('backdrop-filter', 'blur(6px)');
+  expect(
+    await overlay.evaluate((node) => ({
+      overlayAnimations: node.getAnimations().length,
+      extraBackdrop: getComputedStyle(node, '::before').content,
+    })),
+  ).toEqual({ overlayAnimations: 0, extraBackdrop: 'none' });
   const shadow = await dialog.evaluate((el) => getComputedStyle(el).boxShadow);
   expect(shadow).not.toBe('none');
   expect(shadow).not.toContain('inset');

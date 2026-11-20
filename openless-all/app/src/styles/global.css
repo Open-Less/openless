@@ -709,10 +709,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
    展开 220px 搜索框；放大镜图标始终贴右缘不动，输入文字在左侧淡入。
    展开/收起共用同一条 width 过渡，两个方向都有动画（从哪来回到哪去）。 */
 .ol-field.ol-search {
-  width: 36px;
-  height: 36px;
+  width: var(--ol-field-icon-size);
+  height: var(--ol-field-icon-size);
   overflow: hidden;
-  --ol-corner-radius: 18px;
+  --ol-corner-radius: calc(var(--ol-field-icon-size) / 2);
   cursor: default;
   padding: 0;
   gap: 0;
@@ -767,8 +767,8 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-search-icon {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: var(--ol-field-icon-size);
+  height: var(--ol-field-icon-size);
   border: 0;
   background: transparent;
   color: var(--ol-ink-2);
