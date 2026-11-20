@@ -128,7 +128,7 @@ export function UsageServices({ dashboard }: { dashboard: Dashboard }) {
 
   return (
     <div className="ol-grid-12 ol-usage-services-grid">
-      <Card className="ol-usage-panel-card" padding={0}>
+      <Card className="ol-usage-panel-card" padding={14}>
         <div className="ol-usage-card-header">
           <h2 className="ol-usage-card-title">{text('模型缓存报告', 'Model cache reports')}</h2>
           {!ledgerUnavailable && cacheGroups.length > 0 && (
@@ -137,80 +137,82 @@ export function UsageServices({ dashboard }: { dashboard: Dashboard }) {
             </span>
           )}
         </div>
-        <div
-          className="ol-usage-panel-scroll ol-thinscroll"
-          role="region"
-          aria-label={text('模型缓存报告列表', 'Model cache report list')}
-          tabIndex={0}
-        >
-          {ledgerUnavailable ? (
-            <div className="ol-usage-empty">
-              {text('本地账本暂不可用。', 'The local ledger is unavailable.')}
-            </div>
-          ) : cacheGroups.length === 0 ? (
-            <div className="ol-usage-empty">
-              {text('尚无模型缓存报告。', 'No model cache reports yet.')}
-            </div>
-          ) : (
-            cacheGroups.map((group) => {
-              const metaParts = [serviceName(group.service), group.channel].filter(Boolean);
-              const ratePct =
-                group.rate === null ? 0 : Math.min(100, Math.max(0, group.rate * 100));
-              return (
-                <div key={group.key} className="ol-usage-cache-row">
-                  <div className="ol-usage-cache-main">
-                    <div className="ol-usage-model-name">
-                      {group.model ?? text('未知模型', 'Unknown model')}
+        <div className="ol-usage-inset-frame">
+          <div
+            className="ol-usage-panel-scroll ol-thinscroll"
+            role="region"
+            aria-label={text('模型缓存报告列表', 'Model cache report list')}
+            tabIndex={0}
+          >
+            {ledgerUnavailable ? (
+              <div className="ol-usage-empty">
+                {text('本地账本暂不可用。', 'The local ledger is unavailable.')}
+              </div>
+            ) : cacheGroups.length === 0 ? (
+              <div className="ol-usage-empty">
+                {text('尚无模型缓存报告。', 'No model cache reports yet.')}
+              </div>
+            ) : (
+              cacheGroups.map((group) => {
+                const metaParts = [serviceName(group.service), group.channel].filter(Boolean);
+                const ratePct =
+                  group.rate === null ? 0 : Math.min(100, Math.max(0, group.rate * 100));
+                return (
+                  <div key={group.key} className="ol-usage-cache-row">
+                    <div className="ol-usage-cache-main">
+                      <div className="ol-usage-model-name">
+                        {group.model ?? text('未知模型', 'Unknown model')}
+                      </div>
+                      <div className="ol-usage-cache-meta">
+                        <span>{metaParts.join(' · ')}</span>
+                        {group.protocol && (
+                          <Pill size="sm" tone="outline">
+                            {protocolName(group.protocol)}
+                          </Pill>
+                        )}
+                      </div>
                     </div>
-                    <div className="ol-usage-cache-meta">
-                      <span>{metaParts.join(' · ')}</span>
-                      {group.protocol && (
-                        <Pill size="sm" tone="outline">
-                          {protocolName(group.protocol)}
-                        </Pill>
-                      )}
-                    </div>
-                  </div>
-                  <div className="ol-usage-cache-stat">
-                    <div
-                      className="ol-usage-cache-rate"
-                      data-empty={group.rate === null || undefined}
-                      title={
-                        group.rate === null
-                          ? text(
-                              '缺少可比较的缓存数据（含旧记录）',
-                              'Comparable cache data unavailable, including legacy records',
-                            )
-                          : text(
-                              '输入 Token 缓存占比，非请求命中比例',
-                              'Cached input token share, not the fraction of requests with a hit',
-                            )
-                      }
-                    >
-                      {cachePercent(group.rate)}
-                    </div>
-                    <div className="ol-usage-meter" aria-hidden="true">
+                    <div className="ol-usage-cache-stat">
                       <div
-                        className="ol-usage-meter-fill"
-                        data-active={group.rate !== null && group.rate > 0 ? 'true' : undefined}
-                        style={{ width: `${ratePct}%` }}
-                      />
-                    </div>
-                    <div className="ol-usage-cache-sub">
-                      {text(
-                        `${group.comparableRecords}/${group.totalRecords} 条可比较报告`,
-                        `${group.comparableRecords}/${group.totalRecords} comparable reports`,
-                      )}
+                        className="ol-usage-cache-rate"
+                        data-empty={group.rate === null || undefined}
+                        title={
+                          group.rate === null
+                            ? text(
+                                '缺少可比较的缓存数据（含旧记录）',
+                                'Comparable cache data unavailable, including legacy records',
+                              )
+                            : text(
+                                '输入 Token 缓存占比，非请求命中比例',
+                                'Cached input token share, not the fraction of requests with a hit',
+                              )
+                        }
+                      >
+                        {cachePercent(group.rate)}
+                      </div>
+                      <div className="ol-usage-meter" aria-hidden="true">
+                        <div
+                          className="ol-usage-meter-fill"
+                          data-active={group.rate !== null && group.rate > 0 ? 'true' : undefined}
+                          style={{ width: `${ratePct}%` }}
+                        />
+                      </div>
+                      <div className="ol-usage-cache-sub">
+                        {text(
+                          `${group.comparableRecords}/${group.totalRecords} 条可比较报告`,
+                          `${group.comparableRecords}/${group.totalRecords} comparable reports`,
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })
-          )}
+                );
+              })
+            )}
+          </div>
         </div>
       </Card>
 
-      <Card className="ol-usage-panel-card" padding={0}>
+      <Card className="ol-usage-panel-card" padding={14}>
         <div className="ol-usage-card-header">
           <h2 className="ol-usage-card-title">{text('服务与用途', 'Services and purposes')}</h2>
           {!historyUnavailable && totalServiceCalls > 0 && (
@@ -219,59 +221,61 @@ export function UsageServices({ dashboard }: { dashboard: Dashboard }) {
             </span>
           )}
         </div>
-        <div
-          className="ol-usage-panel-scroll ol-thinscroll"
-          role="region"
-          aria-label={text('服务与用途列表', 'Services and purposes list')}
-          tabIndex={0}
-        >
-          {historyUnavailable ? (
-            <div className="ol-usage-empty">
-              {text('历史记录暂不可用。', 'Retained history is unavailable.')}
-            </div>
-          ) : serviceItems.length === 0 ? (
-            <div className="ol-usage-empty">
-              {text('没有可归属服务的记录。', 'No attributable records.')}
-            </div>
-          ) : (
-            serviceItems.map((item) => {
-              const barPct = Math.max(4, item.share * 100);
-              const sharePct = Math.round(item.share * 100);
-              return (
-                <div key={item.key} className="ol-usage-service-row">
-                  <div className="ol-usage-service-top">
-                    <div className="ol-usage-service-id">
-                      <Pill size="sm" tone={stageTone(item.stageKind)}>
-                        {item.stage}
-                      </Pill>
-                      <span className="ol-usage-service-target">
-                        <span className="ol-usage-service-provider">{item.provider}</span>
-                        {item.model && (
-                          <>
-                            <span className="ol-usage-sep" aria-hidden="true">
-                              ·
-                            </span>
-                            <span className="ol-usage-service-model">{item.model}</span>
-                          </>
-                        )}
-                      </span>
+        <div className="ol-usage-inset-frame">
+          <div
+            className="ol-usage-panel-scroll ol-thinscroll"
+            role="region"
+            aria-label={text('服务与用途列表', 'Services and purposes list')}
+            tabIndex={0}
+          >
+            {historyUnavailable ? (
+              <div className="ol-usage-empty">
+                {text('历史记录暂不可用。', 'Retained history is unavailable.')}
+              </div>
+            ) : serviceItems.length === 0 ? (
+              <div className="ol-usage-empty">
+                {text('没有可归属服务的记录。', 'No attributable records.')}
+              </div>
+            ) : (
+              serviceItems.map((item) => {
+                const barPct = Math.max(4, item.share * 100);
+                const sharePct = Math.round(item.share * 100);
+                return (
+                  <div key={item.key} className="ol-usage-service-row">
+                    <div className="ol-usage-service-top">
+                      <div className="ol-usage-service-id">
+                        <Pill size="sm" tone={stageTone(item.stageKind)}>
+                          {item.stage}
+                        </Pill>
+                        <span className="ol-usage-service-target">
+                          <span className="ol-usage-service-provider">{item.provider}</span>
+                          {item.model && (
+                            <>
+                              <span className="ol-usage-sep" aria-hidden="true">
+                                ·
+                              </span>
+                              <span className="ol-usage-service-model">{item.model}</span>
+                            </>
+                          )}
+                        </span>
+                      </div>
+                      <div className="ol-usage-service-count">
+                        <strong>{item.count}</strong>
+                        <span>{sharePct}%</span>
+                      </div>
                     </div>
-                    <div className="ol-usage-service-count">
-                      <strong>{item.count}</strong>
-                      <span>{sharePct}%</span>
+                    <div className="ol-usage-meter" aria-hidden="true">
+                      <div
+                        className="ol-usage-meter-fill"
+                        data-active="true"
+                        style={{ width: `${barPct}%` }}
+                      />
                     </div>
                   </div>
-                  <div className="ol-usage-meter" aria-hidden="true">
-                    <div
-                      className="ol-usage-meter-fill"
-                      data-active="true"
-                      style={{ width: `${barPct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })
-          )}
+                );
+              })
+            )}
+          </div>
         </div>
       </Card>
     </div>
@@ -285,7 +289,7 @@ export function UsageHistory({ dashboard }: { dashboard: Dashboard }) {
 
   return (
     <div className="ol-usage-history-grid">
-      <Card className="ol-usage-record-card ol-usage-reported-card" padding={0}>
+      <Card className="ol-usage-record-card ol-usage-reported-card" padding={14}>
         <div className="ol-usage-card-header ol-usage-card-header--stacked">
           <div className="ol-usage-card-header-row">
             <h2 className="ol-usage-card-title">
@@ -307,106 +311,108 @@ export function UsageHistory({ dashboard }: { dashboard: Dashboard }) {
             </span>
           </p>
         </div>
-        <div
-          className="ol-usage-record-scroll ol-thinscroll"
-          tabIndex={0}
-          role="region"
-          aria-label={text('模型用量列表', 'Model usage list')}
-        >
-          {byPurpose.length > 0 && (
-            <div className="ol-usage-purpose-grid">
-              {byPurpose.map(({ purpose, input, output }) => (
-                <div key={purpose} className="ol-usage-purpose-tile">
-                  <div className="ol-usage-purpose-head">
-                    <Pill size="sm" tone={purposeTone(purpose)}>
-                      {purposeName(purpose)}
-                    </Pill>
-                  </div>
-                  <div className="ol-usage-purpose-metrics">
-                    <div className="ol-usage-purpose-metric">
-                      <span className="ol-usage-metric-key">
-                        {text('已报告输入', 'Reported input')}
-                      </span>
-                      {safeTokens(input)}
+        <div className="ol-usage-inset-frame">
+          <div
+            className="ol-usage-record-scroll ol-thinscroll"
+            tabIndex={0}
+            role="region"
+            aria-label={text('模型用量列表', 'Model usage list')}
+          >
+            {byPurpose.length > 0 && (
+              <div className="ol-usage-purpose-grid">
+                {byPurpose.map(({ purpose, input, output }) => (
+                  <div key={purpose} className="ol-usage-purpose-tile">
+                    <div className="ol-usage-purpose-head">
+                      <Pill size="sm" tone={purposeTone(purpose)}>
+                        {purposeName(purpose)}
+                      </Pill>
                     </div>
-                    <div className="ol-usage-purpose-metric">
-                      <span className="ol-usage-metric-key">
-                        {text('已报告输出', 'Reported output')}
-                      </span>
-                      {safeTokens(output)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {ledgerUnavailable ? (
-            <div className="ol-usage-empty">
-              {text('本地账本暂不可用。', 'The local ledger is unavailable.')}
-            </div>
-          ) : sortedReported.length === 0 ? (
-            <div className="ol-usage-empty">
-              {text(
-                '该时段没有已保存的服务商 token 报告。',
-                'No provider token reports were saved for this period.',
-              )}
-            </div>
-          ) : (
-            <div className="ol-usage-report-list">
-              {sortedReported.map((record) => {
-                const targetParts = [
-                  ...new Set([record.provider, record.channel, record.model].filter(Boolean)),
-                ];
-                return (
-                  <div key={record.id} className="ol-usage-report-item">
-                    <div className="ol-usage-report-head">
-                      <div className="ol-usage-report-identity">
-                        <Pill size="sm" tone={purposeTone(record.purpose)}>
-                          {purposeName(record.purpose)}
-                        </Pill>
-                        <span className="ol-usage-report-target">
-                          {targetParts.join(' · ') || '—'}
+                    <div className="ol-usage-purpose-metrics">
+                      <div className="ol-usage-purpose-metric">
+                        <span className="ol-usage-metric-key">
+                          {text('已报告输入', 'Reported input')}
                         </span>
+                        {safeTokens(input)}
                       </div>
-                      <time className="ol-usage-time">
-                        {new Date(record.occurredAtMs).toLocaleString()}
-                      </time>
-                    </div>
-                    <div className="ol-usage-token-grid">
-                      <div className="ol-usage-token-cell">
-                        <span className="ol-usage-token-label">{text('输入', 'Input')}</span>
-                        {safeTokens(record.inputTokens)}
-                      </div>
-                      <div className="ol-usage-token-cell">
-                        <span className="ol-usage-token-label">{text('输出', 'Output')}</span>
-                        {safeTokens(record.outputTokens)}
-                      </div>
-                      <div className="ol-usage-token-cell">
-                        <span className="ol-usage-token-label">
-                          {text('缓存读取', 'Cache read')}
+                      <div className="ol-usage-purpose-metric">
+                        <span className="ol-usage-metric-key">
+                          {text('已报告输出', 'Reported output')}
                         </span>
-                        {safeTokens(record.cachedInputTokens)}
-                      </div>
-                      <div className="ol-usage-token-cell">
-                        <span className="ol-usage-token-label">
-                          {text('缓存写入', 'Cache write')}
-                        </span>
-                        {safeTokens(record.cacheWriteInputTokens)}
-                      </div>
-                      <div className="ol-usage-token-cell">
-                        <span className="ol-usage-token-label">{text('推理', 'Reasoning')}</span>
-                        {safeTokens(record.reasoningTokens)}
+                        {safeTokens(output)}
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+            {ledgerUnavailable ? (
+              <div className="ol-usage-empty">
+                {text('本地账本暂不可用。', 'The local ledger is unavailable.')}
+              </div>
+            ) : sortedReported.length === 0 ? (
+              <div className="ol-usage-empty">
+                {text(
+                  '该时段没有已保存的服务商 token 报告。',
+                  'No provider token reports were saved for this period.',
+                )}
+              </div>
+            ) : (
+              <div className="ol-usage-report-list">
+                {sortedReported.map((record) => {
+                  const targetParts = [
+                    ...new Set([record.provider, record.channel, record.model].filter(Boolean)),
+                  ];
+                  return (
+                    <div key={record.id} className="ol-usage-report-item">
+                      <div className="ol-usage-report-head">
+                        <div className="ol-usage-report-identity">
+                          <Pill size="sm" tone={purposeTone(record.purpose)}>
+                            {purposeName(record.purpose)}
+                          </Pill>
+                          <span className="ol-usage-report-target">
+                            {targetParts.join(' · ') || '—'}
+                          </span>
+                        </div>
+                        <time className="ol-usage-time">
+                          {new Date(record.occurredAtMs).toLocaleString()}
+                        </time>
+                      </div>
+                      <div className="ol-usage-token-grid">
+                        <div className="ol-usage-token-cell">
+                          <span className="ol-usage-token-label">{text('输入', 'Input')}</span>
+                          {safeTokens(record.inputTokens)}
+                        </div>
+                        <div className="ol-usage-token-cell">
+                          <span className="ol-usage-token-label">{text('输出', 'Output')}</span>
+                          {safeTokens(record.outputTokens)}
+                        </div>
+                        <div className="ol-usage-token-cell">
+                          <span className="ol-usage-token-label">
+                            {text('缓存读取', 'Cache read')}
+                          </span>
+                          {safeTokens(record.cachedInputTokens)}
+                        </div>
+                        <div className="ol-usage-token-cell">
+                          <span className="ol-usage-token-label">
+                            {text('缓存写入', 'Cache write')}
+                          </span>
+                          {safeTokens(record.cacheWriteInputTokens)}
+                        </div>
+                        <div className="ol-usage-token-cell">
+                          <span className="ol-usage-token-label">{text('推理', 'Reasoning')}</span>
+                          {safeTokens(record.reasoningTokens)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </Card>
 
-      <Card className="ol-usage-record-card ol-usage-recent-card" padding={0}>
+      <Card className="ol-usage-record-card ol-usage-recent-card" padding={14}>
         <div className="ol-usage-card-header">
           <h2 className="ol-usage-card-title">{text('最近记录', 'Recent records')}</h2>
           {!historyUnavailable && rows.length > 0 && (
@@ -415,45 +421,47 @@ export function UsageHistory({ dashboard }: { dashboard: Dashboard }) {
             </span>
           )}
         </div>
-        <div
-          className="ol-usage-record-scroll ol-thinscroll"
-          tabIndex={0}
-          role="region"
-          aria-label={text('最近记录列表', 'Recent records list')}
-        >
-          {historyUnavailable ? (
-            <div className="ol-usage-empty">
-              {text('历史记录暂不可用。', 'Retained history is unavailable.')}
-            </div>
-          ) : rows.length === 0 ? (
-            <div className="ol-usage-empty">
-              {text('该时段暂无记录。', 'No records in this period.')}
-            </div>
-          ) : (
-            rows.map((row) => {
-              const providers = [row.asrProvider, row.llmProvider].filter(Boolean);
-              return (
-                <div key={row.id} className="ol-usage-recent-row">
-                  <time dateTime={row.createdAt} className="ol-usage-time">
-                    {new Date(row.createdAt).toLocaleString()}
-                  </time>
-                  <div className="ol-usage-provider-tags">
-                    {providers.length > 0 ? (
-                      providers.map((provider, index) => (
-                        <span key={`${provider}-${index}`} className="ol-usage-provider-tag">
-                          {provider}
+        <div className="ol-usage-inset-frame">
+          <div
+            className="ol-usage-record-scroll ol-thinscroll"
+            tabIndex={0}
+            role="region"
+            aria-label={text('最近记录列表', 'Recent records list')}
+          >
+            {historyUnavailable ? (
+              <div className="ol-usage-empty">
+                {text('历史记录暂不可用。', 'Retained history is unavailable.')}
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="ol-usage-empty">
+                {text('该时段暂无记录。', 'No records in this period.')}
+              </div>
+            ) : (
+              rows.map((row) => {
+                const providers = [row.asrProvider, row.llmProvider].filter(Boolean);
+                return (
+                  <div key={row.id} className="ol-usage-recent-row">
+                    <time dateTime={row.createdAt} className="ol-usage-time">
+                      {new Date(row.createdAt).toLocaleString()}
+                    </time>
+                    <div className="ol-usage-provider-tags">
+                      {providers.length > 0 ? (
+                        providers.map((provider, index) => (
+                          <span key={`${provider}-${index}`} className="ol-usage-provider-tag">
+                            {provider}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="ol-usage-token-value" data-empty="true">
+                          —
                         </span>
-                      ))
-                    ) : (
-                      <span className="ol-usage-token-value" data-empty="true">
-                        —
-                      </span>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })
-          )}
+                );
+              })
+            )}
+          </div>
         </div>
       </Card>
     </div>

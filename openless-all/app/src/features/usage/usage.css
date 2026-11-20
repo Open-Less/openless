@@ -1,3 +1,16 @@
+.ol-usage-page {
+  flex-shrink: 0;
+}
+
+/* Fill the viewport on desktop split-panel views so both plates keep crisp visible bottom corners. */
+.ol-usage-page[data-fill-viewport='true'] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  height: 100%;
+  min-height: 0;
+}
+
 .ol-usage-page .ol-card {
   border-radius: 28px !important;
   clip-path: none !important;
@@ -11,6 +24,7 @@
   flex-wrap: wrap;
   gap: 10px 16px;
   margin: 0 0 18px;
+  flex-shrink: 0;
 }
 
 .ol-usage-tabs {
@@ -49,6 +63,7 @@
   color: var(--ol-ink-3);
   font-size: 13px;
   line-height: 1.45;
+  flex-shrink: 0;
 }
 
 .ol-usage-banner--alert {
@@ -56,14 +71,13 @@
   background: color-mix(in srgb, var(--ol-err) 8%, var(--ol-surface));
 }
 
-/* Shared card chrome */
+/* Shared outer plate header + concentric inset rounded scroll container */
 .ol-usage-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 0.5px solid var(--ol-line);
+  padding: 2px 4px 12px;
   flex-shrink: 0;
 }
 
@@ -101,6 +115,19 @@
 .ol-usage-card-note > svg {
   margin-top: 2px;
   color: var(--ol-ink-4);
+}
+
+/* Concentric inset frame inside the 28px outer plate: 28px - 12px inset = 16px radius,
+   clipping scrolled content cleanly within its own rounded border. */
+.ol-usage-inset-frame {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--ol-radius);
+  overflow: hidden;
+  background: var(--ol-surface);
+  border: 0.5px solid var(--ol-line);
 }
 
 .ol-usage-count-chip {
@@ -287,16 +314,24 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Services tab: balanced two-column panel layout */
+/* Services tab: balanced two-column panel layout filling the viewport */
+.ol-usage-services-grid {
+  flex: 1 1 0%;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .ol-usage-services-grid > * {
   grid-column: span 6;
+  min-height: 0;
 }
 
 .ol-usage-panel-card {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-height: clamp(320px, calc(100dvh - 280px), 640px);
+  min-height: 240px;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -312,7 +347,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 13px 18px;
+  padding: 13px 16px;
   border-bottom: 0.5px solid var(--ol-line);
   transition: background 140ms var(--ol-motion-quick);
 }
@@ -403,7 +438,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 18px;
+  padding: 12px 16px;
   border-bottom: 0.5px solid var(--ol-line);
   transition: background 140ms var(--ol-motion-quick);
 }
@@ -478,11 +513,14 @@
   text-align: right;
 }
 
-/* History tab: weighted 7 / 5 split */
+/* History tab: weighted 7 / 5 split filling the viewport */
 .ol-usage-history-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--ol-grid-gutter);
+  flex: 1 1 0%;
+  min-height: 0;
 }
 
 .ol-usage-reported-card {
@@ -497,7 +535,8 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: clamp(260px, calc(100dvh - 280px), 660px);
+  min-height: 240px;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -509,12 +548,12 @@
   overflow-wrap: anywhere;
 }
 
-/* Purpose summary tiles inside Reported Model Usage */
+/* Purpose summary tiles inside the inset Reported Model Usage tray */
 .ol-usage-purpose-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 8px;
-  padding: 12px 16px;
+  padding: 12px 14px;
   border-bottom: 0.5px solid var(--ol-line);
 }
 
@@ -523,8 +562,8 @@
   flex-direction: column;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 14px;
-  background: var(--ol-surface);
+  border-radius: 12px;
+  background: var(--ol-surface-raised);
   border: 0.5px solid var(--ol-line);
   min-width: 0;
 }
@@ -562,7 +601,7 @@
 }
 
 .ol-usage-report-item {
-  padding: 14px 18px;
+  padding: 14px 16px;
   border-bottom: 0.5px solid var(--ol-line);
   transition: background 140ms var(--ol-motion-quick);
   container-type: inline-size;
@@ -616,8 +655,8 @@
   gap: 6px;
   margin-top: 10px;
   padding: 9px 10px;
-  border-radius: 12px;
-  background: var(--ol-surface);
+  border-radius: 10px;
+  background: var(--ol-surface-raised);
   border: 0.5px solid var(--ol-line);
 }
 
@@ -654,13 +693,13 @@
   font-weight: var(--ol-font-weight-normal);
 }
 
-/* Recent records list */
+/* Recent records list inside the inset tray */
 .ol-usage-recent-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 18px;
+  padding: 12px 16px;
   border-bottom: 0.5px solid var(--ol-line);
   transition: background 140ms var(--ol-motion-quick);
 }
@@ -691,7 +730,7 @@
   align-items: center;
   padding: 2px 8px;
   border-radius: 9px;
-  background: var(--ol-surface);
+  background: var(--ol-surface-raised);
   border: 0.5px solid var(--ol-line);
   font-family: var(--ol-font-mono);
   font-size: 11.5px;
@@ -701,7 +740,41 @@
   overflow-wrap: anywhere;
 }
 
+html[data-ol-stacked-layout='true'] .ol-usage-page[data-fill-viewport='true'],
+html[data-ol-conservative-layout='true']
+  .ol-conservative-scope
+  .ol-usage-page[data-fill-viewport='true'] {
+  height: auto;
+  flex: none;
+}
+
+html[data-ol-stacked-layout='true'] :is(.ol-usage-services-grid, .ol-usage-history-grid),
+html[data-ol-conservative-layout='true']
+  .ol-conservative-scope
+  :is(.ol-usage-services-grid, .ol-usage-history-grid) {
+  grid-template-rows: auto;
+  flex: none;
+}
+
+html[data-ol-stacked-layout='true'] :is(.ol-usage-record-card, .ol-usage-panel-card),
+html[data-ol-conservative-layout='true']
+  .ol-conservative-scope
+  :is(.ol-usage-record-card, .ol-usage-panel-card) {
+  height: clamp(240px, 55dvh, 440px);
+}
+
 @media (max-width: 1000px) {
+  .ol-usage-page[data-fill-viewport='true'] {
+    height: auto;
+    flex: none;
+  }
+
+  .ol-usage-services-grid,
+  .ol-usage-history-grid {
+    grid-template-rows: auto;
+    flex: none;
+  }
+
   .ol-usage-services-grid > *,
   .ol-usage-history-grid > * {
     grid-column: 1 / -1;
@@ -711,12 +784,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ol-usage-record-card {
-    height: clamp(240px, 55dvh, 480px);
-  }
-
+  .ol-usage-record-card,
   .ol-usage-panel-card {
-    max-height: clamp(260px, 55dvh, 480px);
+    height: clamp(240px, 55dvh, 440px);
   }
 }
 

@@ -74,8 +74,13 @@ export function Usage() {
       {t('usage.clear')}
     </Btn>
   );
+  const fillViewport = view === 'history' || view === 'services';
   return (
-    <div className="ol-usage-page" style={{ width: '100%', minWidth: 0, flexShrink: 0 }}>
+    <div
+      className="ol-usage-page"
+      data-fill-viewport={fillViewport || undefined}
+      style={{ width: '100%', minWidth: 0 }}
+    >
       <PageHeader
         title={text('用量', 'Usage')}
         desc={text(
