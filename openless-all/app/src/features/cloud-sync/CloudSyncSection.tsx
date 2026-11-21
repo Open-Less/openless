@@ -371,10 +371,18 @@ export function CloudSyncSection() {
     notificationSettled.current = true;
   };
   const presentReview = (preview: RestorePreview, enableAfter: boolean, scope: string) => {
+    const shown = currentDialog.current;
+    const reviewingSameData =
+      shown?.kind === 'restore' &&
+      shown.scope === scope &&
+      shown.preview.observedRevision === preview.observedRevision &&
+      shown.preview.localGeneration === preview.localGeneration;
+    if (reviewingSameData && shown.preview.previewId === preview.previewId) return;
     const next = { kind: 'restore' as const, preview, enableAfter, scope };
     currentDialog.current = next;
     setDialog(next);
-    announce(preview.conflicts.length ? 'states.conflict' : 'restoreTitle', 'warning');
+    if (!reviewingSameData)
+      announce(preview.conflicts.length ? 'states.conflict' : 'restoreTitle', 'warning');
   };
   const showBusy = () => {
     busyNotification.current = notify({
@@ -390,9 +398,14 @@ export function CloudSyncSection() {
     if (!alive.current) return;
     const errorKey = encryptedSyncErrorKey(error);
     const key = `errors.${errorKey}`;
-    if (errorKey === 'busy') showBusy();
-    else if (errorKey === 'reviewRequired') {
-      if (currentDialog.current?.kind !== 'restore') announce(key, 'warning');
+    if (errorKey === 'busy') {
+      if (settled && progressNotification.current) announce(key, 'warning');
+      else showBusy();
+    } else if (errorKey === 'reviewRequired') {
+      if (currentDialog.current?.kind !== 'restore' && !notificationSettled.current)
+        announce(key, 'warning');
+    } else if (errorKey === 'changed') {
+      announce(key, 'warning');
     } else if (currentDialog.current && errorKey !== 'outcomeUnknown')
       setNotice({ key, error: true });
     else if (settled) announce(key, 'failed');
@@ -420,6 +433,8 @@ export function CloudSyncSection() {
       }
       awaitingSync.current = false;
       syncIntent.current = false;
+      progressNotification.current?.dismiss();
+      progressNotification.current = undefined;
     } else if (next.syncState !== 'syncing' && !next.taskId) {
       const review = pendingReview.current;
       pendingReview.current = null;
@@ -436,7 +451,7 @@ export function CloudSyncSection() {
         awaitingSync.current = false;
         syncIntent.current = false;
         if (next.lastError) showError(next.lastError, true);
-        else if (next.syncState === 'ready') announce('synced');
+        else if (next.syncState === 'ready' || next.syncState === 'pending') announce('synced');
         else if (next.syncState === 'conflict') announce('states.conflict', 'warning');
       }
     }
@@ -688,8 +703,11 @@ export function CloudSyncSection() {
     syncing = false,
   ) => {
     void perform(async (valid) => {
-      const next = await request();
-      if (!valid() || !acceptStatus(next)) return;
+      const returned = await request();
+      if (!valid()) return;
+      acceptStatus(returned);
+      const next = current.current;
+      if (!next) return;
       if (signOut) {
         try {
           const auth = await marketplaceAuthStatus();
@@ -711,10 +729,10 @@ export function CloudSyncSection() {
           return;
         }
         if (next.lastError) {
-          showError(next.lastError, true);
+          if (!notificationSettled.current) showError(next.lastError, true);
           return;
         }
-        if (!syncing || next.syncState === 'ready') announce(syncing ? 'synced' : 'done');
+        if (!notificationSettled.current) announce(syncing ? 'synced' : 'done');
       }
     }, syncing);
   };
@@ -764,10 +782,7 @@ export function CloudSyncSection() {
   };
   const applyRestore = (mode: 'replace' | 'merge', conflictChoices: SyncConflictChoice[]) => {
     if (dialog?.kind !== 'restore') return;
-    if (activeAction.current !== null || current.current?.syncState === 'syncing') {
-      showBusy();
-      return;
-    }
+    if (activeAction.current !== null || current.current?.syncState === 'syncing') return;
     const { preview, enableAfter, scope } = dialog;
     void perform(async (valid) => {
       const snapshot = current.current;
@@ -873,6 +888,13 @@ export function CloudSyncSection() {
   const lastSync = status?.lastSuccessfulSyncAt ? new Date(status.lastSuccessfulSyncAt) : null;
   const lastError = status?.lastError ? encryptedSyncErrorKey(status.lastError) : null;
   const visibleError = !dialog ? lastError : null;
+  const initialErrorReported = useRef(false);
+  useEffect(() => {
+    if (loading || !status || initialErrorReported.current) return;
+    initialErrorReported.current = true;
+    if (status.lastError && !activeAction.current) showError(status.lastError);
+  }, [loading, status]);
+
   const focus = status
     ? setupFocus(status, identityAvailable, preparingStep, setupReached)
     : identityAvailable
@@ -1125,9 +1147,6 @@ export function CloudSyncSection() {
         <p className="ol-cloud-sync-scope">{t('cloudSyncE2ee.passwordWarning')}</p>
         <Collapse open={!!visibleError}>
           <div className="ol-cloud-sync-status-line">
-            <p role="alert" className="ol-cloud-sync-error">
-              {t(`cloudSyncE2ee.errors.${visibleError}`)}
-            </p>
             {REFRESH_ERRORS.has(visibleError ?? '') && (
               <Btn
                 size="sm"
@@ -1250,7 +1269,11 @@ export function CloudSyncSection() {
               {dialog.kind === 'restore' && (
                 <DialogBody>
                   <RestoreReview
-                    key={dialog.preview.previewId}
+                    key={JSON.stringify([
+                      dialog.scope,
+                      dialog.preview.observedRevision,
+                      dialog.preview.localGeneration,
+                    ])}
                     preview={dialog.preview}
                     busy={working}
                     stale={!matchesRestorePreview(dialog.preview, status, dialog.scope)}

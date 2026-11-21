@@ -4,7 +4,6 @@ import { PageSkeleton } from '../../../components/ui/PageSkeleton';
 import { Button } from '../../../ui/controls/Button';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { Card } from '../../../ui/layout/Card';
-import { SectionTitle } from '../../../ui/layout/SectionTitle';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 import {
   readAskEntrySettings,
@@ -13,17 +12,14 @@ import {
   type AskEntryIntentMode,
 } from './askEntrySettings';
 
-const betaModes = [
-  'separateModel',
-  'mainModelTool',
-] as const satisfies readonly AskEntryIntentMode[];
+const modes = ['semanticHybrid', 'separateModel', 'mainModelTool'] as const satisfies readonly AskEntryIntentMode[];
 
 const recoveryNoticeKey = 'ask-entry-settings-recovery';
 
-export function AskEntrySettingsSection() {
+function useAskEntryPreference<K extends keyof AskEntrySettings>(key: K) {
   const { t } = useTranslation();
   const { notify } = useInteraction();
-  const [settings, setSettings] = useState<AskEntrySettings | 'readFailed'>();
+  const [settings, setSettings] = useState<AskEntrySettings[K] | 'readFailed'>();
   const [saving, setSaving] = useState(false);
   const writePending = useRef(false);
 
@@ -31,7 +27,7 @@ export function AskEntrySettingsSection() {
     let active = true;
     void readAskEntrySettings().then(
       (committed) => {
-        if (active) setSettings(committed);
+        if (active) setSettings(committed[key]);
       },
       () => {
         if (!active) return;
@@ -46,9 +42,9 @@ export function AskEntrySettingsSection() {
     return () => {
       active = false;
     };
-  }, [t, notify]);
+  }, [key, t, notify]);
 
-  function commit(next: AskEntrySettings) {
+  function commit(next: Partial<AskEntrySettings>) {
     if (writePending.current) return;
     const restoring = settings === 'readFailed';
     writePending.current = true;
@@ -56,7 +52,7 @@ export function AskEntrySettingsSection() {
     void writeAskEntrySettings(next)
       .then(
         (committed) => {
-          setSettings(committed);
+          setSettings(committed[key]);
           if (restoring) {
             notify({ key: recoveryNoticeKey, state: 'saved', message: t('common.saved') });
           }
@@ -74,68 +70,84 @@ export function AskEntrySettingsSection() {
       });
   }
 
-  if (!settings) return <PageSkeleton rows={3} />;
+  return { settings, saving, commit };
+}
+
+export function AskEntrySettingsSection() {
+  const { t } = useTranslation();
+  const { settings, saving, commit } = useAskEntryPreference('autoVoiceOnOpen');
+  if (settings === undefined) return <PageSkeleton rows={1} />;
   if (settings === 'readFailed') {
-    return (
-      <Card>
-        <SettingRow
-          label={t('askEntrySettings.loadFailed')}
-          desc={t('askEntrySettings.restoreDefaultsHint')}
-        >
-          <Button
-            size="sm"
-            disabled={saving}
-            onClick={() => commit({ autoVoiceOnOpen: true, intentMode: 'separateModel' })}
-          >
-            {t('askEntrySettings.restoreDefaults')}
-          </Button>
-        </SettingRow>
-      </Card>
-    );
+    return <AskSettingsRecovery saving={saving} commit={commit} />;
   }
   return (
-    <>
-      <Card>
-        <SettingRow
-          label={t('askEntrySettings.autoVoiceOnOpen')}
-          desc={t('askEntrySettings.autoVoiceHint')}
-        >
-          <Toggle
-            on={settings.autoVoiceOnOpen}
-            disabled={saving}
-            onToggle={(autoVoiceOnOpen) => commit({ ...settings, autoVoiceOnOpen })}
-          />
-        </SettingRow>
-      </Card>
-      <Card>
-        <SectionTitle hint={t('askEntrySettings.routingHint')}>
-          {t('askEntrySettings.routing')}
-        </SectionTitle>
-        <SettingRow label={t('askEntrySettings.currentMode')}>
-          <span aria-live="polite">{t(`askEntrySettings.${settings.intentMode}`)}</span>
-        </SettingRow>
-        {betaModes.map((mode) => {
-          const label = t(`askEntrySettings.${mode}`);
-          const enabled = settings.intentMode === mode;
+    <Card>
+      <SettingRow
+        label={t('askEntrySettings.autoVoiceOnOpen')}
+        desc={t('askEntrySettings.autoVoiceHint')}
+      >
+        <Toggle
+          on={settings}
+          disabled={saving}
+          onToggle={(autoVoiceOnOpen) => commit({ autoVoiceOnOpen })}
+        />
+      </SettingRow>
+    </Card>
+  );
+}
+
+export function IntentRoutingSection() {
+  const { t } = useTranslation();
+  const { settings, saving, commit } = useAskEntryPreference('intentMode');
+  if (settings === undefined) return <PageSkeleton rows={3} />;
+  if (settings === 'readFailed') {
+    return <AskSettingsRecovery saving={saving} commit={commit} />;
+  }
+  return (
+    <Card>
+      <fieldset className="ol-intent-routing-options" disabled={saving}>
+        <legend className="ol-sr-only">{t('askEntrySettings.routing')}</legend>
+        {modes.map((intentMode) => {
+          const label = t(`askEntrySettings.${intentMode}`);
           return (
-            <SettingRow key={mode} label={label} desc={t(`askEntrySettings.${mode}Hint`)}>
-              <Toggle
-                label={`${label} (Beta)`}
-                on={enabled}
-                disabled={saving}
-                onToggle={(next) => {
-                  if (next !== enabled) {
-                    commit({ ...settings, intentMode: next ? mode : 'semanticHybrid' });
-                  }
-                }}
+            <SettingRow key={intentMode} label={label} desc={t(`askEntrySettings.${intentMode}Hint`)}>
+              <input
+                type="radio"
+                aria-label={label}
+                name="ask-intent-routing"
+                checked={settings === intentMode}
+                onChange={() => commit({ intentMode })}
               />
-              <span className="ol-beta-tag" aria-hidden="true">
-                Beta
-              </span>
             </SettingRow>
           );
         })}
-      </Card>
-    </>
+      </fieldset>
+    </Card>
+  );
+}
+
+function AskSettingsRecovery({
+  saving,
+  commit,
+}: {
+  saving: boolean;
+  commit: (settings: AskEntrySettings) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Card>
+      <SettingRow
+        label={t('askEntrySettings.loadFailed')}
+        desc={t('askEntrySettings.restoreDefaultsHint')}
+      >
+        <Button
+          size="sm"
+          disabled={saving}
+          onClick={() => commit({ autoVoiceOnOpen: true, intentMode: 'separateModel' })}
+        >
+          {t('askEntrySettings.restoreDefaults')}
+        </Button>
+      </SettingRow>
+    </Card>
   );
 }

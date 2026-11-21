@@ -10,7 +10,7 @@ import '../../src/styles/refinements.css';
 
 const params = new URLSearchParams(location.search);
 const settingsKey = 'fixture.askEntrySettings';
-const writes: AskEntrySettings[] = [];
+const writes: Partial<AskEntrySettings>[] = [];
 let finishWrite: ((failed: boolean) => void) | undefined;
 const fixture = {
   writes,
@@ -54,11 +54,16 @@ mockIPC(
           : { autoVoiceOnOpen: true, intentMode: 'separateModel' };
       }
       case 'ask_set_entry_settings': {
-        const { settings } = args as { settings: AskEntrySettings };
+        const { settings } = args as { settings: Partial<AskEntrySettings> };
         writes.push(settings);
         const commit = () => {
-          localStorage.setItem(settingsKey, JSON.stringify(settings));
-          return settings;
+          const stored = localStorage.getItem(settingsKey);
+          const previous: AskEntrySettings = stored
+            ? JSON.parse(stored)
+            : { autoVoiceOnOpen: true, intentMode: 'separateModel' };
+          const committed = { ...previous, ...settings };
+          localStorage.setItem(settingsKey, JSON.stringify(committed));
+          return committed;
         };
         if (!params.has('defer')) return commit();
         return new Promise((resolve, reject) => {

@@ -7,6 +7,7 @@
 pub mod activity;
 pub mod android_types;
 pub mod api;
+pub mod main_dictation_trace;
 #[cfg(feature = "ask-attachments")]
 pub mod ask_attachment;
 pub mod ask_context;

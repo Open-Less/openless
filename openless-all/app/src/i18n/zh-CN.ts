@@ -161,7 +161,8 @@ export const zhCN = {
     restoreMode: '恢复方式',
     merge: '合并，并逐项处理冲突',
     replace: '使用云端资料替换本机同步资料',
-    replaceWarning: '此操作会替换同步范围内的本机资料。若要保留本机修改，请选择合并。',
+    replaceWarning: '此操作会覆盖本机同步范围内的数据。若要保留本机修改，请选择‘合并’。',
+    mergeOverwriteDirection: '发生冲突时，选择本机版本会在合并同步时覆盖对应的云端条目，选择云端版本会覆盖对应的本机条目。',
     restoreCheck: '我已检查恢复方式和冲突处理选择。',
     applyRestore: '确认恢复',
     conflictProgress: '已处理 {{selected}} / {{total}} 项冲突',
@@ -473,7 +474,7 @@ export const zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: '更新风格包',
         withdraw: '下架',
       },
       loadFailed: '我的发布加载失败：{{err}}',

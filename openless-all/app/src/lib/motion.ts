@@ -181,7 +181,7 @@ export function useContentMotion(ref: RefObject<HTMLElement>, key: string) {
 export function useSelectionMotion(
   groupRef: RefObject<HTMLElement>,
   indicatorRef: RefObject<HTMLElement>,
-  selection: string,
+  selection: string | null,
   underline = false,
 ) {
   const reduced = useReducedMotion();
@@ -256,7 +256,7 @@ export function useSelectionMotion(
         void motion.animation.finished.then(motion.cancel).catch(() => {});
       }
     };
-    position(previous.current !== null && previous.current !== selection);
+    position(selection !== null && previous.current !== null && previous.current !== selection);
     previous.current = selection;
     let resizeFrame = 0;
     const observer = new ResizeObserver(() => {

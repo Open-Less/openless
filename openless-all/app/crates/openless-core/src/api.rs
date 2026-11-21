@@ -2636,6 +2636,7 @@ pub struct OpenLessBackend {
     vocabulary_revision: Arc<AtomicU64>,
     history: Arc<HistoryStore>,
     history_revision: Arc<AtomicU64>,
+    main_dictation_trace: crate::main_dictation_trace::MainDictationTrace,
     activity: Arc<ActivityStore>,
     expression_profile: crate::expression_observation::SharedExpressionProfile,
     style_packs: Arc<StylePackStore>,
@@ -3495,6 +3496,7 @@ impl OpenLessBackend {
             vocabulary_revision,
             history: repositories.history,
             history_revision,
+            main_dictation_trace: Default::default(),
             activity: repositories.activity,
             expression_profile: repositories.expression_profile,
             style_packs: repositories.style_packs,
@@ -7457,6 +7459,64 @@ impl OpenLessBackend {
         self.history.list()
     }
 
+    pub fn enable_main_dictation_trace(&self) {
+        self.main_dictation_trace.enable();
+    }
+
+    pub fn main_dictation_trace_enabled(&self) -> bool {
+        self.main_dictation_trace.enabled()
+    }
+
+    pub fn trace_main_dictation_app_route(&self, event: &crate::BackendEvent, emitted: bool) {
+        self.main_dictation_trace.app_route(event, emitted);
+    }
+
+    pub fn trace_main_dictation_webview(
+        &self,
+        session: SessionId,
+        sequence: u64,
+        surface: crate::main_dictation_trace::CaptionTraceSurface,
+        stage: crate::main_dictation_trace::CaptionTraceStage,
+    ) {
+        self.main_dictation_trace.webview(session, sequence, surface, stage);
+    }
+
+    fn trace_main_dictation_history(&self, session: SessionId, checkpoint: &'static str) {
+        let Some(previous) = self.main_dictation_trace.previous(session) else {
+            return;
+        };
+        let Ok(records) = self.list_history() else {
+            self.main_dictation_trace.record(
+                session,
+                format_args!("stage=history checkpoint={checkpoint} status=unavailable"),
+            );
+            return;
+        };
+        let status = |id: SessionId| {
+            let id = id.to_string();
+            let Some(row) = records.iter().find(|row| row.id == id) else {
+                return "absent";
+            };
+            match (
+                !row.raw_transcript.trim().is_empty(),
+                !row.final_text.trim().is_empty(),
+            ) {
+                (true, true) => "raw_and_final",
+                (true, false) => "raw_only",
+                (false, true) => "final_only",
+                (false, false) => "empty",
+            }
+        };
+        self.main_dictation_trace.record(
+            session,
+            format_args!(
+                "stage=history checkpoint={checkpoint} current={} previous={}",
+                status(session),
+                previous.map_or("none", status),
+            ),
+        );
+    }
+
     pub fn recent_history_within_minutes(
         &self,
         minutes: u32,
@@ -8117,6 +8177,9 @@ impl OpenLessBackend {
             state.dictation_start_output_target = Some(output_target);
             state.dictation_translation_requested = None;
             state.dictation_destination_changed = false;
+            if output_target == DictationOutputTarget::ForegroundApp {
+                self.main_dictation_trace.begin(session_id);
+            }
             self.events.publish(
                 Some(session_id),
                 BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -8603,6 +8666,10 @@ impl OpenLessBackend {
                         state.dictation_context = Some(Arc::clone(&context));
                         state.dictation.translation_active = context.polish.translation_active;
                         state.dictation.phase = DictationPhase::Transcribing;
+                        self.main_dictation_trace.record(
+                            session_id,
+                            format_args!("stage=finalization_started"),
+                        );
                         self.events.publish(
                             Some(session_id),
                             BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -8961,6 +9028,10 @@ impl OpenLessBackend {
                     };
             if !replaced {
                 state.dictation.phase = DictationPhase::Completed;
+                self.main_dictation_trace.record(
+                    session_id,
+                    format_args!("stage=terminal phase=completed"),
+                );
                 state.dictation.message = Some(match insert_outcome {
                     Some(InsertOutcome::Inserted) => "inserted".to_string(),
                     Some(InsertOutcome::PasteSent) => "paste_sent".to_string(),
@@ -9070,6 +9141,7 @@ impl OpenLessBackend {
         ) {
             log::warn!("failed to persist recording-start history: {error}");
         }
+        self.trace_main_dictation_history(session_id, "draft");
     }
 
     fn persist_recording_started_if_starting(
@@ -9149,6 +9221,7 @@ impl OpenLessBackend {
             || self.is_cloud_note(result.session_id)
         {
             self.remove_recording_draft(result.session_id);
+            self.trace_main_dictation_history(result.session_id, "destination_excluded");
             return;
         }
         let preferences = self.get_preferences();
@@ -9218,6 +9291,7 @@ impl OpenLessBackend {
         ) {
             log::warn!("failed to persist completed dictation history: {error}");
         }
+        self.trace_main_dictation_history(result.session_id, "completed");
         if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
             log::warn!("failed to persist application activity: {error}");
         }
@@ -9305,6 +9379,7 @@ impl OpenLessBackend {
         ) {
             log::warn!("failed to persist dictation failure history: {error}");
         }
+        self.trace_main_dictation_history(session_id, "failed");
     }
 
     fn hide_dictation_feedback(&self, session_id: SessionId) -> Result<(), BackendError> {
@@ -9630,6 +9705,10 @@ impl OpenLessBackend {
                 .as_ref()
                 .is_some_and(|context| context.output_target == DictationOutputTarget::QuickNote);
             state.dictation.phase = DictationPhase::Cancelled;
+            self.main_dictation_trace.record(
+                active,
+                format_args!("stage=terminal phase=cancelled"),
+            );
             self.events.publish(
                 Some(active),
                 BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -9662,6 +9741,7 @@ impl OpenLessBackend {
             let _ = self.delete_history(&active.to_string());
             Ok(())
         };
+        self.trace_main_dictation_history(active, "cancelled");
         let cancel_result = self.cancel_session_adapters(active).await;
         self.cleanup_voice_activation_after_dictation(active).await;
         // The state can already display cancellation, but native audio/input
@@ -10001,6 +10081,10 @@ impl OpenLessBackend {
         }
         state.dictation.phase = DictationPhase::Failed;
         state.dictation.message = Some(format!("{:?}", error.code));
+        self.main_dictation_trace.record(
+            session_id,
+            format_args!("stage=terminal phase=failed code={:?}", error.code),
+        );
         let snapshot = state.dictation.clone();
         self.events.publish(
             Some(session_id),
@@ -16948,7 +17032,7 @@ mod tests {
                     InsertOutcome::Inserted,
                 )),
                 dictation_engine: Arc::new(crate::testing::FixtureDictationEngine::failing(
-                    BackendError::new(BackendErrorCode::Provider, "fixture ASR failure"),
+                    BackendError::new(BackendErrorCode::Provider, "fixture ASR timeout after release"),
                 )),
                 task_spawner: Arc::new(TokioTaskSpawner),
                 credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
@@ -16963,6 +17047,8 @@ mod tests {
         )
         .unwrap();
         backend.start().await.unwrap();
+        assert!(!backend.main_dictation_trace_enabled());
+        backend.enable_main_dictation_trace();
 
         let session_id = backend.start_dictation().await.unwrap();
         backend
@@ -16986,7 +17072,56 @@ mod tests {
         assert_eq!(history[0].raw_transcript, "draft before provider failure");
         assert!(history[0].final_text.is_empty());
         assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
-        assert!(backend.start_dictation().await.is_ok());
+        let successor = backend.start_dictation().await.unwrap();
+        assert_ne!(session_id, successor);
+        assert_eq!(
+            backend.main_dictation_trace.previous(successor),
+            Some(Some(session_id)),
+        );
+        let late = backend.engine_progress_sink().publish(
+            session_id,
+            EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                text: "late prior delta".into(),
+                offset: 0,
+                is_final: false,
+            }),
+        );
+        assert!(late.is_err());
+        backend
+            .engine_progress_sink()
+            .publish(
+                successor,
+                EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                    text: "discard this on explicit cancel".into(),
+                    offset: 0,
+                    is_final: false,
+                }),
+            )
+            .unwrap();
+        backend.cancel_dictation(Some(successor)).await.unwrap();
+        let preserved = backend.list_history().unwrap();
+        assert_eq!(preserved.len(), 1);
+        assert_eq!(preserved[0].id, session_id.to_string());
+        assert_eq!(preserved[0].raw_transcript, "draft before provider failure");
+
+        // Five is the smallest supported cap for ordinary dictation history.
+        let mut preferences = backend.get_preferences();
+        preferences.history_max_entries = Some(5);
+        backend.set_preferences(preferences).unwrap();
+        for _ in 0..4 {
+            let mut fixture_row = preserved[0].clone();
+            fixture_row.id = SessionId::new().to_string();
+            backend.append_history(fixture_row, 0, Some(5)).unwrap();
+        }
+        let last = backend.start_dictation().await.unwrap();
+        backend
+            .stop_dictation()
+            .await
+            .expect_err("fixture times out after release");
+        let retained = backend.list_history().unwrap();
+        assert_eq!(retained.len(), 5);
+        assert_eq!(retained[0].id, last.to_string());
+        assert!(!retained.iter().any(|row| row.id == session_id.to_string()));
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

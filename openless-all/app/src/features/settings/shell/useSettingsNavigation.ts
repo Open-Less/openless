@@ -81,7 +81,11 @@ export function useSettingsNavigation({
     : showingVoiceSettings
       ? t('settings.recording.dsp.description')
       : activeAdvancedPage
-        ? t(`modal.advancedPages.${activeAdvancedPage.id}`)
+        ? t(
+            activeAdvancedPage.id === 'intentRouting'
+              ? 'askEntrySettings.routingHint'
+              : `modal.advancedPages.${activeAdvancedPage.id}`,
+          )
         : activeGeneralPage
           ? t(activeGeneralPage.descriptionKey)
           : t(`modal.descriptions.${section}`);

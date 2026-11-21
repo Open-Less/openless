@@ -33,7 +33,8 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    let _ = app.emit("backend:event", &event);
+                    let emitted = app.emit("backend:event", &event).is_ok();
+                    backend_for_events.trace_main_dictation_app_route(&event, emitted);
                     if let Some(coordinator) =
                         app.try_state::<Arc<crate::coordinator::Coordinator>>()
                     {

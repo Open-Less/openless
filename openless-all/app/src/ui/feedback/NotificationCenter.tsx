@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { useReducedMotion } from '../../lib/motion';
 import { StatusNotice } from './StatusNotice';
+import { DownloadStatusText } from './DownloadStatusText';
 import { ToastIcon, ToastPanel } from './ToastPanel';
 import { toastVariant } from './toast';
 import { ViewportPortal, useAppViewport } from '../layout/AppViewport';
@@ -38,6 +39,7 @@ const NotificationCard = forwardRef<
 >(function NotificationCard({ item, dismiss }, ref) {
   const { t } = useTranslation();
   const [present, remove] = usePresence();
+  const reduced = useReducedMotion();
   const { modalStack } = useAppViewport();
   const top = useSyncExternalStore(modalStack.subscribe, modalStack.getTopOverlay);
   const variant = toastVariant(item);
@@ -80,7 +82,7 @@ const NotificationCard = forwardRef<
       <StatusNotice
         state={state}
         variant={variant}
-        notificationKey={item.key}
+        notificationKey={present ? item.key : undefined}
         centered={item.align === 'center' || item.progress}
         progress={item.progress}
         severity={item.severity}
@@ -88,17 +90,40 @@ const NotificationCard = forwardRef<
         onExit={remove ?? undefined}
       >
         <ToastPanel>
-          <div className="ol-toast-row">
+          <div className="ol-toast-row" data-download-status={item.downloadStatus ? '' : undefined}>
             {variant !== 'default' && <ToastIcon type={variant} />}
             <div className="ol-notification-body">
               <div role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}>
-                <span className="ol-notification-message" data-slot="toast-title">
-                  {item.message}
-                </span>
-                {item.description && (
-                  <span className="ol-notification-description" data-slot="toast-description">
-                    {item.description}
-                  </span>
+                {item.downloadStatus ? (
+                  <>
+                    <span className="ol-notification-message" data-slot="toast-title">
+                      <DownloadStatusText status={item.downloadStatus} />
+                    </span>
+                    {item.description && (
+                      <span className="ol-notification-description" data-slot="toast-description">
+                        {item.description}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <AnimatePresence initial={false} mode="wait">
+                    <motion.div
+                      key={JSON.stringify([item.message, item.description])}
+                      initial={{ opacity: 0, filter: reduced ? 'none' : 'blur(4px)' }}
+                      animate={{ opacity: 1, filter: 'none' }}
+                      exit={{ opacity: 0, filter: reduced ? 'none' : 'blur(4px)' }}
+                      transition={{ duration: reduced ? 0 : 0.12 }}
+                    >
+                      <span className="ol-notification-message" data-slot="toast-title">
+                        {item.message}
+                      </span>
+                      {item.description && (
+                        <span className="ol-notification-description" data-slot="toast-description">
+                          {item.description}
+                        </span>
+                      )}
+                    </motion.div>
+                  </AnimatePresence>
                 )}
               </div>
               {item.progress && (
@@ -121,21 +146,23 @@ const NotificationCard = forwardRef<
             <AnimatePresence initial={false}>{action}</AnimatePresence>
           </div>
         </ToastPanel>
-        <button
-          type="button"
-          className="ol-notification-close"
-          data-slot="toast-close"
-          aria-label={t('common.close')}
-          title={t('common.close')}
-          disabled={!present}
-          tabIndex={top ? -1 : undefined}
-          onPointerDown={(event) => {
-            if (top) event.preventDefault();
-          }}
-          onClick={dismiss}
-        >
-          <Icon name="close" size={10} />
-        </button>
+        {variant !== 'loading' && !item.progress && (
+          <button
+            type="button"
+            className="ol-notification-close"
+            data-slot="toast-close"
+            aria-label={t('common.close')}
+            title={t('common.close')}
+            disabled={!present}
+            tabIndex={top ? -1 : undefined}
+            onPointerDown={(event) => {
+              if (top) event.preventDefault();
+            }}
+            onClick={dismiss}
+          >
+            <Icon name="close" size={10} />
+          </button>
+        )}
       </StatusNotice>
     </div>
   );

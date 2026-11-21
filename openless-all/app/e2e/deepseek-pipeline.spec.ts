@@ -56,6 +56,10 @@ test('three pipelines retain separate credentials and the selected pipeline afte
         ),
       )
       .toBe(storedMode);
+    const savedRevision = await page.evaluate(async () => {
+      const { getSettingsSnapshot } = await import('/src/api/preferences.ts');
+      return (await getSettingsSnapshot()).revision;
+    });
     await dialog.getByRole('button', { name: '返回应用', exact: true }).click();
     await settleNavigation(page);
     await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -66,6 +70,10 @@ test('three pipelines retain separate credentials and the selected pipeline afte
       'aria-pressed',
       'true',
     );
+    expect(await page.evaluate(async () => {
+      const { getSettingsSnapshot } = await import('/src/api/preferences.ts');
+      return (await getSettingsSnapshot()).revision;
+    })).toBe(savedRevision);
   }
   await expect(page.getByLabel('DeepSeek suite API Key')).toHaveValue('dedicated-fixture-key');
   const after = await page.evaluate(async (id) => {
@@ -84,4 +92,49 @@ test('three pipelines retain separate credentials and the selected pipeline afte
   expect(after.omni).toBe('omni-fixture-key');
   expect(after.suite).toEqual({ apiKey: 'dedicated-fixture-key', voice: 'tide' });
   await page.screenshot({ path: test.info().outputPath('three-pipelines.png') });
+});
+
+test('reopening the guide with DeepSeek active allows choosing Traditional and continuing', async ({
+  page,
+}) => {
+  await page.goto('/?os=mac');
+  const readPipeline = () =>
+    page.evaluate(async () => {
+      const { getSettingsSnapshot } = await import('/src/api/preferences.ts');
+      const { preferences, revision } = await getSettingsSnapshot();
+      return { mode: preferences.pipelineMode, revision };
+    });
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  await settings.getByRole('button', { name: 'DeepSeek 大统一', exact: true }).click();
+  await expect.poll(async () => (await readPipeline()).mode).toBe('deepseek');
+  const deepSeek = await readPipeline();
+
+  await settings.getByRole('button', { name: '权限与数据', exact: true }).click();
+  await settings.getByRole('button', { name: '重新打开入门引导', exact: true }).click();
+  await page.getByRole('button', { name: '开始吧', exact: true }).click();
+  await page.getByRole('button', { name: '稍后配置', exact: true }).click();
+  await page.getByRole('button', { name: '稍后配置', exact: true }).click();
+
+  const mode = page.getByRole('group', { name: '选择把声音变成文字的方式' });
+  const traditional = mode.getByRole('button', { name: /语音识别 \+ 文字润色/ });
+  const multimodal = mode.getByRole('button', { name: /一个多模态模型/ });
+  const next = page.getByRole('button', { name: '继续', exact: true });
+  await expect(traditional).toHaveAttribute('aria-pressed', 'false');
+  await expect(multimodal).toHaveAttribute('aria-pressed', 'false');
+  await expect(next).toBeDisabled();
+  expect(await readPipeline()).toEqual(deepSeek);
+
+  await traditional.click();
+  await expect(traditional).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await readPipeline()).mode).toBe('traditional');
+  const saved = await readPipeline();
+  expect(saved.revision).toBeGreaterThan(deepSeek.revision);
+  await traditional.click();
+  await next.click();
+
+  await expect(page.getByRole('heading', { name: '连接你的语音识别服务' })).toBeVisible();
+  expect(await readPipeline()).toEqual(saved);
 });

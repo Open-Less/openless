@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('usage separates the dashboard, services and history', async ({ page }) => {
+test('usage separates overview, services and six purpose summaries', async ({ page }) => {
   await page.goto('/');
   const usage = page.getByRole('button', { name: '用量', exact: true });
   const settings = page.getByRole('button', { name: '设置', exact: true });
@@ -22,13 +22,13 @@ test('usage separates the dashboard, services and history', async ({ page }) => 
   await page.screenshot({ path: test.info().outputPath('usage-dashboard.png') });
   await page
     .getByRole('navigation', { name: '用量页面' })
-    .getByRole('button', { name: '服务与用途' })
+    .getByRole('button', { name: '服务', exact: true })
     .click();
   await expect(page.getByRole('heading', { name: '服务与用途' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '每日记录' })).toHaveCount(0);
   await page
     .getByRole('navigation', { name: '用量页面' })
-    .getByRole('button', { name: '记录' })
+    .getByRole('button', { name: '用途', exact: true })
     .click();
   const clear = page.getByRole('button', { name: '清除已记录 Token', exact: true });
   await expect(clear).toBeVisible();
@@ -52,22 +52,14 @@ test('usage separates the dashboard, services and history', async ({ page }) => 
   await page.locator('.ol-usage-page').evaluate((node) => {
     node.style.zoom = '1.1';
   });
-  const recent = page.getByRole('region', { name: '最近记录列表' });
-  await expect(recent).toBeVisible();
-  await recent.scrollIntoViewIfNeeded();
-  const bounds = await recent.evaluate((node) => ({
-    height: node.clientHeight,
-    content: node.scrollHeight,
-    overflow: getComputedStyle(node).overflowY,
-  }));
-  expect(bounds.overflow).toBe('auto');
-  expect(bounds.height).toBeLessThan(400);
-  expect(bounds.content).toBeGreaterThan(bounds.height);
-  await recent.hover();
-  await page.mouse.wheel(0, 160);
-  await expect.poll(() => recent.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  const summaries = page.getByRole('region', { name: '已报告的模型用量' });
+  await expect(summaries.getByRole('heading')).toHaveCount(6);
+  await expect(summaries.getByRole('heading', { name: '听写后处理' })).toBeVisible();
+  await expect(summaries.getByText('缓存读取', { exact: true })).toHaveCount(6);
+  await expect(summaries.getByText('缓存写入', { exact: true })).toHaveCount(6);
+  await expect(summaries.getByText('缓存命中率', { exact: true })).toHaveCount(6);
+  await expect(page.getByRole('region', { name: '最近记录列表' })).toHaveCount(0);
   await page.emulateMedia({ colorScheme: 'light' });
-  await page.screenshot({ path: test.info().outputPath('usage-history-light-short.png') });
   await page.setViewportSize({ width: 1300, height: 835 });
   await page.locator('.ol-usage-page').evaluate((node) => {
     node.style.zoom = '1';
@@ -82,7 +74,7 @@ test('usage separates the dashboard, services and history', async ({ page }) => 
   await clear.click();
   const confirmation = page.getByRole('dialog', { name: '清除已记录 Token' });
   await confirmation.getByRole('button', { name: '清除已记录 Token' }).click();
-  await expect(page.getByText('该时段没有已保存的服务商 token 报告。')).toBeVisible();
+  await expect(summaries.locator('dd[data-empty]')).toHaveCount(30);
   await page.getByRole('button', { name: '近 7 天' }).click();
   await expect(page.getByRole('button', { name: '近 7 天' })).toHaveAttribute(
     'aria-pressed',

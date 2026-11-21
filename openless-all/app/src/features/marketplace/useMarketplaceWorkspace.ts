@@ -74,6 +74,9 @@ export function useMarketplaceWorkspace() {
   const [installError, setInstallError] = useState<MarketplaceInstallError | null>(null);
 
   const [showUpload, setShowUpload] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const uploadPending = useRef(false);
+  const pickerPending = useRef(false);
   const [uploadOriginPackId, setUploadOriginPackId] = useState<string | null>(null);
   const [uploadTargetName, setUploadTargetName] = useState<string | null>(null);
   const [localPacks, setLocalPacks] = useState<StylePack[]>([]);
@@ -435,9 +438,9 @@ export function useMarketplaceWorkspace() {
     originPackId: string | null = null,
     targetName: string | null = null,
   ) => {
+    if (pickerPending.current) return;
+    pickerPending.current = true;
     try {
-      setUploadOriginPackId(originPackId);
-      setUploadTargetName(targetName);
       const packs = await listStylePacks();
       // Builtin packs are read-only templates and cannot be uploaded; when updating, sort the same-named local version to the front.
       const target = (targetName ?? '').trim().toLowerCase();
@@ -449,6 +452,8 @@ export function useMarketplaceWorkspace() {
           if (aMatch !== bMatch) return aMatch ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
+      setUploadOriginPackId(originPackId);
+      setUploadTargetName(targetName);
       setLocalPacks(editable);
       // In the update flow, preselect the "suggested update" local pack (same name) so the user usually just confirms.
       const recommended =
@@ -462,6 +467,8 @@ export function useMarketplaceWorkspace() {
         kind: 'err',
         text: t('marketplace.errors.loadLocal', { err: errorMessage(error) }),
       });
+    } finally {
+      pickerPending.current = false;
     }
   };
 
@@ -513,6 +520,9 @@ export function useMarketplaceWorkspace() {
   const onDeleteMine = withdraw;
 
   const onUpload = async (packId: string) => {
+    if (uploadPending.current) return;
+    uploadPending.current = true;
+    setUploading(true);
     const localPack = localPacks.find((p) => p.id === packId);
     try {
       const result = await uploadMarketplacePack(packId, uploadOriginPackId);
@@ -537,14 +547,17 @@ export function useMarketplaceWorkspace() {
           originAuthorLogin: null,
           state: result.state,
         };
+        myPacksSequence.current++;
+        setMyPacksLoading(false);
         setMyPacks((prev) => {
-          const idx = prev.findIndex((p) => p.id === result.id);
+          const idx = prev.findIndex((p) => p.id === result.id || p.id === uploadOriginPackId);
           if (idx >= 0) {
             // Same-id update by the original author: keep server counters like likes/downloads, overwrite meta
             // and reset state to pending.
             const next = [...prev];
             next[idx] = {
               ...next[idx],
+              id: result.id,
               name: optimistic.name,
               description: optimistic.description,
               version: optimistic.version,
@@ -578,6 +591,9 @@ export function useMarketplaceWorkspace() {
         kind: 'err',
         text: t('marketplace.errors.upload', { err: errorMessage(error) }),
       });
+    } finally {
+      uploadPending.current = false;
+      setUploading(false);
     }
   };
 
@@ -625,6 +641,7 @@ export function useMarketplaceWorkspace() {
     installError,
     setInstallError,
     showUpload,
+    uploading,
     setShowUpload,
     uploadOriginPackId,
     setUploadOriginPackId,

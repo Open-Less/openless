@@ -5,6 +5,7 @@ import {
   formatUsageNumber,
   summarizeCacheUsage,
   summarizeCacheUsageByModel,
+  summarizeModelUsageByPurpose,
 } from '../../lib/serviceUsageMetrics';
 
 export type UsageStageKind = 'asr' | 'postprocess' | 'translation' | 'multimodal';
@@ -48,7 +49,6 @@ export function buildUsageDashboard(
   const {
     rows: reported,
     totals,
-    byPurpose,
   } = summarizeReportedUsage(reports ?? [], now - days * 86_400_000, now);
   const cacheSummary = summarizeCacheUsage(reported);
   const cacheRate = cacheSummary.rate;
@@ -234,8 +234,7 @@ export function buildUsageDashboard(
     daily,
     totalDaily,
     maxDaily,
-    byPurpose,
-    reported,
+    modelPurposes: summarizeModelUsageByPurpose(reported),
     historyUnavailable,
     ledgerUnavailable,
     rows: reportedRows,

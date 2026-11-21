@@ -1,4 +1,4 @@
-import { StrictMode, useState } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
@@ -85,6 +85,7 @@ const fixture = {
   cancelledDownloads,
   experimentalToggles,
   experimentalReads: () => experimentalReads,
+  refreshExperimental: async () => {},
   finishExperimentalToggle: () => finishExperimentalToggle?.(),
   setExperimentalStatus(model: ExperimentalAsrModel, change: Partial<ExperimentalAsrStatus>) {
     setExperimentalStatus(model, change);
@@ -330,7 +331,21 @@ function DownloadFixture() {
   const [open, setOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  const experimental = useExperimentalAsr(modelsOpen);
+  const inline = params.has('inlineDownloadStatus');
+  const experimental = useExperimentalAsr(modelsOpen || inline);
+  useEffect(() => {
+    fixture.refreshExperimental = experimental.refresh;
+    return () => {
+      fixture.refreshExperimental = async () => {};
+    };
+  }, [experimental.refresh]);
+  if (inline) {
+    return (
+      <main style={{ width: '100%', height: '100%', overflow: 'auto', padding: 16 }}>
+        <ExperimentalAsrSection controller={experimental} onOpenAsr={async () => {}} />
+      </main>
+    );
+  }
   return (
     <main style={{ width: '100%', padding: 16 }}>
       <button onClick={() => setOpen(true)}>Open download modal</button>

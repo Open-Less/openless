@@ -437,3 +437,7 @@
 [data-ol-theme='dark'] .ol-vocab-dialog {
   --ol-dialog-shadow: var(--ol-shadow-lg);
 }
+
+:root:not([data-ol-theme='dark']) .ol-vocab-add > .ol-vocab-add-icon {
+  color: #000;
+}

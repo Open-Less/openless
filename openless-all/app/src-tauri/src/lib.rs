@@ -244,6 +244,8 @@ macro_rules! app_invoke_handler_desktop {
             main_window_frame_ready,
             get_capsule_auxiliary_snapshot,
             commands::get_capsule_snapshot,
+            commands::main_caption_trace_enabled,
+            commands::report_main_caption_trace,
             commands::get_dictation_translation_target,
             commands::select_dictation_translation_target,
             commands::set_capsule_language_menu,
@@ -850,6 +852,11 @@ fn run_desktop() {
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let core_backend = coordinator.backend();
+    #[cfg(all(not(mobile), debug_assertions))]
+    if std::env::var_os("OPENLESS_MAIN_DICTATION_TRACE").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        core_backend.enable_main_dictation_trace();
+    }
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
     let mut context = tauri::generate_context!();

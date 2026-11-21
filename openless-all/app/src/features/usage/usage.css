@@ -797,3 +797,32 @@ html[data-ol-conservative-layout='true']
     justify-content: space-between;
   }
 }
+
+.ol-usage-model-purposes dl {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.ol-usage-model-purposes dl > div,
+.ol-usage-model-purposes dd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.ol-usage-model-purposes dd {
+  margin: 0;
+  font-weight: var(--ol-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.ol-usage-model-purposes dd[data-empty],
+.ol-usage-model-purposes dt {
+  color: var(--ol-ink-3);
+}
+
+@media (min-width: 901px) {
+  .ol-usage-model-purposes > * {
+    grid-column: span 4;
+  }
+}

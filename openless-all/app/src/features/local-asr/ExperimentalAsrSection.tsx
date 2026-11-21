@@ -1,4 +1,5 @@
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
+import { DownloadStatusText } from '../../ui/feedback/DownloadStatusText';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PresenceModal } from '../../components/ui/Modal';
@@ -27,7 +28,7 @@ export function ExperimentalAsrSection({
   controller: ExperimentalAsrController;
   onOpenAsr: () => Promise<void>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { confirm, notify } = useInteraction();
   const downloadOwnerRefs = useExperimentalDownloadOwnerRefs();
   const deleteRequest = useRef(false);
@@ -110,10 +111,17 @@ export function ExperimentalAsrSection({
                       : 'ol-experimental-model-status'
                   }
                 >
-                  {loading ? t('common.loading') : t(`experimentalAsr.phases.${status.phase}`)}
-                  {status.phase === 'downloading' &&
-                    status.downloadedBytes > 0 &&
-                    ` · ${percent || '<1'}%`}
+                  <DownloadStatusText
+                    status={{
+                      beforeName: loading ? t('common.loading') : t(`experimentalAsr.phases.${status.phase}`),
+                      locale: i18n.resolvedLanguage,
+                      percent: status.phase === 'downloading'
+                        ? status.totalBytes > 0
+                          ? (status.downloadedBytes / status.totalBytes) * 100
+                          : null
+                        : undefined,
+                    }}
+                  />
                 </span>
                 {status.phase === 'downloading' && (
                   <progress

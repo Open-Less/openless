@@ -1,8 +1,9 @@
 // Host jobs outlive settings and are mirrored to the same scoped Toast API as other operations.
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { NotificationHandle } from '../../api/interaction';
+import type { DownloadStatusContent, NotificationHandle } from '../../api/interaction';
 import { useToast } from '../../ui/overlays/InteractionProvider';
+import { downloadStatusMessage } from '../../ui/feedback/DownloadStatusText';
 import { useDownloadJobs } from './useDownloadJobs';
 export type { ProgressItem } from './useDownloadJobs';
 
@@ -11,21 +12,44 @@ export function GlobalDownloadProgress() {
   const toast = useToast('model-downloads');
   const handles = useRef(new Map<string, { handle: NotificationHandle; generation: number }>());
   const results = useRef(new Map<string, NotificationHandle>());
+  const withName = (
+    phase: 'downloading' | 'preparing' | 'ready',
+    name: string,
+  ): DownloadStatusContent => {
+    // Keep the model's slot mounted even when the wording changes around it.
+    const [beforeName, afterName] = t(`modelDownloads.${phase}`, { name: '\0' }).split('\0');
+    return { beforeName, modelName: name, afterName, locale: i18n.resolvedLanguage };
+  };
   const { visible, handleCancel, getActionOwner } = useDownloadJobs((item, outcome) => {
-    const key = `download-result:${item.key}`;
+    const finished = outcome === 'finished';
+    const downloadStatus = finished
+      ? withName('ready', item.name)
+      : { beforeName: t('localAsr.downloadFailed') };
+    const message = downloadStatusMessage(downloadStatus);
+    const description = finished ? undefined : item.name;
     const entry = handles.current.get(item.key);
-    if (entry?.generation === item.generation) entry.handle.dismiss();
-    results.current.set(
-      item.key,
-      outcome === 'finished'
-        ? toast.success(t('modelDownloads.ready', { name: item.name }), { key })
-        : toast.warning(t('localAsr.downloadFailed'), { key, description: item.name }),
-    );
+    if (entry?.generation === item.generation) {
+      // Transfer the live handle before removing the job from the active projection.
+      handles.current.delete(item.key);
+      entry.handle.update({
+        variant: finished ? 'success' : 'warning',
+        message,
+        description,
+        downloadStatus,
+        progress: false,
+        progressValue: undefined,
+        actionLabel: undefined,
+        onAction: undefined,
+      });
+      results.current.set(item.key, entry.handle);
+    } else {
+      const options = { key: `download:${item.key}`, downloadStatus, description };
+      results.current.set(
+        item.key,
+        finished ? toast.success(message, options) : toast.warning(message, options),
+      );
+    }
   });
-  const formatPercent = useMemo(
-    () => new Intl.NumberFormat(i18n.resolvedLanguage, { style: 'percent' }),
-    [i18n.resolvedLanguage],
-  );
 
   useLayoutEffect(() => {
     const active = new Set(visible.map((item) => item.key));
@@ -35,22 +59,18 @@ export function GlobalDownloadProgress() {
       handles.current.delete(key);
     }
     for (const item of visible) {
-      const label = t(item.preparing ? 'modelDownloads.preparing' : 'modelDownloads.downloading', {
-        name: item.name,
-      });
       const percent = item.percent;
-      const belowOnePercent = percent !== null && percent > 0 && percent < 1;
-      const progressLabel =
-        percent === null
-          ? undefined
-          : `${belowOnePercent ? '<' : ''}${formatPercent.format((belowOnePercent ? 1 : Math.floor(percent)) / 100)}`;
-      const message = item.cancelling
-        ? t('localAsr.cancellingDownload')
-        : progressLabel === undefined
-          ? label
-          : `${label} · ${progressLabel}`;
+      const downloadStatus: DownloadStatusContent = item.cancelling
+        ? { beforeName: t('localAsr.cancellingDownload') }
+        : {
+            ...withName(item.preparing ? 'preparing' : 'downloading', item.name),
+            percent: item.preparing ? (percent ?? undefined) : percent,
+          };
+      const message = downloadStatusMessage(downloadStatus);
       const options = {
         description: item.cancelFailed ? t('common.operationFailed') : undefined,
+        downloadStatus,
+        align: 'center' as const,
         progress: true,
         progressValue: percent ?? undefined,
         onAction: () => void handleCancel(item),
@@ -73,7 +93,7 @@ export function GlobalDownloadProgress() {
         });
       }
     }
-  }, [toast, t, visible, handleCancel, getActionOwner, formatPercent]);
+  }, [toast, t, i18n.resolvedLanguage, visible, handleCancel, getActionOwner]);
   useLayoutEffect(() => {
     const active = handles.current;
     const receipts = results.current;

@@ -10,7 +10,7 @@ import { PageHeader } from '../../ui/layout/PageHeader';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { buildUsageDashboard } from './model';
 import { useUsageLabels } from './labels';
-import { UsageOverview, UsageServices, UsageHistory } from './UsageViews';
+import { UsageOverview, UsageServices, UsagePurpose } from './UsageViews';
 import './usage.css';
 
 export function Usage() {
@@ -20,7 +20,7 @@ export function Usage() {
   const history = useHistoryRecords();
   const serviceUsage = useServiceUsage();
   const [days, setDays] = useState(30);
-  const [view, setView] = useState<'overview' | 'services' | 'history'>('overview');
+  const [view, setView] = useState<'overview' | 'purpose' | 'services'>('overview');
   const [clearing, setClearing] = useState(false);
   const clearPending = useRef(false);
   const rows = useMemo(() => {
@@ -63,7 +63,7 @@ export function Usage() {
       clearPending.current = false;
     }
   };
-  const clearControl = view === 'history' && serviceUsage.data && (
+  const clearControl = view === 'purpose' && serviceUsage.data && (
     <Btn
       className="ol-usage-clear-btn"
       icon="trash"
@@ -74,7 +74,7 @@ export function Usage() {
       {t('usage.clear')}
     </Btn>
   );
-  const fillViewport = view === 'history' || view === 'services';
+  const fillViewport = view === 'services';
   return (
     <div
       className="ol-usage-page"
@@ -96,11 +96,12 @@ export function Usage() {
       <div className="ol-usage-controls">
         <nav aria-label={text('用量页面', 'Usage pages')} className="ol-usage-tabs">
           <Segmented
+            compact
             label={text('用量页面', 'Usage pages')}
             options={[
               { value: 'overview', label: text('概览', 'Overview') },
-              { value: 'services', label: text('服务与用途', 'Services and purposes') },
-              { value: 'history', label: text('记录', 'History') },
+              { value: 'purpose', label: text('用途', 'Purpose') },
+              { value: 'services', label: text('服务', 'Services') },
             ]}
             value={view}
             onChange={setView}
@@ -108,6 +109,7 @@ export function Usage() {
         </nav>
         <div className="ol-usage-toolbar">
           <Segmented
+            compact
             label={text('统计时段', 'Usage period')}
             options={[
               { value: '7', label: text('近 7 天', 'Last 7 days') },
@@ -168,7 +170,7 @@ export function Usage() {
       )}
       {view === 'overview' && <UsageOverview dashboard={dashboard} />}
       {view === 'services' && <UsageServices dashboard={dashboard} />}
-      {view === 'history' && <UsageHistory dashboard={dashboard} />}
+      {view === 'purpose' && <UsagePurpose dashboard={dashboard} />}
     </div>
   );
 }

@@ -171,6 +171,10 @@ export function Style() {
     </label>
   );
 
+  const packLayoutEase = busy === 'deleting'
+    ? ([0.3, 0.72, 0.4, 1] as const)
+    : ([0.22, 1, 0.36, 1] as const);
+
   return (
     <>
       <PageHeader
@@ -307,7 +311,7 @@ export function Style() {
                 label={t('style.pack.listTitle')}
                 value={workflowView}
                 onChange={setWorkflowView}
-                sliding
+                compact
                 options={[
                   { value: 'dictation', label: t('style.pack.dictationTab') },
                   { value: 'selection', label: t('style.pack.selectionTab') },
@@ -346,8 +350,11 @@ export function Style() {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{
-                      layout: { duration: reducedMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] },
-                      opacity: { duration: reducedMotion ? 0 : 0.12 },
+                      layout: { duration: reducedMotion ? 0 : 0.22, ease: packLayoutEase },
+                      opacity: {
+                        duration: reducedMotion ? 0 : 0.12,
+                        ease: busy === 'deleting' ? 'easeIn' : undefined,
+                      },
                     }}
                     style={{
                       display: 'flex',
@@ -531,7 +538,7 @@ export function Style() {
                 layout={reducedMotion ? false : 'position'}
                 initial={false}
                 transition={{
-                  layout: { duration: reducedMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] },
+                  layout: { duration: reducedMotion ? 0 : 0.22, ease: packLayoutEase },
                 }}
                 type="button"
                 disabled={busy === 'creating'}

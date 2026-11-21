@@ -75,7 +75,7 @@ export function Vocab() {
           />
           <button
             type="button"
-            className="ol-field ol-field-icon-action ol-pressable"
+            className="ol-field ol-field-icon-action ol-pressable ol-vocab-add"
             aria-label={t('vocab.newWord')}
             title={t('vocab.newWord')}
             onClick={() => {
@@ -84,7 +84,17 @@ export function Vocab() {
               setNewWordTemplateIds([]);
             }}
           >
-            <Icon name="plus" size={15} />
+            <svg
+              className="ol-vocab-add-icon"
+              width={15}
+              height={15}
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
+            </svg>
           </button>
         </div>
         <div className="ol-vocab-filter-actions">
@@ -93,11 +103,11 @@ export function Vocab() {
             label={t('vocab.title')}
             value={filter}
             onChange={setFilter}
-            sliding
+            compact
             options={[
               { value: 'all', label: t('vocab.filter.all') },
-              { value: 'auto', label: t('vocab.filter.auto') },
-              { value: 'manual', label: t('vocab.filter.manual') },
+              { value: 'auto', label: t('vocab.filter.auto'), icon: <Icon name="sparkle" size={13} /> },
+              { value: 'manual', label: t('vocab.filter.manual'), icon: <Icon name="feather" size={13} /> },
             ]}
           />
           <VocabularySelectionToggle

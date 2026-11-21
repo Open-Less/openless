@@ -64,7 +64,8 @@ export function useDesktopGuide({ onComplete }: { onComplete: () => void | Promi
   const steps = guideSteps(os === 'mac', multimodal);
   const step = steps.includes(progress.step) ? progress.step : 'recognition';
   const index = steps.indexOf(step);
-  const currentMode = multimodal ? 'multimodal' : 'traditional';
+  const currentMode: 'traditional' | 'multimodal' | null =
+    prefs?.pipelineMode === 'deepseek' ? null : multimodal ? 'multimodal' : 'traditional';
 
   useEffect(() => {
     alive.current = true;
@@ -219,8 +220,12 @@ export function useDesktopGuide({ onComplete }: { onComplete: () => void | Promi
   const reply = (id: GuideStep) => {
     if (progress.answers[id] === 'later') return t('desktopGuide.laterReply');
     if (id === 'welcome') return progress.name || t('desktopGuide.startReply');
-    if (id === 'mode')
-      return t('desktopGuide.modeReply', { mode: t(`desktopGuide.${currentMode}`) });
+    if (id === 'mode') {
+      const mode = currentMode
+        ? t(`desktopGuide.${currentMode}`)
+        : t('settings.providers.pipelineModeDeepseek');
+      return t('desktopGuide.modeReply', { mode });
+    }
     if (id === 'microphone' || id === 'accessibility') return t('desktopGuide.allowed');
     if (id === 'shortcut') return t('desktopGuide.shortcutReply');
     return t('desktopGuide.configured');
@@ -252,7 +257,7 @@ export function useDesktopGuide({ onComplete }: { onComplete: () => void | Promi
   const primaryDisabled =
     busy ||
     (isPermission && (permission === null || permission === 'noDevice')) ||
-    (step === 'mode' && (loading || !prefs)) ||
+    (step === 'mode' && (loading || !prefs || currentMode === null)) ||
     (step === 'shortcut' && !prefs?.dictationHotkey.primary);
   const primaryAction = () => {
     if (step === 'finish') return finish();

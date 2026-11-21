@@ -197,7 +197,7 @@ export function HistoryDetail({
               label={t('history.showRaw', '查看原文')}
               value={activeView}
               onChange={setContentView}
-              sliding
+              compact
               options={[
                 { value: 'polished', label: polishSummaryLabel, title: polishSummaryLabel },
                 { value: 'raw', label: t('history.rawLabel', '原文') },

@@ -175,6 +175,7 @@ export const de: typeof zhCN = {
     replace: 'Synchronisierte lokale Daten durch Cloud-Daten ersetzen',
     replaceWarning:
       'Lokale Daten im Sync-Umfang werden ersetzt. Zum Behalten lokaler Änderungen Zusammenführen wählen.',
+    mergeOverwriteDirection: 'Bei einem Konflikt überschreibt die lokale Version beim Synchronisieren den Cloud-Eintrag. Die Cloud-Version überschreibt den lokalen Eintrag.',
     restoreCheck: 'Ich habe Wiederherstellungsart und Konfliktentscheidungen geprüft.',
     applyRestore: 'Wiederherstellung bestätigen',
     conflictProgress: '{{selected}} von {{total}} Konflikten gelöst',
@@ -509,7 +510,7 @@ export const de: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Aktualisieren',
+        update: 'Paket aktualisieren',
         withdraw: 'Zurückziehen',
       },
       loadFailed: 'Meine Pakete konnten nicht geladen werden: {{err}}',

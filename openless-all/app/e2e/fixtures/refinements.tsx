@@ -10,6 +10,7 @@ import { SelectLite } from '../../src/ui/controls/SelectLite';
 import { AppViewport } from '../../src/ui/layout/AppViewport';
 import { PresenceModal } from '../../src/ui/overlays/Modal';
 import { ChoiceChips } from '../../src/components/ui/ChoiceChips';
+import { DownloadDialog, type SidebarModelEntry } from '../../src/features/local-asr/components';
 import { DismissibleCard } from '../../src/components/ui/DismissibleCard';
 import { cardDeparture } from '../../src/lib/cardDeparture';
 import '../../src/styles/tokens.css';
@@ -185,12 +186,38 @@ function ModalFixture() {
     </>
   );
 }
+const catalogEntries: SidebarModelEntry[] = [
+  { id: 'qwen', name: 'Fixture Qwen', engine: 'qwen3', isDownloaded: false, isDownloading: false, isActive: false },
+  { id: 'whisper', name: 'Fixture Whisper', engine: 'whisper', isDownloaded: false, isDownloading: false, isActive: false },
+];
+
+function CatalogFixture() {
+  const [selected, setSelected] = useState('qwen');
+  return (
+    <DownloadDialog
+      entries={catalogEntries}
+      selectedId={selected}
+      onSelect={setSelected}
+      sizeOf={() => null}
+      fileCountOf={() => null}
+      hfCardOf={() => null}
+      busy={false}
+      loading={false}
+      error={null}
+      onRetryCatalog={() => {}}
+      onRetryCard={() => {}}
+      onStart={() => {}}
+      onClose={() => {}}
+    />
+  );
+}
+
 initInteractionMode();
 void i18nReady.then(() =>
   createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <AppViewport>
-        <Fixture />
+        {new URLSearchParams(location.search).has('catalog') ? <CatalogFixture /> : <Fixture />}
       </AppViewport>
     </React.StrictMode>,
   ),

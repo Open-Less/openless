@@ -94,8 +94,8 @@
   background: #ff3b30;
 }
 .ol-notification-icon[data-tone='warning'] {
-  background: #ffcc00;
-  color: #342800;
+  background: #ff3b30;
+  color: #fff;
 }
 .ol-notification-icon[data-tone='info'] {
   background: #007aff;
@@ -107,7 +107,7 @@
   background: #ff453a;
 }
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='warning'] {
-  background: #ffd60a;
+  background: #ff453a;
 }
 [data-ol-theme='dark'] .ol-notification-icon[data-tone='info'] {
   background: #0a84ff;
@@ -190,6 +190,12 @@
   font-size: 12px;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
+}
+.ol-toast-row[data-download-status] {
+  column-gap: 6px;
+}
+.ol-toast-row[data-download-status] .ol-notification-message {
+  font-weight: 500;
 }
 .ol-notification-progress {
   display: block;
