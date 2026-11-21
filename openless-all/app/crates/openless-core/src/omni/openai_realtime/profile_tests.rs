@@ -53,6 +53,8 @@ fn configuration(endpoint: &str, provider: &str, auth_mode: RealtimeAuthMode) ->
         extra_headers,
         temperature: None,
         thinking_enabled: false,
+        max_tokens_override: None,
+        reasoning_effort: None,
         realtime_options: RealtimeOptions {
             auth_mode,
             ..RealtimeOptions::default()

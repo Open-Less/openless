@@ -23,6 +23,8 @@ fn config(endpoint: &str) -> OmniConfig {
         extra_headers: HashMap::new(),
         temperature: None,
         thinking_enabled: false,
+        max_tokens_override: None,
+        reasoning_effort: None,
         realtime_options: Default::default(),
     }
 }
