@@ -10,8 +10,9 @@
   --ol-primary-solid-ink: var(--ol-on-accent);
   --ol-danger-solid-bg: var(--ol-err);
   --ol-danger-solid-ink: #ffffff;
-  --ol-control-radius: 8px;
-  --ol-bubble-radius: var(--ol-r-lg);
+  --ol-control-radius: var(--ol-radius);
+  --ol-button-radius: 12px;
+  --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
@@ -20,6 +21,7 @@
   --ol-canvas: #ffffff;
   --ol-surface: #ffffff;
   --ol-surface-2: #f4f4f5;
+  --ol-surface-raised: var(--ol-surface-2);
   --ol-surface-solid: #ffffff;
   --ol-line: #e4e4e7;
   --ol-line-strong: #d4d4d8;
@@ -71,26 +73,44 @@
     0 40px 60px -20px rgba(15, 17, 22, 0.15), 0 24px 30px -12px rgba(15, 17, 22, 0.08),
     0 0 0 0.5px rgba(0, 0, 0, 0.03);
 
-  /* Radii */
-  --ol-shell-radius: 32px;
-  --ol-panel-radius: 18px;
-  --ol-card-radius: 14px;
-  --ol-pill-radius: 999px;
-  --ol-r-sm: 6px;
-  --ol-r-md: 10px;
-  --ol-r-lg: 14px;
-  --ol-r-xl: 18px;
-  --ol-r-2xl: var(--ol-card-radius);
-  --ol-r-pill: var(--ol-pill-radius);
+  /* One radius for every rounded interface surface and control. */
+  --ol-radius: 16px;
+  /* Text/action buttons use this; cards, inputs, dialogs and toasts stay at --ol-radius. */
+  --ol-button-radius: 12px;
+  --ol-shell-radius: var(--ol-radius);
+  --ol-surface-radius: var(--ol-radius);
+  --ol-panel-radius: var(--ol-radius);
+  --ol-card-radius: var(--ol-radius);
+  --ol-pill-radius: var(--ol-radius);
+  --ol-r-sm: var(--ol-radius);
+  --ol-r-md: var(--ol-radius);
+  --ol-r-lg: var(--ol-radius);
+  --ol-r-xl: var(--ol-radius);
+  --ol-r-2xl: var(--ol-radius);
+  --ol-r-pill: var(--ol-radius);
 
   /* Typography: compensate bright-on-dark irradiation without changing the type scale.
      Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
+  --font-weight-normal: var(--ol-font-weight-regular);
+  --font-weight-medium: var(--ol-font-weight-medium);
+  --font-weight-semibold: var(--ol-font-weight-semibold);
+  --font-weight-bold: var(--ol-font-weight-bold);
+  --font-weight-extrabold: calc(800 + var(--ol-font-weight-offset));
+  --ol-font-weight-offset: 0;
+  --ol-font-weight-regular: 400;
+  --ol-font-weight-bold: 700;
+  --ol-font-weight-demibold: 650;
   --ol-font-weight-medium: 500;
   --ol-font-weight-semibold: 600;
   --ol-font-display: var(--ol-font-sans);
   --ol-font-body: var(--ol-font-sans);
   --ol-font-numeric: var(--ol-font-sans);
   --ol-reading-width: 72ch;
+  /* Content panes use a 12-column grid. Sidebars stay fixed chrome outside it. */
+  --ol-grid-columns: 12;
+  --ol-grid-gutter: 16px;
+  --ol-grid-margin: 24px;
+  --ol-grid-margin-compact: 16px;
   --ol-font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --ol-font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
 
@@ -122,6 +142,9 @@
   /* （参考 Codex 侧栏）：侧栏底色与右侧纯白内容区拉开明确层次，
      此前 #fafafa 对白底几乎无区分。 */
   --ol-sidebar-bg: #f0f0f1;
+  /* Opaque equivalents of the choice fills over the sidebar surface. */
+  --ol-sidebar-hover-bg: #e6e6e7;
+  --ol-sidebar-active-bg: #dededf;
   --ol-sidebar-border: #e4e4e7;
   --ol-sidebar-brand-bg: linear-gradient(
     180deg,
@@ -153,12 +176,24 @@
     rgba(255, 255, 255, 0.82),
     rgba(255, 255, 255, 0.48)
   );
-  --ol-nav-hover-bg: rgba(0, 0, 0, 0.04);
+
+  /* Selection state language, shared by the sidebar, the settings rail, segmented
+     controls, tab strips and menus. Idle labels read light; hover darkens the label
+     over a faint neutral wash; the selected item is black on a wash one step darker.
+     Neutral only: blue stays with primary actions, switch tracks, links and focus. */
+  --ol-choice-idle-ink: #85858e;
+  --ol-choice-hover-ink: #18181b;
+  --ol-choice-active-ink: #000000;
+  --ol-choice-disabled-ink: #b4b4bb;
+  --ol-choice-hover-bg: rgba(0, 0, 0, 0.04);
+  --ol-choice-active-bg: rgba(0, 0, 0, 0.075);
+  --ol-choice-motion: 160ms var(--ol-motion-quick);
 
   --ol-settings-rail-bg: #f0f0f1;
   --ol-settings-rail-border: rgba(255, 255, 255, 0.52);
   --ol-settings-links-border: rgba(255, 255, 255, 0.46);
-  --ol-settings-content-bg: #f7f7f8;
+  /* The settings pane is always the plain surface; sticky strips must paint the same. */
+  --ol-settings-content-bg: var(--ol-surface);
   --ol-settings-close-bg: rgba(255, 255, 255, 0.38);
   --ol-settings-close-hover-bg: rgba(255, 255, 255, 0.72);
 
@@ -182,15 +217,12 @@
   --ol-pill-selected-bg: #18181b;
   --ol-pill-selected-ink: #ffffff;
   --ol-pill-selected-border: #18181b;
-  --ol-segmented-bg: rgba(0, 0, 0, 0.04);
-  --ol-segmented-active-bg: #ffffff;
-  --ol-segmented-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
-  --ol-select-trigger-bg: var(--ol-control-solid);
+  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
   --ol-select-popover-bg: #fcfcfd;
   --ol-select-popover-border: rgba(0, 0, 0, 0.1);
   --ol-select-popover-shadow:
     0 12px 30px -10px rgba(15, 17, 22, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
-  --ol-select-option-hover-bg: rgba(37, 99, 235, 0.1);
+  --ol-select-option-hover-bg: var(--ol-choice-hover-bg);
   --ol-toggle-off-bg: rgba(0, 0, 0, 0.15);
   --ol-toggle-knob: #ffffff;
   --ol-overlay-bg: rgba(15, 17, 22, 0.32);
@@ -228,6 +260,10 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-font-weight-offset: -40;
+  --ol-font-weight-regular: 360;
+  --ol-font-weight-bold: 660;
+  --ol-font-weight-demibold: 610;
   --ol-font-weight-medium: 460;
   --ol-font-weight-semibold: 560;
   --ol-accent-solid-bg: #3b82f6;
@@ -295,6 +331,8 @@
   --ol-card-shadow: 0 18px 42px -30px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
   --ol-sidebar-bg: #141417;
+  --ol-sidebar-hover-bg: #1c1c1f;
+  --ol-sidebar-active-bg: #2c2c2e;
   --ol-sidebar-border: #27272a;
   --ol-sidebar-brand-bg: transparent;
   --ol-sidebar-brand-border: transparent;
@@ -310,12 +348,20 @@
     rgba(63, 63, 70, 0.86),
     rgba(39, 39, 42, 0.86)
   );
-  --ol-nav-hover-bg: rgba(116, 183, 255, 0.1);
+
+  --ol-choice-idle-ink: #7d7d86;
+  --ol-choice-hover-ink: #e4e4e7;
+  --ol-choice-active-ink: #ffffff;
+  --ol-choice-disabled-ink: #4a4a52;
+  /* Equal steps read larger on dark grounds: keep hover close to the ground so the
+     selected wash stays clearly the stronger one. */
+  --ol-choice-hover-bg: rgba(255, 255, 255, 0.035);
+  --ol-choice-active-bg: rgba(255, 255, 255, 0.1);
 
   --ol-settings-rail-bg: #141417;
   --ol-settings-rail-border: rgba(226, 232, 240, 0.09);
   --ol-settings-links-border: rgba(226, 232, 240, 0.08);
-  --ol-settings-content-bg: #18181b;
+  --ol-settings-content-bg: var(--ol-surface);
   --ol-settings-close-bg: rgba(255, 255, 255, 0.05);
   --ol-settings-close-hover-bg: rgba(116, 183, 255, 0.14);
 
@@ -338,17 +384,13 @@
   --ol-pill-selected-bg: linear-gradient(180deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.92));
   --ol-pill-selected-ink: #f4f7fb;
   --ol-pill-selected-border: rgba(147, 197, 253, 0.44);
-  --ol-segmented-bg: rgba(226, 232, 240, 0.07);
-  --ol-segmented-active-bg: linear-gradient(180deg, rgba(63, 63, 70, 0.98), rgba(39, 39, 42, 0.98));
-  --ol-segmented-active-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.36), 0 0 0 0.5px rgba(226, 232, 240, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --ol-select-trigger-bg: var(--ol-control-solid);
+  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
   --ol-select-popover-bg: #202024;
   --ol-select-popover-border: rgba(226, 232, 240, 0.12);
   --ol-select-popover-shadow:
     0 18px 42px -16px rgba(0, 0, 0, 0.62), 0 0 0 0.5px rgba(226, 232, 240, 0.08);
-  --ol-select-option-hover-bg: rgba(116, 183, 255, 0.15);
+  /* A menu's highlight is its keyboard cursor, so it stays a step stronger than a hover. */
+  --ol-select-option-hover-bg: rgba(255, 255, 255, 0.07);
   --ol-toggle-off-bg: rgba(226, 232, 240, 0.18);
   --ol-toggle-knob: #fafafa;
   --ol-overlay-bg: rgba(5, 8, 13, 0.64);
@@ -411,7 +453,8 @@ body {
   overscroll-behavior: contain;
 }
 /* 概览是 overflow:hidden 的单屏固定页，永远不会有滚动条 —— 不占槽位。 */
-.ol-thinscroll[data-ol-page-fixed] {
+.ol-thinscroll[data-ol-page-fixed],
+.ol-thinscroll.ol-page-fixed {
   scrollbar-gutter: auto;
 }
 .ol-thinscroll::-webkit-scrollbar {
@@ -423,7 +466,7 @@ body {
 }
 .ol-thinscroll::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.18);
-  border-radius: 3px;
+  border-radius: var(--ol-radius);
 }
 .ol-thinscroll::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.28);
@@ -459,4 +502,10 @@ body {
 .ol-ring:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--ol-blue-ring);
+}
+
+@supports (color: color-mix(in srgb, black, white)) {
+  :root {
+    --ol-surface-raised: color-mix(in srgb, var(--ol-surface) 97%, var(--ol-ink) 3%);
+  }
 }

@@ -55,6 +55,7 @@ impl CredentialMetadataStore for DiskMetadata {
     }
 }
 pub struct HarmonyCredentials {
+    siwc: Arc<openless_core::siwc::SiwcService>,
     directory: CredentialDirectory,
     metadata: Arc<DiskMetadata>,
     values: Values,
@@ -68,6 +69,7 @@ impl HarmonyCredentials {
             values: values.clone(),
         });
         Self {
+            siwc: crate::siwc::service(),
             directory: CredentialDirectory::new(metadata.clone()),
             metadata,
             values,
@@ -101,6 +103,10 @@ impl HarmonyCredentials {
     }
 }
 impl CredentialStore for HarmonyCredentials {
+    fn siwc(&self) -> Option<Arc<openless_core::siwc::SiwcService>> {
+        Some(self.siwc.clone())
+    }
+
     fn status(
         &self,
         prefs: UserPreferences,

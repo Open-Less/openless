@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>OpenLess 使用系统播放声音作为临时参考来抑制听写回声，不会保存或上传播放参考。</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>OpenLess 需要麦克风权限来听写你的语音。</string>
   <key>NSSpeechRecognitionUsageDescription</key>

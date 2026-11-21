@@ -31,7 +31,7 @@ ARM/Intel 的整个打包步骤分别约 15 分 17 秒、15 分 08 秒。主要�
 
 macOS 检查统一关闭 dev/test debug info，分别缓存 Core、Host、backend-tests 的实际 target 目录。stable、MSRV、release 缓存分开，避免不同工具链和 profile 的产物互相挤占。
 
-MLX 的 CMake 输出另用 [cache-macos-mlx](../.github/actions/cache-macos-mlx/action.yml) 保存。实际使用的 `rust-cache` [源码](https://github.com/Swatinem/rust-cache/blob/6323deb102c322ba6fcbdcafc7e3dddab59af2b6/src/workspace.ts) 排除 workspace 目录内的 path 依赖，导致 `src-tauri/vendor/qwen3-asr-rs` 的原生输出在 post 阶段被清理；首轮验证中，命中 Cargo 缓存仍重建 MLX 约 7 分 17 秒。独立缓存步骤放在 `rust-cache` 后，利用 post 的逆序执行先保存原生输出。缓存按架构、profile、Rust/Clang/Metal/CMake/SDK、子模块提交、编译环境和 manifest/lock/config 隔离，无跨 key 的模糊回退。Metal 版本输出去掉每次启动可能变化的挂载目录，保留实际版本与目标信息。只保存 CMake `out`，不保存 Cargo freshness 指纹，下一轮仍执行 build script 与 CMake 输入校验。
+
 
 `scripts/macos-build-env.sh` 为 macOS 打包默认设置 `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`，保留 `opt-level=3`、thin LTO 和 unwind；环境变量可以显式覆盖为其他值。参数取舍依据 [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html#codegen-units)：更多 codegen units 允许更快的并行代码生成，可能影响最终体积或优化效果。共享 `Cargo.toml` 不修改。CI 在恢复缓存前加载同一环境，本地 `build-mac.sh` 也加载它。
 

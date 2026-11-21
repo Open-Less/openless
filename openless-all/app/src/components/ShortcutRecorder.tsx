@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { usePopupViewport } from '../ui/layout/AppViewport';
+
 import { Icon } from './Icon';
 import { Popover } from '@base-ui/react/popover';
 import { Collapse } from './ui/Disclosure';
@@ -46,6 +48,7 @@ export function ShortcutRecorder({
   /** Windows dictation only; other shortcut consumers cannot install mouse hooks. */
   allowMouseButtons?: boolean;
 }) {
+  const { boundary, container } = usePopupViewport();
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -272,24 +275,22 @@ export function ShortcutRecorder({
     display: 'flex',
     flexDirection: 'column',
     gap: 6,
-    width: '100%',
-    // The shortcut recorder in settings rows no longer spans the full row (previously
-    // the value hugged left and the chevron flew to the far edge); capped to the input
-    // width, sitting compactly after the label column.
-    maxWidth: 360,
+    width: 'fit-content',
+    maxWidth: '100%',
   };
   const recorderRowStyle: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
-    width: '100%',
+    width: 'fit-content',
+    maxWidth: '100%',
   };
   const menuButtonStyle: CSSProperties = {
     fontSize: 12,
     padding: '5px 12px',
     border: '0.5px solid var(--ol-line-strong)',
-    borderRadius: 6,
+    borderRadius: 'var(--ol-r-sm)',
     background: 'transparent',
     color: 'var(--ol-ink-2)',
     fontFamily: 'inherit',
@@ -317,8 +318,13 @@ export function ShortcutRecorder({
             disabled={disabled}
             onClick={startRecording}
             aria-label={t('settings.recording.comboRecordBtn')}
+            title={t('settings.recording.comboRecordBtn')}
           >
-            {assigned && value ? <KbdGroup keys={formatComboParts(value)} /> : <span>＋</span>}
+            {assigned && value ? (
+              <KbdGroup keys={formatComboParts(value).map((key) => key.replace('⌃', 'Ctrl'))} />
+            ) : (
+              <span>＋</span>
+            )}
           </Popover.Trigger>
           {onReset && (
             <button
@@ -345,10 +351,11 @@ export function ShortcutRecorder({
             </button>
           )}
         </div>
-        <Popover.Portal className="ol-popup-portal">
+        <Popover.Portal container={container} className="ol-popup-portal">
           <Popover.Positioner
             className="ol-select-positioner"
             positionMethod="fixed"
+            collisionBoundary={boundary}
             side="bottom"
             collisionAvoidance={{ side: 'flip', align: 'shift', fallbackAxisSide: 'none' }}
             align="start"

@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
@@ -34,16 +34,24 @@ export function discoverTestFiles(appRoot = DEFAULT_APP_ROOT) {
 
 export function runTestFiles(
   testFiles,
-  { appRoot = DEFAULT_APP_ROOT, log = console.log, spawn = spawnSync, tsxCli } = {},
+  {
+    appRoot = DEFAULT_APP_ROOT,
+    log = console.log,
+    spawn = spawnSync,
+    tsxImport,
+    timeout = 120_000,
+  } = {},
 ) {
-  let resolvedTsxCli = tsxCli;
+  let resolvedTsxImport = tsxImport;
 
   for (const testFile of testFiles) {
     const absoluteTestFile = resolve(appRoot, testFile);
     let args;
     if (testFile.endsWith('.test.ts')) {
-      resolvedTsxCli ??= fileURLToPath(import.meta.resolve('tsx/cli'));
-      args = [resolvedTsxCli, absoluteTestFile];
+      // Load TypeScript in the child itself. The tsx CLI spawns another Node
+      // process, adding startup cost and leaving it alive if the CLI times out.
+      resolvedTsxImport ??= import.meta.resolve('tsx');
+      args = ['--import', resolvedTsxImport, absoluteTestFile];
     } else if (testFile.endsWith('.mjs')) {
       args = [absoluteTestFile];
     } else {
@@ -52,12 +60,20 @@ export function runTestFiles(
     }
 
     log(`[frontend-tests] ${testFile}`);
+    const started = performance.now();
     const result = spawn(process.execPath, args, {
       cwd: appRoot,
       env: process.env,
       stdio: 'inherit',
+      timeout,
+      killSignal: 'SIGKILL',
     });
+    log(`[frontend-tests] ${testFile}: ${((performance.now() - started) / 1000).toFixed(1)}s`);
     if (result.error) {
+      if (result.error.code === 'ETIMEDOUT') {
+        log(`[frontend-tests] timed out after ${timeout}ms: ${testFile}`);
+        return 124;
+      }
       log(`[frontend-tests] failed to start ${testFile}: ${result.error.message}`);
       return 1;
     }
@@ -69,9 +85,33 @@ export function runTestFiles(
   return 0;
 }
 
+/**
+ * The full suite is platform-independent except for a handful of files that read
+ * `process.platform` or whose name names a platform. Running all 140 scripts on
+ * Windows costs ~3x the macOS time (process spawn + filesystem), so Windows runs
+ * only the platform-sensitive subset and the rest is covered by macOS and Linux.
+ */
+export function selectPlatformSensitive(appRoot, testFiles, platform) {
+  const marked = new RegExp(`(^|[/-])${platform}([-.]|$)`, 'i');
+  return testFiles.filter((file) => {
+    if (marked.test(file)) return true;
+    const source = readFileSync(join(appRoot, file), 'utf8');
+    return /process\.platform/.test(source);
+  });
+}
+
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';
 if (invokedPath === import.meta.url) {
-  const testFiles = discoverTestFiles();
+  const platformOnlyIndex = process.argv.indexOf('--platform-only');
+  const platformOnly = platformOnlyIndex > -1 ? process.argv[platformOnlyIndex + 1] : null;
+  let testFiles = discoverTestFiles();
+  if (platformOnly) {
+    const all = testFiles;
+    testFiles = selectPlatformSensitive(DEFAULT_APP_ROOT, all, platformOnly);
+    console.log(
+      `[frontend-tests] --platform-only ${platformOnly}: ${testFiles.length}/${all.length} tests`,
+    );
+  }
   if (testFiles.length === 0) {
     console.error('[frontend-tests] no tests discovered');
     process.exitCode = 1;

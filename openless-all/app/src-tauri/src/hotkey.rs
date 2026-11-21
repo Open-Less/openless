@@ -27,6 +27,16 @@ use parking_lot::RwLock;
 use crate::types::HotkeyTrigger;
 use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyInstallError};
 
+static CAPSULE_MENU_OPEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_capsule_menu_open(open: bool) {
+    CAPSULE_MENU_OPEN.store(open, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn capsule_menu_open() -> bool {
+    CAPSULE_MENU_OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyEvent {
     Pressed {
@@ -36,6 +46,8 @@ pub enum HotkeyEvent {
     Released {
         at: Instant,
         press_id: u64,
+        /// Native per-press verdict, independent of the asynchronous abort bridge.
+        combined: bool,
     },
     // Combo abort is not in this enum: it goes through the separate `combo_abort` channel to avoid
     // being queued behind the Pressed → begin_session synchronous mic-open flow (see module docs).
@@ -1011,6 +1023,7 @@ mod platform {
 
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                crate::recording_companion::reset_held();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
@@ -1018,11 +1031,30 @@ mod platform {
             }
             FLAGS_CHANGED => handle_flags_changed(ctx, event),
             KEY_DOWN => {
-                handle_key_down(ctx, event);
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+                if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
                 let flags = unsafe { CGEventGetFlags(event) };
-                let consumed = handle_enter_key(ctx, keycode, true, flags, event_is_synthetic(event));
-                crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true);
+                let shortcut_consumed = !ctx.shared.recording_active.load(Ordering::SeqCst)
+                    && crate::side_aware_combo::platform::dispatch_keycode(
+                        keycode,
+                        false,
+                        flags,
+                        true,
+                    );
+                let consumed = handle_enter_key(
+                    ctx,
+                    keycode,
+                    true,
+                    flags,
+                    event_is_synthetic(event),
+                    shortcut_consumed,
+                );
+                if shortcut_consumed {
+                    crate::side_aware_combo::handle_companion_key_down();
+                    note_companion_key_down(ctx);
+                    return std::ptr::null_mut();
+                }
+                handle_key_down(ctx, event);
                 // While a session is active, consume Esc exclusively: returning null deletes the
                 // event (active tap) so the host app never sees it, avoiding double effect between
                 // "cancel session" and the host's Esc semantics. See esc_exclusive docs.
@@ -1036,9 +1068,11 @@ mod platform {
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 let flags = unsafe { CGEventGetFlags(event) };
-                let consumed = handle_enter_key(ctx, keycode, false, flags, event_is_synthetic(event));
-                crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false);
-                if consumed {
+                let consumed =
+                    handle_enter_key(ctx, keycode, false, flags, event_is_synthetic(event), false);
+                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, flags, false)
+                    || consumed
+                {
                     return std::ptr::null_mut();
                 }
             }
@@ -1074,6 +1108,7 @@ mod platform {
         down: bool,
         flags: CgEventFlags,
         synthetic: bool,
+        shortcut_consumed: bool,
     ) -> bool {
         let Some(key) = enter_key(keycode) else {
             return false;
@@ -1084,6 +1119,7 @@ mod platform {
             | FLAG_MASK_COMMAND
             | FLAG_MASK_SECONDARY_FN;
         let eligible = down
+            && !shortcut_consumed
             && !ctx.shared.recording_active.load(Ordering::SeqCst)
             && ctx.shared.binding.read().mode == HotkeyMode::Toggle
             && (flags & modifier_mask) == 0;
@@ -1223,7 +1259,8 @@ mod platform {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
             let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
             if !tap_only_fn {
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
                 return;
             }
 
@@ -1240,7 +1277,8 @@ mod platform {
                         press_id,
                     },
                 );
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
             } else {
                 log::info!(
                     "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
@@ -1769,11 +1807,12 @@ mod platform {
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
+    #[cfg(not(test))]
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
-        WH_KEYBOARD_LL, WM_QUIT,
+        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+        MSG, WH_KEYBOARD_LL, WM_QUIT,
     };
 
     use super::{
@@ -1789,7 +1828,6 @@ mod platform {
     const WM_SYSKEYDOWN: usize = 0x0104;
     const WM_SYSKEYUP: usize = 0x0105;
 
-    const LLKHF_EXTENDED: u32 = 0x01;
     const LLKHF_LOWER_IL_INJECTED: u32 = 0x02;
     const LLKHF_INJECTED: u32 = 0x10;
     const VK_RETURN: u32 = 0x0D;
@@ -1976,9 +2014,14 @@ mod platform {
                 let keyboard_flags = keyboard.flags.0;
                 let injected =
                     (keyboard_flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)) != 0;
+                let vk_code = crate::side_aware_combo::normalize_windows_vk(
+                    keyboard.vkCode,
+                    keyboard.scanCode,
+                    keyboard_flags & LLKHF_EXTENDED.0 != 0,
+                );
                 if dispatch_keyboard_event_with_details(
                     ctx,
-                    keyboard.vkCode,
+                    vk_code,
                     keyboard.scanCode,
                     keyboard_flags,
                     wparam.0,
@@ -2001,6 +2044,7 @@ mod platform {
         }
     }
 
+    #[cfg(test)]
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
         dispatch_keyboard_event_with_details(ctx, vk_code, 0, 0, message, false)
     }
@@ -2014,15 +2058,21 @@ mod platform {
         injected: bool,
     ) -> bool {
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+        let recording_shortcut = ctx.shared.recording_active.load(Ordering::SeqCst);
+        // Keep configured shortcuts and QA companion chords ahead of bare Enter.
+        let enter_shortcut_consumed = vk_code == VK_RETURN
+            && !recording_shortcut
+            && crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
         let enter_consume = if vk_code == VK_RETURN {
-            let key = if flags & LLKHF_EXTENDED != 0 || scan_code == 0xE01C {
+            let key = if flags & LLKHF_EXTENDED.0 != 0 || scan_code == 0xE01C {
                 super::EnterKey::Keypad
             } else {
                 super::EnterKey::Main
             };
             let modifier_down = windows_modifiers_down();
             let eligible = pressed
-                && !ctx.shared.recording_active.load(Ordering::SeqCst)
+                && !recording_shortcut
+                && !enter_shortcut_consumed
                 && ctx.shared.binding.read().mode == HotkeyMode::Toggle
                 && !modifier_down;
             let decision = super::enter_stop_event(
@@ -2044,9 +2094,10 @@ mod platform {
         // Shortcut recording receives real keyboard events in the frontend; the main
         // dictation/Agent hooks must not swallow keys. A previously accepted Enter gesture is
         // still drained above so its matching repeat/up cannot leak after the phase changes.
-        if ctx.shared.recording_active.load(Ordering::SeqCst) {
+        if recording_shortcut {
             return enter_consume;
         }
+        if vk_code == VK_ESCAPE && super::capsule_menu_open() { return false; }
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
@@ -2057,7 +2108,16 @@ mod platform {
             return esc_exclusive();
         }
 
-        crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
+        if enter_shortcut_consumed
+            || (vk_code != VK_RETURN
+                && crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed))
+        {
+            if pressed {
+                crate::side_aware_combo::handle_companion_key_down();
+                note_companion_key_down(ctx);
+            }
+            return true;
+        }
 
         if pressed && !is_modifier_vk(vk_code) {
             crate::side_aware_combo::handle_companion_key_down();
@@ -2158,6 +2218,7 @@ mod platform {
                         HotkeyEvent::Released {
                             at: std::time::Instant::now(),
                             press_id,
+                            combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id,
                         },
                     );
                 }
@@ -2488,6 +2549,23 @@ mod platform {
                 replacement_rx.recv_timeout(std::time::Duration::from_secs(2)),
                 Err(mpsc::RecvTimeoutError::Disconnected)
             );
+        }
+
+        #[test]
+        fn windows_release_carries_combo_verdict_even_when_abort_bridge_has_not_drained() {
+            let (ctx, rx, abort_rx) = callback_context_with_combo(shared(HotkeyTrigger::RightControl));
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            let press_id = match rx.recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                other => panic!("expected press, got {other:?}"),
+            };
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP);
+            // Intentionally read Released before the independently queued Combined.
+            assert!(matches!(rx.recv().unwrap(), HotkeyEvent::Released {
+                press_id: released_id, combined: true, ..
+            } if released_id == press_id));
+            assert_eq!(abort_rx.recv().unwrap().press_id, press_id);
         }
 
         #[test]

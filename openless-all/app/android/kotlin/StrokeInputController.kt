@@ -41,6 +41,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
     private val wordSegments = mutableListOf<String>()
     private var lastStrokeCandidates: List<String> = emptyList()
     private var confirmedText = ""
+    private val associationLearning = TypedContinuationHistory()
     private var phraseQueryEpoch = 0L
     private var strokePreview: TextView? = null
     private var clearStrokeButton: TextView? = null
@@ -79,6 +80,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
 
     /** Matches selectInputMode()'s own old inline reset exactly — mode-switch also resets the number/symbol sub-panel and the punctuation rail's page, which resetForNewInputSession() below does not. */
     fun resetForModeSwitch() {
+        associationLearning.reset()
         strokeNumberMode = false
         numberSymbolMode = false
         symbolPageIndex = 0
@@ -91,15 +93,37 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
 
     /** Matches onStartInput()'s own old inline reset exactly — a fresh input session also drops any in-progress word segments/candidates, but leaves the punctuation rail's page alone. */
     fun resetForNewInputSession() {
+        associationLearning.reset()
         strokeNumberMode = false
         numberSymbolMode = false
         symbolPageIndex = 0
         confirmedText = ""
         phraseQueryEpoch++
         strokeCode = ""
+        strokeQueryEpoch++
         wordSegments.clear()
         lastStrokeCandidates = emptyList()
+        // The panel isn't rebuilt for a new session, so the views still show the old field's code and candidates.
+        strokePreview?.text = ""
+        strokeCandidates?.removeAllViews()
         updateClearStrokeButtonVisibility()
+    }
+
+    /**
+     * The host emptied the field (e.g. a chat app's send button): start over
+     * — no association context, no half-typed code or 分词 segments, and an
+     * empty code row and candidate row. The candidate overlay entries are
+     * shared with the English panel, so they're only touched while this
+     * panel is the one showing.
+     */
+    fun clearAfterFieldEmptied() {
+        associationLearning.reset()
+        if (service.inputMode == OpenLessImeService.InputMode.STROKE) {
+            abandonComposition()
+        } else {
+            confirmedText = ""
+            phraseQueryEpoch++
+        }
     }
 
     fun buildStrokeView(): View {
@@ -234,7 +258,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             background = service.roundedButton(service.tone(Color.rgb(45, 45, 45), Color.rgb(230, 230, 234)), service.dp(4))
         }
         punctuationGroups[punctuationGroupIndex].forEachIndexed { index, mark ->
-            punctuation.addView(service.keyboardKey(mark, 1f, action = { service.currentInputConnection?.commitText(mark, 1) }).apply {
+            punctuation.addView(service.keyboardKey(mark, 1f, action = { commitDirect(mark) }).apply {
                 textSize = 18f
                 // The rail is one connected key surface; separators provide the only visual split.
                 background = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
@@ -266,9 +290,9 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                         background = service.roundedButton(service.tone(Color.rgb(112, 78, 92), Color.rgb(232, 205, 213)), service.dp(5))
                     }
                 } else if (code == "voice") service.keyboardKey("0", 1f, action = {
-                    service.currentInputConnection?.commitText(" ", 1)
+                    commitDirect(" ")
                 }, swipeUpAction = {
-                    service.currentInputConnection?.commitText("0", 1)
+                    commitDirect("0")
                 }, swipePreview = "0", microphoneIcon = true, longPressDelayMs = 900L, longPressAction = {
                     service.inputMode = OpenLessImeService.InputMode.VOICE
                     service.saveInputMode(service.inputMode)
@@ -286,10 +310,10 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                             service.refreshInputView()
                         }
                         " " -> segmentStroke()
-                        else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else service.currentInputConnection?.commitText(code, 1)
+                        else -> if (code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else commitDirect(code)
                     }
                     }, swipeUpAction = swipeDigit?.let { digit ->
-                        { service.currentInputConnection?.commitText(digit, 1) }
+                        { commitDirect(digit) }
                     }, swipePreview = swipeDigit, strokeIconCode = code.takeIf {
                         it in listOf("h", "s", "p", "n", "z")
                     }, graphicCode = code.takeIf {
@@ -313,7 +337,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.65f))
 
         val actions = LinearLayout(service).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-        listOf("←" to { deleteStroke() }, "↵" to { service.sendEnterKey() }, "清除" to { clearStrokes() }, "123" to {
+        listOf("←" to { deleteStroke() }, "↵" to { abandonComposition(); service.sendEnterKey() }, "清除" to { clearStrokes() }, "123" to {
             strokeNumberMode = true
             numberSymbolMode = false
             symbolPageIndex = 0
@@ -422,7 +446,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                         symbolPageIndex = 0
                         service.refreshInputView()
                     })
-                    else -> ({ service.currentInputConnection?.commitText(label, 1) })
+                    else -> ({ commitDirect(label) })
                 }
                 row.addView(service.keyboardKey(label, 1f, action, repeatOnLongPress = rowIndex == 0 && isAction, repeatAction = action).apply {
                     textSize = if (isAction) 15f else 20f
@@ -563,10 +587,10 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
     /** Commits the current character together with any segments already marked via 分词. */
     private fun commitStrokeCandidate(candidate: String) {
         val code = strokeCode
-        val correction = candidate != lastStrokeCandidates.firstOrNull()
-        if (commitWord((wordSegments + candidate).joinToString("")) && correction &&
+        val wasTop = candidate == lastStrokeCandidates.firstOrNull()
+        if (commitWord((wordSegments + candidate).joinToString("")) &&
             service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service) && code.isNotEmpty()) {
-            strokeRepository.recordPersonalPick(code, candidate)
+            strokeRepository.recordPick(code, candidate, wasTop)
         }
     }
 
@@ -576,7 +600,9 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         if (!connection.commitText(service.outputScript(word), 1)) return false
         if (service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service)) {
-            phraseRepository.recordUsage(contextBeforeCommit, word)
+            phraseRepository.recordTypedContinuation(associationLearning.advance(contextBeforeCommit, word))
+        } else {
+            associationLearning.reset()
         }
         if (service.personalizedLearningAllowed()) confirmedText = (confirmedText + word).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
@@ -614,12 +640,14 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         if (service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service)) {
             phraseRepository.recordUsage(matchedContext, displayText)
         }
+        associationLearning.reset()
         confirmedText = (confirmedText + suffix).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
     }
 
     private fun deleteStroke() {
+        associationLearning.reset()
         if (strokeCode.isNotEmpty()) {
             strokeCode = strokeCode.dropLast(1)
             strokeQueryEpoch++
@@ -654,6 +682,26 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         strokePreview?.text = ""
         strokeCandidates?.removeAllViews()
         updateClearStrokeButtonVisibility()
+    }
+
+    /**
+     * Something other than a candidate is about to reach the field (a mark,
+     * digit, space, Return): drop the half-typed code, its segments and the
+     * association context with them — what's on screen next no longer
+     * follows the last committed word, and a stale code row would sit there
+     * meaning nothing. Same as pinyin abandoning its encoding on punctuation.
+     */
+    private fun abandonComposition() {
+        associationLearning.reset()
+        clearStrokes()
+        confirmedText = ""
+        phraseQueryEpoch++
+        service.candidateOverlayEntries = emptyList()
+    }
+
+    private fun commitDirect(text: String) {
+        abandonComposition()
+        service.currentInputConnection?.commitText(text, 1)
     }
 
     // internal, not private: RimePinyinController's own association context

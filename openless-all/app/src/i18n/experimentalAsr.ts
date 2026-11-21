@@ -4,15 +4,16 @@ export const experimentalAsrEn = {
   retiredLabel: 'Removed',
   recommended: 'Recommended · Live streaming',
   textStreamLabel: 'TextStream (local · streaming)',
-  textStreamDescription: 'About 1.9 GB of model files plus isolated runtime components · Apple Silicon, macOS 14+ · multilingual live Draft / Finalized transcription. Setup does not load inference.',
-  streamHint: 'While recording, local apps may subscribe to http://localhost:7890/stream. Drafts can change; only the completed transcript is saved to OpenLess history. The worker and endpoint stop with the recording.',
+  textStreamDescription:
+    'About 1.9 GB of model files plus isolated runtime components · Apple Silicon, macOS 14+ · multilingual live Draft / Finalized transcription. Setup does not load inference.',
+  streamHint:
+    'While recording, local apps may subscribe to http://localhost:7890/stream. Drafts can change; only the completed transcript is saved to OpenLess history. The worker and endpoint stop with the recording.',
   appleSiliconMac14Required: 'Requires Apple Silicon and macOS 14 or later.',
   description:
     'macOS local speech models are managed here. Enable to download and register a channel; inference loads only when recording starts.',
   memoryHint:
     'Using a local model increases memory usage. Opening Settings or restarting OpenLess does not load it.',
-  retiredHint:
-    'This feature has been removed. Please go to Experiments & extensions.',
+  retiredHint: 'This feature has been removed. Please go to Experiments & extensions.',
   deleteHint:
     'Switching off cancels the task, releases inference and removes its automatic channel. Downloaded files are kept; delete them separately when no longer needed.',
   senseVoiceDescription:
@@ -51,8 +52,10 @@ export const experimentalAsrZhCN: typeof experimentalAsrEn = {
   retiredLabel: '已下架',
   recommended: '推荐 · 实时流式',
   textStreamLabel: 'TextStream（本地 · 流式）',
-  textStreamDescription: '模型文件约 1.9 GB，首次开启还需下载独立运行组件 · Apple Silicon、macOS 14 及以上 · 多语种实时草稿与确认文本。安装过程不加载推理。',
-  streamHint: '录音期间，本机应用可订阅 http://localhost:7890/stream。草稿可能修订，整段确认后保存至 OpenLess 历史；结束录音即退出运行进程和接口。',
+  textStreamDescription:
+    '模型文件约 1.9 GB，首次开启还需下载独立运行组件 · Apple Silicon、macOS 14 及以上 · 多语种实时草稿与确认文本。安装过程不加载推理。',
+  streamHint:
+    '录音期间，本机应用可订阅 http://localhost:7890/stream。草稿可能修订，整段确认后保存至 OpenLess 历史；结束录音即退出运行进程和接口。',
   appleSiliconMac14Required: '需要 Apple Silicon 芯片及 macOS 14 或更高版本。',
   description: 'macOS 本地语音模型统一在此管理。开启后下载并注册渠道，开始录音时才加载推理引擎。',
   memoryHint: '使用本地模型会增加内存占用。打开设置或重启应用不会加载模型。',
@@ -93,8 +96,10 @@ export const experimentalAsrZhTW: typeof experimentalAsrEn = {
   retiredLabel: '已下架',
   recommended: '推薦 · 即時串流',
   textStreamLabel: 'TextStream（本機 · 串流）',
-  textStreamDescription: '模型約 1.9 GB，首次啟用另需下載獨立執行元件 · Apple Silicon、macOS 14 以上 · 多語言即時草稿與確認文字。安裝不載入推論。',
-  streamHint: '錄音時本機應用可訂閱 http://localhost:7890/stream。草稿可修訂，整段確認後儲存至歷史；結束即退出執行程序與介面。',
+  textStreamDescription:
+    '模型約 1.9 GB，首次啟用另需下載獨立執行元件 · Apple Silicon、macOS 14 以上 · 多語言即時草稿與確認文字。安裝不載入推論。',
+  streamHint:
+    '錄音時本機應用可訂閱 http://localhost:7890/stream。草稿可修訂，整段確認後儲存至歷史；結束即退出執行程序與介面。',
   appleSiliconMac14Required: '需要 Apple Silicon 晶片及 macOS 14 或更新版本。',
   description: 'macOS 本機語音模型統一在此管理。開啟後下載並註冊管道，開始錄音時才載入推論引擎。',
   memoryHint: '使用本機模型會增加記憶體占用。開啟設定或重新啟動應用程式不會載入模型。',

@@ -258,7 +258,7 @@ impl DictationEngineRouter {
         context: &DictationContext,
     ) -> Result<Arc<dyn DictationEngine>, BackendError> {
         match context.pipeline_mode {
-            PipelineMode::Traditional => Ok(Arc::clone(&self.traditional)),
+            PipelineMode::Traditional | PipelineMode::Deepseek => Ok(Arc::clone(&self.traditional)),
             PipelineMode::Multimodal => self
                 .omni
                 .read()
@@ -527,6 +527,21 @@ impl DictationEngine for DictationEngineRouter {
                 ));
             }
             routed.engine.update_context(session_id, context).await
+        })
+    }
+
+    fn stop_recording(&self, session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+        let routed = self
+            .active
+            .read()
+            .expect("active dictation provider lock poisoned")
+            .get(&session_id)
+            .cloned();
+        Box::pin(async move {
+            match routed {
+                Some(routed) => routed.engine.stop_recording(session_id).await,
+                None => Ok(false),
+            }
         })
     }
 

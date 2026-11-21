@@ -1,8 +1,9 @@
 //! Newest-first dictation history with retention and count caps.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use crate::config::{Clock, SystemClock};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::persistence::{atomic_write, persistence_error};
 use crate::types::{DictationSession, HistorySource};
@@ -12,6 +13,12 @@ pub const HISTORY_CAP: usize = 200;
 pub struct HistoryStore {
     path: PathBuf,
     lock: Mutex<()>,
+    /// 保留裁剪和「最近 N 分钟」都只认这一个时钟，而不是各自去读
+    /// `chrono::Utc::now()`：后者会让注入固定时钟的后端（测试、回放）里
+    /// `created_at` 与裁剪依据分成两套时间，条目可能在写入的瞬间就超期。
+    /// `BackendRepositories::open` 时还不知道时钟来源，所以由后端随后用
+    /// `attach_clock` 补上；没补就是系统时钟。
+    clock: Mutex<Arc<dyn Clock>>,
 }
 
 impl HistoryStore {
@@ -23,7 +30,17 @@ impl HistoryStore {
         Self {
             path,
             lock: Mutex::new(()),
+            clock: Mutex::new(Arc::new(SystemClock)),
         }
+    }
+
+    /// 把后端注入的时钟交给历史仓。同一个仓只会被后端组装一次。
+    pub(crate) fn attach_clock(&self, clock: Arc<dyn Clock>) {
+        *self.clock.lock().expect("history clock lock") = clock;
+    }
+
+    fn now_utc(&self) -> chrono::DateTime<chrono::Utc> {
+        self.clock.lock().expect("history clock lock").now_utc()
     }
 
     pub fn list(&self) -> Result<Vec<DictationSession>, BackendError> {
@@ -66,7 +83,7 @@ impl HistoryStore {
                 let _guard = self.lock_store()?;
                 let mut sessions = self.read_locked()?;
                 sessions.insert(0, session);
-                retain_with_policy(&mut sessions, retention_days, max_entries);
+                retain_with_policy(&mut sessions, retention_days, max_entries, self.now_utc());
                 self.write_locked(&sessions)
             },
         )
@@ -95,7 +112,7 @@ impl HistoryStore {
                 } else {
                     sessions.insert(0, session);
                 }
-                retain_with_policy(&mut sessions, retention_days, max_entries);
+                retain_with_policy(&mut sessions, retention_days, max_entries, self.now_utc());
                 self.write_locked(&sessions)
             },
         )
@@ -123,7 +140,7 @@ impl HistoryStore {
         }
         let _guard = self.lock_store()?;
         let sessions = self.read_locked()?;
-        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(i64::from(minutes));
+        let cutoff = self.now_utc() - chrono::Duration::minutes(i64::from(minutes));
         Ok(sessions
             .into_iter()
             .take_while(|session| {
@@ -206,13 +223,14 @@ fn retain_with_policy(
     sessions: &mut Vec<DictationSession>,
     retention_days: u32,
     max_entries: Option<u32>,
+    now: chrono::DateTime<chrono::Utc>,
 ) {
     // Quick notes are intentionally outside the ordinary history retention
     // policy. A recording-start draft is also protected until it reaches a
     // terminal state, because its audio may be the only recoverable artifact
     // after a process crash.
     if retention_days > 0 {
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
+        let cutoff = now - chrono::Duration::days(i64::from(retention_days));
         sessions.retain(|session| {
             session.source == HistorySource::QuickNote
                 || session.error_code.as_deref() == Some("recording")
@@ -326,6 +344,53 @@ mod tests {
         assert_eq!(sessions.len(), 5);
         assert_eq!(sessions[0].id, "new-6");
         assert!(sessions.iter().all(|session| session.id != "old"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn retention_follows_the_injected_clock_instead_of_the_wall_clock() {
+        // CI 2026-09-27 之后这个场景一直是红的：裁剪偷读 `chrono::Utc::now()`，
+        // 于是一个 injected 固定时钟（2026-08-28）+ retention 30 天的后端，会把
+        // 刚写入的条目当成过期档删掉。
+        let path = std::env::temp_dir().join(format!(
+            "openless-history-clock-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = HistoryStore::at_path(path.clone());
+        let fixed = chrono::DateTime::parse_from_rfc3339("2026-08-28T12:34:56+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        store.attach_clock(Arc::new(crate::testing::FixedClock::new(
+            fixed,
+            fixed.date_naive(),
+        )));
+
+        store
+            .append_with_retention(session("kept", fixed.to_rfc3339()), 30, Some(20))
+            .unwrap();
+        assert_eq!(
+            store.list().unwrap().len(),
+            1,
+            "a fresh entry is never stale"
+        );
+        assert_eq!(
+            store.recent_within_minutes(5).unwrap().len(),
+            1,
+            "the polish context window reads the same clock"
+        );
+
+        // 功能本身不能被放宽：同一个固定时钟下超期的条目照旧被裁掉。
+        let stale = (fixed - chrono::Duration::days(31)).to_rfc3339();
+        store
+            .append_with_retention(session("stale", stale), 30, None)
+            .unwrap();
+        let ids: Vec<String> = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids, vec!["kept".to_string()]);
         let _ = std::fs::remove_file(path);
     }
 

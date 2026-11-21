@@ -567,7 +567,7 @@ fn has_live(unit: Option<&Unit>) -> bool {
 
 fn conflict_id(key: &DocumentKey) -> String {
     let identity = serde_json::to_vec(key).expect("fixed conflict identity serializes");
-    format!("{:x}", Sha256::digest(identity))
+    hex::encode(Sha256::digest(identity))
 }
 
 /// Materialize explicit local deletes relative to the last accepted baseline; keep all old marks.

@@ -1,20 +1,20 @@
 [package]
 name = "openless"
-version = "2.0.2-Beta.1+build.20261017"
+version = "2.0.3-Beta.1"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.99"
 
 [lib]
 name = "openless_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-# Keep on the same train as `tauri = "=2.11.2"`. Floating `version = "2"` resolves
+# Keep on the same train as `tauri = "=2.12.4"`. Floating `version = "2"` resolves
 # to tauri-build 2.7 when CI regenerates the lockfile.
-tauri-build = { version = "=2.6.2", features = [] }
+tauri-build = { version = "=2.7.3", features = [] }
 # Windows manifest anchor and Apple compiler runtime discovery (not legacy ASR).
 cc = "1.1"
 
@@ -23,19 +23,19 @@ zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
-# Pin the whole 2.11.2 train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
+# Pin the whole 2.12.x train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
 # unlocked resolve picks 2.12.0 and fails to compile (Monitor / UnexpectedMenuKind).
 # Direct pins keep fresh lockfile resolution on the compatible train.
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
-tauri = { version = "=2.11.2", features = ["macos-private-api"] }
-tauri-runtime = "=2.11.2"
-tauri-runtime-wry = "=2.11.2"
-tauri-macros = "=2.6.2"
-tauri-utils = "=2.9.2"
+tauri = { version = "=2.12.4", features = ["macos-private-api"] }
+tauri-runtime = "=2.12.2"
+tauri-runtime-wry = "=2.12.2"
+tauri-macros = "=2.7.3"
+tauri-utils = "=2.10.2"
 # 锁 >=2.3.5 修复 GHSA-c9pr-q8gx-3mgp：tauri-plugin-shell `open` 端点作用域校验绕过（CRITICAL，issue #668）。
-tauri-plugin-shell = "2.3.5"
-tauri-plugin-dialog = "2.7.2"
+tauri-plugin-shell = "2.5.0"
+tauri-plugin-dialog = "2.8.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
@@ -61,7 +61,8 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "system-proxy"] }
-zip = "2"
+rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+zip = "9.0.0"
 thiserror = "1"
 anyhow = "1"
 log = "0.4"
@@ -76,18 +77,20 @@ bytes = "1"
 url = "2"
 raw-window-handle = "0.6"
 # Audio capture — shared across desktop and mobile.
-cpal = "0.15"
+# Keep Windows COM objects on their owning audio thread; see vendor/cpal/OPENLESS_PATCH.md.
+cpal = { version = "=0.15.3", path = "vendor/cpal" }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-tauri-plugin-fs = "2.5.1"
+tauri-plugin-fs = "2.7.1"
 
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+openless-capsule = { path = "../crates/openless-capsule", features = ["host"] }
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
-tauri = { version = "=2.11.2", features = ["macos-private-api", "tray-icon"] }
-tauri-plugin-updater = "=2.10.1"
-tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
+tauri = { version = "=2.12.4", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-updater = "=2.14.0"
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-autostart = "2.7.0"
 global-hotkey = "0.6"
 enigo = "0.3"
 arboard = "3"
@@ -96,7 +99,6 @@ x509-parser = { version = "0.16", features = ["verify"] }
 time = "0.3"
 tempfile = "3"
 local-ip-address = "^0.6"
-rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "^0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 axum = { version = "^0.7", default-features = false, features = ["ws", "http1", "tokio", "query"] }
 hyper = { version = "^1", features = ["server", "http1"] }
@@ -127,10 +129,10 @@ tao = "0.35"
 # verified official libraries (scripts/sherpa-onnx-android.mjs) and ships them
 # in jniLibs. Other Android ABIs stay cloud-only.
 [target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
-sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["shared"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["static"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
 security-framework = "=3.7.0"
 block2 = "0.5"
 core-foundation = "0.10"
@@ -142,7 +144,9 @@ dispatch2 = "0.3"
 coreaudio-sys = "0.2"
 objc2 = { version = "0.5", features = ["exception"] }
 objc2-foundation = "0.2"
-objc2-app-kit = "0.2"
+# 0.2.2 的 NSPanel feature 定义缺少结构体 cfg 所需的 NSResponder/NSWindow
+# （app workspace 靠 winit 的 feature union 掩盖了它，src-tauri 无 winit）。
+objc2-app-kit = { version = "0.2", features = ["NSPanel", "NSResponder", "NSWindow"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -184,6 +188,7 @@ window-vibrancy = "0.7"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+issue-1266-diagnostics = []
 
 [profile.release]
 # 之前没有 [profile.release] —— 发布版走 Cargo 默认（无 LTO、不 strip、
@@ -196,3 +201,7 @@ lto = "thin"
 codegen-units = 1
 # Xcode 27 beta 的 strip 会损坏 proc-macro dylib；本地构建加 CARGO_PROFILE_RELEASE_STRIP=none。
 strip = "symbols"
+
+# A1: Windows event-loop targets must not follow Send/Sync runtime handle clones.
+[patch.crates-io]
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }

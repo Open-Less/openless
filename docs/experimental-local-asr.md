@@ -77,4 +77,4 @@ src-tauri/target/debug/bundle/macos/OpenLess.app/Contents/MacOS/openless \
 
 浏览器回归使用 IPC mock，只证明界面行为，不能替代真实原生推理或签名发布验收。debug bundle 也不能替代 notarization 或真实 Windows 设备测试。
 
-本次已完成的真实模型、进程生命周期、Release 打包与验证边界见 [验收记录](local-asr-verification.md)。
+真实模型、进程生命周期与 Release 打包的验收记录只保留在 git 历史里；当前边界见 [本地 ASR 生命周期](local-asr-lifecycle.md)。

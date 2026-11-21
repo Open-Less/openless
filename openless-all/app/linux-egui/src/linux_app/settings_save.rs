@@ -2,6 +2,13 @@ use super::*;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// 设置页里的外链目标，与 Tauri 的 `AboutSection` / `SettingsModal` 一字不差
+/// （`HELP_URL` / `RELEASE_NOTES_URL` 及仓库、issue 页）。
+pub(crate) const REPOSITORY_URL: &str = "https://github.com/Open-Less/openless";
+pub(crate) const HELP_URL: &str = "https://github.com/Open-Less/openless#readme";
+pub(crate) const RELEASE_NOTES_URL: &str = "https://github.com/Open-Less/openless/releases";
+pub(crate) const ISSUES_URL: &str = "https://github.com/Open-Less/openless/issues";
+
 type Patch = BTreeMap<String, Value>;
 
 #[derive(Default)]
@@ -130,6 +137,12 @@ impl OpenLessEguiApp {
             self.snapshot = Some(backend.snapshot());
         }
         self.hydrate_text_fields = true;
+        // 设置写入是「用户改了东西但看起来没保存」类问题的分界线：
+        // 成功一条 debug，失败一条 warn（带字段数），不问就不知道卡在哪一段。
+        match &result {
+            Ok(()) => log::debug!("[settings] saved request={request}"),
+            Err(error) => log::warn!("[settings] save request={request} failed: {error}"),
+        }
         match result {
             Ok(()) => {
                 self.status = tr_l10n(self.lang, "status.settings_saved").to_string();
@@ -177,17 +190,31 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::Multimodal => {
                 preferences.multimodal_pipeline_enabled = !preferences.multimodal_pipeline_enabled;
             }
-            frontend::view_model::SettingsField::LessComputer => {
-                preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
+            frontend::view_model::SettingsField::SelectionVoiceEnabled => {
+                preferences.selection_voice_enabled = !preferences.selection_voice_enabled;
             }
-            frontend::view_model::SettingsField::TestingFeatures => {
-                preferences.testing_features_enabled = !preferences.testing_features_enabled;
+            frontend::view_model::SettingsField::SelectionVoiceAutoIntent => {
+                // Tauri 的开关只有两态：当前是 Auto 就关掉（退回启发式），否则打开。
+                preferences.selection_voice_intent_mode = if matches!(
+                    preferences.selection_voice_intent_mode,
+                    openless_core::shared_types::SelectionVoiceIntentMode::Auto
+                ) {
+                    openless_core::shared_types::SelectionVoiceIntentMode::Heuristic
+                } else {
+                    openless_core::shared_types::SelectionVoiceIntentMode::Auto
+                };
             }
             frontend::view_model::SettingsField::SilenceAutoStop => {
                 preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
             }
             frontend::view_model::SettingsField::AudioCue => {
                 preferences.audio_cue_on_record = !preferences.audio_cue_on_record;
+            }
+            frontend::view_model::SettingsField::LlmThinking => {
+                preferences.llm_thinking_enabled = !preferences.llm_thinking_enabled;
+            }
+            frontend::view_model::SettingsField::CapsuleTranscript => {
+                preferences.capsule_transcript_enabled = !preferences.capsule_transcript_enabled;
             }
             frontend::view_model::SettingsField::ShowCapsule => {
                 preferences.show_capsule = !preferences.show_capsule;
@@ -203,8 +230,28 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AudioEnhancement => {
                 preferences.audio_enhancement_enabled = !preferences.audio_enhancement_enabled;
             }
+            frontend::view_model::SettingsField::EchoCancellation => {
+                preferences.echo_cancellation_enabled = !preferences.echo_cancellation_enabled;
+            }
             frontend::view_model::SettingsField::RecordAudioForDebug => {
                 preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
+                // 打开主开关时默认选「处理后」，否则主开关打开了却什么都不落盘、
+                // 用户以为坏了；「处理前」保持用户上一次的选择。
+                if preferences.record_audio_for_debug
+                    && !preferences.debug_archive_processed
+                    && !preferences.debug_archive_raw
+                {
+                    preferences.debug_archive_processed = true;
+                }
+            }
+            frontend::view_model::SettingsField::DebugArchiveProcessed => {
+                preferences.debug_archive_processed = !preferences.debug_archive_processed;
+            }
+            frontend::view_model::SettingsField::DebugArchiveRaw => {
+                preferences.debug_archive_raw = !preferences.debug_archive_raw;
+            }
+            frontend::view_model::SettingsField::PolishStrategyEnabled => {
+                preferences.polish_strategy_enabled = !preferences.polish_strategy_enabled;
             }
             frontend::view_model::SettingsField::StreamingSaveClipboard => {
                 preferences.streaming_insert_save_clipboard =
@@ -223,10 +270,64 @@ impl OpenLessEguiApp {
         field: frontend::view_model::SettingsComboField,
         index: usize,
     ) {
+        // AEC 参考源是 Core 偏好里的字符串（空 = 自动，"off" = 不采集），
+        // 界面用下标表达，这里换算回去。
+        if matches!(field, frontend::view_model::SettingsComboField::AecReference) {
+            let value = match index {
+                0 => String::new(),
+                1 => "off".to_string(),
+                other => self
+                    .frontend_vm
+                    .settings
+                    .aec_reference_devices
+                    .get(other - 2)
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            self.frontend_vm.settings.aec_reference_index = index;
+            if let Some(preferences) = self.preferences.as_mut() {
+                preferences.aec_reference_device_name = value;
+                self.save_settings_if_dirty();
+            }
+            return;
+        }
+
+        // 日志级别是宿主本地设置（`<data_dir>/logs/level`），不经过 Core 偏好，
+        // 因此要放在下面 `self.preferences` 的守卫之前 —— 否则偏好还没加载时
+        // 连日志级别都改不了。
+        if matches!(field, frontend::view_model::SettingsComboField::LogLevel) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let level = ["info", "debug", "trace"]
+                .get(index)
+                .copied()
+                .unwrap_or("info");
+            let data_dir = backend.config().data_dir.clone();
+            match openless_linux_egui::write_log_level(&data_dir, level) {
+                Ok(parsed) => {
+                    self.frontend_vm.settings.log_level = index;
+                    log::info!(
+                        "[logging] level set to {} (takes effect on the next start)",
+                        openless_linux_egui::level_name(parsed)
+                    );
+                    self.status = tr_l10n(self.lang, "status.log_level_saved").to_string();
+                }
+                Err(error) => {
+                    log::warn!("[logging] failed to persist the level: {error}");
+                    self.status = error.to_string();
+                }
+            }
+            return;
+        }
         let Some(preferences) = self.preferences.as_mut() else {
             return;
         };
         match field {
+            // 已在函数开头处理（不走 Core 偏好）。
+            frontend::view_model::SettingsComboField::LogLevel => {}
+            // 已在函数开头处理（换算成偏好里的设备名字符串）。
+            frontend::view_model::SettingsComboField::AecReference => {}
             frontend::view_model::SettingsComboField::Theme => {
                 preferences.theme_mode = match index {
                     0 => openless_core::shared_types::ThemeMode::System,
@@ -258,32 +359,34 @@ impl OpenLessEguiApp {
                     _ => openless_core::shared_types::HotkeyMode::Toggle,
                 };
             }
-            frontend::view_model::SettingsComboField::CodingAgentProvider => {
-                preferences.coding_agent_provider = match index {
-                    1 => "opencode-cli",
-                    2 => "codex-cli",
-                    3 => "dsh-cli",
-                    _ => "claude-code-cli",
-                }
-                .to_string();
-            }
-            frontend::view_model::SettingsComboField::CodingAgentPermission => {
-                preferences.coding_agent_permission_mode = match index {
-                    1 => "plan",
-                    2 => "default",
-                    3 => "bypassPermissions",
-                    _ => "acceptEdits",
-                }
-                .to_string();
-            }
             frontend::view_model::SettingsComboField::SelectionPolishDelivery => {
                 preferences.selection_polish_output_mode = match index {
                     1 => openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm,
                     _ => openless_core::shared_types::SelectionPolishOutputMode::DirectReplace,
                 };
             }
+            frontend::view_model::SettingsComboField::SelectionVoicePlanFormat => {
+                preferences.selection_voice_edit_plan_format = if index == 1 {
+                    openless_core::edit_plan::EditPlanFormat::Json
+                } else {
+                    openless_core::edit_plan::EditPlanFormat::Xml
+                };
+            }
+            frontend::view_model::SettingsComboField::PipelineMode => {
+                // Tauri's selector enables the pipeline flag in both modes;
+                // only the selected mode is consumed, and both namespaces survive.
+                preferences.multimodal_pipeline_enabled = true;
+                preferences.pipeline_mode = if index == 1 {
+                    openless_core::shared_types::PipelineMode::Multimodal
+                } else {
+                    openless_core::shared_types::PipelineMode::Traditional
+                };
+            }
             frontend::view_model::SettingsComboField::SilenceSeconds => {
                 preferences.silence_auto_stop_seconds = index as f32 + 1.0;
+            }
+            frontend::view_model::SettingsComboField::CapsuleTranscriptFontSize => {
+                preferences.capsule_transcript_font_size = (12 + 2 * index.min(4)) as u8;
             }
             frontend::view_model::SettingsComboField::CapsuleStyle => {
                 preferences.capsule_style = match index {
@@ -358,11 +461,6 @@ impl OpenLessEguiApp {
             ShortcutField::QuickNote => preferences.quick_note_hotkey = Some(binding),
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = Some(binding),
             ShortcutField::OpenApp => preferences.open_app_hotkey = Some(binding),
-            ShortcutField::CodingAgentVoice => {
-                preferences.coding_agent_voice_hotkey = Some(binding);
-                // 「按住说话」有了触发键，Agent 也就该启用（Tauri 同样顺带打开）。
-                preferences.coding_agent_enabled = true;
-            }
             ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = Some(binding),
             ShortcutField::StylePack(index) => {
                 if let Some(row) = preferences.style_pack_hotkeys.get_mut(index) {
@@ -386,7 +484,6 @@ impl OpenLessEguiApp {
         if let Some(native) = &self.native {
             native.host().set_enter_stop_suppressed(false);
         }
-        self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }
 
@@ -409,7 +506,6 @@ impl OpenLessEguiApp {
             ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
             ShortcutField::OpenApp => preferences.open_app_hotkey = None,
-            ShortcutField::CodingAgentVoice => preferences.coding_agent_voice_hotkey = None,
             ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = None,
             ShortcutField::StylePack(index) => {
                 if let Some(row) = preferences.style_pack_hotkeys.get(index) {
@@ -425,7 +521,37 @@ impl OpenLessEguiApp {
             }
         }
 
-        self.frontend_vm.shortcut_menu = None;
+        self.save_settings_if_dirty();
+    }
+
+    /// 恢复出厂默认绑定：默认值来自 `UserPreferences::default()`，与 Core 的
+    /// 序列化默认保持一致（不在这里另抄一份键位）。
+    pub(super) fn apply_shortcut_reset(&mut self, field: frontend::view_model::ShortcutField) {
+        let defaults = openless_core::shared_types::UserPreferences::default();
+        let Some(preferences) = self.preferences.as_mut() else {
+            return;
+        };
+        use frontend::view_model::ShortcutField;
+        match field {
+            ShortcutField::Dictation => preferences.dictation_hotkey = defaults.dictation_hotkey,
+            ShortcutField::Translation => {
+                preferences.translation_hotkey = defaults.translation_hotkey
+            }
+            ShortcutField::Qa => preferences.qa_hotkey = defaults.qa_hotkey,
+            ShortcutField::QuickNote => preferences.quick_note_hotkey = defaults.quick_note_hotkey,
+            ShortcutField::SwitchStyle => {
+                preferences.switch_style_hotkey = defaults.switch_style_hotkey
+            }
+            ShortcutField::OpenApp => preferences.open_app_hotkey = defaults.open_app_hotkey,
+            ShortcutField::SelectionPolish => {
+                preferences.selection_polish_hotkey = defaults.selection_polish_hotkey
+            }
+            // 风格直达键与草稿行没有出厂默认。
+            ShortcutField::StylePack(_) | ShortcutField::StyleDraft => {
+                return;
+            }
+        }
+        self.frontend_vm.shortcut_recording = None;
         self.save_settings_if_dirty();
     }
 
@@ -445,7 +571,6 @@ impl OpenLessEguiApp {
                 .retain(|entry| entry.pack_id != pack_id);
         }
 
-        self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }
 
@@ -524,6 +649,11 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.polish_skip_max_chars = parsed.to_string();
             }
+            frontend::view_model::SettingsTextField::PolishStrategyScript => {
+                preferences.polish_strategy_script = text.chars().take(32_768).collect();
+                self.frontend_vm.settings.polish_strategy_script =
+                    preferences.polish_strategy_script.clone();
+            }
             frontend::view_model::SettingsTextField::AudioRecordingMaxEntries => {
                 preferences.audio_recording_max_entries = text
                     .trim()
@@ -533,32 +663,21 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.audio_recording_max_entries = text;
             }
-            frontend::view_model::SettingsTextField::CodingAgentModel => {
-                preferences.coding_agent_model = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
+            frontend::view_model::SettingsTextField::SelectionVoiceKeywords => {
+                // Tauri：一行一条，空行丢弃。
+                preferences.selection_voice_edit_keywords = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect();
 
-                self.frontend_vm.settings.coding_agent_model = text;
+                self.frontend_vm.settings.selection_voice_keywords = text;
             }
-            frontend::view_model::SettingsTextField::CodingAgentWorkdir => {
-                preferences.coding_agent_workdir = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
+            frontend::view_model::SettingsTextField::SelectionVoiceSystemPrompt => {
+                preferences.selection_voice_edit_system_prompt = text.clone();
 
-                self.frontend_vm.settings.coding_agent_workdir = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentExe => {
-                preferences.coding_agent_exe = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_exe = text;
+                self.frontend_vm.settings.selection_voice_system_prompt = text;
             }
             frontend::view_model::SettingsTextField::HistoryMaxEntries => {
                 preferences.history_max_entries = text
@@ -579,19 +698,27 @@ impl OpenLessEguiApp {
         field: frontend::view_model::SettingsActionField,
     ) {
         match field {
+            frontend::view_model::SettingsActionField::RefreshLinuxAccess => {
+                if !self.frontend_vm.linux_access.checking {
+                    self.refresh_linux_access();
+                    self.load_microphones();
+                }
+            }
             frontend::view_model::SettingsActionField::RetrySave => {
                 self.settings_save.error = None;
                 self.save_settings_if_dirty();
             }
             frontend::view_model::SettingsActionField::ExportDiagnostics => {
                 if let Some(backend) = self.backend() {
-                    let source = openless_linux_egui::log_path(&backend.config().data_dir);
+                    let data_dir = backend.config().data_dir.clone();
                     let lang = self.lang;
                     self.spawn(async move {
                         let destination = tokio::task::spawn_blocking(|| {
                             rfd::FileDialog::new()
-                                .add_filter("Log", &["log"])
-                                .set_file_name("openless.log")
+                                // 导出的是「当前 + 全部轮转历史」，默认名字别再叫 openless.log，
+                                // 否则用户会以为是那个单文件。
+                                .add_filter("Log", &["log", "txt"])
+                                .set_file_name("openless-diagnostics.log")
                                 .save_file()
                         })
                         .await
@@ -608,7 +735,7 @@ impl OpenLessEguiApp {
                             )
                         })?;
                         tokio::task::spawn_blocking(move || {
-                            openless_linux_egui::export_error_log(&source, &destination)
+                            openless_linux_egui::export_error_logs(&data_dir, &destination)
                         })
                         .await
                         .map_err(|error| {
@@ -654,21 +781,28 @@ impl OpenLessEguiApp {
                     }
                 }
             }
+            frontend::view_model::SettingsActionField::ResetSelectionVoicePrompt => {
+                // 留空 = 按「自定义 → 风格包 → 内置默认」回退。
+                if let Some(preferences) = self.preferences.as_mut() {
+                    preferences.selection_voice_edit_system_prompt = String::new();
+                }
+                self.frontend_vm.settings.selection_voice_system_prompt = String::new();
+            }
             frontend::view_model::SettingsActionField::PreviewAudioCue => {
                 // 与真实录音开始时同一段合成提示音（Tauri `playRecordStartCue`）。
                 openless_linux_egui::play_cue_start();
             }
             frontend::view_model::SettingsActionField::OpenGitHub => {
-                let _ = open_external("https://github.com/earendil-works/openless");
+                let _ = open_external(REPOSITORY_URL);
             }
             frontend::view_model::SettingsActionField::OpenHelp => {
-                let _ = open_external("https://github.com/earendil-works/openless");
+                let _ = open_external(HELP_URL);
             }
             frontend::view_model::SettingsActionField::OpenReleaseNotes => {
-                let _ = open_external("https://github.com/earendil-works/openless/releases");
+                let _ = open_external(RELEASE_NOTES_URL);
             }
             frontend::view_model::SettingsActionField::OpenFeedback => {
-                let _ = open_external("https://github.com/earendil-works/openless/issues");
+                let _ = open_external(ISSUES_URL);
             }
             frontend::view_model::SettingsActionField::CopyQQ => {
                 match fcitx5_copy_to_clipboard("1078960553") {
@@ -825,5 +959,17 @@ mod tests {
             serde_json::to_value(draft).unwrap()
         );
         assert!(edits.contains_key("/hotkey/mode"));
+    }
+
+    /// 外链必须指向与 Tauri 相同的仓库/页面（回归：曾经指向 earendil-works）。
+    #[test]
+    fn settings_links_match_the_tauri_targets() {
+        assert_eq!(REPOSITORY_URL, "https://github.com/Open-Less/openless");
+        assert_eq!(HELP_URL, "https://github.com/Open-Less/openless#readme");
+        assert_eq!(
+            RELEASE_NOTES_URL,
+            "https://github.com/Open-Less/openless/releases"
+        );
+        assert_eq!(ISSUES_URL, "https://github.com/Open-Less/openless/issues");
     }
 }

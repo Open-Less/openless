@@ -35,7 +35,14 @@ pub async fn validate_provider_credentials(
             thinking_enabled: core.get_preferences().llm_thinking_enabled,
         })
         .await
-        .map_err(|error| error.message)
+        .map_err(|error| {
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("siwc"))
+                .map(|details| format!("siwc:{details}"))
+                .unwrap_or(error.message)
+        })
 }
 
 #[tauri::command]
@@ -53,7 +60,14 @@ pub async fn list_provider_models(
             thinking_enabled: core.get_preferences().llm_thinking_enabled,
         })
         .await
-        .map_err(|error| error.message)
+        .map_err(|error| {
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("siwc"))
+                .map(|details| format!("siwc:{details}"))
+                .unwrap_or(error.message)
+        })
 }
 
 #[cfg(test)]

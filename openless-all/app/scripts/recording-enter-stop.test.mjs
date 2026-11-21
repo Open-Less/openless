@@ -33,10 +33,10 @@ const dependencies = {
   isPlainTextInsertionActive: () => false,
   showWindowsOpenlessKeyboardListToggle: () => false,
   showWindowsSendInputNewlineMode: () => false,
-  detectOS: () => 'win',
+  getRuntimeOS: () => 'win',
 };
 const source = readFileSync(
-  new URL('../src/pages/settings/RecordingInputSection.tsx', import.meta.url),
+  new URL('../src/features/input/RecordingInputSection.tsx', import.meta.url),
   'utf8',
 );
 const parsed = ts.createSourceFile(
@@ -109,14 +109,14 @@ assert.equal(saves, 1);
 
 for (const mode of ['hold', 'auto', 'toggle']) {
   tree = render();
-  const buttonPath = pathTo(
+  const modePath = pathTo(
     tree,
-    (node) =>
-      node.type === 'button' &&
-      node.props.children === `settings.recording.mode${mode[0].toUpperCase()}${mode.slice(1)}`,
+    (node) => node.type === 'Segmented' && node.props.label === 'settings.recording.modeLabel',
   );
-  assert(buttonPath.length, `expected ${mode} mode control`);
-  buttonPath[buttonPath.length - 1].props.onClick();
+  assert(modePath.length, 'expected recording mode control');
+  const modeControl = modePath[modePath.length - 1];
+  assert(modeControl.props.options.some((option) => option.value === mode));
+  modeControl.props.onChange(mode);
   assert.equal(prefs.hotkey.mode, mode);
   assert.equal(prefs.enterStopEnabled, true, 'switching mode must retain the Enter preference');
   ({ control, group } = enterControl(render()));

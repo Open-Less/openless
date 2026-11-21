@@ -1,6 +1,5 @@
 import {
   effectiveWindowsInsertionMode,
-  showWindowsOpenlessKeyboardListToggle,
   showWindowsSendInputNewlineMode,
 } from './windowsKeyboardListToggle';
 
@@ -21,30 +20,11 @@ assert(
   'missing mode and legacy should resolve to tsf',
 );
 
-assert(!showWindowsOpenlessKeyboardListToggle('tsf'), 'tsf should hide keyboard list toggle');
-assert(
-  showWindowsOpenlessKeyboardListToggle('sendInput'),
-  'sendInput should show keyboard list toggle',
-);
-assert(showWindowsOpenlessKeyboardListToggle('paste'), 'paste should show keyboard list toggle');
-assert(
-  showWindowsOpenlessKeyboardListToggle(undefined, true),
-  'legacy sendInput-only should show keyboard list toggle',
-);
-
-assert(
-  !showWindowsOpenlessKeyboardListToggle('tsf', true),
-  'explicit tsf must win over legacy true for keyboard list toggle',
-);
 assert(
   !showWindowsSendInputNewlineMode('tsf', true),
   'explicit tsf must win over legacy true for newline mode',
 );
 
-assert(
-  showWindowsOpenlessKeyboardListToggle('paste', true),
-  'explicit paste should show keyboard list toggle even with legacy true',
-);
 assert(
   !showWindowsSendInputNewlineMode('paste', true),
   'explicit paste should hide newline mode even with legacy true',

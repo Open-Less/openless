@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 
 use crate::asr::RawTranscript;
 
-use super::sherpa_runtime::{SherpaOnlineSession, SherpaOnnxRuntime};
+use super::sherpa_runtime::{SherpaOnlineSession, SherpaOnnxRuntime, SherpaTokenEmission};
 
 pub struct SherpaOnnxAsr {
     runtime: Arc<SherpaOnnxRuntime>,
@@ -50,11 +50,12 @@ struct OnlineWorker {
 
 enum OnlineWorkerMessage {
     Pcm(Vec<u8>),
+    FlushSegment,
     Finish,
     Cancel,
 }
 
-pub type SherpaTokenHandler = Arc<dyn Fn(String) + Send + Sync + 'static>;
+pub type SherpaTokenHandler = Arc<dyn Fn(super::sherpa_runtime::SherpaTokenEmission) + Send + Sync + 'static>;
 
 impl SherpaOnnxAsr {
     pub fn new(
@@ -252,6 +253,14 @@ impl crate::recorder::AudioConsumer for SherpaOnnxAsr {
             }
         }
     }
+
+    fn finish_segment(&self) {
+        if let SherpaProviderMode::Online { worker } = &self.mode {
+            if let Some(worker) = worker.lock().as_ref() {
+                worker.flush_segment();
+            }
+        }
+    }
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
@@ -281,12 +290,14 @@ impl OnlineWorker {
         let join_handle = std::thread::Builder::new()
             .name(format!("openless-sherpa-online-{alias}"))
             .spawn(move || {
-                let emit = |piece: &str| {
-                    if piece.is_empty() || worker_cancelled.load(Ordering::SeqCst) {
+                // [DEBUG-VOICE-1003] P2 / H1,H2,H4: worker control-message lifecycle.
+                crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "worker", "started", serde_json::json!({}));
+                let emit = |emission: &SherpaTokenEmission| {
+                    if emission.text.is_empty() || worker_cancelled.load(Ordering::SeqCst) {
                         return;
                     }
                     if let Some(handler) = token_handler.as_ref() {
-                        handler(piece.to_string());
+                        handler(emission.clone());
                     }
                 };
                 let result = loop {
@@ -302,7 +313,17 @@ impl OnlineWorker {
                                 break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
                             }
                         }
+                        Ok(OnlineWorkerMessage::FlushSegment) => {
+                            crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "flush", "received", serde_json::json!({"cancelled": worker_cancelled.load(Ordering::SeqCst)}));
+                            if worker_cancelled.load(Ordering::SeqCst) {
+                                break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
+                            }
+                            if let Err(error) = session.flush_segment(&emit) {
+                                break Err(error);
+                            }
+                        }
                         Ok(OnlineWorkerMessage::Finish) => {
+                            crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "finish", "received", serde_json::json!({"cancelled": worker_cancelled.load(Ordering::SeqCst)}));
                             if worker_cancelled.load(Ordering::SeqCst) {
                                 break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
                             }
@@ -314,6 +335,7 @@ impl OnlineWorker {
                         }
                     }
                 };
+                crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "worker", "exiting", serde_json::json!({"ok": result.is_ok(), "cancelled": worker_cancelled.load(Ordering::SeqCst)}));
                 let _ = result_tx.send(result);
             })
             .expect("spawn sherpa online worker");
@@ -339,6 +361,15 @@ impl OnlineWorker {
             .is_err()
         {
             log::warn!("[sherpa-asr] online worker is not accepting PCM");
+        }
+    }
+
+    fn flush_segment(&self) {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        if self.tx.send(OnlineWorkerMessage::FlushSegment).is_err() {
+            log::warn!("[sherpa-asr] online worker is not accepting segment flush");
         }
     }
 
@@ -375,11 +406,13 @@ impl OnlineWorker {
     }
 
     fn cancel(self) {
+        crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "cancel", "entered", serde_json::json!({}));
         self.cancelled.store(true, Ordering::SeqCst);
         let _ = self.tx.send(OnlineWorkerMessage::Cancel);
         if let Some(join_handle) = self.join_handle.lock().take() {
             let _ = join_handle.join();
         }
+        crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "cancel", "returned", serde_json::json!({}));
     }
 }
 

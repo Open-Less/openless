@@ -1,3 +1,4 @@
+import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import { fileIo as fs, picker } from '@kit.CoreFileKit';
@@ -12,6 +13,12 @@ import { VoiceClient, VoiceResult } from './inputmethod/VoiceClient';
 import { publishVoiceConfiguration } from './VoiceConfiguration';
 
 interface Revisions { preferencesRevision: number; stylePackRevision: number; historyRevision: number; vocabularyRevision: number; }
+interface SiwcLaunch { attemptId: string; url: string; }
+interface SiwcLaunchReply { ok: boolean; value: SiwcLaunch; error?: string; }
+interface SiwcState { state: string; }
+interface SiwcStateReply { ok: boolean; value: SiwcState; }
+interface SiwcPublicLaunch { attemptId: string; }
+interface SiwcCancelArgs { channelId: string; action: string; }
 interface RevisionReply { ok: boolean; value: Revisions; }
 interface CredentialChange { account: string; provider?: string | null; value: string | null; }
 interface CredentialChangesReply { ok: boolean; value: CredentialChange[]; }
@@ -24,10 +31,60 @@ interface DeviceInfo { name: string; isDefault: boolean; }
 interface DictationEvent { phase: string; level: number; error: string; }
 interface VoiceCredentialStatus { pipelineMode: string; asrConfigured: boolean; omniConfigured: boolean; }
 interface VoiceCredentialReply { ok: boolean; value: VoiceCredentialStatus; }
-class CommandArgs { deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
+class CommandArgs { channelId: string = ''; action: string = ''; registrationId: string = '';  deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
 
 export class HarmonyApi {
   private logs: string[] = [];
+  private siwcDelay?: number;
+  private siwcEpoch: number = 0;
+  private siwcChannel: string = '';
+  private endSiwcDelay(): void {
+    this.siwcEpoch++;
+    const delay = this.siwcDelay; this.siwcDelay = undefined;
+    if (delay !== undefined) { try { backgroundTaskManager.cancelSuspendDelay(delay); } catch (_) {} }
+  }
+  private async cancelSiwc(channel: string): Promise<void> {
+    const args: SiwcCancelArgs = {channelId: channel, action: 'cancel'};
+    await nativeHost.invokeAsync('siwc_action', JSON.stringify(args));
+  }
+  private async beginSiwc(args: CommandArgs, argsJson: string): Promise<string> {
+    if (this.siwcChannel) {
+      await this.cancelSiwc(this.siwcChannel);
+    }
+    this.endSiwcDelay();
+    this.siwcChannel = args.channelId;
+    const channel = args.channelId;
+    const epoch = this.siwcEpoch;
+    const delay = backgroundTaskManager.requestSuspendDelay('ChatGPT authorization', () => {
+      if (epoch !== this.siwcEpoch) return;
+      this.cancelSiwc(channel).catch(() => {});
+      this.endSiwcDelay();
+    });
+    this.siwcDelay = delay.requestId;
+    try {
+      const launch: SiwcLaunchReply = JSON.parse(await nativeHost.invokeAsync('__siwc_begin', argsJson));
+      if (epoch !== this.siwcEpoch) {
+        const reply: Reply = {ok: false, error: 'siwc: {"code":"cancelled"}'};
+        return JSON.stringify(reply);
+      }
+      if (!launch.ok) {
+        this.endSiwcDelay();
+        const reply: Reply = {ok: false, error: launch.error || 'SIWC authorization failed'};
+        return JSON.stringify(reply);
+      }
+      try { await this.openExternal(launch.value.url); }
+      catch (_) { throw new Error('siwc: {"code":"browser_failed"}'); }
+      const value: SiwcPublicLaunch = {attemptId: launch.value.attemptId};
+      const reply: Reply = {ok: true, value: value};
+      return JSON.stringify(reply);
+    } catch (_) {
+      if (epoch === this.siwcEpoch) {
+        this.endSiwcDelay();
+        await this.cancelSiwc(channel);
+      }
+      throw new Error('siwc: {"code":"browser_failed"}');
+    }
+  }
 
   appendLog(message: string): void {
     this.logs.push(new Date().toISOString() + ' ' + message);
@@ -55,6 +112,22 @@ export class HarmonyApi {
   private revisions?: Revisions;
   private nativeQueue: Promise<void> = Promise.resolve();
 
+  private async notifyBackendChange(): Promise<void> {
+    const snapshot: RevisionReply = JSON.parse(await nativeHost.invokeAsync('__revision_snapshot', '{}'));
+    if (snapshot.ok) {
+      if (this.revisions && JSON.stringify(this.revisions) !== JSON.stringify(snapshot.value)) {
+        this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
+      }
+      this.revisions = snapshot.value;
+    }
+  }
+  private async siwcNative(command: string, args: string): Promise<string> {
+    // OAuth has its own durable native vault; never wait behind ordinary settings writes.
+    const wire = await nativeHost.invokeAsync(command, args);
+    await this.notifyBackendChange();
+    return wire;
+  }
+
   private async native(command: string, args: string): Promise<string> {
     const task = this.nativeQueue.then(async (): Promise<string> => {
       const wire = await nativeHost.invokeAsync(command, args);
@@ -68,13 +141,7 @@ export class HarmonyApi {
         await this.persistCredential(entry);
       }
       if (changes.value.length) await nativeHost.invokeAsync('__ack_credential_writes', '{}');
-      const snapshot: RevisionReply = JSON.parse(await nativeHost.invokeAsync('__revision_snapshot', '{}'));
-      if (snapshot.ok) {
-        if (this.revisions && JSON.stringify(this.revisions) !== JSON.stringify(snapshot.value)) {
-          this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
-        }
-        this.revisions = snapshot.value;
-      }
+      await this.notifyBackendChange();
       await publishVoiceConfiguration();
       return wire;
     });
@@ -255,7 +322,13 @@ export class HarmonyApi {
 
   }
 
-  invoke(command: string, args: string): string { return nativeHost.invoke(command, args); }
+  invoke(command: string, args: string): string {
+    if (command.startsWith('__siwc')) {
+      const reply: Reply = {ok: false, error: 'Native-only SIWC operation'};
+      return JSON.stringify(reply);
+    }
+    return nativeHost.invoke(command, args);
+  }
 
   private microphoneStatus(): string {
     if (!this.context) throw new Error('应用上下文未就绪');
@@ -325,9 +398,23 @@ export class HarmonyApi {
 
   async invokeAsync(command: string, argsJson: string): Promise<string> {
     try {
+      if (command.startsWith('__siwc')) throw new Error('Native-only SIWC operation');
       const args: CommandArgs = JSON.parse(argsJson);
       let value: Object | null = null;
       switch (command) {
+        case 'siwc_models': return await this.siwcNative(command, argsJson);
+        case 'siwc_action': {
+          if (['sign_in', 'add_account', 'enable_usage'].includes(args.action)) return await this.beginSiwc(args, argsJson);
+          const wire = await this.siwcNative(command, argsJson);
+          if (args.action === 'cancel' || args.action === 'disconnect') this.endSiwcDelay();
+          return wire;
+        }
+        case 'siwc_status': {
+          const wire = await this.siwcNative(command, argsJson);
+          const state: SiwcStateReply = JSON.parse(wire);
+          if (state.ok && state.value.state !== 'authorizing' && args.channelId === this.siwcChannel) this.endSiwcDelay();
+          return wire;
+        }
         case 'start_dictation': await this.startDictation(); break;
         case 'stop_dictation': value = await this.stopDictation(); break;
         case 'cancel_dictation': await this.cancelDictation(); break;

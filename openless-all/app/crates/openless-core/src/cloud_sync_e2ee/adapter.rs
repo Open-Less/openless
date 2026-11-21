@@ -43,7 +43,7 @@ pub(crate) fn build(
     }
     let origin = origin.origin().ascii_serialization();
     let root = data_dir.join("encrypted-sync");
-    log::error!(
+    log::debug!(
         "[e2ee-adapter] build start data_dir={} root={}",
         data_dir.display(),
         root.display()
@@ -55,15 +55,15 @@ pub(crate) fn build(
         );
         super::error("local_storage_unavailable")
     })?;
-    log::error!("[e2ee-adapter] stage=gate_open");
+    log::debug!("[e2ee-adapter] stage=gate_open");
     let gate =
         crate::cloud_sync_e2ee_store::gate::open_for_data_dir(data_dir).map_err(|error| {
             log::error!("[e2ee-adapter] reopen sync write gate failed: {error:#}");
             document_error(error)
         })?;
-    log::error!("[e2ee-adapter] stage=device_id");
+    log::debug!("[e2ee-adapter] stage=device_id");
     let device_id = load_device_id(&root)?;
-    log::error!(
+    log::debug!(
         "[e2ee-adapter] stage=device_id_ok id_len={}",
         device_id.len()
     );
@@ -79,7 +79,7 @@ pub(crate) fn build(
         device_id,
         credentials.clone(),
     );
-    log::error!("[e2ee-adapter] stage=store_new");
+    log::debug!("[e2ee-adapter] stage=store_new");
     let credential_store_for_service = credentials.clone();
     let store = Arc::new(
         CoreSyncStore::new(
@@ -96,7 +96,7 @@ pub(crate) fn build(
             document_error(error)
         })?,
     );
-    log::error!("[e2ee-adapter] stage=store_ok");
+    log::debug!("[e2ee-adapter] stage=store_ok");
     let service = super::EncryptedSyncService::new(
         super::SyncServiceConfig {
             origin,
@@ -180,8 +180,13 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                     super::error("local_storage_unavailable")
                 })?;
                 let path = entry.path();
-                if path.is_dir()
-                    && std::fs::read_dir(&path)
+                let owned = entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(crate::cloud_sync_e2ee_store::gate::is_owned_sync_entry);
+                if owned
+                    && path.is_dir()
+                    && crate::cloud_sync_e2ee_store::gate::contains_owned_sync_entry(&path)
                         .map_err(|error| {
                             log::error!(
                                 "[e2ee-adapter] inspect protected dir failed path={} err={error}",
@@ -189,8 +194,6 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                             );
                             super::error("local_storage_unavailable")
                         })?
-                        .next()
-                        .is_some()
                 {
                     log::error!(
                         "[e2ee-adapter] device-id missing but ciphertext present under {}; recovery required",
@@ -329,7 +332,7 @@ fn scope_bucket(scope: &SyncScope) -> DocumentResult<String> {
         &scope.device_id,
     ])
     .map_err(|_| DocumentError::InvalidDocument)?;
-    Ok(format!("scope:{:x}", Sha256::digest(bytes)))
+    Ok(format!("scope:{}", hex::encode(Sha256::digest(bytes))))
 }
 
 impl SyncServiceData for CoreSyncStore {

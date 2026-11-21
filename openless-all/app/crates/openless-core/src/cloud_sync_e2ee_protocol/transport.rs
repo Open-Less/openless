@@ -302,6 +302,12 @@ impl PreparedOperation {
         &self.operation_id
     }
 
+    pub(crate) fn matches_confirmed_delete(&self, vault: &UuidV4, base: Revision) -> bool {
+        self.expected_kind == OperationKind::Delete
+            && &self.expected_vault == vault
+            && base.checked_next().ok() == Some(self.expected_revision)
+    }
+
     /// Export retry material without credentials, filesystem access or network
     /// access. The native coordinator owns durable storage and its lifecycle.
     /// Body bytes are kept verbatim, including JSON whitespace and key ordering.
@@ -1269,7 +1275,7 @@ mod tests {
                 "iterations": 3, "parallelism": 4, "salt": URL_SAFE_NO_PAD.encode([0_u8; 16]) },
             "aead": "xchacha20poly1305-ietf", "codec": "json-pad64k-v1",
             "nonce": URL_SAFE_NO_PAD.encode([0_u8; 24]),
-            "ciphertextSha256": format!("{:x}", Sha256::digest(&ciphertext)),
+            "ciphertextSha256": hex::encode(Sha256::digest(&ciphertext)),
             "ciphertext": URL_SAFE_NO_PAD.encode(ciphertext)
         })
     }

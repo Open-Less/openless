@@ -175,8 +175,20 @@ export function deleteChannel(kind: ChannelKind, id: string): Promise<void> {
 
 export function setChannelEnabled(kind: ChannelKind, id: string, enabled: boolean): Promise<void> {
   return invokeOrMock('set_channel_enabled', { kind, id, enabled }, () => {
-    const channel = mockChannels[kind].find((channel) => channel.id === id);
-    if (channel) channel.enabled = enabled;
+    const list = mockChannels[kind];
+    const channel = list.find((channel) => channel.id === id);
+    if (!channel) return undefined;
+    // Mirror Core's ordering: enabled channels come first and the toggled channel joins the
+    // end of its block, so a disabled channel sinks to the bottom like in the real app.
+    const rest = list.filter((item) => item.id !== id);
+    const toggled = { ...channel, enabled };
+    const enabledRest = rest.filter((item) => item.enabled);
+    const disabledRest = rest.filter((item) => !item.enabled);
+    mockChannels[kind] = (
+      enabled
+        ? [...enabledRest, toggled, ...disabledRest]
+        : [...enabledRest, ...disabledRest, toggled]
+    ).map((item, index) => ({ ...item, order: index }));
     return undefined;
   });
 }

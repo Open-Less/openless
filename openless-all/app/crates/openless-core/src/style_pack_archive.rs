@@ -436,7 +436,10 @@ fn preflight_archive_metadata<R: Read + Seek>(
         let file = archive
             .by_index(index)
             .with_context(|| format!("read style pack zip entry metadata at index {index}"))?;
-        let name = file.name().to_string();
+        let name = file
+            .name()
+            .context("decode style pack zip entry name")?
+            .into_owned();
         validate_entry_name(&name, file.is_dir())?;
         if file.enclosed_name().is_none() {
             bail!("unsafe style pack zip entry name: {name}");

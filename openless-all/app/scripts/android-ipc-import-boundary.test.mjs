@@ -13,13 +13,19 @@ function moduleFor(name) {
     .map(([, , moduleName]) => moduleName);
 }
 
-for (const name of ['getSettings', 'setSettings']) {
+for (const [name, expected] of [
+  ['useHotkeySettings', '../../../src/data/preferences'],
+  ['useInteraction', '../../../src/ui/overlays/InteractionProvider'],
+]) {
   const modules = moduleFor(name);
-  if (modules.length !== 1 || modules[0] !== '../../../src/lib/ipc/settings') {
-    throw new Error(
-      `${name} must be imported directly from ../../../src/lib/ipc/settings; found ${JSON.stringify(modules)}`,
-    );
+  if (modules.length !== 1 || modules[0] !== expected) {
+    throw new Error(`${name} must come from ${expected}; found ${JSON.stringify(modules)}`);
   }
+}
+if (/\b(?:getSettings|setSettings|window\.confirm)\b/.test(source)) {
+  throw new Error(
+    'AndroidPermissionsPanel must use field-level shared preferences and viewport confirmation',
+  );
 }
 
 if (/from\s+['"]\.\.\/\.\.\/\.\.\/src\/lib\/ipc['"]/.test(source)) {

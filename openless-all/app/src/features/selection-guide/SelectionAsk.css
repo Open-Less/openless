@@ -1,0 +1,16 @@
+.ol-ask-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 0;
+}
+.ol-ask-settings-row + .ol-ask-settings-row {
+  border-top: 1px solid var(--ol-line);
+}
+.ol-ask-settings-row p {
+  color: var(--ol-ink-3);
+  font-size: 12px;
+  margin: 6px 0 0;
+  line-height: 1.7;
+}

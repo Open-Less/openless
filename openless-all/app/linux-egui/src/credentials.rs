@@ -40,6 +40,7 @@ struct PersistedCredentialMetadata {
 /// data directory.  Secret values are never serialized to the metadata file.
 #[derive(Clone)]
 pub struct LinuxCredentialStore {
+    siwc: Arc<openless_core::siwc::SiwcService>,
     metadata_path: PathBuf,
     state: Arc<Mutex<PersistedCredentialMetadata>>,
 }
@@ -55,6 +56,7 @@ impl LinuxCredentialStore {
         let metadata_path = data_dir.join("credential-metadata.json");
         let state = read_metadata(&metadata_path)?;
         Ok(Self {
+            siwc: crate::siwc::service(data_dir.to_path_buf()),
             metadata_path,
             state: Arc::new(Mutex::new(state)),
         })
@@ -263,6 +265,10 @@ impl LinuxCredentialStore {
 }
 
 impl CredentialStore for LinuxCredentialStore {
+    fn siwc(&self) -> Option<Arc<openless_core::siwc::SiwcService>> {
+        Some(self.siwc.clone())
+    }
+
     fn status(
         &self,
         preferences: UserPreferences,
@@ -273,10 +279,24 @@ impl CredentialStore for LinuxCredentialStore {
             .expect("credential metadata lock poisoned")
             .clone();
         Box::pin(async move {
-            let active_asr_provider = non_empty(state.metadata.active_provider(ProviderSlot::Asr))
-                .unwrap_or(preferences.active_asr_provider);
-            let active_llm_provider = non_empty(state.metadata.active_provider(ProviderSlot::Llm))
-                .unwrap_or(preferences.active_llm_provider);
+            let active_channel = |kind, slot, fallback: String| {
+                let active = state.metadata.selected_provider(slot);
+                if state.metadata.list_channels(kind).is_empty() {
+                    non_empty(active).unwrap_or(fallback)
+                } else {
+                    active
+                }
+            };
+            let active_asr_provider = active_channel(
+                ChannelKind::Asr,
+                ProviderSlot::Asr,
+                preferences.active_asr_provider,
+            );
+            let active_llm_provider = active_channel(
+                ChannelKind::Llm,
+                ProviderSlot::Llm,
+                preferences.active_llm_provider,
+            );
             let active_omni_provider =
                 non_empty(state.metadata.active_provider(ProviderSlot::Omni))
                     .unwrap_or(preferences.active_omni_provider);
@@ -531,7 +551,7 @@ impl CredentialStore for LinuxCredentialStore {
             }
             #[cfg(target_os = "linux")]
             {
-                tokio::task::spawn_blocking(move || read_secret(&key))
+                tokio::task::spawn_blocking(move || require_committed_value(read_secret(&key)?))
                     .await
                     .map_err(join_error)?
             }
@@ -737,8 +757,19 @@ fn persist_metadata(path: &Path, state: &PersistedCredentialMetadata) -> Result<
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn require_committed_value(
+    value: Option<SecretValue>,
+) -> Result<Option<SecretValue>, BackendError> {
+    value.map(Some).ok_or_else(|| BackendError::new(
+        BackendErrorCode::Persistence,
+        "A saved credential is missing from the active Secret Service vault. Restore the original wallet before editing this channel; its metadata has been retained.",
+    ))
+}
+
 #[cfg(target_os = "linux")]
 fn keyring_entry(key: &CredentialKey) -> Result<keyring::Entry, BackendError> {
+    crate::linux_access::ensure_persistent_vault()?;
     let account = serde_json::to_string(key).map_err(|error| {
         BackendError::new(
             BackendErrorCode::Internal,
@@ -750,6 +781,7 @@ fn keyring_entry(key: &CredentialKey) -> Result<keyring::Entry, BackendError> {
 
 #[cfg(target_os = "linux")]
 fn read_legacy_secret(account: &str) -> Result<Option<SecretValue>, BackendError> {
+    crate::linux_access::ensure_persistent_vault()?;
     let entry = keyring::Entry::new(
         openless_core::credentials_legacy::LEGACY_CREDENTIAL_SERVICE,
         account,
@@ -830,6 +862,13 @@ fn unsupported_keyring<T>() -> Result<T, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_committed_key_missing_from_the_current_vault_is_not_an_empty_form() {
+        let error = require_committed_value(None).unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Persistence);
+        assert!(error.message.contains("original wallet"));
+    }
 
     fn temporary_store() -> LinuxCredentialStore {
         let root = std::env::temp_dir().join(format!(
@@ -1216,6 +1255,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_channels_do_not_restore_stale_preferences_in_status() {
+        let store = temporary_store();
+        let ChannelMutationResult::Created(id) = store
+            .mutate_channel(ChannelMutation::Create {
+                kind: ChannelKind::Asr,
+                provider_type: "tencent-cloud".into(),
+                name: "Cloud".into(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("expected created channel")
+        };
+        store
+            .mutate_channel(ChannelMutation::SetEnabled {
+                kind: ChannelKind::Asr,
+                id,
+                enabled: false,
+            })
+            .await
+            .unwrap();
+        let reopened = LinuxCredentialStore::open(store.metadata_path.parent().unwrap()).unwrap();
+        let status = reopened
+            .status(UserPreferences {
+                active_asr_provider: "local-qwen3-mlx".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(status.active_asr_provider.is_empty());
+        assert!(reopened
+            .active_provider(ProviderSlot::Asr)
+            .await
+            .unwrap()
+            .is_empty());
+        let _ = std::fs::remove_dir_all(store.metadata_path.parent().unwrap());
+    }
+
+    #[tokio::test]
     async fn metadata_round_trips_without_secret_values() {
         let root = std::env::temp_dir().join(format!(
             "openless-linux-credential-metadata-{}",
@@ -1226,19 +1304,22 @@ mod tests {
             .set_active_provider(ProviderSlot::Asr, "local-qwen".into())
             .await
             .unwrap();
-        store
+        let ChannelMutationResult::Created(created) = store
             .mutate_channel(ChannelMutation::Create {
                 kind: ChannelKind::Asr,
                 provider_type: "openai-compatible".into(),
                 name: "Primary".into(),
             })
             .await
-            .unwrap();
+            .unwrap()
+        else {
+            panic!("expected created channel")
+        };
 
         let reopened = LinuxCredentialStore::open(&root).unwrap();
         assert_eq!(
             reopened.active_provider(ProviderSlot::Asr).await.unwrap(),
-            "local-qwen"
+            created
         );
         assert_eq!(
             reopened

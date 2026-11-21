@@ -359,6 +359,10 @@ impl fmt::Debug for SecretValue {
 }
 
 pub trait CredentialStore: Send + Sync {
+    fn siwc(&self) -> Option<std::sync::Arc<crate::siwc::SiwcService>> {
+        None
+    }
+
     fn bind_sync_gate(&self, _gate: std::sync::Arc<SyncWriteGate>) -> Result<(), BackendError> {
         Ok(())
     }
@@ -641,6 +645,24 @@ impl CredentialMetadata {
             .unwrap_or_default()
     }
 
+    /// Returns the channel selected by the enabled channel order. Stores without
+    /// channel configuration retain their legacy active provider value.
+    pub fn selected_provider(&self, slot: ProviderSlot) -> String {
+        let kind = match slot {
+            ProviderSlot::Asr => Some(ChannelKind::Asr),
+            ProviderSlot::Llm => Some(ChannelKind::Llm),
+            ProviderSlot::Omni => None,
+        };
+        if let Some(channels) = kind.and_then(|kind| self.channels.get(&kind)) {
+            if !channels.is_empty() {
+                return first_enabled_channel(channels)
+                    .map(|channel| channel.id.clone())
+                    .unwrap_or_default();
+            }
+        }
+        self.active_provider(slot)
+    }
+
     fn assign_active_provider(&mut self, slot: ProviderSlot, provider_id: String) {
         if self.active_providers.get(&slot) != Some(&provider_id) {
             self.active_providers.insert(slot, provider_id);
@@ -668,6 +690,19 @@ impl CredentialMetadata {
         let mut reordered = false;
         if let Some(kind) = kind {
             let channels = self.channels.entry(kind).or_default();
+            let legacy_provider_type = match slot {
+                ProviderSlot::Asr => crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES
+                    .contains(&provider_id),
+                ProviderSlot::Llm => crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES
+                    .contains(&provider_id),
+                ProviderSlot::Omni => false,
+            };
+            if !channels.is_empty()
+                && !channels.iter().any(|channel| channel.id == provider_id)
+                && !legacy_provider_type
+            {
+                return Err(unknown_channel(kind, provider_id));
+            }
             if let Some(selected) = channels.iter().find(|channel| channel.id == provider_id) {
                 if !selected.enabled {
                     return Err(BackendError::new(
@@ -727,13 +762,25 @@ impl CredentialMetadata {
             | ChannelMutation::RecordTest { kind, .. } => *kind,
         };
         let slot = slot_for_kind(mutation_kind);
-        let active = self.active_provider(slot);
+        let active = self
+            .active_providers
+            .get(&slot)
+            .cloned()
+            .unwrap_or_default();
         let active_was_managed = matches!(&mutation, ChannelMutation::ActivateLocalAsr { .. })
             || active.is_empty()
             || self
                 .channels
                 .get(&mutation_kind)
-                .is_some_and(|channels| channels.iter().any(|channel| channel.id == active));
+                .is_some_and(|channels| {
+                    channels.iter().any(|channel| channel.id == active)
+                        || (matches!(&mutation, ChannelMutation::Create { .. })
+                            && channels.is_empty())
+                        || (!channels.is_empty()
+                            && first_enabled_channel(channels)
+                                .map(|channel| channel.id.as_str())
+                                != Some(active.as_str()))
+                });
         let (kind, result) = match mutation {
             ChannelMutation::RegisterExperimentalAsr { model } => {
                 let channels = self.channels.entry(ChannelKind::Asr).or_default();
@@ -977,11 +1024,24 @@ impl CredentialMetadata {
         let active = self
             .channels
             .get(&kind)
-            .and_then(|channels| channels.iter().find(|channel| channel.enabled))
+            .and_then(|channels| first_enabled_channel(channels))
             .map(|channel| channel.id.clone())
             .unwrap_or_default();
         self.active_providers.insert(slot, active);
     }
+}
+
+/// Shared selection rule for status, channel UI and new request contexts.
+/// Use the channel id for credentials and its provider_type for protocol routing.
+pub(crate) fn first_enabled_channel(channels: &[ChannelSummary]) -> Option<&ChannelSummary> {
+    channels
+        .iter()
+        .filter(|channel| channel.enabled)
+        .min_by(|left, right| {
+            left.order
+                .cmp(&right.order)
+                .then_with(|| left.id.cmp(&right.id))
+        })
 }
 
 fn slot_for_kind(kind: ChannelKind) -> ProviderSlot {
@@ -1324,6 +1384,112 @@ mod tests {
             order,
             last_test: None,
         }
+    }
+
+    #[test]
+    fn channel_order_is_authoritative_after_reloading_stale_active_metadata() {
+        for stale in ["local-qwen3-mlx", "local-channel", "missing", ""] {
+            let metadata = CredentialMetadata::from_parts(
+                vec![
+                    summary("local-channel", 9, false),
+                    summary("cloud-channel", 0, true),
+                ],
+                vec![
+                    summary("llm-backup", 1, true),
+                    summary("llm-primary", 0, true),
+                ],
+                stale,
+                "llm-backup",
+                "omni-selection",
+                7,
+            );
+            let reloaded: CredentialMetadata =
+                serde_json::from_str(&serde_json::to_string(&metadata).unwrap()).unwrap();
+            assert_eq!(reloaded.selected_provider(ProviderSlot::Asr), "cloud-channel");
+            assert_eq!(reloaded.selected_provider(ProviderSlot::Llm), "llm-primary");
+            assert_eq!(
+                reloaded.active_provider(ProviderSlot::Omni),
+                "omni-selection"
+            );
+        }
+    }
+
+    #[test]
+    fn all_disabled_channels_do_not_reactivate_a_legacy_provider() {
+        let metadata = CredentialMetadata::from_parts(
+            vec![summary("local-channel", 0, false)],
+            vec![],
+            "local-qwen3-mlx",
+            "legacy-llm",
+            "omni",
+            0,
+        );
+        assert_eq!(metadata.selected_provider(ProviderSlot::Asr), "");
+        assert_eq!(metadata.active_provider(ProviderSlot::Llm), "legacy-llm");
+    }
+
+    #[test]
+    fn channel_mutations_repair_an_unmanaged_active_selection() {
+        let mut metadata = CredentialMetadata::from_parts(
+            vec![
+                summary("local-channel", 0, true),
+                summary("cloud-channel", 1, true),
+            ],
+            vec![],
+            "local-qwen3-mlx",
+            "",
+            "",
+            0,
+        );
+        metadata
+            .apply_channel_mutation(
+                ChannelMutation::Reorder {
+                    kind: ChannelKind::Asr,
+                    ids: vec!["cloud-channel".into(), "local-channel".into()],
+                },
+                |_| false,
+            )
+            .unwrap();
+        assert_eq!(
+            metadata.active_providers[&ProviderSlot::Asr],
+            "cloud-channel"
+        );
+        metadata
+            .apply_channel_mutation(
+                ChannelMutation::SetEnabled {
+                    kind: ChannelKind::Asr,
+                    id: "cloud-channel".into(),
+                    enabled: false,
+                },
+                |_| false,
+            )
+            .unwrap();
+        assert_eq!(
+            metadata.active_providers[&ProviderSlot::Asr],
+            "local-channel"
+        );
+    }
+
+    #[test]
+    fn managed_selection_rejects_provider_types_and_disabled_channel_ids() {
+        let mut metadata = CredentialMetadata::from_parts(
+            vec![
+                summary("local-channel", 1, false),
+                summary("cloud-channel", 0, true),
+            ],
+            vec![],
+            "cloud-channel",
+            "",
+            "",
+            0,
+        );
+        for id in ["local-qwen3-mlx", "local-channel"] {
+            assert!(metadata
+                .select_active_provider(ProviderSlot::Asr, id.into())
+                .is_err());
+        }
+        assert_eq!(metadata.selected_provider(ProviderSlot::Asr), "cloud-channel");
+        assert_eq!(metadata.revision(), 0);
     }
 
     #[test]

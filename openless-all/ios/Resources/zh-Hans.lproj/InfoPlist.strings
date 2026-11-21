@@ -1,0 +1,3 @@
+// System permission descriptions. The OpenLess display name is unchanged.
+"NSMicrophoneUsageDescription" = "仅在你点按或按住录音时采集声音，结束后立即释放麦克风。";
+"NSSpeechRecognitionUsageDescription" = "使用 Apple 语音识别将你主动录制的声音转换成文字。";

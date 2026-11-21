@@ -1,10 +1,34 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
+
+function micyouNotices(): Plugin {
+  return {
+    name: 'micyou-notices',
+    apply: 'build',
+    generateBundle() {
+      // Frontend assets also ship inside Android and Harmony packages.
+      for (const notice of [
+        'LICENSE',
+        'LICENSE-RNNoise.txt',
+        'LICENSE-PureVox.txt',
+        'LICENSE-AEC7.txt',
+        'UPSTREAM.md',
+      ]) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `licenses/micyou/${notice}`,
+          source: readFileSync(path.join(appRoot, 'crates/micyou-dsp', notice)),
+        });
+      }
+    },
+  };
+}
 
 const host = process.env.TAURI_DEV_HOST;
 const isHarmony = process.env.VITE_OPENLESS_PLATFORM === 'harmony';
@@ -15,7 +39,7 @@ export default defineConfig(async () => ({
   // tailwindcss: serves only the official shadcn components of the unified chat panel
   // (components/chat/chat.css entry; sources explicitly scoped to chat/ and the two panel
   // files); all other global styles bypass tailwind.
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), micyouNotices()],
   resolve: {
     alias: {
       '@android': path.resolve(appRoot, 'android/frontend'),

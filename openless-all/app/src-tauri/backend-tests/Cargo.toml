@@ -2,7 +2,7 @@
 name = "openless-backend-tests"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.99"
 publish = false
 
 [dependencies]
@@ -35,4 +35,10 @@ parking_lot = "0.12"
 futures-util = "0.3"
 
 [target.'cfg(windows)'.dev-dependencies]
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+parking_lot = "0.12"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Exercise the production recorder worker without the retired Linux Tauri host.
+cpal = { version = "=0.15.3", path = "../vendor/cpal" }
+parking_lot = "0.12"

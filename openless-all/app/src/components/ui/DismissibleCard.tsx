@@ -13,10 +13,14 @@ export const DismissibleCard = forwardRef<
   HTMLMotionProps<'div'> & {
     dismissible: boolean;
     onDismiss: () => void;
+    resetOnDismiss?: boolean;
     /** Keep the owner's ref out of AnimatePresence's child props on React 18. */
     elementRef?: Ref<HTMLDivElement>;
   }
->(function DismissibleCard({ dismissible, onDismiss, elementRef, style, ...props }, ref) {
+>(function DismissibleCard(
+  { dismissible, onDismiss, resetOnDismiss, elementRef, style, ...props },
+  ref,
+) {
   const composedRef = useComposedRefs(ref, elementRef);
   const controls = useDragControls();
   const x = useMotionValue(0);
@@ -48,9 +52,10 @@ export const DismissibleCard = forwardRef<
           !cancelled.current &&
           (Math.abs(info.offset.x) > 120 ||
             (Math.abs(info.offset.x) > 40 && Math.abs(info.velocity.x) > 650))
-        )
+        ) {
+          if (resetOnDismiss) animate(x, 0, { type: 'spring', stiffness: 480, damping: 46 });
           onDismiss();
-        else animate(x, 0, { type: 'spring', stiffness: 480, damping: 38 });
+        } else animate(x, 0, { type: 'spring', stiffness: 480, damping: 46 });
       }}
     />
   );

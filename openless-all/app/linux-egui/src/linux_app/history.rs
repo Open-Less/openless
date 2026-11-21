@@ -14,6 +14,10 @@ pub(super) struct HistoryCache {
 }
 
 impl HistoryCache {
+    pub(super) fn entry(&self, id: &str) -> Option<&openless_core::DictationSession> {
+        self.entries.iter().find(|entry| entry.id == id)
+    }
+
     pub(super) fn new(preferences: &UserPreferences) -> Self {
         let mut cache = Self::default();
         cache.policy_changed(preferences);
@@ -139,6 +143,30 @@ fn spawn_history_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn second_page_actions_resolve_ids_after_cache_changes() {
+        let entry = |index| {
+            serde_json::from_value::<openless_core::DictationSession>(serde_json::json!({
+                "id": format!("entry-{index}"), "createdAt": "2026-10-19T00:00:00Z",
+                "rawTranscript": format!("raw-{index}"), "finalText": format!("final-{index}"),
+                "mode": "raw", "insertStatus": "notRequested"
+            }))
+            .unwrap()
+        };
+        let mut cache = HistoryCache {
+            entries: (0..250).map(entry).collect(),
+            ..Default::default()
+        };
+        let id = cache.entries[220].id.clone();
+        assert!(cache.entries[..200].iter().all(|entry| entry.id != id));
+        assert_eq!(cache.entry(&id).unwrap().raw_transcript, "raw-220");
+        cache.entries.insert(0, entry(999));
+        cache.entries.remove(100);
+        assert_eq!(cache.entry(&id).unwrap().final_text, "final-220");
+        cache.entries.retain(|entry| entry.id != id);
+        assert!(cache.entry(&id).is_none());
+    }
 
     #[test]
     fn idle_ticks_do_not_read_and_refreshes_coalesce_while_blocked() {

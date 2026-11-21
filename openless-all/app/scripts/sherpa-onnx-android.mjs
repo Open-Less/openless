@@ -20,12 +20,12 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 // Must match the sherpa-onnx crate version in src-tauri/Cargo.toml.
-export const SHERPA_ONNX_VERSION = '1.13.2';
+export const SHERPA_ONNX_VERSION = '1.13.8';
 export const SHERPA_ONNX_ANDROID_ARCHIVE = {
   name: `sherpa-onnx-v${SHERPA_ONNX_VERSION}-android.tar.bz2`,
   url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/sherpa-onnx-v${SHERPA_ONNX_VERSION}-android.tar.bz2`,
-  sizeBytes: 52_236_308,
-  sha256: 'fc4d17941152941a883b0cfabfc9acac118682324e9f97df6c1ae1360bc7bc8e',
+  sizeBytes: 46_093_321,
+  sha256: '2ff63469a71cb6009aa2e3ed5f4a670f8abdcbe4bb9ffd23776afc792a6b4f44',
 };
 /** The only ABI local ASR is built for; the others stay cloud-only. */
 export const SHERPA_ONNX_ANDROID_ABI = 'arm64-v8a';
@@ -70,19 +70,27 @@ export async function ensureSherpaOnnxAndroidLibs({ root = appRoot, log = consol
     renameSync(partial, archive);
     if (!(await valid())) {
       rmSync(archive, { force: true });
-      throw new Error(`sherpa-onnx archive failed size/SHA-256 verification: ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`);
+      throw new Error(
+        `sherpa-onnx archive failed size/SHA-256 verification: ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`,
+      );
     }
   }
 
-  const members = SHERPA_ONNX_ANDROID_LIBS.map((lib) => `./jniLibs/${SHERPA_ONNX_ANDROID_ABI}/${lib}`);
+  const members = SHERPA_ONNX_ANDROID_LIBS.map(
+    (lib) => `./jniLibs/${SHERPA_ONNX_ANDROID_ABI}/${lib}`,
+  );
   const result = spawnSync('tar', ['-xjf', SHERPA_ONNX_ANDROID_ARCHIVE.name, ...members], {
     cwd: cacheDir,
     stdio: 'inherit',
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`extracting ${SHERPA_ONNX_ANDROID_ARCHIVE.name} failed (tar exit ${result.status})`);
+  if (result.status !== 0)
+    throw new Error(
+      `extracting ${SHERPA_ONNX_ANDROID_ARCHIVE.name} failed (tar exit ${result.status})`,
+    );
   for (const lib of SHERPA_ONNX_ANDROID_LIBS) {
-    if (!existsSync(join(libDir, lib))) throw new Error(`${lib} missing from ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`);
+    if (!existsSync(join(libDir, lib)))
+      throw new Error(`${lib} missing from ${SHERPA_ONNX_ANDROID_ARCHIVE.name}`);
   }
   log(`[sherpa-onnx] libraries ready in ${libDir}`);
   return libDir;

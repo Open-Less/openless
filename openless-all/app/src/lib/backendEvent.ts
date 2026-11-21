@@ -126,8 +126,7 @@ export function applyTranscriptSnapshot(
     snapshot.revision < state.revision ||
     (snapshot.revision === state.revision && snapshot.sequence < state.sequence);
   if (stale) return state;
-  const sessionChanged =
-    snapshot.sessionId !== null && snapshot.sessionId !== state.sessionId;
+  const sessionChanged = snapshot.sessionId !== null && snapshot.sessionId !== state.sessionId;
   return {
     ...state,
     sessionId: snapshot.sessionId,
@@ -197,14 +196,16 @@ export function applyTranscriptEvent(
       sessionId: sessionId ?? state.sessionId,
       sequence: event.sequence,
       revision: Math.max(state.revision, event.sequence),
-      awaitingSessionStart:
-        payload?.phase === 'recording' ? false : state.awaitingSessionStart,
-      sessionStartObserved:
-        payload?.phase === 'recording' ? true : state.sessionStartObserved,
+      awaitingSessionStart: payload?.phase === 'recording' ? false : state.awaitingSessionStart,
+      sessionStartObserved: payload?.phase === 'recording' ? true : state.sessionStartObserved,
     };
   }
   if (event.kind.type !== 'transcript_delta') {
-    return { ...state, sequence: event.sequence, revision: Math.max(state.revision, event.sequence) };
+    return {
+      ...state,
+      sequence: event.sequence,
+      revision: Math.max(state.revision, event.sequence),
+    };
   }
   if (state.awaitingSessionStart) return state;
   if (state.sessionId !== null && event.sessionId !== state.sessionId) return state;

@@ -34,6 +34,15 @@ fn language(name: &str) -> Option<&'static Language> {
     })
 }
 
+pub fn native_language_name(value: &str) -> Option<String> {
+    language(value).map(|language| language.native_name.clone())
+}
+
+/// The catalog code (`zh-Hans`, `en`, ...) used to name a language in a locale.
+pub fn language_code(value: &str) -> Option<String> {
+    language(value).map(|language| language.code.clone())
+}
+
 pub fn asr_language_code(native_name: &str) -> Option<String> {
     language(native_name).map(|language| language.asr_code.clone())
 }

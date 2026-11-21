@@ -13,14 +13,13 @@ const container = read('crates/openless-core/src/local_migration_bundle/containe
 const bridge = read('src-tauri/src/android/native_bridge.rs');
 const scaffolding = read('scripts/copy-android-scaffolding.mjs');
 const manifestMerge = read('scripts/merge-android-overlay-manifest.mjs');
-const privacyTabs = read('src/pages/settings/tabs.tsx');
-const migrationSection = read('src/pages/settings/LocalMigrationSection.tsx');
+const privacyTabs = read('src/features/settings/shell/tabs.tsx');
+const migrationSection = read('src/features/settings/sections/LocalMigrationSection.tsx');
 const migrationIpc = read('src/lib/ipc/local-migration.ts');
 const permissionsCommands = read('src-tauri/src/commands/permissions_cmds.rs');
 const mobileHandler = read('src-tauri/src/lib.rs');
 const application = read('android/kotlin/OpenLessApplication.kt');
 const settingsExport = read('android/kotlin/OpenLessSettingsExport.kt');
-const legacyPinyin = read('android/kotlin/LegacyPinyinBackup.kt');
 
 assert.match(policy, /openless\.android\.migration-bundle/);
 assert.match(migrationActivity, /nativeExportLocalMigrationBundle/);
@@ -55,10 +54,18 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(keyboardActivity, /showExportCategoryDialog|launchImportPicker/);
 assert.match(keyboardActivity, /nativeAsrUsage/);
-assert.match(keyboardActivity, /LegacyPinyinBackup/);
+assert.doesNotMatch(keyboardActivity, /LegacyPinyinBackup/);
+// The keyboard page exports its own learning data, separately from the migration bundle.
+const keyboardData = read('android/kotlin/KeyboardDataFile.kt');
+assert.match(keyboardActivity, /KeyboardDataFile\.export\(/);
+assert.match(keyboardActivity, /KeyboardDataFile\.import\(/);
+assert.match(keyboardData, /OpenLessRime\.exportUserDictionary/);
+assert.match(keyboardData, /OpenLessRime\.importUserDictionary/);
+assert.doesNotMatch(keyboardData, /nativeExportLocalMigrationBundle|OpenLessSettingsExport/);
 assert.doesNotMatch(settingsExport, /LitePinyinLearnedPhrases/);
-assert.match(settingsExport, /pinyinLearnedPhrases.*LegacyPinyinBackup/);
-assert.match(legacyPinyin, /OpenLessMigrationState\.settings/);
+// Bundle schema 1 keeps the field, always empty now that Rime replaced LitePinyin.
+assert.match(settingsExport, /put\("pinyinLearnedPhrases", JSONObject\(\)\)/);
+assert.equal(existsSync(join(appRoot, 'android/kotlin/LegacyPinyinBackup.kt')), false);
 assert.equal(existsSync(join(appRoot, 'android/kotlin/LitePinyinLearnedPhrases.kt')), false);
 assert.match(scaffolding, /OpenLessLocalMigrationActivity\.kt/);
 assert.match(native, /nativeExportLocalMigrationBundle/);

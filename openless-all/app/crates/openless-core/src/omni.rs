@@ -13,14 +13,16 @@
 mod gemini_transcribe;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::polish::{
-    append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
-    extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
-    openai_model_omits_custom_temperature, safe_str_slice, send_with_transient_retry, LLMError,
+    append_utf8_sse_chunk, apply_openai_compatible_thinking_control_with_effort,
+    chat_completions_url, extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
+    openai_model_omits_custom_temperature, openai_model_uses_max_completion_tokens, safe_str_slice,
+    send_with_transient_retry, LLMError,
 };
 
 pub const OMNI_GEMINI_PROVIDER_ID: &str = "gemini";
@@ -38,6 +40,10 @@ pub struct OmniConfig {
     pub extra_headers: HashMap<String, String>,
     pub temperature: Option<f32>,
     pub thinking_enabled: bool,
+    /// Per-request token cap selected by the post-ASR strategy.
+    pub max_tokens_override: Option<u32>,
+    /// Per-request reasoning effort selected by the post-ASR strategy.
+    pub reasoning_effort: Option<String>,
 }
 
 impl OmniConfig {
@@ -100,16 +106,27 @@ impl OpenAICompatibleOmni {
                 body["temperature"] = json!(temperature);
             }
         }
+        if let Some(max_tokens) = self.config.max_tokens_override {
+            let field = if self.config.provider_id.trim() == "openai"
+                && openai_model_uses_max_completion_tokens(&self.config.model)
+            {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[field] = json!(max_tokens);
+        }
         // DashScope Omni requests text-only output.
         if self.config.audio_requires_data_url() {
             body["modalities"] = json!(["text"]);
         }
-        apply_openai_compatible_thinking_control(
+        apply_openai_compatible_thinking_control_with_effort(
             &mut body,
             &self.config.provider_id,
             &self.config.base_url,
             &self.config.model,
             self.config.thinking_enabled,
+            self.config.reasoning_effort.as_deref(),
         );
         body
     }
@@ -362,24 +379,43 @@ pub enum OmniProvider {
 
 impl OmniProvider {
     pub fn new(config: OmniConfig) -> Self {
+        Self::with_task_spawner(config, Arc::new(crate::config::TokioTaskSpawner))
+    }
+
+    /// Use the host scheduler for both transcription work and asynchronous cleanup.
+    pub fn with_task_spawner(
+        config: OmniConfig,
+        task_spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Self {
         if config.is_gemini() {
             let label = OmniCallLabel {
                 provider: config.provider_id.clone(),
                 model: config.model.clone(),
             };
-            if config.model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+            if matches!(
+                config.model.trim(),
+                crate::asr::gemini::DEFAULT_MODEL | crate::asr::gemini_live::MODEL
+            ) {
                 return Self::GeminiTranscribe {
-                    provider: gemini_transcribe::GeminiTranscribeOmni::new(config),
+                    provider: gemini_transcribe::GeminiTranscribeOmni::with_task_spawner(
+                        config,
+                        task_spawner,
+                    ),
                     label,
                 };
             }
-            let gemini_config = crate::llm_gemini::GeminiConfig::new(
+            let thinking_enabled = config
+                .reasoning_effort
+                .as_deref()
+                .map(|effort| effort != "none")
+                .unwrap_or(config.thinking_enabled);
+            let mut gemini_config = crate::llm_gemini::GeminiConfig::new(
                 config.api_key.clone(),
                 config.model.clone(),
                 config.base_url.clone(),
             )
-            .with_thinking_enabled(config.thinking_enabled);
-            let mut gemini_config = gemini_config;
+            .with_thinking_enabled(thinking_enabled)
+            .with_max_output_tokens(config.max_tokens_override);
             if let Some(temperature) = config.temperature {
                 gemini_config.temperature = temperature;
             }
@@ -402,6 +438,17 @@ impl OmniProvider {
 
     pub fn is_transcription_only(&self) -> bool {
         matches!(self, Self::GeminiTranscribe { .. })
+    }
+
+    /// Open a real-time audio session when the selected dedicated model supports it.
+    pub(crate) async fn start_live_transcription(
+        &self,
+        partials: std::sync::Arc<dyn crate::ports::TextStreamSink>,
+    ) -> Result<Option<std::sync::Arc<crate::asr::gemini_live::GeminiLiveASR>>, LLMError> {
+        match self {
+            Self::GeminiTranscribe { provider, .. } => provider.start_live(partials).await,
+            _ => Ok(None),
+        }
     }
 
     pub fn call_label(&self) -> OmniCallLabel {
@@ -492,6 +539,8 @@ mod tests {
             extra_headers: HashMap::new(),
             temperature: Some(0.3),
             thinking_enabled: false,
+            max_tokens_override: None,
+            reasoning_effort: None,
         }
     }
 
@@ -756,6 +805,20 @@ mod tests {
         // temperature is stored as f32 (0.3f32 serializes as 0.30000001192092896); compare with tolerance.
         assert!((body["temperature"].as_f64().unwrap() - 0.3).abs() < 1e-6);
         assert!(body.get("modalities").is_none());
+    }
+
+    #[test]
+    fn omni_body_applies_strategy_request_overrides() {
+        let mut omni = config();
+        omni.model = "gpt-5-mini".into();
+        omni.max_tokens_override = Some(321);
+        omni.reasoning_effort = Some("high".into());
+        let provider = OpenAICompatibleOmni::new(omni);
+        let body = provider.omni_body(false, vec![json!({"role": "user", "content": "x"})]);
+
+        assert_eq!(body["max_completion_tokens"], 321);
+        assert_eq!(body["reasoning_effort"], "high");
+        assert!(body.get("max_tokens").is_none());
     }
 
     #[test]

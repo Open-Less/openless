@@ -24,7 +24,7 @@ const CODE_COPY_GAP: f32 = 10.0;
 fn my_packs_button(ui: &mut egui::Ui, rect: egui::Rect, label: &str) -> egui::Response {
     let response = ui.interact(
         rect,
-        ui.id().with("marketplace-my-packs"),
+        ui.scope_id().with("marketplace-my-packs"),
         egui::Sense::click(),
     );
     let painter = ui.painter().with_clip_rect(rect);
@@ -60,7 +60,7 @@ fn my_packs_button(ui: &mut egui::Ui, rect: egui::Rect, label: &str) -> egui::Re
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(
-            egui::Id::new("openless-mine-button-test-rects"),
+            egui::Id::unique("openless-mine-button-test-rects"),
             (rect, badge, label_pos),
         )
     });
@@ -80,7 +80,7 @@ fn close_control(
     glyph_size: f32,
     radius: u8,
 ) -> egui::Response {
-    let id = ui.id().with((
+    let id = ui.scope_id().with((
         "openless-close-control",
         rect.left().round() as i32,
         rect.top().round() as i32,
@@ -192,7 +192,7 @@ pub fn marketplace_page(
                     // so the search box looked like it ignored typing.
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut vm.marketplace_query)
-                            .id(egui::Id::new("openless-marketplace-search"))
+                            .id(egui::Id::unique("openless-marketplace-search"))
                             .hint_text(tr_l10n(lang, "marketplace.search_placeholder"))
                             .text_color(theme::INK)
                             .frame(egui::Frame::NONE)
@@ -294,6 +294,14 @@ pub fn marketplace_page(
         .map(|(index, _)| index)
         .collect();
 
+    super::paging::load_more_footer(
+        ui,
+        lang,
+        super::paging::Collection::Marketplace,
+        vm,
+        false,
+        actions,
+    );
     if visible.is_empty() {
         let (title, hint) = if liked_only {
             (
@@ -390,7 +398,7 @@ fn marketplace_card(
         rect,
         ui.interact(
             rect,
-            ui.id().with(("marketplace-card", index)),
+            ui.scope_id().with(("marketplace-card", index)),
             egui::Sense::click(),
         ),
     );
@@ -526,7 +534,7 @@ fn marketplace_detail(
     let card_rect =
         egui::Rect::from_center_size(body_rect.center(), egui::vec2(modal_width, card_height));
 
-    let modal = egui::Area::new(egui::Id::new("openless-marketplace-detail-modal"))
+    let modal = egui::Area::new(egui::Id::unique("openless-marketplace-detail-modal"))
         // 与设置弹窗同一套层级策略：遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个
         // LayerId）。各自独立 Area 时，egui 会在按下后把被点到的 Area 抬到同层最上
         // （`move_to_top`），遮罩一旦被抬起就会盖住卡片；同一图层里先画遮罩、再画卡片在
@@ -697,7 +705,7 @@ fn marketplace_detail(
         });
     ctx.data_mut(|data| {
         data.insert_temp(
-            egui::Id::new("openless-marketplace-detail-card-rect"),
+            egui::Id::unique("openless-marketplace-detail-card-rect"),
             modal.inner.rect,
         );
     });
@@ -718,9 +726,9 @@ fn marketplace_oauth(
         egui::Rect::from_center_size(body.center() + egui::vec2(OAUTH_CARD_SHIFT_X, 0.0), size);
     #[cfg(test)]
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new("openless-marketplace-oauth-card-rect"), card)
+        data.insert_temp(egui::Id::unique("openless-marketplace-oauth-card-rect"), card)
     });
-    egui::Area::new(egui::Id::new("openless-marketplace-oauth-modal"))
+    egui::Area::new(egui::Id::unique("openless-marketplace-oauth-modal"))
         .order(egui::Order::Tooltip)
         .fixed_pos(body.min)
         .constrain(false)
@@ -767,7 +775,7 @@ fn marketplace_oauth(
                                     #[cfg(test)]
                                     ui.ctx().data_mut(|data| {
                                         data.insert_temp(
-                                            egui::Id::new("openless-marketplace-oauth-close-rect"),
+                                            egui::Id::unique("openless-marketplace-oauth-close-rect"),
                                             close.rect,
                                         )
                                     });
@@ -827,7 +835,7 @@ fn marketplace_oauth(
                                     #[cfg(test)]
                                     ui.ctx().data_mut(|data| {
                                         data.insert_temp(
-                                            egui::Id::new("openless-marketplace-oauth-code-box"),
+                                            egui::Id::unique("openless-marketplace-oauth-code-box"),
                                             ui.min_rect().expand2(egui::vec2(12.0, 10.0)),
                                         )
                                     });
@@ -861,7 +869,7 @@ fn marketplace_oauth(
                                         );
                                         let copy = ui.interact(
                                             copy_rect,
-                                            ui.id().with("openless-oauth-copy-code"),
+                                            ui.scope_id().with("openless-oauth-copy-code"),
                                             egui::Sense::click(),
                                         );
                                         let painter = ui.painter().with_clip_rect(copy_rect);
@@ -959,7 +967,7 @@ fn marketplace_oauth(
                                 #[cfg(test)]
                                 ui.ctx().data_mut(|data| {
                                     data.insert_temp(
-                                        egui::Id::new("openless-marketplace-oauth-status-row"),
+                                        egui::Id::unique("openless-marketplace-oauth-status-row"),
                                         row,
                                     )
                                 });
@@ -981,7 +989,7 @@ fn marketplace_upload(
     let card_width = (body.width() - 40.0).clamp(320.0, 560.0);
     let card_height = (body.height() * 0.82).clamp(300.0, 560.0);
     let card = egui::Rect::from_center_size(body.center(), egui::vec2(card_width, card_height));
-    egui::Area::new(egui::Id::new("openless-marketplace-upload-modal"))
+    egui::Area::new(egui::Id::unique("openless-marketplace-upload-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
         .constrain(false)
@@ -1153,7 +1161,7 @@ fn marketplace_withdraw_confirm(
         openless_linux_egui::fmt_l10n(lang, "marketplace.withdraw.confirm", &[&pack.pack.name]);
     let card =
         egui::Rect::from_center_size(body.center(), egui::vec2(body.width().min(420.0), 170.0));
-    egui::Area::new(egui::Id::new("openless-marketplace-withdraw-confirm"))
+    egui::Area::new(egui::Id::unique("openless-marketplace-withdraw-confirm"))
         .order(egui::Order::Tooltip)
         .fixed_pos(body.min)
         .constrain(false)
@@ -1241,9 +1249,9 @@ fn marketplace_mine(
     let card = egui::Rect::from_center_size(body.center(), size);
     #[cfg(test)]
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new("openless-marketplace-mine-card-rect"), card)
+        data.insert_temp(egui::Id::unique("openless-marketplace-mine-card-rect"), card)
     });
-    egui::Area::new(egui::Id::new("openless-marketplace-mine-modal"))
+    egui::Area::new(egui::Id::unique("openless-marketplace-mine-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
         .constrain(false)
@@ -1742,7 +1750,7 @@ mod tests {
             },
         );
         let (outer, avatar, text): (egui::Rect, egui::Rect, egui::Pos2) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-mine-button-test-rects"))
+            data.get_temp(egui::Id::unique("openless-mine-button-test-rects"))
                 .unwrap()
         });
         assert!(outer.contains_rect(avatar));
@@ -1778,7 +1786,7 @@ mod tests {
             let _ = crate::ui::frontend::end_pass(&ctx);
         }
         let card: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-card-rect")))
+            .data(|data| data.get_temp(egui::Id::unique("openless-marketplace-oauth-card-rect")))
             .expect("the open dialog must publish its card rect");
         let body = layout::body_rect(&ctx);
         assert_eq!(card.width(), OAUTH_CARD_WIDTH);
@@ -1787,7 +1795,7 @@ mod tests {
         assert!(card.right() <= body.right(), "{card:?} in {body:?}");
 
         let row: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-status-row")))
+            .data(|data| data.get_temp(egui::Id::unique("openless-marketplace-oauth-status-row")))
             .expect("the pending phase must paint the status row");
         assert!(
             (row.center().x - card.center().x).abs() <= 2.0,
@@ -1799,7 +1807,7 @@ mod tests {
         // The code tile spans the whole card (Tauri renders it as a full-width
         // flex row) instead of hugging the code text on the left edge.
         let code_box: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-code-box")))
+            .data(|data| data.get_temp(egui::Id::unique("openless-marketplace-oauth-code-box")))
             .expect("the pending phase must paint the code tile");
         assert_eq!(code_box.width(), card.width() - 44.0);
         assert!(
@@ -1810,7 +1818,7 @@ mod tests {
         // The × is painted into a fixed 28×28 rect: a stock `egui::Button` would
         // take its size from the font metrics and from egui's per-state padding.
         let close: egui::Rect = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-marketplace-oauth-close-rect")))
+            .data(|data| data.get_temp(egui::Id::unique("openless-marketplace-oauth-close-rect")))
             .expect("the dialog must publish its close control");
         assert_eq!(close.size(), egui::vec2(28.0, 28.0));
     }

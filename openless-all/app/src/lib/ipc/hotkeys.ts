@@ -13,20 +13,19 @@ import {
   androidHotkeyCapability,
   androidWindowsImeStatus,
 } from './shared';
-import {
-  mockHotkeyStatus,
-  mockHotkeyCapability,
-  mockSettings,
-  mockSetSettings,
-  mockWindowsImeStatus,
-} from './mock-data';
+import { getPreviewProfile } from '../../preview/profiles';
+import { mockSettings, mockSetSettings } from './mock-data';
 
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
   return platformCapabilities().then((caps) => {
     if (!caps.supportsDesktopHotkey) {
       return androidHotkeyStatus;
     }
-    return invokeOrMock('get_hotkey_status', undefined, () => mockHotkeyStatus);
+    return invokeOrMock(
+      'get_hotkey_status',
+      undefined,
+      () => getPreviewProfile().hotkeyStatus ?? androidHotkeyStatus,
+    );
   });
 }
 
@@ -35,7 +34,11 @@ export function getHotkeyCapability(): Promise<HotkeyCapability> {
     if (!caps.supportsDesktopHotkey) {
       return androidHotkeyCapability;
     }
-    return invokeOrMock('get_hotkey_capability', undefined, () => mockHotkeyCapability);
+    return invokeOrMock(
+      'get_hotkey_capability',
+      undefined,
+      () => getPreviewProfile().hotkeyCapability ?? androidHotkeyCapability,
+    );
   });
 }
 
@@ -44,7 +47,11 @@ export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
     if (caps.platform !== 'desktop') {
       return androidWindowsImeStatus;
     }
-    return invokeOrMock('get_windows_ime_status', undefined, () => mockWindowsImeStatus);
+    return invokeOrMock(
+      'get_windows_ime_status',
+      undefined,
+      () => getPreviewProfile().windowsImeStatus,
+    );
   });
 }
 

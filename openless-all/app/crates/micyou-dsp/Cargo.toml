@@ -1,0 +1,18 @@
+[package]
+name = "micyou-dsp"
+version = "0.1.0"
+edition = "2021"
+license-file = "LICENSE"
+publish = false
+
+[features]
+default = ["dsp", "noise-suppression"]
+dsp = []
+noise-suppression = ["dsp"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+nnnoiseless = { version = "0.5.2", default-features = false }
+rustfft = "6.4.1"
+micyou-infer = { path = "../micyou-infer" }

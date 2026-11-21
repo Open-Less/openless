@@ -1,0 +1,17 @@
+Copyright © 2014–2022 Chris Morgan
+
+This project is distributed under the terms of three different licenses,
+at your choice:
+
+- Blue Oak Model License 1.0.0: https://blueoakcouncil.org/license/1.0.0
+- MIT License: https://opensource.org/licenses/MIT
+- Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+
+If you do not have particular cause to select the MIT or the Apache-2.0
+license, Chris Morgan recommends that you select BlueOak-1.0.0, which is
+better and simpler than both MIT and Apache-2.0, which are only offered
+due to their greater recognition and their conventional use in the Rust
+ecosystem. (BlueOak-1.0.0 was only published in March 2019.)
+
+When using this code, ensure you comply with the terms of at least one of
+these licenses.

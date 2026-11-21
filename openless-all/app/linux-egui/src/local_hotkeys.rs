@@ -1,7 +1,7 @@
 //! 我们自己的窗口有焦点时，fcitx5 插件收不到按键 —— 本地兜底匹配的**判定层**。
 //!
 //! 插件把热键匹配挂在 fcitx5 的 `EventType::InputContextKeyEvent` 上
-//! （`scripts/linux-fcitx5-plugin/openless.cpp`），而 fcitx5 只有在聚焦的客户端
+//! （`app/scripts/linux-fcitx5-plugin/openless.cpp`），而 fcitx5 只有在聚焦的客户端
 //! 注册了 text-input 时才会收到那个客户端的按键。我们的 winit/egui 窗口从不注册
 //! （`ime_allowed` 默认 false → 不会调用 `zwp_text_input_v3.enable()`），于是
 //! **主窗口、选区助手、Less Computer 面板有焦点时插件一个信号都不会发**：用户
@@ -33,7 +33,6 @@ pub enum LocalHotkey {
     SwitchStyle,
     SelectionPolish,
     OpenApp,
-    LessComputer,
     /// 风格包热键带 **pack id**（不是下标）：窗口进程与宿主各自持有的
     /// `HotkeyRuntimeTarget` 可能来自不同时刻，用下标会指错包。
     StylePack(String),
@@ -98,7 +97,7 @@ pub fn match_hotkey(
         // 不支持的主键（egui 词表里有、X11 keysym 表里没有）：交给插件那条路。
         return None;
     }
-    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 8] = [
+    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 7] = [
         (Some(&target.dictation), LocalHotkey::Dictation),
         (target.qa.as_ref(), LocalHotkey::Qa),
         (target.quick_note.as_ref(), LocalHotkey::QuickNote),
@@ -109,13 +108,6 @@ pub fn match_hotkey(
         (Some(&target.translation), LocalHotkey::Translation),
         (target.switch_style.as_ref(), LocalHotkey::SwitchStyle),
         (target.open_app.as_ref(), LocalHotkey::OpenApp),
-        (
-            target
-                .coding_agent_voice
-                .as_ref()
-                .filter(|_| target.coding_agent_enabled),
-            LocalHotkey::LessComputer,
-        ),
     ];
     for (binding, hotkey) in candidates {
         let Some(binding) = binding else { continue };
@@ -202,9 +194,6 @@ pub fn plugin_event_hotkey(
         }
         LinuxHotkeyEvent::SwitchStylePressed => LocalHotkey::SwitchStyle,
         LinuxHotkeyEvent::OpenAppPressed => LocalHotkey::OpenApp,
-        LinuxHotkeyEvent::LessComputerPressed { .. }
-        | LinuxHotkeyEvent::LessComputerReleased { .. }
-        | LinuxHotkeyEvent::LessComputerCombined { .. } => LocalHotkey::LessComputer,
         LinuxHotkeyEvent::StylePackPressed { symbol, states } => {
             let raw = (*symbol, *states);
             target
@@ -297,19 +286,26 @@ impl HotkeyDeduplicator {
     /// 会被丢弃，这里的判定方向相反：插件信号刚处理过，本地边沿不再重复触发。
     pub fn accept_local(&mut self, hotkey: &LocalHotkey, at: Instant) -> bool {
         let stamps = self.seen.entry(hotkey.clone()).or_default();
-        stamps.local = Some(at);
-        !stamps
+        let accepted = stamps
             .signal
-            .is_some_and(|signal| at.saturating_duration_since(signal) < HOTKEY_DEDUPE_WINDOW)
+            .is_none_or(|signal| at.saturating_duration_since(signal) >= HOTKEY_DEDUPE_WINDOW);
+        // A rejected echo must not suppress the originating source's key-up.
+        if accepted {
+            stamps.local = Some(at);
+        }
+        accepted
     }
 
     /// 采纳一条插件信号？本地刚命中过（同一窗口还是 XWayland 客户端）就丢弃。
     pub fn accept_signal(&mut self, hotkey: &LocalHotkey, at: Instant) -> bool {
         let stamps = self.seen.entry(hotkey.clone()).or_default();
-        stamps.signal = Some(at);
-        !stamps
+        let accepted = stamps
             .local
-            .is_some_and(|local| at.saturating_duration_since(local) < HOTKEY_DEDUPE_WINDOW)
+            .is_none_or(|local| at.saturating_duration_since(local) >= HOTKEY_DEDUPE_WINDOW);
+        if accepted {
+            stamps.signal = Some(at);
+        }
+        accepted
     }
 }
 
@@ -331,6 +327,7 @@ mod tests {
             dictation_mode: HotkeyMode::Toggle,
             enter_stop_enabled: false,
             qa: Some(binding(";", &["ctrl", "shift"])),
+            qa_companion_key: "Space".into(),
             quick_note: None,
             translation: binding("Z", &["alt"]),
             switch_style: Some(binding("S", &["ctrl", "shift"])),
@@ -357,10 +354,6 @@ mod tests {
         assert_eq!(
             match_hotkey(&target, &binding(";", &["ctrl", "shift"])),
             Some(LocalHotkey::Qa)
-        );
-        assert_eq!(
-            match_hotkey(&target, &binding("V", &["alt"])),
-            Some(LocalHotkey::LessComputer)
         );
         // 没绑的组合不命中。
         assert_eq!(match_hotkey(&target, &binding("B", &["alt"])), None);
@@ -413,13 +406,6 @@ mod tests {
             match_hotkey(&target, &binding("1", &["ctrl", "alt"])),
             Some(LocalHotkey::StylePack("pack-1".to_string()))
         );
-    }
-
-    #[test]
-    fn a_disabled_less_computer_hotkey_is_not_matched() {
-        let mut target = target();
-        target.coding_agent_enabled = false;
-        assert_eq!(match_hotkey(&target, &binding("V", &["alt"])), None);
     }
 
     #[test]

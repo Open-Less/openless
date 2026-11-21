@@ -546,7 +546,11 @@ fn read_entries(bytes: &[u8]) -> BundleResult<BTreeMap<String, Vec<u8>>> {
         let file = archive
             .by_index(index)
             .map_err(|_| BundleError::MalformedContainer)?;
-        let name = file.name().to_owned();
+        // `zip` 9（本仓）返回 `Result<Cow<str>, ZipError>`，2.x 直接返回 `&str`。
+        let name = file
+            .name()
+            .map_err(|_| BundleError::MalformedContainer)?
+            .into_owned();
         if file.is_dir()
             || file.encrypted()
             || !safe_entry_name(&name)

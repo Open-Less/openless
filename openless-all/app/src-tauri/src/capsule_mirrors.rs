@@ -13,8 +13,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::types::CapsuleDisplayMode;
+#[cfg(not(mobile))]
+use tauri::Monitor;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use tauri::{AppHandle, Manager, Monitor, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 pub(crate) const CAPSULE_MIRROR_PREFIX: &str = "capsule-mirror-";
 pub(crate) const RAIL_MIRROR_PREFIX: &str = "capsule-rail-mirror-";
@@ -40,7 +42,7 @@ pub(crate) struct MonitorRect {
     pub(crate) identity: u64,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(not(mobile))]
 fn monitor_identity(name: Option<&String>) -> u64 {
     let Some(name) = name else {
         return 0;
@@ -58,7 +60,7 @@ fn monitor_identity(name: Option<&String>) -> u64 {
 }
 
 impl MonitorRect {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(not(mobile))]
     pub(crate) fn from_tauri(monitor: &Monitor) -> Self {
         let position = monitor.position();
         let size = monitor.size();
@@ -167,7 +169,7 @@ pub(crate) fn resolve_frozen_monitor(
 /// Map a captured external foreground HWND to the monitor containing that window.
 #[cfg(target_os = "windows")]
 pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
-    window: &WebviewWindow<R>,
+    app: &AppHandle<R>,
     raw_hwnd: usize,
 ) -> Option<MonitorRect> {
     use std::ffi::c_void;
@@ -193,14 +195,18 @@ pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
         return None;
     }
     let rect = info.rcMonitor;
-    all_monitor_rects(window).into_iter().find(|candidate| {
-        (
-            candidate.left,
-            candidate.top,
-            candidate.right,
-            candidate.bottom,
-        ) == (rect.left, rect.top, rect.right, rect.bottom)
-    })
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(MonitorRect::from_tauri)
+        .find(|candidate| {
+            (
+                candidate.left,
+                candidate.top,
+                candidate.right,
+                candidate.bottom,
+            ) == (rect.left, rect.top, rect.right, rect.bottom)
+        })
 }
 
 pub(crate) fn monitor_at_point(monitors: &[MonitorRect], x: i32, y: i32) -> Option<MonitorRect> {
@@ -286,6 +292,32 @@ pub(crate) fn mirror_targets(
         })
         .take(MAX_CAPSULE_MIRRORS)
         .collect()
+}
+
+/// Shared target selection for disposable overlays without a hidden WebView.
+pub(crate) fn display_targets(
+    mode: CapsuleDisplayMode,
+    monitors: &[MonitorRect],
+    primary: Option<MonitorRect>,
+    cursor: Option<(i32, i32)>,
+    frozen: Option<MonitorRect>,
+) -> Vec<MonitorRect> {
+    let target = match mode {
+        CapsuleDisplayMode::PrimaryScreen => primary.or_else(|| monitors.first().copied()),
+        CapsuleDisplayMode::ForegroundWindowScreen => {
+            resolve_frozen_monitor(frozen, monitors, primary)
+        }
+        CapsuleDisplayMode::CursorScreen | CapsuleDisplayMode::AllScreens => cursor
+            .and_then(|(x, y)| monitor_at_point(monitors, x, y))
+            .or(primary)
+            .or_else(|| monitors.first().copied()),
+    };
+    let Some(target) = target else {
+        return Vec::new();
+    };
+    let mut targets = vec![target];
+    targets.extend(mirror_targets(mode, monitors, target));
+    targets
 }
 
 /// Stable hash of the monitor layout. Changes when a monitor is connected, disconnected,
@@ -464,6 +496,54 @@ mod tests {
         let mut monitor = monitor(left, top, width, height, taskbar, scale);
         monitor.identity = identity;
         monitor
+    }
+
+    #[test]
+    fn disposable_capsule_obeys_each_display_mode() {
+        let primary = monitor(0, 0, 1920, 1080, 40, 1.0);
+        let left = monitor(-1920, 0, 1920, 1080, 40, 1.0);
+        let right = monitor(1920, 0, 2560, 1440, 80, 1.5);
+        let monitors = [primary, left, right];
+        let select = |mode| {
+            display_targets(
+                mode,
+                &monitors,
+                Some(primary),
+                Some((-100, 20)),
+                Some(right),
+            )
+        };
+        assert_eq!(select(CapsuleDisplayMode::CursorScreen), vec![left]);
+        assert_eq!(select(CapsuleDisplayMode::PrimaryScreen), vec![primary]);
+        assert_eq!(
+            select(CapsuleDisplayMode::ForegroundWindowScreen),
+            vec![right]
+        );
+        assert_eq!(
+            select(CapsuleDisplayMode::AllScreens),
+            vec![left, primary, right]
+        );
+        assert_eq!(
+            display_targets(
+                CapsuleDisplayMode::ForegroundWindowScreen,
+                &[primary],
+                Some(primary),
+                Some((-100, 20)),
+                Some(right)
+            ),
+            vec![primary]
+        );
+        assert_eq!(
+            display_targets(
+                CapsuleDisplayMode::CursorScreen,
+                &monitors,
+                Some(primary),
+                None,
+                None
+            ),
+            vec![primary]
+        );
+        assert!(display_targets(CapsuleDisplayMode::AllScreens, &[], None, None, None).is_empty());
     }
 
     #[test]

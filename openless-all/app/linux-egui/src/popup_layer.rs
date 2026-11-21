@@ -18,21 +18,23 @@
 //!   compositor to respect reserved panel/taskbar space.
 //!
 //! Rendering reuses the popup's existing egui view ([`crate::ui::frontend::popups::dictation_capsule`]):
-//! the runner below owns the EGL context (glutin), the `egui_glow` painter and
-//! the wayland event loop, and asks the caller for one egui frame at a time.
+//! the runner below owns a Vulkan/WGPU surface and the Wayland event loop, and
+//! asks the caller for one egui frame at a time.
 //!
 //! Everything that can be decided without a compositor lives in pure functions
 //! ([`has_layer_shell`], [`choose_capsule_path`], [`capsule_geometry`],
 //! [`pointer_events`]) so the policy is unit-testable; the I/O half is a thin
 //! shell around them and reports failures as `Err`.
 
+use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::num::NonZeroU32;
+use std::os::fd::AsRawFd;
 use std::ptr::NonNull;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wayland_client::protocol::{wl_compositor, wl_pointer, wl_registry, wl_seat, wl_surface};
+use wayland_client::protocol::{
+    wl_compositor, wl_pointer, wl_registry, wl_seat, wl_surface, wl_touch,
+};
 use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
@@ -250,6 +252,7 @@ pub struct LayerFrame {
     pub exit: bool,
     /// When to draw the next frame.
     pub repaint_after: Duration,
+    pub capsule_layout: Option<(CapsuleGeometry, bool)>,
 }
 
 // ── compositor probe ────────────────────────────────────────────────────────
@@ -275,6 +278,8 @@ struct LayerState {
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
+    touch_input: TouchInput,
     pointer_position: Option<egui::Pos2>,
     /// Set when the pointer actually moved (or entered) since the last frame, so
     /// a stationary pointer does not emit a motion event every frame.
@@ -302,11 +307,100 @@ impl LayerState {
             }
         }
         all.extend(events);
+        all.append(&mut self.touch_input.events);
         egui::RawInput {
             screen_rect: Some(rect),
             events: all,
             focused: true,
             ..Default::default()
+        }
+    }
+}
+
+/// Native touchscreen contacts also need pointer emulation for egui buttons,
+/// just as egui-winit does. Do not promote another finger during a gesture.
+#[derive(Default)]
+struct TouchInput {
+    contacts: BTreeMap<i32, egui::Pos2>,
+    primary: Option<i32>,
+    events: Vec<egui::Event>,
+}
+
+impl TouchInput {
+    fn emit(&mut self, id: i32, phase: egui::TouchPhase, pos: egui::Pos2) {
+        self.events.push(egui::Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId::from(id),
+            phase,
+            pos,
+            force: None,
+        });
+    }
+
+    fn button(&mut self, pos: egui::Pos2, pressed: bool) {
+        self.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+
+    fn cancel_pointer(&mut self) {
+        if self.primary.take().is_some() {
+            // PointerGone alone leaves egui's button held. Move off-surface
+            // before releasing, so cancellation cannot become a button click.
+            let outside = egui::pos2(-100_000.0, -100_000.0);
+            self.events.push(egui::Event::PointerMoved(outside));
+            self.button(outside, false);
+            self.events.push(egui::Event::PointerGone);
+        }
+    }
+
+    fn down(&mut self, id: i32, pos: egui::Pos2) {
+        let single = self.contacts.is_empty();
+        let std::collections::btree_map::Entry::Vacant(contact) = self.contacts.entry(id) else {
+            return;
+        };
+        contact.insert(pos);
+        self.emit(id, egui::TouchPhase::Start, pos);
+        if single {
+            self.primary = Some(id);
+            self.events.push(egui::Event::PointerMoved(pos));
+            self.button(pos, true);
+        } else {
+            // Multi-finger gestures must not accidentally stop dictation.
+            self.cancel_pointer();
+        }
+    }
+
+    fn motion(&mut self, id: i32, pos: egui::Pos2) {
+        let Some(contact) = self.contacts.get_mut(&id) else {
+            return;
+        };
+        *contact = pos;
+        self.emit(id, egui::TouchPhase::Move, pos);
+        if self.primary == Some(id) {
+            self.events.push(egui::Event::PointerMoved(pos));
+        }
+    }
+
+    fn up(&mut self, id: i32) {
+        let Some(pos) = self.contacts.remove(&id) else {
+            return;
+        };
+        self.emit(id, egui::TouchPhase::End, pos);
+        if self.primary == Some(id) {
+            self.primary = None;
+            self.button(pos, false);
+            self.events.push(egui::Event::PointerGone);
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.cancel_pointer();
+        for (id, pos) in std::mem::take(&mut self.contacts) {
+            self.emit(id, egui::TouchPhase::Cancel, pos);
         }
     }
 }
@@ -389,6 +483,16 @@ impl Dispatch<wl_seat::WlSeat, ()> for LayerState {
             if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
                 state.pointer = Some(seat.get_pointer(qh, ()));
             }
+            if capabilities.contains(wl_seat::Capability::Touch) {
+                if state.touch.is_none() {
+                    state.touch = Some(seat.get_touch(qh, ()));
+                }
+            } else if let Some(touch) = state.touch.take() {
+                state.touch_input.cancel();
+                if touch.version() >= 3 {
+                    touch.release();
+                }
+            }
         }
     }
 }
@@ -442,6 +546,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for LayerState {
     }
 }
 
+impl Dispatch<wl_touch::WlTouch, ()> for LayerState {
+    fn event(
+        state: &mut Self,
+        _touch: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _data: &(),
+        _connection: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_touch::Event::Down { id, x, y, .. } => {
+                state.touch_input.down(id, egui::pos2(x as f32, y as f32));
+            }
+            wl_touch::Event::Motion { id, x, y, .. } => {
+                state.touch_input.motion(id, egui::pos2(x as f32, y as f32));
+            }
+            wl_touch::Event::Up { id, .. } => state.touch_input.up(id),
+            wl_touch::Event::Cancel => state.touch_input.cancel(),
+            _ => {}
+        }
+    }
+}
+
 ignore_events!(zwlr_layer_shell_v1::ZwlrLayerShellV1);
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
@@ -468,109 +595,220 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
     }
 }
 
-// ── EGL + egui_glow plumbing ────────────────────────────────────────────────
+// ── Vulkan/WGPU plumbing ────────────────────────────────────────────────────
 
-struct GlSurface {
-    _display: glutin::display::Display,
-    surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
-    context: glutin::context::PossiblyCurrentContext,
-    gl: Arc<glow::Context>,
+fn capsule_alpha_mode(
+    supported: &[eframe::egui_wgpu::wgpu::CompositeAlphaMode],
+) -> Result<eframe::egui_wgpu::wgpu::CompositeAlphaMode, String> {
+    use eframe::egui_wgpu::wgpu::CompositeAlphaMode;
+    if supported.contains(&CompositeAlphaMode::PreMultiplied) {
+        Ok(CompositeAlphaMode::PreMultiplied)
+    } else {
+        Err(format!(
+            "Vulkan capsule surface lacks premultiplied transparency: {supported:?}"
+        ))
+    }
 }
 
-impl GlSurface {
+struct WgpuSurface {
+    _instance: eframe::egui_wgpu::wgpu::Instance,
+    surface: eframe::egui_wgpu::wgpu::Surface<'static>,
+    device: eframe::egui_wgpu::wgpu::Device,
+    queue: eframe::egui_wgpu::wgpu::Queue,
+    config: eframe::egui_wgpu::wgpu::SurfaceConfiguration,
+    renderer: eframe::egui_wgpu::Renderer,
+}
+
+impl WgpuSurface {
     fn new(
         connection: &Connection,
         wl_surface: &wl_surface::WlSurface,
         size: (u32, u32),
     ) -> Result<Self, String> {
-        let size = (size.0.max(1), size.1.max(1));
-        use glutin::config::{Api, ConfigTemplateBuilder};
-        use glutin::context::{ContextApi, ContextAttributesBuilder};
-        use glutin::display::{Display, DisplayApiPreference, GlDisplay};
-        use glutin::prelude::*;
-        use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
+        use eframe::egui_wgpu::wgpu;
         use raw_window_handle::{
             RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
         };
 
         let display_ptr = connection.backend().display_ptr().cast::<c_void>();
-        // `ObjectId::as_ptr` hands back the underlying `wl_proxy`, which is the
-        // same C object as the `wl_surface` glutin wants.
         let surface_ptr = wl_surface.id().as_ptr().cast::<c_void>();
-
         let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(display_ptr).ok_or("null wayland display")?,
         ));
         let raw_window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
             NonNull::new(surface_ptr).ok_or("null wayland surface")?,
         ));
-
-        let display = unsafe { Display::new(raw_display, DisplayApiPreference::Egl) }
-            .map_err(|error| format!("egl display: {error}"))?;
-        let template = ConfigTemplateBuilder::new()
-            .with_alpha_size(8)
-            .with_transparency(true)
-            .with_api(Api::OPENGL | Api::GLES2)
-            .build();
-        let config = unsafe { display.find_configs(template) }
-            .map_err(|error| format!("egl configs: {error}"))?
-            .reduce(|best, candidate| {
-                let best_alpha = best.alpha_size();
-                let candidate_alpha = candidate.alpha_size();
-                if candidate_alpha > best_alpha {
-                    candidate
-                } else {
-                    best
-                }
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        // The Wayland connection and wl_surface are owned by run_layer_capsule
+        // and outlive this surface. RawHandle is therefore the correct unsafe
+        // constructor: no legacy graphics context is created or retained.
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(raw_display),
+                raw_window_handle: raw_window,
             })
-            .ok_or("no suitable EGL config")?;
-        let attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-            raw_window,
-            NonZeroU32::new(size.0.max(1)).ok_or("zero width")?,
-            NonZeroU32::new(size.1.max(1)).ok_or("zero height")?,
+        }
+        .map_err(|error| format!("vulkan surface: {error}"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("wgpu runtime: {error}"))?;
+        let adapter = runtime
+            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            }))
+            .map_err(|error| format!("vulkan adapter: {error}"))?;
+        let (device, queue) = runtime
+            .block_on(adapter.request_device(&crate::wgpu_device::device_descriptor()))
+            .map_err(|error| format!("vulkan device: {error}"))?;
+        let mut config = surface
+            .get_default_config(&adapter, size.0.max(1), size.1.max(1))
+            .ok_or("Wayland surface has no Vulkan format")?;
+        // Auto may select Opaque: clearing to transparent would then present
+        // a black rectangle. Both egui and Siri output premultiplied alpha.
+        config.alpha_mode = capsule_alpha_mode(&surface.get_capabilities(&adapter).alpha_modes)?;
+        // Zero-delay animation requests are paced by the compositor, never an
+        // immediate/mailbox swapchain followed by an unrelated fixed timer.
+        config.present_mode = wgpu::PresentMode::Fifo;
+        surface.configure(&device, &config);
+        let format = config.format;
+        let mut renderer = eframe::egui_wgpu::Renderer::new(
+            &device,
+            format,
+            eframe::egui_wgpu::RendererOptions {
+                msaa_samples: 1,
+                ..Default::default()
+            },
         );
-        let surface = unsafe { display.create_window_surface(&config, &attributes) }
-            .map_err(|error| format!("egl window surface: {error}"))?;
-        let context_attributes = ContextAttributesBuilder::new()
-            .with_context_api(ContextApi::OpenGl(None))
-            .build(Some(raw_window));
-        let context = unsafe { display.create_context(&config, &context_attributes) }
-            .map_err(|error| format!("egl context: {error}"))?
-            .make_current(&surface)
-            .map_err(|error| format!("egl make current: {error}"))?;
-        let gl = unsafe {
-            glow::Context::from_loader_function(|symbol| {
-                let symbol = std::ffi::CString::new(symbol)
-                    .map_err(|_| ())
-                    .unwrap_or_default();
-                display.get_proc_address(symbol.as_c_str())
-            })
-        };
+        crate::siri_wgpu::install_renderer(&mut renderer, &device, format, 1);
         Ok(Self {
-            _display: display,
+            _instance: instance,
             surface,
-            context,
-            gl: Arc::new(gl),
+            device,
+            queue,
+            config,
+            renderer,
         })
     }
 
     fn paint(
-        &self,
-        painter: &mut egui_glow::Painter,
+        &mut self,
         size: (u32, u32),
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &mut egui::TexturesDelta,
         scale: f32,
-    ) {
-        // The capsule is a transparent overlay: the painter clears the buffer
-        // itself, so no opaque clear colour is needed.
-        painter.paint_and_update_textures(
-            [size.0.max(1), size.1.max(1)],
-            scale,
-            primitives,
-            textures_delta,
+    ) -> Result<bool, String> {
+        let width = size.0.max(1);
+        let height = size.1.max(1);
+        if self.config.width != width || self.config.height != height {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+        }
+        // Texture deltas are incremental (not re-sent next frame). Upload them
+        // even if surface acquisition times out, so fonts/icons aren't lost.
+        for (id, deltas) in &textures_delta.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
+        }
+        let output = match self.surface.get_current_texture() {
+            eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Success(texture)
+            | eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Timeout
+            | eframe::egui_wgpu::wgpu::CurrentSurfaceTexture::Occluded => {
+                for id in &textures_delta.free {
+                    self.renderer.free_texture(id);
+                }
+                textures_delta.clear();
+                return Ok(false);
+            }
+            other => return Err(format!("vulkan acquire: {other:?}")),
+        };
+        let view = output
+            .texture
+            .create_view(&eframe::egui_wgpu::wgpu::TextureViewDescriptor::default());
+        let screen = eframe::egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [width, height],
+            pixels_per_point: scale,
+        };
+        let mut encoder = self.device.create_command_encoder(
+            &eframe::egui_wgpu::wgpu::CommandEncoderDescriptor {
+                label: Some("openless-capsule-wgpu"),
+            },
         );
+        let callbacks = self.renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            primitives,
+            &screen,
+        );
+        {
+            let mut pass = encoder
+                .begin_render_pass(&eframe::egui_wgpu::wgpu::RenderPassDescriptor {
+                    label: Some("openless-capsule"),
+                    color_attachments: &[Some(
+                        eframe::egui_wgpu::wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: eframe::egui_wgpu::wgpu::Operations {
+                                load: eframe::egui_wgpu::wgpu::LoadOp::Clear(
+                                    eframe::egui_wgpu::wgpu::Color::TRANSPARENT,
+                                ),
+                                store: eframe::egui_wgpu::wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        },
+                    )],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            self.renderer.render(&mut pass, primitives, &screen);
+        }
+        self.queue.submit(callbacks);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        // In wgpu 30 presentation belongs to the queue, not SurfaceTexture.
+        self.queue.present(output);
+        for id in &textures_delta.free {
+            self.renderer.free_texture(id);
+        }
+        textures_delta.clear();
+        Ok(true)
     }
+}
+
+/// Honor egui's earliest root-viewport request, and budget rendering/acquisition
+/// inside the frame interval instead of adding a full sleep after presentation.
+fn frame_pause(frame: &LayerFrame, spent: Duration, presented: bool) -> Duration {
+    let requested = frame
+        .output
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map_or(frame.repaint_after, |root| {
+            root.repaint_delay.min(frame.repaint_after)
+        });
+    let interval = if !presented && requested.is_zero() {
+        // Occluded surfaces can return immediately without FIFO backpressure.
+        // Keep pumping IPC/input, but do not spin a hidden animation at full CPU.
+        Duration::from_millis(16)
+    } else {
+        requested
+    };
+    interval.min(MAX_FRAME_PAUSE).saturating_sub(spent)
 }
 
 // ── runner ──────────────────────────────────────────────────────────────────
@@ -579,8 +817,8 @@ impl GlSurface {
 /// the compositor closes it.
 ///
 /// Fails (with a human-readable reason) when there is no Wayland session, the
-/// compositor lacks the protocol, the configure never arrives, or EGL could not
-/// be initialised — the caller then uses the X11 overlay instead. The context is
+/// compositor lacks the protocol, the configure never arrives, or Vulkan/WGPU could not
+/// be initialised — the caller then uses the X11 overlay instead. The renderer is
 /// created here; the caller installs fonts/visuals on the first frame (egui's
 /// built-in fonts are enough for the pill, but a host font setup should run
 /// once).
@@ -616,7 +854,7 @@ fn bind_globals(
     state
 }
 
-pub fn run_layer_capsule<F>(geometry: CapsuleGeometry, mut frame: F) -> Result<(), String>
+pub fn run_layer_capsule<F>(mut geometry: CapsuleGeometry, mut frame: F) -> Result<(), String>
 where
     F: FnMut(&egui::Context, egui::RawInput, bool) -> LayerFrame,
 {
@@ -683,21 +921,49 @@ where
          (layer=top, anchor=bottom, margin.bottom={}, keyboard-interactivity=none, exclusive-zone=0)",
         geometry.bottom_gap
     );
-    let gl = GlSurface::new(&connection, &wl_surface, geometry.buffer_size())?;
-    use glutin::surface::GlSurface as _;
-    let mut painter = egui_glow::Painter::new(gl.gl.clone(), "", None, false)
-        .map_err(|error| format!("egui_glow painter: {error}"))?;
-    eprintln!("OpenLess capsule: EGL ready on the layer surface");
+    let mut renderer = WgpuSurface::new(&connection, &wl_surface, geometry.buffer_size())?;
+    eprintln!("OpenLess capsule: Vulkan/WGPU ready on the layer surface");
     let context = egui::Context::default();
-    // This EGL layer surface is single-sample; feather egui geometry instead.
+    // This layer surface is single-sample; feather egui geometry instead.
     context.tessellation_options_mut(|options| {
         options.feathering = true;
         options.feathering_size_in_pixels = 1.0;
     });
     let scale = 1.0;
     let mut first = true;
+    let mut right_aligned = false;
+    let animation_started = Instant::now();
 
     loop {
+        let frame_started = Instant::now();
+        // dispatch_pending alone never reads the display socket. Without this,
+        // pointer events arriving after initial configure cannot reach egui.
+        if let Some(reader) = queue.prepare_read() {
+            let mut fd = libc::pollfd {
+                fd: reader.connection_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: fd is a valid, borrowed display descriptor and the pollfd
+            // remains live for this non-blocking call. The reader owns the read.
+            let ready = unsafe { libc::poll(&mut fd, 1, 0) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(format!("wayland input poll: {error}"));
+                }
+            } else if fd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+                match reader.read() {
+                    Ok(_) => {}
+                    Err(wayland_client::backend::WaylandError::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => return Err(format!("wayland input read: {error}")),
+                }
+            }
+        }
         queue
             .dispatch_pending(&mut state)
             .map_err(|error| format!("wayland dispatch: {error}"))?;
@@ -705,25 +971,49 @@ where
             return Ok(());
         }
         let _ = connection.flush();
-        let rect = geometry.rect_for_configure(state.configure.unwrap_or((width, height)));
-        let input = state.take_input(rect);
+        let rect = geometry.rect_for_configure(state.configure.unwrap_or(geometry.buffer_size()));
+        let mut input = state.take_input(rect);
+        input.time = Some(animation_started.elapsed().as_secs_f64());
         let mut frame = frame(&context, input, first);
         first = false;
         let primitives = context.tessellate(frame.output.shapes.clone(), scale);
-        gl.paint(
-            &mut painter,
+        let presented = renderer.paint(
             (rect.width().max(1.0) as u32, rect.height().max(1.0) as u32),
             &primitives,
             &mut frame.output.textures_delta,
             scale,
-        );
-        gl.surface
-            .swap_buffers(&gl.context)
-            .map_err(|error| format!("egl swap: {error}"))?;
+        )?;
         if frame.exit {
             return Ok(());
         }
-        std::thread::sleep(frame.repaint_after.min(MAX_FRAME_PAUSE));
+        if let Some((next, align_right)) = frame.capsule_layout {
+            if next != geometry || align_right != right_aligned {
+                geometry = next;
+                right_aligned = align_right;
+                let (width, height) = geometry.buffer_size();
+                layer_surface.set_size(width, height);
+                layer_surface.set_anchor(if right_aligned {
+                    zwlr_layer_surface_v1::Anchor::Bottom | zwlr_layer_surface_v1::Anchor::Right
+                } else {
+                    zwlr_layer_surface_v1::Anchor::Bottom
+                });
+                layer_surface.set_margin(
+                    0,
+                    if right_aligned { 24 } else { 0 },
+                    geometry.bottom_gap,
+                    0,
+                );
+                state.configure = None;
+                wl_surface.commit();
+                connection
+                    .flush()
+                    .map_err(|error| format!("wayland resize flush: {error}"))?;
+            }
+        }
+        let pause = frame_pause(&frame, frame_started.elapsed(), presented);
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
     }
 }
 
@@ -851,6 +1141,23 @@ mod tests {
     }
 
     #[test]
+    fn capsule_requires_explicit_premultiplied_transparency() {
+        use eframe::egui_wgpu::wgpu::CompositeAlphaMode as Alpha;
+        assert_eq!(
+            capsule_alpha_mode(&[Alpha::Opaque, Alpha::PreMultiplied]).unwrap(),
+            Alpha::PreMultiplied,
+        );
+        for modes in [
+            vec![],
+            vec![Alpha::Opaque],
+            vec![Alpha::Auto],
+            vec![Alpha::PostMultiplied],
+        ] {
+            assert!(capsule_alpha_mode(&modes).is_err());
+        }
+    }
+
+    #[test]
     fn capsule_geometry_clamps_to_a_paintable_surface() {
         let geometry = capsule_geometry(200, 100, 12);
         assert_eq!(geometry.buffer_size(), (200, 100));
@@ -872,6 +1179,64 @@ mod tests {
         assert_eq!(
             geometry.rect_for_configure((240, 120)).size(),
             egui::vec2(240.0, 120.0)
+        );
+    }
+
+    fn pacing_frame(delay: Duration) -> LayerFrame {
+        let mut output = egui::FullOutput::default();
+        output.viewport_output.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportOutput {
+                parent: egui::ViewportId::ROOT,
+                class: egui::ViewportClass::Root,
+                builder: egui::ViewportBuilder::default(),
+                viewport_ui_cb: None,
+                commands: Vec::new(),
+                repaint_delay: delay,
+            },
+        );
+        LayerFrame {
+            output,
+            exit: false,
+            capsule_layout: None,
+            repaint_after: Duration::from_millis(33),
+        }
+    }
+
+    #[test]
+    fn repaint_requests_win_and_render_time_is_not_added_twice() {
+        let frame = pacing_frame(Duration::from_millis(16));
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(5), true),
+            Duration::from_millis(11)
+        );
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(20), true),
+            Duration::ZERO
+        );
+        let immediate = pacing_frame(Duration::ZERO);
+        assert_eq!(
+            frame_pause(&immediate, Duration::from_millis(5), true),
+            Duration::ZERO
+        );
+        let mut idle = pacing_frame(Duration::MAX);
+        idle.repaint_after = Duration::from_secs(2);
+        assert_eq!(
+            frame_pause(&idle, Duration::from_millis(4), true),
+            Duration::from_millis(96)
+        );
+    }
+
+    #[test]
+    fn an_occluded_immediate_animation_does_not_busy_spin() {
+        let frame = pacing_frame(Duration::ZERO);
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(3), false),
+            Duration::from_millis(13)
+        );
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(20), false),
+            Duration::ZERO
         );
     }
 
@@ -912,6 +1277,60 @@ mod tests {
         );
         assert_eq!(button_from_code(0x112), Some(egui::PointerButton::Middle));
         assert_eq!(button_from_code(0x113), None);
+    }
+
+    fn touch_button_frame(ctx: &egui::Context, state: &mut LayerState) -> bool {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+        let mut clicked = false;
+        let mut output = ctx.run_ui(state.take_input(rect), |ui| {
+            clicked |= ui
+                .put(
+                    egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(80.0, 40.0)),
+                    egui::Button::new("Stop"),
+                )
+                .clicked();
+        });
+        output.textures_delta.clear();
+        clicked
+    }
+
+    #[test]
+    fn a_native_touch_tap_clicks_once_and_drains_input() {
+        let ctx = egui::Context::default();
+        let mut state = LayerState::default();
+        touch_button_frame(&ctx, &mut state);
+        state.touch_input.down(7, egui::pos2(30.0, 25.0));
+        state.touch_input.motion(7, egui::pos2(31.0, 25.0));
+        state.touch_input.up(7);
+        assert!(touch_button_frame(&ctx, &mut state));
+        assert!(!touch_button_frame(&ctx, &mut state));
+        assert!(state.touch_input.contacts.is_empty());
+        assert!(state.touch_input.primary.is_none());
+        assert!(state.touch_input.events.is_empty());
+    }
+
+    #[test]
+    fn cancelling_or_adding_a_finger_cannot_click_or_leave_a_button_held() {
+        let ctx = egui::Context::default();
+        let mut state = LayerState::default();
+        touch_button_frame(&ctx, &mut state);
+        for multi in [false, true] {
+            state.touch_input.down(1, egui::pos2(30.0, 25.0));
+            assert!(!touch_button_frame(&ctx, &mut state));
+            if multi {
+                state.touch_input.down(2, egui::pos2(40.0, 25.0));
+                state.touch_input.up(1);
+                state.touch_input.up(2);
+            } else {
+                state.touch_input.cancel();
+            }
+            assert!(!touch_button_frame(&ctx, &mut state));
+            assert!(!ctx.input(|input| input.pointer.any_down()));
+            assert!(state.touch_input.contacts.is_empty());
+            state.touch_input.down(3, egui::pos2(30.0, 25.0));
+            state.touch_input.up(3);
+            assert!(touch_button_frame(&ctx, &mut state));
+        }
     }
 
     #[test]

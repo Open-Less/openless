@@ -33,6 +33,7 @@ pub(crate) struct TauriQaHostContext {
     external_focus_target: Mutex<Option<usize>>,
     front_app: Mutex<Option<String>>,
     panel_visible: AtomicBool,
+    voice_surface_owner: Mutex<Option<Arc<dyn Fn(bool) + Send + Sync>>>,
     selection_voice_target_binder: Mutex<Option<SelectionVoiceTargetBinder>>,
 }
 
@@ -45,6 +46,15 @@ fn retain_external_focus_target(
 }
 
 impl TauriQaHostContext {
+    pub(crate) fn bind_voice_surface_owner(&self, owner: Arc<dyn Fn(bool) + Send + Sync>) {
+        *self.voice_surface_owner.lock() = Some(owner);
+    }
+
+    pub(crate) fn set_voice_surface_active(&self, active: bool) {
+        let owner = self.voice_surface_owner.lock().clone();
+        if let Some(owner) = owner { owner(active); }
+    }
+
     pub(crate) fn is_panel_visible(&self) -> bool {
         self.panel_visible.load(Ordering::Acquire)
     }
@@ -113,10 +123,13 @@ impl TauriQaHostContext {
             *self.focus_target.lock() = Some(target);
         }
         let _ = crate::coordinator::restore_focus_target_if_possible(*self.focus_target.lock());
-        let (selection, selection_target) = crate::selection::resolve_selection_workspace_capture();
-        if let Some(app) = app.lock().clone() {
-            crate::refocus_qa_window(&app);
+        if let Some(front) = crate::coordinator::capture_frontmost_app() {
+            *self.front_app.lock() = Some(front);
         }
+        let (selection, selection_target) = crate::selection::capture_explicit_qa_selection();
+        // Voice Ask keeps the original app focused throughout capture/recording.
+        // The result window is non-activating; there is no composer to focus.
+        let _ = app;
         let selection_text = selection.as_ref().map(|selection| selection.text.clone());
         let front_app = selection
             .and_then(|selection| selection.source_app)

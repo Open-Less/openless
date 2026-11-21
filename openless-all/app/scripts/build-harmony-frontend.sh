@@ -14,12 +14,18 @@ SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/
 export OPENLESS_HARMONY_CLIPBOARD_ACCESS="${OPENLESS_HARMONY_CLIPBOARD_ACCESS:-0}"
 export OPENLESS_HARMONY_STARTUP_PROBES="${OPENLESS_HARMONY_STARTUP_PROBES:-0}"
 case "$OPENLESS_HARMONY_CLIPBOARD_ACCESS" in
-  0|1) ;;
-  *) echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2; exit 1 ;;
+  0 | 1) ;;
+  *)
+    echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2
+    exit 1
+    ;;
 esac
 case "$OPENLESS_HARMONY_STARTUP_PROBES" in
-  0|1) ;;
-  *) echo 'OPENLESS_HARMONY_STARTUP_PROBES must be 0 or 1' >&2; exit 1 ;;
+  0 | 1) ;;
+  *)
+    echo 'OPENLESS_HARMONY_STARTUP_PROBES must be 0 or 1' >&2
+    exit 1
+    ;;
 esac
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 WEB_DIST="$CACHE_ROOT/harmony/web-dist"
@@ -32,7 +38,7 @@ bash "$APP_ROOT/scripts/build-harmony-backend.sh"
 cd "$APP_ROOT"
 npm run build -- --base=./ --outDir="$WEB_DIST"
 # Build a disposable copy so every Hvigor intermediate stays in the shared cache.
-python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" "$WEB_DIST" "$SIGNING_DIR" <<'PY'
+python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" "$WEB_DIST" "$SIGNING_DIR" << 'PY'
 from pathlib import Path
 import json, os, shutil, sys
 source, target, web, signing = map(Path, sys.argv[1:])
@@ -91,9 +97,31 @@ shutil.copy2(target.parent / 'rust-target/aarch64-unknown-linux-ohos/release/lib
 
 PY
 cd "$BUILD_PROJECT"
-ohpm install --all --cache "$CACHE_ROOT/harmony/ohpm"
-hvigorw --mode module -p product=default -p module=entry@default -p buildMode=debug assembleHap --no-daemon
+# ohpm keeps its cache under $OHPM_HOME (default ~/.ohpm). The CLI's `--cache`
+# flag only exists in newer DevEco builds, so set the home instead of guessing
+# which flag this toolchain has.
+export OHPM_HOME="${OHPM_HOME:-$CACHE_ROOT/harmony/ohpm}"
+ohpm install --all
+# `HVIGOR_JS` lets a runner without DevEco drive the standalone hvigor CLI; the
+# DevEco install keeps using its own `hvigorw` wrapper.
+if [ -n "${HVIGOR_JS:-}" ]; then
+  HVIGOR=(node "$HVIGOR_JS")
+else
+  HVIGOR=(hvigorw)
+fi
+# AppGallery only accepts an App Pack (`.app`), never a bare `.hap`. hvigor
+# cannot write a signingConfig from CI: `storePassword`/`keyPassword` must be the
+# IDE-encrypted material (>= 32 chars), so the pack stays unsigned here and
+# `scripts/sign-harmony-hap.py` signs it afterwards with `hap-sign-tool`.
+"${HVIGOR[@]}" --mode module -p product=default -p module=entry@default -p buildMode=debug assembleHap --no-daemon
 printf '\nHAP output: %s/entry/build/default/outputs/default/\n' "$BUILD_PROJECT"
+
+if [ -n "${OPENLESS_HARMONY_STORE_SIGNING:-}" ]; then
+  # `--mode project`: `assembleApp` is a project-level task and is invisible in
+  # module mode ("Task [ 'assembleApp' ] was not found in the project").
+  "${HVIGOR[@]}" --mode project -p product=default -p buildMode=release assembleApp --no-daemon
+  printf 'App Pack output: %s/build/outputs/default/\n' "$BUILD_PROJECT"
+fi
 
 if [[ -f "$SIGNING_DIR/debug.cer" && -f "$SIGNING_DIR/debug.p7b" ]]; then
   python3 "$APP_ROOT/scripts/sign-harmony-hap.py" "$HARMONY_TOOLCHAIN" "$SIGNING_DIR" "$BUILD_PROJECT/entry/build/default/outputs/default"

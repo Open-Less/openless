@@ -1,13 +1,13 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.2-Beta.1+build.20261017",
+  "version": "2.0.3-Beta.1",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
     "test": "node scripts/frontend-test-runner.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs && node scripts/harmony-entry-startup.test.mjs && node scripts/harmony-app-dictation.test.mjs && node scripts/harmony-voice-configuration.test.mjs && node scripts/harmony-panel-layout.test.mjs && node scripts/harmony-editor-compat.test.mjs && node scripts/harmony-clipboard-history.test.mjs && node scripts/harmony-symbol-gesture.test.mjs && node scripts/harmony-rime-startup.test.mjs",
+    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs && node scripts/harmony-entry-startup.test.mjs && node scripts/harmony-app-dictation.test.mjs && node scripts/harmony-siwc.test.mjs && node scripts/harmony-voice-configuration.test.mjs && node scripts/harmony-panel-layout.test.mjs && node scripts/harmony-editor-compat.test.mjs && node scripts/harmony-clipboard-history.test.mjs && node scripts/harmony-symbol-gesture.test.mjs && node scripts/harmony-rime-startup.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -24,7 +24,6 @@
     "copy:android-scaffolding": "node scripts/copy-android-scaffolding.mjs",
     "check:macos-capsule-spaces": "node scripts/macos-capsule-spaces-contract.test.mjs",
     "check:macos-audio-usage-description": "node scripts/macos-audio-usage-description-contract.test.mjs",
-    "check:hotkey-injection": "node scripts/check-hotkey-injection.mjs",
     "check:hotkey-side-modifiers": "tsx src/lib/hotkeySideModifiers.test.ts",
     "check:windows-startup-lifecycle": "node scripts/windows-startup-lifecycle-contract.test.mjs",
     "check:windows-ui-config": "node scripts/windows-ui-config.test.mjs",
@@ -58,20 +57,19 @@
     "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@tauri-apps/cli": "^2.1.0",
     "@types/dompurify": "^3.0.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "js-yaml": "4.3.0",
-    "prettier": "3.9.6",
-    "prettier-plugin-sh": "0.19.0",
-    "shadcn": "^4.13.0",
-    "tsx": "4.23.1",
+    "prettier": "3.9.10",
+    "prettier-plugin-sh": "0.20.2",
+    "tsx": "4.23.15",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.6.3",
-    "vite": "^6.4.3"
+    "vite": "^6.4.5"
   },
   "overrides": {
     "@shadcn/react": {

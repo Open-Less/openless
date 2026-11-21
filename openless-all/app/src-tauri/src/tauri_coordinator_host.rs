@@ -4,13 +4,18 @@
 //! [`tauri::AppHandle`] and keeps window, main-thread and managed-state access
 //! out of the coordinator's business paths.
 
-#[cfg(target_os = "windows")]
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+
 #[cfg(target_os = "windows")]
-use std::sync::OnceLock;
+#[path = "capsule_hit_test.rs"]
+mod capsule_hit_test;
+#[cfg(target_os = "windows")]
+use capsule_hit_test::{
+    install_capsule_card_hit_test_proc, install_capsule_hit_test_proc, set_capsule_no_activate,
+    CapsuleHitTestRect,
+};
 
 #[path = "capsule_snapshot.rs"]
 mod capsule_snapshot;
@@ -20,6 +25,10 @@ use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::types::{CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle};
+
+/// The Tauri event-loop thread, recorded by [`TauriCoordinatorHost::bind`].
+#[cfg(target_os = "windows")]
+static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
 
 static CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_FIRST_SHOW_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -64,10 +73,10 @@ fn capsule_transcript_rail_position(
         CapsuleStyle::Classic => {
             const HOST_HEIGHT: f64 = 172.0;
             const BODY_BOTTOM_INSET: f64 = 16.0;
-            const BODY_HEIGHT: f64 = 52.0;
+            const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
             const RAIL_GAP: f64 = 8.0;
-            const BADGE_HEIGHT: f64 = 22.0;
+            const BADGE_HEIGHT: f64 = 28.0;
             const BADGE_GAP: f64 = 8.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
             let gap = RAIL_GAP;
@@ -139,34 +148,6 @@ fn position_rail_for_capsule<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-#[derive(Clone, Copy)]
-struct CapsuleHitTestEntry {
-    previous_proc: isize,
-    control_left: i32,
-    control_right: i32,
-    control_top: i32,
-    control_bottom: i32,
-}
-
-#[cfg(target_os = "windows")]
-static CAPSULE_HIT_TEST_ENTRIES: OnceLock<Mutex<HashMap<isize, CapsuleHitTestEntry>>> =
-    OnceLock::new();
-
-#[cfg(target_os = "windows")]
-fn capsule_hit_test_entries() -> &'static Mutex<HashMap<isize, CapsuleHitTestEntry>> {
-    CAPSULE_HIT_TEST_ENTRIES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CapsuleHitTestRect {
-    left: i32,
-    right: i32,
-    top: i32,
-    bottom: i32,
-}
-
-#[cfg(target_os = "windows")]
 fn capsule_control_hit_rect(
     style: CapsuleStyle,
     transcript_visible: bool,
@@ -187,7 +168,7 @@ fn capsule_control_hit_rect(
         // Classic transcript is hosted by the separate click-through rail HWND on
         // Windows. The capsule HWND therefore owns only its 172px host, regardless
         // of whether the rail is visible.
-        CapsuleStyle::Classic => (460.0, 172.0, 196.0, 52.0, 16.0),
+        CapsuleStyle::Classic => (460.0, 172.0, 116.0, 32.0, 16.0),
         // Typeless content is scaled by zoom: 64px CSS × 0.447. The native window may be
         // 57px or 65px high when the dedicated translation row is present.
         CapsuleStyle::Typeless => (
@@ -202,8 +183,13 @@ fn capsule_control_hit_rect(
     let _ = transcript_visible;
     let scale =
         (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
-    let body_width = (logical_body_width * scale).round() as i32;
-    let body_height = (logical_body_height * scale).round() as i32;
+    // Windows clips the native input region as well as CSS. Include the language
+    // picker only while translation is active; the transcript remains click-through.
+    let picker_visible = style == CapsuleStyle::Classic && translation_active;
+    let interactive_width = if picker_visible { 260.0 } else { logical_body_width };
+    let interactive_height = logical_body_height + if picker_visible { 36.0 } else { 0.0 };
+    let body_width = (interactive_width * scale).round() as i32;
+    let body_height = (interactive_height * scale).round() as i32;
     let bottom_inset = (logical_bottom_inset * scale).round() as i32;
     let control_left = ((window_width as f64 - body_width as f64) / 2.0).round() as i32;
     let control_bottom = window_height - bottom_inset;
@@ -223,118 +209,6 @@ fn capsule_card_hit_rect(window_width: i32, window_height: i32) -> CapsuleHitTes
         top: 0,
         bottom: window_height.max(0),
     }
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn capsule_hit_test_window_proc(
-    hwnd: windows::Win32::Foundation::HWND,
-    msg: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC,
-        HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST,
-    };
-
-    if msg == WM_NCDESTROY {
-        let previous_proc = capsule_hit_test_entries()
-            .lock()
-            .remove(&(hwnd.0 as isize))
-            .map(|entry| entry.previous_proc)
-            .unwrap_or_default();
-        if previous_proc != 0 {
-            let previous: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
-                std::mem::transmute(previous_proc);
-            let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, previous_proc);
-            return CallWindowProcW(previous, hwnd, msg, wparam, lparam);
-        }
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
-    }
-
-    if msg == WM_NCHITTEST {
-        let key = hwnd.0 as isize;
-        let entry = capsule_hit_test_entries().lock().get(&key).copied();
-        if let Some(entry) = entry {
-            let screen_x = (lparam.0 as i32 & 0xffff) as u16 as i16 as i32;
-            let screen_y = ((lparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
-            let mut rect = RECT::default();
-            if GetWindowRect(hwnd, &mut rect).is_ok() {
-                let client_x = screen_x - rect.left;
-                let client_y = screen_y - rect.top;
-                if client_x < entry.control_left
-                    || client_x >= entry.control_right
-                    || client_y < entry.control_top
-                    || client_y >= entry.control_bottom
-                {
-                    return windows::Win32::Foundation::LRESULT(HTTRANSPARENT as isize);
-                }
-            }
-        }
-    }
-
-    let previous_proc = capsule_hit_test_entries()
-        .lock()
-        .get(&(hwnd.0 as isize))
-        .map(|entry| entry.previous_proc)
-        .unwrap_or_default();
-    if previous_proc != 0 {
-        let previous: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
-            std::mem::transmute(previous_proc);
-        CallWindowProcW(previous, hwnd, msg, wparam, lparam)
-    } else {
-        DefWindowProcW(hwnd, msg, wparam, lparam)
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn install_capsule_hit_test_proc(
-    hwnd: windows::Win32::Foundation::HWND,
-    rect: CapsuleHitTestRect,
-) -> tauri::Result<()> {
-    use windows::Win32::Foundation::{GetLastError, SetLastError, ERROR_SUCCESS};
-    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_WNDPROC};
-
-    if hwnd.0.is_null() {
-        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "cannot install hit-test proc for a null HWND"
-        )));
-    }
-
-    let key = hwnd.0 as isize;
-    let mut entries = capsule_hit_test_entries().lock();
-    if let Some(entry) = entries.get_mut(&key) {
-        entry.control_left = rect.left;
-        entry.control_right = rect.right;
-        entry.control_top = rect.top;
-        entry.control_bottom = rect.bottom;
-        return Ok(());
-    }
-    unsafe { SetLastError(ERROR_SUCCESS) };
-    let previous = unsafe {
-        SetWindowLongPtrW(
-            hwnd,
-            GWLP_WNDPROC,
-            capsule_hit_test_window_proc as usize as isize,
-        )
-    };
-    if previous == 0 && unsafe { GetLastError() } != ERROR_SUCCESS {
-        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "SetWindowLongPtrW(GWLP_WNDPROC) failed"
-        )));
-    }
-    entries.insert(
-        key,
-        CapsuleHitTestEntry {
-            previous_proc: previous,
-            control_left: rect.left,
-            control_right: rect.right,
-            control_top: rect.top,
-            control_bottom: rect.bottom,
-        },
-    );
-    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -421,7 +295,7 @@ fn configure_capsule_hit_test<R: tauri::Runtime>(
     set_capsule_input_region(hwnd, rect)?;
     if let Err(error) = install_capsule_hit_test_proc(hwnd, rect) {
         clear_capsule_input_region(hwnd);
-        return Err(error);
+        return Err(tauri::Error::Anyhow(error.into()));
     }
     Ok(())
 }
@@ -452,7 +326,8 @@ fn configure_card_hit_test<R: tauri::Runtime>(
     }
     let rect = capsule_card_hit_rect(client.right - client.left, client.bottom - client.top);
     clear_capsule_input_region(hwnd);
-    install_capsule_hit_test_proc(hwnd, rect)
+    install_capsule_card_hit_test_proc(hwnd, rect)
+        .map_err(|error| tauri::Error::Anyhow(error.into()))
 }
 
 #[cfg(target_os = "windows")]
@@ -508,6 +383,17 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     reassert_spaces: bool,
 ) {
+    #[cfg(target_os = "macos")]
+    if crate::desktop_resources::active() {
+        if let Ok(raw) = window.ns_window() {
+            unsafe {
+                use objc2::{msg_send, runtime::AnyObject};
+                let panel = raw as *mut AnyObject;
+                let _: () = msg_send![panel, orderFrontRegardless];
+            }
+        }
+        return;
+    }
     let mut needs_fallback = true;
     if capsule_show_strategy_for_platform() == CapsuleShowStrategy::NoActivate {
         needs_fallback = !show_capsule_window_no_activate(app, window, reassert_spaces);
@@ -763,6 +649,7 @@ fn capsule_window_action(
     fallback_card_active: bool,
     show_capsule: bool,
     state: CapsuleState,
+    _qa_voice_active: bool,
 ) -> CapsuleWindowAction {
     if fallback_card_active {
         CapsuleWindowAction::PreserveFallbackCard
@@ -770,6 +657,55 @@ fn capsule_window_action(
         CapsuleWindowAction::ShowCapsule
     } else {
         CapsuleWindowAction::HideCapsule
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapsuleCursorUpdate {
+    Keep,
+    SetPassthrough(bool),
+    /// Close is still on screen (or just hidden). Do not enable passthrough yet.
+    SuspendHitsUntilInteractive,
+}
+
+/// Cursor policy for one capsule frame.
+///
+/// Terminal frames stay visible for the exit animation. Enabling passthrough
+/// calls `set_ignore_cursor_events`, and on Windows tao reapplies `WS_CAPTION`
+/// plus `WS_EX_WINDOWEDGE` with `SWP_FRAMECHANGED`. That paints the classic
+/// non-client frame for one frame, and clearing the window region makes the
+/// full rectangle visible. Keep the undecorated styles and region; suspend
+/// hit testing instead until the next interactive frame.
+fn capsule_cursor_update(
+    style: CapsuleStyle,
+    state: CapsuleState,
+    selection_polish: bool,
+    current_passthrough: bool,
+    close_hits_suspended: bool,
+) -> CapsuleCursorUpdate {
+    let interactive = style != CapsuleStyle::Siri
+        && !selection_polish
+        && matches!(
+            state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        );
+    let want_passthrough = !interactive;
+    if close_hits_suspended && !want_passthrough {
+        return CapsuleCursorUpdate::SetPassthrough(false);
+    }
+    if want_passthrough
+        && !current_passthrough
+        && matches!(
+            state,
+            CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error | CapsuleState::Idle
+        )
+    {
+        return CapsuleCursorUpdate::SuspendHitsUntilInteractive;
+    }
+    if current_passthrough == want_passthrough {
+        CapsuleCursorUpdate::Keep
+    } else {
+        CapsuleCursorUpdate::SetPassthrough(want_passthrough)
     }
 }
 
@@ -807,10 +743,26 @@ pub(crate) struct CapsuleSnapshot {
     pub(crate) payload_revision: u64,
 }
 
+struct CapsuleMenuFrame {
+    label: String,
+    session_id: openless_core::SessionId,
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+}
+
+fn capsule_menu_geometry(y: i32, height: u32, work_top: i32, scale: f64) -> (i32, u32) {
+    let extra = ((320.0 * scale).round() as i32).min(y.saturating_sub(work_top).max(0));
+    (y - extra, height.saturating_add(extra as u32))
+}
+
 struct CapsuleWindowState {
     layout: Mutex<Option<CapsuleLayoutState>>,
     capsule_visible: AtomicBool,
+    qa_voice_active: AtomicBool,
+    translation_menu: Mutex<Option<CapsuleMenuFrame>>,
     cursor_passthrough: AtomicBool,
+    /// Close suspended hit testing without changing native window styles.
+    close_hits_suspended: AtomicBool,
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
     style: AtomicU8,
@@ -820,6 +772,7 @@ struct CapsuleWindowState {
     foreground_target_captured: AtomicBool,
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
+    fallback_payload: Mutex<Option<crate::types::InsertFallbackCardPayload>>,
     deferred_payload: Mutex<Option<CapsulePayload>>,
     snapshot: Mutex<CapsuleSnapshotState>,
     layout_watch_active: AtomicBool,
@@ -834,7 +787,10 @@ impl Default for CapsuleWindowState {
         Self {
             layout: Mutex::new(None),
             capsule_visible: AtomicBool::new(false),
+            qa_voice_active: AtomicBool::new(false),
+            translation_menu: Mutex::new(None),
             cursor_passthrough: AtomicBool::new(true),
+            close_hits_suspended: AtomicBool::new(false),
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
             style: AtomicU8::new(0),
@@ -844,6 +800,7 @@ impl Default for CapsuleWindowState {
             foreground_target_captured: AtomicBool::new(false),
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
+            fallback_payload: Mutex::new(None),
             deferred_payload: Mutex::new(None),
             snapshot: Mutex::new(CapsuleSnapshotState::default()),
             layout_watch_active: AtomicBool::new(false),
@@ -859,7 +816,7 @@ const DISPLAY_MODE_PRIMARY_SCREEN: u8 = 1;
 const DISPLAY_MODE_FOREGROUND_WINDOW_SCREEN: u8 = 2;
 const DISPLAY_MODE_ALL_SCREENS: u8 = 3;
 
-fn normalized_display_mode(mode: CapsuleDisplayMode) -> CapsuleDisplayMode {
+pub(crate) fn normalized_display_mode(mode: CapsuleDisplayMode) -> CapsuleDisplayMode {
     #[cfg(not(target_os = "windows"))]
     if matches!(
         mode,
@@ -998,6 +955,8 @@ impl CapsuleWindowState {
 #[derive(Clone)]
 pub(crate) struct TauriCapsuleWindow {
     app: AppHandle,
+    #[cfg(target_os = "windows")]
+    host: TauriCoordinatorHost,
     state: Arc<CapsuleWindowState>,
     qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
@@ -1027,7 +986,17 @@ impl TauriCapsuleWindow {
     }
 
     #[cfg(target_os = "windows")]
-    fn prepare_display_target(&self, payload: &CapsulePayload, window: &tauri::WebviewWindow) {
+    pub(crate) fn capture_foreground_monitor(&self) -> Option<crate::capsule_mirrors::MonitorRect> {
+        self.qa_context
+            .is_panel_visible()
+            .then(|| self.qa_context.external_focus_target())
+            .flatten()
+            .or_else(crate::coordinator::capture_focus_target)
+            .and_then(|hwnd| crate::capsule_mirrors::monitor_rect_for_hwnd(&self.app, hwnd))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn prepare_display_target(&self, payload: &CapsulePayload, _window: &tauri::WebviewWindow) {
         const NON_DICTATION_SESSION: &str = "__openless_non_dictation_foreground__";
 
         if payload.selection_polish {
@@ -1041,15 +1010,7 @@ impl TauriCapsuleWindow {
                         .as_deref()
                         .unwrap_or(NON_DICTATION_SESSION);
                     if !self.state.foreground_target_matches_session(session_id) {
-                        let raw_hwnd = self
-                            .qa_context
-                            .is_panel_visible()
-                            .then(|| self.qa_context.external_focus_target())
-                            .flatten()
-                            .or_else(crate::coordinator::capture_focus_target);
-                        let monitor = raw_hwnd.and_then(|hwnd| {
-                            crate::capsule_mirrors::monitor_rect_for_hwnd(window, hwnd)
-                        });
+                        let monitor = self.capture_foreground_monitor();
                         self.state
                             .begin_foreground_target_capture(session_id, monitor);
                     }
@@ -1127,10 +1088,94 @@ impl TauriCapsuleWindow {
     where
         F: FnOnce(Self) + Send + 'static,
     {
-        let capsule = self.clone();
-        self.app
-            .run_on_main_thread(move || task(capsule))
-            .map_err(|error| error.to_string())
+        self.run_on_main_thread_observed(crate::issue1266_debug::Kind::CapsuleDispatch, task)
+    }
+
+    fn run_on_main_thread_observed<F>(&self, kind: crate::issue1266_debug::Kind, task: F)
+        -> Result<(), String>
+    where
+        F: FnOnce(Self) + Send + 'static,
+    {
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+            let capsule = dispatch.clone_handle(|| self.clone());
+            let result = self.app.run_on_main_thread(dispatch.wrap(move || task(capsule)))
+                .map_err(|error| error.to_string());
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let _ = kind;
+            let capsule = self.clone();
+            self.app.run_on_main_thread(move || task(capsule))
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
+        let frame = {
+            let mut slot = self.state.translation_menu.lock();
+            if let Some((label, session_id)) = owner {
+                if !slot.as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id) { return Ok(false); }
+            }
+            slot.take()
+        };
+        let Some(frame) = frame else { return Ok(false); };
+        #[cfg(not(mobile))]
+        crate::hotkey::set_capsule_menu_open(false);
+        self.invalidate_layout();
+        if let Some(window) = self.app.get_webview_window(&frame.label) {
+            window.set_size(frame.size).map_err(|error| error.to_string())?;
+            window.set_position(frame.position).map_err(|error| error.to_string())?;
+            #[cfg(target_os = "windows")]
+            configure_capsule_hit_test(&window, self.state.cached_style(),
+                self.state.transcript_visible.load(Ordering::SeqCst), true).map_err(|error| error.to_string())?;
+        }
+        Ok(true)
+    }
+
+    /// Reserve room for the shared popup above the pill without moving its bottom anchor.
+    pub(crate) fn set_translation_menu_open(&self, label: String, session_id: openless_core::SessionId, open: bool) -> Result<(), String> {
+        if !open {
+            if self.restore_translation_menu(Some((&label, session_id)))? && self.state.capsule_visible.load(Ordering::SeqCst) {
+                self.start_layout_watch();
+                self.refresh_style();
+                self.sync_capsule_mirrors();
+            }
+            return Ok(());
+        }
+        if self.state.qa_voice_active.load(Ordering::SeqCst) { return Err("qa_owns_voice_surface".into()); }
+        if self.state.translation_menu.lock().as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id) { return Ok(()); }
+        self.restore_translation_menu(None)?;
+        let window = self.app.get_webview_window(&label).ok_or("capsule_window_unavailable")?;
+        let position = window.outer_position().map_err(|error| error.to_string())?;
+        let size = window.inner_size().map_err(|error| error.to_string())?;
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let work_top = window.current_monitor().map_err(|error| error.to_string())?
+            .map(|monitor| monitor.work_area().position.y).unwrap_or(position.y - (320.0 * scale) as i32);
+        let (top, height) = capsule_menu_geometry(position.y, size.height, work_top, scale);
+        *self.state.translation_menu.lock() = Some(CapsuleMenuFrame {label, session_id, position, size});
+        #[cfg(not(mobile))]
+        crate::hotkey::set_capsule_menu_open(true);
+        self.stop_layout_watch();
+        self.hide_transcript_overlay();
+        let result = (|| -> tauri::Result<()> {
+            window.set_position(tauri::PhysicalPosition::new(position.x, top))?;
+            window.set_size(tauri::PhysicalSize::new(size.width, height))?;
+            #[cfg(not(mobile))]
+            window.set_ignore_cursor_events(false)?;
+            #[cfg(target_os = "windows")]
+            configure_card_hit_test(&window)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = self.restore_translation_menu(None);
+            self.start_layout_watch();
+            return Err(error.to_string());
+        }
+        Ok(())
     }
 
     pub(crate) fn set_size(&self, width: f64, height: f64) -> tauri::Result<()> {
@@ -1190,6 +1235,14 @@ impl TauriCapsuleWindow {
 
     #[cfg(not(mobile))]
     pub(crate) fn set_card_hit_test_mode(&self) -> tauri::Result<()> {
+        self.stop_layout_watch();
+        if crate::desktop_resources::active() {
+            if let Some(coordinator) = self.app.try_state::<Arc<crate::coordinator::Coordinator>>()
+            {
+                coordinator.tauri_host().stop_native_capsule();
+            }
+        }
+        crate::desktop_resources::ensure_card_window(&self.app)?;
         self.state
             .hit_test_mode
             .store(HIT_TEST_MODE_CARD, Ordering::SeqCst);
@@ -1206,6 +1259,18 @@ impl TauriCapsuleWindow {
 
     #[cfg(not(mobile))]
     pub(crate) fn restore_capsule_hit_test_mode(&self) -> tauri::Result<()> {
+        #[cfg(target_os = "windows")]
+        if let Some(window) = self.window() {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(raw) = handle.as_raw() {
+                    set_capsule_no_activate(
+                        windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _),
+                        false,
+                    );
+                }
+            }
+        }
         self.state
             .hit_test_mode
             .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
@@ -1241,7 +1306,8 @@ impl TauriCapsuleWindow {
     /// Apply the user's display-target choice on the native main thread.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
-        let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
+        let _ = self.run_on_main_thread_observed(crate::issue1266_debug::Kind::MirrorDispatch,
+            |capsule| capsule.apply_capsule_mirrors());
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1249,6 +1315,7 @@ impl TauriCapsuleWindow {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn apply_capsule_mirrors(&self) {
+        if self.state.translation_menu.lock().is_some() { return; }
         use crate::capsule_mirrors::{
             capsule_placement, ensure_capsule_mirror, mirror_label, mirror_targets,
             CAPSULE_MIRROR_PREFIX, MAX_CAPSULE_MIRRORS, RAIL_MIRROR_PREFIX,
@@ -1433,10 +1500,21 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn hide(&self) -> tauri::Result<()> {
+        let _ = self.restore_translation_menu(None);
         self.state.capsule_visible.store(false, Ordering::SeqCst);
         self.stop_layout_watch();
         self.hide_transcript_overlay();
         if let Some(window) = self.window() {
+            #[cfg(not(mobile))]
+            {
+                if crate::desktop_resources::active() {
+                    self.state
+                        .hit_test_mode
+                        .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
+                }
+                crate::desktop_resources::hide_capsule_window(&window)?;
+            }
+            #[cfg(mobile)]
             window.hide()?;
         }
         self.sync_capsule_mirrors();
@@ -1448,24 +1526,173 @@ impl TauriCapsuleWindow {
         width: f64,
         height: f64,
         edge_margin: f64,
+        observation_ids: &[Option<u64>],
+        position: openless_core::shared_types::VocabularySuggestionPosition,
     ) -> tauri::Result<()> {
-        let Some(window) = self.window() else {
+        #[cfg(target_os = "windows")]
+        {
+            use crate::capsule_mirrors::MonitorRect;
+            use crate::vocab_card_placement::{place_card, Rect, Screen};
+            use windows::Win32::Foundation::{HWND, RECT};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindow,
+            };
+            let Some(window) = self.window() else {
+                return Ok(());
+            };
+            let state = self
+                .app
+                .try_state::<crate::core_adapters::VocabPlacementState>();
+            let ids: Vec<_> = observation_ids.iter().flatten().copied().collect();
+            if let Some(state) = state.as_ref() {
+                state.retain(&ids);
+            }
+            let id = observation_ids
+                .first()
+                .copied()
+                .flatten()
+                .filter(|id| observation_ids.iter().all(|other| *other == Some(*id)));
+            let snapshot = id.and_then(|id| state.as_ref()?.snapshot(id));
+            let monitors: Vec<_> = self
+                .app
+                .available_monitors()?
+                .iter()
+                .map(MonitorRect::from_tauri)
+                .collect();
+            let rect = |m: MonitorRect| Rect {
+                left: m.left,
+                top: m.top,
+                right: m.right,
+                bottom: m.bottom,
+            };
+            let mut anchor = None;
+            let mut source_monitor = None;
+            if let Some(snapshot) = snapshot {
+                let hwnd = HWND(snapshot.window as *mut _);
+                let mut pid = 0;
+                let mut bounds = RECT::default();
+                let valid_window = unsafe {
+                    IsWindow(hwnd).as_bool() && {
+                        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                        pid == snapshot.process_id
+                    }
+                };
+                if valid_window {
+                    source_monitor =
+                        crate::capsule_mirrors::monitor_rect_for_hwnd(&self.app, snapshot.window);
+                    let unchanged = unsafe {
+                        GetWindowRect(hwnd, &mut bounds).is_ok() && GetForegroundWindow() == hwnd
+                    };
+                    let current = Rect {
+                        left: bounds.left,
+                        top: bounds.top,
+                        right: bounds.right,
+                        bottom: bounds.bottom,
+                    };
+                    if position == openless_core::shared_types::VocabularySuggestionPosition::NearInput
+                        && unchanged
+                        && current == snapshot.window_rect
+                        && id.is_some_and(|id| {
+                            state
+                                .as_ref()
+                                .is_some_and(|state| state.source_is_current(id))
+                        })
+                    {
+                        anchor = snapshot.anchor;
+                    }
+                }
+                if source_monitor.is_none() {
+                    source_monitor = snapshot
+                        .screen_rect
+                        .and_then(|screen| monitors.iter().copied().find(|m| rect(*m) == screen));
+                }
+            }
+            let anchor_monitor = anchor.and_then(|a| {
+                let x = ((i64::from(a.left) + i64::from(a.right)) / 2) as i32;
+                let y = ((i64::from(a.top) + i64::from(a.bottom)) / 2) as i32;
+                crate::capsule_mirrors::monitor_at_point(&monitors, x, y)
+            });
+            // A detached monitor cannot keep a stale near-input anchor alive.
+            if anchor_monitor.is_none() {
+                anchor = None;
+            }
+            let monitor = anchor_monitor
+                .or(source_monitor)
+                .or_else(|| {
+                    self.app
+                        .primary_monitor()
+                        .ok()
+                        .flatten()
+                        .as_ref()
+                        .map(MonitorRect::from_tauri)
+                })
+                .or_else(|| monitors.first().copied());
+            let Some(monitor) = monitor else {
+                return Ok(());
+            };
+            let screen = Screen {
+                bounds: rect(monitor),
+                work: Rect {
+                    left: monitor.work_left,
+                    top: monitor.work_top,
+                    right: monitor.work_right,
+                    bottom: monitor.work_bottom,
+                },
+                scale: monitor.scale,
+            };
+            if let Some(p) = place_card(screen, anchor, width, height, edge_margin) {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+                };
+                let handle = window
+                    .window_handle()
+                    .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!("{error}")))?;
+                let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+                    return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+                        "card has no Win32 window"
+                    )));
+                };
+                unsafe {
+                    SetWindowPos(
+                        HWND(raw.hwnd.get() as *mut _),
+                        HWND::default(),
+                        p.x,
+                        p.y,
+                        p.width as i32,
+                        p.height as i32,
+                        SWP_NOACTIVATE | SWP_NOZORDER,
+                    )
+                    .map_err(|error| tauri::Error::Anyhow(error.into()))?;
+                }
+            } else {
+                return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+                    "no usable vocabulary card work area"
+                )));
+            }
             return Ok(());
-        };
-        let Some(monitor) = window.current_monitor()? else {
-            return Ok(());
-        };
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let position = monitor.position();
-        let monitor_width = size.width as f64 / scale;
-        let monitor_height = size.height as f64 / scale;
-        let monitor_x = position.x as f64 / scale;
-        let monitor_y = position.y as f64 / scale;
-        window.set_position(tauri::LogicalPosition::new(
-            monitor_x + monitor_width - width - edge_margin,
-            monitor_y + monitor_height - height - 80.0,
-        ))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (observation_ids, position);
+            let Some(window) = self.window() else {
+                return Ok(());
+            };
+            let Some(monitor) = window.current_monitor()? else {
+                return Ok(());
+            };
+            let scale = monitor.scale_factor();
+            let size = monitor.size();
+            let position = monitor.position();
+            let monitor_width = size.width as f64 / scale;
+            let monitor_height = size.height as f64 / scale;
+            let monitor_x = position.x as f64 / scale;
+            let monitor_y = position.y as f64 / scale;
+            window.set_position(tauri::LogicalPosition::new(
+                monitor_x + monitor_width - width - edge_margin,
+                monitor_y + monitor_height - height - 80.0,
+            ))
+        }
     }
 
     pub(crate) fn position_fallback_card(&self, width: f64, height: f64) -> tauri::Result<()> {
@@ -1637,6 +1864,7 @@ impl TauriCapsuleWindow {
         translation_active: bool,
         style: CapsuleStyle,
     ) {
+        if self.state.translation_menu.lock().is_some() { return; }
         let Some(next) = self.layout_snapshot(window, translation_active, style) else {
             return;
         };
@@ -1690,6 +1918,29 @@ impl TauriCapsuleWindow {
         }
     }
 
+    pub(crate) fn show_vocab_card(&self) -> bool {
+        if self.state.qa_voice_active.load(Ordering::SeqCst) {
+            return false;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let Some(window) = self.window() else {
+                return false;
+            };
+            if !set_capsule_window_topmost_no_activate(&window, true) {
+                return false;
+            }
+            self.state.capsule_visible.store(true, Ordering::SeqCst);
+            self.sync_capsule_mirrors();
+            true
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.show_for_recording(true);
+            true
+        }
+    }
+
     pub(crate) fn show_for_recording(&self, reassert_spaces: bool) {
         self.state.capsule_visible.store(true, Ordering::SeqCst);
         if let Some(window) = self.window() {
@@ -1715,54 +1966,127 @@ impl TauriCapsuleWindow {
             .layout_watch_epoch
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
+        let state = Arc::clone(&self.state);
+        // The Windows timer must not own a Tauri handle: both cloning it on a Tokio
+        // worker and dropping it when the timer exits can race the event loop's Rc.
+        #[cfg(target_os = "windows")]
+        let host = self.host.clone();
+        #[cfg(not(target_os = "windows"))]
         let capsule = self.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
+                if state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
                     break;
                 }
-                let _ = capsule.run_on_main_thread(move |capsule| {
-                    if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
-                        return;
-                    }
-                    let Some(window) = capsule.window() else {
-                        capsule.stop_layout_watch();
-                        return;
-                    };
-                    if !window.is_visible().unwrap_or(false) {
-                        capsule.stop_layout_watch();
-                        return;
-                    }
-                    let payload = capsule.state.snapshot.lock().payload.clone();
-                    if let Some(payload) = payload {
-                        capsule.maybe_position_capsule_bottom_center(
-                            &window,
-                            payload.translation,
-                            capsule.state.cached_style(),
-                        );
-                    }
+                #[cfg(target_os = "windows")]
+                {
+                    let host_for_main = host.clone();
+                    host.on_main_thread_observed(crate::issue1266_debug::Kind::LayoutDispatch, move || {
+                        if let Some(capsule) = host_for_main.capsule_window() {
+                            capsule.refresh_watched_layout(epoch);
+                        }
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                let _ = capsule.run_on_main_thread_observed(crate::issue1266_debug::Kind::LayoutDispatch, move |capsule| {
+                    capsule.refresh_watched_layout(epoch);
                 });
             }
         });
     }
 
+    fn refresh_watched_layout(&self, epoch: u64) {
+        // A stopped/restarted watch can still have an old tick queued on the main thread.
+        if self.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        let Some(window) = self.window() else {
+            self.stop_layout_watch();
+            return;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            self.stop_layout_watch();
+            return;
+        }
+        let payload = self.state.snapshot.lock().payload.clone();
+        if let Some(payload) = payload {
+            self.maybe_position_capsule_bottom_center(
+                &window,
+                payload.translation,
+                self.state.cached_style(),
+            );
+        }
+    }
+
     fn update_cursor_for_payload(&self, payload: &CapsulePayload, style: CapsuleStyle) {
         #[cfg(not(mobile))]
         {
-            let interactive = style != CapsuleStyle::Siri
-                && !payload.selection_polish
-                && matches!(
-                    payload.state,
-                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-                );
-            let want_passthrough = !interactive;
-            if self.state.cursor_passthrough.load(Ordering::SeqCst) != want_passthrough {
-                if let Err(error) = self.set_cursor_passthrough(want_passthrough) {
-                    log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+            let update = capsule_cursor_update(
+                style,
+                payload.state,
+                payload.selection_polish,
+                self.state.cursor_passthrough.load(Ordering::SeqCst),
+                self.state.close_hits_suspended.load(Ordering::SeqCst),
+            );
+            match update {
+                CapsuleCursorUpdate::Keep => {}
+                CapsuleCursorUpdate::SetPassthrough(passthrough) => {
+                    self.state
+                        .close_hits_suspended
+                        .store(false, Ordering::SeqCst);
+                    if let Err(error) = self.set_cursor_passthrough(passthrough) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                    }
+                }
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive => {
+                    if self.state.close_hits_suspended.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+                    // Windows: do not clear the region or call
+                    // set_ignore_cursor_events while the exit frame can be seen.
+                    // Other platforms have no classic non-client frame.
+                    #[cfg(target_os = "windows")]
+                    self.suspend_close_hit_testing();
+                    #[cfg(not(target_os = "windows"))]
+                    if let Err(error) = self.set_cursor_passthrough(true) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                    }
                 }
             }
         }
+    }
+
+    /// Pass clicks through during close without changing window styles.
+    ///
+    /// `SetWindowRgn(NULL)` and tao's decoration refresh both paint the classic
+    /// frame. An empty hit rect keeps the existing undecorated region.
+    #[cfg(target_os = "windows")]
+    fn suspend_close_hit_testing(&self) {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Some(window) = self.window() else {
+            return;
+        };
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
+        if hwnd.0.is_null() {
+            return;
+        }
+        let _ = install_capsule_hit_test_proc(
+            hwnd,
+            CapsuleHitTestRect {
+                left: 0,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            },
+        );
     }
 
     fn refresh_style(&self) {
@@ -1790,6 +2114,9 @@ impl TauriCapsuleWindow {
         style: CapsuleStyle,
         reassert_spaces: bool,
     ) {
+        if payload.state != CapsuleState::Recording || !payload.translation {
+            let _ = self.restore_translation_menu(None);
+        }
         self.state.cache_style(style);
         let Some(window) = self.window() else {
             return;
@@ -1799,7 +2126,7 @@ impl TauriCapsuleWindow {
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
         {
-            let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
+            let action = capsule_window_action(fallback_card_active, show_capsule, payload.state, self.state.qa_voice_active.load(Ordering::SeqCst));
             if action == CapsuleWindowAction::PreserveFallbackCard {
                 log::debug!(
                     "[capsule] native window update deferred: insert fallback card owns the window"
@@ -1824,6 +2151,22 @@ impl TauriCapsuleWindow {
                 self.invalidate_layout();
             }
             self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            // Hide before any cursor or style change. The exit frames below
+            // must not enable passthrough while this HWND is still visible.
+            if action == CapsuleWindowAction::HideCapsule {
+                self.stop_layout_watch();
+                if !show_capsule
+                    && !matches!(payload.state, CapsuleState::Idle)
+                    && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
+                {
+                    log::info!(
+                        "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
+                        capsule_state_log_name(payload.state)
+                    );
+                }
+                hide_capsule_window_if_present();
+                let _ = self.hide();
+            }
             self.update_cursor_for_payload(payload, style);
             self.sync_capsule_mirrors();
 
@@ -1853,18 +2196,6 @@ impl TauriCapsuleWindow {
                     crate::restore_main_window_key_if_active(&self.app);
                 }
                 CapsuleWindowAction::HideCapsule => {
-                    self.stop_layout_watch();
-                    if !show_capsule
-                        && !matches!(payload.state, CapsuleState::Idle)
-                        && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
-                    {
-                        log::info!(
-                            "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
-                            capsule_state_log_name(payload.state)
-                        );
-                    }
-                    hide_capsule_window_if_present();
-                    let _ = self.hide();
                     if matches!(
                         payload.state,
                         CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error
@@ -1886,6 +2217,8 @@ impl TauriCapsuleWindow {
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
     capsule: Arc<CapsuleWindowState>,
+    #[cfg(not(mobile))]
+    native: Arc<Mutex<Option<Arc<crate::native_capsule::NativeCapsule>>>>,
     qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
@@ -1897,12 +2230,137 @@ impl TauriCoordinatorHost {
         Self {
             app,
             capsule: Arc::new(CapsuleWindowState::default()),
+            #[cfg(not(mobile))]
+            native: Arc::new(Mutex::new(None)),
             qa_context,
         }
     }
 
     pub(crate) fn bind(&self, app: AppHandle) {
+        app.manage(crate::core_adapters::VocabPlacementState::default());
+        // `bind` runs in Tauri's `setup`, on the event-loop thread.
+        #[cfg(target_os = "windows")]
+        let _ = MAIN_THREAD.set(std::thread::current().id());
+        #[cfg(not(mobile))]
+        if crate::desktop_resources::active() {
+            match crate::native_capsule::NativeCapsule::new(app.clone()) {
+                Ok(native) => {
+                    *self.native.lock() = Some(Arc::new(native));
+                }
+                Err(error) => {
+                    log::error!("[native-capsule] {error}; dictation remains available");
+                }
+            }
+        }
         *self.app.lock() = Some(app);
+    }
+
+    /// Runs `task` on the event-loop thread.
+    ///
+    /// Tauri handles (`AppHandle`, windows, `TauriCapsuleWindow`) share the event loop through a
+    /// non-atomic `Rc`, so cloning or dropping one off the main thread races the main thread's
+    /// refcount and eventually frees the event loop while it runs (heap corruption 0xc0000374).
+    /// This posts through the bound handle by reference instead of cloning it on the caller.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn on_main_thread<F>(&self, task: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.on_main_thread_observed(crate::issue1266_debug::Kind::HostDispatch, task);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn on_main_thread_observed<F>(&self, kind: crate::issue1266_debug::Kind, task: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        #[cfg(feature = "issue-1266-diagnostics")]
+        let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+        #[cfg(feature = "issue-1266-diagnostics")]
+        let task = dispatch.wrap(task);
+        #[cfg(not(feature = "issue-1266-diagnostics"))]
+        let _ = kind;
+
+        if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
+            task();
+            #[cfg(feature = "issue-1266-diagnostics")]
+            dispatch.dispatched(true);
+            return;
+        }
+        // Borrow, never clone, the bound handle. On a worker this only queues;
+        // the slot lock cannot re-enter on the same thread.
+        let queued = if let Some(app) = self.app.lock().as_ref() {
+            app.run_on_main_thread(task).is_ok()
+        } else {
+            false
+        };
+        #[cfg(feature = "issue-1266-diagnostics")]
+        dispatch.dispatched(queued);
+        #[cfg(not(feature = "issue-1266-diagnostics"))]
+        let _ = queued;
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn present_native_capsule(
+        &self,
+        payload: &CapsulePayload,
+        epoch: u64,
+        previous: Option<CapsuleState>,
+    ) -> bool {
+        if !crate::desktop_resources::active() {
+            return false;
+        }
+        if let Some(app) = self.app() {
+            let preferences = app
+                .state::<Arc<crate::coordinator::Coordinator>>()
+                .backend()
+                .get_preferences();
+            if payload.state == CapsuleState::Recording && previous != Some(CapsuleState::Recording)
+            {
+                if preferences.audio_cue_on_record
+                    && !preferences.mute_during_recording
+                    && !payload.selection_polish
+                {
+                    crate::native_audio_cue::play_start();
+                }
+            } else if payload.state != CapsuleState::Recording
+                && previous == Some(CapsuleState::Recording)
+            {
+                crate::native_audio_cue::stop();
+            }
+        }
+        if let Some(native) = self.native.lock().as_ref() {
+            if self.capsule.fallback_card_visible.load(Ordering::SeqCst)
+                || self.capsule.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD
+            {
+                native.stop();
+            } else {
+                native.present(payload, epoch, self.capsule.snapshot.lock().text.clone());
+            }
+        }
+        true
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn set_native_capsule_locale(&self, locale: String) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.set_locale(locale);
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn refresh_native_capsule_theme(&self) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.refresh_theme();
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn stop_native_capsule(&self) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.stop();
+        }
+        crate::native_audio_cue::stop();
     }
 
     fn app(&self) -> Option<AppHandle> {
@@ -1916,9 +2374,15 @@ impl TauriCoordinatorHost {
     pub(crate) fn capsule_window(&self) -> Option<TauriCapsuleWindow> {
         self.app().map(|app| TauriCapsuleWindow {
             app,
+            #[cfg(target_os = "windows")]
+            host: self.clone(),
             state: Arc::clone(&self.capsule),
             qa_context: Arc::clone(&self.qa_context),
         })
+    }
+
+    pub(crate) fn set_qa_voice_active(&self, active: bool) {
+        self.capsule.qa_voice_active.store(active, Ordering::SeqCst);
     }
 
     pub(crate) fn cached_capsule_style(&self) -> CapsuleStyle {
@@ -1948,6 +2412,11 @@ impl TauriCoordinatorHost {
     /// Commit the replay frame before the webview/main-thread work is queued.
     /// The rail snapshot is an IPC replay source, so it must not wait for a
     /// window callback to become internally consistent.
+    pub(crate) fn capsule_feedback_revision(&self) -> Option<u64> {
+        let snapshot = self.capsule.snapshot.lock();
+        snapshot.pending_payload_revision.is_none().then_some(snapshot.revision)
+    }
+
     pub(crate) fn capsule_revision(&self) -> u64 {
         self.capsule.snapshot.lock().revision
     }
@@ -1966,6 +2435,22 @@ impl TauriCoordinatorHost {
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
         self.capsule.snapshot.lock().record_backend_event(event);
+        #[cfg(not(mobile))]
+        if crate::desktop_resources::active()
+            && matches!(
+                event.kind,
+                openless_core::BackendEventKind::TranscriptDelta(_)
+            )
+        {
+            // Streaming text may arrive after capture stops, with no further level frames.
+            let (session_id, text) = {
+                let snapshot = self.capsule.snapshot.lock();
+                (snapshot.session_id.clone(), snapshot.text.clone())
+            };
+            if let (Some(session_id), Some(native)) = (session_id, self.native.lock().as_ref()) {
+                native.update_transcript(&session_id, text);
+            }
+        }
     }
 
     pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {
@@ -1991,6 +2476,12 @@ impl TauriCoordinatorHost {
         self.capsule.defer_if_fallback_active(payload)
     }
 
+    pub(crate) fn auxiliary_fallback_snapshot(
+        &self,
+    ) -> Option<crate::types::InsertFallbackCardPayload> {
+        self.capsule.fallback_payload.lock().clone()
+    }
+
     pub(crate) fn active_insert_fallback_presentation_id(&self) -> Option<u64> {
         self.capsule.active_fallback_presentation_id()
     }
@@ -2004,11 +2495,23 @@ impl TauriCoordinatorHost {
     where
         F: FnOnce() + Send + 'static,
     {
-        let app = self
-            .app()
-            .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
-        app.run_on_main_thread(task)
-            .map_err(|error| error.to_string())
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            use crate::issue1266_debug::{Kind, MainDispatch};
+            let dispatch = MainDispatch::new(Kind::HostDispatch);
+            let app = dispatch.clone_handle(|| self.app());
+            let result = app.ok_or_else(|| "Tauri AppHandle is not bound".to_string())
+                .and_then(|app| app.run_on_main_thread(dispatch.wrap(task))
+                    .map_err(|error| error.to_string()));
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let app = self.app()
+                .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
+            app.run_on_main_thread(task).map_err(|error| error.to_string())
+        }
     }
 
     pub(crate) fn spawn<F>(&self, future: F) -> tauri::async_runtime::JoinHandle<F::Output>
@@ -2107,12 +2610,14 @@ impl TauriCoordinatorHost {
     }
 
     pub(crate) fn emit_insert_fallback(&self, payload: &crate::types::InsertFallbackCardPayload) {
+        *self.capsule.fallback_payload.lock() = Some(payload.clone());
         if let Some(app) = self.app() {
             let _ = app.emit_to("capsule", "insert:fallback", payload);
         }
     }
 
     pub(crate) fn clear_insert_fallback(&self) {
+        self.capsule.fallback_payload.lock().take();
         if let Some(app) = self.app() {
             let _ = app.emit_to(
                 "capsule",
@@ -2364,6 +2869,34 @@ mod tests {
     }
 
     #[test]
+    fn qa_voice_uses_the_capsule_without_hiding_the_answer_window() {
+        for state in [
+            CapsuleState::Recording,
+            CapsuleState::Transcribing,
+            CapsuleState::Polishing,
+        ] {
+            assert_eq!(
+                capsule_window_action(false, true, state, true),
+                CapsuleWindowAction::ShowCapsule
+            );
+        }
+        assert_eq!(
+            capsule_window_action(false, true, CapsuleState::Idle, true),
+            CapsuleWindowAction::HideCapsule
+        );
+    }
+
+    #[test]
+    fn language_menu_expands_upward_and_preserves_the_bottom_at_each_scale() {
+        for (y,height,top,scale) in [(600,172,24,1.0), (1200,344,48,2.0), (-200,172,-1000,1.0), (100,172,24,1.0)] {
+            let (expanded_y, expanded_height) = super::capsule_menu_geometry(y,height,top,scale);
+            assert!(expanded_y >= top);
+            assert_eq!(expanded_y + expanded_height as i32, y + height as i32);
+            assert!(expanded_height >= height);
+        }
+    }
+
+    #[test]
     fn fallback_card_owns_native_window_until_dismissed() {
         for state in [
             CapsuleState::Idle,
@@ -2372,24 +2905,83 @@ mod tests {
             CapsuleState::Done,
         ] {
             assert_eq!(
-                capsule_window_action(true, true, state),
+                capsule_window_action(true, true, state, false),
                 CapsuleWindowAction::PreserveFallbackCard
             );
         }
     }
 
     #[test]
+    fn closing_openless_capsule_does_not_enable_passthrough_while_visible() {
+        // Classic is the OpenLess default. It is interactive while recording, so
+        // close used to flip passthrough on and tao repainted the caption frame.
+        for state in [
+            CapsuleState::Done,
+            CapsuleState::Cancelled,
+            CapsuleState::Error,
+            CapsuleState::Idle,
+        ] {
+            assert_eq!(
+                capsule_cursor_update(CapsuleStyle::Classic, state, false, false, false),
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive,
+                "close must not call set_ignore_cursor_events for {state:?}"
+            );
+            assert_eq!(
+                capsule_cursor_update(CapsuleStyle::Typeless, state, false, false, true),
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive
+            );
+        }
+        // The next interactive frame restores hit testing without a passthrough edge.
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                false,
+                false,
+                true
+            ),
+            CapsuleCursorUpdate::SetPassthrough(false)
+        );
+        // Siri is already click-through, so close does not touch window styles.
+        assert_eq!(
+            capsule_cursor_update(CapsuleStyle::Siri, CapsuleState::Done, false, true, false),
+            CapsuleCursorUpdate::Keep
+        );
+        // Non-close transitions still update passthrough.
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                false,
+                true,
+                false
+            ),
+            CapsuleCursorUpdate::SetPassthrough(false)
+        );
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                true,
+                false,
+                false
+            ),
+            CapsuleCursorUpdate::SetPassthrough(true)
+        );
+    }
+
+    #[test]
     fn capsule_window_action_follows_visibility_without_fallback_card() {
         assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Recording),
+            capsule_window_action(false, true, CapsuleState::Recording, false),
             CapsuleWindowAction::ShowCapsule
         );
         assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Idle),
+            capsule_window_action(false, true, CapsuleState::Idle, false),
             CapsuleWindowAction::HideCapsule
         );
         assert_eq!(
-            capsule_window_action(false, false, CapsuleState::Recording),
+            capsule_window_action(false, false, CapsuleState::Recording, false),
             CapsuleWindowAction::HideCapsule
         );
     }
@@ -2414,14 +3006,14 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 44.0, 8.0)
+            (460.0, 52.0, 64.0, 8.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 82.0,
-                top_offset: 14.0,
+                height: 88.0,
+                top_offset: 28.0,
                 gap: 8.0,
             })
         );
@@ -2454,7 +3046,7 @@ mod tests {
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
             (classic_badge.height, classic_badge.top_offset),
-            (22.0, 74.0)
+            (28.0, 88.0)
         );
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
@@ -2472,18 +3064,18 @@ mod tests {
         assert_eq!(
             capsule_control_hit_rect(CapsuleStyle::Classic, true, false, 460, 172),
             Some(CapsuleHitTestRect {
-                left: 132,
-                right: 328,
-                top: 104,
+                left: 172,
+                right: 288,
+                top: 124,
                 bottom: 156,
             })
         );
         assert_eq!(
             capsule_control_hit_rect(CapsuleStyle::Classic, false, false, 460, 172),
             Some(CapsuleHitTestRect {
-                left: 132,
-                right: 328,
-                top: 104,
+                left: 172,
+                right: 288,
+                top: 124,
                 bottom: 156,
             })
         );

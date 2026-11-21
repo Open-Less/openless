@@ -114,11 +114,11 @@ fn toolbar(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
     ui.put(
         input,
         egui::TextEdit::singleline(&mut vm.translation_query)
-            .id(egui::Id::new("openless-translation-search"))
+            .id(egui::Id::unique("openless-translation-search"))
             .hint_text(tr_l10n(lang, "translation.search_languages"))
             .text_color(theme::INK)
             .frame(egui::Frame::NONE)
-            .vertical_align(egui::Align::Center),
+            .align(egui::Align2::CENTER_CENTER),
     );
     ui.painter().text(
         egui::pos2(row.right(), row.center().y),
@@ -220,7 +220,7 @@ fn language_row(
 ) -> bool {
     let response = ui.interact(
         rect,
-        ui.id().with(("openless-language-row", native)),
+        ui.scope_id().with(("openless-language-row", native)),
         egui::Sense::click(),
     );
     let painter = ui.painter().with_clip_rect(rect);
@@ -473,7 +473,7 @@ fn paint_style_badge(ui: &egui::Ui, rect: egui::Rect, name: &str) {
     );
     #[cfg(test)]
     ui.ctx()
-        .data_mut(|data| data.insert_temp(egui::Id::new("translation-style-badge"), rect));
+        .data_mut(|data| data.insert_temp(egui::Id::unique("translation-style-badge"), rect));
 }
 
 fn usage_columns(width: f32) -> usize {

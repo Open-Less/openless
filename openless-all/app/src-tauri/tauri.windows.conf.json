@@ -57,5 +57,9 @@
         "acceptFirstMouse": false
       }
     ]
+  },
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev"
   }
 }

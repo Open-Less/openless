@@ -54,9 +54,11 @@ pub(crate) fn encrypt(
     fill(&mut nonce).map_err(|_| BundleError::InvalidPassword)?;
     let key = derive_key(password, &salt)?;
     let cipher = XChaCha20Poly1305::new((&*key.0).into());
+    // `cipher` 0.5 把 `from_slice` 标成 deprecated：`&[u8; N]` 直接转 `&Array`。
+    let nonce_ref: &XNonce = (&nonce).into();
     let ciphertext = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            nonce_ref,
             Payload {
                 msg: plaintext,
                 aad,
@@ -92,9 +94,10 @@ pub(crate) fn decrypt(
         .map_err(|_| BundleError::InvalidPassword)?;
     let key = derive_key(password, salt)?;
     let cipher = XChaCha20Poly1305::new((&*key.0).into());
+    let nonce_ref: &XNonce = nonce.into();
     let plaintext = cipher
         .decrypt(
-            XNonce::from_slice(nonce),
+            nonce_ref,
             Payload {
                 msg: &envelope[HEADER_BYTES..],
                 aad,

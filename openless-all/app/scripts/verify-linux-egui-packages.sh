@@ -13,7 +13,17 @@ test "${#rpms[@]}" -eq 1
 test "${#appimages[@]}" -eq 0
 test -s "$OUTPUT/SHA256SUMS"
 test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
-test "$(find "$OUTPUT" -maxdepth 1 \( -type f -o -type l \) | wc -l)" -eq 3
+# `SHA256SUMS` plus the two packages. `SHA256SUMS-linux` is an optional copy the
+# release workflow adds for the GitHub Release, where the desktop and Android
+# assets already own the name `SHA256SUMS`.
+expected_files=3
+[ -f "$OUTPUT/SHA256SUMS-linux" ] && expected_files=4
+actual_files=$(find "$OUTPUT" -maxdepth 1 \( -type f -o -type l \) | wc -l)
+if [ "$actual_files" -ne "$expected_files" ]; then
+  echo "expected $expected_files files in $OUTPUT, found $actual_files:" >&2
+  find "$OUTPUT" -maxdepth 1 -type f -printf '  %f\n' >&2
+  exit 1
+fi
 (
   cd "$OUTPUT"
   sha256sum --check --strict SHA256SUMS
@@ -23,8 +33,14 @@ check_elf() {
   local binary=$1 deps
   file -L "$binary" | grep -q 'ELF 64-bit.*x86-64'
   deps=$(ldd "$binary")
-  if grep -q 'not found' <<< "$deps"; then printf '%s\n' "$deps"; return 1; fi
-  if grep -Eqi 'webkit|wry|tauri' <<< "$deps"; then printf '%s\n' "$deps"; return 1; fi
+  if grep -q 'not found' <<< "$deps"; then
+    printf '%s\n' "$deps"
+    return 1
+  fi
+  if grep -Eqi 'webkit|wry|tauri' <<< "$deps"; then
+    printf '%s\n' "$deps"
+    return 1
+  fi
 }
 check_elf "$TARGET_DIR/release/openless-linux-egui"
 
@@ -57,7 +73,7 @@ grep -Fq 'fcitx5' <<< "$DEB_DEPENDS"
 grep -Fq 'libpipewire-0.3-0' <<< "$DEB_DEPENDS"
 
 mkdir -p "$WORK/rpm"
-( cd "$WORK/rpm" && rpm2cpio "${rpms[0]}" | cpio -idm --quiet )
+(cd "$WORK/rpm" && rpm2cpio "${rpms[0]}" | cpio -idm --quiet)
 test -x "$WORK/rpm/usr/bin/openless"
 test -s "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
 test -s "$WORK/rpm/usr/share/fcitx5/addon/openless.conf"
@@ -71,11 +87,13 @@ appstreamcli validate --no-net "$WORK/rpm/usr/share/metainfo/top.openless.OpenLe
 check_elf "$WORK/rpm/usr/bin/openless"
 check_elf "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
 test "$("$WORK/rpm/usr/bin/openless" --version)" = "OpenLess $DEB_VERSION"
-RPM_FILES=$(rpm -qlp "${rpms[0]}")
+# Query our unsigned local artifact without touching the host's system RPM keyring.
+mkdir -p "$WORK/rpmdb"
+RPM_FILES=$(rpm --dbpath "$WORK/rpmdb" -qlp "${rpms[0]}")
 grep -Fxq '/usr/bin/openless' <<< "$RPM_FILES"
 grep -Fxq '/usr/lib64/fcitx5/libopenless.so' <<< "$RPM_FILES"
 grep -Fxq '/usr/share/openless/fcitx5-addon.sha256' <<< "$RPM_FILES"
-RPM_DEPENDS=$(rpm -qp --requires "${rpms[0]}")
+RPM_DEPENDS=$(rpm --dbpath "$WORK/rpmdb" -qp --requires "${rpms[0]}")
 grep -Fq 'fcitx5' <<< "$RPM_DEPENDS"
 grep -Fq 'pipewire-libs' <<< "$RPM_DEPENDS"
 printf 'PASS: deb/rpm contents, ELF dependencies, desktop metadata and SHA-256\n'

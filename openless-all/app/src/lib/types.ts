@@ -31,7 +31,7 @@ export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 /** Recognition pipeline mode (issue #902): traditional = two-stage ASR + LLM;
  *  multimodal = one multimodal model turns audio + prompt into final text in a single step.
  *  The two configurations are fully isolated in the credentials vault; runtime reads only the current mode. */
-export type PipelineMode = 'traditional' | 'multimodal';
+export type PipelineMode = 'traditional' | 'multimodal' | 'deepseek';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
@@ -124,6 +124,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  observationId?: number;
   expiresAtMs: number;
   id: string;
   pattern: string;
@@ -340,6 +341,36 @@ export interface StylePackRuntimeDiagnostics {
   previewOmitsFrontApp: boolean;
 }
 
+export type AudioDspStage =
+  | 'acousticEchoCancellation'
+  | 'noiseReduction'
+  | 'dereverb'
+  | 'equalizer'
+  | 'amplifier'
+  | 'agc'
+  | 'vad';
+export interface AudioDspConfig {
+  /** 回声消除算法：轻量 NLMS 省 CPU，aec7 模型抑制更强但约 3 倍开销。 */
+  aecMode: 'off' | 'light' | 'model';
+  androidAecEnabled?: boolean;
+  androidNoiseSuppressionEnabled?: boolean;
+  androidAgcEnabled?: boolean;
+  noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
+  noiseStrength: number;
+  gainDb: number;
+  agcEnabled: boolean;
+  agcTarget: number;
+  agcAttack: number;
+  agcDecay: number;
+  vadEnabled: boolean;
+  vadThresholdDb: number;
+  dereverbLevel: number;
+  equalizerEnabled: boolean;
+  equalizerPreampDb: number;
+  equalizerBandsDb: number[];
+  processingOrder: AudioDspStage[];
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -362,8 +393,21 @@ export interface UserPreferences {
   stableTranscriptionEnabled: boolean;
   /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
   lowLatencyDictationEnabled: boolean;
-  /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
+  /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Use a local playback reference for optional echo cancellation. Off by default. */
+  echoCancellationEnabled: boolean;
+  audioDsp?: AudioDspConfig;
+  /** Desktop resource policy, applied after restarting the application. */
+  /** Enable local-only voice activation while idle (Windows desktop only). */
+  voiceActivationEnabled: boolean;
+  voiceActivationHotkeyLinked: boolean;
+  voiceActivationWakeEnabled: boolean;
+  voiceActivationFinishEnabled: boolean;
+  voiceActivationWakePhrase: string;
+  voiceActivationFinishPhrase: string;
+  voiceActivationTimeoutEnabled: boolean;
+  voiceActivationTimeoutSeconds: number;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
@@ -403,7 +447,7 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** Legacy compat: `true` is equivalent to `windowsInsertionMode === 'sendInput'`. */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows: whether to show OpenLess in the system keyboard list (Win+Space) for non-TSF insertion. */
+  /** Legacy wire compatibility only; the Windows speech TIP never appears in Win+Space. */
   windowsShowOpenlessInKeyboardList: boolean;
   /** User's working languages (multi-select, native names); injected as a premise at the head of LLM polish/translate prompts. */
   workingLanguages: string[];
@@ -415,6 +459,7 @@ export interface UserPreferences {
   outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
+  qaCompanionKey: string;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
   /** Selection polish hotkey. null = disabled. */
@@ -504,6 +549,10 @@ export interface UserPreferences {
   polishContextWindowMinutes: number;
   /** Skip LLM polish when the transcript has at most N non-whitespace chars (issue #1032). 0 = off. */
   polishSkipMaxChars: number;
+  /** Enable the bounded post-ASR polish strategy hook (issue #1225). */
+  polishStrategyEnabled: boolean;
+  /** Rhai source evaluated by Core after corrected ASR and before polish. */
+  polishStrategyScript: string;
   /** Run silently at startup (no main window). Common for Windows auto-start — background + tray only,
    *  without the main window popping up. When on, no startup path shows the window; open it from the menu bar / tray. Default false. */
   startMinimized: boolean;
@@ -526,6 +575,7 @@ export interface UserPreferences {
   streamingInsertSaveClipboard: boolean;
   /** Windows TSF: show the live transcript as an underlined composition in the target. */
   windowsCompositionInput: boolean;
+  macosCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
@@ -533,10 +583,12 @@ export interface UserPreferences {
    *  managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
+  expressionLearningEnabled: boolean;
   vocabularyLearningSettings: {
     observationSeconds: number;
     suggestionSeconds: number;
     maxPhraseChars: number;
+    suggestionPosition: 'nearInput' | 'bottomRight';
   };
   /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;
@@ -554,6 +606,10 @@ export interface UserPreferences {
   /** Whether to keep the raw microphone audio file (wav) per session, for debugging ASR misrecognition / mic sensitivity.
    *  Default false. When on, it uses disk space and follows the same cleanup policy as historyRetentionDays. */
   recordAudioForDebug: boolean;
+  /** 调试录音：追加保存「处理后」的音频（主档案 `<session>.wav`）。 */
+  debugArchiveProcessed: boolean;
+  /** 调试录音：额外保存「处理前」的 `<session>.raw.wav`，用于 A/B 对照。 */
+  debugArchiveRaw: boolean;
   /** Number of recent wav files kept in recordings/. null = follows the 200 hard cap; 1..=200 for user-defined values.
    *  Decoupled from historyMaxEntries — many text entries with only the 5 most recent wavs is a valid combination. */
   audioRecordingMaxEntries: number | null;
@@ -628,6 +684,7 @@ export interface MicrophoneDevice {
  *  v2 (issue #118 v2): multi-turn support; the backend sends the whole messages array each time (single source of truth).
  *  v2.1: enables `stream:true`, pushing LLM answer chunks to the frontend via `answer_delta` events for streaming render. */
 export type QaStateKind =
+  | 'activity'
   | 'idle'
   | 'recording'
   | 'loading'
@@ -645,7 +702,13 @@ export interface QaChatMessage {
   selectionText?: string;
 }
 
+export interface QaActivity {
+  kind: 'thinking' | 'searching_web' | 'reading_web' | 'using_tool';
+  toolName?: string;
+}
+
 export interface QaStatePayload {
+  activity?: QaActivity;
   kind: QaStateKind;
   /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */
   sessionId?: string;
@@ -738,6 +801,7 @@ export type CapsuleState =
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
+  qa?: boolean;
   /** Session generation that owns this capsule frame. */
   sessionId?: string | null;
   state: CapsuleState;

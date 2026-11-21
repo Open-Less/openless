@@ -1734,6 +1734,17 @@ impl ModelStore {
 
     pub fn cleanup_incomplete(&self, target: &LocalAsrTarget) -> Result<(), BackendError> {
         validate_model_id(target.model_id())?;
+        // Hold the download gate so a new transfer cannot create staging files during cleanup.
+        let active = self
+            .active_downloads
+            .lock()
+            .expect("model download lock poisoned");
+        if active.contains_key(target) {
+            return Err(BackendError::new(
+                BackendErrorCode::Busy,
+                "model download is in progress",
+            ));
+        }
         let staging = self.models_root_dir().join(staging_dir_name(target));
         if staging.exists() {
             std::fs::remove_dir_all(staging).map_err(platform_error)?;
@@ -2565,7 +2576,7 @@ fn sha256_file(path: &Path) -> Result<String, BackendError> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 pub fn validate_model_id(value: &str) -> Result<(), BackendError> {
@@ -3058,9 +3069,13 @@ pub fn extract_archive_safely(
         let mut entry = archive
             .by_index(index)
             .map_err(|error| invalid(error.to_string()))?;
-        validate_model_path(entry.name())?;
-        if matches!(entry.name(), MODEL_READY_SENTINEL | MODEL_PARTIAL_INDEX)
-            || !seen.insert(entry.name().to_string())
+        let name = entry
+            .name()
+            .map_err(|error| invalid(error.to_string()))?
+            .into_owned();
+        validate_model_path(&name)?;
+        if matches!(name.as_str(), MODEL_READY_SENTINEL | MODEL_PARTIAL_INDEX)
+            || !seen.insert(name.clone())
         {
             return Err(invalid("archive contains a reserved or duplicate path"));
         }
@@ -3076,7 +3091,7 @@ pub fn extract_archive_safely(
         if total > DEFAULT_MODEL_MAX_TOTAL_BYTES {
             return Err(invalid("archive exceeds the configured total size limit"));
         }
-        let output = staging.join(entry.name());
+        let output = staging.join(name);
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent).map_err(platform_error)?;
         }
@@ -3463,7 +3478,7 @@ mod tests {
                 path: "weights.bin".into(),
                 url: "https://example.test/weights.bin".into(),
                 size_bytes: body.len() as u64,
-                sha256: Some(format!("{:x}", Sha256::digest(&body))),
+                sha256: Some(hex::encode(Sha256::digest(&body))),
             }],
         )
         .unwrap();
@@ -3507,7 +3522,7 @@ mod tests {
                 path: "weights.bin".into(),
                 url: "https://example.test/weights.bin".into(),
                 size_bytes: body.len() as u64,
-                sha256: Some(format!("{:x}", Sha256::digest(&body))),
+                sha256: Some(hex::encode(Sha256::digest(&body))),
             }],
         )
         .unwrap();
@@ -3631,7 +3646,7 @@ mod tests {
                 path: "weights.bin".into(),
                 url: "https://example.test/weights.bin".into(),
                 size_bytes: body.len() as u64,
-                sha256: Some(format!("{:x}", Sha256::digest(&body))),
+                sha256: Some(hex::encode(Sha256::digest(&body))),
             }],
         )
         .unwrap();

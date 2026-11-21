@@ -1,0 +1,4 @@
+# Preserve upstream license text, including its original whitespace.
+Resources/Licenses/**/*.txt -whitespace
+# Unified patch context includes significant whitespace prefixes.
+CoreHost/Patches/*.patch -whitespace

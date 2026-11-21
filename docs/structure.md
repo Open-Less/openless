@@ -1,29 +1,32 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-09-23。分层与调用链见 [架构](architecture.md)。
+状态：canonical；更新：2026-10-19。分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
 ```text
-1-app/                            Git 仓库、分支与发布边界
-├── AGENTS.md / docs/              规则、架构、合同说明和平台交接
+openless-src/                     Git 仓库、分支与发布边界
+├── docs/                         架构、合同说明、平台交接、已知缺口与参考样例
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
-├── .github/workflows/            CI、Tauri、Android、Linux 发布
+├── .github/workflows/            CI、Tauri / Android / Linux / HarmonyOS 发布
 ├── Casks/                        Homebrew 分发定义
-├── Examples/                     示例数据
-├── assets/ / video-materials/     产品展示材料
-├── scripts/                      仓库级辅助脚本
+├── assets/                       产品展示材料
+├── scripts/                      仓库级辅助脚本（版本号同步等）
 └── openless-all/
-    ├── design_handoff_openless/   设计交接材料
-    └── app/                      npm 与 Core/Linux Cargo 工作目录
+    ├── README.md                全平台总览
+    ├── ios/                    原生 iPhone App、键盘扩展与录音组件
+    └── app/                     npm 与 Core/Linux Cargo 工作目录
         ├── src/                  React / TypeScript 界面
         ├── crates/openless-core/  共享业务 Rust crate
-        ├── src-tauri/            Tauri Host，独立 Cargo manifest
-        ├── linux-egui/           Linux Host 和 egui UI
+        ├── src-tauri/            Tauri Host（macOS / Windows / Android），独立 Cargo manifest
+        ├── linux-egui/           Linux Host 和 egui UI（不链接 Tauri / WebKitGTK）
+        ├── harmony/              HarmonyOS 宿主（ArkTS + ArkWeb + Rust napi）
+        ├── mobile-ime/           Android / 鸿蒙共用的输入法 native 后端
         ├── android/              Kotlin / AIDL / manifest / 前端片段
         ├── windows-ime/          原生 TSF/IME 工程
         ├── contract/             机器可读 backend-2.0 合同
+        ├── .cargo/config.toml    Windows GNU 目标的 linker flag（cdylib 符号导出）
         ├── scripts/              构建、平台检查与合同测试
         └── public/               Vite 静态资源
 ```
@@ -34,10 +37,12 @@
 
 | 任务 | 入口 | 相关边界 |
 | --- | --- | --- |
-| 启动与窗口分支 | `src/main.tsx`、`src/App.tsx` | typed IPC 启动快照；Tauri 配置与运行时窗口 |
-| 主界面、页面与设置 | `src/components/FloatingShell.tsx`、`src/pages/`、`src/pages/settings/` | `src/state/` 组织界面状态；业务规则归 Core |
-| 多语言、主题、组件 | `src/i18n/`、`src/styles/`、`src/components/` | 八种界面语言；tokens/global 样式 |
-| 新增或调整 IPC | `src/lib/ipc/`、`src-tauri/src/commands/`、`src-tauri/src/lib.rs` | Rust/TypeScript 类型、注册、事件与 `contract/` 同步 |
+| 启动与窗口分支 | `src/app/bootstrap.tsx`、`src/app/windowRoutes.tsx`、`src/app/startup.ts` | `src/runtime/` 识别宿主并完成启动握手，Android 嵌入面板由 `src/app/useAndroidPanels.ts` 管理 |
+| 主界面、页面与设置 | `src/app/shell/`、`src/features/` | 导航和窗口布局在 `app`，直接加载 `features` 下的业务界面（设置、渠道、历史、模型、胶囊、更新等） |
+| 共享界面组件 | `src/ui/controls/`、`src/ui/layout/`、`src/ui/overlays/` | 控件和布局通过参数与回调复用；每窗一个 AppViewport，内容与浮层共享可见边界 |
+| 多语言与主题 | `src/i18n/`、`src/styles/` | 文案、语种与主题样式 |
+| 共享快照、偏好和预览 | `src/data/`、`src/preview/` | data 管理读写次序；preview 提供浏览器的设备预设、模拟数据和事件 |
+| 新增或调整 IPC | `src/api/`、`src/runtime/`、`src-tauri/src/commands/` | React 通过分域 API 读写；Rust/TypeScript 类型、注册、事件与 `contract/` 同步 |
 | 共享业务入口 | `crates/openless-core/src/api.rs` | `events.rs`、`ports.rs`、`domains.rs`、`config.rs` |
 | 听写和服务 | Core `dictation_engine.rs`、`provider_*`、`asr/`、`polish.rs` | Host 的录音、插入和本地模型适配 |
 | 历史、词库、纠错、风格包 | Core `history.rs`、`vocabulary.rs`、`correction.rs`、`style_pack_store.rs` | Tauri `persistence/` 与对应 command |
@@ -46,6 +51,7 @@
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
+| iOS 应用与输入法 | `../ios/App/`、`../ios/Keyboard/`、`../ios/RecordingWidget/` | SwiftUI/UIKit 界面、独立 Rust Host、共享版本配置；见 [iOS 工程](../openless-all/ios/README.md) |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |
 
 Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台缺口、事件签名与验收项由专项文档维护，本文件只提供定位。

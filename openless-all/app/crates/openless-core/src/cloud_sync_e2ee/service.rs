@@ -116,6 +116,12 @@ struct Pending {
     old_key_id: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ReconcilePolicy<'a> {
+    Sync,
+    ConfirmedDelete { vault: &'a UuidV4, base: Revision },
+}
+
 struct PreviewState {
     public: RestorePreview,
     remote: ValidatedSyncDocuments,
@@ -245,9 +251,11 @@ impl EncryptedSyncService {
     }
 
     fn update(&self, update: impl FnOnce(&mut EncryptedSyncStatus)) {
+        let service_origin = self.remote_origin();
         let status = {
             let mut status = self.0.status.lock().unwrap_or_else(|e| e.into_inner());
             update(&mut status);
+            status.service_origin = service_origin;
             status.sequence = self
                 .0
                 .sequence
@@ -260,6 +268,7 @@ impl EncryptedSyncService {
             None,
             BackendEventKind::CloudSyncStateChanged(EncryptedSyncEvent {
                 sequence: status.sequence.clone(),
+                service_origin: status.service_origin.clone(),
                 account_id: status.account.as_ref().map(|v| v.github_id.clone()),
                 vault_id: status.vault_id.clone(),
                 task_id: status.task_id.clone(),
@@ -743,7 +752,7 @@ impl EncryptedSyncService {
             return Err(error("sign_in_required"));
         }
         let policy = ProxyPolicy::for_origin(&origin, use_system_proxy);
-        self.connect_with_proxy_policy(runtime, policy, origin, custom_token)
+        self.connect_with_proxy_policy(runtime, policy, origin, custom_token, None)
             .await
     }
 
@@ -753,6 +762,7 @@ impl EncryptedSyncService {
         proxy_policy: ProxyPolicy,
         origin: String,
         custom_token: Option<SecretValue>,
+        expected_owner: Option<&str>,
     ) -> SyncResult<()> {
         let valid = if let Some(connection) = &runtime.connection {
             let credential_unchanged = match (&connection.credential, &custom_token) {
@@ -773,6 +783,12 @@ impl EncryptedSyncService {
             false
         };
         if valid {
+            if expected_owner.is_some_and(|owner| {
+                runtime.settings.owner_id.as_deref() != Some(owner)
+                    || self.status().account.as_ref().map(|a| a.github_id.as_str()) != Some(owner)
+            }) {
+                return Err(error("account_changed"));
+            }
             return Ok(());
         }
         #[cfg(not(test))]
@@ -852,6 +868,9 @@ impl EncryptedSyncService {
         if canonical_origin(&self.remote_origin()).map_err(protocol_error)? != origin
             || !self.credential_is_current(&credential).await?
         {
+            return Err(error("account_changed"));
+        }
+        if expected_owner.is_some_and(|owner| account.github_id.as_str() != owner) {
             return Err(error("account_changed"));
         }
         let backup_retention_days = transport.capabilities().max_backup_retention_days;
@@ -1113,9 +1132,54 @@ impl EncryptedSyncService {
         Ok(())
     }
 
+    pub(crate) async fn refresh_backup_metadata(&self) -> SyncResult<EncryptedSyncStatus> {
+        let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
+        self.begin();
+        let result = async {
+            self.initialize(&mut runtime).await?;
+            if runtime.settings.consent_version.as_deref().is_none_or(|version| {
+                version.is_empty() || version == CONSENT_VERSION
+            }) {
+                return Err(error("consent_required"));
+            }
+            let owner = runtime
+                .settings
+                .owner_id
+                .clone()
+                .ok_or_else(|| error("sign_in_required"))?;
+            let origin = canonical_origin(&self.remote_origin()).map_err(protocol_error)?;
+            if runtime.settings.service_origin.as_deref() != Some(origin.as_str()) {
+                return Err(error("account_changed"));
+            }
+            if runtime.retry_at.is_some_and(|at| at > Instant::now()) {
+                return Err(error("rate_limited"));
+            }
+            let custom_token = self.read_custom_token().await?;
+            if custom_token.is_none() && self.0.data.custom_server_origin().is_some() {
+                return Err(error("sign_in_required"));
+            }
+            let policy = ProxyPolicy::for_origin(&origin, crate::net::use_system_proxy());
+            self.connect_with_proxy_policy(&mut runtime, policy, origin, custom_token, Some(&owner))
+                .await?;
+            self.refresh_metadata(&mut runtime).await
+        }
+        .await;
+        self.finish(&mut runtime, &result);
+        result.map(|()| self.status())
+    }
+
+    #[cfg(test)]
     pub(crate) async fn prepare_enable(
         &self,
         consent_version: String,
+    ) -> SyncResult<EnablePreparation> {
+        self.prepare_enable_scoped(consent_version, None).await
+    }
+
+    pub(crate) async fn prepare_enable_scoped(
+        &self,
+        consent_version: String,
+        expected_scope: Option<ConsentScope>,
     ) -> SyncResult<EnablePreparation> {
         if consent_version != CONSENT_VERSION {
             return Err(error("consent_required"));
@@ -1123,11 +1187,37 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result: SyncResult<EnableStep> = async {
+            self.initialize(&mut runtime).await?;
+            let expected_owner = expected_scope
+                .as_ref()
+                .and_then(|scope| scope.account_id.clone())
+                .or_else(|| runtime.settings.owner_id.clone());
+            if let Some(scope) = &expected_scope {
+                let status = self.status();
+                if scope.service_origin != self.remote_origin()
+                    || scope.account_id != status.account.map(|account| account.github_id)
+                    || scope.vault_id != status.vault_id
+                {
+                    return Err(error("account_changed"));
+                }
+            }
             self.connect(&mut runtime).await?;
+            if expected_scope.is_some()
+                && expected_owner
+                    .as_deref()
+                    .is_some_and(|owner| runtime.settings.owner_id.as_deref() != Some(owner))
+            {
+                return Err(error("account_changed"));
+            }
             self.refresh_metadata(&mut runtime).await?;
-            runtime.settings.consent_version = Some(consent_version);
-            runtime.settings.prompted = true;
-            self.save_settings(&runtime).await?;
+            if let Some(expected_vault) = expected_scope
+                .as_ref()
+                .and_then(|scope| scope.vault_id.as_deref())
+            {
+                if self.status().vault_id.as_deref() != Some(expected_vault) {
+                    return Err(error("account_changed"));
+                }
+            }
             self.try_remembered(&mut runtime).await?;
             let step = if self.metadata(&runtime)?.value().state != VaultState::Active {
                 EnableStep::Create
@@ -1144,6 +1234,21 @@ impl EncryptedSyncService {
             } else {
                 EnableStep::RestoreReview
             };
+            self.current_account(&runtime).await?;
+            let resume = runtime.settings.enabled
+                && runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION)
+                && step == EnableStep::Ready;
+            let mut settings = runtime.settings.clone();
+            settings.consent_version = Some(consent_version);
+            settings.prompted = true;
+            self.0
+                .local
+                .write("device", "client", settings.clone())
+                .await?;
+            runtime.settings = settings;
+            if resume {
+                self.0.wake.notify_one();
+            }
             Ok(step)
         }
         .await;
@@ -1172,11 +1277,10 @@ impl EncryptedSyncService {
         self.0.auto_suspended.store(false, Ordering::Release);
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
+            self.require_consent(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
-            if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
-                return Err(error("consent_required"));
-            }
             let snapshot = self.download(&mut runtime).await?;
             let encoded = snapshot.clone();
             let metadata = self.metadata(&runtime)?.value().clone();
@@ -1213,6 +1317,8 @@ impl EncryptedSyncService {
                         .and_then(|m| m.value().vault_id.as_ref())
             }) {
                 self.make_preview(&mut runtime, documents).await?;
+            } else if runtime.settings.enabled {
+                self.0.wake.notify_one();
             }
             Ok(())
         }
@@ -1236,10 +1342,13 @@ impl EncryptedSyncService {
         }
         log::warn!("[e2ee-token] create: entered, observed_revision={observed_revision}");
         let observed = Revision::parse(&observed_revision).map_err(protocol_error)?;
+        let password =
+            NormalizedPassword::confirmed_new(password, confirmation).map_err(protocol_error)?;
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.0.auto_suspended.store(false, Ordering::Release);
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
@@ -1253,9 +1362,6 @@ impl EncryptedSyncService {
             if metadata.state == VaultState::Active || metadata.revision != observed {
                 log::warn!("[e2ee-token] create: revision_conflict (state or revision mismatch)");
                 return Err(error("revision_conflict"));
-            }
-            if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
-                return Err(error("consent_required"));
             }
             self.retire_reviewed_pending(&mut runtime, None).await?;
             let context = EncryptContext {
@@ -1274,8 +1380,6 @@ impl EncryptedSyncService {
                 .await?;
             let documents = captured.documents.documents().clone();
             let (snapshot, key) = tokio::task::spawn_blocking(move || {
-                let password = NormalizedPassword::confirmed_new(password, confirmation)
-                    .map_err(protocol_error)?;
                 let key =
                     Arc::new(crypto::derive_key(&password, &context.kdf).map_err(protocol_error)?);
                 let snapshot =
@@ -1289,8 +1393,13 @@ impl EncryptedSyncService {
                 .await?;
             self.upload(&mut runtime, snapshot, captured, None).await?;
             self.check_cancelled()?;
-            runtime.settings.enabled = true;
-            self.save_settings(&runtime).await?;
+            let mut settings = runtime.settings.clone();
+            settings.enabled = true;
+            self.0
+                .local
+                .write("device", "client", settings.clone())
+                .await?;
+            runtime.settings = settings;
             Ok(())
         }
         .await;
@@ -1388,9 +1497,19 @@ impl EncryptedSyncService {
     }
 
     async fn reconcile(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        self.require_consent(runtime).await?;
+        self.reconcile_pending(runtime, ReconcilePolicy::Sync).await?;
+        Ok(())
+    }
+
+    async fn reconcile_pending(
+        &self,
+        runtime: &mut Runtime,
+        policy: ReconcilePolicy<'_>,
+    ) -> SyncResult<bool> {
         let owner = self.storage_owner(runtime)?;
         let Some(pending): Option<Pending> = self.0.local.read(&owner, "pending").await? else {
-            return Ok(());
+            return Ok(false);
         };
         let connection = runtime
             .connection
@@ -1403,6 +1522,12 @@ impl EncryptedSyncService {
         if operation.operation_id().as_str() != pending.operation_id {
             return Err(error("recovery_required"));
         }
+        let confirmed_delete = match policy {
+            ReconcilePolicy::Sync => false,
+            ReconcilePolicy::ConfirmedDelete { vault, base } => {
+                pending.deleted && operation.matches_confirmed_delete(vault, base)
+            }
+        };
         self.current_account(runtime).await?;
         let receipt = match connection
             .transport
@@ -1419,7 +1544,11 @@ impl EncryptedSyncService {
                 return Err(result);
             }
             OperationStatus::NotFound => {
-                // 404 does not prove failure. Only an identical body/op ID can be retried.
+                // Deletion can look up old receipts, but may retry only the exact deletion
+                // the user confirmed. In particular, it cannot trigger an upload replay.
+                if !matches!(policy, ReconcilePolicy::Sync) && !confirmed_delete {
+                    return Err(error("outcome_unknown"));
+                }
                 self.current_account(runtime).await?;
                 match connection
                     .transport
@@ -1437,7 +1566,8 @@ impl EncryptedSyncService {
                 }
             }
         };
-        self.accept_receipt(runtime, &pending, &receipt).await
+        self.accept_receipt(runtime, &pending, &receipt).await?;
+        Ok(confirmed_delete)
     }
 
     async fn accept_receipt(
@@ -1739,6 +1869,7 @@ impl EncryptedSyncService {
                     .fetch_add(1, Ordering::AcqRel)
                     .saturating_add(1)
                     .to_string(),
+                service_origin: scope.service_origin.clone(),
                 account_id: scope.owner_github_id,
                 vault_id: scope.vault_id,
                 task_id: self.status().task_id,
@@ -1756,6 +1887,7 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.connect(&mut runtime).await?;
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
@@ -1783,6 +1915,7 @@ impl EncryptedSyncService {
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
         let result = async {
+            self.require_consent(&mut runtime).await?;
             self.current_account(&runtime).await?;
             self.unlocked(&runtime)?;
             self.refresh_metadata(&mut runtime).await?;
@@ -1879,6 +2012,7 @@ impl EncryptedSyncService {
                         .fetch_add(1, Ordering::AcqRel)
                         .saturating_add(1)
                         .to_string(),
+                    service_origin: scope.service_origin.clone(),
                     account_id: scope.owner_github_id,
                     vault_id: scope.vault_id,
                     task_id: self.status().task_id,
@@ -1904,7 +2038,16 @@ impl EncryptedSyncService {
         result.map(|()| self.status())
     }
 
+    async fn require_consent(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        self.initialize(runtime).await?;
+        if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
+            return Err(error("consent_required"));
+        }
+        Ok(())
+    }
+
     async fn run_once(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        self.require_consent(runtime).await?;
         self.connect(runtime).await?;
         self.reconcile(runtime).await?;
         if !runtime.settings.enabled {
@@ -2090,7 +2233,21 @@ impl EncryptedSyncService {
         self.begin();
         let result = async {
             self.connect(&mut runtime).await?;
-            self.reconcile_for_review(&mut runtime).await?;
+            match self
+                .reconcile_pending(
+                    &mut runtime,
+                    ReconcilePolicy::ConfirmedDelete {
+                        vault: &expected,
+                        base: observed,
+                    },
+                )
+                .await
+            {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) if error.message == "outcome_unknown" => {}
+                Err(error) => return Err(error),
+            }
             self.refresh_metadata(&mut runtime).await?;
             let metadata = self.metadata(&runtime)?;
             if metadata.value().revision != observed
@@ -2099,7 +2256,15 @@ impl EncryptedSyncService {
             {
                 return Err(error("revision_conflict"));
             }
-            self.retire_reviewed_pending(&mut runtime, None).await?;
+            self.retire_reviewed_pending(&mut runtime, None)
+                .await
+                .map_err(|failure| {
+                    if failure.message == "outcome_unknown" {
+                        error("delete_pending_operation")
+                    } else {
+                        failure
+                    }
+                })?;
             let metadata = self.metadata(&runtime)?;
             let connection = runtime
                 .connection
@@ -2590,6 +2755,7 @@ impl EncryptedSyncService {
                     .fetch_add(1, Ordering::AcqRel)
                     .saturating_add(1)
                     .to_string(),
+                service_origin: scope.service_origin.clone(),
                 account_id: scope.owner_github_id.clone(),
                 vault_id: scope.vault_id.clone(),
                 task_id: self.status().task_id,

@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Icon } from '../../../src/components/Icon';
-import { getSettings, setSettings } from '../../../src/lib/ipc/settings';
-import type { UserPreferences } from '../../../src/lib/types';
-import { Btn, Pill } from '../../../src/pages/_atoms';
-import { SettingRow } from '../../../src/pages/settings/shared';
+import { useHotkeySettings } from '../../../src/data/preferences';
+import { useInteraction } from '../../../src/ui/overlays/InteractionProvider';
+import type { UserPreferences } from '../../../src/api/contracts';
+import { Button as Btn } from '../../../src/ui/controls/Button';
+import { Pill } from '../../../src/ui/controls/Pill';
+import { SettingRow } from '../../../src/ui/controls/SettingRow';
+import { SolidSlider } from '../../../src/ui/controls/Slider';
 import { useLayoutStack, useConservativeLayout } from '../../../src/lib/useMobileLayout';
 import {
   getAndroidAccessibilityStatus,
@@ -29,49 +32,8 @@ import type {
 } from '../lib/androidTypes';
 import { clampAndroidOverlaySize, normalizeAndroidOverlayTrigger } from '../lib/androidTypes';
 
-type AndroidPrefsSlice = Pick<UserPreferences, AndroidPreferenceKey>;
-
-function pickAndroidPrefs(settings: UserPreferences): AndroidPrefsSlice {
-  return {
-    androidInsertStrategy: settings.androidInsertStrategy,
-    androidOverlayTrigger: settings.androidOverlayTrigger,
-    androidOverlayActivationMode: settings.androidOverlayActivationMode,
-    androidOverlayLeftSwipeAction: settings.androidOverlayLeftSwipeAction,
-    androidOverlayCancelSwipeDirection: settings.androidOverlayCancelSwipeDirection,
-    androidOverlayGestureActions: settings.androidOverlayGestureActions,
-    androidOverlaySizeDp: settings.androidOverlaySizeDp,
-  };
-}
-
-let androidOverlaySaveQueue = Promise.resolve();
-
-function enqueueAndroidOverlaySave<T>(task: () => Promise<T>): Promise<T> {
-  const run = androidOverlaySaveQueue.then(task);
-  androidOverlaySaveQueue = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
-function persistAndroidOverlayPrefs(patch: Partial<UserPreferences>): Promise<AndroidPrefsSlice> {
-  return enqueueAndroidOverlaySave(async () => {
-    const settings = await getSettings();
-    const next = {
-      ...settings,
-      ...patch,
-    };
-    await setSettings(next);
-    return pickAndroidPrefs(next);
-  });
-}
-
 type AndroidPermissionsPanelMode =
-  | 'all'
-  | 'permissionsOnly'
-  | 'accessibility'
-  | 'overlayPermission'
-  | 'overlayConfig';
+  'all' | 'permissionsOnly' | 'accessibility' | 'overlayPermission' | 'overlayConfig';
 
 interface AndroidPermissionsPanelProps {
   mode?: AndroidPermissionsPanelMode;
@@ -79,6 +41,10 @@ interface AndroidPermissionsPanelProps {
 
 export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPanelProps) {
   const { t } = useTranslation();
+  const { prefs: androidPrefs, updatePrefs } = useHotkeySettings();
+  const { confirm } = useInteraction();
+  const [actionError, setActionError] = useState(false);
+  const reportFailure = () => setActionError(true);
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = baseLayoutStack || conservative;
@@ -89,22 +55,23 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const [shizukuRecoveryMessageKey, setShizukuRecoveryMessageKey] = useState<string | null>(null);
   const [shizukuActionMessageKey, setShizukuActionMessageKey] = useState<string | null>(null);
   const [shizukuRecoveryPending, setShizukuRecoveryPending] = useState(false);
-  const [androidPrefs, setAndroidPrefs] = useState<Pick<
-    UserPreferences,
-    AndroidPreferenceKey
-  > | null>(null);
   const [sizeDraft, setSizeDraft] = useState<number | null>(null);
+  const draftSizeRef = useRef<number | null>(null);
+  const draftRevision = useRef(0);
   const sizeDebounceRef = useRef<number | null>(null);
-  const sizePendingRef = useRef(false);
+  const recovery = useRef(false);
+  const loaded = useRef(false);
+  const refreshRevision = useRef(0);
+  const migratedLegacyTrigger = useRef(false);
 
   const refreshAndroid = async () => {
-    const [overlayResult, accessibilityResult, shizukuResult, settingsResult] =
-      await Promise.allSettled([
-        getAndroidOverlayStatus(),
-        getAndroidAccessibilityStatus(),
-        getAndroidShizukuStatus(),
-        getSettings(),
-      ]);
+    const request = ++refreshRevision.current;
+    const [overlayResult, accessibilityResult, shizukuResult] = await Promise.allSettled([
+      getAndroidOverlayStatus(),
+      getAndroidAccessibilityStatus(),
+      getAndroidShizukuStatus(),
+    ]);
+    if (!loaded.current || refreshRevision.current !== request) return;
     if (overlayResult.status === 'fulfilled') {
       setAndroidOverlay(overlayResult.value);
     }
@@ -124,32 +91,38 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
         return shizuku;
       });
     }
-    if (settingsResult.status === 'fulfilled') {
-      let migratedSettings = settingsResult.value;
-      if (migratedSettings.androidOverlayTrigger === 'keyboard') {
-        const migratedPrefs = await persistAndroidOverlayPrefs({
-          androidOverlayTrigger: normalizeAndroidOverlayTrigger(
-            migratedSettings.androidOverlayTrigger,
-          ),
-        });
-        migratedSettings = { ...migratedSettings, ...migratedPrefs };
-      }
-      setAndroidPrefs(pickAndroidPrefs(migratedSettings));
-    }
   };
 
   const handleRecoverAccessibility = async () => {
-    if (shizukuRecoveryPending) return;
-    const confirmed = window.confirm(t('settings.permissions.androidShizukuRecoverConfirm'));
-    if (!confirmed) return;
-    setShizukuActionMessageKey(null);
+    if (recovery.current) return;
+    recovery.current = true;
     setShizukuRecoveryPending(true);
     try {
+      const confirmed = await confirm({
+        title: t('settings.permissions.androidShizukuRecoverConfirm'),
+        tone: 'danger',
+      });
+      if (!confirmed) return;
+      setActionError(false);
+      setShizukuActionMessageKey(null);
       const result = await recoverAndroidAccessibility(true);
-      setShizukuRecoveryMessageKey(result.messageKey);
+      if (loaded.current) setShizukuRecoveryMessageKey(result.messageKey);
       await refreshAndroid();
+    } catch {
+      if (loaded.current) reportFailure();
     } finally {
-      setShizukuRecoveryPending(false);
+      recovery.current = false;
+      if (loaded.current) setShizukuRecoveryPending(false);
+    }
+  };
+
+  const requestAndRefresh = async (action: () => Promise<unknown>) => {
+    setActionError(false);
+    try {
+      await action();
+      await refreshAndroid();
+    } catch {
+      if (loaded.current) reportFailure();
     }
   };
 
@@ -161,6 +134,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     null;
 
   useEffect(() => {
+    loaded.current = true;
     void refreshAndroid();
     const androidId = window.setInterval(refreshAndroid, 3000);
     const onFocus = () => {
@@ -168,112 +142,87 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     };
     window.addEventListener('focus', onFocus);
     return () => {
+      loaded.current = false;
+      refreshRevision.current += 1;
+      if (sizeDebounceRef.current != null) clearTimeout(sizeDebounceRef.current);
       window.clearInterval(androidId);
       window.removeEventListener('focus', onFocus);
     };
   }, []);
 
   useEffect(() => {
-    if (sizePendingRef.current) return;
-    if (androidPrefs?.androidOverlaySizeDp != null) {
-      setSizeDraft(androidPrefs.androidOverlaySizeDp);
-    }
-  }, [androidPrefs?.androidOverlaySizeDp]);
+    if (androidPrefs?.androidOverlayTrigger !== 'keyboard' || migratedLegacyTrigger.current) return;
+    migratedLegacyTrigger.current = true;
+    void updatePrefs((current) =>
+      current.androidOverlayTrigger === 'keyboard'
+        ? { ...current, androidOverlayTrigger: normalizeAndroidOverlayTrigger('keyboard') }
+        : current,
+    ).catch(() => undefined);
+  }, [androidPrefs?.androidOverlayTrigger, updatePrefs]);
 
-  useEffect(() => {
-    return () => {
-      if (sizeDebounceRef.current) clearTimeout(sizeDebounceRef.current);
-    };
-  }, []);
-
-  const saveAndroidOverlaySize = async (value: number) => {
-    const clamped = clampAndroidOverlaySize(value);
-    try {
-      const nextPrefs = await persistAndroidOverlayPrefs({ androidOverlaySizeDp: clamped });
-      setAndroidPrefs((prev) => (prev ? { ...prev, ...nextPrefs } : nextPrefs));
-      setSizeDraft(clamped);
-    } catch (error) {
-      console.error('[android] failed to save overlay size', error);
-      const settings = await getSettings();
-      const rolledBack = settings.androidOverlaySizeDp;
-      const safeDraft = rolledBack != null ? clampAndroidOverlaySize(rolledBack) : null;
-      setAndroidPrefs((prev) => (prev ? { ...prev, androidOverlaySizeDp: rolledBack } : null));
-      setSizeDraft(safeDraft);
-    } finally {
-      sizePendingRef.current = false;
-    }
+  const finishSizeDraft = (revision: number) => {
+    if (draftRevision.current !== revision) return;
+    draftSizeRef.current = null;
+    if (loaded.current) setSizeDraft(null);
   };
 
-  const scheduleAndroidOverlaySizeSave = (value: number) => {
-    if (sizeDebounceRef.current) clearTimeout(sizeDebounceRef.current);
-    sizeDebounceRef.current = window.setTimeout(() => {
-      sizeDebounceRef.current = null;
-      void saveAndroidOverlaySize(value);
-    }, 200);
-  };
-
-  const flushAndroidOverlaySizeSave = (value: number) => {
-    const hasDebounce = sizeDebounceRef.current != null;
-    const hasPending = sizePendingRef.current;
-    if (!hasDebounce && !hasPending) return;
-
-    if (sizeDebounceRef.current) {
-      clearTimeout(sizeDebounceRef.current);
-      sizeDebounceRef.current = null;
-    }
-
-    const clamped = clampAndroidOverlaySize(value);
-    const committed = androidPrefs?.androidOverlaySizeDp;
-    if (committed != null && clamped === committed) {
-      sizePendingRef.current = false;
-      return;
-    }
-
-    void saveAndroidOverlaySize(clamped);
+  const saveAndroidOverlaySize = async (value: number, revision: number) => {
+    setActionError(false);
+    await updatePrefs((current) => ({ ...current, androidOverlaySizeDp: value })).catch(
+      () => undefined,
+    );
+    finishSizeDraft(revision);
   };
 
   const handleAndroidOverlaySizeChange = (value: number) => {
     const clamped = clampAndroidOverlaySize(value);
-    sizePendingRef.current = true;
+    const revision = ++draftRevision.current;
+    draftSizeRef.current = clamped;
     setSizeDraft(clamped);
-    scheduleAndroidOverlaySizeSave(clamped);
+    if (sizeDebounceRef.current != null) clearTimeout(sizeDebounceRef.current);
+    sizeDebounceRef.current = window.setTimeout(() => {
+      sizeDebounceRef.current = null;
+      void saveAndroidOverlaySize(clamped, revision);
+    }, 200);
+  };
+
+  const flushAndroidOverlaySizeSave = () => {
+    if (sizeDebounceRef.current == null || draftSizeRef.current === null) return;
+    clearTimeout(sizeDebounceRef.current);
+    sizeDebounceRef.current = null;
+    void saveAndroidOverlaySize(draftSizeRef.current, draftRevision.current);
   };
 
   const updateAndroidPref = async <K extends AndroidPreferenceKey>(
     key: K,
-    value: UserPreferences[K],
+    value: UserPreferences[K] | ((current: UserPreferences) => UserPreferences[K]),
   ) => {
-    if (key !== 'androidOverlaySizeDp' && sizeDebounceRef.current) {
+    const revision = draftRevision.current;
+    const oldDraft = sizeDebounceRef.current == null ? null : draftSizeRef.current;
+    if (sizeDebounceRef.current != null) {
       clearTimeout(sizeDebounceRef.current);
       sizeDebounceRef.current = null;
     }
-
-    const patch: Partial<UserPreferences> = {
-      [key]:
-        key === 'androidOverlayTrigger'
-          ? normalizeAndroidOverlayTrigger(value as AndroidOverlayTrigger)
-          : value,
-    };
-
-    if (key !== 'androidOverlaySizeDp') {
-      const committedSize = androidPrefs?.androidOverlaySizeDp;
-      const draftSize = sizeDraft;
-      if (sizePendingRef.current || (draftSize != null && draftSize !== committedSize)) {
-        patch.androidOverlaySizeDp = clampAndroidOverlaySize(draftSize ?? committedSize ?? 72);
-      }
-      sizePendingRef.current = false;
-    }
-
+    setActionError(false);
     try {
-      const nextPrefs = await persistAndroidOverlayPrefs(patch);
-      setAndroidPrefs(nextPrefs);
-      if (patch.androidOverlaySizeDp != null) {
-        setSizeDraft(nextPrefs.androidOverlaySizeDp);
-      }
+      // Compute the edit from the latest optimistic preferences in the shared
+      // gate; fields saved by the onboarding or settings shell stay intact.
+      await updatePrefs((current) => {
+        const next = typeof value === 'function' ? value(current) : value;
+        return {
+          ...current,
+          [key]:
+            key === 'androidOverlayTrigger'
+              ? normalizeAndroidOverlayTrigger(next as AndroidOverlayTrigger)
+              : next,
+          ...(oldDraft === null ? {} : { androidOverlaySizeDp: oldDraft }),
+        };
+      });
       await refreshAndroid();
-    } catch (error) {
-      console.error('[android] failed to save overlay pref', error);
-      await refreshAndroid();
+    } catch {
+      // The shared preferences owner rolls back and reports failed writes.
+    } finally {
+      if (oldDraft !== null) finishSizeDraft(revision);
     }
   };
 
@@ -304,6 +253,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
 
   return (
     <>
+      {actionError && <p role="alert">{t('common.operationFailed')}</p>}
       {showOverlayPermission && (
         <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
           <div className="ol-flex-row" style={actionRowStyle}>
@@ -325,7 +275,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void requestAndroidOverlayPermission().then(refreshAndroid);
+                  void requestAndRefresh(requestAndroidOverlayPermission);
                 }}
               >
                 {t('settings.permissions.grant')}
@@ -365,7 +315,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    void requestAndroidAccessibilityPermission().then(refreshAndroid);
+                    void requestAndRefresh(requestAndroidAccessibilityPermission);
                   }}
                 >
                   {t('settings.permissions.openSystem')}
@@ -420,11 +370,11 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                   onClick={() => {
                     setShizukuRecoveryMessageKey(null);
                     setShizukuActionMessageKey(null);
-                    void openShizukuApp().then((result) => {
-                      if (!result.launched) {
+                    void requestAndRefresh(async () => {
+                      const result = await openShizukuApp();
+                      if (!result.launched && loaded.current) {
                         setShizukuActionMessageKey(result.messageKey);
                       }
-                      return refreshAndroid();
                     });
                   }}
                 >
@@ -438,11 +388,11 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                   onClick={() => {
                     setShizukuRecoveryMessageKey(null);
                     setShizukuActionMessageKey(null);
-                    void requestAndroidShizukuPermission().then((result) => {
-                      if (!result.launched) {
+                    void requestAndRefresh(async () => {
+                      const result = await requestAndroidShizukuPermission();
+                      if (!result.launched && loaded.current) {
                         setShizukuActionMessageKey(result.messageKey);
                       }
-                      return refreshAndroid();
                     });
                   }}
                 >
@@ -475,7 +425,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      void requestAndroidAccessibilityPermission().then(refreshAndroid);
+                      void requestAndRefresh(requestAndroidAccessibilityPermission);
                     }}
                   >
                     {t('settings.permissions.openSystem')}
@@ -529,6 +479,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               }}
             >
               <select
+                disabled={!androidPrefs}
                 value={androidPrefs?.androidInsertStrategy ?? 'accessibility'}
                 onChange={(event) => {
                   void updateAndroidPref(
@@ -563,6 +514,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               }}
             >
               <select
+                disabled={!androidPrefs}
                 value={androidPrefs?.androidOverlayTrigger ?? 'background'}
                 onChange={(event) => {
                   void updateAndroidPref(
@@ -606,6 +558,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               }}
             >
               <select
+                disabled={!androidPrefs}
                 value={androidPrefs?.androidOverlayActivationMode ?? 'tap'}
                 onChange={(event) => {
                   void updateAndroidPref(
@@ -659,29 +612,35 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                     )}
                   </span>
                   <select
+                    disabled={!androidPrefs}
                     value={androidPrefs?.androidOverlayGestureActions?.[direction] ?? 'none'}
                     onChange={(event) => {
-                      const actions = androidPrefs?.androidOverlayGestureActions ?? {
-                        up: 'cancel',
-                        down: 'none',
-                        left: 'translation',
-                        right: 'qa',
-                      };
-                      void updateAndroidPref('androidOverlayGestureActions', {
-                        ...actions,
-                        [direction]: event.target.value as AndroidOverlayGestureAction,
-                      });
+                      const action = event.currentTarget.value as AndroidOverlayGestureAction;
+                      void updateAndroidPref('androidOverlayGestureActions', (current) => ({
+                        ...(current.androidOverlayGestureActions ?? {
+                          up: 'cancel',
+                          down: 'none',
+                          left: 'translation',
+                          right: 'qa',
+                        }),
+                        [direction]: action,
+                      }));
                     }}
                     style={selectStyle}
                   >
                     {(
-                      ['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'qa', 'voice_edit'] as const
+                      [
+                        'none',
+                        'quick_note',
+                        'translation',
+                        'style_pack',
+                        'cancel',
+                        'qa',
+                        'voice_edit',
+                      ] as const
                     ).map((action) => (
                       <option key={action} value={action}>
-                        {t(
-                          `settings.permissions.androidOverlayGestureAction.${action}`,
-                          action,
-                        )}
+                        {t(`settings.permissions.androidOverlayGestureAction.${action}`, action)}
                       </option>
                     ))}
                   </select>
@@ -708,24 +667,15 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                   maxWidth: '100%',
                 }}
               >
-                <input
-                  type="range"
+                <SolidSlider
+                  aria-label={t('settings.permissions.androidOverlaySizeLabel')}
+                  disabled={!androidPrefs}
                   min={48}
                   max={120}
                   step={4}
                   value={sizeDraft ?? androidPrefs?.androidOverlaySizeDp ?? 72}
-                  onChange={(event) => {
-                    handleAndroidOverlaySizeChange(Number(event.target.value));
-                  }}
-                  onPointerUp={(event) => {
-                    flushAndroidOverlaySizeSave(Number(event.currentTarget.value));
-                  }}
-                  onTouchEnd={(event) => {
-                    flushAndroidOverlaySizeSave(Number(event.currentTarget.value));
-                  }}
-                  onBlur={(event) => {
-                    flushAndroidOverlaySizeSave(Number(event.currentTarget.value));
-                  }}
+                  onValueChange={handleAndroidOverlaySizeChange}
+                  onValueCommitted={flushAndroidOverlaySizeSave}
                   style={{ flex: 1, minWidth: 0 }}
                 />
                 <span

@@ -255,7 +255,7 @@ mod imp {
     }
 
     async fn download_package_with_fallbacks(
-        client: &reqwest::Client,
+        client: &crate::net::HttpClient,
         package: &NativePackage,
         source: RuntimeSource,
         out_dir: &Path,
@@ -288,7 +288,7 @@ mod imp {
     }
 
     async fn download_package_from_feed(
-        client: &reqwest::Client,
+        client: &crate::net::HttpClient,
         package: &NativePackage,
         feed_index: &str,
         out_dir: &Path,
@@ -554,7 +554,7 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
     }
 
     async fn resolve_package_base_address(
-        client: &reqwest::Client,
+        client: &crate::net::HttpClient,
         feed_index: &str,
     ) -> Result<String> {
         let value: Value = client
@@ -606,7 +606,10 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
         let mut extracted = 0usize;
         for index in 0..archive.len() {
             let mut file = archive.by_index(index).context("read zip entry")?;
-            let name = file.name().to_string();
+            let name = file
+                .name()
+                .map_err(|error| anyhow::anyhow!("read zip entry name: {error}"))?
+                .into_owned();
             if !name.starts_with(TARGET_RID_NATIVE_PREFIX) || !name.ends_with(".dll") {
                 continue;
             }

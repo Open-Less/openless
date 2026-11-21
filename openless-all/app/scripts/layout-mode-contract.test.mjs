@@ -8,16 +8,18 @@ const read = (relativePath) => readFileSync(join(appRoot, relativePath), 'utf8')
 
 const css = read('src/styles/global.css');
 const stackedLayout = read('src/lib/stackedLayout.ts');
-const shared = read('src/pages/settings/shared.tsx');
-const pageAtoms = read('src/pages/_atoms.tsx');
-const row = read('src/components/ui/Row.tsx');
-const channelList = read('src/pages/settings/ChannelList.tsx');
-const permissions = read('src/pages/settings/PermissionsSection.tsx');
+const toggle = read('src/ui/controls/SettingRow.tsx');
+const refinements = read('src/styles/refinements.css');
+const pageHeader = read('src/ui/layout/PageHeader.tsx');
+const rowCss = read('src/ui/controls/setting-row.css');
+const channelList = read('src/features/providers/ChannelList.tsx');
+const permissions = read('src/features/input/PermissionsSection.tsx');
 const androidPermissions = read('android/frontend/components/AndroidPermissionsPanel.tsx');
-const about = read('src/pages/settings/AboutSection.tsx');
-const updateButton = read('src/pages/settings/CheckUpdateButton.tsx');
-const moreSheet = read('src/components/MobileMoreSheet.tsx');
-const styleSheet = read('src/components/MobileStyleSheet.tsx');
+const about = read('src/features/settings/sections/AboutSection.tsx');
+const updateButton = read('src/features/settings/sections/CheckUpdateButton.tsx');
+const updateButtonCss = read('src/features/settings/sections/check-update-button.css');
+const mobileSheet = read('src/app/shell/MobileNavigationSheet.tsx');
+const mobileSheetCss = read('src/app/shell/navigation.css');
 
 assert.doesNotMatch(css, /\.ol-flex-row\s*>\s*\*/);
 assert.doesNotMatch(css, /\[class\*=["']ol-grid["']\]/);
@@ -26,14 +28,19 @@ assert.match(css, /\.ol-conservative-stack/);
 
 assert.match(stackedLayout, /stackedRowLayout\?: boolean/);
 assert.doesNotMatch(stackedLayout, /mobile\s*\|\|/);
-// Toggle size contract: width 36 is locked by width/minWidth/maxWidth; flex only declares no grow/shrink.
-// flex-basis must be auto to avoid stretching the toggle's height to 36px in a column-direction container.
-assert.match(shared, /flex:\s*['"]0 0 auto['"]/);
-assert.match(shared, /width:\s*36/);
-assert.match(shared, /minWidth:\s*36/);
-assert.match(shared, /maxWidth:\s*36/);
-assert.match(pageAtoms, /preferenceStack\s*\?/);
-assert.match(row, /stackLayout\s*\?\s*'minmax\(0, 1fr\)'/);
+// Toggle size contract: the shared .ol-switch locks width 36 with width/min-width/max-width; flex only
+// declares no grow/shrink. flex-basis must be auto to avoid stretching the toggle's height to 36px in a
+// column-direction container.
+const switchRule = refinements.match(/\.ol-switch\s*\{[^}]*\}/)?.[0] ?? '';
+assert.match(toggle, /className="ol-switch"/);
+assert.match(switchRule, /--ol-switch-width:\s*36px/);
+assert.match(switchRule, /flex:\s*0 0 auto/);
+assert.match(switchRule, /\swidth:\s*var\(--ol-switch-width\)/);
+assert.match(switchRule, /min-width:\s*var\(--ol-switch-width\)/);
+assert.match(switchRule, /max-width:\s*var\(--ol-switch-width\)/);
+assert.match(pageHeader, /useMobileLayout\(\)/);
+assert.doesNotMatch(pageHeader, /useReadableLayout|useConservativeLayout/);
+assert.match(rowCss, /@media \(max-width: 719px\)[^]*?grid-template-columns: minmax\(0, 1fr\)/);
 
 assert.match(channelList, /ol-conservative-stack/);
 assert.match(channelList, /settings\.channels\.edit/);
@@ -44,16 +51,14 @@ assert.match(androidPermissions, /const rowJustify = layoutStack \? 'flex-start'
 
 assert.match(about, /ol-inline-composite/);
 assert.match(about, /compact=\{compactLayout\}/);
-assert.match(updateButton, /minWidth:\s*compact\s*\?\s*32\s*:\s*160/);
+assert.match(updateButton, /data-compact=\{compact \|\| undefined\}/);
+assert.match(updateButtonCss, /\.ol-check-update-button\s*\{[^}]*\bmin-width:\s*160px/);
+assert.match(updateButtonCss, /\.ol-check-update-button\[data-compact\]\s*\{[^}]*\bmin-width:\s*32px/);
 assert.match(updateButton, /aria-label=\{compact\s*\?\s*label\s*:\s*undefined\}/);
-assert.match(updateButton, /display:\s*compact\s*\?\s*'none'/);
-assert.match(moreSheet, /chevRight/);
-assert.match(styleSheet, /chevRight/);
-assert.match(moreSheet, /flexWrap:\s*'nowrap'/);
-assert.match(styleSheet, /flexWrap:\s*'nowrap'/);
-assert.match(moreSheet, /position:\s*'fixed'/);
-assert.match(styleSheet, /position:\s*'fixed'/);
-assert.match(moreSheet, /boxSizing:\s*'border-box'/);
-assert.match(styleSheet, /boxSizing:\s*'border-box'/);
+assert.match(updateButtonCss, /\.ol-check-update-button\[data-compact\] \.ol-check-update-label\s*\{[^}]*\bdisplay:\s*none/);
+assert.match(mobileSheet, /chevRight/);
+assert.match(mobileSheet, /<Modal[^]*?overlayClassName="ol-mobile-navigation-sheet"/);
+assert.match(mobileSheetCss, /align-items: end/);
+assert.match(mobileSheetCss, /min-width: 0/);
 
 console.log('layout mode contract tests passed');

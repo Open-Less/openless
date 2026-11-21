@@ -619,6 +619,10 @@ fn reset_credentials_cache_for_tests() {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[allow(non_snake_case)]
 struct CredsRoot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    web_search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deepseek_suite: Option<String>,
     #[serde(default = "credsroot_default_version")]
     version: u32,
     #[serde(default)]
@@ -1076,21 +1080,6 @@ fn channel_provider_type<'a, V: HasChannelMeta>(key: &'a str, entry: &'a V) -> &
     entry.meta().providerType.as_deref().unwrap_or(key)
 }
 
-/// Only for the v1 -> v2 migration to repair a lost active; runtime active
-/// policy lives in Core.
-fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<String> {
-    map.iter()
-        .filter(|(_, entry)| entry.meta().enabled)
-        .min_by(|(left_key, left), (right_key, right)| {
-            let left_order = left.meta().order.unwrap_or(u32::MAX);
-            let right_order = right.meta().order.unwrap_or(u32::MAX);
-            left_order
-                .cmp(&right_order)
-                .then_with(|| left_key.as_str().cmp(right_key.as_str()))
-        })
-        .map(|(key, _)| key.clone())
-}
-
 /// v1 (one slot per preset) → v2 (channel cards).
 ///
 /// Two pillars of idempotency:
@@ -1219,26 +1208,19 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
         false
     };
 
-    let changed = asr_changed || llm_changed || seeded;
-    if changed {
-        if !root
-            .providers
-            .asr
-            .get(&root.active.asr)
-            .is_some_and(|entry| entry.meta().enabled)
-        {
-            root.active.asr = current_channel_id(&root.providers.asr).unwrap_or_default();
-        }
-        if !root
-            .providers
-            .llm
-            .get(&root.active.llm)
-            .is_some_and(|entry| entry.meta().enabled)
-        {
-            root.active.llm = current_channel_id(&root.providers.llm).unwrap_or_default();
-        }
+    // Reconcile on every successful load, including already-channelized vaults
+    // restored from disk/sync. Status and credential lookups must use the same
+    // first-enabled selection as Core and the settings list. This only changes
+    // the loaded copy; the next gated mutation owns durable persistence.
+    let metadata = credential_metadata(root);
+    root.active.asr = metadata.selected_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.selected_provider(openless_core::ProviderSlot::Llm);
+    let selection_changed = root.active.asr != active_asr || root.active.llm != active_llm;
+    if selection_changed {
+        root.metadata_revision = root.metadata_revision.saturating_add(1);
     }
-    // Omni normalization must not trigger the separate ASR/LLM active fallback.
+    let changed = asr_changed || llm_changed || seeded || selection_changed;
+    // Omni uses its own explicit provider selection.
     migrate_legacy_omni_slot(&mut root.omni) || changed
 }
 
@@ -3007,7 +2989,7 @@ fn channel_summaries<V: HasChannelMeta>(
             }
         })
         .collect();
-    // Same ordering as current_channel_id: ascending order, ties broken by id alphabetical order.
+    // Same ordering as Core channel selection: ascending order, ties broken by id alphabetical order.
     list.sort_by(|left, right| {
         left.order
             .cmp(&right.order)
@@ -3071,8 +3053,8 @@ fn apply_credential_metadata(
         metadata.list_channels(ChannelKind::Llm),
         |entry, name| entry.displayName = name,
     );
-    root.active.asr = metadata.active_provider(openless_core::ProviderSlot::Asr);
-    root.active.llm = metadata.active_provider(openless_core::ProviderSlot::Llm);
+    root.active.asr = metadata.selected_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.selected_provider(openless_core::ProviderSlot::Llm);
     root.omni.active = metadata.active_provider(openless_core::ProviderSlot::Omni);
     root.metadata_revision = metadata.revision();
     Ok(())
@@ -3517,7 +3499,53 @@ fn apply_sync_credentials_root(
 /// Credential vault — the system credential store; the legacy JSON file is a migration source only.
 pub struct CredentialsVault;
 
+fn deepseek_tts_credentials(root: &CredsRoot) -> Result<(openless_core::SecretValue, String)> {
+    let config = match root.deepseek_suite.as_deref() {
+        Some(raw) => openless_core::deepseek_suite::DeepSeekSuiteConfig::parse(raw)?,
+        None => openless_core::deepseek_suite::DeepSeekSuiteConfig::default(),
+    };
+    anyhow::ensure!(config.configured(), "DeepSeek suite API key is missing");
+    Ok((
+        openless_core::SecretValue::new(config.api_key),
+        config.voice,
+    ))
+}
+
 impl CredentialsVault {
+    pub fn get_deepseek_suite_config() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(load_credentials_for_update()?.deepseek_suite)
+    }
+    pub fn set_deepseek_suite_config(value: &str) -> Result<()> {
+        if !value.is_empty() {
+            openless_core::deepseek_suite::DeepSeekSuiteConfig::parse(value)?;
+        }
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.deepseek_suite = (!value.is_empty()).then(|| value.to_string());
+            Ok(true)
+        })
+    }
+
+    pub fn get_deepseek_tts_credentials() -> Result<(openless_core::SecretValue, String)> {
+        let _guard = credentials_lock().lock();
+        deepseek_tts_credentials(&load_credentials_for_update()?)
+    }
+
+    pub fn get_web_search_config() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(load_credentials_for_update()?.web_search)
+    }
+
+    pub fn set_web_search_config(value: &str) -> Result<()> {
+        if !value.is_empty() {
+            serde_json::from_str::<openless_core::web_search::WebSearchConfig>(value)?;
+        }
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.web_search = (!value.is_empty()).then(|| value.to_string());
+            Ok(true)
+        })
+    }
+
     /// System credential store service name; maps to the Keychain service on macOS.
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 
@@ -4117,19 +4145,34 @@ mod tests {
     use super::load_android_credentials_from_source_with_crypto;
     use super::{
         android_credentials_root_for_update, android_persistable_credentials, chunk_json_payload,
-        credentials_cache, get_android_marketplace_token_at, load_android_credentials_from_path,
-        load_android_credentials_from_path_with_crypto, load_credentials_into_cache_with,
-        lookup_account, lookup_marketplace_github_token, lookup_omni_account,
-        omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
-        parse_llm_temperature, reset_credentials_cache_for_tests,
+        configuration_snapshot_with, credentials_cache, get_android_marketplace_token_at,
+        load_android_credentials_from_path, load_android_credentials_from_path_with_crypto,
+        load_credentials_into_cache_with, lookup_account, lookup_marketplace_github_token,
+        lookup_omni_account, migrate_channels, omni_extra_headers_json, omni_temperature_string,
+        parse_extra_headers_json, parse_llm_temperature, reset_credentials_cache_for_tests,
         set_llm_extra_headers_for_provider_in_root, set_llm_temperature_for_provider_in_root,
-        write_account, write_marketplace_github_token, write_omni_account, CredentialAccount,
-        CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot, MarketplaceGithubToken,
-        KEYRING_CHUNK_MAX_UTF16_UNITS,
+        write_account, write_marketplace_github_token, write_omni_account, ChannelMeta,
+        CredentialAccount, CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot,
+        MarketplaceGithubToken, CHANNELS_SCHEMA_VERSION, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
     use parking_lot::Mutex;
     use std::collections::HashMap;
+
+    #[test]
+    fn speech_uses_only_the_dedicated_suite_key() {
+        let mut root = CredsRoot::default();
+        root.web_search = Some(r#"{"ttsChannel":"voice"}"#.into());
+        let mut entry = CredsLlmEntry::default();
+        entry.channel.providerType = Some("deepseek".into());
+        entry.apiKey = Some("traditional-key".into());
+        root.providers.llm.insert("voice".into(), entry);
+        assert!(super::deepseek_tts_credentials(&root).is_err());
+        root.deepseek_suite = Some(r#"{"apiKey":"suite-key","voice":"tide"}"#.into());
+        let (key, voice) = super::deepseek_tts_credentials(&root).unwrap();
+        assert_eq!(key.expose_secret(), "suite-key");
+        assert_eq!(voice, "tide");
+    }
 
     #[test]
     fn macos_credentials_read_one_item_after_legacy_chunk_migration() {
@@ -5031,6 +5074,88 @@ mod tests {
     }
 
     #[test]
+    fn loaded_channel_selection_repairs_stale_active_without_changing_credentials() {
+        for stale in ["local-qwen3-mlx", "local-account", "missing", ""] {
+            let mut root = CredsRoot::default();
+            root.version = CHANNELS_SCHEMA_VERSION;
+            root.active.asr = stale.into();
+            root.providers.asr.insert(
+                "local-account".into(),
+                CredsAsrEntry {
+                    channel: ChannelMeta {
+                        providerType: Some("local-qwen3-mlx".into()),
+                        order: Some(1),
+                        enabled: false,
+                        lastTest: None,
+                    },
+                    ..Default::default()
+                },
+            );
+            root.providers.asr.insert(
+                "cloud-account".into(),
+                CredsAsrEntry {
+                    channel: ChannelMeta {
+                        providerType: Some("tencent-cloud".into()),
+                        order: Some(0),
+                        enabled: true,
+                        lastTest: None,
+                    },
+                    model: Some("Hy-ASR-3.0-preview".into()),
+                    tencentCloudSecretKey: Some("fixture-secret".into()),
+                    ..Default::default()
+                },
+            );
+            let providers = serde_json::to_value(&root.providers).unwrap();
+            assert!(migrate_channels(&mut root));
+            assert_eq!(root.active.asr, "cloud-account");
+            assert_eq!(root.metadata_revision, 1);
+            assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+            let serialized = serde_json::to_string(&root).unwrap();
+            let mut restarted: CredsRoot = serde_json::from_str(&serialized).unwrap();
+            assert!(!migrate_channels(&mut restarted));
+            assert_eq!(
+                serde_json::to_value(&restarted).unwrap(),
+                serde_json::from_str::<serde_json::Value>(&serialized).unwrap()
+            );
+            let status = configuration_snapshot_with(false, || Ok(restarted)).unwrap();
+            assert_eq!(status.active_asr_provider, "tencent-cloud");
+            assert_eq!(
+                status.credentials.asr_model.as_deref(),
+                Some("Hy-ASR-3.0-preview")
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_channel_selection_uses_order_even_when_old_active_is_enabled() {
+        let mut root = v1_root_with_two_asr_providers();
+        migrate_channels(&mut root);
+        root.providers.asr.get_mut("groq").unwrap().channel.order = Some(0);
+        root.providers
+            .asr
+            .get_mut("volcengine")
+            .unwrap()
+            .channel
+            .order = Some(1);
+        assert!(migrate_channels(&mut root));
+        assert_eq!(root.active.asr, "groq");
+        assert!(!migrate_channels(&mut root));
+    }
+
+    #[test]
+    fn loaded_channel_selection_does_not_reactivate_disabled_models() {
+        let mut root = v1_root_with_two_asr_providers();
+        migrate_channels(&mut root);
+        for entry in root.providers.asr.values_mut() {
+            entry.channel.enabled = false;
+        }
+        root.active.asr = "local-qwen3-mlx".into();
+        assert!(migrate_channels(&mut root));
+        assert!(root.active.asr.is_empty());
+        assert!(!migrate_channels(&mut root));
+    }
+
+    #[test]
     fn migrated_credentials_still_resolve_through_lookup_account() {
         let mut root = v1_root_with_two_asr_providers();
         super::migrate_channels(&mut root);
@@ -5128,6 +5253,130 @@ mod tests {
             lookup_account(&root, CredentialAccount::VolcengineAppKey).as_deref(),
             Some("vk")
         );
+    }
+
+    // 已渠道化的凭据也要修复误写为供应商类型的指针，不能依赖元数据迁移触发。
+    #[test]
+    fn channelized_vault_repairs_a_dangling_active_pointer() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.asr = "bailian".into(); // 供应商类型，不是渠道 id
+        root.providers.asr.insert(
+            "volcengine".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("volcengine".into()),
+                    order: Some(1),
+                    enabled: true,
+                    lastTest: None,
+                },
+                volcengineApiKey: Some("vk-empty".into()),
+                ..Default::default()
+            },
+        );
+        root.providers.asr.insert(
+            "volcengine-2".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("bailian".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some("bk".into()),
+                model: Some("fun-asr-realtime".into()),
+                ..Default::default()
+            },
+        );
+
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
+
+        // 指针回落到排序第一的已配置卡片，凭据一个字节都没动。
+        assert_eq!(root.active.asr, "volcengine-2");
+        assert_eq!(root.metadata_revision, 1);
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert_eq!(
+            root.providers
+                .asr
+                .get("volcengine-2")
+                .unwrap()
+                .apiKey
+                .as_deref(),
+            Some("bk")
+        );
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::AsrApiKey).as_deref(),
+            Some("bk")
+        );
+        // 第二遍必须是幂等的：指针已经指向真实卡片，不再报改动。
+        assert!(!super::migrate_channels(&mut root));
+        assert_eq!(root.active.asr, "volcengine-2");
+    }
+
+    /// LLM 侧同样需要这份校正：渠道 id 与供应商类型不同名时（`ark-2` vs `deepseek`），
+    /// 悬空指针会让润色整条链路取不到 key。
+    #[test]
+    fn channelized_vault_repairs_a_dangling_active_llm_pointer() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.llm = "deepseek".into(); // 供应商类型，不是渠道 id
+        root.providers.llm.insert(
+            "ark-2".into(),
+            CredsLlmEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("deepseek".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some("sk".into()),
+                model: Some("deepseek-v4-flash".into()),
+                ..Default::default()
+            },
+        );
+
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
+
+        assert_eq!(root.active.llm, "ark-2");
+        assert_eq!(root.metadata_revision, 1);
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::ArkApiKey).as_deref(),
+            Some("sk")
+        );
+        assert!(!super::migrate_channels(&mut root));
+    }
+
+    // 已配置渠道但全部停用时，不得回退到旧偏好或读取停用渠道的凭据。
+    #[test]
+    fn channelized_vault_clears_a_dangling_active_pointer_when_all_channels_are_disabled() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.asr = "bailian".into();
+        root.providers.asr.insert(
+            "volcengine-2".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("bailian".into()),
+                    order: Some(0),
+                    enabled: false,
+                    lastTest: None,
+                },
+                apiKey: Some("bk".into()),
+                ..Default::default()
+            },
+        );
+
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
+
+        assert!(root.active.asr.is_empty());
+        assert_eq!(root.metadata_revision, 1);
+        assert!(lookup_account(&root, CredentialAccount::AsrApiKey).is_none());
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert!(!super::migrate_channels(&mut root));
     }
 
     #[test]

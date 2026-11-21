@@ -1,0 +1,10 @@
+config_version: '1'
+schema_list:
+  - schema: pinyin_simp
+menu:
+  page_size: 9
+ascii_composer:
+  good_old_caps_lock: false
+  switch_key:
+    Shift_L: noop
+    Shift_R: noop

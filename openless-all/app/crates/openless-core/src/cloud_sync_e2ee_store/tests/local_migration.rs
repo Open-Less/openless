@@ -396,7 +396,7 @@ fn legacy_usage_bundle(bytes: &[u8]) -> Vec<u8> {
         });
     let documents = serde_json::to_vec(&set).unwrap();
     manifest["documents"]["bytes"] = json!(documents.len());
-    manifest["documents"]["sha256"] = json!(format!("{:x}", Sha256::digest(&documents)));
+    manifest["documents"]["sha256"] = json!(hex::encode(Sha256::digest(&documents)));
     let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, bytes) in [
         ("manifest.json", serde_json::to_vec(&manifest).unwrap()),

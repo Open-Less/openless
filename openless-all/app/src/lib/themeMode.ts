@@ -1,9 +1,11 @@
 // Theme preference: localStorage boot cache + Rust UserPreferences.theme_mode authority.
 // Applies via html[data-ol-theme] + CSS variables — no React re-render for color changes.
 
-import { getSettings, isTauri } from './ipc';
+import { getSettings } from './ipc/settings';
+import { isTauri } from './ipc/shared';
 import { syncWindowsCaptionTheme } from './platform';
-import type { ThemeMode } from './types';
+import { syncMacOSWindowTheme } from './nativeWindowTheme';
+import type { ThemeMode, UserPreferences } from './types';
 
 export type ThemePreference = ThemeMode;
 export type ResolvedTheme = 'light' | 'dark';
@@ -15,6 +17,8 @@ const SYSTEM_MEDIA = '(prefers-color-scheme: dark)';
 let systemListener: MediaQueryList | null = null;
 let systemHandler: ((event: MediaQueryListEvent) => void) | null = null;
 let activePreference: ThemePreference = 'system';
+let preferenceRevision = 0;
+let initialized = false;
 
 function readStoredPreference(): ThemePreference {
   try {
@@ -78,7 +82,18 @@ export function applyThemeMode(resolved: ResolvedTheme): void {
   void syncWindowsCaptionTheme(resolved === 'dark');
 }
 
+function syncNativeAppearance(preference: ThemePreference): void {
+  void syncMacOSWindowTheme(preference).then((applied) => {
+    // matchMedia may still reflect the old explicit native appearance until
+    // NSApplication's override has been cleared. Re-read it after that change.
+    if (applied && preference === 'system' && activePreference === preference) {
+      applyThemeMode(resolveTheme(preference));
+    }
+  });
+}
+
 export function applyThemeFromPreference(pref: ThemePreference): void {
+  preferenceRevision++;
   activePreference = pref;
   writeStoredPreference(pref);
   if (pref === 'system') {
@@ -87,6 +102,7 @@ export function applyThemeFromPreference(pref: ThemePreference): void {
     detachSystemListener();
   }
   applyThemeMode(resolveTheme(pref));
+  syncNativeAppearance(pref);
 }
 
 export function setThemePreference(pref: ThemePreference): void {
@@ -94,6 +110,8 @@ export function setThemePreference(pref: ThemePreference): void {
 }
 
 export function initThemeMode(): void {
+  if (initialized) return;
+  initialized = true;
   activePreference = readStoredPreference();
   if (activePreference === 'system') {
     attachSystemListener();
@@ -101,11 +119,35 @@ export function initThemeMode(): void {
   applyThemeMode(resolveTheme(activePreference));
 
   if (!isTauri) return;
-  void getSettings()
+  const requestedRevision = preferenceRevision;
+  // This subscription belongs to the WebView lifetime, including hidden capsules
+  // and transcript mirrors that never mount HotkeySettingsProvider.
+  void (async () => {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      await listen<Partial<UserPreferences>>('prefs:changed', ({ payload }) => {
+        const preference = payload?.themeMode;
+        if (preference === 'light' || preference === 'dark' || preference === 'system') {
+          applyThemeFromPreference(preference);
+        }
+      });
+    } catch (error) {
+      console.warn('[theme] failed to subscribe to preference changes', error);
+    }
+    // Subscribe before the boot read. A newer event or local choice invalidates
+    // this response even if a hidden WebView's initial IPC finishes late.
+    return getSettings();
+  })()
     .then((prefs) => {
+      if (requestedRevision !== preferenceRevision) return;
       const rustPref = prefs.themeMode ?? 'system';
-      if (rustPref === activePreference) return;
-      applyThemeFromPreference(rustPref);
+      // The boot cache paints the page only. Rust has already initialized
+      // native appearance, so a stale cache must never overwrite it.
+      if (rustPref === activePreference) {
+        syncNativeAppearance(rustPref);
+      } else {
+        applyThemeFromPreference(rustPref);
+      }
     })
     .catch((error) => {
       console.warn('[theme] failed to reconcile theme from preferences', error);

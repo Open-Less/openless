@@ -36,6 +36,7 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("minimax", "asrMinimax"),
     ("groq", "asrGroq"),
     ("whisper", "asrWhisper"),
+    ("deepseek", "deepseek"),
     ("openrouter", "asrOpenrouter"),
     ("orcarouter", "orcarouter"),
     ("zenmux", "asrZenmux"),
@@ -64,6 +65,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("openai", "openai"),
     ("gemini", "gemini"),
     (crate::polish::CODEX_OAUTH_PROVIDER_ID, "codexOAuth"),
+    (crate::siwc::PROVIDER_ID, "chatgptSiwc"),
     ("mimo", "mimo"),
     ("cometapi", "cometapi"),
     ("openrouterFree", "openrouterFree"),
@@ -114,11 +116,15 @@ const DASHSCOPE_MODELS: &[&str] = &[
     crate::asr::dashscope_multimodal::QWEN_AUDIO_MODEL,
     crate::asr::dashscope_multimodal::DEFAULT_MODEL,
 ];
-const GEMINI_MODELS: &[&str] = &[crate::asr::gemini::DEFAULT_MODEL];
+const GEMINI_MODELS: &[&str] = &[
+    crate::asr::gemini::DEFAULT_MODEL,
+    crate::asr::gemini_live::MODEL,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthRequirement {
+    Siwc,
     None,
     ApiKey,
     EndpointModelOptionalApiKey,
@@ -268,6 +274,7 @@ fn provider_descriptor_with_label(
             default_llm_model(&id),
             match id.as_str() {
                 crate::polish::CODEX_OAUTH_PROVIDER_ID => AuthRequirement::OAuth,
+                crate::siwc::PROVIDER_ID => AuthRequirement::Siwc,
                 "gemini" => AuthRequirement::ApiKey,
                 "lmstudio" => AuthRequirement::EndpointModelOptionalApiKey,
                 _ => AuthRequirement::ApiKeyUnlessCustomEndpoint,
@@ -369,6 +376,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "gemini") => GEMINI_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
         (ProviderKind::Asr, "minimax") => &["asr-1.0"],
+        (ProviderKind::Asr, "deepseek") => &["deepseek-asr"],
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -517,6 +525,7 @@ pub fn auth_requirement_satisfied(
                 && configuration.tencent_cloud_secret_key
         }
         AuthRequirement::OAuth => configuration.codex_oauth && model,
+        AuthRequirement::Siwc => false, // Backend combines the local-only SIWC session with the selected model.
     }
 }
 
@@ -532,6 +541,7 @@ pub fn api_key_required(
         AuthRequirement::None
         | AuthRequirement::EndpointModelOptionalApiKey
         | AuthRequirement::OAuth
+        | AuthRequirement::Siwc
         | AuthRequirement::TencentCloud => false,
         AuthRequirement::ApiKeyUnlessCustomEndpoint => {
             let Some(endpoint) = configured_endpoint.filter(|value| !value.trim().is_empty())
@@ -576,6 +586,7 @@ pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("https://api.minimaxi.com/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "whisper" => Some("https://api.openai.com/v1"),
+        "deepseek" => Some("https://api.deepseek.com/v1"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT),
         "zenmux" => Some("https://zenmux.ai/api/v1"),
@@ -601,6 +612,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("asr-1.0"),
         "groq" => Some("whisper-large-v3-turbo"),
         "whisper" => Some("whisper-1"),
+        "deepseek" => Some("deepseek-asr"),
         "openrouter" => Some("openai/whisper-large-v3-turbo"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL),
         "zenmux" => Some(crate::asr::whisper::ZENMUX_DEFAULT_MODEL),
@@ -613,6 +625,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
 
 pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
     match provider_type {
+        crate::siwc::PROVIDER_ID => Some(crate::siwc::API_BASE),
         "opencode" => Some("https://opencode.ai/zen/v1"),
         "ark" => Some("https://ark.cn-beijing.volces.com/api/v3"),
         "deepseek" => Some("https://api.deepseek.com/v1"),
@@ -639,11 +652,12 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "ark" => Some("deepseek-v3-2"),
-        "deepseek" | "opencode" => Some("deepseek-v4-flash"),
+        "deepseek" => Some("deepseek-flash"),
+        "opencode" => Some("deepseek-v4-flash"),
         "siliconflow" => Some("Qwen/Qwen2.5-7B-Instruct"),
         "atlascloud" => Some("qwen/qwen3.5-flash"),
         "openai" | "cometapi" => Some("gpt-4o"),
-        "gemini" => Some("gemini-2.5-flash"),
+        "gemini" => Some("gemini-3.5-flash-lite"),
         crate::polish::CODEX_OAUTH_PROVIDER_ID => Some(crate::polish::CODEX_DEFAULT_MODEL),
         "mimo" => Some("xiaomi/mimo-v2-flash"),
         "openrouterFree" => Some("qwen/qwen3-coder:free"),
@@ -737,7 +751,7 @@ pub fn default_omni_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_omni_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "openai" => Some("gpt-4o-audio-preview"),
-        "gemini" => Some("gemini-2.5-flash"),
+        "gemini" => Some("gemini-3.5-flash-lite"),
         "dashscope-omni" => Some("qwen3-omni-flash"),
         _ => None,
     }
@@ -784,13 +798,13 @@ pub fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
 }
 
 pub fn validate_gemini_asr_model(model: &str) -> Result<(), String> {
-    if model.trim().is_empty() || model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+    if model.trim().is_empty() || GEMINI_MODELS.contains(&model.trim()) {
         Ok(())
     } else {
         Err(format!(
             "不支持的 Gemini ASR 模型：{}。当前仅支持 {}",
             model.trim(),
-            crate::asr::gemini::DEFAULT_MODEL
+            GEMINI_MODELS.join("、")
         ))
     }
 }
@@ -833,7 +847,8 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper"
+        "deepseek"
+            | "whisper"
             | "siliconflow"
             | "zhipu"
             | "groq"
@@ -1087,15 +1102,26 @@ pub fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> Advanced
     parse_advanced_asr_config(raw)
 }
 
+/// Providers cap uploads by size (25 MB on Groq's free tier and OpenAI), so a
+/// long dictation sent as one WAV is rejected with 413. Ten minutes of 16 kHz
+/// mono PCM is 19.2 MB, safely under that cap.
+const DEFAULT_BATCH_ASR_CHUNK_MS: u64 = 600_000;
+
 pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) -> Option<u64> {
     match provider_id {
+        "deepseek" => Some(120_000),
         "zhipu" | "openrouter" | "zenmux" => Some(30_000),
-        _ => advanced.chunk_duration_ms,
+        // Preserve the custom provider's "0/blank = send the whole clip" setting.
+        OPENAI_COMPATIBLE_ASR_PROVIDER_ID => advanced.chunk_duration_ms,
+        _ => advanced
+            .chunk_duration_ms
+            .or(Some(DEFAULT_BATCH_ASR_CHUNK_MS)),
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrRequestFormat {
+    DeepSeek,
     Multipart,
     OpenRouterJson,
     ZenMuxJson,
@@ -1103,6 +1129,7 @@ pub enum AsrRequestFormat {
 
 pub fn whisper_request_format(provider_id: &str) -> AsrRequestFormat {
     match provider_id {
+        "deepseek" => AsrRequestFormat::DeepSeek,
         "openrouter" => AsrRequestFormat::OpenRouterJson,
         "zenmux" => AsrRequestFormat::ZenMuxJson,
         _ => AsrRequestFormat::Multipart,
@@ -1294,6 +1321,26 @@ mod tests {
     }
 
     #[test]
+    fn custom_asr_disabled_chunking_keeps_long_recordings_whole() {
+        let pcm = vec![0u8; 32_000 * 660];
+        for raw in [
+            None,
+            Some(""),
+            Some("{}"),
+            Some(r#"{"chunkDurationMs":0}"#),
+            Some(r#"{"chunkDurationMs":null}"#),
+        ] {
+            let advanced = advanced_asr_config_for(OPENAI_COMPATIBLE_ASR_PROVIDER_ID, raw);
+            let limit = batch_asr_chunk_limit_ms(OPENAI_COMPATIBLE_ASR_PROVIDER_ID, advanced);
+            let chunks = crate::asr::whisper::split_pcm_by_duration(&pcm, limit);
+
+            assert_eq!(chunks.len(), 1, "disabled chunking was overridden: {raw:?}");
+            assert_eq!(limit, None);
+            assert_eq!(chunks[0].len(), pcm.len());
+        }
+    }
+
+    #[test]
     fn request_shape_and_timeout_rules_are_stable() {
         assert_eq!(
             whisper_request_format("openrouter"),
@@ -1306,6 +1353,20 @@ mod tests {
         assert_eq!(
             batch_asr_chunk_limit_ms("openrouter", AdvancedAsrConfig::default()),
             Some(30_000)
+        );
+        assert_eq!(
+            batch_asr_chunk_limit_ms("groq", AdvancedAsrConfig::default()),
+            Some(600_000)
+        );
+        assert_eq!(
+            batch_asr_chunk_limit_ms(
+                "openai-compatible",
+                AdvancedAsrConfig {
+                    chunk_duration_ms: Some(45_000),
+                    ..AdvancedAsrConfig::default()
+                }
+            ),
+            Some(45_000)
         );
         assert_eq!(whisper_transcribe_timeout(10.0), Duration::from_secs(30));
         assert_eq!(whisper_transcribe_timeout(60.0), Duration::from_secs(50));
@@ -1348,7 +1409,7 @@ mod tests {
             "https://api.openai.com/v1/chat/completions/",
             default_llm_endpoint("openai").unwrap()
         ));
-        assert_eq!(default_llm_model("gemini"), Some("gemini-2.5-flash"));
+        assert_eq!(default_llm_model("gemini"), Some("gemini-3.5-flash-lite"));
         assert_eq!(
             default_omni_endpoint("dashscope-omni"),
             Some("https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -1480,7 +1541,10 @@ mod tests {
         );
         assert_eq!(
             descriptor.static_models,
-            vec![crate::asr::gemini::DEFAULT_MODEL.to_string()]
+            vec![
+                crate::asr::gemini::DEFAULT_MODEL.to_string(),
+                crate::asr::gemini_live::MODEL.to_string(),
+            ]
         );
         assert_eq!(descriptor.auth_requirement, AuthRequirement::ApiKey);
         assert_eq!(
@@ -1491,7 +1555,12 @@ mod tests {
             resolve_effective_asr_provider("gemini", ""),
             Ok("gemini".to_string())
         );
-        assert!(resolve_effective_asr_provider("gemini", "gemini-3.5-transcribe-live").is_err());
+        for model in GEMINI_MODELS {
+            assert_eq!(
+                resolve_effective_asr_provider("gemini", &format!(" {model} ")),
+                Ok("gemini".to_string())
+            );
+        }
         assert!(resolve_effective_asr_provider("gemini", "unknown").is_err());
     }
 

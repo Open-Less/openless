@@ -9,9 +9,12 @@ pub mod android_types;
 pub mod api;
 pub mod asr;
 pub mod audio;
+pub mod audio_dsp;
+pub use audio_dsp::{AecMode, AudioDspConfig, AudioDspStage, NoiseReduction};
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
+pub use cloud_providers::parse_temperature;
 pub mod cloud_sync;
 pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;
@@ -21,11 +24,13 @@ mod cloud_sync_transaction;
 mod cloud_sync_types;
 mod cloud_sync_validation;
 pub mod coding_agent;
+mod correction_observation;
 pub mod coding_agent_guard;
 pub mod config;
 pub mod correction;
 pub mod credentials;
 pub mod credentials_legacy;
+pub mod deepseek_suite;
 pub mod dictation_context;
 pub mod dictation_engine;
 pub mod domains;
@@ -33,6 +38,7 @@ pub mod edit_plan;
 pub mod endpoint_security;
 pub mod errors;
 pub mod events;
+pub mod expression_observation;
 pub mod experimental_asr;
 pub mod external_audio;
 pub mod history;
@@ -50,13 +56,17 @@ pub mod omni;
 pub mod output_cleaning;
 mod persistence;
 pub mod polish;
+pub mod polish_strategy;
 pub mod ports;
 pub mod preferences;
+mod prompt_cache;
 pub mod prompt_compose;
 pub mod prompts;
 pub mod provider_registry;
 mod provider_resolution;
 pub mod provider_rules;
+pub mod web_search;
+pub mod deepseek_tts;
 mod provider_service;
 pub mod provider_transport;
 pub mod providers;
@@ -68,13 +78,17 @@ mod selection_voice_service;
 pub mod settings;
 pub mod shared_types;
 pub mod silence_auto_stop;
+pub mod siwc;
 pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
 pub mod style_packs;
 pub mod testing;
 pub mod types;
+pub mod usage_ledger;
 pub mod vocabulary;
+pub mod voice_activation;
+mod voice_activation_hotkey;
 pub mod voice_edit_session;
 mod voice_session;
 
@@ -215,14 +229,15 @@ pub mod contract {
 
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
-    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
-    DictationHotkeyEdge, LessComputerHotkeyAction, LessComputerVoiceFinish,
-    LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
-    QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
+    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
+    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
+    LessComputerHotkeyAction, LessComputerVoiceFinish, LessComputerVoiceOptions,
+    LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult, QaVoiceCaptureSession,
+    StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
-    encode_dictation_wav, AudioEnhancer, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
-    PcmNormalizer, DICTATION_SAMPLE_RATE,
+    encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
+    NormalizedPcmChunk, PcmNormalizer, ReferenceAudioBuffer, DICTATION_SAMPLE_RATE,
 };
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,
@@ -292,6 +307,10 @@ pub use model_store::{
     ModelTransport, ModelTransportRequest, ModelTransportResponse, ReqwestModelTransport,
     MODEL_PARTIAL_INDEX, MODEL_READY_SENTINEL,
 };
+pub use polish_strategy::{
+    evaluate as evaluate_polish_strategy, PolishRequestOverrides, PolishStrategyConfig,
+    PolishStrategyDecision, PolishStrategyInput, ReasoningEffort,
+};
 pub use ports::PreparedTranscription;
 pub use ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
@@ -301,8 +320,10 @@ pub use ports::{
     InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
-    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
-    UnsupportedTextInserter, VoiceCapture,
+    TextStreamChunk, TextStreamSink, TranscriptMetadata, TranscriptOutput, TranscriptionEngine,
+    TranscriptionSession, UnsupportedTextInserter, UnsupportedVoiceActivationRuntime,
+    VoiceActivationError, VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink,
+    VoiceCapture, VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -375,6 +396,15 @@ pub use types::{
 pub use vocabulary::{
     builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
     DictionaryStore,
+};
+pub use voice_activation::{
+    normalize_phrase, validate_phrase, PhraseValidationError, VoiceActivationCommand,
+    VoiceActivationConfig, VoiceActivationDecision, VoiceActivationGeneration,
+    VoiceActivationPhase, VoiceActivationSession, VoiceActivationSignal,
+    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceActivationTextPolicy,
+    VoiceCommandMatch, VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE,
+    DEFAULT_TIMEOUT_SECONDS, DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
 };
 pub use voice_edit_session::{
     TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,

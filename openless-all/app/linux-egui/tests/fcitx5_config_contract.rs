@@ -65,6 +65,23 @@ const INPUT_METHOD_CONFIG_DIR: &str = ".config/fcitx5";
 const ENGINE_RESERVED_KEY_SETTING: &str = "QuickPhraseKey";
 
 #[test]
+fn hotkey_registration_clears_the_retired_binding_before_registering_active_keys() {
+    let source =
+        strip_comments(&std::fs::read_to_string(crate_root().join("src/settings.rs")).unwrap());
+    let compact: String = source.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let cleanup = compact
+        .find("tolerate_optional_fcitx_method(apply_action_hotkey(\"SetLessComputerHotkeyRaw\",None))?")
+        .expect("clear the old plugin's persisted Agent key and tolerate only UnknownMethod");
+    let active = compact
+        .find("apply_dictation_hotkey(&target.dictation)?")
+        .unwrap();
+    assert!(
+        cleanup < active,
+        "retire the old binding before reusing its key"
+    );
+}
+
+#[test]
 fn the_host_never_rewrites_the_input_method_configuration() {
     let root = crate_root();
     let mut violations = Vec::new();
@@ -94,7 +111,7 @@ fn the_host_never_rewrites_the_input_method_configuration() {
 fn enter_stop_contract_keeps_the_native_gate_and_gesture_guard() {
     let root = crate_root();
     let source = std::fs::read_to_string(
-        root.join("../../scripts/linux-fcitx5-plugin/openless.cpp"),
+        root.join("../scripts/linux-fcitx5-plugin/openless.cpp"),
     )
     .expect("fcitx5 plugin source");
     for required in [

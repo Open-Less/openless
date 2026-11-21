@@ -13,6 +13,7 @@ pub enum IconName {
     Settings,
     Mic,
     Sparkle,
+    Flask,
     Hash,
     Clock,
     Bolt,
@@ -34,15 +35,23 @@ pub enum IconName {
     Github,
     More,
     ChevronRight,
+    ChevronLeft,
     Feather,
     Layout,
     Doc,
     Pencil,
+    /// 渠道卡片左侧的拖拽手柄（Tauri 用字符 `⠿`；egui 这边用同一套 Lucide
+    /// 图标的 GripVertical，字形风险比外字符小）。
+    Grip,
     Cloud,
     Shield,
     Info,
     Help,
     External,
+    /// Tauri 侧 `Icon name="mac"` 的对位图标。Linux 上原本只给 Less Computer
+    /// 设置页用；该功能整体移除后没有调用点，但 Lucide 同步脚本要求每个图标
+    /// 都有 Rust 分支（`scripts/egui-icons-contract.test.mjs`），所以保留映射。
+    #[allow(dead_code)]
     Monitor,
 }
 
@@ -74,6 +83,7 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
             "Sparkle",
             include_str!("../../../assets/lucide/Sparkle.svg"),
         ),
+        IconName::Flask => ("Flask", include_str!("../../../assets/lucide/Flask.svg")),
         IconName::Hash => ("Hash", include_str!("../../../assets/lucide/Hash.svg")),
         IconName::Clock => ("Clock", include_str!("../../../assets/lucide/Clock.svg")),
         IconName::Bolt => ("Bolt", include_str!("../../../assets/lucide/Bolt.svg")),
@@ -102,6 +112,10 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
             "ChevronRight",
             include_str!("../../../assets/lucide/ChevronRight.svg"),
         ),
+        IconName::ChevronLeft => (
+            "ChevronLeft",
+            include_str!("../../../assets/lucide/ChevronLeft.svg"),
+        ),
         IconName::Feather => (
             "Feather",
             include_str!("../../../assets/lucide/Feather.svg"),
@@ -109,6 +123,7 @@ fn lucide_svg(icon: IconName) -> Option<(&'static str, &'static str)> {
         IconName::Layout => ("Layout", include_str!("../../../assets/lucide/Layout.svg")),
         IconName::Doc => ("Doc", include_str!("../../../assets/lucide/Doc.svg")),
         IconName::Pencil => ("Pencil", include_str!("../../../assets/lucide/Pencil.svg")),
+        IconName::Grip => ("Grip", include_str!("../../../assets/lucide/Grip.svg")),
         IconName::Cloud => ("Cloud", include_str!("../../../assets/lucide/Cloud.svg")),
         IconName::Shield => ("Shield", include_str!("../../../assets/lucide/Shield.svg")),
         IconName::Info => ("Info", include_str!("../../../assets/lucide/Info.svg")),
@@ -138,9 +153,14 @@ fn rasterize_mask(source: &str) -> Option<egui::ColorImage> {
     );
     // tiny-skia returns premultiplied white; ColorImage expects straight RGBA.
     // SVGs contain only white strokes, so opacity is the entire mask.
+    //
+    // 覆盖率做一次 0.75 次幂：Lucide 是 24px 下 2px 描边，缩到 13px 只剩约 1px，
+    // 边缘半透明像素一多，图标看着又细又尖。抬一下 alpha 让笔画更饱满、边缘更圆。
     let mut pixels = Vec::with_capacity(ICON_PIXELS * ICON_PIXELS * 4);
     for pixel in pixmap.data().as_chunks::<4>().0 {
-        pixels.extend_from_slice(&[255, 255, 255, pixel[3]]);
+        let alpha = pixel[3] as f32 / 255.0;
+        let lifted = (alpha.powf(0.75) * 255.0).round().clamp(0.0, 255.0) as u8;
+        pixels.extend_from_slice(&[255, 255, 255, lifted]);
     }
     Some(egui::ColorImage::from_rgba_unmultiplied(
         [ICON_PIXELS, ICON_PIXELS],
@@ -151,6 +171,17 @@ fn rasterize_mask(source: &str) -> Option<egui::ColorImage> {
 /// Draw the same SVG outlines used by Tauri, recolored for this surface.
 /// Texture handles live in egui's context and are reused across frames/windows.
 pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui::Color32) {
+    draw_icon_sized(ui, center, icon, color, ICON_SIZE);
+}
+
+/// Draw an icon at a caller-selected CSS-equivalent size.
+pub fn draw_icon_sized(
+    ui: &egui::Ui,
+    center: egui::Pos2,
+    icon: IconName,
+    color: egui::Color32,
+    size: f32,
+) {
     let Some((name, svg)) = lucide_svg(icon) else {
         // Not part of Icon.tsx: the account avatar fallback is deliberately
         // separate from the monochrome Lucide interface controls.
@@ -160,7 +191,7 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
         return;
     };
     let ctx = ui.ctx();
-    let id = egui::Id::new(("lucide-icon", name));
+    let id = egui::Id::unique(("lucide-icon", name));
     let texture = ctx
         .data(|data| data.get_temp::<egui::TextureHandle>(id))
         .or_else(|| {
@@ -176,7 +207,7 @@ pub fn draw_icon(ui: &egui::Ui, center: egui::Pos2, icon: IconName, color: egui:
     if let Some(texture) = texture {
         ui.painter().image(
             texture.id(),
-            egui::Rect::from_center_size(center, egui::vec2(ICON_SIZE, ICON_SIZE)),
+            egui::Rect::from_center_size(center, egui::vec2(size, size)),
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
             color,
         );
@@ -198,6 +229,7 @@ mod tests {
             IconName::Settings,
             IconName::Mic,
             IconName::Sparkle,
+            IconName::Flask,
             IconName::Hash,
             IconName::Clock,
             IconName::Bolt,
@@ -217,6 +249,7 @@ mod tests {
             IconName::Chat,
             IconName::More,
             IconName::ChevronRight,
+            IconName::ChevronLeft,
             IconName::Feather,
             IconName::Layout,
             IconName::Doc,

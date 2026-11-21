@@ -1,6 +1,7 @@
 import { invokeOrMock, isTauriNow } from './shared';
+import { getCloudSyncPreview } from '../../preview/cloud-sync';
 
-export const CLOUD_SYNC_E2EE_CONSENT_VERSION = 'encrypted-full-snapshot-v1';
+export const CLOUD_SYNC_E2EE_CONSENT_VERSION = 'encrypted-full-snapshot-v2';
 
 export type EncryptedSyncState =
   | 'disabled'
@@ -58,6 +59,7 @@ export interface RestorePreview {
 
 export interface EncryptedSyncEventScope {
   sequence: string;
+  serviceOrigin: string;
   accountId: string | null;
   vaultId: string | null;
   taskId: string | null;
@@ -73,8 +75,7 @@ export interface EncryptedSyncRestoreEvent extends EncryptedSyncEventScope {
   uiPreferences: Record<string, string>;
 }
 
-// Browser previews have neither a native vault nor a verified GitHub session.
-// Never invent an enabled/unlocked/successful state in the preview adapter.
+// Only explicitly selected preview scenarios simulate cloud sync.
 function unavailable(): never {
   throw Object.assign(new Error('cloud_sync_e2ee_unavailable'), {
     code: 'unsupported',
@@ -82,54 +83,96 @@ function unavailable(): never {
   });
 }
 
+function previewCloudSync() {
+  return getCloudSyncPreview(CLOUD_SYNC_E2EE_CONSENT_VERSION, syncPasswordMeetsBasicRequirements);
+}
+
 export const cloudSyncE2eeStatus = (): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_status', undefined, unavailable);
+  invokeOrMock('cloud_sync_e2ee_status', undefined, () => previewCloudSync()?.status() ?? unavailable());
+export const cloudSyncE2eeRefreshBackupMetadata = (): Promise<EncryptedSyncStatus> =>
+  invokeOrMock('cloud_sync_e2ee_refresh_backup_metadata', undefined, () =>
+    previewCloudSync()?.refreshBackupMetadata() ?? unavailable(),
+  );
 export const cloudSyncE2eeClaimSetupPrompt = (): Promise<boolean> =>
-  invokeOrMock('cloud_sync_e2ee_claim_setup_prompt', undefined, unavailable);
-export const cloudSyncE2eePrepareEnable = (consentVersion: string): Promise<EnablePreparation> =>
-  invokeOrMock('cloud_sync_e2ee_prepare_enable', { consentVersion }, unavailable);
+  invokeOrMock('cloud_sync_e2ee_claim_setup_prompt', undefined, () =>
+    previewCloudSync() ? false : unavailable(),
+  );
+export interface ConsentScope {
+  serviceOrigin: string;
+  accountId: string | null;
+  vaultId: string | null;
+}
+export const cloudSyncE2eePrepareEnable = (
+  consentVersion: string,
+  expectedScope?: ConsentScope,
+): Promise<EnablePreparation> =>
+  invokeOrMock(
+    'cloud_sync_e2ee_prepare_enable',
+    { consentVersion, ...(expectedScope ? { expectedScope } : {}) },
+    () => previewCloudSync()?.prepare(consentVersion, expectedScope) ?? unavailable(),
+  );
 export const cloudSyncE2eeCreate = (input: {
   password: string;
   passwordConfirmation: string;
   rememberKey: boolean;
   consentVersion: string;
   observedRevision: string;
-}): Promise<EncryptedSyncStatus> => invokeOrMock('cloud_sync_e2ee_create', input, unavailable);
+}): Promise<EncryptedSyncStatus> => invokeOrMock('cloud_sync_e2ee_create', input, () =>
+    previewCloudSync()?.create(input) ?? unavailable(),
+  );
 export const cloudSyncE2eeUnlock = (input: {
   password: string;
   rememberKey: boolean;
-}): Promise<EncryptedSyncStatus> => invokeOrMock('cloud_sync_e2ee_unlock', input, unavailable);
+}): Promise<EncryptedSyncStatus> => invokeOrMock('cloud_sync_e2ee_unlock', input, () =>
+    previewCloudSync()?.unlock(input.password) ?? unavailable(),
+  );
 export const cloudSyncE2eeLock = (): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_lock', undefined, unavailable);
+  invokeOrMock('cloud_sync_e2ee_lock', undefined, () =>
+    previewCloudSync()?.lock() ?? unavailable(),
+  );
 export const cloudSyncE2eeSetEnabled = (enabled: boolean): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_set_enabled', { enabled }, unavailable);
+  invokeOrMock('cloud_sync_e2ee_set_enabled', { enabled }, () =>
+    previewCloudSync()?.setEnabled(enabled) ?? unavailable(),
+  );
 export const cloudSyncE2eeSyncNow = (): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_sync_now', undefined, unavailable);
+  invokeOrMock('cloud_sync_e2ee_sync_now', undefined, () =>
+    previewCloudSync()?.sync() ?? unavailable(),
+  );
 export const cloudSyncE2eeCancel = (taskId: string): Promise<EncryptedSyncStatus> =>
   invokeOrMock('cloud_sync_e2ee_cancel', { taskId }, unavailable);
 export const cloudSyncE2eePreviewRestore = (observedRevision: string): Promise<RestorePreview> =>
-  invokeOrMock('cloud_sync_e2ee_preview_restore', { observedRevision }, unavailable);
+  invokeOrMock('cloud_sync_e2ee_preview_restore', { observedRevision }, () =>
+    previewCloudSync()?.previewRestore(observedRevision) ?? unavailable(),
+  );
 export const cloudSyncE2eeApplyRestore = (input: {
   previewId: string;
   mode: 'replace' | 'merge';
   conflictChoices: SyncConflictChoice[];
 }): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_apply_restore', input, unavailable);
+  invokeOrMock('cloud_sync_e2ee_apply_restore', input, () =>
+    previewCloudSync()?.applyRestore(input.previewId) ?? unavailable(),
+  );
 export const cloudSyncE2eeChangePassword = (input: {
   currentPassword: string;
   newPassword: string;
   confirmation: string;
   rememberKey: boolean;
 }): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_change_password', input, unavailable);
+  invokeOrMock('cloud_sync_e2ee_change_password', input, () =>
+    previewCloudSync()?.changePassword(input.currentPassword, input.newPassword, input.confirmation) ?? unavailable(),
+  );
 export const cloudSyncE2eeDeleteRemote = (input: {
   expectedVaultId: string;
   observedRevision: string;
   confirmed: boolean;
 }): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_delete_remote', input, unavailable);
+  invokeOrMock('cloud_sync_e2ee_delete_remote', input, () =>
+    previewCloudSync()?.deleteRemote(input.expectedVaultId, input.observedRevision, input.confirmed) ?? unavailable(),
+  );
 export const cloudSyncE2eeSignOut = (): Promise<EncryptedSyncStatus> =>
-  invokeOrMock('cloud_sync_e2ee_sign_out', undefined, unavailable);
+  invokeOrMock('cloud_sync_e2ee_sign_out', undefined, () =>
+    previewCloudSync()?.signOut() ?? unavailable(),
+  );
 export const cloudSyncE2eeConfigureServer = (input: {
   origin: string | null;
   token: string;
@@ -143,7 +186,10 @@ export const cloudSyncE2eeGetUiPreferences = (): Promise<{
 } | null> => invokeOrMock('cloud_sync_e2ee_get_ui_preferences', undefined, unavailable);
 
 export async function mirrorEncryptedSyncUiPreferences(): Promise<void> {
-  if (!isTauriNow()) unavailable();
+  if (!isTauriNow()) {
+    if (previewCloudSync()) return;
+    unavailable();
+  }
   const { flushEncryptedSyncUiPreferences } = await import('../encryptedSyncUiBridge');
   await flushEncryptedSyncUiPreferences();
 }
@@ -171,6 +217,7 @@ export function matchesEncryptedSyncEvent(
     incoming !== null &&
     previous !== null &&
     incoming > previous &&
+    event.serviceOrigin === status.serviceOrigin &&
     event.accountId === (status.account?.githubId ?? null) &&
     event.vaultId === status.vaultId &&
     (!requireTask || event.taskId === status.taskId)
@@ -204,6 +251,7 @@ const errorKeys = {
   rate_limited: 'rateLimited',
   service_failed: 'network',
   outcome_unknown: 'outcomeUnknown',
+  delete_pending_operation: 'deletePendingOperation',
   recovery_required: 'recovery',
   local_storage_unavailable: 'recovery',
   sync_journal_unavailable: 'recovery',

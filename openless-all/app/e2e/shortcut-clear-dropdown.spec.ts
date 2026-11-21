@@ -1,4 +1,6 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
+import { openMicrophoneSettings } from './support/navigation';
 
 test('every configurable shortcut can be cleared and stays clear after remount', async ({
   page,
@@ -18,7 +20,8 @@ test('every configurable shortcut can be cleared and stays clear after remount',
     await clear.click();
     await expect(row.locator('.ol-shortcut-binding')).toHaveText('＋');
   }
-  await page.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await page.getByRole('button', { name: '通用', exact: true }).click();
+  await openMicrophoneSettings(page);
   await expect(page.locator('.ol-shortcut-binding').first()).toHaveText('＋');
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
   for (let index = 0; index < count; index++) {
@@ -41,11 +44,12 @@ test('every configurable shortcut can be cleared and stays clear after remount',
 });
 
 for (const scale of [0.9, 1, 1.1]) {
-  test(`standard and searchable menus open below at ${scale * 100}%`, async ({ page }) => {
+  test(`standard and searchable menus open below at ${Math.round(scale * 100)}%`, async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 1100, height: 1200 });
-    await page.goto('http://127.0.0.1:5326/e2e/fixtures/refinements.html');
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/refinements.html`);
     await page.evaluate((scale) => {
-      document.documentElement.style.zoom = String(scale);
       document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
       document.querySelector('main')!.style.minHeight = '100vh';
     }, scale);

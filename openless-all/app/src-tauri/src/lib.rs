@@ -29,7 +29,6 @@ mod audio_mute;
 #[cfg(test)]
 mod build_target;
 mod cli;
-mod coding_agent;
 #[cfg(not(mobile))]
 mod combo_hotkey;
 #[cfg(mobile)]
@@ -40,11 +39,17 @@ mod coordinator;
 mod coordinator_state;
 mod core_adapters;
 mod correction;
+mod desktop_resources;
 #[cfg(target_os = "macos")]
 mod macos_dictation_key;
 #[cfg(target_os = "macos")]
 mod macos_streaming_input;
+#[cfg(not(mobile))]
+mod native_audio_cue;
+#[cfg(not(mobile))]
+mod native_capsule;
 mod qa_adapter;
+mod recording_companion;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // 仅桌面端。详见 issue #470。
@@ -65,7 +70,10 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+mod issue1266_debug;
 mod llm_gemini;
+#[cfg(target_os = "macos")]
+mod macos_capsule_input;
 #[cfg(mobile)]
 mod mobile_runtime;
 #[cfg(not(mobile))]
@@ -102,13 +110,17 @@ mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
+#[cfg(target_os = "android")]
+mod style_zip_transfer;
 mod tauri_events;
+mod tls_crypto;
 mod types;
 #[cfg(not(mobile))]
 mod unicode_keystroke;
 #[cfg(mobile)]
 #[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
+mod update_source;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 mod windows_ime_profile;
@@ -159,6 +171,15 @@ static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static QA_WINDOW_CREATE_LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn qa_window_create_lock() -> &'static parking_lot::Mutex<()> {
+    QA_WINDOW_CREATE_LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
+
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
@@ -197,26 +218,39 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    issue1266_debug::initialize();
+    tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
     // system credential vault, but exercises the actual shared/native engines.
     // This entry point does not exist in production release builds.
     #[cfg(all(debug_assertions, target_os = "macos", target_arch = "aarch64"))]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--openless-local-asr-check")) {
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--openless-local-asr-check"))
+    {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         if !(args.len() == 2 || (args.len() == 3 && args[2] == "--download")) {
             eprintln!("usage: openless --openless-local-asr-check <isolated openless-asr-acceptance* directory> <16kHz mono WAV> [--download]");
             std::process::exit(2);
         }
-        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("acceptance runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("acceptance runtime");
         match runtime.block_on(crate::asr::local::experimental::acceptance::run(
-            args[0].clone().into(), args[1].clone().into(), args.len() == 3,
+            args[0].clone().into(),
+            args[1].clone().into(),
+            args.len() == 3,
         )) {
             Ok(()) => return,
-            Err(error) => { eprintln!("local ASR acceptance failed: {error:#}"); std::process::exit(1); }
+            Err(error) => {
+                eprintln!("local ASR acceptance failed: {error:#}");
+                std::process::exit(1);
+            }
         }
     }
     // Old installations/launchers must not revive the retired native worker.
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--openless-mlx-worker")) {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--openless-mlx-worker"))
+    {
         eprintln!("Legacy local ASR worker has been retired");
         return;
     }
@@ -234,9 +268,14 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            get_capsule_auxiliary_snapshot,
             commands::get_capsule_snapshot,
+            commands::get_dictation_translation_target,
+            commands::select_dictation_translation_target,
+            commands::set_capsule_language_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
+            commands::get_voice_activation_state,
             commands::update_setting_fields,
             commands::get_default_style_system_prompts,
             commands::set_settings,
@@ -248,8 +287,11 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_update_channel,
             commands::fetch_latest_beta_release,
             commands::app_check_update_with_channel,
+            commands::app_update_github_fallback,
             commands::check_network,
             commands::take_splash_playback,
+            commands::get_desktop_onboarding_state,
+            commands::set_desktop_onboarding_finished,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
             commands::set_shortcut_recording_active,
@@ -275,6 +317,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::delete_history_entry,
             commands::clear_history,
             commands::get_activity_stats,
+            commands::get_activity_apps,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -297,6 +340,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::cloud_sync_restore,
             commands::cloud_sync_delete,
             commands::cloud_sync_e2ee_status,
+            commands::cloud_sync_e2ee_refresh_backup_metadata,
             commands::cloud_sync_e2ee_claim_setup_prompt,
             commands::cloud_sync_e2ee_prepare_enable,
             commands::cloud_sync_e2ee_create,
@@ -325,6 +369,10 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_vocab_enabled,
             commands::update_vocab,
             commands::list_correction_rules,
+            commands::get_expression_profile,
+            commands::clear_expression_profile,
+            commands::get_service_usage,
+            commands::clear_service_usage,
             commands::add_correction_rule,
             commands::remove_correction_rule,
             commands::set_correction_rule_enabled,
@@ -345,13 +393,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::voice_edit_window_open,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
-            coding_agent::commands::coding_agent_detect,
-            coding_agent::commands::coding_agent_detect_opencode,
-            coding_agent::commands::coding_agent_detect_cli,
-            coding_agent::commands::coding_agent_list_opencode_models,
-            coding_agent::commands::coding_agent_run_test,
-            coding_agent::commands::coding_agent_cancel_test,
-            coding_agent::commands::coding_agent_command_risk,
+            #[cfg(target_os = "macos")]
+            macos_capsule_input::set_capsule_interactive_regions,
             commands::handle_window_hotkey_event,
             #[cfg(debug_assertions)]
             commands::inject_hotkey_click_for_dev,
@@ -421,26 +464,24 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
+            commands::qa_cancel_turn,
+            commands::qa_stop_recording,
             commands::qa_window_set_expanded,
             commands::qa_get_snapshot,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
+            commands::deepseek_tts_start,
+            commands::deepseek_tts_stop,
             commands::qa_set_edit_instruction_mode,
-            commands::less_computer_window_dismiss,
-            commands::less_computer_window_open,
             commands::chat_panel_focus_keyboard,
-            commands::less_computer_submit_text,
-            commands::less_computer_sync,
-            commands::less_computer_approve,
-            commands::less_computer_voice_start,
-            commands::less_computer_voice_stop,
-            commands::less_computer_voice_cancel,
-            commands::less_computer_task_cancel,
             commands::validate_combo_hotkey,
             commands::set_combo_hotkey,
             commands::list_provider_descriptors,
             commands::validate_provider_credentials,
             commands::list_provider_models,
+            commands::siwc_status,
+            commands::siwc_models,
+            commands::siwc_action,
             commands::experimental_asr_status,
             commands::experimental_asr_set_enabled,
             commands::experimental_asr_delete,
@@ -518,6 +559,8 @@ macro_rules! app_invoke_handler_desktop {
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,
+            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+            issue1266_health,
             set_windows_caption_theme,
         ]
     };
@@ -531,12 +574,17 @@ macro_rules! app_invoke_handler_mobile {
         tauri::generate_handler![
             $crate::commands::get_startup_snapshot,
             $crate::commands::get_settings,
+            $crate::commands::get_android_audio_effects_status,
+            $crate::commands::set_android_audio_monitoring,
             $crate::commands::get_settings_snapshot,
+            $crate::commands::get_voice_activation_state,
             $crate::commands::update_setting_fields,
             $crate::commands::get_default_style_system_prompts,
             $crate::commands::set_settings,
             $crate::commands::check_network,
             $crate::commands::take_splash_playback,
+            $crate::commands::get_desktop_onboarding_state,
+            $crate::commands::set_desktop_onboarding_finished,
             $crate::commands::get_platform_capabilities,
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
@@ -571,10 +619,14 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::list_provider_descriptors,
             $crate::commands::validate_provider_credentials,
             $crate::commands::list_provider_models,
+            $crate::commands::siwc_status,
+            $crate::commands::siwc_models,
+            $crate::commands::siwc_action,
             $crate::commands::list_history,
             $crate::commands::delete_history_entry,
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
+            $crate::commands::get_activity_apps,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -597,6 +649,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::cloud_sync_restore,
             $crate::commands::cloud_sync_delete,
             $crate::commands::cloud_sync_e2ee_status,
+            $crate::commands::cloud_sync_e2ee_refresh_backup_metadata,
             $crate::commands::cloud_sync_e2ee_claim_setup_prompt,
             $crate::commands::cloud_sync_e2ee_prepare_enable,
             $crate::commands::cloud_sync_e2ee_create,
@@ -626,6 +679,10 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_vocab_enabled,
             $crate::commands::update_vocab,
             $crate::commands::list_correction_rules,
+            $crate::commands::get_expression_profile,
+            $crate::commands::clear_expression_profile,
+            $crate::commands::get_service_usage,
+            $crate::commands::clear_service_usage,
             $crate::commands::add_correction_rule,
             $crate::commands::remove_correction_rule,
             $crate::commands::set_correction_rule_enabled,
@@ -646,10 +703,14 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::voice_edit_window_open,
             $crate::commands::voice_edit_window_close,
             $crate::commands::qa_window_dismiss,
+            $crate::commands::qa_cancel_turn,
+            $crate::commands::qa_stop_recording,
             $crate::commands::qa_window_set_expanded,
             $crate::commands::qa_get_snapshot,
             $crate::commands::qa_toggle_recording,
             $crate::commands::qa_submit_text,
+            $crate::commands::deepseek_tts_start,
+            $crate::commands::deepseek_tts_stop,
             $crate::commands::qa_set_edit_instruction_mode,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
@@ -679,6 +740,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_update_channel,
             $crate::commands::fetch_latest_beta_release,
             $crate::commands::app_check_update_with_channel,
+            $crate::commands::app_update_github_fallback,
             $crate::commands::app_download_and_install_android_update,
             $crate::restart_app,
             $crate::reset_accessibility_permission_and_restart_app,
@@ -758,6 +820,12 @@ macro_rules! app_invoke_handler_mobile {
     };
 }
 
+#[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+#[tauri::command]
+fn issue1266_health() -> issue1266_debug::Health {
+    issue1266_debug::health()
+}
+
 #[cfg(not(mobile))]
 fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _cwd: String) {
     if let Some(intent) = cli::parse_cli_intent(&argv) {
@@ -782,6 +850,23 @@ fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _
     show_main_window(app);
 }
 
+fn permission_requires_visible_start(
+    accessibility: permissions::PermissionStatus,
+    microphone: permissions::PermissionStatus,
+) -> bool {
+    let accessibility_missing = !matches!(
+        accessibility,
+        permissions::PermissionStatus::Granted | permissions::PermissionStatus::NotApplicable
+    );
+    let microphone_missing = !matches!(
+        microphone,
+        permissions::PermissionStatus::Granted
+            | permissions::PermissionStatus::NotApplicable
+            | permissions::PermissionStatus::NoDevice
+    );
+    accessibility_missing || microphone_missing
+}
+
 #[cfg(not(mobile))]
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
@@ -798,6 +883,8 @@ fn run_desktop() {
     let core_backend = coordinator.backend();
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
+    let mut context = tauri::generate_context!();
+    desktop_resources::configure(&mut context, false);
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
     // non-activating NSPanel (a plain NSWindow cannot do this even with collectionBehavior —
@@ -818,6 +905,7 @@ fn run_desktop() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .manage(desktop_resources::MainWindowLifecycle::default())
         .manage(coordinator.clone())
         .manage(core_backend.clone())
         .manage(foundry_local_runtime.clone())
@@ -878,46 +966,37 @@ fn run_desktop() {
             // — saving 3 resident webviews. Positioning and the QA drag fix are applied in
             // the creation/show paths.
 
-            // Main-window frosted material: NSVisualEffectView on macOS, Mica on Windows.
-            // Without this layer, transparent: true makes the window see-through to
-            // nothing instead of frosted glass.
+            // Main-window material: Mica on Windows. macOS deliberately applies no
+            // NSVisualEffectView: the React shell (WindowChrome, --ol-window-bg) paints a fully
+            // opaque surface over the whole content view, so a HudWindow/Active effect view would
+            // be invisible yet keep a live behind-window blur compositing on every frame. The
+            // native title bar style (Overlay + traffic lights) comes from tauri.conf.json at
+            // window creation; do not call set_decorations here (tao no-ops it when unchanged).
             //
             // decorations is decided per-platform at runtime: macOS keeps true for the
             // system traffic lights; Windows disables native chrome so the React
             // WinTitleBar takes over.
+            // Set the native appearance before showing any window, including
+            // launches where the main WebView does not exist yet.
+            #[cfg(target_os = "macos")]
+            app.set_theme(match coordinator.backend().get_preferences().theme_mode {
+                types::ThemeMode::System => None,
+                types::ThemeMode::Light => Some(tauri::Theme::Light),
+                types::ThemeMode::Dark => Some(tauri::Theme::Dark),
+            });
             if let Some(main) = app.get_webview_window("main") {
+                desktop_resources::initialize_main(&main);
                 #[cfg(target_os = "macos")]
-                {
-                    use window_vibrancy::{
-                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-                    };
-                    if let Err(e) = main.set_decorations(true) {
-                        log::warn!("[main] enable native decorations failed: {e}");
-                    }
-                    if let Err(e) = apply_vibrancy(
-                        &main,
-                        NSVisualEffectMaterial::HudWindow,
-                        Some(NSVisualEffectState::Active),
-                        Some(20.0),
-                    ) {
-                        log::warn!("[main] vibrancy failed: {e}");
-                    }
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    use window_vibrancy::apply_mica;
-                    // Windows uses Tauri decorations:true for the native Win11 title bar /
-                    // close button / dragging / rounded corners / resize border. Keep
-                    // apply_mica to give the native chrome a frosted material; combined
-                    // with WindowChrome's translucent background it lets the sidebar show
-                    // through with a glassy feel.
-                    if let Err(e) = apply_mica(&main, None) {
-                        log::warn!("[main] mica failed: {e}");
-                    }
-                    // Win11 22H2+: sync the native title bar theme; the frontend calls
-                    // set_windows_caption_theme again once ready. Silently no-ops on
-                    // older Windows.
-                    apply_windows_caption_theme(&main, false);
+                let permission_recovery_required = permission_requires_visible_start(
+                    permissions::check_accessibility(),
+                    permissions::check_microphone(),
+                );
+                #[cfg(not(target_os = "macos"))]
+                let permission_recovery_required = false;
+                if permission_recovery_required {
+                    log::info!(
+                        "[main] permission recovery required → showing main window despite start_minimized"
+                    );
                 }
                 // Silent-start switch: prefs.start_minimized = true → don't pop the main
                 // window; the user reaches it from the menu bar / tray. Especially useful
@@ -927,13 +1006,21 @@ fn run_desktop() {
                 let force_show =
                     std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
                 let suppress_show = !force_show && coordinator.startup_error().is_none()
-                    && coordinator.backend().get_preferences().start_minimized;
+                    && coordinator.backend().get_preferences().start_minimized
+                    && !permission_recovery_required;
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }
+                }
+            }
+
+            if desktop_resources::active() {
+                let force_show = std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
+                if force_show || coordinator.startup_error().is_some() || !coordinator.backend().get_preferences().start_minimized {
+                    show_main_window(app.handle());
                 }
             }
 
@@ -972,7 +1059,7 @@ fn run_desktop() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
-                        "quit" => app.exit(0),
+                        "quit" => request_quit(app),
                         id => {
                             if handle_style_tray_menu_event(app, id) {
                                 return;
@@ -996,6 +1083,7 @@ fn run_desktop() {
                 start_tray_microphone_watcher(app.handle().clone());
             } else {
                 log::warn!("[startup] default window icon missing; tray icon disabled");
+                show_main_window(app.handle());
             }
 
             // Bind recovery effects before Core startup; the Ready handler
@@ -1025,20 +1113,26 @@ fn run_desktop() {
             Ok(())
         })
         .invoke_handler(app_invoke_handler_desktop!())
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
-        .run(|app, event| match event {
+        .run(|app, event| {
+            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+            observe_issue1266_lifecycle(&event);
+            match event {
             RunEvent::Ready => {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.start_hotkey_supervisors_when_ready();
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
+            RunEvent::ExitRequested { code: None, api, .. } if desktop_resources::active() => api.prevent_exit(),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
                     if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
                         api.prevent_close();
                         hide_main_window(app);
+                    } else if matches!(event, tauri::WindowEvent::Destroyed) {
+                        desktop_resources::main_destroyed(app);
                     }
                 }
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1060,6 +1154,7 @@ fn run_desktop() {
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
+                coordinator.tauri_host().stop_native_capsule();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
@@ -1076,7 +1171,42 @@ fn run_desktop() {
                 });
             }
             _ => {}
+            }
         });
+}
+
+#[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+fn observe_issue1266_lifecycle(event: &RunEvent) {
+    use issue1266_debug::{Event, Facts, Kind, Operation, Outcome, Probe};
+    let (event, kind) = match event {
+        RunEvent::Ready => (Event::Ready, Kind::None),
+        RunEvent::ExitRequested { .. } => (Event::ExitRequested, Kind::None),
+        RunEvent::Exit => (Event::Exit, Kind::None),
+        RunEvent::WindowEvent { label, event, .. } => {
+            let event = match event {
+                tauri::WindowEvent::CloseRequested { .. } => Event::CloseRequested,
+                tauri::WindowEvent::Destroyed => Event::Destroyed,
+                _ => return,
+            };
+            let kind = match label.as_str() {
+                "main" => Kind::MainWindow,
+                "qa" => Kind::QaWindow,
+                "capsule" => Kind::CapsuleWindow,
+                "less-computer" => Kind::LessWindow,
+                _ => Kind::OtherWindow,
+            };
+            (event, kind)
+        }
+        _ => return,
+    };
+    Operation::new(Probe::P6).record(
+        event,
+        Outcome::Observed,
+        Facts {
+            kind,
+            ..Facts::default()
+        },
+    );
 }
 
 #[cfg(not(mobile))]
@@ -1596,13 +1726,21 @@ fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     };
 
     let coord = app.state::<Arc<coordinator::Coordinator>>();
-    if let Err(err) = coord
-        .backend()
-        .select_microphone_device(selected.device_name.clone())
-    {
+    let backend = coord.backend();
+    if let Err(err) = backend.select_microphone_device(selected.device_name.clone()) {
         log::warn!("[tray] save microphone preference failed: {err}");
         return;
     }
+    commands::sync_low_latency_capture_preferences(&backend.get_preferences());
+    let selected_device_name = selected.device_name.clone();
+    let backend_for_reconfigure = Arc::clone(&backend);
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = backend_for_reconfigure.configure_voice_activation().await {
+            log::warn!(
+                "[tray] reconfigure microphone-dependent voice runtime for {selected_device_name:?} failed: {err}"
+            );
+        }
+    });
 
     commands::sync_tray_microphone_selection(&items, &selected.device_name);
 }
@@ -1721,10 +1859,43 @@ fn set_windows_caption_theme(app: AppHandle, dark: bool) {
 
 #[tauri::command]
 fn restart_app(app: AppHandle) {
+    // The main-thread restart path skips the RunEvent::Exit handlers; stop the
+    // disposable capsule explicitly. The child also self-closes when the
+    // inherited pipe hits EOF, so an exit here can never orphan it.
+    #[cfg(not(mobile))]
+    if let Some(coordinator) = app.try_state::<Arc<coordinator::Coordinator>>() {
+        coordinator.tauri_host().stop_native_capsule();
+    }
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_for_beta_restart();
-    app.restart();
+    restart_on_main_thread(app);
+}
+
+/// `AppHandle::restart` from a command thread routes through
+/// `ExitRequested { code: None }` can be intercepted by the desktop lifecycle;
+/// hopping to the main thread takes Tauri's direct spawn-and-exit path instead.
+fn restart_on_main_thread(app: AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || handle.restart());
+}
+
+/// How long a tray-initiated quit may take before the process is forced down.
+/// Once the tray callback runs, the watchdog bounds a stalled exit (#1337).
+/// The callback itself still needs a responsive event loop to arm the watchdog.
+const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Arm the fallback before requesting graceful exit on explicit user intent.
+fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    std::thread::spawn(|| {
+        std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
+        // Keep the deadline path independent of application locks: synchronous
+        // logging can block on I/O, and AppHandle::exit can enter synchronous
+        // cleanup if sending the exit request fails. A healthy exit never
+        // reaches here.
+        std::process::exit(0);
+    });
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -1790,7 +1961,13 @@ fn reset_tcc_for_beta_restart() {
     // Beta builds are currently ad-hoc signed. Their code hash changes across builds, so
     // old TCC rows can leave System Settings checked while AXIsProcessTrusted() is false.
     reset_tcc_service_for_restart("Accessibility", "beta ad-hoc identity refresh");
-    reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    // A granted microphone must survive the restart. Resetting it marks that grant missing.
+    let microphone = permissions::check_microphone();
+    if permissions::should_reset_microphone_tcc(microphone) {
+        reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    } else {
+        log::info!("[tcc] microphone already granted; skipping TCC reset");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1799,7 +1976,7 @@ fn is_beta_build() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn reset_tcc_service_for_restart(service: &str, reason: &str) {
+pub(crate) fn reset_tcc_service_for_restart(service: &str, reason: &str) {
     match std::process::Command::new("/usr/bin/tccutil")
         .args(["reset", service, OPENLESS_BUNDLE_ID])
         .status()
@@ -1921,7 +2098,17 @@ pub fn log_dir_path() -> std::path::PathBuf {
 
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_window_mode(app);
-    if let Some(w) = app.get_webview_window("main") {
+    #[cfg(not(mobile))]
+    let main = match desktop_resources::ensure_main(app) {
+        Ok(window) => window,
+        Err(error) => {
+            log::error!("[main] recreate failed: {error}");
+            None
+        }
+    };
+    #[cfg(mobile)]
+    let main = app.get_webview_window("main");
+    if let Some(w) = main {
         let _ = w.show();
         #[cfg(not(mobile))]
         let _ = w.unminimize();
@@ -2001,6 +2188,25 @@ pub(crate) fn request_microphone_from_foreground<R: Runtime>(
 }
 
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(not(mobile))]
+    {
+        // The main editor is an infrequent surface. Destroy its WebView when the
+        // user closes it so WebKit can release its content process and memory;
+        // tray/menu actions recreate it through ensure_main on the next open.
+        desktop_resources::close_main(app);
+        let app_for_preview = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(state) = app_for_preview.try_state::<commands::MicrophoneMonitorState>() {
+                let _operation = state.operation.lock();
+                if let Some(recorder) = state.recorder.lock().take() {
+                    recorder.stop();
+                }
+                crate::recorder::warm_capture_hub().end_preview();
+            }
+        });
+        activate_menu_bar_mode(app);
+        return;
+    }
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
@@ -2110,12 +2316,16 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
-/// QA starts as a small composer and grows downwards after a question.
+/// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 560.0;
-/// Gap between the capsule and the QA window; matches the design spec.
-const QA_WINDOW_GAP_TO_CAPSULE: f64 = 8.0;
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 720.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 380.0;
+/// Reserve room for the independent recording capsule and its context badge.
+const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
+/// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
+const QA_WINDOW_EXPANDED_BOTTOM_INSET: f64 = 132.0;
+const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2643,12 +2853,11 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let Some((frame, scale)) = chat_window_work_area(window, true)? else {
         return Ok(());
     };
-    let capsule_height = capsule_height_for_qa();
     let (x, y) = bottom_center_position(
         frame,
         QA_WINDOW_WIDTH,
-        QA_WINDOW_EXPANDED_HEIGHT,
-        capsule_height + QA_WINDOW_GAP_TO_CAPSULE,
+        QA_WINDOW_HEIGHT,
+        QA_WINDOW_BOTTOM_INSET,
     );
     window.set_position(tauri::PhysicalPosition::new(
         (x * scale).round() as i32,
@@ -2659,6 +2868,29 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
         (QA_WINDOW_HEIGHT * scale).round() as u32,
     ))?;
     Ok(())
+}
+
+// Preserve a dragged window's centre and baseline; repeated result events must not drift.
+fn qa_resize_origin(
+    x: f64,
+    y: f64,
+    old_width: f64,
+    old_height: f64,
+    width: f64,
+    height: f64,
+    was_expanded: bool,
+    expanded: bool,
+) -> (f64, f64) {
+    let lift = if expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 }
+        - if was_expanded {
+            QA_RESULT_BOTTOM_LIFT
+        } else {
+            0.0
+        };
+    (
+        x + (old_width - width) / 2.0,
+        y + old_height - height - lift,
+    )
 }
 
 /// Called on the native main thread by the restricted QA command. The compact
@@ -2680,23 +2912,48 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .inner_position()
         .map_err(|_| "qa_geometry_unavailable")?
         .to_logical::<f64>(scale);
-    let mut width = QA_WINDOW_WIDTH;
+    let current_size = window
+        .inner_size()
+        .map_err(|_| "qa_geometry_unavailable")?
+        .to_logical::<f64>(scale);
+    let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
+    let mut width = if expanded {
+        QA_WINDOW_EXPANDED_WIDTH
+    } else {
+        QA_WINDOW_WIDTH
+    };
     let mut height = if expanded {
         QA_WINDOW_EXPANDED_HEIGHT
     } else {
         QA_WINDOW_HEIGHT
     };
-    let (mut x, mut y) = (position.x, position.y);
     if let Some((frame, _)) = area {
         width = width.min((frame.width - 32.0).max(240.0));
         height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
+    }
+    let (mut x, mut y) = qa_resize_origin(
+        position.x,
+        position.y,
+        current_size.width,
+        current_size.height,
+        width,
+        height,
+        was_expanded,
+        expanded,
+    );
+    if let Some((frame, _)) = area {
         x = x.clamp(
             frame.x + 16.0,
             (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
         );
+        let bottom_inset = if expanded {
+            QA_WINDOW_EXPANDED_BOTTOM_INSET
+        } else {
+            QA_WINDOW_BOTTOM_INSET
+        };
         y = y.clamp(
             frame.y + 32.0,
-            (frame.y + frame.height - height - 16.0).max(frame.y + 32.0),
+            (frame.y + frame.height - height - bottom_inset).max(frame.y + 32.0),
         );
     }
     window
@@ -2837,6 +3094,9 @@ fn make_chat_window_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow
             // Floating level (NSFloatingWindowLevel): above normal windows, below the
             // menu bar / capsule (25).
             panel.set_level(3);
+            if tag == "qa" {
+                panel.set_hides_on_deactivate(false);
+            }
             panel.set_collection_behaviour(
                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
@@ -2902,6 +3162,9 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
 /// at creation time here, otherwise the lazily created QA window can't be dragged on macOS.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    // ShowQa can arrive concurrently from independent Core workflows. Keep the existing-window
+    // lookup and first build in one critical section so two callers cannot create two qa HWNDs.
+    let _creation_guard = qa_window_create_lock().lock();
     if let Some(w) = app.get_webview_window("qa") {
         return Some(w);
     }
@@ -3396,7 +3659,11 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
         let result = app_for_show
             .try_state::<Arc<openless_core::OpenLessBackend>>()
             .ok_or_else(|| "Backend is not initialized".to_string())
-            .and_then(|backend| backend.ensure_testing_features_enabled().map_err(|error| error.message))
+            .and_then(|backend| {
+                backend
+                    .ensure_testing_features_enabled()
+                    .map_err(|error| error.message)
+            })
             .and_then(|()| {
                 window.show().map_err(|error| {
                     log::warn!("[less-computer] show failed: {error}");
@@ -3405,12 +3672,15 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
             });
         if result.is_ok() {
             LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-            let _ = app_for_show.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+            let _ =
+                app_for_show.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
         }
         let _ = result_tx.send(result);
     })
     .map_err(|error| format!("Less Computer window show dispatch failed: {error}"))?;
-    result_rx.recv().map_err(|error| format!("Less Computer window show task failed: {error}"))?
+    result_rx
+        .recv()
+        .map_err(|error| format!("Less Computer window show task failed: {error}"))?
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -3492,6 +3762,8 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 /// Pure multi-monitor capsule helpers (tests run on every CI host). Window creation
 /// inside the module stays `cfg(windows)`.
 mod capsule_mirrors;
+mod capsule_feedback;
+mod vocab_card_placement;
 
 /// Init and card-return paths use the default stage; the recording display path passes the
 /// current style explicitly.
@@ -3711,21 +3983,17 @@ fn capsule_visual_height(_translation_active: bool) -> f64 {
     140.0
 }
 
-fn capsule_height_for_qa() -> f64 {
-    capsule_visual_height(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_center_position, capsule_height_for_qa, capsule_visual_height,
-        capsule_window_bounds, capsule_window_bounds_for_style,
-        capsule_window_bounds_for_style_with_transcript,
+        bottom_center_position, capsule_visual_height, capsule_window_bounds,
+        capsule_window_bounds_for_style, capsule_window_bounds_for_style_with_transcript,
         capsule_window_bounds_for_style_with_transcript_and_translation, clamp_to_monitor,
         frame_contains_point, frame_distance_to_point_squared, logical_monitor_frame,
-        parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
-        tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
-        LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
+        parse_tray_style_pack_menu_id, permission_requires_visible_start,
+        resolve_tray_style_pack_id, rotate_log_if_too_large, tray_style_menu_enabled,
+        tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame, TrayLabels,
+        LOG_ROTATE_LIMIT_BYTES,
     };
     #[cfg(target_os = "macos")]
     use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
@@ -3733,6 +4001,28 @@ mod tests {
         builtin_style_pack_for_mode, CapsuleStyle, PolishMode, StylePack, StylePackKind,
     };
     use std::io::Write;
+
+    #[test]
+    fn missing_mac_permissions_override_silent_start() {
+        use crate::permissions::PermissionStatus;
+
+        assert!(permission_requires_visible_start(
+            PermissionStatus::Denied,
+            PermissionStatus::Granted,
+        ));
+        assert!(permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NotDetermined,
+        ));
+        assert!(!permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NoDevice,
+        ));
+        assert!(!permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NotApplicable,
+        ));
+    }
 
     #[test]
     fn tray_style_menu_is_windows_only() {
@@ -3997,8 +4287,18 @@ mod tests {
     }
 
     #[test]
-    fn qa_anchor_uses_normal_capsule_height_source() {
-        assert_eq!(capsule_height_for_qa(), 140.0);
+    fn qa_resize_preserves_centre_baseline_and_user_position() {
+        let expanded =
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 720.0, 380.0, false, true);
+        assert_eq!(expanded, (-820.0, 360.0));
+        assert_eq!(
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 720.0, 380.0, true, true),
+            expanded
+        );
+        assert_eq!(
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 480.0, 80.0, true, false),
+            (-700.0, 700.0)
+        );
     }
 
     #[test]
@@ -4238,4 +4538,17 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Cards can be created after their first event was emitted. Replay their state
+/// after the frontend subscribes, rather than losing a passage on cold start.
+#[cfg(not(mobile))]
+#[tauri::command]
+fn get_capsule_auxiliary_snapshot(
+    coord: tauri::State<'_, Arc<coordinator::Coordinator>>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "suggestions": coord.backend().pending_corrections(),
+        "fallback": coord.tauri_host().auxiliary_fallback_snapshot(),
+    })
 }

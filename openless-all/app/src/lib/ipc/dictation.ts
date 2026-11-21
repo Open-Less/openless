@@ -1,21 +1,31 @@
+import { previewHistory } from '../../preview/history';
 import { isDesktop } from './platform-exports';
-import { invokeOrMock, platformCapabilities } from './shared';
+import { invokeOrMock, isTauriNow, platformCapabilities, requireBackendReady } from './shared';
 import type { CapsuleSnapshot } from '../types';
 
 export function startDictation(): Promise<void> {
-  return invokeOrMock('start_dictation', undefined, () => undefined);
+  return invokeOrMock('start_dictation', undefined, () => {
+    previewHistory.startRecording();
+  });
 }
 
 export function stopDictation(): Promise<void> {
-  return invokeOrMock('stop_dictation', undefined, () => undefined);
+  return invokeOrMock('stop_dictation', undefined, () => previewHistory.stopRecording());
 }
 
 export function cancelDictation(): Promise<void> {
-  return invokeOrMock('cancel_dictation', undefined, () => undefined);
+  return invokeOrMock('cancel_dictation', undefined, () => previewHistory.cancelRecording());
 }
 
-export function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
-  if (!isDesktop()) return Promise.resolve();
+export async function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
+  if (!isDesktop()) return;
+  if (isTauriNow()) {
+    await requireBackendReady();
+    const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+    // Mirrors render the shared transcript but never own the primary rail's native layout.
+    // This also prevents a retained/closing mirror's cleanup from hiding the active rail.
+    if (getCurrentWebviewWindow().label !== 'capsule') return;
+  }
   return invokeOrMock('set_capsule_transcript_visible', { visible }, () => undefined);
 }
 
@@ -41,4 +51,29 @@ export function handleWindowHotkeyEvent(
       () => undefined,
     );
   });
+}
+
+export interface DictationTranslationTarget {
+  sessionId: string;
+  targetLanguage: string;
+  workingLanguages: string[];
+  mutable: boolean;
+}
+
+export function getDictationTranslationTarget(): Promise<DictationTranslationTarget | null> {
+  return invokeOrMock('get_dictation_translation_target', undefined, () => null);
+}
+
+export function selectDictationTranslationTarget(
+  sessionId: string,
+  targetLanguage: string,
+): Promise<DictationTranslationTarget> {
+  return invokeOrMock('select_dictation_translation_target', { sessionId, targetLanguage }, () => {
+    throw new Error('No active native recording');
+  });
+}
+
+/** Reserve native headroom for the shared Base UI popup; close is session-bound. */
+export function setCapsuleLanguageMenu(open: boolean, sessionId: string): Promise<void> {
+  return invokeOrMock('set_capsule_language_menu', { open, sessionId }, () => undefined);
 }

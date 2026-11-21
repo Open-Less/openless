@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "macos-native-theme",
+  "description": "Let the main window synchronize native appearance with the user's theme preference",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["core:app:allow-set-app-theme"]
+}

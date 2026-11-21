@@ -12,7 +12,8 @@ export type AuthRequirement =
   | 'volcengine'
   | 'xfyun'
   | 'tencent_cloud'
-  | 'o_auth';
+  | 'o_auth'
+  | 'siwc';
 
 export interface ProviderDescriptor {
   kind: ProviderKind;

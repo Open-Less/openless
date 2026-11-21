@@ -1,11 +1,36 @@
 use super::*;
 
 #[tauri::command]
+pub fn get_android_audio_effects_status() -> serde_json::Value {
+    #[cfg(target_os = "android")]
+    {
+        crate::recorder::android_capture::status()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        serde_json::json!({"aecAvailable": false, "noiseSuppressionAvailable": false, "agcAvailable": false, "runtime": null})
+    }
+}
+
+#[tauri::command]
+pub fn set_android_audio_monitoring(enabled: bool) {
+    #[cfg(target_os = "android")]
+    crate::recorder::android_capture::set_monitoring(enabled);
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+}
+
+#[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
     let mut prefs = core.get_preferences();
     prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
     sync_low_latency_capture_preferences(&prefs);
     prefs
+}
+
+#[tauri::command]
+pub fn get_voice_activation_state(core: CoreState<'_>) -> Option<openless_core::VoiceActivationStateSnapshot> {
+    core.latest_voice_activation_state()
 }
 
 #[tauri::command]
@@ -219,19 +244,58 @@ pub(crate) fn persist_strict_settings(
 }
 
 #[cfg(target_os = "windows")]
-fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
-    crate::recorder::warm_capture_hub().configure(
-        prefs.low_latency_dictation_enabled,
+pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
+    let warm_hub = crate::recorder::warm_capture_hub();
+    warm_hub.configure(
+        crate::recorder::warm_capture_enabled(
+            prefs.low_latency_dictation_enabled,
+            warm_hub.activation_is_active(),
+        ),
         (!prefs.microphone_device_name.trim().is_empty())
             .then(|| prefs.microphone_device_name.clone()),
         openless_core::AudioProcessingConfig {
             enhancement_enabled: prefs.audio_enhancement_enabled,
+            echo_cancellation_enabled: prefs.echo_cancellation_enabled,
+            dsp: prefs.audio_dsp,
         },
     );
 }
 
 #[cfg(not(target_os = "windows"))]
-fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
+pub(crate) fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
+
+fn voice_activation_preferences_changed(
+    previous: &UserPreferences,
+    next: &UserPreferences,
+) -> bool {
+    previous.voice_activation_enabled != next.voice_activation_enabled
+        || previous.voice_activation_hotkey_linked != next.voice_activation_hotkey_linked
+        || previous.voice_activation_wake_enabled != next.voice_activation_wake_enabled
+        || previous.voice_activation_finish_enabled != next.voice_activation_finish_enabled
+        || previous.voice_activation_wake_phrase != next.voice_activation_wake_phrase
+        || previous.voice_activation_finish_phrase != next.voice_activation_finish_phrase
+        || previous.voice_activation_timeout_enabled != next.voice_activation_timeout_enabled
+        || previous.voice_activation_timeout_seconds != next.voice_activation_timeout_seconds
+        || previous.microphone_device_name != next.microphone_device_name
+}
+
+fn validate_voice_activation_preferences(prefs: &UserPreferences) -> Result<(), String> {
+    openless_core::VoiceActivationConfig {
+        enabled: prefs.voice_activation_enabled,
+        wake_enabled: prefs.voice_activation_wake_enabled,
+        finish_enabled: prefs.voice_activation_finish_enabled,
+        wake_phrase: prefs.voice_activation_wake_phrase.clone(),
+        finish_phrase: prefs.voice_activation_finish_phrase.clone(),
+        timeout_enabled: prefs.voice_activation_timeout_enabled,
+        timeout_seconds: prefs.voice_activation_timeout_seconds,
+        microphone_device_name: (!prefs.microphone_device_name.trim().is_empty())
+            .then(|| prefs.microphone_device_name.clone()),
+        activation_generation: 0,
+    }
+    .normalized()
+    .map(|_| ())
+    .map_err(|error| format!("invalid voice activation settings: {error}"))
+}
 
 async fn invalidate_llm_tests_if_thinking_changed(
     coord: &Coordinator,
@@ -269,6 +333,7 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    validate_voice_activation_preferences(&prefs)?;
     invalidate_llm_tests_if_thinking_changed(&coord, &remote_prev, &prefs).await?;
     // Persist changed fields and notify every WebView through the shared settings path.
     if let Some(edits) = edits {
@@ -278,6 +343,11 @@ pub async fn set_settings(
     }
     let prefs = coord.backend().get_preferences();
     sync_low_latency_capture_preferences(&prefs);
+    if voice_activation_preferences_changed(&remote_prev, &prefs) {
+        if let Err(error) = coord.backend().configure_voice_activation().await {
+            log::warn!("[voice-activation] settings reconfiguration failed: {error}");
+        }
+    }
     // Sync the capsule-style atom on save: the next recording's entrance frame carries the
     // new style instead of depending on emit_capsule's ~30Hz main-thread closure sync (a
     // congested Windows main thread delays the closure → the whole session shows the old
@@ -345,6 +415,7 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    validate_voice_activation_preferences(&prefs)?;
     invalidate_llm_tests_if_thinking_changed(&coord, &previous, &prefs).await?;
     if let Some(edits) = edits {
         persist_setting_fields(&coord, &edits)?;
@@ -353,8 +424,12 @@ pub async fn set_settings(
     }
     let prefs = coord.backend().get_preferences();
     sync_low_latency_capture_preferences(&prefs);
-    // Sync the capsule-style atom on save (same source as the Android notification capsule
-    // payload; see emit_capsule).
+    if voice_activation_preferences_changed(&previous, &prefs) {
+        if let Err(error) = coord.backend().configure_voice_activation().await {
+            log::warn!("[voice-activation] settings reconfiguration failed: {error}");
+        }
+    }
+    // Sync the capsule-style atom on save (same source as the Android notification capsule payload; see emit_capsule).
     coord.sync_capsule_style_from_preferences();
     // Rebuild the client connection pool immediately when the system-proxy switch changes (issue #869).
     if previous.use_system_proxy != prefs.use_system_proxy {
@@ -468,6 +543,28 @@ mod tests {
 
         assert_eq!(stale_payload.update_channel, UpdateChannel::Stable);
         assert!(stale_payload.update_channel_explicit);
+    }
+
+    #[test]
+    fn android_update_url_validation_requires_exact_https_release_hosts() {
+        assert!(is_allowed_android_update_url(
+            "https://dl.aeoform.com/releases/v2.0.2-tauri/OpenLess_aarch64.app.tar.gz"
+        ));
+        assert!(is_allowed_android_update_url(
+            "https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk"
+        ));
+        assert!(is_allowed_android_update_url(
+            "https://fastgit.cc/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk"
+        ));
+        assert!(!is_allowed_android_update_url(
+            "https://dl.aeoform.com@attacker.example/package.apk"
+        ));
+        assert!(!is_allowed_android_update_url(
+            "https://dl.aeoform.com.attacker.example/package.apk"
+        ));
+        assert!(!is_allowed_android_update_url(
+            "http://dl.aeoform.com/releases/v2.0.2-tauri/OpenLess.apk"
+        ));
     }
 }
 
@@ -642,20 +739,21 @@ fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {
 // ─────────────────────── Channel-aware updater check ────────────────────────
 //
 // Replaces the frontend's previous direct import('@tauri-apps/plugin-updater').check() path:
-// - Stable channel: the builder keeps tauri.conf's stable manifest URL endpoints untouched.
-// - Beta channel: fetch_latest_beta_release gets the latest prerelease tag, builds the -beta
-//   manifest URL (as a mirror + direct pair), then
+// - Stable channel: the builder keeps tauri.conf's Stable manifest endpoint untouched, which
+//   is `https://dl.aeoform.com/updates/stable/latest-{{target}}-{{arch}}.json`.
+// - Beta channel: swap in `https://dl.aeoform.com/updates/beta/...-beta.json` through
 //   builder.endpoints(vec![url])?.build()?.check().
+//
+// Manifests live on the project CDN instead of the GitHub Release assets (see
+// `crate::update_source`), so a release no longer accumulates fourteen `latest-*.json` copies.
+// The channel split is now a URL *path* (`/updates/stable/` vs `/updates/beta/`) instead of a
+// filename suffix, and artifact URLs inside the manifest point at the same CDN — a Stable
+// client can never reach a Beta package, and mainland-China downloads never touch github.com.
 //
 // The returned Metadata shape exactly matches plugin-updater's JS UpdateMetadata (rid +
 // currentVersion and other camelCase fields), so the frontend can call
 // `new Update(metadata)` directly and reuse the plugin's download / install / close
 // implementations instead of writing our own download and signature verification.
-//
-// Physical isolation: manifests published from Beta tags carry a `-beta` filename suffix
-// (see the comment at line 382 of release-tauri.yml), separate from Stable's
-// `latest-{tgt}-{arch}.json` in the GitHub Release assets — even if buggy code passed a
-// Beta URL to a Stable user, HTTP returns 404 outright; the wrong artifact is unreachable.
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -672,7 +770,7 @@ pub struct AppUpdateMetadata {
     pub raw_json: serde_json::Value,
 }
 
-/// Resolves the manifest source, then runs plugin-updater's standard check flow.
+/// Resolves the update endpoint, then runs plugin-updater's standard check flow.
 /// Channel: uses an explicitly passed `channel` (the About page always checks Stable, the
 /// advanced page's Beta section checks Beta); when absent, uses the user's explicit
 /// channel choice; when none chosen yet, follows the current build type.
@@ -689,25 +787,77 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 
     let prefs = coord.backend().get_preferences();
     let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
-    let mut builder = webview.updater_builder();
-    if let Some(ms) = timeout_ms {
-        builder = builder.timeout(std::time::Duration::from_millis(ms));
-    }
-    if matches!(channel, UpdateChannel::Beta) {
-        let urls = resolve_beta_manifest_endpoints().await?;
-        builder = builder
-            .endpoints(urls)
-            .map_err(|e| format!("set beta endpoints: {e}"))?;
-    }
+    let check_timeout =
+        std::time::Duration::from_millis(timeout_ms.unwrap_or(8000).clamp(1000, 15000));
+    let builder = webview
+        .updater_builder()
+        .timeout(check_timeout)
+        .endpoints(vec![url::Url::parse(
+            &crate::update_source::endpoint_template(channel),
+        )
+        .map_err(|e| e.to_string())?])
+        .map_err(|e| e.to_string())?;
     let updater = builder.build().map_err(|e| format!("build updater: {e}"))?;
-    let update = updater
-        .check()
+    let (mirror, github) = tokio::join!(updater.check(), async {
+        tokio::time::timeout(check_timeout, async {
+            let manifest = crate::update_source::github_manifest(channel).await?;
+            updater.restore_update(manifest).map_err(|e| e.to_string())
+        })
         .await
-        .map_err(|e| format!("check update failed: {e}"))?;
-
-    let Some(update) = update else {
+        .map_err(|_| "GitHub update check timed out".to_string())?
+    });
+    // Official CDN (`mirror`) and GitHub are both checked. A newer semver wins
+    // even when the other side is missing or not newer than the installed build.
+    // Equal versions are chosen by estimated download time.
+    let update = match (mirror, github) {
+        (Ok(Some(mirror)), Ok(Some(github))) => {
+            let equal = semver::Version::parse(&mirror.version)
+                .ok()
+                .zip(semver::Version::parse(&github.version).ok())
+                .is_some_and(|(mirror_version, github_version)| {
+                    mirror_version.cmp_precedence(&github_version).is_eq()
+                });
+            let samples = if equal {
+                tokio::join!(
+                    crate::update_source::probe_download(&mirror.download_url),
+                    crate::update_source::probe_download(&github.download_url)
+                )
+            } else {
+                (None, None)
+            };
+            match crate::update_source::choose_release(
+                &mirror.version,
+                &github.version,
+                samples.0,
+                samples.1,
+            )? {
+                crate::update_source::ReleaseSource::Mirror => Some(mirror),
+                crate::update_source::ReleaseSource::Github => Some(github),
+            }
+        }
+        (Ok(Some(update)), Ok(None) | Err(_)) => Some(update),
+        (Ok(None) | Err(_), Ok(Some(update))) => Some(update),
+        (Ok(None), Ok(None) | Err(_)) | (Err(_), Ok(None)) => None,
+        (Err(mirror), Err(github)) => {
+            return Err(format!("official update source: {mirror}; GitHub: {github}"))
+        }
+    };
+    let Some(mut update) = update else {
         return Ok(None);
     };
+    // PR #1399's source policy, without giving up independent GitHub discovery.
+    // Preserve the same version/signature even if the rolling CDN manifest lags.
+    let chosen =
+        crate::update_source::resolve_artifact_download_url(update.download_url.as_str()).await;
+    update.download_url = url::Url::parse(&chosen).map_err(|e| e.to_string())?;
+    update.raw_json["url"] = serde_json::Value::String(chosen);
+    update.timeout = Some(std::time::Duration::from_secs(
+        if update.download_url.host_str() == Some("dl.aeoform.com") {
+            120
+        } else {
+            600
+        },
+    ));
     // Passing through the date field would require the time crate; the frontend
     // AutoUpdate.tsx never uses date, so set it to None here and avoid pulling a new dep
     // into src-tauri/Cargo.toml.
@@ -722,28 +872,52 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
     Ok(Some(metadata))
 }
 
-/// Builds the -beta manifest URL pair from the latest prerelease tag found by
-/// fetch_latest_beta_release.
-/// Order: mirror first (fastgit.cc proxies GitHub), then direct — matching tauri.conf's
-/// existing Stable endpoints so mainland-China access hits the CDN first.
+/// Retry only the exact stored signed artifact, never re-discover a different version.
+#[tauri::command]
 #[cfg(not(mobile))]
-async fn resolve_beta_manifest_endpoints() -> Result<Vec<url::Url>, String> {
-    let Some(latest) = fetch_latest_beta_release().await? else {
-        return Err("尚未发布过 Beta 版本".to_string());
-    };
-    let tag = latest.tag_name;
-    // {{target}} / {{arch}} placeholders are substituted by the plugin at check time. A
-    // Rust raw string (r#""#) needs no escaped double braces and is cleaner than format!-ing
-    // the literal.
-    let mirror = format!(
-        "https://fastgit.cc/https://github.com/Open-Less/openless/releases/download/{tag}/latest-{{{{target}}}}-{{{{arch}}}}-beta-mirror.json"
-    );
-    let direct = format!(
-        "https://github.com/Open-Less/openless/releases/download/{tag}/latest-{{{{target}}}}-{{{{arch}}}}-beta.json"
-    );
-    let mirror_url = url::Url::parse(&mirror).map_err(|e| format!("parse beta mirror url: {e}"))?;
-    let direct_url = url::Url::parse(&direct).map_err(|e| format!("parse beta direct url: {e}"))?;
-    Ok(vec![mirror_url, direct_url])
+pub async fn app_update_github_fallback<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    rid: tauri::ResourceId,
+) -> Result<AppUpdateMetadata, String> {
+    let resource = webview
+        .resources_table()
+        .get::<tauri_plugin_updater::Update>(rid)
+        .map_err(|e| e.to_string())?;
+    let mut update = (*resource).clone();
+    let fallback =
+        crate::update_source::github_fallback_for_cdn_artifact(update.download_url.as_str())
+            .ok_or("No GitHub fallback for this update source")?;
+    update.download_url = url::Url::parse(&fallback).map_err(|e| e.to_string())?;
+    update.raw_json["url"] = serde_json::Value::String(fallback);
+    update.timeout = Some(std::time::Duration::from_secs(600));
+    Ok(AppUpdateMetadata {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date: None,
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    })
+}
+
+#[tauri::command]
+#[cfg(mobile)]
+pub async fn app_update_github_fallback(rid: u32) -> Result<AppUpdateMetadata, String> {
+    let _ = rid;
+    Err("Desktop-only update retry".into())
+}
+
+/// The Beta manifest endpoint, with `{{target}}` / `{{arch}}` left in place for
+/// `tauri-plugin-updater` to substitute at check time.
+///
+/// Beta is a URL *path* on the CDN (`/updates/beta/`), so there is no tag discovery step and
+/// no dependency on `releases.atom` or the GitHub Release assets.
+#[cfg(not(mobile))]
+fn beta_manifest_endpoint() -> Result<url::Url, String> {
+    let template = crate::update_source::endpoint_template(UpdateChannel::Beta);
+    // `url` percent-encodes the `{{target}}` / `{{arch}}` braces; the plugin substitutes both
+    // the literal and the `%7B%7B…%7D%7D` form, so either spelling works at check time.
+    url::Url::parse(&template).map_err(|e| format!("parse beta manifest url: {e}"))
 }
 
 #[cfg(mobile)]
@@ -766,6 +940,27 @@ pub async fn app_check_update_with_channel(
     }
 }
 
+fn is_allowed_android_update_url(raw: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(raw) else {
+        return false;
+    };
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+    {
+        return false;
+    }
+    match (parsed.host_str(), parsed.path()) {
+        (Some("dl.aeoform.com"), path) => path.starts_with("/releases/"),
+        (Some("github.com"), path) => path.starts_with("/Open-Less/openless/releases/"),
+        (Some("fastgit.cc"), path) => {
+            path.starts_with("/https://github.com/Open-Less/openless/releases/")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn app_download_and_install_android_update(
@@ -774,12 +969,9 @@ pub async fn app_download_and_install_android_update(
     signature: String,
     version: String,
 ) -> Result<(), String> {
-    // Security: validate the URL before downloading to prevent SSRF (e.g. intranet metadata
-    // endpoints, localhost services). Only the known GitHub direct links and the fastgit
-    // mirror prefix are allowed.
-    const DIRECT_BASE: &str = "https://github.com/Open-Less/openless";
-    const MIRROR_BASE: &str = "https://fastgit.cc/https://github.com/Open-Less/openless";
-    if !url.starts_with(DIRECT_BASE) && !url.starts_with(MIRROR_BASE) {
+    // Parse and validate the host before downloading so userinfo and hostname-prefix tricks
+    // cannot turn the signed update fetch into an SSRF primitive.
+    if !is_allowed_android_update_url(&url) {
         return Err(format!("不信任的更新 URL，拒绝下载: {url}"));
     }
     #[cfg(target_os = "android")]

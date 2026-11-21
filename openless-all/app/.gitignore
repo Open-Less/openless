@@ -9,3 +9,6 @@ dist/
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+
+# Generated native capsule sidecars
+src-tauri/binaries/

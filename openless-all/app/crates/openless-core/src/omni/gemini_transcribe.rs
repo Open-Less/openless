@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use super::OmniConfig;
 use crate::asr::gemini::{CancelOnDrop, GeminiBatchASR, TranscriptionMode};
-use crate::config::{TaskSpawner, TokioTaskSpawner};
+use crate::asr::gemini_live::{GeminiLiveASR, GeminiLiveConfig};
+use crate::config::TaskSpawner;
 use crate::polish::LLMError;
+use crate::ports::{AudioConsumer, TextStreamChunk, TextStreamSink};
 
 /// Uses the dedicated audio API instead of Gemini's general-purpose chat API.
 pub struct GeminiTranscribeOmni {
@@ -17,10 +19,6 @@ pub struct GeminiTranscribeOmni {
 }
 
 impl GeminiTranscribeOmni {
-    pub fn new(config: OmniConfig) -> Self {
-        Self::with_task_spawner(config, Arc::new(TokioTaskSpawner))
-    }
-
     pub(crate) fn with_task_spawner(
         config: OmniConfig,
         task_spawner: Arc<dyn TaskSpawner>,
@@ -36,6 +34,28 @@ impl GeminiTranscribeOmni {
     pub fn set_hints(&mut self, languages: &[String], hotwords: &[String]) {
         self.languages = languages.to_vec();
         self.hotwords = hotwords.to_vec();
+    }
+
+    /// Start a Smart session during recording; batch models have no live session.
+    pub async fn start_live(
+        &self,
+        partials: Arc<dyn TextStreamSink>,
+    ) -> Result<Option<Arc<GeminiLiveASR>>, LLMError> {
+        if self.config.model.trim() != crate::asr::gemini_live::MODEL {
+            return Ok(None);
+        }
+        let config = GeminiLiveConfig {
+            api_key: self.config.api_key.clone(),
+            base_url: self.config.base_url.clone(),
+            languages: self.languages.clone(),
+            hotwords: self.hotwords.clone(),
+            mode: TranscriptionMode::Smart,
+            extra_headers: self.config.extra_headers.clone(),
+        };
+        GeminiLiveASR::connect(config, partials, Arc::clone(&self.task_spawner))
+            .await
+            .map(Some)
+            .map_err(|error| LLMError::Network(error.to_string()))
     }
 
     /// Smart mode supplies its own cleanup rules. The API rejects system instructions.
@@ -56,6 +76,26 @@ impl GeminiTranscribeOmni {
                 "Gemini Transcribe supports dictation only; choose a general-purpose model for Q&A"
                     .into(),
             ));
+        }
+        if self.config.model.trim() == crate::asr::gemini_live::MODEL {
+            let pcm = crate::audio::decode_dictation_wav(wav)
+                .map_err(|error| LLMError::ParseError(error.to_string()))?;
+            if pcm.len() > 32_000 * 600 {
+                return Err(LLMError::ParseError(
+                    "Gemini Live recordings are limited to 10 minutes".into(),
+                ));
+            }
+            let provider = self
+                .start_live(Arc::new(DiscardLivePreview))
+                .await?
+                .expect("Live model creates a Live session");
+            // The bounded queue also accepts a complete recording for Verify and retries.
+            provider.consume_pcm_chunk(pcm);
+            return provider
+                .finish()
+                .await
+                .map(|result| result.text)
+                .map_err(|error| LLMError::Network(error.to_string()));
         }
         let provider = Arc::new(
             GeminiBatchASR::new(
@@ -119,6 +159,14 @@ impl GeminiTranscribeOmni {
             on_delta(&text);
         }
         Ok(text)
+    }
+}
+
+struct DiscardLivePreview;
+
+impl TextStreamSink for DiscardLivePreview {
+    fn publish(&self, _: TextStreamChunk) -> Result<(), crate::BackendError> {
+        Ok(())
     }
 }
 

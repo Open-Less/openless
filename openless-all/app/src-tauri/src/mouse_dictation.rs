@@ -232,6 +232,7 @@ fn match_modifier_states(required: &[String], down: [bool; 4]) -> bool {
 
 /// Dispatch a Mouse4 / Mouse5 edge into the active monitor (if any).
 pub fn handle_button(primary: &str, pressed: bool) {
+    crate::recording_companion::event(primary, pressed);
     let Some(normalized) = normalize_mouse_primary(primary) else {
         return;
     };

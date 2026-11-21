@@ -27,16 +27,14 @@
 //! X11 mutation goes through the [`OverlayX11`] trait so the request sequence
 //! can be asserted without an X server.
 
-/// Capsule window size (the 176×42 pill plus room for the translate badge).
-pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (200, 100);
+/// Tauri's 460×180 Siri canvas plus the 40px raw-transcript rail and 8px gap.
+/// Classic/Typeless still paint at the bottom; phases never resize the host.
+pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (460, 228);
 /// Gap between the capsule pill and the bottom of the work area — Tauri's
 /// `EDGE_GAP` for the classic / siri capsule styles.
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
 /// Selection-ask panel size (the chat panel) — Tauri `qa` window is 420×540.
 pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
-/// Less Computer panel size — Tauri `less-computer` is 420×540, the same
-/// footprint as the selection-ask panel.
-pub const LESS_COMPUTER_WINDOW_SIZE: (u32, u32) = (420, 540);
 // 旧的独立润色预览窗口（Tauri `selection-polish-preview` 640×440 / min 480×320）
 // 连同 `PREVIEW_WINDOW_SIZE`、`PREVIEW_MIN_SIZE` 一起下线，Tauri 侧的独立窗口也已
 // 删除：润色结果现在由选区助手面板（420×540）承载，见 `HostToPopup::PolishPreview`。
@@ -47,7 +45,6 @@ pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
     match kind {
         PopupKind::Capsule => CAPSULE_WINDOW_SIZE,
         PopupKind::Qa => QA_WINDOW_SIZE,
-        PopupKind::LessComputer => LESS_COMPUTER_WINDOW_SIZE,
     }
 }
 
@@ -68,7 +65,6 @@ pub fn popup_position(
     match kind {
         PopupKind::Capsule => environment.position_for(CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
         PopupKind::Qa => environment.centred_for(QA_WINDOW_SIZE),
-        PopupKind::LessComputer => environment.centred_for(LESS_COMPUTER_WINDOW_SIZE),
     }
 }
 
@@ -300,6 +296,52 @@ impl OverlayPlacement {
     pub fn applied(&self) -> bool {
         self.window.is_some()
     }
+}
+
+/// Place an interactive panel in the requested work area without changing its
+/// focus or taskbar policy. This is only a best-effort X11 post-map correction:
+/// Wayland clients cannot choose an xdg-toplevel position.
+pub fn place_panel(
+    x11: &mut dyn OverlayX11,
+    pid: u32,
+    environment: &OverlayEnvironment,
+    kind: crate::popup::PopupKind,
+) -> OverlayPlacement {
+    let mut placement = OverlayPlacement::default();
+    let (window, matched) = match x11.find_own_window(pid) {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            placement
+                .warnings
+                .push("own X11 window not found yet".to_string());
+            return placement;
+        }
+        Err(error) => {
+            placement
+                .warnings
+                .push(format!("window lookup failed: {error}"));
+            return placement;
+        }
+    };
+    placement.window = Some(window);
+    placement.matched = Some(matched);
+
+    if let Err(error) = x11.mark_self_placed(window) {
+        placement
+            .warnings
+            .push(format!("position hint failed: {error}"));
+    }
+    if let Some(position) = popup_position(environment, kind) {
+        match x11.move_window(window, position) {
+            Ok(()) => placement.moved_to = Some(position),
+            Err(error) => placement.warnings.push(format!("move failed: {error}")),
+        }
+    } else {
+        placement
+            .warnings
+            .push("no usable work area or monitor".to_string());
+    }
+    placement
 }
 
 /// Point the popup's own X11 window at the bottom centre of the work area and
@@ -971,13 +1013,8 @@ mod tests {
     #[test]
     fn popup_size_maps_every_kind() {
         assert_eq!(popup_size(PopupKind::Capsule), CAPSULE_WINDOW_SIZE);
+        assert_eq!(CAPSULE_WINDOW_SIZE, (460, 228));
         assert_eq!(popup_size(PopupKind::Qa), QA_WINDOW_SIZE);
-        // Tauri 的 `less-computer` 窗口与 qa 同为 420×540。
-        assert_eq!(
-            popup_size(PopupKind::LessComputer),
-            LESS_COMPUTER_WINDOW_SIZE
-        );
-        assert_eq!(LESS_COMPUTER_WINDOW_SIZE, (420, 540));
     }
 
     /// The capsule hugs the bottom edge of the work area, centred.
@@ -985,7 +1022,7 @@ mod tests {
     fn popup_position_puts_the_capsule_at_the_bottom_centre() {
         assert_eq!(
             popup_position(&environment(), PopupKind::Capsule),
-            Some((860, 968))
+            Some((730, 840))
         );
     }
 
@@ -1029,7 +1066,7 @@ mod tests {
         assert_eq!(popup_position(&environment, PopupKind::Qa), Some((0, 0)),);
         assert_eq!(
             popup_position(&environment, PopupKind::Capsule),
-            Some((100, 188)),
+            Some((0, 60)),
         );
     }
 
@@ -1052,18 +1089,36 @@ mod tests {
                 "window_type(42)",
                 "self_placed(42)",
                 "states(42)",
-                "move(42,860,968)",
+                "move(42,730,840)",
                 "active_window",
                 "focus(64)", // 0x40
             ]
         );
         assert_eq!(placement.window, Some(0x2a));
         assert_eq!(placement.matched, Some(WindowMatch::Pid));
-        assert_eq!(placement.moved_to, Some((860, 968)));
+        assert_eq!(placement.moved_to, Some((730, 840)));
         assert!(placement.focus_was_stolen);
         assert!(placement.focus_restored);
         assert!(placement.warnings.is_empty());
         assert!(placement.applied());
+    }
+
+    #[test]
+    fn place_panel_moves_without_changing_focus_or_overlay_state() {
+        let mut x11 = FakeX11 {
+            window: Some(0x2a),
+            ..Default::default()
+        };
+        let placement = place_panel(&mut x11, 4242, &environment(), PopupKind::Qa);
+        assert_eq!(
+            x11.calls,
+            vec!["find(4242)", "self_placed(42)", "move(42,750,270)"]
+        );
+        assert_eq!(placement.window, Some(0x2a));
+        assert_eq!(placement.moved_to, Some((750, 270)));
+        assert!(!placement.focus_was_stolen);
+        assert!(!placement.focus_restored);
+        assert!(placement.warnings.is_empty());
     }
 
     #[test]
@@ -1075,7 +1130,7 @@ mod tests {
         };
         let placement = place_overlay(&mut x11, 1, &environment(), PopupKind::Capsule);
         assert!(placement.applied());
-        assert_eq!(placement.moved_to, Some((860, 968)));
+        assert_eq!(placement.moved_to, Some((730, 840)));
         assert_eq!(placement.warnings, vec!["input hint failed: nope"]);
     }
 

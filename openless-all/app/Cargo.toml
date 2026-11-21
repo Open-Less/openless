@@ -2,7 +2,11 @@
 resolver = "2"
 members = [
     "crates/openless-core",
+    "crates/micyou-dsp",
+    "crates/micyou-infer",
     "linux-egui",
+    "crates/openless-capsule",
+    "native-capsule",
     "harmony/rust",
 ]
 exclude = [
