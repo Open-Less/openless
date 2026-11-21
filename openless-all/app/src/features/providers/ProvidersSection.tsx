@@ -37,6 +37,12 @@ import type { BailianProtocol } from '../../lib/bailianProtocol';
 import { useContentMotion } from '../../lib/motion';
 import { dismissNotification } from '../../lib/notifications';
 import { emitSaved } from '../../lib/savedEvent';
+import { providerValidationCopy } from '../../lib/providerValidation';
+import {
+  fillEmptyOmniDefaults,
+  isRealtimeOmniProvider,
+  type RealtimeAuthMode,
+} from '../../lib/realtimeOmni';
 import { useConservativeLayout, useLayoutStack } from '../../lib/useMobileLayout';
 import { Card } from '../../ui/layout/Card';
 import { SectionTitle } from '../../ui/layout/SectionTitle';
@@ -47,6 +53,7 @@ import { BailianProtocolField } from './BailianProtocolField';
 import { CredentialField } from './CredentialField';
 import { LlmProtocolFields } from './LlmProtocolFields';
 import { ProviderFormContext, useProviderForm } from './ProviderForm';
+import { RealtimeOmniOptionsFields } from './RealtimeOmniOptions';
 import { SiwcChannelFields } from './SiwcChannelFields';
 import {
   ChannelFormRow,
@@ -1308,8 +1315,10 @@ function ProviderTools({
   const { t } = useTranslation();
   const form = useContext(ProviderFormContext);
   const modelWrite = useRef<Promise<boolean> | null>(null);
-  // Omni credentials are provider-scoped, but Core resolves its tools from the active slot.
-  const channelId = kind === 'omni' ? undefined : provider;
+  const omniProfile = kind === 'omni' ? provider : undefined;
+  const realtimeModels = isRealtimeOmniProvider(omniProfile ?? '');
+  const validationCopy = providerValidationCopy(kind, omniProfile, audioValidation);
+  const channelId = kind !== 'omni' || realtimeModels ? provider : undefined;
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -1354,15 +1363,7 @@ function ProviderTools({
       const latency = Math.round(performance.now() - started);
       setResult(
         result.ok ? 'success' : 'error',
-        t(
-          result.ok
-            ? audioValidation
-              ? 'settings.providers.validateSuccessAudio'
-              : kind === 'omni'
-                ? 'settings.providers.validateSuccessOmni'
-                : 'settings.providers.validateSuccess'
-            : 'settings.providers.validateFailed',
-        ),
+        t(result.ok ? validationCopy.successKey : 'settings.providers.validateFailed'),
       );
       await persistTest(result.ok, result.ok ? latency : null, result.ok ? null : 'validateFailed');
     } catch (error) {
@@ -1391,11 +1392,7 @@ function ProviderTools({
     setOperation('models');
     setResult('loading', t('settings.providers.loadingModels'));
     try {
-      const result = await listProviderModels(
-        kind,
-        channelId,
-        kind === 'omni' ? provider : undefined,
-      );
+      const result = await listProviderModels(kind, channelId, omniProfile);
       setModels(result.models);
       if (result.models.length === 0) {
         setResult('empty', t('settings.providers.modelsEmpty'));
@@ -1487,7 +1484,13 @@ function ProviderTools({
           status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
         }
       />
-      {modelsUrl ? t('settings.providers.viewModels') : t('settings.providers.fetchModels')}
+      {modelsUrl
+        ? t('settings.providers.viewModels')
+        : t(
+            realtimeModels
+              ? 'settings.providers.realtimeOptions.modelCandidates'
+              : 'settings.providers.fetchModels',
+          )}
     </button>
   );
   const verifyButton = (
@@ -1515,11 +1518,7 @@ function ProviderTools({
       <ChannelSectionHeading
         icon="bolt"
         title={t('settings.channels.validationTitle')}
-        description={t(
-          kind === 'omni' && !audioValidation
-            ? 'settings.channels.validationHintOmni'
-            : 'settings.channels.validationHint',
-        )}
+        description={t(validationCopy.hintKey)}
       />
       <div className="ol-channel-validation-actions">
         <div className="ol-provider-status-slot">{operation === 'validate' && resultMessage}</div>
@@ -1538,15 +1537,7 @@ function ProviderTools({
           {verifyButton}
         </div>
         <div className="ol-omni-tools-hint">
-          {(operation === 'models' || !message) && (
-            <span>
-              {t(
-                audioValidation
-                  ? 'settings.channels.validationHint'
-                  : 'settings.channels.validationHintOmni',
-              )}
-            </span>
-          )}
+          {(operation === 'models' || !message) && <span>{t(validationCopy.hintKey)}</span>}
           {resultMessage}
         </div>
       </section>
@@ -1655,6 +1646,7 @@ export function OmniChannelSection() {
   const switching = useRef(false);
   const pickerSave = useRef<((model: string) => Promise<boolean>) | null>(null);
   const [omniModel, setOmniModel] = useState('');
+  const [realtimeAuthMode, setRealtimeAuthMode] = useState<RealtimeAuthMode>('bearer');
   const formRef = useRef<HTMLDivElement>(null);
   useContentMotion(formRef, committedOmniProvider ?? '');
 
@@ -1673,6 +1665,7 @@ export function OmniChannelSection() {
         nameKey: descriptor.labelKey,
         baseUrl: descriptor.defaultEndpoint ?? '',
         modelPlaceholder: descriptor.defaultModel ?? '',
+        models: descriptor.staticModels,
       })),
     [descriptors],
   );
@@ -1703,10 +1696,7 @@ export function OmniChannelSection() {
         let backendSwitched = false;
         try {
           if (preset.id !== 'custom') {
-            if (preset.baseUrl && !(await readCredential('omni.endpoint', id))?.trim())
-              await setCredential('omni.endpoint', preset.baseUrl, id);
-            if (preset.modelPlaceholder && !(await readCredential('omni.model', id))?.trim())
-              await setCredential('omni.model', preset.modelPlaceholder, id);
+            await fillEmptyOmniDefaults(id, preset, readCredential, setCredential);
           }
           await setActiveOmniProvider(id);
           backendSwitched = true;
@@ -1741,6 +1731,7 @@ export function OmniChannelSection() {
       </Card>
     );
   }
+  const realtime = isRealtimeOmniProvider(committedOmniProvider);
   const geminiTranscribe =
     committedOmniProvider === 'gemini' &&
     ['gemini-3.5-transcribe', 'gemini-3.5-transcribe-live'].includes(omniModel.trim());
@@ -1774,6 +1765,11 @@ export function OmniChannelSection() {
               pickerSaveRef={pickerSave}
               placeholder={omniPreset.modelPlaceholder || 'model-name'}
               onValueChange={setOmniModel}
+              options={
+                realtime && omniPreset.models.length
+                  ? omniPreset.models.map((model) => ({ value: model, label: model }))
+                  : undefined
+              }
               mono
               trailing={
                 committedOmniProvider === 'gemini' && !geminiTranscribe ? (
@@ -1800,10 +1796,41 @@ export function OmniChannelSection() {
               {t('settings.providers.geminiTranscribeOmniNotice')}
             </div>
           )}
+          {realtime && (
+            <>
+              <div
+                role="note"
+                style={{
+                  fontSize: 12,
+                  color: 'var(--ol-ink-3)',
+                  lineHeight: 1.65,
+                  marginBottom: 12,
+                }}
+              >
+                {t(
+                  'settings.providers.realtimeOptions.' +
+                    (committedOmniProvider === 'openai-realtime'
+                      ? 'openaiNotice'
+                      : committedOmniProvider === 'dashscope-realtime'
+                        ? 'dashscopeNotice'
+                        : 'legacyNotice'),
+                )}
+              </div>
+              <RealtimeOmniOptionsFields
+                key={committedOmniProvider}
+                providerId={committedOmniProvider}
+                onAuthModeChange={setRealtimeAuthMode}
+              />
+            </>
+          )}
           <div className="ol-omni-primary-fields ol-omni-connection-fields">
             <CredentialField
               key={`${committedOmniProvider}:api_key`}
-              label={t('settings.providers.apiKeyLabel')}
+              label={t(
+                realtime && realtimeAuthMode === 'headers'
+                  ? 'settings.providers.realtimeOptions.optionalKey'
+                  : 'settings.providers.apiKeyLabel',
+              )}
               account="omni.api_key"
               provider={committedOmniProvider}
               mono
@@ -1837,6 +1864,22 @@ export function OmniChannelSection() {
                 mask
               />
             </div>
+          )}
+          {realtime && (
+            <>
+              <CredentialField
+                key={`${committedOmniProvider}:extra_headers`}
+                label={t('settings.providers.extraHeadersLabel')}
+                account="omni.extra_headers"
+                provider={committedOmniProvider}
+                placeholder={t('settings.providers.extraHeadersPlaceholder')}
+                mono
+                mask
+              />
+              <p style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65 }}>
+                {t('settings.providers.realtimeOptions.modelCandidatesHint')}
+              </p>
+            </>
           )}
           <ProviderTools
             key={`omni:${committedOmniProvider}`}

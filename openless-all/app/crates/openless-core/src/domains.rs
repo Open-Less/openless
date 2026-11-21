@@ -50,6 +50,9 @@ pub struct ProviderRequest {
     pub kind: ProviderKind,
     #[serde(default)]
     pub thinking_enabled: bool,
+    /// ASR/LLM channel ID, or a registered Omni provider ID. None selects the
+    /// active provider. Explicit Omni scope lets settings validate an inactive
+    /// provider without switching the user's dictation pipeline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
 }
@@ -859,7 +862,12 @@ pub struct QaMessage {
 /// Status reported by a real provider/tool execution, never inferred from answer text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum QaActivityKind { Thinking, SearchingWeb, ReadingWeb, UsingTool }
+pub enum QaActivityKind {
+    Thinking,
+    SearchingWeb,
+    ReadingWeb,
+    UsingTool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

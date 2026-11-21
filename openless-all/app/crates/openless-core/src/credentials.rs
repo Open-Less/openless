@@ -153,6 +153,7 @@ pub const OMNI_ENDPOINT_ACCOUNT: &str = "omni.endpoint";
 pub const OMNI_MODEL_ACCOUNT: &str = "omni.model";
 pub const OMNI_EXTRA_HEADERS_ACCOUNT: &str = "omni.extra_headers";
 pub const OMNI_TEMPERATURE_ACCOUNT: &str = "omni.temperature";
+pub const OMNI_REALTIME_OPTIONS_ACCOUNT: &str = "omni.realtime_options";
 /// Static bearer token for a self-hosted `cloud_sync_e2ee` server, stored
 /// under `CredentialNamespace::Application` (an alternative to GitHub OAuth).
 pub const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = "cloud_sync.custom_token";
@@ -690,13 +691,14 @@ impl CredentialMetadata {
         let mut reordered = false;
         if let Some(kind) = kind {
             let channels = self.channels.entry(kind).or_default();
-            let legacy_provider_type = match slot {
-                ProviderSlot::Asr => crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES
-                    .contains(&provider_id),
-                ProviderSlot::Llm => crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES
-                    .contains(&provider_id),
-                ProviderSlot::Omni => false,
-            };
+            let legacy_provider_type =
+                match slot {
+                    ProviderSlot::Asr => crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES
+                        .contains(&provider_id),
+                    ProviderSlot::Llm => crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES
+                        .contains(&provider_id),
+                    ProviderSlot::Omni => false,
+                };
             if !channels.is_empty()
                 && !channels.iter().any(|channel| channel.id == provider_id)
                 && !legacy_provider_type
@@ -769,18 +771,13 @@ impl CredentialMetadata {
             .unwrap_or_default();
         let active_was_managed = matches!(&mutation, ChannelMutation::ActivateLocalAsr { .. })
             || active.is_empty()
-            || self
-                .channels
-                .get(&mutation_kind)
-                .is_some_and(|channels| {
-                    channels.iter().any(|channel| channel.id == active)
-                        || (matches!(&mutation, ChannelMutation::Create { .. })
-                            && channels.is_empty())
-                        || (!channels.is_empty()
-                            && first_enabled_channel(channels)
-                                .map(|channel| channel.id.as_str())
-                                != Some(active.as_str()))
-                });
+            || self.channels.get(&mutation_kind).is_some_and(|channels| {
+                channels.iter().any(|channel| channel.id == active)
+                    || (matches!(&mutation, ChannelMutation::Create { .. }) && channels.is_empty())
+                    || (!channels.is_empty()
+                        && first_enabled_channel(channels).map(|channel| channel.id.as_str())
+                            != Some(active.as_str()))
+            });
         let (kind, result) = match mutation {
             ChannelMutation::RegisterExperimentalAsr { model } => {
                 let channels = self.channels.entry(ChannelKind::Asr).or_default();
@@ -1405,7 +1402,10 @@ mod tests {
             );
             let reloaded: CredentialMetadata =
                 serde_json::from_str(&serde_json::to_string(&metadata).unwrap()).unwrap();
-            assert_eq!(reloaded.selected_provider(ProviderSlot::Asr), "cloud-channel");
+            assert_eq!(
+                reloaded.selected_provider(ProviderSlot::Asr),
+                "cloud-channel"
+            );
             assert_eq!(reloaded.selected_provider(ProviderSlot::Llm), "llm-primary");
             assert_eq!(
                 reloaded.active_provider(ProviderSlot::Omni),
@@ -1488,7 +1488,10 @@ mod tests {
                 .select_active_provider(ProviderSlot::Asr, id.into())
                 .is_err());
         }
-        assert_eq!(metadata.selected_provider(ProviderSlot::Asr), "cloud-channel");
+        assert_eq!(
+            metadata.selected_provider(ProviderSlot::Asr),
+            "cloud-channel"
+        );
         assert_eq!(metadata.revision(), 0);
     }
 

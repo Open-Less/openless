@@ -440,6 +440,10 @@ fn validate_credentials(credentials: &ProviderCredentialRecord) -> DocumentResul
         if !credential_accounts(credentials.namespace).contains(&account.as_str()) {
             return Err(DocumentError::ExcludedField);
         }
+        if account == crate::credentials::OMNI_REALTIME_OPTIONS_ACCOUNT {
+            crate::omni::realtime_options::RealtimeOptions::parse(value)
+                .map_err(|_| DocumentError::InvalidDocument)?;
+        }
         if account.ends_with(".extra_headers") && !value.trim().is_empty() {
             let headers: BTreeMap<String, String> =
                 serde_json::from_str(value).map_err(|_| DocumentError::InvalidDocument)?;
