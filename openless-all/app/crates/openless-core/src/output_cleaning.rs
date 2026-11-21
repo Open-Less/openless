@@ -214,6 +214,156 @@ pub fn clean_json_llm_output(content: &str) -> String {
     strip_markdown_fence(trimmed).trim().to_string()
 }
 
+/// JSON keys audio models used when they wrapped a reply despite the plain-text
+/// format (issue #1304), in priority order. Compared case-insensitively after
+/// trimming `[`/`]`, so the reply markers count as keys. The `STRICT` keys are
+/// distinctive enough to unwrap even inside the requested format, where any other
+/// JSON was dictated; the generic ones only count when the whole reply is JSON.
+const STRICT_TEXT_KEYS: &[&str] = &["final_text", "polished_text", "openless_text"];
+const TEXT_KEYS: &[&str] = &[
+    "final_text",
+    "polished_text",
+    "openless_text",
+    "final",
+    "text",
+    "raw_transcript",
+];
+const STRICT_TRANSLATION_KEYS: &[&str] = &[
+    "translated_text",
+    "final_translation",
+    "openless_translation",
+];
+const TRANSLATION_KEYS: &[&str] = &[
+    "translated_text",
+    "final_translation",
+    "openless_translation",
+    "translation",
+    "translated",
+];
+/// Where a JSON-wrapped translation kept the polished source.
+const SOURCE_KEYS: &[&str] = &[
+    "openless_polished_source",
+    "final_source",
+    "polished_source",
+    "source_text",
+    "source",
+    "original_text",
+    "final_text",
+    "polished_text",
+    "text",
+];
+
+/// Parses content that is entirely one JSON value, tolerating the raw line breaks
+/// models write inside strings.
+pub(crate) fn parse_json_reply(content: &str) -> Option<serde_json::Value> {
+    let trimmed = content.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    serde_json::from_str(&escape_json_string_controls(trimmed)).ok()
+}
+
+fn envelope_field<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    keys.iter().find_map(|wanted| {
+        object
+            .iter()
+            .find(|(key, _)| key.trim_matches(['[', ']']).eq_ignore_ascii_case(wanted))
+            .and_then(|(_, value)| value.as_str())
+    })
+}
+
+/// Plain text that a model returned as a JSON object (`{"final_text": "…"}`)
+/// although it was asked for plain text (issue #1304). Returns `None` unless the
+/// whole content is such an envelope, so ordinary text, including text that merely
+/// contains braces, is left alone; `Some("")` means an envelope without text.
+///
+/// Strict callers (content inside the requested format) only take the distinctive
+/// keys. `lenient` also takes generic keys, an object whose only field is a string
+/// and one quoted string in braces (`{"…"}`, not valid JSON): shapes seen when the
+/// whole reply is the wrapper, but also what dictated JSON looks like.
+pub(crate) fn unwrap_json_text_envelope(content: &str, lenient: bool) -> Option<String> {
+    let trimmed = content.trim();
+    let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let text = match parse_json_reply(trimmed) {
+        Some(serde_json::Value::Object(object)) => {
+            let keys = if lenient { TEXT_KEYS } else { STRICT_TEXT_KEYS };
+            let only = match object.values().collect::<Vec<_>>().as_slice() {
+                [value] if lenient => value.as_str(),
+                _ => None,
+            };
+            envelope_field(&object, keys).or(only)?.to_string()
+        }
+        Some(_) => return None,
+        None if lenient => {
+            serde_json::from_str::<String>(&escape_json_string_controls(inner.trim())).ok()?
+        }
+        None => return None,
+    };
+    Some(text.trim().to_string())
+}
+
+/// Translation and polished source from a reply wrapped in a JSON object
+/// (`{"final_text": "你好", "translated_text": "Hello"}`). Returns `None` unless
+/// the whole content is a JSON object; an object without a translation field
+/// yields an empty translation, so the source is never taken for it.
+pub(crate) fn unwrap_json_translation_envelope(
+    content: &str,
+    lenient: bool,
+) -> Option<(String, Option<String>)> {
+    let Some(serde_json::Value::Object(object)) = parse_json_reply(content) else {
+        return None;
+    };
+    let keys = if lenient {
+        TRANSLATION_KEYS
+    } else {
+        STRICT_TRANSLATION_KEYS
+    };
+    let translation = envelope_field(&object, keys).unwrap_or_default();
+    let source = envelope_field(&object, SOURCE_KEYS)
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+        .map(str::to_string);
+    Some((translation.trim().to_string(), source))
+}
+
+/// Models write real line breaks and tabs inside JSON strings, which JSON forbids.
+fn escape_json_string_controls(json: &str) -> Cow<'_, str> {
+    if !json.contains(['\n', '\r', '\t']) {
+        return Cow::Borrowed(json);
+    }
+    let mut escaped = String::with_capacity(json.len());
+    let (mut in_string, mut after_backslash) = (false, false);
+    for character in json.chars() {
+        if in_string {
+            match character {
+                _ if after_backslash => after_backslash = false,
+                '\\' => after_backslash = true,
+                '"' => in_string = false,
+                '\n' => {
+                    escaped.push_str("\\n");
+                    continue;
+                }
+                '\r' => {
+                    escaped.push_str("\\r");
+                    continue;
+                }
+                '\t' => {
+                    escaped.push_str("\\t");
+                    continue;
+                }
+                _ => {}
+            }
+        } else if character == '"' {
+            in_string = true;
+        }
+        escaped.push(character);
+    }
+    Cow::Owned(escaped)
+}
+
 /// Strip model reasoning blocks so only the final polished text is inserted.
 ///
 /// Thinking-capable OpenAI-compatible models commonly return their reasoning in
@@ -481,5 +631,112 @@ mod tests {
             sentence_like_segments("The price is 3.14. Next sentence."),
             ["The price is 3.14.", "Next sentence."]
         );
+    }
+
+    #[test]
+    fn json_text_envelope_unwraps_shapes_returned_by_audio_models() {
+        let unwrap = |content: &str| unwrap_json_text_envelope(content, true);
+        assert_eq!(
+            unwrap(r#"{"final_text": "你好。"}"#).as_deref(),
+            Some("你好。")
+        );
+        assert_eq!(
+            unwrap("{\"final_text\":\"标题：\\n\\n1. 第一项\"}").as_deref(),
+            Some("标题：\n\n1. 第一项")
+        );
+        // Real line breaks inside the string are not valid JSON but still a wrapper.
+        assert_eq!(
+            unwrap("{\n  \"final_text\": \"第一行\n第二行\"\n}").as_deref(),
+            Some("第一行\n第二行")
+        );
+        assert_eq!(
+            unwrap(r#" {"raw_transcript": "原话"} "#).as_deref(),
+            Some("原话")
+        );
+        assert_eq!(
+            unwrap(r#"{"original_text": "原文", "final_text": "整理后"}"#).as_deref(),
+            Some("整理后")
+        );
+        // Known keys win regardless of key order or other metadata keys.
+        assert_eq!(
+            unwrap(r#"{"final_output_language": "简体中文", "final_text": "你好"}"#).as_deref(),
+            Some("你好")
+        );
+        assert_eq!(
+            unwrap(r#"{"final": "整理后", "confidence": 0.55}"#).as_deref(),
+            Some("整理后")
+        );
+        assert_eq!(
+            unwrap(r#"{"项目启动请求": "请再次启动项目。"}"#).as_deref(),
+            Some("请再次启动项目。")
+        );
+        // Braces around one quoted string are not valid JSON but are still a wrapper.
+        assert_eq!(
+            unwrap(r#"{"现在 .env 文件已经完整了。"}"#).as_deref(),
+            Some("现在 .env 文件已经完整了。")
+        );
+        // A recognized envelope without text is reported as empty, not left as JSON.
+        assert_eq!(unwrap(r#"{"final_text": "  "}"#).as_deref(), Some(""));
+        // Inside the requested format only distinctive keys count.
+        let strict = |content: &str| unwrap_json_text_envelope(content, false);
+        assert_eq!(strict(r#"{"final_text": "你好"}"#).as_deref(), Some("你好"));
+    }
+
+    #[test]
+    fn json_text_envelope_leaves_other_text_alone() {
+        for content in [
+            "普通文本",
+            r#"{"env"} 文件就是环境配置文件。"#,
+            "{\"这里面\"这部分不太通顺，整理如下：}\n\n正文",
+            r#"{"steps": ["a", "b"]}"#,
+            r#"{"final_text": 1}"#,
+            r#"{"a": "一", "b": "二"}"#,
+            "{}",
+        ] {
+            assert_eq!(unwrap_json_text_envelope(content, true), None, "{content}");
+        }
+        // Strict mode keeps dictated JSON, including generic or suffixed keys.
+        for content in [
+            r#"{"name": "Alice"}"#,
+            r#"{"apple"}"#,
+            r#"{"text": "hello"}"#,
+            r#"{"display_text": "hello"}"#,
+        ] {
+            assert_eq!(unwrap_json_text_envelope(content, false), None, "{content}");
+        }
+    }
+
+    #[test]
+    fn json_translation_envelope_keeps_the_source_and_never_substitutes_it() {
+        let unwrap = |content: &str| unwrap_json_translation_envelope(content, true);
+        let pair = |translation: &str, source: Option<&str>| {
+            Some((translation.to_string(), source.map(str::to_string)))
+        };
+        assert_eq!(
+            unwrap(r#"{"final_text": "你好", "translated_text": "Hello"}"#),
+            pair("Hello", Some("你好"))
+        );
+        assert_eq!(
+            unwrap(r#"{"final_source": "你好", "final_translation": "Hello"}"#),
+            pair("Hello", Some("你好"))
+        );
+        assert_eq!(
+            unwrap(
+                r#"{"[[OPENLESS_POLISHED_SOURCE]]": "你好", "[[OPENLESS_TRANSLATION]]": "Hello"}"#
+            ),
+            pair("Hello", Some("你好"))
+        );
+        assert_eq!(
+            unwrap(r#"{"translated_from": "zh", "translation": "Hello"}"#),
+            pair("Hello", None)
+        );
+        // Without a translation field the source is not used as the translation.
+        assert_eq!(unwrap(r#"{"raw_transcript": "你好"}"#), pair("", None));
+        assert_eq!(unwrap(r#"{"final_text": "你好"}"#), pair("", Some("你好")));
+        assert_eq!(
+            unwrap_json_translation_envelope(r#"{"translation": "Hello"}"#, false),
+            pair("", None)
+        );
+        assert_eq!(unwrap("Hello"), None);
     }
 }
