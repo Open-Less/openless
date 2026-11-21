@@ -9,13 +9,24 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#ifdef OPENLESS_PREDICT
+#include <rime/common.h>
+#include "predict_db.h"
+#endif
 
 // librime is linked statically: referencing the module keeps its registration
 // (and the user dictionary manager behind it) from being dropped by the linker.
 void rime_require_module_levers();  // C++ linkage, as RIME_REGISTER_MODULE defines it
 
 namespace {
-const char* const kPinyinSchemas[] = {"openless_pinyin_private", "openless_pinyin_learning"};
+// 需要部署的方案：拼音（含 learning 变体）+ 笔画 + 英文。
+// stroke / melt_eng 的词库都来自 rime-ice 与 rime-stroke，不再单独维护。
+const char* const kPinyinSchemas[] = {
+    "openless_pinyin_private", "openless_pinyin_learning",
+#ifdef OPENLESS_PREDICT
+    "stroke", "melt_eng",
+#endif
+};
 const char* const kUserDict = "pinyin_simp";
 std::mutex mutex;
 RimeApi* api = nullptr;
@@ -122,6 +133,31 @@ std::string request(const std::string& op, const std::string& handle, const std:
         return "{\"ok\":true}";
     }
     if (!api) throw std::runtime_error("Rime is not initialized");
+#ifdef OPENLESS_PREDICT
+    if (op == "predict") {
+        // Read-only shared corpus; no user history is written or uploaded.
+        static auto db = [] {
+            const auto path = rime::path{shared_dir.c_str()} / "predict.db";
+            auto result = std::make_unique<rime::PredictDb>(rime::path{path});
+            if (!result->Load()) result.reset();
+            return result;
+        }();
+        std::string response = "{\"ok\":true,\"candidates\":[";
+        if (db && arg.size() <= 32) {
+            for (size_t start = 0; start < arg.size(); ++start) {
+                if ((static_cast<unsigned char>(arg[start]) & 0xC0) == 0x80) continue;
+                const auto* entries = db->Lookup(arg.substr(start));
+                if (!entries) continue;
+                for (size_t i = 0; i < entries->size && i < 32; ++i) {
+                    if (i) response += ',';
+                    response += quote(db->GetEntryText(entries->begin()[i]));
+                }
+                break;
+            }
+        }
+        return response + "]}";
+    }
+#endif
     if (op == "redeploy") {
         // Rebuild after a schema .custom.yaml changed; deleting the compiled
         // schema keeps a same-second rewrite from looking up to date.
@@ -156,9 +192,15 @@ std::string request(const std::string& op, const std::string& handle, const std:
     if (op == "create") {
         auto id = api->create_session();
         if (!id) throw std::runtime_error("Rime session creation failed");
-        if (!api->select_schema(id, arg == "learning" ? "openless_pinyin_learning" : "openless_pinyin_private")) {
+        // 会话按用途选方案：拼音（默认/learning）、笔画、英文。
+        // 传 "stroke" / "melt_eng" 时直接选对应 schema，共用同一份部署数据。
+        const std::string schema = arg == "learning" ? "openless_pinyin_learning"
+                                 : arg == "stroke"   ? "stroke"
+                                 : arg == "english"  ? "melt_eng"
+                                                     : "openless_pinyin_private";
+        if (!api->select_schema(id, schema.c_str())) {
             api->destroy_session(id);
-            throw std::runtime_error("Rime pinyin_simp schema unavailable");
+            throw std::runtime_error("Rime schema unavailable: " + schema);
         }
         api->set_option(id, "ascii_mode", False);
         // Sessions with learning disabled must not update the user dictionary.

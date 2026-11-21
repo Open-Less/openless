@@ -20,10 +20,12 @@ internal object OpenLessRime {
         val shared = File(context.filesDir, "rime-shared-1.17.0-ice-da1fbe60-v1").apply { mkdirs() }
         val files = context.assets.list("rime") ?: error("Rime assets unavailable")
         require(files.isNotEmpty())
-        for (name in files) {
+        val assetMarker = "openless-mobile-assets-v2"
+        val upgradeAssets = assetMarker in files && !File(shared, assetMarker).exists()
+        for (name in files.sortedBy { it == assetMarker }) {
             require(!name.contains('/') && !name.contains(".."))
             val target = File(shared, name)
-            if (!target.exists()) {
+            if (!target.exists() || (upgradeAssets && name in setOf("stroke.schema.yaml", "melt_eng.dict.yaml", "default.custom.yaml"))) {
                 val temporary = File(shared, "$name.tmp")
                 context.assets.open("rime/$name").use { input -> temporary.outputStream().use { input.copyTo(it) } }
                 check(temporary.renameTo(target))
@@ -35,7 +37,11 @@ internal object OpenLessRime {
         var ready = false
         repeat(3) {
             if (!ready) {
-                if (selected != shared.absolutePath && !selected.startsWith(shared.absolutePath + "/public-updates-v1/")) selected = shared.absolutePath
+                if (selected != shared.absolutePath &&
+                    (!selected.startsWith(shared.absolutePath + "/public-updates-v1/") ||
+                        (assetMarker in files && !File(selected, assetMarker).isFile))) {
+                    selected = shared.absolutePath
+                }
                 try { request("initialize", selected, profile); ready = true }
                 catch (error: Exception) {
                     if (selected == shared.absolutePath) throw error
@@ -64,6 +70,19 @@ internal object OpenLessRime {
         val response = JSONObject(nativeRequest(operation, session, argument))
         check(response.optBoolean("ok")) { response.optString("error", "Rime request failed") }
         return response
+    }
+
+    /**
+     * Creates a schema session on the maintenance queue and returns it together
+     * with the generation it belongs to. Auxiliary providers (stroke, English)
+     * use this so a dictionary import/export or redeploy cannot destroy the
+     * fresh handle between `create` and the generation they record for it —
+     * that stale stamp used to keep a dead handle "current" until restart.
+     */
+    fun createSession(schema: String): Pair<String, Long> = RimeTaskQueue.run {
+        val generation = sessionGeneration
+        val created = request("create", "", schema).getString("session")
+        created to generation
     }
 
     private fun closingSessions(operation: String, argument: String): JSONObject =
