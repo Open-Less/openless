@@ -8,7 +8,7 @@ assert.match(copy, /const KOTLIN_ANDROID_TEST_FILES = \[[\s\S]*?'OpenLessRuntime
 const runtime = read('android/kotlin/OpenLessRuntimeService.kt');
 assert(!runtime.includes('等待 ChatGPT 授权'));
 assert(runtime.includes('后台运行服务已就绪'));
-assert(runtime.includes('stopForeground(STOP_FOREGROUND_REMOVE)'));
+assert(runtime.includes('stopSelfResult(startId)'));
 assert(!runtime.includes('context.stopService('));
 const ime = read('android/kotlin/OpenLessImeService.kt');
 assert(ime.includes('OpenLessRuntimeService.setImeRequested(this, true)'));

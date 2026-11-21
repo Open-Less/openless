@@ -70,7 +70,8 @@ class OpenLessRuntimeServiceInstrumentedTest {
         awaitText("后台运行服务已就绪")
         assertTrue(foreground())
         instrumentation.runOnMainSync {
-            assertEquals(Service.START_NOT_STICKY, instance()!!.onStartCommand(serviceIntent, 0, 10000))
+            val service = instance()!!
+            assertEquals(Service.START_NOT_STICKY, service.onStartCommand(serviceIntent, 0, startId(service)))
         }
         val original = instance()
         val activityStarts = starts("actkill")
@@ -127,16 +128,14 @@ class OpenLessRuntimeServiceInstrumentedTest {
         assertSame("old cleanup must not destroy the new lease's context", original, instance())
     }
 
-    @Test fun queuedReleaseBeforeInitialStartDoesNotResurrectIdleRuntime() {
-        val exits = starts("rtexit")
+    @Test fun queuedReleaseBeforeInitialForegroundStartStopsRuntimeWithoutCrashing() {
         instrumentation.runOnMainSync {
             worker { OpenLessRuntimeService.acquireAuthorization(context) }
             worker { OpenLessRuntimeService.releaseAuthorization(context) }
-            context.startService(serviceIntent.setAction("com.openless.app.action.RUNTIME_EXITED"))
+            // The system has queued the start while the main thread is blocked.
+            // A second startService call would clear the foreground-start requirement.
+            assertTrue("initial foreground start was accepted", running())
         }
-        // The counter is an actual onStartCommand delivery barrier, not a sleep
-        // that can pass before the queued initial service creation has happened.
-        await("initial starts delivered") { starts("rtexit") == exits + 1 }
         await("released-before-start runtime stopped") { !running() && notification() == null }
         // A redundant release must neither underflow nor create another service.
         OpenLessRuntimeService.releaseAuthorization(context)
@@ -145,16 +144,30 @@ class OpenLessRuntimeServiceInstrumentedTest {
         assertFalse(running())
     }
 
+    @Test fun queuedIdleCallbackCannotStopANewerForegroundStart() {
+        val exits = starts("rtexit")
+        instrumentation.runOnMainSync {
+            // This callback arrives first, while Android is waiting for the newer
+            // foreground start to be promoted.
+            context.startService(serviceIntent.setAction("com.openless.app.action.RUNTIME_EXITED"))
+            worker { OpenLessRuntimeService.acquireAuthorization(context) }
+            worker { OpenLessRuntimeService.releaseAuthorization(context) }
+        }
+        await("queued runtime exit recorded") { starts("rtexit") == exits + 1 }
+        await("newer foreground start handled and stopped") { !running() && notification() == null }
+    }
+
     @Test fun nullIntentRestartUsesOnlyLiveDemandAndRetainsRestartCounters() {
         OpenLessRuntimeService.setImeRequested(context, true)
         awaitText("输入法面板已就绪")
         val sticky = starts("sticky")
         instrumentation.runOnMainSync {
             val service = instance()!!
-            assertEquals(Service.START_STICKY, service.onStartCommand(null, 0, 10001))
+            val startId = startId(service)
+            assertEquals(Service.START_STICKY, service.onStartCommand(null, 0, startId))
             OpenLessRuntimeService.setImeRequested(context, false)
             // Model lost process-local demand before a sticky null-intent delivery.
-            assertEquals(Service.START_NOT_STICKY, service.onStartCommand(null, 0, 10002))
+            assertEquals(Service.START_NOT_STICKY, service.onStartCommand(null, 0, startId))
         }
         assertEquals(sticky + 2, starts("sticky"))
         await("idle sticky restart stopped") { !running() && notification() == null }
@@ -201,6 +214,13 @@ class OpenLessRuntimeServiceInstrumentedTest {
         OpenLessRuntimeService::class.java.getDeclaredField("runningService").let {
             it.isAccessible = true
             it.get(null) as OpenLessRuntimeService?
+        }
+
+    // Simulate callbacks with the real start ID so Android accepts stopSelfResult.
+    private fun startId(service: OpenLessRuntimeService): Int =
+        OpenLessRuntimeService::class.java.getDeclaredField("lastStartId").let {
+            it.isAccessible = true
+            it.get(service) as Int
         }
 
     @Suppress("DEPRECATION")

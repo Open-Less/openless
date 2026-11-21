@@ -12,6 +12,8 @@ import android.util.Log
 
 /** Keeps the runtime alive for IME or active authorization, without showing an overlay. */
 class OpenLessRuntimeService : Service() {
+    private var lastStartId: Int? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     // Registers this Service (not an Activity) as the Context every
@@ -84,10 +86,15 @@ class OpenLessRuntimeService : Service() {
             OpenLessProcessRestartStats(this, "rtexit").recordStart()
         }
         // Serialize demand snapshots AND Android start/stop requests. A JNI worker
-        // cannot acquire between an idle decision and its stopSelf() request.
+        // cannot acquire between an idle decision and its stop request.
         return synchronized(demandLock) {
-            if (!runtimeRequestedLocked()) {
-                stopIdleRuntime()
+            if (runningService !== this) return@synchronized START_NOT_STICKY
+            lastStartId = startId
+            val requested = runtimeRequestedLocked()
+            // A foreground start must be promoted even if its caller has already
+            // released demand. Android treats stopping before promotion as a crash.
+            if (!requested && intent?.action != ACTION_START_FOREGROUND_RUNTIME) {
+                stopRuntimeIfLatestStart()
                 return@synchronized START_NOT_STICKY
             }
             try {
@@ -106,10 +113,11 @@ class OpenLessRuntimeService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
             } catch (error: Throwable) {
-                Log.e(TAG, "failed to promote IME runtime service", error)
-                stopSelf(startId)
+                Log.e(TAG, "failed to promote runtime service", error)
+                stopRuntimeIfLatestStart()
                 return@synchronized START_NOT_STICKY
             }
+            if (!requested) stopRuntimeIfLatestStart()
             // START_STICKY keeps the backend service alive, but it must not launch
             // a visible Tauri Activity merely because the service restarted or a
             // previous Activity was destroyed. Doing so steals the foreground from
@@ -121,10 +129,11 @@ class OpenLessRuntimeService : Service() {
         }
     }
 
-    /** Main thread, with demandLock held; never stop from a stale worker snapshot. */
-    private fun stopIdleRuntime() {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+    /** Main thread, with demandLock held. Android removes the notification when the service stops. */
+    private fun stopRuntimeIfLatestStart() {
+        val startId = lastStartId ?: return
+        // A newer request may still be waiting for its onStartCommand callback.
+        if (stopSelfResult(startId)) runningService = null
     }
 
     private fun buildNotification(): Notification {
@@ -176,8 +185,11 @@ class OpenLessRuntimeService : Service() {
 
         private fun startRuntimeLocked(context: android.content.Context) {
             val intent = Intent(context, OpenLessRuntimeService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent.setAction(ACTION_START_FOREGROUND_RUNTIME))
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun setImeRequested(context: android.content.Context, requested: Boolean) {
@@ -216,8 +228,8 @@ class OpenLessRuntimeService : Service() {
                     // Re-read CURRENT demand after any newer JNI acquire/IME start.
                     // In particular, never post a captured stopService decision.
                     if (!runtimeRequestedLocked()) {
-                        runningService?.stopIdleRuntime()
-                    } else if (runningService != null) {
+                        runningService?.stopRuntimeIfLatestStart()
+                    } else if (runningService?.lastStartId != null) {
                         // Re-deliver onStartCommand to refresh the notification AND
                         // sticky policy. This is an already-running service, not a
                         // new background startForegroundService authorization request.
@@ -232,6 +244,7 @@ class OpenLessRuntimeService : Service() {
 
         private const val NOTIFICATION_ID = 42002
         private const val TAG = "OpenLessRuntimeService"
+        private const val ACTION_START_FOREGROUND_RUNTIME = "com.openless.app.action.START_FOREGROUND_RUNTIME"
         private const val ACTION_RUNTIME_ACTIVITY_DESTROYED = "com.openless.app.action.RUNTIME_ACTIVITY_DESTROYED"
         private const val EXTRA_DESTROY_REASON = "reason"
 
