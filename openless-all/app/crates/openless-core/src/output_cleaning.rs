@@ -214,6 +214,98 @@ pub fn clean_json_llm_output(content: &str) -> String {
     strip_markdown_fence(trimmed).trim().to_string()
 }
 
+/// Field names audio models have been seen to invent for the dictation itself, in
+/// priority order: a polished/final field wins over a raw transcript field.
+const DICTATION_JSON_TEXT_KEYS: &[&str] = &[
+    "final_text",
+    "polished_text",
+    "output",
+    "result",
+    "text",
+    "transcription",
+    "transcript",
+    "raw_transcript",
+];
+
+/// Side fields (reasoning, detected language, ...) that may accompany the text field.
+const DICTATION_JSON_META_KEYS: &[&str] = &[
+    "analysis",
+    "reasoning",
+    "thoughts",
+    "thinking",
+    "notes",
+    "language",
+];
+
+/// Multimodal audio models sometimes wrap the dictation in JSON, e.g.
+/// `{"raw_transcript": "..."}` or `{"analysis": "...", "final_text": "..."}`.
+/// Unwrap only objects whose keys are all known text/meta fields, so dictated text
+/// that merely looks like JSON is left untouched. Anything else is returned exactly
+/// as received, so streamed deltas stay a prefix of the final text.
+pub fn unwrap_dictation_json_wrapper(content: &str) -> String {
+    let candidate = strip_markdown_fence(content.trim()).trim();
+    if candidate.starts_with('{') && candidate.ends_with('}') {
+        if let Ok(serde_json::Value::Object(map)) =
+            serde_json::from_str::<serde_json::Value>(candidate)
+        {
+            let all_known = map.keys().all(|key| {
+                DICTATION_JSON_TEXT_KEYS.contains(&key.as_str())
+                    || DICTATION_JSON_META_KEYS.contains(&key.as_str())
+            });
+            if all_known {
+                let text = DICTATION_JSON_TEXT_KEYS
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(|value| value.as_str()))
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty());
+                if let Some(text) = text {
+                    return text.to_string();
+                }
+            }
+        }
+    }
+    content.to_string()
+}
+
+/// Streaming companion of [`unwrap_dictation_json_wrapper`]. Deltas are held back once
+/// the output starts like a JSON object or markdown fence, so a wrapper is never typed
+/// into the target app or shown in the capsule; the caller's final publish then
+/// delivers the cleaned text. Ordinary prose streams through unchanged.
+#[derive(Debug, Default)]
+pub struct DictationWrapperDeltaGate {
+    pending: String,
+    state: DeltaGateState,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum DeltaGateState {
+    #[default]
+    Undecided,
+    Pass,
+    Hold,
+}
+
+impl DictationWrapperDeltaGate {
+    /// Returns the text that may be streamed now, if any.
+    pub fn push(&mut self, delta: &str) -> Option<String> {
+        match self.state {
+            DeltaGateState::Pass => return (!delta.is_empty()).then(|| delta.to_string()),
+            DeltaGateState::Hold => return None,
+            DeltaGateState::Undecided => {}
+        }
+        self.pending.push_str(delta);
+        let first = self.pending.trim_start().chars().next()?;
+        if first == '{' || first == '`' {
+            self.state = DeltaGateState::Hold;
+            self.pending.clear();
+            None
+        } else {
+            self.state = DeltaGateState::Pass;
+            Some(std::mem::take(&mut self.pending))
+        }
+    }
+}
+
 /// Strip model reasoning blocks so only the final polished text is inserted.
 ///
 /// Thinking-capable OpenAI-compatible models commonly return their reasoning in
@@ -481,5 +573,51 @@ mod tests {
             sentence_like_segments("The price is 3.14. Next sentence."),
             ["The price is 3.14.", "Next sentence."]
         );
+    }
+
+    #[test]
+    fn dictation_json_wrapper_is_unwrapped_only_for_known_fields() {
+        assert_eq!(
+            unwrap_dictation_json_wrapper(r#"{"raw_transcript": "Hello，hello，能听到吗？"}"#),
+            "Hello，hello，能听到吗？"
+        );
+        assert_eq!(
+            unwrap_dictation_json_wrapper("```json\n{\"text\": \"你好\"}\n```"),
+            "你好"
+        );
+        // Seen from gpt-audio-1.5: reasoning plus the final field; the final field wins.
+        assert_eq!(
+            unwrap_dictation_json_wrapper(
+                r#"{"analysis": "The audio content is: '先获取 Token'", "raw_transcript": "先获取token", "final_text": "先获取 Token。"}"#
+            ),
+            "先获取 Token。"
+        );
+        // Dictated JSON-like text and objects with unknown fields stay as spoken.
+        for kept in [
+            r#"{"name": "OpenLess"}"#,
+            r#"{"text": "a", "lang": "zh"}"#,
+            r#"{"text": ""}"#,
+            r#"{"analysis": "only reasoning"}"#,
+            "普通文本 {不是 JSON}",
+        ] {
+            assert_eq!(unwrap_dictation_json_wrapper(kept), kept);
+        }
+        // Non-wrapper output keeps its exact whitespace so streamed text stays a prefix.
+        assert_eq!(unwrap_dictation_json_wrapper("你好。\n"), "你好。\n");
+    }
+
+    #[test]
+    fn delta_gate_holds_wrappers_and_streams_prose() {
+        let mut gate = DictationWrapperDeltaGate::default();
+        assert_eq!(gate.push("  "), None);
+        assert_eq!(gate.push("你好"), Some("  你好".to_string()));
+        assert_eq!(gate.push("，世界"), Some("，世界".to_string()));
+        assert_eq!(gate.push(""), None);
+
+        for opening in ["{\"raw", "\n```json"] {
+            let mut gate = DictationWrapperDeltaGate::default();
+            assert_eq!(gate.push(opening), None);
+            assert_eq!(gate.push("_transcript\": \"你好\"}"), None);
+        }
     }
 }
