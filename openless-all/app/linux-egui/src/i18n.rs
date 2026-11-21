@@ -371,6 +371,26 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.providers.openaiServiceTierLabel",
+        text: row(
+            "OpenAI Fast 模式",
+            "OpenAI Fast 模式",
+            "OpenAI Fast mode",
+            "OpenAI Fast モード",
+            "OpenAI Fast 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.openaiServiceTierHint",
+        text: row(
+            "Fast 模式费用更高，详见 https://developers.openai.com/api/docs/pricing。不支持的模型或地区会返回错误。",
+            "Fast 模式費用更高，詳見 https://developers.openai.com/api/docs/pricing。不支援的模型或地區會回傳錯誤。",
+            "Fast mode costs more. See https://developers.openai.com/api/docs/pricing. Unsupported models or regions return an error.",
+            "Fast モードは料金が高くなります。https://developers.openai.com/api/docs/pricing を参照してください。未対応のモデルまたはリージョンではエラーが返ります。",
+            "Fast 모드는 요금이 더 높습니다. https://developers.openai.com/api/docs/pricing 를 참고하세요. 지원하지 않는 모델이나 지역은 오류를 반환합니다.",
+        ),
+    },
+    Msg {
         key: "settings.providers.messagesThinkingLabel",
         text: row(
             "思考方式",
