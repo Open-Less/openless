@@ -381,6 +381,7 @@ export const zhCN = {
     mobileRecordStart: '开始录音',
     mobileRecordStop: '结束并提交',
     composerPlaceholder: '输入问题，Enter 发送',
+    voiceInputPlaceholder: '你正在进行语音输入',
     composerSend: '发送',
     statusIdle: '按 {{recordHotkey}} 提问',
     statusRecording: '录音中',
@@ -1101,6 +1102,14 @@ export const zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提问快捷键行为',
+      desc: '使用当前录音快捷键加提问附加键。单独按录音快捷键仍会在光标处听写。',
+      record: '打开并立即录音',
+      open: '仅打开，再按一次录音',
+      draft: '打开并聚焦文字框',
+      failed: '无法保存提问快捷键行为。',
+    },
     dictation: '口述',
     translation: '翻译',
     question: '随便问',

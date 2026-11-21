@@ -413,6 +413,7 @@ export const es: typeof zhCN = {
     mobileRecordStart: 'Iniciar grabación',
     mobileRecordStop: 'Detener y enviar',
     composerPlaceholder: 'Escribe una pregunta. Pulsa Intro para enviar',
+    voiceInputPlaceholder: 'Estás usando la entrada por voz',
     composerSend: 'Enviar',
     statusIdle: 'Pulsa {{recordHotkey}} para preguntar',
     statusRecording: 'Grabando',
@@ -1168,6 +1169,14 @@ export const es: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Comportamiento del atajo de preguntas',
+      desc: 'Usa el atajo de grabación junto con la tecla auxiliar. El atajo de grabación solo sigue dictando en el cursor.',
+      record: 'Abrir y grabar inmediatamente',
+      open: 'Abrir y pulsar de nuevo para grabar',
+      draft: 'Abrir y enfocar el campo de texto',
+      failed: 'No se pudo guardar el comportamiento del atajo.',
+    },
     dictation: 'Dictar',
     translation: 'Traducir',
     question: 'Pregunta lo que quieras',

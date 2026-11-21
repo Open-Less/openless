@@ -415,6 +415,7 @@ export const de: typeof zhCN = {
     mobileRecordStart: 'Aufnahme starten',
     mobileRecordStop: 'Beenden und senden',
     composerPlaceholder: 'Frage eingeben. Mit Enter senden',
+    voiceInputPlaceholder: 'Du verwendest die Spracheingabe',
     composerSend: 'Senden',
     statusIdle: 'Zum Fragen {{recordHotkey}} drücken',
     statusRecording: 'Aufnahme läuft',
@@ -1175,6 +1176,14 @@ export const de: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Verhalten des Fragen-Kürzels',
+      desc: 'Verwendet das Aufnahme-Kürzel und die Zusatztaste. Das Aufnahme-Kürzel allein diktiert weiterhin am Cursor.',
+      record: 'Öffnen und sofort aufnehmen',
+      open: 'Öffnen, erneut drücken zum Aufnehmen',
+      draft: 'Öffnen und Textfeld fokussieren',
+      failed: 'Das Verhalten konnte nicht gespeichert werden.',
+    },
     dictation: 'Diktieren',
     translation: 'Übersetzen',
     question: 'Alles fragen',

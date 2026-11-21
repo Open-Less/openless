@@ -142,7 +142,7 @@ async fn forward_legacy_event(
             }
         }
     }
-    if matches!(
+    if cfg!(mobile) && matches!(
         kind,
         BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
     ) {
@@ -219,6 +219,9 @@ async fn forward_legacy_event(
             capsule_owners.transcription_notice = None;
             capsule_owners.qa_voice = None;
             capsule_owners.qa_capsule = None;
+            if crate::qa_draft::owns(result.session_id) {
+                return;
+            }
             if selection_voice_blocks_dictation_capsule(app) {
                 return;
             }
@@ -415,6 +418,9 @@ async fn forward_legacy_event(
                 });
             // Recheck the current owner after awaiting QA. A queued callback
             // from a cancelled native operation must not replace a new capsule.
+            if session_id.is_some_and(crate::qa_draft::owns) {
+                return;
+            }
             let qa_notice =
                 session_id.is_some() && qa.as_ref().is_some_and(|qa| qa.session_id == session_id);
             if let Some(payload) = (!qa_notice || cfg!(mobile))
@@ -498,6 +504,9 @@ fn emit_dictation_state(
     backend: &OpenLessBackend,
     snapshot: DictationStateSnapshot,
 ) {
+    if crate::qa_draft::present(app, &snapshot) {
+        return;
+    }
     if snapshot.phase == DictationPhase::Completed {
         return;
     }

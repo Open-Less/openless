@@ -412,6 +412,7 @@ export const en: typeof zhCN = {
     mobileRecordStart: 'Start recording',
     mobileRecordStop: 'Stop and submit',
     composerPlaceholder: 'Type a question. Enter to send',
+    voiceInputPlaceholder: 'You are using voice input',
     composerSend: 'Send',
     statusIdle: 'Press {{recordHotkey}} to ask',
     statusRecording: 'Recording',
@@ -1153,6 +1154,14 @@ export const en: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'When the Ask shortcut is pressed',
+      desc: 'Uses your recording shortcut plus the Ask companion key. The recording shortcut alone still dictates at the cursor.',
+      record: 'Open and record immediately',
+      open: 'Open first; press again to record',
+      draft: 'Open and focus the text box',
+      failed: 'Could not save the Ask shortcut behavior.',
+    },
     dictation: 'Dictate',
     translation: 'Translate',
     question: 'Ask anything',

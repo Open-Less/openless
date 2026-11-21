@@ -381,6 +381,7 @@ export const zhTW: typeof zhCN = {
     mobileRecordStart: '開始錄音',
     mobileRecordStop: '結束並提交',
     composerPlaceholder: '輸入問題，Enter 傳送',
+    voiceInputPlaceholder: '你正在進行語音輸入',
     composerSend: '傳送',
     statusIdle: '按 {{recordHotkey}} 提問',
     statusRecording: '錄音中',
@@ -1102,6 +1103,14 @@ export const zhTW: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提問快捷鍵行為',
+      desc: '使用目前錄音快捷鍵加提問附加鍵。單獨按錄音快捷鍵仍會在游標處聽寫。',
+      record: '開啟並立即錄音',
+      open: '僅開啟，再按一次錄音',
+      draft: '開啟並聚焦文字框',
+      failed: '無法儲存提問快捷鍵行為。',
+    },
     dictation: '口述',
     translation: '翻譯',
     question: '隨便問',
