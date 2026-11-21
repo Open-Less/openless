@@ -129,7 +129,7 @@ test('returning to General retires Appearance when its animation finishes during
   await expect(surfaces).toHaveCount(1);
 });
 
-test('settings retains the old title with its form and focuses a subpage after deblurring', async ({
+test('settings retains the old title with its form and focuses a subpage after the incoming surface settles', async ({
   page,
 }) => {
   const dialog = await openSettings(page);
@@ -139,10 +139,10 @@ test('settings retains the old title with its form and focuses a subpage after d
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (keyframes, options) {
       const animation = animate.call(this, keyframes, options);
-      if (this.matches('.ol-transition-page-with-header[data-transition-phase="exit"]')) {
+      if (this.matches('.ol-transition-page-with-header[data-transition-phase="enter"]')) {
         Element.prototype.animate = animate;
         animation.pause();
-        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
+        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) * 0.5;
       }
       return animation;
     };
@@ -151,17 +151,21 @@ test('settings retains the old title with its form and focuses a subpage after d
   await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
   const outgoing = surfaces.filter({ has: page.locator('[data-section="general"]') });
   const incoming = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
-  await expect(outgoing).toHaveAttribute('data-transition-phase', 'exit');
+  await expect(outgoing).toHaveAttribute('data-transition-phase', 'retained');
+  await expect(incoming).toHaveAttribute('data-transition-phase', 'enter');
   await expect(outgoing.locator('h2')).toHaveText('通用');
   await expect(incoming.locator('h2')).toHaveText('外观与语言');
-  await expect(incoming).toHaveCSS('opacity', '0');
-  await expect(outgoing).toHaveCSS('filter', /blur\(/);
+  await expect(outgoing).toHaveCSS('opacity', '1');
+  await expect(outgoing).toHaveCSS('filter', 'none');
+  const enteringOpacity = await incoming.evaluate((node) => Number(getComputedStyle(node).opacity));
+  expect(enteringOpacity).toBeGreaterThan(0);
+  expect(enteringOpacity).toBeLessThan(1);
   expect(await outgoing.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
   expect(await incoming.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
-  await outgoing.evaluate((el) =>
+  await incoming.evaluate((el) =>
     el
       .getAnimations()
-      .find((a) => a.id === 'ol-page-exit')!
+      .find((a) => a.id === 'ol-page-enter')!
       .play(),
   );
   await settleNavigation(dialog);
@@ -462,4 +466,51 @@ test('Windows wake shortcut linkage is opt-in, keyboard accessible and preserves
       async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
     ),
   ).toBe(mode);
+});
+
+
+test('settings search matches foreign-language category aliases without changing displayed labels', async ({ page }) => {
+  const dialog = await openSettings(page);
+  const search = dialog.getByRole('searchbox');
+  await search.fill('language');
+  const result = dialog.locator('.ol-settings-scroll').getByRole('button', { name: '外观与语言', exact: true });
+  await expect(result).toBeVisible();
+  await expect(result).not.toContainText('调整主题');
+  await search.fill('Sprache');
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(page.getByRole('combobox', { name: '界面大小', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: '外观与语言', exact: true })).toBeVisible();
+});
+
+
+test('the download mirror uses the shared popup above the actual narrow catalog modal', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixture}?catalog`);
+  const dialog = page.getByRole('dialog');
+  const mirror = page.getByRole('combobox', { name: 'Download mirror', exact: true });
+  await mirror.click();
+  const option = page.getByRole('option', { name: 'Mirror', exact: true });
+  await expect(option).toBeVisible();
+  expect(await option.evaluate((node) => {
+    const bounds = node.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    return hit !== null && node.contains(hit) && !node.closest('[inert]');
+  })).toBe(true);
+  await option.click();
+  await expect(mirror).toContainText('Mirror');
+  await expect(dialog).toBeVisible();
+  await mirror.click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
+  // Exercise Escape after the popup has painted too, not just its queued-open frame.
+  await mirror.click();
+  await expect(mirror).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
 });

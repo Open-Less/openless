@@ -98,105 +98,46 @@ test('the first Overview to History click paints a clear page and its records', 
 });
 
 for (const theme of ['light', 'dark'] as const) {
-  test(`ready pages fade through the ${theme} surface within the navigation budget`, async ({
-    page,
-  }, testInfo) => {
+  test(`ready pages keep a painted surface throughout ${theme} navigation`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: theme });
     await page.goto('/?os=mac');
-    await expect(page.locator('html')).toHaveCSS('color-scheme', theme);
     const viewport = page.locator('main .ol-transition-viewport');
     const overview = viewport.locator('[data-ol-page="overview"]');
     const history = viewport.locator('[data-ol-page="history"]');
-    try {
-      await page.evaluate(() => {
-        const animate = Element.prototype.animate;
-        (window as NavigationProbe).restoreNavigationClock = () => {
-          Element.prototype.animate = animate;
-        };
-        Element.prototype.animate = function (keyframes, options) {
-          const animation = animate.call(this, keyframes, options);
-          if (
-            this.matches(
-              'main [data-transition-phase="enter"], main [data-transition-phase="exit"]',
-            )
-          ) {
-            // Sample the real effect without depending on the runner painting every frame.
-            animation.pause();
-            animation.currentTime = 0;
-          }
-          return animation;
-        };
-      });
-      await page.getByRole('button', { name: '历史', exact: true }).click();
-      await expect(overview.getByText('今日概览', { exact: true })).toBeVisible();
-      await expect(overview).toHaveCSS('overflow', 'hidden');
-      await expect(overview).toHaveClass(/\bol-page-fixed\b/);
-
-      const sample = async (surface: typeof overview, phase: 'exit' | 'enter') => {
-        await expect(surface).toHaveAttribute('data-transition-phase', phase);
-        return surface.evaluate(async (element, id) => {
-          const animation = element.getAnimations().find((candidate) => candidate.id === id)!;
-          await animation.ready;
-          const duration = Number(animation.effect!.getComputedTiming().activeDuration);
-          const frames = [0, 0.35, 0.7].map((fraction) => {
-            animation.currentTime = duration * fraction;
-            const style = getComputedStyle(element);
-            return {
-              opacity: Number(style.opacity),
-              blur: parseFloat(style.filter.match(/blur\(([\d.]+)px\)/)?.[1] ?? '0'),
-              scale: new DOMMatrixReadOnly(style.transform).m11,
-            };
-          });
-          return { duration, frames };
-        }, `ol-page-${phase}`);
+    await expect(overview).toHaveAttribute('data-transition-phase', 'settled');
+    await page.evaluate(() => {
+      const animate = Element.prototype.animate;
+      (window as NavigationProbe).restoreNavigationClock = () => { Element.prototype.animate = animate; };
+      Element.prototype.animate = function (keyframes, options) {
+        const animation = animate.call(this, keyframes, options);
+        if (this.matches('main [data-transition-phase="enter"]')) {
+          animation.pause();
+          animation.currentTime = 0;
+        }
+        return animation;
       };
-      const { duration: exitMs, frames: exit } = await sample(overview, 'exit');
-      await page.screenshot({
-        path: testInfo.outputPath(`acceptance-transition-${theme}-exit.png`),
-      });
-      await expect(history).toHaveAttribute('data-transition-phase', 'waiting');
-      await expect(history).toHaveCSS('opacity', '0');
-      expect(exit[0].opacity).toBe(1);
-      expect(exit[1].opacity).toBeGreaterThan(exit[2].opacity);
-      expect(exit[0].blur).toBeLessThan(exit[1].blur);
-      expect(exit[1].blur).toBeLessThan(exit[2].blur);
-      await overview.evaluate((el) =>
-        el
-          .getAnimations()
-          .find((a) => a.id === 'ol-page-exit')!
-          .finish(),
-      );
-
+    });
+    try {
+      await page.getByRole('button', { name: '历史', exact: true }).click();
       await expect(history).toHaveAttribute('data-transition-phase', 'enter');
-      await expect(overview).toHaveCSS('opacity', '0');
-      await expect(history).toHaveCSS('opacity', '0');
-      await expect(viewport).toHaveCSS(
-        'background-color',
-        theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(28, 28, 31)',
-      );
-      await page.screenshot({
-        path: testInfo.outputPath(`acceptance-transition-${theme}-surface.png`),
+      await expect(overview).toHaveCSS('opacity', '1');
+      await expect(overview).toHaveAttribute('inert', '');
+      const samples = await viewport.evaluate(async (node) => {
+        const incoming = node.querySelector<HTMLElement>('[data-transition-phase="enter"]')!;
+        const animation = incoming.getAnimations().find((a) => a.id === 'ol-page-enter')!;
+        await animation.ready;
+        const duration = Number(animation.effect!.getComputedTiming().activeDuration);
+        return [0, 0.25, 0.5, 0.75].map((fraction) => {
+          animation.currentTime = duration * fraction;
+          const surfaces = [...node.children] as HTMLElement[];
+          return Math.max(...surfaces.map((surface) => Number(getComputedStyle(surface).opacity)));
+        });
       });
-      const { duration: enterMs, frames: enter } = await sample(history, 'enter');
-      expect(exitMs + enterMs).toBeLessThanOrEqual(165);
-      await page.screenshot({
-        path: testInfo.outputPath(`acceptance-transition-${theme}-enter.png`),
-      });
-      expect(enter[0].opacity).toBe(0);
-      expect(enter[1].opacity).toBeLessThan(enter[2].opacity);
-      expect(enter[0].blur).toBeGreaterThan(enter[1].blur);
-      expect(enter[1].blur).toBeGreaterThan(enter[2].blur);
-      expect([...exit, ...enter].map(({ scale }) => scale)).toEqual(Array(6).fill(1));
-      await history.evaluate((el) =>
-        el
-          .getAnimations()
-          .find((a) => a.id === 'ol-page-enter')!
-          .play(),
-      );
+      expect(samples).toEqual([1, 1, 1, 1]);
+      await history.evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
       await expect(history).toHaveAttribute('data-transition-phase', 'settled');
-      await expect(history).toHaveCSS('opacity', '1');
-      await expect(history).toHaveCSS('filter', 'none');
       await expect(overview).toHaveCount(0);
+      await expect(history).toHaveCSS('filter', 'none');
     } finally {
       await page.evaluate(() => (window as NavigationProbe).restoreNavigationClock?.());
     }
@@ -273,4 +214,38 @@ test('dictation shortcuts hug the key label and coarse wheel scrolling has inter
   expect(end).toBeGreaterThan(80);
   expect(positions.some((value) => value > 1 && value < end - 1)).toBe(true);
   expect(positions.every((value, index) => !index || value >= positions[index - 1] - 1)).toBe(true);
+});
+
+
+test('pipeline switches keep the fixed controls and a visible model surface', async ({ page }) => {
+  await page.goto('/?os=mac');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  const pipeline = page.locator('.ol-service-pipeline-mode');
+  await expect(pipeline).toBeVisible();
+  await page.waitForFunction(() => document.querySelector('.ol-settings-scroll')?.getAttribute('data-transition-phase') === 'settled');
+  const original = await pipeline.boundingBox();
+  await pipeline.evaluate((node) => node.setAttribute('data-stable-pipeline', 'true'));
+  const models = page.locator('.ol-services-page > .ol-transition-viewport');
+  await models.evaluate((node) => {
+    const samples: number[] = [];
+    let active = true;
+    const sample = () => {
+      if (!active) return;
+      samples.push(Math.max(0, ...[...node.children].map((surface) => Number(getComputedStyle(surface).opacity))));
+      requestAnimationFrame(sample);
+    };
+    Object.assign(window, { stopPipelineSamples: () => { active = false; return samples; } });
+    sample();
+  });
+  for (const mode of ['多模态模式', 'DeepSeek 大统一', '传统模式', '多模态模式', '传统模式']) {
+    await page.getByRole('button', { name: mode, exact: true }).click();
+    await expect(page.getByRole('button', { name: mode, exact: true })).toHaveAttribute('aria-pressed', 'true');
+  }
+  await expect(pipeline).not.toHaveAttribute('aria-busy', 'true');
+  await expect(models.locator('[data-transition-phase="settled"]')).toHaveCount(1);
+  const samples = await page.evaluate(() => (window as unknown as { stopPipelineSamples(): number[] }).stopPipelineSamples());
+  expect(Math.min(...samples)).toBe(1);
+  await expect(pipeline).toHaveAttribute('data-stable-pipeline', 'true');
+  expect(await pipeline.boundingBox()).toEqual(original);
 });

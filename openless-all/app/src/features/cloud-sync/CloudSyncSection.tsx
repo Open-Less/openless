@@ -308,7 +308,7 @@ export function CustomSyncServerSection() {
             disabled={working}
           />
         </div>
-        <Btn size="sm" variant="blue" disabled={working || !prefs || !status} onClick={save}>
+        <Btn size="sm" variant="blue" style={{ alignSelf: 'flex-end' }} disabled={working || !prefs || !status} onClick={save}>
           {t('cloudSyncE2ee.customServerSave')}
         </Btn>
       </div>
@@ -837,9 +837,7 @@ export function CloudSyncSection() {
   const cancelRequested = taskId !== null && cancelRequestedTask === taskId;
   const sectionHeaderTask = modalActive && !dialog && working ? taskId : null;
   const dialogHeaderTask = dialog && working ? taskId : null;
-  const sectionHeaderAction = t(
-    sectionHeaderTask ? 'cloudSyncE2ee.cancelTask' : 'cloudSyncE2ee.refresh',
-  );
+  const sectionHeaderAction = t('cloudSyncE2ee.cancelTask');
   const syncing = syncIntent.current;
   const progressMessage = t(
     cancelRequested
@@ -942,16 +940,17 @@ export function CloudSyncSection() {
             <h3 id="cloud-sync-e2ee-title">{t('cloudSyncE2ee.title')}</h3>
             <p>{t('cloudSyncE2ee.description')}</p>
           </div>
-          <button
-            type="button"
-            className="ol-settings-back"
-            onClick={() => void (sectionHeaderTask ? cancelTask(sectionHeaderTask) : load())}
-            disabled={sectionHeaderTask ? cancelRequested : loading}
-            aria-label={sectionHeaderAction}
-            title={sectionHeaderAction}
-          >
-            <Icon name={sectionHeaderTask ? 'close' : 'refresh'} size={16} />
-          </button>
+          <span className="ol-sync-task-slot">
+            {sectionHeaderTask ? (
+              <button type="button" className="ol-settings-back"
+                onClick={() => void cancelTask(sectionHeaderTask)}
+                disabled={cancelRequested} aria-label={sectionHeaderAction} title={sectionHeaderAction}>
+                <Icon name="close" size={16} />
+              </button>
+            ) : (loading || working) ? (
+              <Icon name="refresh" size={16} className="ol-loading-spinner" />
+            ) : null}
+          </span>
         </header>
         {previewScenario && <p role="note">{t('cloudSyncE2ee.previewNotice')}</p>}
         <div className="ol-cloud-sync-account" style={{ justifyContent: 'space-between' }}>
@@ -1154,7 +1153,7 @@ export function CloudSyncSection() {
                 disabled={loading || working}
                 onClick={() => void load()}
               >
-                {t('cloudSyncE2ee.refresh')}
+                {t('common.retry')}
               </Btn>
             )}
             {(visibleError === 'unlock' ||

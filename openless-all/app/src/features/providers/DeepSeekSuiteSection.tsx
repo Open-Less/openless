@@ -9,7 +9,7 @@ import {
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
-import { inputStyle } from '../../ui/controls/settingsFieldStyles';
+import { SelectLite } from '../../ui/controls/SelectLite';
 import { SettingRow } from '../../ui/controls/SettingRow';
 
 export function DeepSeekSuiteSection() {
@@ -44,14 +44,8 @@ export function DeepSeekSuiteSection() {
       <h3>{text('DeepSeek 大统一', 'DeepSeek suite')}</h3>
       <p>
         {text(
-          '当前管线使用 DeepSeek 完成语音识别、对话、原生联网搜索和朗读。此处凭据独立保存，首次使用会复制已配置的默认 DeepSeek 官方渠道 API Key。',
-          'This pipeline uses DeepSeek for speech recognition, conversation, native web search and read aloud. Credentials are stored independently; first setup copies the default configured official DeepSeek channel key.',
-        )}
-      </p>
-      <p>
-        {text(
-          'ASR 在松开录音键后上传，每段最长 120 秒。联网和语音按 DeepSeek 官方计费。传统、多模态管线仍使用各自的模型和 Web Search 配置。',
-          'ASR uploads after recording stops, in segments of up to 120 seconds. DeepSeek charges apply to search and speech. Traditional and multimodal pipelines keep their own models and Web Search settings.',
+          '录音会发送至 DeepSeek，每段最长 120 秒。联网与语音服务按官方标准计费。',
+          'Recordings are sent to DeepSeek, up to 120 seconds per segment. Search and speech services are billed by DeepSeek.',
         )}
       </p>
       {config && (
@@ -68,18 +62,16 @@ export function DeepSeekSuiteSection() {
             />
           </SettingRow>
           <SettingRow label={text('朗读音色', 'Voice')}>
-            <select
-              aria-label={text('朗读音色', 'Voice')}
-              style={inputStyle}
+            <SelectLite
+              ariaLabel={text('朗读音色', 'Voice')}
               value={config.voice}
               disabled={busy}
-              onChange={(e) =>
-                setConfig({ ...config, voice: e.target.value as DeepSeekSuiteConfig['voice'] })
-              }
-            >
-              <option value="stella">{text('海星 · 女声', 'Stella')}</option>
-              <option value="tide">{text('暗潮 · 男声', 'Tide')}</option>
-            </select>
+              onChange={(voice) => setConfig({ ...config, voice: voice as DeepSeekSuiteConfig['voice'] })}
+              options={[
+                { value: 'stella', label: text('海星 · 女声', 'Stella') },
+                { value: 'tide', label: text('暗潮 · 男声', 'Tide') },
+              ]}
+            />
           </SettingRow>
           <Btn
             variant="primary"

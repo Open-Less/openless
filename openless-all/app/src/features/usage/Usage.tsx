@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { clearServiceUsage, supportsServiceUsage } from '../../api/usage';
 import { Icon } from '../../components/Icon';
-import { historyStore, useHistoryRecords } from '../../data/history';
+import { useHistoryRecords } from '../../data/history';
 import { refreshServiceUsage, useServiceUsage } from '../../data/usage';
 import { Segmented } from '../../ui/controls/Segmented';
 import { Button as Btn } from '../../ui/controls/Button';
@@ -33,10 +33,6 @@ export function Usage() {
   }, [history.data, days]);
   const dashboard = buildUsageDashboard(rows, serviceUsage.data?.records ?? null, days, text);
 
-  const refresh = async () => {
-    if (clearing) return;
-    await Promise.all([historyStore.refreshRecords(), refreshServiceUsage()]);
-  };
   const clear = async () => {
     if (clearPending.current) return;
     clearPending.current = true;
@@ -87,11 +83,6 @@ export function Usage() {
           '按服务与用途查看本机保留的使用记录。',
           'Review retained local records by service and purpose.',
         )}
-        right={
-          <Btn icon="refresh" disabled={clearing} onClick={() => void refresh()}>
-            {text('刷新', 'Refresh')}
-          </Btn>
-        }
       />
       <div className="ol-usage-controls">
         <nav aria-label={text('用量页面', 'Usage pages')} className="ol-usage-tabs">

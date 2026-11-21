@@ -34,8 +34,8 @@ export function useActivityAppRanking(year: number) {
     return () => {
       active = false;
     };
-  }, [key, year]);
-  const icons = resolved?.key === key ? resolved.icons : undefined;
+  }, [key, year, apps.data]);
+  const icons = resolved?.icons;
   return {
     rows: rows.map((row) => ({ ...row, icon: icons?.[row.name] })),
     loadFailed: apps.error !== null,

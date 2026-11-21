@@ -195,10 +195,10 @@ p {
 }
 
 /* 通用旋转 —— 「检查更新」按钮检查中的转圈动画等。
-   refresh 图标是逆时针（ccw）箭头，旋转方向与其一致，避免视觉上"反着转"。 */
+   refresh uses RefreshCw; keep its motion clockwise. */
 @keyframes ol-spin {
   to {
-    transform: rotate(-360deg);
+    transform: rotate(360deg);
   }
 }
 
@@ -2339,4 +2339,14 @@ input[type='search']::-webkit-search-results-decoration {
   background-color: transparent !important;
   border-color: transparent !important;
   box-shadow: none;
+}
+
+.ol-sync-task-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  margin-inline-start: auto;
 }

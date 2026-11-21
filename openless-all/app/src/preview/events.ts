@@ -1,8 +1,9 @@
-type PreviewSignal = 'history' | 'preferences' | 'style-packs';
+type PreviewSignal = 'history' | 'preferences' | 'style-packs' | 'service-usage';
 const listeners: Record<PreviewSignal, Set<() => void>> = {
   history: new Set(),
   preferences: new Set(),
   'style-packs': new Set(),
+  'service-usage': new Set(),
 };
 
 export function publishPreviewChange(domain: PreviewSignal): void {

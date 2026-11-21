@@ -263,29 +263,50 @@ pub struct UsageRecorder {
     ledger: Arc<UsageLedger>,
     sender: mpsc::SyncSender<WriterCommand>,
     dropped_or_failed: Arc<AtomicU64>,
+    on_change: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl UsageRecorder {
     pub fn start(ledger: Arc<UsageLedger>) -> Result<Self, BackendError> {
+        Self::start_with_change_listener(ledger, || {})
+    }
+
+    /// Notify hosts after persisted data or the failure count changes.
+    /// The listener must not synchronously call back into this recorder.
+    pub fn start_with_change_listener(
+        ledger: Arc<UsageLedger>,
+        on_change: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, BackendError> {
         let (sender, receiver) = mpsc::sync_channel(256);
         let worker_ledger = Arc::clone(&ledger);
         let dropped_or_failed = Arc::new(AtomicU64::new(0));
         let failures = Arc::clone(&dropped_or_failed);
+        let on_change: Arc<dyn Fn() + Send + Sync> = Arc::new(on_change);
+        let worker_on_change = Arc::clone(&on_change);
         std::thread::Builder::new()
             .name("openless-usage-ledger".into())
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
                     match command {
                         WriterCommand::Append(generation, record) => {
-                            if worker_ledger.append(generation, *record).is_err() {
-                                failures.fetch_add(1, Ordering::Relaxed);
+                            match worker_ledger.append(generation, *record) {
+                                Ok(true) => worker_on_change(),
+                                Ok(false) => {}
+                                Err(_) => {
+                                    failures.fetch_add(1, Ordering::Relaxed);
+                                    worker_on_change();
+                                }
                             }
                         }
                         WriterCommand::Flush(reply) => {
                             let _ = reply.send(());
                         }
                         WriterCommand::Clear(reply) => {
-                            let _ = reply.send(worker_ledger.clear());
+                            let result = worker_ledger.clear();
+                            if result.is_ok() {
+                                worker_on_change();
+                            }
+                            let _ = reply.send(result);
                         }
                     }
                 }
@@ -295,6 +316,7 @@ impl UsageRecorder {
             ledger,
             sender,
             dropped_or_failed,
+            on_change,
         })
     }
 
@@ -311,6 +333,7 @@ impl UsageRecorder {
             true
         } else {
             self.dropped_or_failed.fetch_add(1, Ordering::Relaxed);
+            (self.on_change)();
             false
         }
     }
@@ -673,17 +696,30 @@ mod tests {
     fn recorder_flushes_and_rejects_inflight_records_after_clear() {
         let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
         let ledger = Arc::new(UsageLedger::open(dir.join("usage.json")).unwrap());
-        let recorder = UsageRecorder::start(ledger).unwrap();
+        let observed_ledger = Arc::clone(&ledger);
+        let (changed, changes) = mpsc::channel();
+        let recorder = UsageRecorder::start_with_change_listener(ledger, move || {
+            changed.send(observed_ledger.list().unwrap().len()).unwrap();
+        })
+        .unwrap();
         let generation = recorder.generation();
-        assert!(recorder.submit(generation, record()));
+        let original = record();
+        assert!(recorder.submit(generation, original.clone()));
         assert_eq!(recorder.snapshot().unwrap().0.len(), 1);
+        assert_eq!(changes.try_recv().unwrap(), 1);
+        assert!(recorder.submit(generation, original));
+        assert_eq!(recorder.snapshot().unwrap().0.len(), 1);
+        assert!(changes.try_recv().is_err());
         recorder.clear().unwrap();
+        assert_eq!(changes.try_recv().unwrap(), 0);
         assert!(recorder.submit(generation, record()));
         assert!(recorder.snapshot().unwrap().0.is_empty());
+        assert!(changes.try_recv().is_err());
         let mut invalid = record();
         invalid.model = Some("sk-secret".into());
         assert!(recorder.submit(recorder.generation(), invalid));
         assert_eq!(recorder.snapshot().unwrap().1, 1);
+        assert_eq!(changes.try_recv().unwrap(), 0);
         drop(recorder);
         std::fs::remove_dir_all(dir).unwrap();
     }

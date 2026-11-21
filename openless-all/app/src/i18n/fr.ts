@@ -158,7 +158,7 @@ export const fr: typeof zhCN = {
     disableDescription:
       'Les synchronisations cessent. La sauvegarde cloud et les données locales sont conservées. La suppression est une action distincte.',
     confirmDisable: 'Désactiver la synchronisation',
-    refreshBackup: 'Afficher ou actualiser la sauvegarde cloud',
+    refreshBackup: 'Afficher la sauvegarde cloud',
     deleteTitle: 'Supprimer la sauvegarde cloud chiffrée ?',
     deleteDescription:
       'Seule la sauvegarde cloud de ce compte sera supprimée. Les données locales restent. Une nouvelle sauvegarde sera nécessaire pour un autre appareil.',
@@ -1505,7 +1505,7 @@ export const fr: typeof zhCN = {
         spectrumHint:
           'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
-        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        spectrumWaiting: 'En attente d’enregistrement',
         presets: 'Equalizer presets',
         choosePreset: 'Choose a preset',
         preset_normal: 'Flat',

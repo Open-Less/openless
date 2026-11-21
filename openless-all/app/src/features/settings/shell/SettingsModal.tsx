@@ -1,3 +1,4 @@
+import { officialLinks } from '../../../lib/officialLinks';
 import { TextField } from '../../../ui/controls/TextField';
 // Settings categories reuse the existing consumers; complex experiments open in the right pane.
 import { useRef, useState, type CSSProperties } from 'react';
@@ -45,7 +46,7 @@ interface SettingsModalProps {
 }
 
 const LINKS = [
-  { id: 'helpCenter', icon: 'help', href: 'https://github.com/Open-Less/openless#readme' },
+  { id: 'helpCenter', icon: 'help', href: 'docs' },
   { id: 'releaseNotes', icon: 'doc', href: 'https://github.com/Open-Less/openless/releases' },
 ];
 
@@ -397,7 +398,7 @@ export function SettingsModal({
                                   {contentTitle}
                                 </h2>
                               )}
-                              {activeAdvancedPage?.id !== 'localModels' && (
+                              {searching && (
                                 <p
                                   style={{
                                     margin:
@@ -458,19 +459,9 @@ export function SettingsModal({
                                       style={{
                                         display: 'block',
                                         fontWeight: 'var(--ol-font-weight-semibold)',
-                                        marginBottom: 5,
                                       }}
                                     >
                                       {item.title}
-                                    </span>
-                                    <span
-                                      style={{
-                                        fontSize: 12,
-                                        color: 'var(--ol-ink-3)',
-                                        lineHeight: 1.6,
-                                      }}
-                                    >
-                                      {item.description}
                                     </span>
                                   </span>
                                   <Icon name="chevRight" size={14} />
@@ -570,7 +561,8 @@ export function SettingsModal({
 }
 
 function HelpLinks() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const links = officialLinks(i18n.language);
   return (
     <div
       style={{
@@ -586,7 +578,7 @@ function HelpLinks() {
         <button
           key={link.id}
           type="button"
-          onClick={() => void openExternal(link.href)}
+          onClick={() => void openExternal(link.href === 'docs' ? links.docs : link.href)}
           className="ol-settings-rail-link"
           style={{ ...railButtonStyle, padding: '8px 10px' }}
         >

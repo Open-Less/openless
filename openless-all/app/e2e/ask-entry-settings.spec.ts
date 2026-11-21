@@ -123,7 +123,8 @@ test('a failed pending save reports a notice and preserves committed values', as
   await expect(voice).toBeEnabled();
   await openIntentRouting(page);
   await mainTool.click();
-  await expect(separate).toBeDisabled();
+  await expect(separate).toHaveAttribute('aria-disabled', 'true');
+  expect(await separate.evaluate((node) => node.matches(':disabled'))).toBe(false);
   await expect
     .poll(() => page.evaluate(() => window.askEntrySettingsFixture.hasPendingWrite()))
     .toBe(true);
@@ -175,4 +176,50 @@ test('a native read failure requires explicit, committed recovery', async ({ pag
   await expect(restore).toHaveCount(0);
   await openIntentRouting(page);
   await expect(page.getByRole('radio', { name: 'Independent model', exact: true })).toBeChecked();
+});
+
+test('intent routing preserves neighbouring radio appearance during a deferred failed save', async ({ page }) => {
+  await page.goto(`${fixture}?defer`);
+  await openIntentRouting(page);
+  const semantic = page.getByRole('radio', { name: 'Semantic hybrid', exact: true });
+  const mainTool = page.getByRole('radio', { name: 'Primary model tools', exact: true });
+  const independent = page.getByRole('radio', { name: 'Independent model', exact: true });
+  const appearance = () => mainTool.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { opacity: style.opacity, color: style.color, disabled: node.matches(':disabled'), bounds: node.getBoundingClientRect().toJSON() };
+  });
+  const before = await appearance();
+  await semantic.click();
+  await expect.poll(() => page.evaluate(() => window.askEntrySettingsFixture.hasPendingWrite())).toBe(true);
+  expect(await appearance()).toEqual(before);
+  await mainTool.press('Space');
+  expect(await page.evaluate(() => window.askEntrySettingsFixture.writes.length)).toBe(1);
+  await page.evaluate(() => window.askEntrySettingsFixture.finish(true));
+  await expect(independent).toBeChecked();
+  await expect(mainTool).not.toBeChecked();
+  expect(await appearance()).toEqual(before);
+});
+
+test('permissions check once per entry and only recheck focus after opening system settings', async ({ page }) => {
+  await page.goto(fixture);
+  await page.getByRole('button', { name: 'Permissions & data', exact: true }).click();
+  await settleNavigation(page);
+  const reads = () => page.evaluate(() => window.askEntrySettingsFixture.microphoneReads());
+  await expect.poll(reads).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await reads()).toBe(1);
+  await page.getByRole('button', { name: 'Open System Settings', exact: true }).click();
+  expect(await page.evaluate(() => window.askEntrySettingsFixture.settingsOpened())).toBe(1);
+  const beforeReturn = await reads();
+  await page.evaluate(() => {
+    window.askEntrySettingsFixture.grantMicrophone();
+    window.dispatchEvent(new Event('focus'));
+  });
+  await expect.poll(reads).toBe(beforeReturn + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await reads()).toBe(beforeReturn + 1);
+  await page.getByRole('button', { name: 'General', exact: true }).click();
+  await settleNavigation(page);
+  await page.getByRole('button', { name: 'Permissions & data', exact: true }).click();
+  await expect.poll(reads).toBe(beforeReturn + 2);
 });

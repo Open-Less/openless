@@ -50,55 +50,33 @@ function PhaseText({ text }: { text: string }) {
 function RollingDownloadPercent({ percent, locale }: { percent: number; locale?: string }) {
   const { before, digits, after } = downloadPercentParts(percent, locale);
   const reduced = useReducedMotion();
-  const live = useRef<HTMLSpanElement>(null);
+  const track = useRef<HTMLSpanElement>(null);
   const outgoing = useRef<HTMLSpanElement>(null);
-  const previous = useRef({ digits, percent });
-  const animations = useRef<Animation[]>([]);
+  const previous = useRef(digits);
 
   useLayoutEffect(() => {
     const prior = previous.current;
-    previous.current = { digits, percent };
-    if (prior.digits === digits && !reduced) return;
-    const interrupted = animations.current.some((animation) => animation.playState === 'running');
-    animations.current.forEach((animation) => animation.cancel());
-    animations.current = [];
-
-    const current = live.current;
+    previous.current = digits;
+    const node = track.current;
     const ghost = outgoing.current;
-    // A fast tick replaces the in-flight roll with the latest readable value.
-    if (reduced || interrupted || !current?.animate || !ghost || prior.digits === digits) return;
-    ghost.dataset.previous = prior.digits;
-    const distance = percent >= prior.percent ? 100 : -100;
-    const timing = { duration: 180, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' };
-    animations.current = [
-      ghost.animate(
-        [
-          { opacity: 1, transform: 'translateY(0)' },
-          { opacity: 1, transform: `translateY(${-distance}%)` },
-        ],
-        timing,
-      ),
-      current.animate(
-        [{ transform: `translateY(${distance}%)` }, { transform: 'translateY(0)' }],
-        timing,
-      ),
-    ];
-  }, [digits, percent, reduced]);
-
-  useLayoutEffect(
-    () => () => {
-      animations.current.forEach((animation) => animation.cancel());
-    },
-    [],
-  );
+    if (reduced || prior === digits || !node?.animate || !ghost) return;
+    ghost.dataset.previous = prior;
+    // Both values are fixed one line apart. One animation moves the entire reel,
+    // including inside the notification's smaller inherited line-height.
+    const animation = node.animate(
+      [{ transform: 'translateY(100%)' }, { transform: 'translateY(0)' }],
+      { duration: 180, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    );
+    return () => animation.cancel();
+  }, [digits, reduced]);
 
   return (
     <span className="ol-download-percent">
       {before}
       <span className="ol-download-digits">
-        <span ref={outgoing} className="ol-download-digits-outgoing" aria-hidden="true" />
-        <span ref={live} className="ol-download-digits-current">
-          {digits}
+        <span ref={track} className="ol-download-digits-track">
+          <span ref={outgoing} className="ol-download-digits-outgoing" aria-hidden="true" />
+          <span className="ol-download-digits-current">{digits}</span>
         </span>
       </span>
       {after}
