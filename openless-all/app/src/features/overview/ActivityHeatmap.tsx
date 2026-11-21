@@ -1,7 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActivityDay } from '../../api/contracts';
+import { getActivityAppIcons } from '../../api/history';
 import { useActivityApps } from '../../data/history';
+import { getRuntimeEnvironment } from '../../runtime/environment';
 import { formatLocaleDecimal, formatLocaleNumber } from '../../lib/localeFormat';
 import {
   GitHubActivity,
@@ -25,13 +27,36 @@ export function ActivityHeatmap({
   const locale = i18n.resolvedLanguage || i18n.language || 'en';
   const year = new Date().getFullYear();
   const apps = useActivityApps(year);
-  const appRows =
-    apps.data?.status === 'available'
-      ? [...apps.data.rows]
-          .sort(([, left], [, right]) => right - left)
-          .slice(0, 5)
-          .map(([name, count]) => ({ name, count }))
-      : [];
+  const appRows = useMemo(
+    () =>
+      apps.data?.status === 'available'
+        ? [...apps.data.rows]
+            .sort(([, left], [, right]) => right - left)
+            .slice(0, 5)
+            .map(([name, count]) => ({ name, count }))
+        : [],
+    [apps.data],
+  );
+  const [icons, setIcons] = useState<Record<string, string>>({});
+  const { host, os, isMobile } = getRuntimeEnvironment();
+  const iconKey =
+    host === 'tauri' && !isMobile && (os === 'mac' || os === 'win') && appRows.length > 0
+      ? JSON.stringify(appRows.map(({ name }) => name).sort())
+      : null;
+  useEffect(() => {
+    if (iconKey === null) return;
+    let active = true;
+    void getActivityAppIcons(year)
+      .then((next) => {
+        if (active) setIcons(next);
+      })
+      .catch(() => {
+        // Missing icons (including older hosts) must never hide the ranking.
+      });
+    return () => {
+      active = false;
+    };
+  }, [iconKey, year]);
   const data = useMemo(() => {
     const first = new Date(year, 0, 1);
     const last = new Date(year, 11, 31);
@@ -122,7 +147,7 @@ export function ActivityHeatmap({
         fitToWidth
         showMonths
         contributions={data.contributions}
-        apps={appRows}
+        apps={appRows.map((row) => ({ ...row, icon: icons[row.name] }))}
         accent="var(--ol-accent-solid-bg)"
         heading={`${t('overview.activityCount', { count: data.total })} · ${year}`}
         label={t('overview.activityAppsLabel')}

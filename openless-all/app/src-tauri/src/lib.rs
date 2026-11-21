@@ -24,6 +24,8 @@ compile_error!(
 );
 
 mod android;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod activity_app_icons;
 mod asr;
 mod audio_mute;
 #[cfg(test)]
@@ -318,6 +320,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::clear_history,
             commands::get_activity_stats,
             commands::get_activity_apps,
+            commands::get_activity_app_icons,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -627,6 +630,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
             $crate::commands::get_activity_apps,
+            $crate::commands::get_activity_app_icons,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
