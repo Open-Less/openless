@@ -58,178 +58,6 @@
 .qa-capsule-shell.is-closing {
   pointer-events: none;
 }
-.qa-prompt {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 7px;
-  height: 64px;
-  padding: 10px 11px;
-  --qa-prompt-outline: var(--qa-strong);
-  border: 0;
-  border-radius: var(--ol-surface-radius);
-  background: var(--qa-paper);
-  box-shadow:
-    inset 0 0 0 1px var(--qa-prompt-outline),
-    0 3px 12px rgb(30 40 20 / 6%),
-    inset 0 1px 0 rgb(255 255 255 / 12%);
-}
-.qa-prompt:focus-within {
-  /* Inset ring: it follows the composer's radius and can never paint outside
-     the window's rounded clip. No outer outline is used. */
-  --qa-prompt-outline: var(--qa-accent);
-}
-.qa-prompt :is(input, textarea):focus,
-.qa-prompt :is(input, textarea):focus-visible {
-  outline: none;
-}
-.qa-prompt button {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  border-radius: var(--ol-radius);
-}
-.qa-prompt button:not(:disabled) {
-  transition:
-    background-color 130ms ease,
-    color 130ms ease;
-}
-.qa-prompt button:not(:disabled):hover {
-  background: var(--qa-wash);
-}
-.qa-add {
-  width: 25px;
-  height: 25px;
-  color: var(--qa-muted) !important;
-  opacity: 0.5;
-}
-.qa-add svg {
-  width: 17px;
-  height: 17px;
-  stroke-width: 1.7;
-}
-.qa-input-stage {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  opacity: 1;
-  transition:
-    flex-basis 230ms ease,
-    opacity 160ms ease,
-    transform 230ms ease;
-}
-.qa-input-stage input {
-  width: 100%;
-  min-width: 0;
-  height: 30px;
-  border: 0;
-  background: transparent;
-  padding: 0 2px;
-  outline: none;
-  font-size: 12px;
-  letter-spacing: 0.01em;
-}
-.qa-input-stage input::placeholder {
-  color: var(--qa-muted);
-  opacity: 1;
-}
-.qa-input-stage input:disabled {
-  -webkit-text-fill-color: var(--qa-muted);
-}
-.qa-browser-note {
-  font-size: 8px;
-  color: var(--qa-muted);
-  padding-left: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.qa-mode {
-  width: 24px;
-  height: 27px;
-  color: var(--qa-muted) !important;
-}
-.qa-mode svg {
-  width: 14px;
-  height: 14px;
-}
-.qa-mode.is-on {
-  color: var(--qa-accent) !important;
-  background: var(--qa-wash);
-}
-.qa-mode:disabled {
-  opacity: 0.35;
-}
-.qa-voice-pod {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0;
-  flex: 0 0 32px;
-  min-width: 0;
-  transition:
-    flex-basis 240ms cubic-bezier(0.22, 0.8, 0.22, 1),
-    background-color 160ms ease;
-  border-radius: var(--ol-r-xl);
-}
-.qa-voice-feedback {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  flex: 0 1 0;
-  min-width: 0;
-  width: 0;
-  opacity: 0;
-  overflow: hidden;
-  transform: translateX(9px);
-  transition:
-    opacity 150ms ease,
-    transform 240ms ease,
-    flex-grow 240ms ease;
-}
-.qa-mic {
-  width: 32px;
-  height: 32px;
-}
-.qa-mic svg {
-  width: 17px;
-  height: 17px;
-  stroke-width: 1.8;
-}
-.qa-mic.is-recording {
-  background: var(--qa-accent);
-  color: var(--qa-paper);
-}
-.qa-mic.is-recording:not(:disabled):hover {
-  background: var(--qa-accent);
-}
-.qa-mic.is-recording svg {
-  width: 12px;
-  height: 12px;
-  fill: currentColor;
-}
-.qa-mic:disabled {
-  opacity: 0.4;
-}
-.qa-send {
-  width: 29px;
-  height: 29px;
-  background: var(--qa-accent);
-  color: var(--qa-paper) !important;
-}
-.qa-send svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.9;
-}
-.qa-send:not(:disabled):hover {
-  background: var(--qa-accent) !important;
-}
-.qa-send:disabled {
-  opacity: 0.22;
-}
 .qa-close {
   width: 20px;
   height: 24px;
@@ -241,70 +69,6 @@
 }
 .qa-close:disabled {
   opacity: 0.5;
-}
-.qa-prompt.is-voice .qa-input-stage {
-  flex: 0 1 0;
-  opacity: 0;
-  transform: translateX(-6px);
-  pointer-events: none;
-}
-.qa-prompt.is-voice .qa-mode {
-  display: none;
-}
-.qa-prompt.is-voice .qa-voice-pod {
-  flex: 1 1 230px;
-  gap: 12px;
-}
-.qa-prompt.is-voice .qa-voice-feedback {
-  flex: 1 1 auto;
-  width: auto;
-  opacity: 1;
-  transform: translateX(0);
-}
-.qa-capsule-shell .voice-waveform {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-width: 0;
-}
-.qa-capsule-shell .voice-waveform-bars {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  height: 30px;
-  flex-shrink: 0;
-}
-.qa-capsule-shell .voice-waveform-bars span {
-  width: 3px;
-  border-radius: var(--ol-radius);
-  background: var(--qa-accent);
-  transition: height 90ms linear;
-}
-.qa-capsule-shell .voice-waveform-label {
-  font-size: 10px;
-  color: var(--qa-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.qa-capsule-shell .voice-waveform.is-processing .voice-waveform-bars span {
-  animation: qa-processing-pulse 1.2s ease-in-out var(--wave-delay) infinite;
-}
-.qa-recording-selection {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 9px;
-  line-height: 1.2;
-  color: var(--qa-muted);
-}
-.qa-recording-selection svg {
-  width: 9px;
-  height: 9px;
 }
 .qa-answer-panel {
   display: flex;
@@ -528,9 +292,6 @@
   padding: 10px;
   background: var(--qa-bg);
 }
-.qa-capsule-shell.is-embedded .qa-prompt {
-  border-radius: var(--ol-r-xl);
-}
 @keyframes qa-processing-pulse {
   0%,
   100% {
@@ -538,32 +299,6 @@
   }
   50% {
     opacity: 1;
-  }
-}
-@media (max-width: 380px) {
-  .qa-prompt {
-    gap: 4px;
-    padding-left: 7px;
-    padding-right: 7px;
-  }
-  .qa-mode {
-    width: 21px;
-  }
-  .qa-add {
-    width: 20px;
-  }
-  .qa-input-stage input {
-    font-size: 11px;
-  }
-  .qa-capsule-shell .voice-waveform-bars {
-    gap: 2px;
-  }
-  .qa-capsule-shell .voice-waveform {
-    gap: 6px;
-  }
-  .qa-messages {
-    padding-left: 15px;
-    padding-right: 15px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -646,10 +381,6 @@
 }
 .qa-capsule-shell.is-expanded .qa-composer-dock {
   order: 2;
-}
-.qa-capsule-shell.is-expanded .qa-prompt {
-  height: 48px;
-  border-radius: var(--ol-r-lg);
 }
 .qa-answer-panel {
   border-radius: var(--ol-r-xl);
@@ -973,14 +704,24 @@
 }
 
 /* Conversation layout. The polish preview reuses this panel without this class. */
-.qa-capsule-shell.is-expanded .qa-conversation.qa-answer-panel {
+.qa-capsule-shell.is-expanded:not(.is-embedded):has(.qa-conversation) {
+  padding: 0;
+}
+.qa-conversation.qa-answer-panel {
+  --qa-content-width: 640px;
+  --qa-content-gutter: 16px;
+  --qa-prompt-line: rgb(0 0 0 / 8%);
+  container-type: size;
+  border: 1px solid var(--qa-line);
+  border-radius: 0;
   background: var(--qa-bg);
-  box-shadow:
-    inset 0 0 0 1px var(--qa-line),
-    0 8px 28px rgb(0 0 0 / 10%);
+  box-shadow: none;
 }
 .qa-conversation .qa-answer-header {
-  background: var(--qa-paper);
+  background: var(--qa-bg);
+}
+.qa-conversation .qa-answer-header::after {
+  display: none;
 }
 .qa-conversation .qa-answer-header h1 {
   max-width: calc(100% - 72px);
@@ -988,21 +729,34 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.qa-conversation .qa-answer-header::after {
-  background: linear-gradient(to bottom, var(--qa-paper), transparent);
+.qa-conversation .qa-window-actions,
+.qa-conversation[data-platform='mac'] .qa-window-actions {
+  top: 8px;
+  right: 10px;
 }
-.qa-conversation .qa-window-actions button,
+.qa-conversation[data-platform='mac'] .qa-window-actions {
+  left: 10px;
+  right: auto;
+}
+.qa-conversation .qa-window-actions .qa-close {
+  border-radius: 50%;
+  background: var(--qa-wash);
+}
+.qa-conversation .qa-window-actions .qa-close:hover {
+  background: var(--qa-line);
+}
 .qa-conversation .qa-copy {
   color: var(--qa-muted) !important;
 }
-.qa-conversation .qa-window-actions button:hover,
 .qa-conversation .qa-copy:hover {
   background: var(--qa-wash);
 }
 .qa-conversation .qa-messages {
-  gap: 20px;
-  /* Clear the header fade so the first turn is not blurred into the title bar. */
-  padding: 28px 20px 24px;
+  width: 100%;
+  max-width: calc(var(--qa-content-width) + 2 * var(--qa-content-gutter));
+  margin-inline: auto;
+  padding: 10px var(--qa-content-gutter) 24px;
+  gap: 18px;
 }
 .qa-conversation .qa-messages > [data-message-id]:has(.qa-assistant-message),
 .qa-conversation .qa-messages > [data-message-id] > .qa-assistant-message {
@@ -1030,13 +784,16 @@
 }
 .qa-conversation .qa-user-turn p {
   margin: 0;
-  padding: 10px 14px;
-  border-radius: 16px;
+  padding: 10px 16px;
+  border-radius: 20px;
   background: var(--qa-wash);
   color: var(--qa-ink);
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 24px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .qa-conversation .qa-user-turn .qa-copy {
   opacity: 0;
@@ -1056,7 +813,7 @@
 }
 .qa-conversation .qa-assistant-message .olchat-answer {
   font-size: 15px;
-  line-height: 1.75;
+  line-height: 24px;
 }
 .qa-conversation .qa-thought {
   display: flex;
@@ -1065,6 +822,10 @@
   min-height: 28px;
   color: var(--qa-muted);
   font-size: 13px;
+}
+.qa-conversation .qa-thought svg {
+  width: 16px;
+  height: 16px;
 }
 .qa-conversation .qa-empty-answer {
   display: flex;
@@ -1082,73 +843,39 @@
   min-height: 0;
 }
 .qa-conversation .qa-composer-dock {
-  padding: 0 12px 12px;
+  padding: 0 var(--qa-content-gutter) 16px;
 }
-.qa-capsule-shell.is-expanded .qa-conversation .qa-prompt {
-  flex-direction: column;
-  align-items: stretch;
-  height: auto;
-  min-height: 76px;
-  padding: 9px 12px 6px;
-  gap: 1px;
-  border-radius: 18px;
+.qa-conversation .qa-prompt {
+  max-width: var(--qa-content-width);
+  margin-inline: auto;
 }
-.qa-conversation .qa-input-stage input {
-  height: 30px;
-  font-size: 13.5px;
+@container (max-width: 480px) {
+  .qa-conversation :is(.qa-messages, .qa-composer-dock) {
+    --qa-content-gutter: 12px;
+  }
 }
-.qa-conversation .qa-prompt-tools {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  min-height: 28px;
-}
-.qa-conversation .qa-prompt.is-voice .qa-input-stage {
-  display: none;
-}
-.qa-conversation .qa-prompt.is-voice .qa-prompt-tools {
-  min-height: 44px;
-}
-.qa-conversation .qa-prompt.is-voice .qa-voice-pod {
-  flex: 1 1 auto;
-}
-.qa-conversation .qa-send,
-.qa-conversation .qa-mic,
-.qa-conversation .qa-mode {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-}
-.qa-conversation .qa-send.is-stop {
-  border-radius: 10px;
-}
-.qa-conversation .qa-send.is-stop svg {
-  width: 11px;
-  height: 11px;
-  fill: currentColor;
-}
-.qa-conversation .qa-recording-selection {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 220px;
-  overflow: hidden;
-  color: var(--qa-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+@container (max-height: 260px) {
+  .qa-conversation .qa-composer-dock {
+    padding-bottom: 8px;
+  }
+  .qa-conversation .qa-messages {
+    padding-block: 8px 12px;
+  }
 }
 html[data-ol-theme='dark'] .qa-capsule-shell:has(.qa-conversation) {
   color-scheme: dark;
-  --qa-bg: var(--ol-bg-base);
-  --qa-paper: var(--ol-surface);
-  --qa-wash: var(--ol-surface-2);
+  --qa-bg: #171717;
+  --qa-paper: #0f0f0f;
+  --qa-wash: rgb(255 255 255 / 8%);
   --qa-ink: var(--ol-ink);
   --qa-muted: var(--ol-ink-3);
   --qa-line: var(--ol-line);
   --qa-strong: var(--ol-line-strong);
   --qa-accent: var(--ol-blue);
+}
+
+html[data-ol-theme='dark'] .qa-conversation {
+  --qa-prompt-line: rgb(255 255 255 / 10%);
 }
 
 .qa-turn-error {

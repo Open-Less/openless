@@ -147,14 +147,14 @@ test('QA opens the conversation while recording and starts fresh after close', a
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-prompt')).toBeVisible();
   const host = page.locator('#native-host');
-  await expect(host).toHaveCSS('width', '720px');
-  await expect(host).toHaveCSS('height', '380px');
+  await expect(host).toHaveCSS('width', '975px');
+  await expect(host).toHaveCSS('height', '415px');
   await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'a', messages: [messages[0]] });
   await expect(page.locator('.qa-thought')).toBeVisible();
   await expect(page.locator('.ol-default-capsule')).toHaveCount(0);
   await emit(page, 'qa:state', { kind: 'answer', sessionId: 'a', messages });
   await expect(page.locator('.qa-assistant-message')).toContainText('我会尽力为你解答');
-  await expect(host).toHaveCSS('width', '720px');
+  await expect(host).toHaveCSS('width', '975px');
   await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('qa-result.png') });
   await emit(page, 'chat-panel:closing', {});
@@ -174,7 +174,7 @@ test('QA opens the conversation while recording and starts fresh after close', a
   await expect(page.locator('.qa-capsule-shell')).not.toHaveClass(/is-closing/);
   await expect(page.locator('.qa-answer-panel')).toBeVisible();
   await expect(page.locator('.qa-assistant-message')).toHaveCount(0);
-  await expect(host).toHaveCSS('height', '380px');
+  await expect(host).toHaveCSS('height', '415px');
   expect(errors).toEqual([]);
 });
 

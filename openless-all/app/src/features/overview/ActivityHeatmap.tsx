@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActivityDay } from '../../api/contracts';
-import { useActivityApps } from '../../data/history';
 import { formatLocaleDecimal, formatLocaleNumber } from '../../lib/localeFormat';
 import {
   GitHubActivity,
   type Contribution,
   type ContributionLevel,
 } from '../../ui/controls/GitHubActivity';
+import { useActivityAppRanking } from './useActivityAppRanking';
 import './overview.css';
 
 function localDateKey(date: Date): string {
@@ -24,14 +24,7 @@ export function ActivityHeatmap({
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || 'en';
   const year = new Date().getFullYear();
-  const apps = useActivityApps(year);
-  const appRows =
-    apps.data?.status === 'available'
-      ? [...apps.data.rows]
-          .sort(([, left], [, right]) => right - left)
-          .slice(0, 5)
-          .map(([name, count]) => ({ name, count }))
-      : [];
+  const apps = useActivityAppRanking(year);
   const data = useMemo(() => {
     const first = new Date(year, 0, 1);
     const last = new Date(year, 11, 31);
@@ -75,9 +68,9 @@ export function ActivityHeatmap({
   );
 
   const appStatus =
-    apps.error !== null
+    apps.loadFailed
       ? t('overview.activityAppsError')
-      : apps.data?.status === 'unsupported'
+      : apps.unsupported
         ? t('overview.activityAppsUnavailable')
         : null;
 
@@ -122,7 +115,7 @@ export function ActivityHeatmap({
         fitToWidth
         showMonths
         contributions={data.contributions}
-        apps={appRows}
+        apps={apps.rows}
         accent="var(--ol-accent-solid-bg)"
         heading={`${t('overview.activityCount', { count: data.total })} · ${year}`}
         label={t('overview.activityAppsLabel')}

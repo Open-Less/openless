@@ -44,7 +44,21 @@ const dispose = installMessageFollow(root);
 resize();
 flush();
 assert.equal(viewport.scrollTop, 900);
-viewport.dispatchEvent(new Event('touchmove'));
+// Resize deliveries can precede the animation frame that moves to the new bottom.
+viewport.scrollHeight = 1080;
+resize();
+viewport.scrollHeight = 1160;
+resize();
+flush();
+assert.equal(viewport.scrollTop, 1060, 'geometry changes do not revoke bottom ownership');
+for (const [type, clientY] of [
+  ['touchstart', 20],
+  ['touchmove', 50],
+]) {
+  const event = new Event(type);
+  Object.defineProperty(event, 'touches', { value: [{ clientY }] });
+  viewport.dispatchEvent(event);
+}
 viewport.scrollTop = 800;
 viewport.dispatchEvent(new Event('scroll'));
 // Browser scroll anchoring and a delayed ResizeObserver can put scrollTop beyond
