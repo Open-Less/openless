@@ -83,18 +83,8 @@ export function AudioDspSettings({
   };
   const body = (
     <>
-      <p style={{ fontSize: 12, color: 'var(--ol-muted)', lineHeight: 1.6 }}>
-        {label(
-          'description',
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
-        )}
-      </p>
       <SettingRow
         label={stageLabels.acousticEchoCancellation}
-        desc={label(
-          'aecHint',
-          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
-        )}
       >
         <SelectLite
           ariaLabel={stageLabels.acousticEchoCancellation}
@@ -107,11 +97,6 @@ export function AudioDspSettings({
           ]}
         />
       </SettingRow>
-      {draft.aecMode === 'model' &&
-        label(
-          'aecModelHint',
-          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
-        )}
       {isAndroid() && expanded && <AndroidAudioEffects value={draft} onChange={save} />}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite
@@ -141,10 +126,6 @@ export function AudioDspSettings({
       )}
       <SettingRow
         label={stageLabels.vad}
-        desc={label(
-          'vadHint',
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
-        )}
       >
         <Toggle on={draft.vadEnabled} onToggle={() => save({ vadEnabled: !draft.vadEnabled })} />
       </SettingRow>
@@ -154,12 +135,6 @@ export function AudioDspSettings({
         <summary style={{ cursor: 'pointer', fontSize: 12 }}>
           {label('tone', 'Tone and room adjustments')}
         </summary>
-        <p style={{ fontSize: 12, color: 'var(--ol-muted)' }}>
-          {label(
-            'combHint',
-            'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
-          )}
-        </p>
         {slider('dereverbLevel', stageLabels.dereverb, 0, 100, '%')}
         <SettingRow label={stageLabels.equalizer}>
           <Toggle
@@ -219,8 +194,8 @@ export function AudioDspSettings({
         </summary>
         <ol style={{ paddingLeft: 20 }}>
           {draft.processingOrder.map((stage, index) => (
-            <li key={stage} style={{ fontSize: 12, marginTop: 8 }}>
-              <span style={{ display: 'inline-block', minWidth: 140 }}>{stageLabels[stage]}</span>
+            <li key={stage} style={{ fontSize: 12, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>{stageLabels[stage]}</span>
               <button
                 type="button"
                 disabled={index === 0}

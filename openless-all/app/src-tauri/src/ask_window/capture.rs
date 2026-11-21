@@ -80,7 +80,7 @@ pub(super) fn foreground() -> Option<Foreground> {
 }
 
 #[cfg(target_os = "macos")]
-fn app_identity(pid: u32) -> Option<AppIdentity> {
+pub(super) fn app_identity(pid: u32) -> Option<AppIdentity> {
     use objc2::{
         msg_send,
         rc::autoreleasepool,
@@ -89,6 +89,9 @@ fn app_identity(pid: u32) -> Option<AppIdentity> {
     use std::ffi::CStr;
 
     unsafe fn string(object: *mut AnyObject) -> Option<String> {
+        if object.is_null() {
+            return None;
+        }
         let bytes: *const std::ffi::c_char = msg_send![object, UTF8String];
         (!bytes.is_null()).then(|| CStr::from_ptr(bytes).to_string_lossy().into_owned())
     }
@@ -129,7 +132,7 @@ pub(super) fn foreground() -> Option<Foreground> {
 }
 
 #[cfg(target_os = "windows")]
-fn app_identity(pid: u32) -> Option<AppIdentity> {
+pub(super) fn app_identity(pid: u32) -> Option<AppIdentity> {
     use windows::core::PWSTR;
     use windows::Win32::{
         Foundation::CloseHandle,

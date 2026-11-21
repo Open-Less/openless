@@ -1,16 +1,40 @@
-//! Authorized pre-activation desktop metadata for Ask only. No document or window titles.
+//! Authorized, read-only Ask context. Foreground metadata always comes from the
+//! external invocation, never from whichever OpenLess window currently has focus.
 
 use chrono::{Local, Utc};
+use openless_core::ask::{AskCancellation, AskTurnKey};
 use openless_core::ask_context::{
     AppMetadata, ContextAuthorization, ContextProvider, DesktopApps, InvocationContext, TurnContext,
 };
+use openless_core::assistant_api::{
+    AssistantContextProvider, AssistantContextQuery, AssistantContextResult,
+};
+use openless_core::{BackendError, BackendErrorCode};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+#[path = "context_native.rs"]
+mod device;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReadPermissions {
+    pub browser_tab: bool,
+    pub voice_history: bool,
+}
+
+#[derive(Clone)]
+struct BrowserSource {
+    pid: u32,
+    bundle_id: String,
+}
 
 #[derive(Default)]
 pub(crate) struct DesktopContext {
     state: Mutex<ContextState>,
+    backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
 }
 
 #[derive(Default)]
@@ -19,6 +43,9 @@ struct ContextState {
     app_grant_epoch: u64,
     next_capture: u64,
     conversations: HashMap<Uuid, Option<CapturedInvocation>>,
+    read_permissions: ReadPermissions,
+    read_grant_epoch: u64,
+    browser_sources: HashMap<Uuid, BrowserSource>,
 }
 
 pub(crate) struct CapturedInvocation {
@@ -28,8 +55,82 @@ pub(crate) struct CapturedInvocation {
 }
 
 impl DesktopContext {
+    pub(crate) fn with_backend(backend: std::sync::Arc<openless_core::OpenLessBackend>) -> Self {
+        Self {
+            backend: Some(backend),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn read_permissions(&self) -> ReadPermissions {
+        self.state.lock().read_permissions
+    }
+
+    pub(crate) fn set_read_permissions(&self, permissions: ReadPermissions) {
+        let mut state = self.state.lock();
+        if state.read_permissions != permissions {
+            state.read_grant_epoch += 1;
+        }
+        state.read_permissions = permissions;
+        if !permissions.browser_tab {
+            state.browser_sources.clear();
+        }
+    }
+
+    pub(crate) fn bind_browser_source(&self, conversation_id: Uuid, pid: u32, bundle_id: &str) {
+        let mut state = self.state.lock();
+        if state.read_permissions.browser_tab && state.conversations.contains_key(&conversation_id)
+        {
+            state.browser_sources.insert(
+                conversation_id,
+                BrowserSource {
+                    pid,
+                    bundle_id: bundle_id.into(),
+                },
+            );
+        }
+    }
+
+    pub(crate) fn recent_voice(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<openless_core::ask::AskVoiceContext>, BackendError> {
+        if !self.read_permissions().voice_history {
+            return Ok(Vec::new());
+        }
+        let Some(backend) = &self.backend else {
+            return Ok(Vec::new());
+        };
+        let rows = backend.recent_history_within_minutes(30)?;
+        Ok(voice_rows(rows, query, limit))
+    }
+
+    pub(crate) fn original_app(&self, conversation_id: Uuid) -> Option<AppMetadata> {
+        let state = self.state.lock();
+        if !state.authorization.app_metadata {
+            return None;
+        }
+        state
+            .conversations
+            .get(&conversation_id)?
+            .as_ref()
+            .filter(|capture| capture.grant_epoch == state.app_grant_epoch)?
+            .context
+            .foreground_app
+            .clone()
+    }
+
     pub(crate) fn app_metadata_allowed(&self) -> bool {
-        self.state.lock().authorization.app_metadata
+        self.app_metadata_grant().is_some()
+    }
+
+    pub(crate) fn app_metadata_grant(&self) -> Option<u64> {
+        let state = self.state.lock();
+        state
+            .authorization
+            .app_metadata
+            .then_some(state.app_grant_epoch)
     }
 
     /// Use only Ask-specific grants. Neither OS permission nor the search
@@ -92,7 +193,9 @@ impl DesktopContext {
     }
 
     pub(crate) fn close_conversation(&self, conversation_id: Uuid) {
-        self.state.lock().conversations.remove(&conversation_id);
+        let mut state = self.state.lock();
+        state.conversations.remove(&conversation_id);
+        state.browser_sources.remove(&conversation_id);
     }
 
     /// Call only from the external native invocation path, synchronously
@@ -166,6 +269,185 @@ impl ContextProvider for DesktopContext {
             .and_then(Option::as_ref)
             .map(|capture| &capture.context);
         TurnContext::build(Local::now().fixed_offset(), state.authorization, invocation)
+    }
+}
+
+impl AssistantContextProvider for DesktopContext {
+    fn read(
+        &self,
+        key: AskTurnKey,
+        query: AssistantContextQuery,
+        cancellation: AskCancellation,
+    ) -> futures_util::future::BoxFuture<'_, Result<AssistantContextResult, BackendError>> {
+        Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "askCancelled",
+                ));
+            }
+            if let AssistantContextQuery::BrowserTab = query {
+                let (source, epoch) = {
+                    let state = self.state.lock();
+                    if !state.conversations.contains_key(&key.conversation_id) {
+                        return Ok(unavailable("askConversationUnavailable"));
+                    }
+                    if !state.read_permissions.browser_tab {
+                        return Ok(AssistantContextResult::Denied);
+                    }
+                    if !cfg!(target_os = "macos") {
+                        return Ok(unavailable("browserTabUnsupported"));
+                    }
+                    (
+                        state.browser_sources.get(&key.conversation_id).cloned(),
+                        state.read_grant_epoch,
+                    )
+                };
+                let Some(source) = source else {
+                    return Ok(unavailable("noExternalBrowser"));
+                };
+                let reading = cancellation.clone();
+                let result = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(BackendError::new(BackendErrorCode::Cancelled, "askCancelled")),
+                    result = tokio::task::spawn_blocking(move || device::browser_tab(source.pid, &source.bundle_id, &reading)) => result.unwrap_or(Err("browserReadFailed")),
+                };
+                let state = self.state.lock();
+                if cancellation.is_cancelled() {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "askCancelled",
+                    ));
+                }
+                if !state.conversations.contains_key(&key.conversation_id) {
+                    return Ok(unavailable("askConversationUnavailable"));
+                }
+                if state.read_grant_epoch != epoch || !state.read_permissions.browser_tab {
+                    return Ok(AssistantContextResult::Denied);
+                }
+                return Ok(match result {
+                    Ok(data) => AssistantContextResult::Available {
+                        data,
+                        source: "browserAccessibility".into(),
+                        as_of: Local::now().to_rfc3339(),
+                    },
+                    Err(reason) => unavailable(reason),
+                });
+            }
+            if let AssistantContextQuery::VoiceHistory { ref query, limit } = query {
+                let epoch = {
+                    let state = self.state.lock();
+                    if !state.conversations.contains_key(&key.conversation_id) {
+                        return Ok(unavailable("askConversationUnavailable"));
+                    }
+                    if !state.read_permissions.voice_history {
+                        return Ok(AssistantContextResult::Denied);
+                    }
+                    if self.backend.is_none() {
+                        return Ok(unavailable("voiceHistoryUnavailable"));
+                    }
+                    state.read_grant_epoch
+                };
+                let rows = self.recent_voice(query, limit)?;
+                let state = self.state.lock();
+                if state.read_grant_epoch != epoch
+                    || !state.conversations.contains_key(&key.conversation_id)
+                {
+                    return Ok(AssistantContextResult::Denied);
+                }
+                if cancellation.is_cancelled() {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "askCancelled",
+                    ));
+                }
+                return Ok(AssistantContextResult::Available {
+                    data: serde_json::json!({"entries":rows}),
+                    source: "voiceTranscriptionHistory".into(),
+                    as_of: Local::now().to_rfc3339(),
+                });
+            }
+            let state = self.state.lock();
+            let Some(invocation) = state.conversations.get(&key.conversation_id) else {
+                return Ok(unavailable("askConversationUnavailable"));
+            };
+            let now = Local::now().fixed_offset().to_rfc3339();
+            Ok(match query {
+                AssistantContextQuery::CurrentTime => AssistantContextResult::Available {
+                    data: serde_json::json!({ "iso8601": now }),
+                    source: "deviceClock".into(),
+                    as_of: now,
+                },
+                AssistantContextQuery::System => AssistantContextResult::Available {
+                    data: serde_json::json!({
+                        "os": std::env::consts::OS,
+                        "architecture": device::architecture(),
+                        "processArchitecture": std::env::consts::ARCH,
+                        "version": device::system_version(),
+                    }),
+                    source: "hostPlatform".into(),
+                    as_of: now,
+                },
+                AssistantContextQuery::ForegroundApp => {
+                    if !state.authorization.app_metadata {
+                        AssistantContextResult::Denied
+                    } else if let Some(capture) = invocation
+                        .as_ref()
+                        .filter(|capture| capture.grant_epoch == state.app_grant_epoch)
+                    {
+                        match capture.context.foreground_app.as_ref() {
+                            Some(app) => AssistantContextResult::Available {
+                                data: serde_json::json!({ "app": app }),
+                                source: "externalInvocation".into(),
+                                as_of: capture.context.captured_at.to_rfc3339(),
+                            },
+                            None => unavailable("foregroundAppUnavailable"),
+                        }
+                    } else {
+                        unavailable("noExternalInvocation")
+                    }
+                }
+                AssistantContextQuery::BrowserTab | AssistantContextQuery::VoiceHistory { .. } => {
+                    unreachable!()
+                }
+            })
+        })
+    }
+}
+
+fn voice_rows(
+    rows: Vec<openless_core::DictationSession>,
+    query: &str,
+    limit: usize,
+) -> Vec<openless_core::ask::AskVoiceContext> {
+    let query = query.trim().to_lowercase();
+    rows.into_iter()
+        .filter(|row| row.source == openless_core::HistorySource::Voice && row.error_code.is_none())
+        .filter_map(|row| {
+            let text = if row.final_text.trim().is_empty() {
+                row.raw_transcript
+            } else {
+                row.final_text
+            };
+            (!text.trim().is_empty()
+                && text.chars().count() <= 4000
+                && (query.is_empty()
+                    || text.to_lowercase().contains(&query)
+                    || query.contains(&text.to_lowercase())))
+            .then_some(openless_core::ask::AskVoiceContext {
+                text,
+                recorded_at: row.created_at,
+                // Durable history has no native control/range lease. Equal text alone is not proof.
+                matches_selection: false,
+            })
+        })
+        .take(limit.min(8))
+        .collect()
+}
+
+fn unavailable(reason: &str) -> AssistantContextResult {
+    AssistantContextResult::Unavailable {
+        reason: reason.into(),
     }
 }
 
@@ -348,6 +630,48 @@ mod native {
 }
 
 impl openless_core::ask::ContextProvider for DesktopContext {
+    fn recent_voice(
+        &self,
+        turn: AskTurnKey,
+        selection: String,
+        cancel: AskCancellation,
+    ) -> futures_util::future::BoxFuture<
+        '_,
+        Result<Vec<openless_core::ask::AskVoiceContext>, BackendError>,
+    > {
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "askCancelled",
+                ));
+            }
+            let epoch = {
+                let state = self.state.lock();
+                if !state.conversations.contains_key(&turn.conversation_id)
+                    || !state.read_permissions.voice_history
+                {
+                    return Ok(Vec::new());
+                }
+                state.read_grant_epoch
+            };
+            let rows = self.recent_voice(&selection, 4)?;
+            let state = self.state.lock();
+            if cancel.is_cancelled() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "askCancelled",
+                ));
+            }
+            if state.read_grant_epoch != epoch
+                || !state.conversations.contains_key(&turn.conversation_id)
+            {
+                return Ok(Vec::new());
+            }
+            Ok(rows)
+        })
+    }
+
     fn context(
         &self,
         turn: openless_core::ask::AskTurnKey,
@@ -459,5 +783,30 @@ mod tests {
         provider.close_conversation(first);
         assert!(!provider.record_invocation(first, late));
         assert!(!model_data(&provider, first).contains("Closing"));
+    }
+
+    #[test]
+    fn voice_queries_return_only_bounded_related_text_and_never_grant_a_replacement_range() {
+        let row = |id: usize, source: &str, text: &str| {
+            serde_json::from_value::<openless_core::DictationSession>(serde_json::json!({
+            "id":id.to_string(), "source":source, "createdAt":"2026-11-21T20:00:00+08:00",
+            "rawTranscript":"raw private audio transcription", "finalText":text, "mode":"light", "insertStatus":"inserted",
+            "hasAudioRecording":true,
+        })).unwrap()
+        };
+        let mut rows = vec![
+            row(0, "qa", "matching chat is not voice history"),
+            row(1, "voice", "unrelated"),
+        ];
+        rows.extend((2..14).map(|index| row(index, "voice", "Matching dictated text")));
+        let excerpts = voice_rows(rows, "matching", 100);
+        assert_eq!(excerpts.len(), 8);
+        assert!(excerpts
+            .iter()
+            .all(|entry| entry.text == "Matching dictated text" && !entry.matches_selection));
+        let public = serde_json::to_value(&excerpts).unwrap().to_string();
+        assert!(!public.contains("hasAudioRecording"));
+        assert!(!public.contains("raw private"));
+        assert!(!public.contains("\"id\""));
     }
 }

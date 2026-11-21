@@ -144,6 +144,45 @@ test('download labels stay readable through rapid percentages and one bounded ph
   const cancel = job.getByRole('button', { name: 'Cancel download', exact: true });
   const cancelBefore = (await cancel.boundingBox())!;
 
+  // Observe an ordinary tick in both consumers, not just its final text.
+  await page.evaluate(() => {
+    const original = Element.prototype.animate;
+    Object.assign(window, { restoreDownloadAnimation: () => { Element.prototype.animate = original; } });
+    Element.prototype.animate = function (frames, options) {
+      const animation = original.call(this, frames, options);
+      if (this.matches('.ol-download-digits-track')) {
+        animation.pause();
+        animation.currentTime = 0;
+      }
+      return animation;
+    };
+  });
+  await change(40);
+  try {
+    for (const container of [job, row]) {
+      const geometry = await container.locator('.ol-download-digits').evaluate(async (slot) => {
+        const track = slot.querySelector('.ol-download-digits-track')!;
+        const animation = track.getAnimations()[0];
+        await animation.ready;
+        const height = slot.getBoundingClientRect().height;
+        const samples = [0, 0.5, 1].map((fraction) => {
+          animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) * fraction;
+          const old = slot.querySelector('.ol-download-digits-outgoing')!.getBoundingClientRect();
+          const next = slot.querySelector('.ol-download-digits-current')!.getBoundingClientRect();
+          return { separation: next.top - old.top, next: next.top - slot.getBoundingClientRect().top };
+        });
+        animation.finish();
+        return { height, samples, overflow: getComputedStyle(slot).overflowY };
+      });
+      expect(geometry.overflow).toBe('hidden');
+      for (const sample of geometry.samples) expect(Math.abs(sample.separation - geometry.height)).toBeLessThan(1);
+      expect(geometry.samples[0].next).toBeGreaterThan(geometry.samples[1].next);
+      expect(Math.abs(geometry.samples[2].next)).toBeLessThan(1);
+    }
+  } finally {
+    await page.evaluate(() => (window as unknown as { restoreDownloadAnimation(): void }).restoreDownloadAnimation());
+  }
+
   for (const [bytes, text] of [[3, '<1%'], [10, '1%'], [30, '3%']] as const) {
     await change(bytes);
     await expect(status).toHaveText(`Downloading Embedding Gemma · ${text}`);

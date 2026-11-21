@@ -387,6 +387,8 @@ macro_rules! app_invoke_handler_desktop {
             ask_window::chat::ask_ack_voice,
             ask_window::chat::ask_get_context_permission,
             ask_window::chat::ask_set_context_permission,
+            ask_window::chat::ask_get_read_permissions,
+            ask_window::chat::ask_set_read_permissions,
             ask_window::chat::ask_get_entry_settings,
             ask_window::chat::ask_set_entry_settings,
             commands::voice_edit_window_close,

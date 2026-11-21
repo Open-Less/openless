@@ -4381,25 +4381,41 @@ impl OpenLessBackend {
     pub fn create_standalone_ask(
         &self,
         context: Arc<dyn crate::ask::ContextProvider>,
+        assistant_context: Arc<dyn crate::assistant_api::AssistantContextProvider>,
         attachments: Arc<dyn crate::ask::AttachmentReader>,
     ) -> crate::ask::StandaloneQaService {
         use crate::ask::{AskUsagePersistence, ConfiguredAskModels, StandaloneQaDependencies};
+        let models = Arc::new(ConfiguredAskModels::new(
+            self.deps.credential_store.clone(),
+            self.preferences.clone(),
+        ));
+        let search = Arc::new(crate::ask_search::WebSearchTool::new(
+            self.deps.credential_store.clone(),
+        ));
+        let usage = self.deps.services.usage_recorder.clone().map(|recorder| AskUsagePersistence {
+            recorder,
+            clock: self.clock.clone(),
+        });
+        let assistant = Arc::new(crate::assistant::PersonalAssistant::new(
+            crate::assistant::AssistantDependencies {
+                models: models.clone(),
+                context: assistant_context,
+                search: search.clone(),
+                usage: usage.as_ref().map(|usage| AskUsagePersistence {
+                    recorder: usage.recorder.clone(),
+                    clock: usage.clock.clone(),
+                }),
+            },
+        ));
         crate::ask::StandaloneQaService::new(StandaloneQaDependencies {
-            models: Arc::new(ConfiguredAskModels::new(
-                self.deps.credential_store.clone(),
-                self.preferences.clone(),
-            )),
+            assistant,
+            models,
             context,
-            search: Arc::new(crate::ask_search::WebSearchTool::new(
-                self.deps.credential_store.clone(),
-            )),
+            search,
             attachments,
             spawner: self.deps.task_spawner.clone(),
             history: self.deps.services.qa.ask_history_sink(),
-            usage: self.deps.services.usage_recorder.clone().map(|recorder| AskUsagePersistence {
-                recorder,
-                clock: self.clock.clone(),
-            }),
+            usage,
         })
     }
 

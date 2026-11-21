@@ -1,0 +1,16 @@
+# AOCI .aoci asset boundary
+#
+# Unknown files in this directory are local runtime assets and are excluded
+# from Git by default. Formal cognition and governance assets are explicitly
+# included below.
+
+*
+
+# This boundary file must be tracked.
+!.gitignore
+
+# Formal AOCI cognition and governance assets.
+!baseline.json
+!database-baseline.json
+!config.json
+!curation.json

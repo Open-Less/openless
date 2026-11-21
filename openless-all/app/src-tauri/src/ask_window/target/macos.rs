@@ -4,6 +4,7 @@ use block2::RcBlock;
 use core_foundation::{
     array::CFArray,
     base::{CFRange, CFType, TCFType},
+    boolean::CFBoolean,
     number::CFNumber,
     runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource},
     string::{CFString, CFStringGetCharacters, CFStringGetLength, CFStringRef},
@@ -22,6 +23,7 @@ extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXUIElementGetTypeID() -> usize;
     fn AXValueGetTypeID() -> usize;
+    fn AXUIElementPerformAction(element: AxUiElementRef, action: CFStringRef) -> i32;
     fn AXUIElementIsAttributeSettable(
         element: AxUiElementRef,
         name: CFStringRef,
@@ -289,6 +291,7 @@ impl Platform {
         &self,
         identity: &Identity,
         baseline: &Baseline,
+        operation: WriteOperation,
         text: &str,
         eligible: impl Fn() -> bool,
         recover: impl Fn(FocusRecovery),
@@ -299,8 +302,10 @@ impl Platform {
             let Some(expected) = baseline.expected(&text_units) else {
                 return WriteOutcome::NotWritten;
             };
-            if identity.verify().is_none()
-                || identity.baseline().as_ref() != Some(baseline)
+            if identity.verify_control().is_none()
+                || document(&identity.element).as_ref() != Some(&baseline.document)
+                || (matches!(operation, WriteOperation::Replace)
+                    && (identity.verify().is_none() || identity.baseline().as_ref() != Some(baseline)))
                 || !matches!(self.foreground(), Foreground::Own | Foreground::External(_))
                 || matches!(self.foreground(), Foreground::External(pid) if pid != identity.pid)
                 || !eligible()
@@ -313,6 +318,8 @@ impl Platform {
                 outcome
             };
             if !identity.restore_front()
+                || !eligible()
+                || (matches!(operation, WriteOperation::Insert) && !identity.restore_caret(baseline))
                 || identity.verify().is_none()
                 || !settable(&identity.element)
                 || identity.baseline().as_ref() != Some(baseline)
@@ -325,6 +332,7 @@ impl Platform {
                 || self.foreground() != Foreground::External(identity.pid)
                 || selected_range(&identity.element).as_ref() != Some(&baseline.selection)
                 || secure_input()
+                || !eligible()
             {
                 return fail(WriteOutcome::NotWritten);
             }
@@ -356,6 +364,52 @@ impl Drop for Platform {
 }
 
 impl Identity {
+    pub(super) fn pid(&self) -> u32 {
+        self.pid as u32
+    }
+
+    /// Restore only the captured A control and collapsed UTF-16 range. A changed
+    /// document is not rebased; B replacement never calls this method.
+    fn restore_caret(&self, baseline: &Baseline) -> bool {
+        if self.verify_control().is_none()
+            || !baseline.selection.is_empty()
+            || document(&self.element).as_ref() != Some(&baseline.document)
+        {
+            return false;
+        }
+        if self.verify().is_none() {
+            let raise = CFString::new("AXRaise");
+            let focused = CFString::new("AXFocused");
+            unsafe {
+                if AXUIElementPerformAction(raw_ax(&self.window), raise.as_concrete_TypeRef()) != 0
+                    || AXUIElementSetAttributeValue(
+                        raw_ax(&self.element), focused.as_CFTypeRef(), CFBoolean::true_value().as_CFTypeRef(),
+                    ) != 0
+                {
+                    return false;
+                }
+            }
+        }
+        if self.verify().is_none() || document(&self.element).as_ref() != Some(&baseline.document) {
+            return false;
+        }
+        if selected_range(&self.element).as_ref() != Some(&baseline.selection) {
+            let range = CFRange { location: baseline.selection.start as isize, length: 0 };
+            let name = CFString::new("AXSelectedTextRange");
+            unsafe {
+                let value = AXValueCreate(AX_RANGE, ptr::from_ref(&range).cast());
+                if value.is_null() {
+                    return false;
+                }
+                let value = CFType::wrap_under_create_rule(value);
+                if AXUIElementSetAttributeValue(raw_ax(&self.element), name.as_CFTypeRef(), value.as_CFTypeRef()) != 0 {
+                    return false;
+                }
+            }
+        }
+        self.verify().is_some() && self.baseline().as_ref() == Some(baseline)
+    }
+
     fn verify_control(&self) -> Option<()> {
         let terminated: Bool = unsafe { msg_send![&*self.application, isTerminated] };
         if terminated.as_bool() || secure_input() || !unsafe { AXIsProcessTrusted() } {

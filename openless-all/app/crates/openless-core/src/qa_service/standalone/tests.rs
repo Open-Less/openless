@@ -7,7 +7,6 @@ struct TestModel {
     caps: AskModelCapabilities,
     calls: mpsc::UnboundedSender<Call>,
     intent_tool: bool,
-    manual_review: std::sync::atomic::AtomicBool,
 }
 
 impl AskModel for TestModel {
@@ -34,12 +33,6 @@ impl AskModel for TestModel {
         progress: AskModelSink,
     ) -> BoxFuture<'_, Result<AskModelCompletion, BackendError>> {
         Box::pin(async move {
-            if request.instructions == DELIVERY_REVIEW_RULE
-                && !self.manual_review.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                progress(AskModelProgress::Text("deliver".into()));
-                return Ok(AskModelCompletion::Complete);
-            }
             let (finish, receiver) = oneshot::channel();
             assert!(self
                 .calls
@@ -47,7 +40,6 @@ impl AskModel for TestModel {
                     request,
                     progress,
                     finish,
-                    framed: Default::default(),
                 })
                 .is_ok());
             receiver.await.expect("test response supplied")
@@ -59,7 +51,6 @@ struct Call {
     request: AskModelRequest,
     progress: AskModelSink,
     finish: oneshot::Sender<Result<AskModelCompletion, BackendError>>,
-    framed: std::sync::atomic::AtomicBool,
 }
 
 impl Call {
@@ -79,11 +70,6 @@ impl Call {
     }
 
     fn delta(&self, text: &str) {
-        if self.request.instructions.contains(FULFILLMENT_RULE)
-            && !self.framed.swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            self.raw_delta("ASK_RESULT direct\n");
-        }
         self.raw_delta(text);
     }
 
@@ -227,11 +213,10 @@ impl AttachmentReader for Attachments {
 struct Fixture {
     service: StandaloneQaService,
     calls: mpsc::UnboundedReceiver<Call>,
-    context: Arc<Context>,
+    assistants: mpsc::UnboundedReceiver<AssistantCall>,
     search: Arc<Search>,
     attachments: Arc<Attachments>,
     history: Arc<Mutex<Vec<(String, String)>>>,
-    model: Arc<TestModel>,
 }
 
 impl Fixture {
@@ -245,30 +230,31 @@ impl Fixture {
 
     fn with_capabilities(window: usize, intent_tool: bool, image_input: bool) -> Self {
         let (sender, calls) = mpsc::unbounded_channel();
+        let (assistant, assistants) = mpsc::unbounded_channel();
         let context = Arc::new(Context::default());
         let search = Arc::new(Search::default());
         let attachments = Arc::new(Attachments::default());
         let history = Arc::new(Mutex::new(Vec::new()));
         let recorded = history.clone();
         let model = Arc::new(TestModel {
-                label: AskModelLabel {
-                    service: "test-service".into(),
-                    channel: "test-channel".into(),
-                    model: "test-model".into(),
-                    protocol: "test-protocol".into(),
-                },
-                caps: AskModelCapabilities {
-                    context_window: Some(window),
-                    output_tokens: 256,
-                    image_input,
-                    image_token_reserve: 0,
-                    deep_thinking: false,
-                },
-                calls: sender,
-                intent_tool,
-                manual_review: Default::default(),
-            });
+            label: AskModelLabel {
+                service: "test-service".into(),
+                channel: "test-channel".into(),
+                model: "test-model".into(),
+                protocol: "test-protocol".into(),
+            },
+            caps: AskModelCapabilities {
+                context_window: Some(window),
+                output_tokens: 256,
+                image_input,
+                image_token_reserve: 0,
+                deep_thinking: false,
+            },
+            calls: sender,
+            intent_tool,
+        });
         let service = StandaloneQaService::new(StandaloneQaDependencies {
+            assistant: Arc::new(TestAssistant(assistant)),
             models: Arc::new(Factory(model.clone())),
             context: context.clone(),
             search: search.clone(),
@@ -282,16 +268,11 @@ impl Fixture {
         Self {
             service,
             calls,
-            context,
+            assistants,
             search,
             attachments,
             history,
-            model,
         }
-    }
-
-    fn review_manually(&self) {
-        self.model.manual_review.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     async fn next(&mut self) -> Call {
@@ -353,6 +334,10 @@ struct WriteAttempt {
 struct TestWriter(mpsc::UnboundedSender<WriteAttempt>);
 
 impl AskWriter for TestWriter {
+    fn has_original_caret(&self) -> bool {
+        true
+    }
+
     fn write(
         &self,
         operation: AskWriteOperation,
@@ -461,1448 +446,1008 @@ fn assert_no_chat(service: &StandaloneQaService, key: AskTurnKey) {
         .any(|message| message.turn_id == key.turn_id));
 }
 
-#[tokio::test]
-async fn lazy_capture_is_once_and_chat_acceptance_follows_isolated_hybrid_routing() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let mut fixture = Fixture::new(32_768);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    let captures = AtomicUsize::new(0);
-    let original = request(
-        conversation_id,
-        "first",
-        "Explain in simpler words why this passage is confusing",
-    );
-    let selected = Mutex::new("original external selection".to_owned());
-    let (entered, capture_started) = oneshot::channel();
-    let (resume, capture_resume) = oneshot::channel();
-    let submit = service.submit_prepared(original.clone(), || async {
-        captures.fetch_add(1, Ordering::SeqCst);
-        let frozen = selected.lock().clone();
-        entered.send(()).unwrap();
-        capture_resume.await.unwrap();
-        Ok(AskPreparation {
-            selection: ExternalSelection::Selected(frozen),
-            ..Default::default()
+struct TestAssistant(mpsc::UnboundedSender<AssistantCall>);
+struct AssistantCall {
+    request: AssistantRequest,
+    events: crate::assistant_api::AssistantEventSink,
+    cancellation: AskCancellation,
+    finish: oneshot::Sender<Result<crate::assistant_api::AssistantResponse, BackendError>>,
+}
+impl crate::assistant_api::AssistantRuntime for TestAssistant {
+    fn run(
+        &self,
+        request: AssistantRequest,
+        cancellation: AskCancellation,
+        events: crate::assistant_api::AssistantEventSink,
+    ) -> BoxFuture<'_, Result<crate::assistant_api::AssistantResponse, BackendError>> {
+        Box::pin(async move {
+            let (finish, response) = oneshot::channel();
+            assert!(self
+                .0
+                .send(AssistantCall {
+                    request,
+                    events,
+                    cancellation,
+                    finish
+                })
+                .is_ok());
+            response.await.unwrap_or_else(|_| Err(cancelled()))
         })
-    });
-    let verify = async {
-        capture_started.await.unwrap();
-        assert!(service
-            .snapshot(conversation_id)
-            .unwrap()
-            .submission
-            .is_none());
-        *selected.lock() = "later selection".to_owned();
-        resume.send(()).unwrap();
-        let duplicate = service
-            .submit_prepared(original.clone(), || async {
-                captures.fetch_add(1, Ordering::SeqCst);
-                Ok(AskPreparation::default())
-            })
+    }
+}
+impl AssistantCall {
+    fn complete(self, text: &str) {
+        assert!(self
+            .finish
+            .send(Ok(crate::assistant_api::AssistantResponse {
+                text: text.into()
+            }))
+            .is_ok());
+    }
+}
+impl Fixture {
+    async fn assistant(&mut self) -> AssistantCall {
+        tokio::time::timeout(Duration::from_secs(3), self.assistants.recv())
             .await
-            .unwrap();
-        assert_eq!(
-            service
-                .submit_prepared(request(conversation_id, "first", "conflicting"), || async {
-                    panic!("conflict must not capture");
-                })
-                .await
-                .unwrap_err()
-                .message,
-            "askRequestConflict"
+            .unwrap()
+            .unwrap()
+    }
+    async fn route(&mut self, route: AskRoute) {
+        let call = self.next().await;
+        assert!(call.request.instructions.contains("Classify"));
+        assert!(!call.request.tools.available.search);
+        assert!(!call.request.tools.available.calculator);
+        if call.request.tools.available.resolve_intent {
+            call.tool(AskToolCall::ResolveIntent {
+                route,
+                edit_target: (route == AskRoute::Edit).then_some(AskEditTarget::CurrentSelection),
+            });
+        } else {
+            call.complete_raw(&serde_json::json!({"route":route,"editTarget":(route == AskRoute::Edit).then_some(AskEditTarget::CurrentSelection)}).to_string());
+        }
+    }
+    fn no_more_calls(&mut self) {
+        assert!(
+            self.calls.try_recv().is_err(),
+            "unexpected model/review call"
         );
-        assert_eq!(
-            service
-                .submit_prepared(request(conversation_id, "busy", "busy"), || async {
-                    panic!("busy must not capture");
-                })
-                .await
-                .unwrap_err()
-                .code,
-            BackendErrorCode::Busy
+        assert!(
+            self.assistants.try_recv().is_err(),
+            "unexpected assistant call"
         );
-        duplicate
-    };
-    let (first, duplicate) = tokio::join!(submit, verify);
-    let turn_id = first.unwrap();
-    assert_eq!(turn_id, duplicate);
-    assert_eq!(captures.load(Ordering::SeqCst), 1);
-    let pending = service.snapshot(conversation_id).unwrap();
-    assert!(pending.messages.is_empty());
-    assert!(pending.turns.is_empty());
-    assert!(pending.submission.unwrap().route.is_none());
-    assert!(matches!(
-        events.recv().await.unwrap().kind,
-        AskEventKind::Submitted { .. }
-    ));
-    let call = fixture.next().await;
-    assert!(model_text(&call.request).contains("\"selection\":\"present\""));
-    assert!(!model_text(&call.request).contains("external selection"));
-    assert!(!call.request.tools.available.any());
-    call.complete(r#"{"route":"selectionAnswer"}"#, None, None);
-    let call = fixture.next().await;
-    let replay = service.events(conversation_id, 0).unwrap();
-    let route = replay
-        .events
-        .iter()
-        .position(|event| {
-            matches!(
-                event.kind,
-                AskEventKind::RouteResolved {
-                    route: AskRoute::SelectionAnswer
-                }
-            )
-        })
-        .unwrap();
-    assert!(matches!(
-        replay.events[route + 1].kind,
-        AskEventKind::Accepted { .. }
-    ));
-    assert!(model_text(&call.request).contains("original external selection"));
-    assert!(!model_text(&call.request).contains("later selection"));
-    call.complete("inspection", None, None);
-    assert_eq!(
-        terminal(
-            &mut events,
-            AskTurnKey {
-                conversation_id,
-                turn_id
-            }
-        )
-        .await,
-        AskTurnStatus::Completed
-    );
-    let snapshot = service.snapshot(conversation_id).unwrap();
-    assert_eq!(snapshot.messages.len(), 2);
-    assert!(!serde_json::to_string(&snapshot)
-        .unwrap()
-        .contains("original external selection"));
+        assert!(self.search.0.lock().is_empty(), "old chat search path ran");
+    }
 }
-
-#[tokio::test]
-async fn accepted_chat_bypasses_entry_preparation_but_keeps_current_attachments() {
-    let mut fixture = Fixture::new(32_768);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    let previous = prepared(
-        &service,
-        conversation_id,
-        "What is the capital of Japan?",
-        AskPreparation::default(),
-    )
-    .await;
-    fixture.next().await.complete("Tokyo", None, None);
-    assert_eq!(
-        terminal(&mut events, previous).await,
-        AskTurnStatus::Completed
-    );
-    let attachment_id = Uuid::new_v4();
-    fixture.attachments.1.lock().insert(
-        attachment_id,
-        (conversation_id, Arc::from("private attachment text")),
-    );
-    let mut submission = request(conversation_id, "second", "What is the capital of France?");
-    submission.attachment_ids.push(attachment_id);
-    let turn_id = service
-        .submit_prepared(submission, || async {
-            panic!("a locked chat must not read the external selection or prepare classification")
-        })
-        .await
-        .unwrap();
-    let key = AskTurnKey {
-        conversation_id,
-        turn_id,
-    };
-    let answer = fixture.next().await;
-    assert!(answer.request.tools.intent.is_none());
-    assert!(model_text(&answer.request).contains("Tokyo"));
-    assert!(model_text(&answer.request).contains("private attachment text"));
-    assert!(!model_text(&answer.request).contains("private unrelated"));
-    answer.complete("Paris", None, None);
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+fn setup_writer() -> (Arc<TestWriter>, mpsc::UnboundedReceiver<WriteAttempt>) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    (Arc::new(TestWriter(sender)), receiver)
 }
-
-#[tokio::test]
-async fn main_model_tool_continues_into_search_calculation_and_inserts_body_without_chat() {
-    let mut fixture = Fixture::new(32_768);
-    fixture.review_manually();
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    fixture
-        .search
-        .1
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-    let (writer, mut attempts) = mpsc::unbounded_channel();
-    let clipboard = clipboard(&service, conversation_id, false);
-    let key = prepared(
-        &service,
-        conversation_id,
-        "Look up the exchange rate, calculate the price, then write a quote",
-        AskPreparation {
-            intent_mode: AskIntentMode::MainModelTool,
-            selection: ExternalSelection::None,
-            writer: Some(Arc::new(TestWriter(writer))),
-            clipboard: Some(clipboard.clone()),
-        },
-    )
-    .await;
-    let intent = fixture.next().await;
-    assert!(intent.request.tools.available.resolve_intent);
-    assert!(!intent.request.tools.available.search && !intent.request.tools.available.calculator);
-    let classifier_input = model_text(&intent.request);
-    intent.tool(AskToolCall::ResolveIntent {
-        route: AskRoute::Write,
-    });
-    let search = fixture.next().await;
-    assert!(search.request.tools.intent.is_none());
-    assert!(search.request.tools.available.search);
-    assert!(!search.request.tools.available.resolve_intent);
-    search.tool(AskToolCall::WebSearch {
-        public_query: "USD exchange rate".into(),
-    });
-    let calc = fixture.next().await;
-    let continuation = calc.request.tools.intent.as_ref().unwrap();
-    let [AskModelPart::Text(input)] = continuation.input.parts.as_slice() else { panic!("missing classifier input") };
-    assert_eq!(input, &classifier_input);
-    assert_eq!(continuation.result.call.id.as_deref(), Some("fixture-tool-id"));
-    assert!(continuation.result.output.contains("\"route\":\"write\""));
-    assert!(calc.request.instructions.contains("只输出一份可直接插入的正文"));
-    assert!(!calc.request.tools.available.search);
-    assert!(calc.request.tools.available.calculator && calc.request.tools.intent.is_some());
-    assert_eq!(fixture.search.0.lock().as_slice(), ["USD exchange rate"]);
-    assert!(calc.request.tools.results.is_empty());
-    assert!(model_text(&calc.request).contains("1 USD = 1.25"));
-    calc.tool(AskToolCall::Calculate {
-        expression: "40 * 1.25".into(),
-    });
-    let compose = fixture.next().await;
-    assert!(compose.request.tools.results[0]
-        .output
-        .contains("\"decimal\":\"50\""));
-    compose.delta("Quote\n");
-    assert!(attempts.try_recv().is_err());
-    compose.complete("Total: $50", None, None);
-    let validation = fixture.next().await;
-    assert_eq!(validation.request.instructions, DELIVERY_REVIEW_RULE);
-    assert!(!validation.request.tools.available.any());
-    assert!(model_text(&validation.request).contains("Total: $50"));
-    assert!(!model_text(&validation.request).contains("private-to-model source body"));
-    validation.complete_raw("deliver");
-    let effect = tokio::time::timeout(Duration::from_secs(3), attempts.recv())
+async fn attempt(receiver: &mut mpsc::UnboundedReceiver<WriteAttempt>) -> WriteAttempt {
+    tokio::time::timeout(Duration::from_secs(3), receiver.recv())
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(effect.operation, AskWriteOperation::Insert);
-    assert_eq!(effect.body, "Quote\nTotal: $50");
-    assert_eq!(
-        service
-            .snapshot(conversation_id)
-            .unwrap()
-            .submission
-            .unwrap()
-            .delivery,
-        Some(AskDeliveryStatus::Pending)
-    );
-    assert!(effect.claim.claim());
-    effect.outcome.send(AskWriteOutcome::Written).unwrap();
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
-    let result = service
-        .snapshot(conversation_id)
         .unwrap()
-        .submission
-        .unwrap();
-    assert_eq!(result.delivery, Some(AskDeliveryStatus::Written));
-    assert_eq!(result.copy_status, AskCopyStatus::NotNeeded);
-    assert!(
-        result.result_text.is_none()
-            && clipboard.copies.lock().is_empty()
-            && fixture.history.lock().is_empty()
-    );
-    assert_no_chat(&service, key);
 }
-
-#[tokio::test]
-async fn write_with_incidental_selection_retains_once_before_failed_copy_and_never_becomes_history()
-{
-    let mut fixture = Fixture::new(32_768);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    let (writer, mut attempts) = mpsc::unbounded_channel();
-    let clipboard = clipboard(&service, conversation_id, true);
-    let key = prepared(
-        &service,
-        conversation_id,
-        "写一封道歉邮件",
-        AskPreparation {
-            selection: ExternalSelection::Selected("incidental selected text".into()),
-            writer: Some(Arc::new(TestWriter(writer))),
-            clipboard: Some(clipboard.clone()),
-            ..Default::default()
+fn usage(call_id: Uuid, input: u64) -> AskCallUsage {
+    AskCallUsage {
+        call_id,
+        purpose: AskCallPurpose::Answer,
+        model: AskModelLabel {
+            service: "assistant".into(),
+            channel: "primary".into(),
+            model: "model".into(),
+            protocol: "responses".into(),
         },
-    )
-    .await;
-    let compose = fixture.next().await;
-    assert!(!model_text(&compose.request).contains("incidental selected"));
-    compose.complete("很抱歉。\n谢谢理解。", None, None);
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
-    let snapshot = service.snapshot(conversation_id).unwrap();
-    let retained = snapshot.submission.unwrap();
-    assert_eq!(retained.route, Some(AskRoute::Write));
-    assert_eq!(retained.delivery, Some(AskDeliveryStatus::Retained));
-    assert_eq!(retained.copy_status, AskCopyStatus::Failed);
-    assert_eq!(
-        retained.result_text.as_deref(),
-        Some("很抱歉。\n谢谢理解。")
-    );
-    assert!(attempts.try_recv().is_err());
-    assert_no_chat(&service, key);
-    assert!(fixture.history.lock().is_empty());
-    let replay = service.events(conversation_id, 0).unwrap();
-    assert!(replay.events.iter().any(|event| matches!(&event.kind,
-        AskEventKind::Delivery { submission } if submission.copy_status == AskCopyStatus::Pending
-            && submission.result_text == retained.result_text)));
-    assert_eq!(clipboard.copies.lock().len(), 1);
-    let next = prepared(
-        &service,
-        conversation_id,
-        "What is the capital of Japan?",
-        AskPreparation::default(),
-    )
-    .await;
-    let answer = fixture.next().await;
-    assert!(!model_text(&answer.request).contains("谢谢理解"));
-    assert!(service
-        .snapshot(conversation_id)
-        .unwrap()
-        .submission
-        .unwrap()
-        .result_text
-        .is_none());
-    answer.complete("Tokyo", None, None);
-    assert_eq!(terminal(&mut events, next).await, AskTurnStatus::Completed);
-    assert_eq!(clipboard.copies.lock().len(), 1);
+        input: Some(input),
+        output: Some(5),
+        cached_input: Some(10),
+        cache_write_input: Some(0),
+        reasoning: Some(1),
+        input_accounting: Some(CacheInputAccounting::Inclusive),
+    }
 }
 
 #[tokio::test]
-async fn edit_claim_cancellation_and_fallback_never_duplicate_live_effects() {
-    for (cancel_before, cancel_after, outcome, delivery) in [
-        (true, false, AskWriteOutcome::Declined, None),
-        (
-            false,
-            true,
-            AskWriteOutcome::Written,
-            Some(AskDeliveryStatus::Written),
-        ),
-        (
-            false,
-            true,
-            AskWriteOutcome::Unknown,
-            Some(AskDeliveryStatus::Unknown),
-        ),
-        (
-            false,
-            false,
-            AskWriteOutcome::Unknown,
-            Some(AskDeliveryStatus::Unknown),
-        ),
-        (
-            false,
-            false,
-            AskWriteOutcome::NotWritten,
-            Some(AskDeliveryStatus::Retained),
-        ),
-    ] {
-        let mut fixture = Fixture::new(32_768);
-        let service = fixture.service.clone();
-        let conversation_id = service.open();
-        let mut events = service.subscribe();
-        let (writer, mut attempts) = mpsc::unbounded_channel();
-        let clipboard = clipboard(&service, conversation_id, false);
+async fn every_submission_routes_after_chat_and_isolates_a_b_writes() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let (writer, mut writes) = setup_writer();
+    let cases = [
+        ("日本首都是哪里？", AskRoute::Answer),
+        ("这段是什么意思？", AskRoute::SelectionAnswer),
+        ("帮我写一封道歉邮件", AskRoute::Write),
+        ("能把这段改短吗", AskRoute::Edit),
+    ];
+    for (index, (instruction, route)) in cases.into_iter().enumerate() {
         let key = prepared(
-            &service,
-            conversation_id,
-            "Make this shorter, please?",
+            &f.service,
+            id,
+            instruction,
             AskPreparation {
-                selection: ExternalSelection::Selected("original\nselection".into()),
-                writer: Some(Arc::new(TestWriter(writer))),
-                clipboard: Some(clipboard.clone()),
+                selection: ExternalSelection::Selected(format!("verified B {index}")),
+                writer: Some(writer.clone()),
                 ..Default::default()
             },
         )
         .await;
-        let model = fixture.next().await;
-        assert!(
-            model_text(&model.request).contains(r#"{"externalSelection":"original\nselection"}"#)
-        );
-        model.complete("shorter", None, None);
-        let effect = tokio::time::timeout(Duration::from_secs(3), attempts.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(effect.operation, AskWriteOperation::Replace);
-        if cancel_before {
-            service.cancel(key).unwrap();
-            assert!(!effect.claim.claim());
-            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Cancelled);
-            effect.outcome.send(outcome).unwrap();
+        f.route(route).await;
+        if route.is_chat() {
+            let call = f.assistant().await;
+            assert_eq!(call.request.key, key);
+            assert_eq!(call.request.client_request_id, instruction);
+            assert_eq!(call.request.text, instruction);
+            if route == AskRoute::SelectionAnswer {
+                assert_eq!(
+                    call.request.selection.as_ref().unwrap().text,
+                    format!("verified B {index}")
+                );
+            } else {
+                assert!(
+                    call.request.selection.is_none(),
+                    "unrelated selection leaked into an ordinary answer"
+                );
+            }
+            assert_eq!(call.request.messages.len(), index * 2);
+            call.complete("direct assistant answer");
+            assert!(writes.try_recv().is_err());
         } else {
-            if outcome != AskWriteOutcome::NotWritten {
-                assert!(effect.claim.claim());
-            }
-            if cancel_after {
-                service.cancel(key).unwrap();
-                assert_eq!(service.turn(key).unwrap().status, AskTurnStatus::Running);
-            }
-            effect.outcome.send(outcome).unwrap();
-            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+            let call = f.next().await;
+            assert!(!call.request.tools.available.any());
+            assert!(!call.request.instructions.contains("ASK_RESULT"));
+            call.complete("final body", Some(50), Some(10));
+            let write = attempt(&mut writes).await;
+            assert_eq!(
+                write.operation,
+                if route == AskRoute::Write {
+                    AskWriteOperation::Insert
+                } else {
+                    AskWriteOperation::Replace
+                }
+            );
+            assert_eq!(write.body, "final body");
+            assert!((write.claim.still_current())());
+            assert!(write.claim.claim());
+            assert!(write.outcome.send(AskWriteOutcome::Written).is_ok());
         }
-        let result = service
-            .snapshot(conversation_id)
-            .unwrap()
-            .submission
-            .unwrap();
-        let delivery = if cancel_before { Some(AskDeliveryStatus::Retained) } else { delivery };
-        assert_eq!(result.delivery, delivery);
-        let retained = matches!(
-            delivery,
-            Some(AskDeliveryStatus::Unknown | AskDeliveryStatus::Retained)
-        );
-        assert_eq!(result.result_text.as_deref(), retained.then_some("shorter"));
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+        let snapshot = f.service.snapshot(id).unwrap();
+        assert_eq!(snapshot.submission.as_ref().unwrap().route, Some(route));
         assert_eq!(
-            clipboard.copies.lock().len(),
-            usize::from(retained && !cancel_before && !cancel_after)
+            snapshot.submission.as_ref().unwrap().client_request_id,
+            instruction
         );
-        assert!(attempts.try_recv().is_err());
-        assert_no_chat(&service, key);
+        if !route.is_chat() {
+            assert_no_chat(&f.service, key);
+        }
+        f.no_more_calls();
+    }
+    assert_eq!(f.history.lock().len(), 2);
+}
+
+#[tokio::test]
+async fn semantic_hybrid_uses_a_semantic_call_instead_of_keyword_shortcuts() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    for (text, route) in [
+        ("能把这段改短吗", AskRoute::Edit),
+        ("日本首都是哪里？", AskRoute::Answer),
+    ] {
+        let key = prepared(
+            &f.service,
+            id,
+            text,
+            AskPreparation {
+                intent_mode: AskIntentMode::SemanticHybrid,
+                selection: ExternalSelection::Selected("unrelated selection".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let classify = f.next().await;
+        assert!(model_text(&classify.request).contains(text));
+        assert!(!classify.request.tools.available.resolve_intent);
+        classify.complete_raw(&serde_json::json!({"route":route,"editTarget":(route == AskRoute::Edit).then_some(AskEditTarget::CurrentSelection)}).to_string());
+        if route == AskRoute::Edit {
+            f.next().await.complete_raw("short text");
+        } else {
+            f.assistant().await.complete("Tokyo");
+        }
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+        f.no_more_calls();
     }
 }
 
 #[tokio::test]
-async fn missing_selection_and_invalid_or_unsupported_classifier_stay_in_composer() {
-    let mut fixture = Fixture::with_intent_tool(32_768, false);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    let clipboard = clipboard(&service, conversation_id, false);
+async fn main_model_tool_then_one_composition_and_no_review() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
     let key = prepared(
-        &service,
-        conversation_id,
-        "这段是什么意思？",
+        &f.service,
+        id,
+        "write a reply",
         AskPreparation {
-            selection: ExternalSelection::Unavailable,
+            intent_mode: AskIntentMode::MainModelTool,
+            selection: ExternalSelection::None,
+            ..Default::default()
+        },
+    )
+    .await;
+    let routing = f.next().await;
+    assert!(routing.request.tools.available.resolve_intent);
+    routing.tool(AskToolCall::ResolveIntent {
+        route: AskRoute::Write,
+        edit_target: None,
+    });
+    let composition = f.next().await;
+    assert!(composition.request.tools.intent.is_some());
+    assert!(!composition.request.tools.available.any());
+    composition.complete_raw(
+        "Can we meet tomorrow?
+
+Thanks!",
+    );
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    let submission = f.service.snapshot(id).unwrap().submission.unwrap();
+    assert_eq!(
+        submission.result_text.as_deref(),
+        Some(
+            "Can we meet tomorrow?
+
+Thanks!"
+        )
+    );
+    assert_eq!(submission.delivery, Some(AskDeliveryStatus::Retained));
+    f.no_more_calls();
+}
+
+#[tokio::test]
+async fn invalid_or_unsupported_intent_never_switches_modes() {
+    assert_eq!(AskIntentMode::default(), AskIntentMode::SeparateModel);
+    assert!(serde_json::from_str::<AskIntentMode>("\"unknown\"").is_err());
+    for (supported, output) in [(false, None), (true, Some("{\"route\":\"write\"}"))] {
+        let mut f = Fixture::with_intent_tool(32_000, supported);
+        let id = f.service.open();
+        let mut events = f.service.subscribe();
+        let key = prepared(
+            &f.service,
+            id,
+            "write a memo",
+            AskPreparation {
+                intent_mode: AskIntentMode::MainModelTool,
+                ..Default::default()
+            },
+        )
+        .await;
+        if let Some(output) = output {
+            f.next().await.complete_raw(output);
+        }
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+        assert_eq!(
+            f.service.turn(key).unwrap().error.unwrap().message,
+            if supported {
+                "askIntentInvalid"
+            } else {
+                "askIntentToolUnsupported"
+            }
+        );
+        f.no_more_calls();
+    }
+    for output in [
+        "not json",
+        "{\"route\":\"other\"}",
+        "{\"route\":\"answer\",\"extra\":1}",
+    ] {
+        let mut f = Fixture::new(32_000);
+        let id = f.service.open();
+        let mut events = f.service.subscribe();
+        let key = prepared(&f.service, id, "request", AskPreparation::default()).await;
+        f.next().await.complete_raw(output);
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+        assert_eq!(
+            f.service.turn(key).unwrap().error.unwrap().message,
+            "askIntentInvalid"
+        );
+        f.no_more_calls();
+    }
+}
+
+#[tokio::test]
+async fn missing_selection_and_unbound_voice_clarification_never_invoke_writer() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let (writer, mut writes) = setup_writer();
+    for (index, route) in [AskRoute::Edit, AskRoute::SelectionAnswer, AskRoute::Clarify]
+        .into_iter()
+        .enumerate()
+    {
+        let key = prepared(
+            &f.service,
+            id,
+            &format!("刚才那句 {index}"),
+            AskPreparation {
+                selection: ExternalSelection::Unavailable,
+                writer: Some(writer.clone()),
+                recent_voice: vec![AskVoiceContext {
+                    text: "previous utterance".into(),
+                    recorded_at: "2026-11-21T09:00:00-07:00".into(),
+                    matches_selection: false,
+                }],
+                ..Default::default()
+            },
+        )
+        .await;
+        let classify = f.next().await;
+        assert!(classify
+            .request
+            .instructions
+            .contains("matchesSelection=true"));
+        assert!(model_text(&classify.request).contains("2026-11-21"));
+        classify.complete_raw(&serde_json::json!({"route":route,"editTarget":(route == AskRoute::Edit).then_some(AskEditTarget::RecentVoice)}).to_string());
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+        assert_eq!(
+            f.service.snapshot(id).unwrap().submission.unwrap().route,
+            Some(AskRoute::Clarify)
+        );
+        assert!(writes.try_recv().is_err());
+        f.no_more_calls();
+    }
+}
+
+#[tokio::test]
+async fn a_recent_voice_edit_requires_a_verified_binding_even_with_another_selection() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let (writer, mut writes) = setup_writer();
+    for (index, bound) in [false, true].into_iter().enumerate() {
+        let key = prepared(
+            &f.service,
+            id,
+            &format!("修改刚才那句 {index}"),
+            AskPreparation {
+                selection: ExternalSelection::Selected("verified B text".into()),
+                writer: Some(writer.clone()),
+                recent_voice: vec![AskVoiceContext {
+                    text: "recent spoken text".into(),
+                    recorded_at: "2026-11-21T09:00:00+08:00".into(),
+                    matches_selection: bound,
+                }],
+                ..Default::default()
+            },
+        )
+        .await;
+        f.next()
+            .await
+            .complete_raw(r#"{"route":"edit","editTarget":"recentVoice"}"#);
+        if bound {
+            f.next().await.complete_raw("replacement");
+            let write = attempt(&mut writes).await;
+            assert_eq!(write.operation, AskWriteOperation::Replace);
+            assert!(write.claim.claim());
+            write.outcome.send(AskWriteOutcome::Written).unwrap();
+            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+        } else {
+            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+            assert_eq!(
+                f.service.snapshot(id).unwrap().submission.unwrap().route,
+                Some(AskRoute::Clarify)
+            );
+            assert!(writes.try_recv().is_err());
+        }
+        f.no_more_calls();
+    }
+}
+
+#[tokio::test]
+async fn composition_context_uses_only_its_target_and_authorized_voice_text() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    for route in [AskRoute::Write, AskRoute::Edit] {
+        let text = format!("compose {route:?}");
+        let key = prepared(
+            &f.service,
+            id,
+            &text,
+            AskPreparation {
+                selection: ExternalSelection::Selected("verified selection B".into()),
+                original_context: AskCompositionContext {
+                    app_purpose: Some("email composition A".into()),
+                    before: Some("caret before A".into()),
+                    after: Some("caret after A".into()),
+                    ..Default::default()
+                },
+                selection_context: AskCompositionContext {
+                    app_purpose: Some("document editing B".into()),
+                    before: Some("range before B".into()),
+                    after: Some("range after B".into()),
+                    ..Default::default()
+                },
+                recent_voice: vec![AskVoiceContext {
+                    text: "relevant voice".into(),
+                    recorded_at: "2026-11-21T10:01:02-07:00".into(),
+                    matches_selection: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await;
+        f.route(route).await;
+        let call = f.next().await;
+        let text = model_text(&call.request);
+        assert!(text.contains("relevant voice") && text.contains("2026-11-21T10:01:02"));
+        assert_eq!(text.contains("caret before A"), route == AskRoute::Write);
+        assert_eq!(text.contains("range before B"), route == AskRoute::Edit);
+        assert_eq!(
+            text.contains("verified selection B"),
+            route == AskRoute::Edit
+        );
+        call.complete_raw("body");
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+        f.no_more_calls();
+    }
+}
+
+#[tokio::test]
+async fn target_expiry_retains_exact_body_and_reports_clipboard_failure() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let (writer, mut writes) = setup_writer();
+    let clipboard = clipboard(&f.service, id, true);
+    let key = prepared(
+        &f.service,
+        id,
+        "edit this",
+        AskPreparation {
+            selection: ExternalSelection::Selected("B".into()),
+            writer: Some(writer),
             clipboard: Some(clipboard.clone()),
             ..Default::default()
         },
     )
     .await;
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-    let result = service
-        .snapshot(conversation_id)
-        .unwrap()
-        .submission
-        .unwrap();
-    assert_eq!(result.route, Some(AskRoute::Clarify));
-    assert_eq!(result.error.unwrap().message, "askSelectionUnavailable");
-    assert_no_chat(&service, key);
-    assert!(fixture.calls.try_recv().is_err() && clipboard.copies.lock().is_empty());
-    let key = prepared(
-        &service,
-        conversation_id,
-        "tool unsupported",
-        AskPreparation {
-            intent_mode: AskIntentMode::MainModelTool,
-            ..Default::default()
-        },
-    )
-    .await;
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-    assert_eq!(
-        service.turn(key).unwrap().error.unwrap().message,
-        "askIntentToolUnsupported"
-    );
-    assert!(fixture.calls.try_recv().is_err());
-    let key = prepared(
-        &service,
-        conversation_id,
-        "invalid model output",
-        AskPreparation {
-            intent_mode: AskIntentMode::SeparateModel,
-            ..Default::default()
-        },
-    )
-    .await;
-    fixture
-        .next()
-        .await
-        .complete(r#"{"route":"edit","sideEffect":"replaceAll"}"#, None, None);
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-    assert_eq!(
-        service.turn(key).unwrap().error.unwrap().message,
-        "askIntentInvalid"
-    );
-    assert!(fixture.calls.try_recv().is_err());
-    assert_no_chat(&service, key);
+    f.route(AskRoute::Edit).await;
+    f.next().await.complete_raw("  final body\n");
+    let write = attempt(&mut writes).await;
+    assert!(write.outcome.send(AskWriteOutcome::NotWritten).is_ok());
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    let submission = f.service.snapshot(id).unwrap().submission.unwrap();
+    assert_eq!(submission.delivery, Some(AskDeliveryStatus::Retained));
+    assert_eq!(submission.result_text.as_deref(), Some("  final body\n"));
+    assert_eq!(submission.copy_status, AskCopyStatus::Failed);
+    assert_eq!(&*clipboard.copies.lock(), &["  final body\n"]);
+    f.no_more_calls();
 }
 
 #[tokio::test]
-async fn beta_classifiers_cannot_turn_clear_non_insert_requests_into_writes() {
-    for intent_mode in [AskIntentMode::SeparateModel, AskIntentMode::MainModelTool] {
-        let mut fixture = Fixture::new(32_768);
-        let service = fixture.service.clone();
-        let conversation_id = service.open();
-        let mut events = service.subscribe();
-        let (writer, mut attempts) = mpsc::unbounded_channel();
-        let clipboard = clipboard(&service, conversation_id, false);
-        for text in [
-            "What is the capital of Japan?",
-            "What does this mean?",
-            "Make this shorter, please?",
-        ] {
-            let key = prepared(
-                &service,
-                conversation_id,
-                text,
-                AskPreparation {
-                    intent_mode,
-                    selection: ExternalSelection::None,
-                    writer: Some(Arc::new(TestWriter(writer.clone()))),
-                    clipboard: Some(clipboard.clone()),
-                },
-            )
-            .await;
-            let decision = fixture.next().await;
-            match intent_mode {
-                AskIntentMode::SeparateModel => {
-                    assert!(!decision.request.tools.available.any());
-                    decision.complete(r#"{"route":"write"}"#, None, None);
-                }
-                AskIntentMode::MainModelTool => {
-                    assert!(decision.request.tools.available.resolve_intent);
-                    decision.tool(AskToolCall::ResolveIntent {
-                        route: AskRoute::Write,
-                    });
-                }
-                AskIntentMode::SemanticHybrid => unreachable!(),
-            }
-            let status = tokio::select! {
-                status = terminal(&mut events, key) => status,
-                _ = fixture.calls.recv() => panic!("misrouting reached generation: {intent_mode:?}, {text}"),
-            };
-            assert_eq!(status, AskTurnStatus::Failed, "{intent_mode:?}, {text}");
-            let submission = service
-                .snapshot(conversation_id)
-                .unwrap()
-                .submission
-                .unwrap();
-            assert_eq!(submission.error.unwrap().message, "askIntentInvalid");
-            assert!(submission.route.is_none() && submission.delivery.is_none());
-            assert!(attempts.try_recv().is_err());
-            assert!(clipboard.copies.lock().is_empty());
-            assert_no_chat(&service, key);
-        }
+async fn cancellation_during_generation_drops_late_body_and_never_writes() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let (writer, mut writes) = setup_writer();
+    let key = prepared(
+        &f.service,
+        id,
+        "edit selection",
+        AskPreparation {
+            selection: ExternalSelection::Selected("B".into()),
+            writer: Some(writer),
+            ..Default::default()
+        },
+    )
+    .await;
+    f.route(AskRoute::Edit).await;
+    let call = f.next().await;
+    f.service.cancel(key).unwrap();
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Cancelled);
+    let sequence = f.service.snapshot(id).unwrap().sequence;
+    call.raw_delta("late replacement");
+    let _ = call.finish.send(Ok(AskModelCompletion::Complete));
+    tokio::task::yield_now().await;
+    assert!(writes.try_recv().is_err());
+    assert_eq!(f.service.snapshot(id).unwrap().sequence, sequence);
+}
+
+#[tokio::test]
+async fn cancellation_before_claim_retains_generated_body_and_revokes_writer() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let (writer, mut writes) = setup_writer();
+    let key = prepared(
+        &f.service,
+        id,
+        "write a body",
+        AskPreparation {
+            selection: ExternalSelection::None,
+            writer: Some(writer),
+            ..Default::default()
+        },
+    )
+    .await;
+    f.route(AskRoute::Write).await;
+    f.next().await.complete_raw("generated body");
+    let write = attempt(&mut writes).await;
+    f.service.cancel(key).unwrap();
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Cancelled);
+    assert!(!(write.claim.still_current())());
+    assert!(!write.claim.claim());
+    assert!(write.outcome.send(AskWriteOutcome::Declined).is_ok());
+    tokio::task::yield_now().await;
+    let snapshot = f.service.snapshot(id).unwrap();
+    let submission = snapshot.submission.unwrap();
+    assert_eq!(submission.result_text.as_deref(), Some("generated body"));
+    assert_eq!(submission.delivery, Some(AskDeliveryStatus::Retained));
+    assert_eq!(submission.status, AskTurnStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn history_off_keeps_live_messages_and_current_validated_attachments() {
+    let mut f = Fixture::new(32_000);
+    Arc::get_mut(&mut f.service.0).unwrap().deps.history = None;
+    let id = f.service.open_transient();
+    let mut events = f.service.subscribe();
+    let first = prepared(
+        &f.service,
+        id,
+        "Remember the name Ada",
+        AskPreparation::default(),
+    )
+    .await;
+    f.route(AskRoute::Answer).await;
+    f.assistant().await.complete("Ada noted");
+    assert_eq!(terminal(&mut events, first).await, AskTurnStatus::Completed);
+    assert!(f.history.lock().is_empty());
+    let attachment_id = Uuid::new_v4();
+    f.attachments
+        .1
+        .lock()
+        .insert(attachment_id, (id, Arc::from("validated attachment")));
+    let mut input = request(id, "followup", "What was the name?");
+    input.attachment_ids.push(attachment_id);
+    let turn_id = f
+        .service
+        .submit_prepared(input, || async { Ok(AskPreparation::default()) })
+        .await
+        .unwrap();
+    let key = AskTurnKey {
+        conversation_id: id,
+        turn_id,
+    };
+    f.route(AskRoute::Answer).await;
+    let call = f.assistant().await;
+    assert_eq!(
+        call.request
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Remember the name Ada", "Ada noted"]
+    );
+    assert_eq!(call.request.client_request_id, "followup");
+    assert!(
+        matches!(&call.request.attachments[..], [AskAttachment::Selection { text }] if &**text == "validated attachment")
+    );
+    call.complete("Ada");
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    assert!(f.history.lock().is_empty());
+}
+
+#[tokio::test]
+async fn assistant_failure_has_no_legacy_fallback_and_keeps_attachments() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let attachment_id = Uuid::new_v4();
+    f.attachments
+        .1
+        .lock()
+        .insert(attachment_id, (id, Arc::from("attachment")));
+    f.service
+        .publish_attachment(
+            id,
+            AskAttachmentMetadata {
+                attachment_id,
+                kind: AskAttachmentKind::Selection,
+                display_name: "selection".into(),
+                preview: None,
+                page_count: None,
+                source_app: None,
+                state: AskAttachmentStatus::Ready,
+                error: None,
+            },
+            true,
+        )
+        .unwrap();
+    let mut input = request(id, "failure", "question");
+    input.attachment_ids.push(attachment_id);
+    let turn_id = f.service.submit(input).await.unwrap();
+    let key = AskTurnKey {
+        conversation_id: id,
+        turn_id,
+    };
+    f.route(AskRoute::Answer).await;
+    let call = f.assistant().await;
+    assert!(call
+        .finish
+        .send(Err(ask_error(BackendErrorCode::Provider, "fixtureFailure")))
+        .is_ok());
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
+    assert_eq!(f.service.snapshot(id).unwrap().attachments.len(), 1);
+    assert!(f.history.lock().is_empty());
+    f.no_more_calls();
+}
+
+struct NoCaretWriter;
+
+impl AskWriter for NoCaretWriter {
+    fn write(
+        &self,
+        _: AskWriteOperation,
+        _: String,
+        _: AskWriteClaim,
+    ) -> BoxFuture<'_, AskWriteOutcome> {
+        panic!("an unbound A caret must never be used for insertion")
     }
 }
 
 #[tokio::test]
-async fn main_model_rejects_missing_selection_without_requesting_a_followup() {
-    let mut fixture = Fixture::new(32_768);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    let prepare = || AskPreparation {
-        intent_mode: AskIntentMode::MainModelTool,
-        selection: ExternalSelection::None,
-        ..Default::default()
-    };
+async fn missing_original_caret_never_inserts_into_b_or_current_focus() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
     let key = prepared(
-        &service,
-        conversation_id,
-        "Please edit my selection",
-        prepare(),
+        &f.service,
+        id,
+        "write new content",
+        AskPreparation {
+            selection: ExternalSelection::Selected("B must remain unchanged".into()),
+            writer: Some(Arc::new(NoCaretWriter)),
+            ..Default::default()
+        },
     )
     .await;
-    fixture.next().await.tool(AskToolCall::ResolveIntent {
-        route: AskRoute::Edit,
-    });
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-    assert_eq!(service.turn(key).unwrap().error.unwrap().message, "askSelectionRequired");
-    assert!(fixture.calls.try_recv().is_err());
-    assert_no_chat(&service, key);
-    let key = prepared(
-        &service,
-        conversation_id,
-        "Please show me the result",
-        prepare(),
-    )
-    .await;
-    fixture
-        .next()
-        .await
-        .complete(r#"{"route":"answer"}"#, None, None);
-    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-    assert_eq!(
-        service.turn(key).unwrap().error.unwrap().message,
-        "askIntentInvalid"
-    );
-    assert!(fixture.calls.try_recv().is_err());
-    assert_no_chat(&service, key);
+    f.route(AskRoute::Write).await;
+    f.next().await.complete_raw("new body for A");
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    let submission = f.service.snapshot(id).unwrap().submission.unwrap();
+    assert_eq!(submission.delivery, Some(AskDeliveryStatus::Retained));
+    assert_eq!(submission.result_text.as_deref(), Some("new body for A"));
+    f.no_more_calls();
 }
 
 #[tokio::test]
-async fn submit_is_idempotent_and_late_cancellation_stays_with_its_owner() {
-    let mut fixture = Fixture::new(32_768);
-    let service = fixture.service.clone();
-    let mut events = service.subscribe();
-    let first = service.open();
-    let other = service.new_conversation();
-    assert_eq!(service.open(), other);
-    let original = request(first, "same-id", "only conversation A");
-    let (left, right) = tokio::join!(
-        service.submit(original.clone()),
-        service.submit(original.clone())
-    );
-    let first_turn = left.unwrap();
-    assert_eq!(right.unwrap(), first_turn);
-    let delayed = fixture.next().await;
-    delayed.delta("partial A\n\n");
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.turn_id == Some(first_turn)
-                && matches!(&event.kind, AskEventKind::AnswerDelta { delta, .. } if delta == "partial A\n\n")
-            {
-                break;
-            }
-        }
-    }).await.unwrap();
-    let mut conflicting = original;
-    conflicting.text.push('!');
+async fn idempotency_preserves_request_turn_event_ownership_and_one_preparation() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let input = request(id, "same-request", "question");
+    let turn_id = f
+        .service
+        .submit_prepared(input.clone(), || async { Ok(AskPreparation::default()) })
+        .await
+        .unwrap();
+    let key = AskTurnKey {
+        conversation_id: id,
+        turn_id,
+    };
+    let duplicate = f
+        .service
+        .submit_prepared(input.clone(), || async {
+            panic!("duplicate recaptured targets")
+        })
+        .await
+        .unwrap();
+    assert_eq!(turn_id, duplicate);
+    let mut conflict = input.clone();
+    conflict.text = "changed".into();
     assert_eq!(
-        service.submit(conflicting).await.unwrap_err().message,
+        f.service.submit(conflict).await.unwrap_err().message,
         "askRequestConflict"
     );
     assert_eq!(
-        service
-            .submit(request(first, "busy", "wait"))
+        f.service
+            .submit(request(id, "busy", "other"))
             .await
             .unwrap_err()
             .code,
         BackendErrorCode::Busy
     );
-    let other_turn = service
-        .submit(request(other, "same-id", "only conversation B"))
-        .await
-        .unwrap();
-    let other_call = fixture.next().await;
-    assert!(!model_text(&other_call.request).contains("conversation A"));
-    other_call.complete("B", Some(200), None);
-    assert_eq!(
-        terminal(
-            &mut events,
-            AskTurnKey {
-                conversation_id: other,
-                turn_id: other_turn
-            }
-        )
-        .await,
-        AskTurnStatus::Completed
-    );
-    let old = AskTurnKey {
-        conversation_id: first,
-        turn_id: first_turn,
-    };
-    service.cancel(old).unwrap();
-    assert_eq!(
-        service
-            .cancel(AskTurnKey {
-                conversation_id: other,
-                turn_id: first_turn
-            })
-            .unwrap_err()
-            .message,
-        "askTurnNotFound"
-    );
-    let later = service
-        .submit(request(first, "later", "new A"))
-        .await
-        .unwrap();
-    let current = fixture.next().await;
-    assert!(!model_text(&current.request).contains("conversation A"));
-    delayed.delta("stale A");
-    service.cancel(old).unwrap();
-    current.complete("new answer", Some(120), Some(60));
-    assert_eq!(
-        terminal(
-            &mut events,
-            AskTurnKey {
-                conversation_id: first,
-                turn_id: later
-            }
-        )
-        .await,
-        AskTurnStatus::Completed
-    );
-    let snapshot = service.snapshot(first).unwrap();
-    assert_eq!(snapshot.messages[1].text, "partial A\n\n");
-    assert_eq!(snapshot.messages[3].text, "new answer");
-    let replay = service.events(first, 0).unwrap();
-    assert_eq!(replay.latest_sequence, snapshot.sequence);
-    assert_eq!(
-        replay
-            .events
-            .iter()
-            .filter(|event| matches!(event.kind, AskEventKind::Terminal { .. }))
-            .count(),
-        2
-    );
-    assert_eq!(snapshot.cache[0].hit_rate, Some(0.5));
-    assert_eq!(service.snapshot(other).unwrap().cache[0].hit_rate, None);
-}
-
-#[tokio::test]
-async fn compact_never_receives_old_facts() {
-    let mut fixture = Fixture::new(5_200);
-    let service = fixture.service.clone();
-    let mut events = service.subscribe();
-    let conversation_id = service.open();
-    *fixture.context.0.lock() = Some("revoked-fact-marker".into());
-    let first = request(
-        conversation_id,
-        "one",
-        &format!("Question one about the current app {}", "x".repeat(500)),
-    );
-    let turn_id = service.submit(first).await.unwrap();
-    let call = fixture.next().await;
-    assert!(model_text(&call.request).contains("revoked-fact-marker"));
-    call.complete(&"a".repeat(220), Some(100), Some(0));
-    assert_eq!(
-        terminal(
-            &mut events,
-            AskTurnKey {
-                conversation_id,
-                turn_id
-            }
-        )
-        .await,
-        AskTurnStatus::Completed
-    );
-    assert!(fixture.search.0.lock().is_empty());
-    *fixture.context.0.lock() = None;
-    for index in 2..=3 {
-        let turn_id = service
-            .submit(request(
-                conversation_id,
-                &index.to_string(),
-                &format!("Question {index} {}", "x".repeat(500)),
-            ))
-            .await
-            .unwrap();
-        let call = fixture.next().await;
-        assert!(!model_text(&call.request).contains("revoked-fact-marker"));
-        call.complete(&"b".repeat(220), Some(300), Some(150));
-        assert_eq!(
-            terminal(
-                &mut events,
-                AskTurnKey {
-                    conversation_id,
-                    turn_id
-                }
-            )
-            .await,
-            AskTurnStatus::Completed
-        );
-    }
-
-    let turn_id = service
-        .submit(request(
-            conversation_id,
-            "four",
-            &format!("New question {}", "y".repeat(600)),
-        ))
-        .await
-        .unwrap();
-    let compact = fixture.next().await;
-    let compact_text = model_text(&compact.request);
-    assert!(compact_text.contains("Question one"));
-    assert!(!compact_text.contains("Question 2"));
-    assert!(!compact_text.contains("revoked-fact-marker"));
-    compact.complete("earlier summary", Some(250), Some(100));
-    let key = AskTurnKey { conversation_id, turn_id };
-    let answer = tokio::select! {
-        answer = fixture.next() => answer,
-        status = terminal(&mut events, key) => panic!("final provider call missing: {status:?} {:?}", service.turn(key).unwrap().error),
-    };
-    let answer_text = model_text(&answer.request);
-    assert!(answer_text.contains("earlier summary"));
-    assert!(answer_text.contains("conversationSummary"));
-    assert!(answer_text.contains("Question 2"));
-    assert!(answer_text.contains("Question 3"));
-    assert!(!answer_text.contains("Question one"));
-    answer.complete("answer", Some(50), Some(50));
-    assert_eq!(
-        terminal(
-            &mut events,
-            AskTurnKey {
-                conversation_id,
-                turn_id
-            }
-        )
-        .await,
-        AskTurnStatus::Completed
-    );
-    let snapshot = service.snapshot(conversation_id).unwrap();
-    assert!(snapshot.messages[0].text.contains("Question one"));
-    assert_eq!(snapshot.cache[0].comparable_reports, 5);
-    assert_eq!(snapshot.cache[0].hit_rate, Some(450.0 / 1000.0));
-    assert_eq!(snapshot.turns[3].usage[0].purpose, AskCallPurpose::Compact);
-    assert_eq!(snapshot.turns[3].usage[1].purpose, AskCallPurpose::Answer);
-}
-
-#[tokio::test]
-async fn search_publishes_sources_not_evidence_and_replays_a_bounded_tail() {
-    let mut fixture = Fixture::new(32_000);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    fixture
-        .search
-        .1
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-    *fixture.context.0.lock() = Some("private app metadata".into());
-    let submission = request(
-        conversation_id,
-        "request",
-        "Search the web for recent rates",
-    );
-    let turn_id = service.submit(submission).await.unwrap();
-    let key = AskTurnKey {
-        conversation_id,
-        turn_id,
-    };
-    let decision = fixture.next().await;
-    assert!(decision.request.tools.available.search);
-    assert!(!decision.request.tools.available.calculator);
-    assert!(!model_text(&decision.request).contains("private app metadata"));
-    assert!(fixture.search.0.lock().is_empty());
-    decision
-        .finish
-        .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
-            id: Some("call1".into()),
-            tool: AskToolCall::WebSearch {
-                public_query: "public query".into(),
-            },
-            resume: Vec::new(),
-        })))
-        .ok()
-        .unwrap();
-    let call = fixture.next().await;
-    assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);
-    assert!(!model_text(&call.request).contains("private app metadata"));
-    assert!(call.request.tools.results[0].output.contains("private-to-model source body"));
-    assert!(!call.request.tools.available.search);
-    assert!(!call.request.tools.available.calculator);
-    assert_eq!(fixture.search.0.lock().as_slice(), ["public query"]);
-    let search_replay =
-        serde_json::to_string(&service.events(conversation_id, 0).unwrap()).unwrap();
-    assert!(!search_replay.contains("private-to-model source body"));
-    assert_eq!(
-        service.turn(key).unwrap().search_status,
-        AskSearchStatus::Done
-    );
-    assert_eq!(
-        service.source_url(key, "source-a").unwrap(),
-        "https://example.com/result"
-    );
-    assert!(service.source_url(key, "not-a-real-source").is_err());
-    for tokens in 1..=EVENT_LIMIT + 1 {
-        (call.progress)(AskModelProgress::Usage(ReportedTokens {
-            output: Some(tokens as u64),
-            ..Default::default()
-        }));
-    }
-    let mut terminal_events = service.subscribe();
-    call.complete("done", None, None);
-    assert_eq!(
-        terminal(&mut terminal_events, key).await,
-        AskTurnStatus::Completed
-    );
-    let snapshot = service.snapshot(conversation_id).unwrap();
-    let reply = service.events(conversation_id, 0).unwrap();
-    assert!(reply.truncated);
-    assert_eq!(reply.events.len(), EVENT_LIMIT);
-    assert!(reply
-        .events
-        .windows(2)
-        .all(|events| events[0].sequence + 1 == events[1].sequence));
-    let current = service.events(conversation_id, snapshot.sequence).unwrap();
-    assert!(!current.truncated);
-    assert!(fixture.service.end_conversation(conversation_id).is_ok());
-    assert!(service.snapshot(conversation_id).is_err());
-    assert!(matches!(
-        events.try_recv(),
-        Err(broadcast::error::TryRecvError::Lagged(_))
-    ));
-}
-
-#[tokio::test]
-async fn calculator_runs_without_web_search_and_stops_at_its_call_budget() {
-    let mut fixture = Fixture::new(32_000);
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    let turn_id = service
-        .submit(request(conversation_id, "calc", "What is 1/3?"))
-        .await
-        .unwrap();
-    let key = AskTurnKey {
-        conversation_id,
-        turn_id,
-    };
-    for index in 0..MAX_CALCULATIONS {
-        let call = fixture.next().await;
-        assert!(!call.request.tools.available.search);
-        assert!(call.request.tools.available.calculator);
-        assert_eq!(call.request.tools.results.len(), index);
-        call.finish
-            .send(Ok(AskModelCompletion::ToolCall(AskModelToolCall {
-                id: Some(format!("calc-{index}")),
-                tool: AskToolCall::Calculate {
-                    expression: if index == 0 { "1/0" } else { "1/3" }.into(),
-                },
-                resume: Vec::new(),
-            })))
-            .ok()
-            .unwrap();
-    }
-    let final_call = fixture.next().await;
-    assert!(!final_call.request.tools.available.any());
-    let results = &final_call.request.tools.results;
-    assert_eq!(results.len(), MAX_CALCULATIONS);
-    assert!(results[0].output.contains("division_by_zero"));
-    assert!(results[1].output.contains("\"exact\":\"1/3\""));
-    assert!(fixture.search.0.lock().is_empty());
-    assert_eq!(
-        service.turn(key).unwrap().search_status,
-        AskSearchStatus::Idle
-    );
-    final_call.complete("1/3 exactly.", None, None);
+    f.route(AskRoute::Answer).await;
+    f.assistant().await.complete("answer");
     assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    assert_eq!(f.service.submit(input).await.unwrap(), turn_id);
+    let snapshot = f.service.snapshot(id).unwrap();
+    assert_eq!(snapshot.turns[0].client_request_id, "same-request");
+    let replay = f.service.events(id, 0).unwrap();
+    for event in replay.events {
+        assert_eq!(event.conversation_id, id);
+        assert_eq!(event.turn_id, Some(turn_id));
+        assert_eq!(event.client_request_id.as_deref(), Some("same-request"));
+    }
+    f.no_more_calls();
 }
 
 #[tokio::test]
-async fn unsupported_images_and_thinking_reject_before_acceptance_and_keep_the_draft() {
-    let mut fixture = Fixture::new(100_000);
-    let service = fixture.service.clone();
-    let owner = service.open();
-    let other = service.new_conversation();
+async fn tools_usage_and_authoritative_response_survive_truncated_replay() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let key = prepared(
+        &f.service,
+        id,
+        "answer with a tool",
+        AskPreparation::default(),
+    )
+    .await;
+    f.route(AskRoute::Answer).await;
+    let call = f.assistant().await;
+    assert_eq!(call.request.key, key);
+    let sink = call.events.clone();
+    let tool_call_id = Uuid::new_v4();
+    sink(AssistantEvent::Tool {
+        tool_call_id,
+        name: "read_context".into(),
+        status: AssistantToolStatus::Running,
+        error: None,
+    });
+    for _ in 0..EVENT_LIMIT + 2 {
+        sink(AssistantEvent::TextDelta("x".into()));
+    }
+    sink(AssistantEvent::Tool {
+        tool_call_id,
+        name: "read_context".into(),
+        status: AssistantToolStatus::Completed,
+        error: None,
+    });
+    let first_call = Uuid::new_v4();
+    let second_call = Uuid::new_v4();
+    sink(AssistantEvent::Usage(usage(first_call, 100)));
+    sink(AssistantEvent::Usage(usage(first_call, 120)));
+    sink(AssistantEvent::Usage(usage(second_call, 80)));
+    call.complete("authoritative final answer without a marker");
+    // The event queue intentionally overflowed; replay/snapshot are the recovery path.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match events.recv().await {
+                Ok(event) if matches!(event.kind, AskEventKind::Terminal { .. }) => break,
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let snapshot = f.service.snapshot(id).unwrap();
+    assert_eq!(
+        snapshot.messages[1].text,
+        "authoritative final answer without a marker"
+    );
+    assert_eq!(snapshot.turns[0].tools.len(), 1);
+    assert!(matches!(
+        snapshot.turns[0].tools[0].status,
+        AssistantToolStatus::Completed
+    ));
+    assert_eq!(
+        snapshot.submission.unwrap().tools[0].tool_call_id,
+        tool_call_id
+    );
+    assert_eq!(snapshot.turns[0].usage.len(), 2);
+    assert_eq!(snapshot.turns[0].usage[0].input, Some(120));
+    let replay = f.service.events(id, 0).unwrap();
+    assert!(replay.truncated);
+    assert!(replay.events.iter().any(|event| matches!(&event.kind, AskEventKind::Terminal { text: Some(text), .. } if text == "authoritative final answer without a marker")));
+    let sequence = snapshot.sequence;
+    sink(AssistantEvent::TextDelta("late".into()));
+    sink(AssistantEvent::Usage(usage(Uuid::new_v4(), 300)));
+    assert_eq!(f.service.snapshot(id).unwrap().sequence, sequence);
+    f.no_more_calls();
+}
+
+#[tokio::test]
+async fn cancelled_assistant_closes_tools_and_drops_late_events_in_a_new_turn() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let old = prepared(&f.service, id, "old question", AskPreparation::default()).await;
+    f.route(AskRoute::Answer).await;
+    let old_call = f.assistant().await;
+    let tool_call_id = Uuid::new_v4();
+    (old_call.events)(AssistantEvent::Tool {
+        tool_call_id,
+        name: "read_page".into(),
+        status: AssistantToolStatus::Running,
+        error: None,
+    });
+    f.service.cancel(old).unwrap();
+    assert!(old_call.cancellation.is_cancelled());
+    assert_eq!(terminal(&mut events, old).await, AskTurnStatus::Cancelled);
+    assert!(matches!(
+        f.service.turn(old).unwrap().tools[0].status,
+        AssistantToolStatus::Cancelled
+    ));
+    let next = prepared(&f.service, id, "new question", AskPreparation::default()).await;
+    f.route(AskRoute::Answer).await;
+    let next_call = f.assistant().await;
+    let sequence = f.service.snapshot(id).unwrap().sequence;
+    (old_call.events)(AssistantEvent::TextDelta("late answer".into()));
+    (old_call.events)(AssistantEvent::Tool {
+        tool_call_id,
+        name: "read_page".into(),
+        status: AssistantToolStatus::Completed,
+        error: None,
+    });
+    let _ = old_call
+        .finish
+        .send(Ok(crate::assistant_api::AssistantResponse {
+            text: "late".into(),
+        }));
+    f.service.cancel(old).unwrap();
+    assert_eq!(f.service.snapshot(id).unwrap().sequence, sequence);
+    assert!(!next_call.cancellation.is_cancelled());
+    next_call.complete("fresh");
+    assert_eq!(terminal(&mut events, next).await, AskTurnStatus::Completed);
+}
+
+#[tokio::test]
+async fn opening_fence_revokes_preparation_and_inflight_assistant() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let fence = AskSessionFence::default();
+    let permit = fence.issue();
+    let service = f.service.clone();
+    let pending = service.submit_prepared_guarded(
+        request(id, "pending", "question"),
+        || async { std::future::pending::<Result<AskPreparation, BackendError>>().await },
+        || true,
+        permit,
+    );
+    tokio::pin!(pending);
+    tokio::select! { result = &mut pending => panic!("unexpected result {result:?}"), _ = tokio::task::yield_now() => {} }
+    fence.revoke();
+    assert_eq!(pending.await.unwrap_err().code, BackendErrorCode::Cancelled);
+    assert!(f.service.snapshot(id).unwrap().turns.is_empty());
+    let key = prepared(&f.service, id, "running", AskPreparation::default()).await;
+    f.route(AskRoute::Answer).await;
+    let call = f.assistant().await;
+    f.service.end_conversation(id).unwrap();
+    assert!(call.cancellation.is_cancelled());
+    (call.events)(AssistantEvent::TextDelta("late".into()));
+    assert!(f.service.snapshot(key.conversation_id).is_err());
+}
+
+#[tokio::test]
+async fn invalid_attachments_and_unsupported_thinking_reject_before_acceptance() {
+    let mut f = Fixture::new(32_000);
+    let id = f.service.open();
+    let foreign = Uuid::new_v4();
     let image_id = Uuid::new_v4();
-    fixture.attachments.0.lock().insert(
+    f.attachments.0.lock().insert(
         image_id,
         (
-            owner,
+            foreign,
             AskImage {
                 mime: AskImageMime::Png,
-                bytes: Arc::from([1_u8, 2]),
+                bytes: Arc::from([1u8]),
                 width: 1,
                 height: 1,
             },
         ),
     );
-    let mut submit = request(other, "test", "");
-    submit.attachment_ids.push(image_id);
+    let mut input = request(id, "image", "describe");
+    input.attachment_ids.push(image_id);
     assert_eq!(
-        service.submit(submit.clone()).await.unwrap_err().code,
+        f.service.submit(input.clone()).await.unwrap_err().code,
         BackendErrorCode::PermissionDenied
     );
-    submit.conversation_id = owner;
+    f.attachments.0.lock().get_mut(&image_id).unwrap().0 = id;
     assert_eq!(
-        service.submit(submit).await.unwrap_err().message,
+        f.service.submit(input).await.unwrap_err().message,
         "askImageUnsupported"
     );
-    let mut thinking = request(owner, "think", "question");
-    thinking.options.deep_thinking = true;
+    let mut input = request(id, "thinking", "question");
+    input.options.deep_thinking = true;
     assert_eq!(
-        service.submit(thinking).await.unwrap_err().message,
+        f.service.submit(input).await.unwrap_err().message,
         "askDeepThinkingUnsupported"
     );
-    assert!(service.snapshot(owner).unwrap().messages.is_empty());
-    assert!(fixture.calls.try_recv().is_err());
-    service.end_all();
-    assert!(fixture.attachments.0.lock().is_empty());
+    assert!(f.service.snapshot(id).unwrap().submission.is_none());
+    f.no_more_calls();
 }
 
-#[tokio::test]
-async fn a_large_model_window_does_not_raise_the_total_cap() {
-    let mut fixture = Fixture::new(1_000_000);
-    let service = fixture.service.clone();
-    let id = service.open();
-    let text = "x".repeat(255_000);
-    assert_eq!(
-        service
-            .submit(request(id, "large", &text))
-            .await
-            .unwrap_err()
-            .message,
-        "askContextLimit"
-    );
-    assert!(service.snapshot(id).unwrap().messages.is_empty());
-    assert!(fixture.calls.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn expanded_opening_never_reclassifies_or_writes_but_a_fresh_opening_can_edit() {
-    for mode in [AskIntentMode::SemanticHybrid, AskIntentMode::SeparateModel, AskIntentMode::MainModelTool] {
-        let mut fixture = Fixture::new(32_768);
-        fixture.review_manually();
-        let service = fixture.service.clone();
-        let mut events = service.subscribe();
-        let first = service.open_transient();
-        let question = prepared(&service, first, "Hello", AskPreparation {
-            intent_mode: mode, ..Default::default()
-        }).await;
-        match mode {
-            AskIntentMode::SemanticHybrid => {}
-            AskIntentMode::SeparateModel => fixture.next().await.complete(r#"{"route":"answer"}"#, None, None),
-            AskIntentMode::MainModelTool => fixture.next().await.tool(AskToolCall::ResolveIntent { route: AskRoute::Answer }),
-        }
-        fixture.next().await.complete("First opening sentinel.", None, None);
-        fixture.next().await.complete_raw("deliver");
-        assert_eq!(terminal(&mut events, question).await, AskTurnStatus::Completed);
-
-        let following = service.submit_prepared(
-            request(first, "chat-edit", "Make this shorter, please?"),
-            || async { panic!("no external selection or classifier for locked chat") },
-        ).await.unwrap();
-        let answer = fixture.next().await;
-        assert!(answer.request.tools.intent.is_none() && !answer.request.tools.available.resolve_intent);
-        assert!(model_text(&answer.request).contains("First opening sentinel"));
-        let confirmation = match mode {
-            AskIntentMode::SemanticHybrid => "你想让我做的是哪一件事？\n\n1. 直接替换\n2. 只在这里展示\n\n请确认一下，我再继续。",
-            AskIntentMode::SeparateModel => "Should I edit the original or show it here? I’ll wait for your choice.",
-            AskIntentMode::MainModelTool => "Précisez l’option retenue avant que je poursuive.",
-        };
-        let following = AskTurnKey { conversation_id: first, turn_id: following };
-        if mode == AskIntentMode::SemanticHybrid {
-            let (first_paragraph, rest) = confirmation.split_once("\n\n").unwrap();
-            answer.delta(&format!("{first_paragraph}\n\n"));
-            assert!(service.snapshot(first).unwrap().messages.last().unwrap().text.is_empty());
-            answer.complete(rest, None, None);
-        } else {
-            answer.complete(confirmation, None, None);
-        }
-        let review = fixture.next().await;
-        assert_eq!(review.request.instructions, DELIVERY_REVIEW_RULE);
-        assert!(model_text(&review.request).contains("candidateBody"));
-        assert!(!model_text(&review.request).contains("First opening sentinel"));
-        assert!(service.snapshot(first).unwrap().messages.last().unwrap().text.is_empty());
-        review.complete_raw("reject");
-        assert_eq!(terminal(&mut events, following).await, AskTurnStatus::Failed);
-        let snapshot = service.snapshot(first).unwrap();
-        let rejected = snapshot.submission.unwrap();
-        assert!(rejected.delivery.is_none() && rejected.result_text.is_none());
-        assert_eq!(rejected.error.unwrap().message, "askAnswerUnusable");
-        assert!(snapshot.messages.last().unwrap().text.is_empty());
-        assert!(!snapshot.messages.last().unwrap().text.contains(confirmation));
-        assert!(!snapshot.messages.last().unwrap().text.contains("直接替换"));
-        assert!(!service.events(first, 0).unwrap().events.iter().any(|event| {
-            matches!(&event.kind, AskEventKind::AnswerDelta { delta, .. } if delta.contains("请确认") || delta.contains("哪一件事"))
-        }));
-
-        let legitimate = service.submit_prepared(
-            request(first, "chat-question-content", "Show the shorter invitation here."),
-            || async { panic!("no classification within the chat opening") },
-        ).await.unwrap();
-        let invitation = "Would you like to join us this Friday?";
-        fixture.next().await.complete(invitation, None, None);
-        fixture.next().await.complete_raw("deliver");
-        assert_eq!(terminal(&mut events, AskTurnKey { conversation_id: first, turn_id: legitimate }).await, AskTurnStatus::Completed);
-        assert_eq!(service.snapshot(first).unwrap().messages.last().unwrap().text, invitation);
-
-        let second = service.open_transient();
-        assert!(service.snapshot(first).is_err());
-        assert!(service.snapshot(second).unwrap().messages.is_empty());
-        let (writer, mut effects) = mpsc::unbounded_channel();
-        let edit = prepared(&service, second, "能把这段改短吗？", AskPreparation {
-            intent_mode: mode,
-            selection: ExternalSelection::Selected("current selection sentinel".into()),
-            writer: Some(Arc::new(TestWriter(writer))),
-            ..Default::default()
-        }).await;
-        if mode != AskIntentMode::SemanticHybrid {
-            let classifier = fixture.next().await;
-            assert!(!model_text(&classifier.request).contains("current selection sentinel"));
-            assert!(!model_text(&classifier.request).contains("First opening sentinel"));
-            if mode == AskIntentMode::MainModelTool {
-                classifier.tool(AskToolCall::ResolveIntent { route: AskRoute::Edit });
-            } else {
-                classifier.complete(r#"{"route":"edit"}"#, None, None);
-            }
-        }
-        let model = fixture.next().await;
-        let material = model_text(&model.request);
-        assert!(material.contains("current selection sentinel"));
-        assert!(!material.contains("First opening sentinel"));
-        model.complete("Short.", None, None);
-        fixture.next().await.complete_raw("deliver");
-        let effect = effects.recv().await.unwrap();
-        assert_eq!(effect.operation, AskWriteOperation::Replace);
-        assert!(effect.claim.claim());
-        effect.outcome.send(AskWriteOutcome::Written).unwrap();
-        assert_eq!(terminal(&mut events, edit).await, AskTurnStatus::Completed);
-        assert!(effects.try_recv().is_err() && fixture.history.lock().is_empty());
-    }
-}
-
-#[tokio::test]
-async fn opening_fence_rejects_queued_preparation_and_drops_a_late_provider_delta() {
-    let mut fixture = Fixture::new(32_768);
-    let service = fixture.service.clone();
-    let old = service.open_transient();
-    let fence = AskSessionFence::default();
-    let (started, entered) = oneshot::channel();
-    let pending = service.submit_prepared_guarded(request(old, "held", "old pending sentinel"), || async move {
-        started.send(()).unwrap();
-        std::future::pending().await
-    }, || true, fence.issue());
-    let revoke = async { entered.await.unwrap(); fence.revoke(); };
-    assert!(tokio::join!(pending, revoke).0.is_err());
-    assert!(fixture.calls.try_recv().is_err());
-
-    service.submit_prepared_guarded(request(old, "active", "Hello"), || async {
-        Ok(AskPreparation::default())
-    }, || true, fence.issue()).await.unwrap();
-    let stale = fixture.next().await;
-    fence.revoke();
-    let fresh = service.open_transient();
-    stale.delta("old late sentinel\n\n");
-    let mut events = service.subscribe();
-    let next = service.submit(request(fresh, "fresh", "new question sentinel")).await.unwrap();
-    let answer = fixture.next().await;
-    let payload = model_text(&answer.request);
-    assert!(payload.contains("new question sentinel"));
-    assert!(!payload.contains("old late sentinel") && !payload.contains("Hello"));
-    assert!(answer.request.tools.intent.is_none());
-    answer.complete("Fresh answer.", None, None);
-    assert_eq!(terminal(&mut events, AskTurnKey { conversation_id: fresh, turn_id: next }).await, AskTurnStatus::Completed);
-    assert!(fixture.history.lock().is_empty());
-}
-
-#[tokio::test]
-async fn explicit_news_and_same_opening_retry_keep_public_scope_but_reopen_does_not() {
-    let mut fixture = Fixture::new(32_768);
-    fixture.search.1.store(true, std::sync::atomic::Ordering::Relaxed);
-    let service = fixture.service.clone();
-    let mut events = service.subscribe();
-    let first = service.open_transient();
-    let public = "Berlin transit strike official 2026-11-19";
-    for (index, (message, search)) in [
-        ("Search the web for Berlin transit strike on 2026-11-19, official sources only.", true),
-        ("用‘搜索’造一个句子", false),
-        ("Did the previously mentioned disruption affect the morning service in those reports?", true),
-    ].into_iter().enumerate() {
-        let id = service.submit(request(first, message, message)).await.unwrap();
-        let decision = fixture.next().await;
-        let wire = model_text(&decision.request);
-        assert!(decision.request.tools.available.search);
-        assert!(wire.contains(message) && !wire.contains("private-answer-sentinel"));
-        if index > 0 { assert!(wire.contains(public)); }
-        if search {
-            decision.tool(AskToolCall::WebSearch { public_query: public.into() });
-        } else {
-            decision.complete_raw(r#""notNeeded""#);
-        }
-        let answer = fixture.next().await;
-        assert!(!answer.request.tools.available.search);
-        assert_eq!(answer.request.instructions.contains("本轮搜索已由应用处理"), search);
-        if index == 0 {
-            assert_eq!(answer.request.tools.results.len(), 1);
-        } else if search {
-            assert!(answer.request.tools.results.is_empty());
-            assert!(model_text(&answer.request).contains("publicSearch"));
-        }
-        answer.complete(if search { "private-answer-sentinel" } else { "我正在搜索一本书的资料。" }, None, None);
-        assert_eq!(terminal(&mut events, AskTurnKey { conversation_id: first, turn_id: id }).await, AskTurnStatus::Completed);
-        if !search {
-            assert_eq!(service.snapshot(first).unwrap().messages.last().unwrap().text, "我正在搜索一本书的资料。");
-            assert_eq!(fixture.search.0.lock().len(), 1);
-        }
-    }
-    assert_eq!(fixture.search.0.lock().as_slice(), [public, public]);
-    let fresh = service.open_transient();
-    let id = service.submit(request(fresh, "fresh", "Any updates?")).await.unwrap();
-    let decision = fixture.next().await;
-    assert!(!model_text(&decision.request).contains(public));
-    assert!(!model_text(&decision.request).contains("private-answer-sentinel"));
-    decision.complete_raw(r#""missingPublicTopic""#);
-    assert_eq!(terminal(&mut events, AskTurnKey { conversation_id: fresh, turn_id: id }).await, AskTurnStatus::Completed);
-    assert!(fixture.calls.try_recv().is_err());
-    assert_eq!(fixture.search.0.lock().len(), 2);
-}
-
-#[tokio::test]
-async fn search_disabled_rejected_and_unreadable_evidence_are_distinct() {
-    for (enabled, decision_rejected, result, expected) in [
-        (false, false, None, AskSearchStatus::Disabled),
-        (true, true, None, AskSearchStatus::Rejected),
-        (true, false, Some(Ok(AskSearchResult::NoResults)), AskSearchStatus::NoResults),
-        (true, false, Some(Ok(AskSearchResult::Done { evidence: "[]".into() })), AskSearchStatus::NoResults),
-        (true, false, Some(Ok(AskSearchResult::SnippetOnly)), AskSearchStatus::SnippetOnly),
-        (true, false, Some(Err(ask_error(BackendErrorCode::Provider, "fixture_search_failed"))), AskSearchStatus::Error),
-    ] {
-        let mut fixture = Fixture::new(32_768);
-        fixture.search.1.store(enabled, std::sync::atomic::Ordering::Relaxed);
-        *fixture.search.2.lock() = result;
-        let service = fixture.service.clone();
-        let conversation_id = service.open_transient();
-        let mut events = service.subscribe();
-        let turn_id = service.submit(request(conversation_id, "news", "Search for today’s transit news in Berlin.")).await.unwrap();
-        let key = AskTurnKey { conversation_id, turn_id };
-        if enabled {
-            let plan = fixture.next().await;
-            assert!(plan.request.tools.available.search);
-            if decision_rejected {
-                plan.complete_raw("tool refused");
-            } else {
-                plan.tool(AskToolCall::WebSearch { public_query: "Berlin transit latest official news".into() });
-            }
-        }
-        if !enabled || decision_rejected {
-            let answer = fixture.next().await;
-            assert!(!answer.request.tools.available.any());
-            assert!(!answer.request.instructions.contains(WEB_SEARCH_GUIDANCE));
-            answer.complete_raw("ASK_RESULT needs_public_evidence");
-        }
-        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
-        assert_eq!(service.turn(key).unwrap().search_status, expected);
-        let snapshot = service.snapshot(conversation_id).unwrap();
-        let answer = &snapshot.messages.last().unwrap().text;
-        assert_eq!(answer.contains("Web Search is off"), !enabled);
-        assert!(!answer.contains("source body") && !answer.contains("ASK_RESULT"));
-        assert!(fixture.calls.try_recv().is_err());
-    }
-}
-
-#[tokio::test]
-async fn external_delivery_rejects_mislabeled_meta_and_preserves_questions_in_the_body() {
-    for (index, (instruction, body, framed, approval)) in [
-        ("帮我写一篇邮件", "你想让我做的是哪一件事？\n\n请确认一下，我再继续。", false, false),
-        ("Write an email", "What is the recipient’s name?", true, false),
-        ("Make this shorter, please?", "Avant de continuer, confirmez ce que je dois faire.", true, false),
-        ("帮我写一篇邮件", "主题：[事项]\n\n您好，您方便在本周沟通[事项]吗？\n\n谢谢！\n[姓名]", true, true),
-    ].into_iter().enumerate() {
-        let mut fixture = Fixture::new(32_768);
-        fixture.review_manually();
-        let service = fixture.service.clone();
-        let conversation_id = service.open_transient();
-        let mut events = service.subscribe();
-        let (writer, mut effects) = mpsc::unbounded_channel();
-        let key = prepared(&service, conversation_id, instruction, AskPreparation {
-            selection: if index == 2 { ExternalSelection::Selected("current selection sentinel".into()) } else { ExternalSelection::None },
-            writer: Some(Arc::new(TestWriter(writer))),
-            ..Default::default()
-        }).await;
-        let compose = fixture.next().await;
-        assert!(compose.request.instructions.contains(FULFILLMENT_RULE));
-        if framed {
-            compose.complete(body, None, None);
-            let validation = fixture.next().await;
-            assert!(validation.request.instructions.contains("写给收件人的提问"));
-            assert!(model_text(&validation.request).contains("candidateBody"));
-            assert!(!model_text(&validation.request).contains("current selection sentinel"));
-            assert!(effects.try_recv().is_err());
-            validation.complete_raw(if approval { "deliver" } else { "reject" });
-        } else {
-            compose.complete_raw(body);
-        }
-        if approval {
-            let effect = effects.recv().await.unwrap();
-            assert_eq!(effect.operation, AskWriteOperation::Insert);
-            assert_eq!(effect.body, body);
-            assert!(effect.claim.claim());
-            effect.outcome.send(AskWriteOutcome::Written).unwrap();
-            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
-        } else {
-            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-            assert_eq!(service.snapshot(conversation_id).unwrap().submission.unwrap().error.unwrap().message, "askDraftUnusable");
-        }
-        assert!(effects.try_recv().is_err());
-        assert!(fixture.history.lock().is_empty());
-    }
-}
-
-#[tokio::test]
-async fn failed_timed_out_and_cancelled_review_retain_generated_body_without_native_effects() {
-    for failure in ["transport", "timeout", "cancel", "reopen"] {
-        let mut fixture = Fixture::new(32_768);
-        fixture.review_manually();
-        let service = fixture.service.clone();
-        let conversation_id = service.open_transient();
-        let mut events = service.subscribe();
-        let (writer, mut effects) = mpsc::unbounded_channel();
-        let key = prepared(&service, conversation_id, "Write an email", AskPreparation {
-            selection: ExternalSelection::None,
-            writer: Some(Arc::new(TestWriter(writer))),
-            ..Default::default()
-        }).await;
-        let body = "Subject: [Subject]\n\nHello,\n\nMay we meet on [date]?\n\n[Name]";
-        fixture.next().await.complete(body, None, None);
-        let review = fixture.next().await;
-        assert_eq!(review.request.instructions, DELIVERY_REVIEW_RULE);
-        assert!(effects.try_recv().is_err());
-        let snapshot = service.snapshot(conversation_id).unwrap().submission.unwrap();
-        assert_eq!(snapshot.delivery, Some(AskDeliveryStatus::Pending));
-        assert!(snapshot.result_text.is_none());
-
-        match failure {
-            "transport" => {
-                assert!(review.finish.send(Err(ask_error(BackendErrorCode::Provider, "fixture_review_disconnected"))).is_ok());
-            }
-            "timeout" => {
-                assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-                assert!(review.finish.is_closed());
-            }
-            "cancel" => {
-                service.cancel(key).unwrap();
-                review.raw_delta("deliver");
-            }
-            "reopen" => {
-                let fresh = service.open_transient();
-                review.raw_delta("deliver");
-                assert!(service.snapshot(conversation_id).is_err());
-                let snapshot = service.snapshot(fresh).unwrap();
-                assert!(snapshot.messages.is_empty() && snapshot.submission.is_none());
-                assert!(effects.try_recv().is_err());
-                continue;
-            }
-            _ => unreachable!(),
-        }
-        if failure != "timeout" {
-            let expected = if failure == "cancel" { AskTurnStatus::Cancelled } else { AskTurnStatus::Failed };
-            assert_eq!(terminal(&mut events, key).await, expected);
-        }
-        let snapshot = service.snapshot(conversation_id).unwrap().submission.unwrap();
-        assert_eq!(snapshot.delivery, Some(AskDeliveryStatus::Retained));
-        assert_eq!(snapshot.result_text.as_deref(), Some(body));
-        if failure != "cancel" {
-            assert_eq!(snapshot.error.unwrap().message, "askDraftReviewUnavailable");
-        }
-        assert!(effects.try_recv().is_err());
-        assert!(fixture.history.lock().is_empty());
-    }
-}
-
-#[tokio::test]
-async fn reviewed_chat_streams_safe_prefix_and_retains_attached_turn_on_tail_review_outage() {
-    let mut fixture = Fixture::with_capabilities(32_768, true, true);
-    fixture.review_manually();
-    let service = fixture.service.clone();
-    let conversation_id = service.open();
-    let mut events = service.subscribe();
-    for (index, outage) in [false, true].into_iter().enumerate() {
-        let attachment_id = Uuid::new_v4();
-        fixture.attachments.0.lock().insert(attachment_id, (conversation_id, AskImage {
-            mime: AskImageMime::Png, bytes: Arc::from([1_u8, 2, 3]), width: 1, height: 1,
-        }));
-        service.publish_attachment(conversation_id, AskAttachmentMetadata {
-            attachment_id, kind: AskAttachmentKind::Image, display_name: format!("fixture-{index}.png"),
-            state: AskAttachmentStatus::Ready, preview: None, source_app: None, page_count: None, error: None,
-        }, true).unwrap();
-        let mut request = request(conversation_id, &format!("image-{index}"), "Explain this picture.");
-        request.attachment_ids.push(attachment_id);
-        let turn_id = service.submit(request).await.unwrap();
-        let key = AskTurnKey { conversation_id, turn_id };
-        let generation = fixture.next().await;
-        assert!(generation.request.messages.last().unwrap().parts.iter().any(|part| matches!(part, AskModelPart::Image(_))));
-        let approved_prefix = "The first detail is visible.\n\n";
-        let tail = if outage { "Unreviewed synthetic tail." } else { "A second visual detail." };
-        let started = std::time::Instant::now();
-        generation.delta(approved_prefix);
-        let early = fixture.next().await;
-        assert_eq!(early.request.instructions, DELIVERY_REVIEW_RULE);
-        assert!(early.request.messages.iter().all(|message| message.parts.iter().all(|part| matches!(part, AskModelPart::Text(_)))));
-        assert!(service.snapshot(conversation_id).unwrap().messages.last().unwrap().text.is_empty());
-        early.complete_raw("deliver");
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let event = events.recv().await.unwrap();
-                if event.turn_id == Some(turn_id)
-                    && matches!(&event.kind, AskEventKind::AnswerDelta { delta, .. } if delta == approved_prefix)
-                {
-                    break;
-                }
-            }
-        }).await.unwrap();
-        let first_delta = started.elapsed();
-        assert!(!generation.finish.is_closed());
-        assert_eq!(service.snapshot(conversation_id).unwrap().messages.last().unwrap().text, approved_prefix);
-        tokio::time::sleep(Duration::from_millis(75)).await;
-        let provider_end = started.elapsed();
-        eprintln!("synthetic Ask first approved delta {first_delta:?}; fixture provider finish {provider_end:?}");
-        generation.complete(tail, None, None);
-        let final_review = fixture.next().await;
-        let review_payload = model_text(&final_review.request);
-        assert!(review_payload.contains("approvedPrefix") && review_payload.contains(tail));
-        assert_eq!(service.snapshot(conversation_id).unwrap().messages.last().unwrap().text, approved_prefix);
-        if outage {
-            assert!(final_review.finish.send(Err(ask_error(BackendErrorCode::Provider, "fixture_review_disconnected"))).is_ok());
-            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Failed);
-            let state = service.snapshot(conversation_id).unwrap();
-            let current = state.submission.unwrap();
-            assert!(current.delivery.is_none());
-            assert_eq!(current.error.unwrap().message, "askAnswerReviewUnavailable");
-            assert_eq!(current.result_text, Some(format!("{approved_prefix}{tail}")));
-            assert_eq!(state.attachments[0].attachment_id, attachment_id);
-            assert_eq!(state.messages.last().unwrap().text, approved_prefix);
-        } else {
-            final_review.complete_raw("deliver");
-            assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
-            let state = service.snapshot(conversation_id).unwrap();
-            assert_eq!(state.messages.last().unwrap().text, format!("{approved_prefix}{tail}"));
-            assert!(state.attachments.is_empty() && state.submission.unwrap().result_text.is_none());
-        }
-    }
-    assert_eq!(fixture.history.lock().len(), 1);
-    assert!(!fixture.history.lock()[0].1.contains("Unreviewed synthetic"));
-    let next = service.submit(request(conversation_id, "third", "An unrelated follow-up.")).await.unwrap();
-    let answer = fixture.next().await;
-    let payload = model_text(&answer.request);
-    assert!(payload.contains("A second visual detail.") && !payload.contains("Unreviewed synthetic tail."));
-    assert!(answer.request.messages.iter().all(|message| message.parts.iter().all(|part| matches!(part, AskModelPart::Text(_)))));
-    answer.complete("A new synthetic answer.", None, None);
-    fixture.next().await.complete_raw("deliver");
-    assert_eq!(terminal(&mut events, AskTurnKey { conversation_id, turn_id: next }).await, AskTurnStatus::Completed);
-}
-
-#[tokio::test]
-async fn reopened_chat_does_not_publish_a_late_prefix_review_or_tail() {
-    let mut fixture = Fixture::new(32_768);
-    fixture.review_manually();
-    let service = fixture.service.clone();
-    let old = service.open_transient();
-    service.submit(request(old, "old", "Old question.")).await.unwrap();
-    let generation = fixture.next().await;
-    generation.delta("Old preview candidate.\n\n");
-    let review = fixture.next().await;
-    let fresh = service.open_transient();
-    review.raw_delta("deliver");
-    let _ = review.finish.send(Ok(AskModelCompletion::Complete));
-    generation.delta("Late old tail.");
-    let _ = generation.finish.send(Ok(AskModelCompletion::Complete));
-    let mut events = service.subscribe();
-    let key = AskTurnKey {
-        conversation_id: fresh,
-        turn_id: service.submit(request(fresh, "new", "Fresh question.")).await.unwrap(),
+#[test]
+fn composer_budget_does_not_start_compaction_or_exceed_total_cap() {
+    let caps = AskModelCapabilities {
+        context_window: Some(1_000_000),
+        output_tokens: 256,
+        image_input: false,
+        image_token_reserve: 0,
+        deep_thinking: false,
     };
-    let answer = fixture.next().await;
-    assert!(!model_text(&answer.request).contains("Old preview"));
-    answer.complete("Fresh result.", None, None);
-    fixture.next().await.complete_raw("deliver");
+    assert!(prompt::Material::new(
+        &"a".repeat(256_000),
+        Vec::new(),
+        caps,
+        &AskOptions::default()
+    )
+    .is_err());
+    let material =
+        prompt::Material::new("write a memo", Vec::new(), caps, &AskOptions::default()).unwrap();
+    let request = material
+        .compose(
+            AskRoute::Write,
+            &AskPreparation::default(),
+            vec![AssistantMessage {
+                role: AssistantRole::User,
+                text: "x".repeat(256_000),
+            }],
+            None,
+        )
+        .unwrap();
+    assert_eq!(request.messages.len(), 1);
+    assert!(!request.tools.available.any());
+}
+
+#[tokio::test]
+async fn routing_and_composition_record_separate_calls_and_merge_partial_usage() {
+    let mut f = Fixture::new(32_000);
+    let root = std::env::temp_dir().join(format!("openless-entry-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let notifications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let changed = notifications.clone();
+    let recorder = Arc::new(
+        UsageRecorder::start_with_change_listener(
+            Arc::new(crate::usage_ledger::UsageLedger::open(root.join("usage.json")).unwrap()),
+            move || {
+                changed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        )
+        .unwrap(),
+    );
+    Arc::get_mut(&mut f.service.0).unwrap().deps.usage = Some(AskUsagePersistence {
+        recorder: recorder.clone(),
+        clock: Arc::new(crate::SystemClock),
+    });
+    let id = f.service.open();
+    let mut events = f.service.subscribe();
+    let key = prepared(&f.service, id, "write a memo", AskPreparation::default()).await;
+    // No reported quantities still represents a real, distinct routing call.
+    f.route(AskRoute::Write).await;
+    let call = f.next().await;
+    (call.progress)(AskModelProgress::Usage(ReportedTokens {
+        input: Some(123),
+        cached_input: Some(23),
+        input_accounting: Some(CacheInputAccounting::Inclusive),
+        ..Default::default()
+    }));
+    (call.progress)(AskModelProgress::Usage(ReportedTokens {
+        output: Some(7),
+        ..Default::default()
+    }));
+    call.complete_raw("memo");
     assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
-    assert_eq!(service.snapshot(fresh).unwrap().messages.last().unwrap().text, "Fresh result.");
-    assert!(fixture.history.lock().is_empty());
+    let (records, failures) = recorder.snapshot().unwrap();
+    assert_eq!(failures, 0);
+    assert_eq!(records.len(), 2);
+    assert_ne!(records[0].id, records[1].id);
+    let compose = records
+        .iter()
+        .find(|record| record.purpose == ServicePurpose::Question)
+        .unwrap();
+    assert_eq!(compose.input_tokens, Some(123));
+    assert_eq!(compose.output_tokens, Some(7));
+    assert_eq!(compose.cached_input_tokens, Some(23));
+    assert_eq!(compose.outcome, ServiceOutcome::Succeeded);
+    assert_eq!(notifications.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let view = f.service.turn(key).unwrap();
+    assert_eq!(view.usage[0].input, Some(123));
+    assert_eq!(view.usage[0].output, Some(7));
+    drop(f);
+    drop(recorder);
+    std::fs::remove_dir_all(root).unwrap();
 }

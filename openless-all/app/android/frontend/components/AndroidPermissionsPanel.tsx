@@ -1,3 +1,4 @@
+import { SelectLite } from '../../../src/ui/controls/SelectLite';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -478,24 +479,17 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 width: '100%',
               }}
             >
-              <select
+              <SelectLite
+                ariaLabel={t('settings.permissions.androidInsertStrategyLabel')}
                 disabled={!androidPrefs}
                 value={androidPrefs?.androidInsertStrategy ?? 'accessibility'}
-                onChange={(event) => {
-                  void updateAndroidPref(
-                    'androidInsertStrategy',
-                    event.target.value as AndroidInsertStrategy,
-                  );
-                }}
+                onChange={(value) => void updateAndroidPref('androidInsertStrategy', value as AndroidInsertStrategy)}
                 style={selectStyle}
-              >
-                <option value="accessibility">
-                  {t('settings.permissions.androidInsertStrategy.accessibility')}
-                </option>
-                <option value="clipboard">
-                  {t('settings.permissions.androidInsertStrategy.clipboard')}
-                </option>
-              </select>
+                options={[
+                  { value: 'accessibility', label: t('settings.permissions.androidInsertStrategy.accessibility') },
+                  { value: 'clipboard', label: t('settings.permissions.androidInsertStrategy.clipboard') },
+                ]}
+              />
               <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(
                   `settings.permissions.androidInsertStrategyHint.${androidPrefs?.androidInsertStrategy ?? 'accessibility'}`,
@@ -513,30 +507,19 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 width: '100%',
               }}
             >
-              <select
+              <SelectLite
+                ariaLabel={t('settings.permissions.androidOverlayTriggerLabel')}
                 disabled={!androidPrefs}
                 value={androidPrefs?.androidOverlayTrigger ?? 'background'}
-                onChange={(event) => {
-                  void updateAndroidPref(
-                    'androidOverlayTrigger',
-                    event.target.value as AndroidOverlayTrigger,
-                  );
-                }}
+                onChange={(value) => void updateAndroidPref('androidOverlayTrigger', value as AndroidOverlayTrigger)}
                 style={selectStyle}
-              >
-                <option value="background">
-                  {t('settings.permissions.androidOverlayTrigger.background')}
-                </option>
-                <option value="keyboard" disabled>
-                  {t('settings.permissions.androidOverlayTrigger.keyboard')}
-                </option>
-                <option value="always">
-                  {t('settings.permissions.androidOverlayTrigger.always')}
-                </option>
-                <option value="never">
-                  {t('settings.permissions.androidOverlayTrigger.never')}
-                </option>
-              </select>
+                options={[
+                  { value: 'background', label: t('settings.permissions.androidOverlayTrigger.background') },
+                  { value: 'keyboard', label: t('settings.permissions.androidOverlayTrigger.keyboard'), disabled: true },
+                  { value: 'always', label: t('settings.permissions.androidOverlayTrigger.always') },
+                  { value: 'never', label: t('settings.permissions.androidOverlayTrigger.never') },
+                ]}
+              />
               <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(
                   `settings.permissions.androidOverlayTriggerHint.${androidPrefs?.androidOverlayTrigger ?? 'background'}`,
@@ -557,24 +540,17 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 width: '100%',
               }}
             >
-              <select
+              <SelectLite
+                ariaLabel={t('settings.permissions.androidOverlayActivationModeLabel')}
                 disabled={!androidPrefs}
                 value={androidPrefs?.androidOverlayActivationMode ?? 'tap'}
-                onChange={(event) => {
-                  void updateAndroidPref(
-                    'androidOverlayActivationMode',
-                    event.target.value as AndroidOverlayActivationMode,
-                  );
-                }}
+                onChange={(value) => void updateAndroidPref('androidOverlayActivationMode', value as AndroidOverlayActivationMode)}
                 style={selectStyle}
-              >
-                <option value="tap">
-                  {t('settings.permissions.androidOverlayActivationMode.tap')}
-                </option>
-                <option value="long_press">
-                  {t('settings.permissions.androidOverlayActivationMode.long_press')}
-                </option>
-              </select>
+                options={[
+                  { value: 'tap', label: t('settings.permissions.androidOverlayActivationMode.tap') },
+                  { value: 'long_press', label: t('settings.permissions.androidOverlayActivationMode.long_press') },
+                ]}
+              />
               <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(
                   `settings.permissions.androidOverlayActivationModeHint.${androidPrefs?.androidOverlayActivationMode ?? 'tap'}`,
@@ -611,38 +587,24 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                       direction,
                     )}
                   </span>
-                  <select
+                  <SelectLite
+                    ariaLabel={t(`settings.permissions.androidOverlayGestureDirection.${direction}`, direction)}
                     disabled={!androidPrefs}
                     value={androidPrefs?.androidOverlayGestureActions?.[direction] ?? 'none'}
-                    onChange={(event) => {
-                      const action = event.currentTarget.value as AndroidOverlayGestureAction;
+                    onChange={(value) => {
+                      const action = value as AndroidOverlayGestureAction;
                       void updateAndroidPref('androidOverlayGestureActions', (current) => ({
                         ...(current.androidOverlayGestureActions ?? {
-                          up: 'cancel',
-                          down: 'none',
-                          left: 'translation',
-                          right: 'none',
+                          up: 'cancel', down: 'none', left: 'translation', right: 'none',
                         }),
                         [direction]: action,
                       }));
                     }}
                     style={selectStyle}
-                  >
-                    {(
-                      [
-                        'none',
-                        'quick_note',
-                        'translation',
-                        'style_pack',
-                        'cancel',
-                        'voice_edit',
-                      ] as const
-                    ).map((action) => (
-                      <option key={action} value={action}>
-                        {t(`settings.permissions.androidOverlayGestureAction.${action}`, action)}
-                      </option>
-                    ))}
-                  </select>
+                    options={(['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'voice_edit'] as const).map((action) => ({
+                      value: action, label: t(`settings.permissions.androidOverlayGestureAction.${action}`, action),
+                    }))}
+                  />
                 </label>
               ))}
             </div>

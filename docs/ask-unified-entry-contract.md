@@ -2,6 +2,8 @@
 
 This contract covers the macOS and Windows Ask window, shortcuts, native targets, submission and delivery. See the [attachment, context and tool contract](ask-standalone-contract.md) for those shared boundaries.
 
+The personal-assistant replacement and its typed runtime boundary are defined in the [assistant contract](ask-assistant-rewrite-contract.md). Chat execution belongs to that independent runtime; this entry layer owns routing and native delivery.
+
 ## Open and submit
 
 The current recording shortcut plus Space opens or focuses the compact `ask-anything` composer. The same window expands around the composer after an explicit submission resolves to `answer` or `selectionAnswer`. `write`, `edit` and `clarify` stay compact. Expansion requires the matching acknowledged turn and current visibility generation. Replay can reconcile a live submission but cannot expand a dismissed window. Escape dismisses the composer and cancels pending voice input. An accepted turn retains its own cancellation and result lifecycle.
@@ -16,7 +18,7 @@ The recording chord can start voice input after the current composer acknowledge
 | `edit` | Replaces the verified original selection. A missing selection requests clarification. |
 | `clarify` | Requests input in the composer, with no external write. |
 
-Explicit send prepares the native target and freezes the chosen mode, channel and validated attachments after admission. An identical request ID and payload reuse the original turn. A different payload with the same ID conflicts. Busy work is rejected before another target read. Once chat has expanded, later turns remain in that conversation and use the answer path. The backend reviews output before publishing or delivering it.
+Explicit send prepares the native target and freezes the chosen mode, channel and validated attachments after admission. An identical request ID and payload reuse the original turn. A different payload with the same ID conflicts. Busy work is rejected before another target read. Every explicit submission resolves its intent, including later turns in an expanded conversation. Answer routes use the personal-assistant runtime; write/edit generate final text once, then validate the native target before delivery. There is no second model review or polishing pass.
 
 ## Settings and routing
 

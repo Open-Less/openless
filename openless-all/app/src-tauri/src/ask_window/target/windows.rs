@@ -19,6 +19,7 @@ use windows::Win32::{
 
 const MESSAGE_MS: u32 = 80;
 const EM_GETSEL: u32 = 0x00b0;
+const EM_SETSEL: u32 = 0x00b1;
 const EM_REPLACESEL: u32 = 0x00c2;
 const EM_GETPASSWORDCHAR: u32 = 0x00d2;
 
@@ -250,6 +251,7 @@ impl Platform {
         &self,
         identity: &Identity,
         baseline: &Baseline,
+        operation: WriteOperation,
         text: &str,
         claim: impl FnOnce() -> Result<(), WriteOutcome>,
     ) -> WriteOutcome {
@@ -273,8 +275,21 @@ impl Platform {
         units.push(0);
 
         if self.verify(identity).is_none()
-            || edit.baseline().as_ref() != Some(baseline)
-            || !identity.window.restore_front()
+            || edit.document().as_ref() != Some(&baseline.document)
+            || (matches!(operation, WriteOperation::Replace)
+                && edit.baseline().as_ref() != Some(baseline))
+            || match self.foreground() {
+                Foreground::Own => false,
+                Foreground::External(window) => window != identity.window,
+                Foreground::Unknown => true,
+            }
+        {
+            return WriteOutcome::NotWritten;
+        }
+        if !identity.window.restore_front()
+            || (matches!(operation, WriteOperation::Insert)
+                && !self.restore_caret(identity, edit, baseline))
+            || self.verify(identity).is_none()
             || !self.focus_matches(identity)
             || edit.safe_edit_style() != Some(state)
             || edit.baseline().as_ref() != Some(baseline)
@@ -295,6 +310,30 @@ impl Platform {
         } else {
             WriteOutcome::Unknown
         }
+    }
+
+    fn restore_caret(&self, identity: &Identity, edit: Window, baseline: &Baseline) -> bool {
+        if !baseline.selection.is_empty()
+            || self.verify(identity).is_none()
+            || edit.document().as_ref() != Some(&baseline.document)
+        {
+            return false;
+        }
+        if !self.focus_matches(identity) && unsafe { identity.element.SetFocus() }.is_err() {
+            return false;
+        }
+        if !self.focus_matches(identity)
+            || self.verify(identity).is_none()
+            || edit.document().as_ref() != Some(&baseline.document)
+        {
+            return false;
+        }
+        if edit.selection().as_ref() != Some(&baseline.selection)
+            && edit.send(EM_SETSEL, baseline.selection.start, baseline.selection.end as isize).is_none()
+        {
+            return false;
+        }
+        self.focus_matches(identity) && edit.baseline().as_ref() == Some(baseline)
     }
 
     fn verify(&self, target: &Identity) -> Option<()> {
@@ -359,7 +398,11 @@ impl Platform {
     fn verify_capture(&self, target: &Identity) -> Option<()> {
         self.verify(target)?;
         match self.foreground() {
-            Foreground::Own => Some(()),
+            // UIA's global focused element is now Ask. Only a native Edit
+            // whose own GUI thread still identifies this child is verifiable.
+            Foreground::Own => target.edit
+                .filter(|edit| target.window.focused_child() == Some(edit.handle))
+                .map(|_| ()),
             Foreground::External(window)
                 if window == target.window && self.focus_matches(target) =>
             {
@@ -400,6 +443,10 @@ impl Drop for Platform {
 }
 
 impl Identity {
+    pub(super) fn pid(&self) -> u32 {
+        self.window.pid
+    }
+
     unsafe fn write_baseline(
         &self,
         edit: Window,
@@ -423,6 +470,10 @@ impl Identity {
 }
 
 impl Window {
+    pub(super) fn pid(self) -> u32 {
+        self.pid
+    }
+
     fn new(handle: HWND) -> Option<Self> {
         if handle.0.is_null() {
             return None;

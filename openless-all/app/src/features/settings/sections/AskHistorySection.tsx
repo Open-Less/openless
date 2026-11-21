@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageSkeleton } from '../../../components/ui/PageSkeleton';
 import { useHotkeySettings } from '../../../data/preferences';
@@ -8,12 +8,17 @@ import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { Card } from '../../../ui/layout/Card';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 
+type ReadPermissions = { browserTab: boolean; voiceHistory: boolean };
+
 export function AskHistorySection({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const { notify } = useInteraction();
   const { prefs, updatePrefs } = useHotkeySettings();
   const [contextAllowed, setContextAllowed] = useState<boolean>();
   const [contextSaving, setContextSaving] = useState(false);
+  const [readPermissions, setReadPermissions] = useState<ReadPermissions>();
+  const [readSaving, setReadSaving] = useState<keyof ReadPermissions>();
+  const readPending = useRef(false);
   useEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
@@ -26,6 +31,9 @@ export function AskHistorySection({ compact = false }: { compact?: boolean }) {
           notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') });
         }
       });
+    void invokeOrPreview<ReadPermissions>('ask_get_read_permissions', undefined, () => ({ browserTab: false, voiceHistory: false }))
+      .then((permissions) => { if (!cancelled) setReadPermissions(permissions); })
+      .catch(() => { if (!cancelled) notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') }); });
     return () => {
       cancelled = true;
     };
@@ -72,6 +80,27 @@ export function AskHistorySection({ compact = false }: { compact?: boolean }) {
           />
         </SettingRow>
       )}
+      {readPermissions && (['browserTab', 'voiceHistory'] as const).map((permission) => (
+        <SettingRow key={permission}
+          label={t(`askEntrySettings.${permission}`)}
+          desc={t(`askEntrySettings.${permission}Hint`)}
+          descriptionPlacement="hint"
+        >
+          <Toggle
+            on={readPermissions[permission]}
+            disabled={readSaving === permission}
+            onToggle={(allowed) => {
+              if (readPending.current) return;
+              readPending.current = true;
+              setReadSaving(permission);
+              void invokeOrPreview<ReadPermissions>('ask_set_read_permissions', { permissions: { ...readPermissions, [permission]: allowed } }, () => ({ ...readPermissions, [permission]: allowed }))
+                .then(setReadPermissions)
+                .catch(() => notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') }))
+                .finally(() => { readPending.current = false; setReadSaving(undefined); });
+            }}
+          />
+        </SettingRow>
+      ))}
     </Card>
   );
 }

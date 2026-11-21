@@ -1,4 +1,4 @@
-import { AskCurrentNotice, useScopedAskNotice } from './notices';
+import { useCurrentAskNotice, useClearAskNotice, useAskNotice } from './notices';
 import { PromptBox, type PromptEffort } from '@/components/ui/prompt-box';
 import { Brain, Paperclip } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -6,11 +6,9 @@ import { AttachmentDeck } from './attachments';
 import {
   askLocale,
   askIdleLabel,
-  errorMessage,
+  askErrorLabel,
   newRequestId,
   requestFingerprint,
-  submissionErrorMessage,
-  type AskError,
   type AskClient,
   type AskFocus,
   type AskSnapshot,
@@ -79,6 +77,7 @@ export function useComposer({
   check,
   focus,
   activation,
+  expanded,
   result,
   captureSubmitReceipt,
 }: {
@@ -89,12 +88,20 @@ export function useComposer({
   check: () => void;
   focus?: AskFocus;
   activation: number;
+  expanded: boolean;
   result?: ReactNode;
   captureSubmitReceipt: () => (turnId: string) => void;
 }) {
   const { conversationId, attachments } = snapshot;
-  const notice = useScopedAskNotice();
-  const sendNotice = useRef<ReturnType<typeof notice>>();
+  const notice = useAskNotice();
+  const clearNotice = useClearAskNotice();
+  const currentNotice = useCurrentAskNotice();
+  const cancelOnAccept = useRef(false);
+  const lifetime = useRef(true);
+  useEffect(() => {
+    lifetime.current = true;
+    return () => { lifetime.current = false; };
+  }, []);
   const editor = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef('');
   const lastClear = useRef<Draft>();
@@ -146,8 +153,10 @@ export function useComposer({
       : 'Polishing…';
   const workingLabel = /^zh-(TW|HK|Hant)\b/i.test(language) ? '處理中…'
     : /^zh\b/i.test(language) ? '处理中…' : 'Working…';
-  const placeholder = !draft && showPolish ? polishLabel
+  const placeholder = !expanded && currentNotice ? askErrorLabel(currentNotice.code, language)
+    : !draft && showPolish ? polishLabel
     : !draft && showWorking ? workingLabel : idleLabel;
+  const showDraftError = !expanded && Boolean(currentNotice) && draft.length > 0;
 
   useEffect(() => {
     const update = () => setLanguage(askLocale());
@@ -171,6 +180,7 @@ export function useComposer({
     } else {
       nextSelection.current = selection;
     }
+    clearNotice();
     draftRef.current = text;
     setDraft(text);
   }
@@ -289,24 +299,31 @@ export function useComposer({
       return;
     }
 
+    clearNotice();
+    cancelOnAccept.current = false;
     pendingRef.current = true;
     const reportAccepted = captureSubmitReceipt();
-    sendNotice.current?.dismiss();
-    sendNotice.current = undefined;
     setPending(true);
     void client
       .submit(request)
       .then(({ turnId: acceptedTurnId }) => {
+        if (cancelOnAccept.current) {
+          void client.cancel(request.conversationId, acceptedTurnId).catch(() => {});
+          if (restore && lifetime.current) restoreDraft(restore);
+          return;
+        }
+        if (!lifetime.current) return;
         if (restore) sentDraft.current = { turnId: acceptedTurnId, draft: restore };
         setAcknowledgedTurn(acceptedTurnId);
         reportAccepted(acceptedTurnId);
         draftIds.current.delete(requestFingerprint(request));
       })
       .catch((cause) => {
-        const message =
-          typeof cause === 'object' && cause !== null && 'reason' in cause
-            ? (submissionErrorMessage(cause as AskError) ?? 'Ask could not send this message.')
-            : errorMessage(cause, 'Ask could not send this message.');
+        if (!lifetime.current) return;
+        if (cancelOnAccept.current) {
+          if (restore) restoreDraft(restore);
+          return;
+        }
         const recoverable =
           typeof cause === 'object' &&
           cause !== null &&
@@ -314,7 +331,7 @@ export function useComposer({
           ['busy', 'invalid_argument', 'cancelled'].includes(String(cause.code));
         const severity = recoverable ? 'warning' : 'error';
         if (restore) restoreDraft(restore);
-        sendNotice.current = notice(message, severity, 'ask-send');
+        notice(cause, severity, 'ask-send');
       })
       .finally(() => {
         pendingRef.current = false;
@@ -345,7 +362,7 @@ export function useComposer({
     setAdding(true);
     void add()
       .catch((cause) =>
-        notice(errorMessage(cause, 'Could not add an attachment.'), 'warning', 'ask-attachment'),
+        notice(cause, 'warning', 'ask-attachment'),
       )
       .finally(() => {
         setAdding(false);
@@ -387,16 +404,7 @@ export function useComposer({
       if (event.type === 'cancelled' || event.type === 'failed') {
         activeRecording.current = undefined;
         if (event.type === 'failed' && currentVoiceEditor.current?.(event) === recording.input) {
-          const failedToStart = event.stage === 'start';
-          const message = /^zh-(TW|HK|Hant)\b/i.test(language)
-            ? (failedToStart ? '無法開始語音輸入。草稿已保留，仍可直接輸入。'
-              : '語音輸入未完成。草稿已保留，仍可直接輸入。')
-            : /^zh\b/i.test(language)
-              ? (failedToStart ? '无法开始语音输入。草稿已保留，仍可直接输入。'
-                : '语音输入未完成。草稿已保留，仍可直接输入。')
-              : (failedToStart ? 'Could not start voice input. Your draft was kept; you can still type.'
-                : 'Voice input did not finish. Your draft was kept; you can still type.');
-          notice(message, 'error', 'ask-voice');
+          notice(undefined, 'error', 'ask-voice');
         }
         return;
       }
@@ -444,7 +452,7 @@ export function useComposer({
       .catch((cause) => {
         if (!stopped)
           notice(
-            errorMessage(cause, 'Could not connect to Ask voice input.'),
+            cause,
             'warning',
             'ask-voice',
           );
@@ -466,7 +474,9 @@ export function useComposer({
   const box = (
     <div
       className="composer"
-      data-polishing={showPolish && !draft}
+      data-polishing={showPolish && !draft && !currentNotice}
+      data-error-code={!expanded ? currentNotice?.code : undefined}
+      data-draft-error={showDraftError || undefined}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes('Files')) return;
         event.preventDefault();
@@ -488,6 +498,7 @@ export function useComposer({
         });
       }}
     >
+      {!expanded && currentNotice && <span className="sr-only" role="alert">{askErrorLabel(currentNotice.code, language)}</span>}
       <PromptBox
         className="w-full"
         placeholder={placeholder}
@@ -498,9 +509,18 @@ export function useComposer({
         submitDisabled={cannotSubmit || isComposing}
         canSubmitEmpty={attachments.length > 0 && attachmentsReady}
         inputProps={{
-          'aria-label': placeholder,
+          'aria-label': idleLabel,
           'aria-describedby': attachments.length ? 'draft-references' : undefined,
           readOnly: pending,
+          onKeyDown: (event) => {
+            if (showDraftError && !['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) clearNotice();
+            if (event.key === 'Escape' && !event.nativeEvent.isComposing && !composing.current && pendingRef.current) {
+              cancelOnAccept.current = true;
+            }
+          },
+          onPointerDown: () => {
+            if (showDraftError) clearNotice();
+          },
           onFocus: () => syncEditor(),
           onBlur: () => {
             activeRecording.current = undefined;
@@ -508,6 +528,7 @@ export function useComposer({
           },
           onSelect: () => syncEditor(),
           onCompositionStart: () => {
+            clearNotice();
             activeRecording.current = undefined;
             composing.current = true;
             syncEditor();
@@ -530,12 +551,13 @@ export function useComposer({
         onSubmit={submitDraft}
         onStop={() => {
           if (!connected || !turnId || cancelling === turnId) return;
+          clearNotice();
           setCancelling(turnId);
           void client
             .cancel(conversationId, turnId)
             .catch((cause) => {
               notice(
-                errorMessage(cause, 'Could not stop the current request.'),
+                cause,
                 'error',
                 'ask-stop',
               );
@@ -546,7 +568,6 @@ export function useComposer({
             });
         }}
         beforeInput={<>
-          <AskCurrentNotice />
           {result}
           {recoverDraft && <details className="ask-inline-notice">
             <summary>Previous instruction</summary>
@@ -564,7 +585,7 @@ export function useComposer({
                 .removeAttachment(conversationId, attachmentId)
                 .catch((cause) => {
                   notice(
-                    errorMessage(cause, 'Could not remove this attachment.'),
+                    cause,
                     'warning',
                     'ask-attachment',
                   );
@@ -577,6 +598,14 @@ export function useComposer({
                 });
             }}
           />
+          {showDraftError && currentNotice && (
+            <div className="ask-draft-error-anchor" aria-hidden="true">
+              <span className="ask-draft-error">
+                <span>{askErrorLabel(currentNotice.code, language).slice(0, -currentNotice.code.length)}</span>
+                <span>{currentNotice.code}</span>
+              </span>
+            </div>
+          )}
         </>}
         actions={
           <>

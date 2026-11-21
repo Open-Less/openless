@@ -27,6 +27,7 @@ impl Platform {
         &self,
         _: &Identity,
         _: &Baseline,
+        _: WriteOperation,
         _: &str,
         _: impl FnOnce() -> Result<(), WriteOutcome>,
     ) -> WriteOutcome {

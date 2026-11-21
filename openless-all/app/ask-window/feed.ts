@@ -1,10 +1,23 @@
-import type { AskClient, AskEvent, AskSnapshot, AskSource, AskSubmission, AskTurn } from './client';
+import type { AskClient, AskEvent, AskSnapshot, AskSource, AskSubmission, AskTool, AskTurn } from './client';
 
 function upsertSource(sources: AskSource[], source: AskSource) {
   const index = sources.findIndex((item) => item.sourceId === source.sourceId);
   return index < 0
     ? [...sources, source]
     : sources.map((item, offset) => (offset === index ? source : item));
+}
+
+function upsertTool(tools: AskTool[] = [], event: AskTool): AskTool[] {
+  const tool = { toolCallId: event.toolCallId, name: event.name, status: event.status, error: event.error };
+  const previous = tools.find((item) => item.toolCallId === tool.toolCallId);
+  // A delayed running event cannot restart an already finished tool call.
+  if (previous && previous.status !== 'running') return tools;
+  return previous ? tools.map((item) => item === previous ? tool : item) : [...tools, tool];
+}
+
+function stopTools(tools: AskTool[] | undefined, status: string): AskTool[] | undefined {
+  if (status !== 'cancelled' && status !== 'failed') return tools;
+  return tools?.map((tool) => tool.status === 'running' ? { ...tool, status } : tool);
 }
 
 function applySubmission(
@@ -23,10 +36,12 @@ function applySubmission(
         sources: event.sources ?? submission.sources,
         searchError: event.error,
       };
+    case 'toolChanged':
+      return { ...submission, tools: upsertTool(submission.tools, event) };
     case 'sourceChanged':
       return { ...submission, sources: upsertSource(submission.sources, event.source) };
     case 'turnFinished':
-      return { ...submission, status: event.status, error: event.error };
+      return { ...submission, status: event.status, error: event.error, tools: stopTools(submission.tools, event.status) };
     default:
       return submission;
   }
@@ -38,6 +53,12 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
   }
   if (event.sequence !== snapshot.sequence + 1) return null;
   const next = { ...snapshot, sequence: event.sequence };
+  const eventTurn = 'turnId' in event ? event.turnId
+    : 'submission' in event ? event.submission.currentTurnId
+    : event.type === 'turnAccepted' ? event.turn.turnId : undefined;
+  const owner = snapshot.submission?.currentTurnId === eventTurn ? snapshot.submission
+    : snapshot.turns.find((turn) => turn.turnId === eventTurn);
+  if (owner?.clientRequestId && event.clientRequestId && owner.clientRequestId !== event.clientRequestId) return next;
   function consumeAttachments(attachmentIds: string[]) {
     const consumed = new Set(attachmentIds);
     next.attachments = next.attachments.filter((item) => !consumed.has(item.attachmentId));
@@ -60,23 +81,30 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
       );
       return next;
     case 'submitted':
+      if (next.submission?.currentTurnId === event.submission.currentTurnId || next.turns.some((turn) => turn.turnId === event.submission.currentTurnId)) return next;
       if (next.activeTurnId) return null;
       next.activeTurnId = event.submission.currentTurnId;
-      next.submission = event.submission;
+      next.submission = { ...event.submission, clientRequestId: event.submission.clientRequestId ?? event.clientRequestId };
       if (event.attachmentIds) consumeAttachments(event.attachmentIds);
       return next;
     case 'delivery':
       if (next.submission?.currentTurnId === event.submission.currentTurnId) {
-        next.submission = event.submission;
+        if (next.submission.status === 'cancelled') return next;
+        const delivery = { ...event.submission,
+          clientRequestId: event.submission.clientRequestId ?? next.submission.clientRequestId,
+          tools: event.submission.tools ?? next.submission.tools,
+        };
+        next.submission = next.activeTurnId === event.submission.currentTurnId ? delivery : {
+          ...delivery, status: next.submission.status, error: next.submission.error,
+          tools: stopTools(delivery.tools, next.submission.status),
+        };
       }
       return next;
     case 'turnAccepted': {
-      if (
-        (next.activeTurnId && next.activeTurnId !== event.turn.turnId) ||
-        next.turns.some((turn) => turn.turnId === event.turn.turnId)
-      )
-        return null;
-      next.turns = [...next.turns, event.turn];
+      if (next.turns.some((turn) => turn.turnId === event.turn.turnId)) return next;
+      if (next.submission?.currentTurnId === event.turn.turnId && !next.activeTurnId) return next;
+      if (next.activeTurnId && next.activeTurnId !== event.turn.turnId) return null;
+      next.turns = [...next.turns, { ...event.turn, clientRequestId: event.turn.clientRequestId ?? event.clientRequestId ?? owner?.clientRequestId }];
       next.activeTurnId = event.turn.turnId;
       return next;
     }
@@ -113,6 +141,9 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
             searchError: event.error,
           };
           break;
+        case 'toolChanged':
+          updated = { ...turn, tools: upsertTool(turn.tools, event) };
+          break;
         case 'sourceChanged':
           updated = {
             ...turn,
@@ -120,7 +151,15 @@ export function applyEvent(snapshot: AskSnapshot, event: AskEvent): AskSnapshot 
           };
           break;
         case 'turnFinished':
-          updated = { ...turn, status: event.status, error: event.error };
+          updated = {
+            ...turn,
+            status: event.status,
+            error: event.error,
+            tools: stopTools(turn.tools, event.status),
+            assistantMessage: event.status === 'completed' && typeof event.text === 'string'
+              ? { messageId: turn.assistantMessage?.messageId ?? event.turnId, text: event.text }
+              : turn.assistantMessage,
+          };
           break;
         default:
           return null;

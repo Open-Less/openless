@@ -179,6 +179,42 @@ body,
   overflow-y: auto;
 }
 
+.ask-draft-error-anchor {
+  position: relative;
+  z-index: 20;
+  height: 0;
+  flex: none;
+  pointer-events: none;
+}
+
+.ask-draft-error {
+  display: flex;
+  position: absolute;
+  top: 16px;
+  inset-inline: 16px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--ol-surface);
+  color: #868593;
+  font-size: 15px;
+  line-height: 24px;
+}
+
+.ask-draft-error > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ask-draft-error > :last-child {
+  flex: none;
+}
+
+.composer[data-draft-error='true'] [data-slot='prompt-box-input'] {
+  opacity: 0;
+}
+
 .submission-result {
   display: grid;
   min-height: 0;
@@ -566,4 +602,29 @@ button:focus-visible {
 .connection-notice {
   margin-top: 48px;
   text-align: center;
+}
+
+.ask-tool-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+}
+
+.ask-tool-activity li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ask-tool-activity li > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ask-tool-activity li > :last-child {
+  flex: none;
+  white-space: nowrap;
 }

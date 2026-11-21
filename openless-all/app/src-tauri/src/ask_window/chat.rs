@@ -10,7 +10,10 @@ use openless_core::{BackendError, BackendErrorCode, OpenLessBackend};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WebviewWindow};
 use tauri_plugin_shell::ShellExt;
 use uuid::Uuid;
@@ -27,17 +30,24 @@ pub(crate) struct AskHost {
     attachment_gate: Mutex<()>,
     backend: Arc<OpenLessBackend>,
     context_preference: Option<PathBuf>,
+    read_permissions_path: Option<PathBuf>,
     entry_settings: Arc<AskEntrySettingsStore>,
     targets: Arc<TargetTracker>,
-    original: Mutex<Option<(u64, target::WriteTarget)>>,
+    original: Mutex<Option<OriginalTarget>>,
     keep_history: AtomicBool,
     fence: ask::AskSessionFence,
+}
+
+struct OriginalTarget {
+    generation: u64,
+    caret: Option<target::WriteTarget>,
+    context: ask::AskCompositionContext,
 }
 
 impl AskHost {
     pub(crate) fn new(app: &AppHandle, backend: Arc<OpenLessBackend>) -> Self {
         let registry = Arc::new(AttachmentRegistry::default());
-        let context = Arc::new(DesktopContext::default());
+        let context = Arc::new(DesktopContext::with_backend(backend.clone()));
         let context_preference = crate::persistence::data_dir()
             .ok()
             .map(|dir| dir.join("ask-app-context.json"));
@@ -56,8 +66,22 @@ impl AskHost {
             app_metadata: allowed,
             usage: false,
         });
-        let service = backend
-            .create_standalone_ask(context.clone(), Arc::new(AttachmentPort(registry.clone())));
+        let read_permissions_path = context_preference
+            .as_ref()
+            .map(|path| path.with_file_name("ask-read-context.json"));
+        let permissions = read_permissions_path
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| {
+                serde_json::from_slice::<super::context::ReadPermissions>(&bytes).ok()
+            })
+            .unwrap_or_default();
+        context.set_read_permissions(permissions);
+        let service = backend.create_standalone_ask(
+            context.clone(),
+            context.clone(),
+            Arc::new(AttachmentPort(registry.clone())),
+        );
         let targets = Arc::new(TargetTracker::new());
         if let Err(error) = targets.start() {
             log::warn!("[ask] external target observation unavailable: {error}");
@@ -71,6 +95,7 @@ impl AskHost {
             fence: ask::AskSessionFence::default(),
             backend,
             context_preference,
+            read_permissions_path,
             entry_settings,
             targets,
             original: Mutex::new(None),
@@ -83,7 +108,11 @@ impl AskHost {
         let keep_history = self.backend.get_preferences().qa_save_history;
         self.keep_history.store(keep_history, Ordering::Release);
         self.clear_session();
-        let id = if keep_history { self.service.open() } else { self.service.open_transient() };
+        let id = if keep_history {
+            self.service.open()
+        } else {
+            self.service.open_transient()
+        };
         self.initialize_scope(id);
         Ok(id)
     }
@@ -114,18 +143,25 @@ impl AskHost {
         tauri::async_runtime::spawn(async move {
             loop {
                 match changes.recv().await {
-                    Ok(event) if matches!(event.kind, openless_core::BackendEventKind::PreferencesChanged(_)) => {}
+                    Ok(event)
+                        if matches!(
+                            event.kind,
+                            openless_core::BackendEventKind::PreferencesChanged(_)
+                        ) => {}
                     Err(openless_core::EventRecvError::Lagged(_)) => {}
                     Err(openless_core::EventRecvError::Closed) => return,
                     _ => continue,
                 }
                 let ui = app.clone();
                 let _ = app.run_on_main_thread(move || {
-                    let Some(host) = ui.try_state::<Arc<Self>>() else { return };
+                    let Some(host) = ui.try_state::<Arc<Self>>() else {
+                        return;
+                    };
                     let next = host.backend.get_preferences().qa_save_history;
                     if host.keep_history.swap(next, Ordering::AcqRel) && !next {
                         if let (Some(window), Some(desktop)) = (
-                            ui.get_webview_window(LABEL), ui.try_state::<Arc<super::Desktop>>(),
+                            ui.get_webview_window(LABEL),
+                            ui.try_state::<Arc<super::Desktop>>(),
                         ) {
                             let _ = desktop.hide(&window);
                         } else {
@@ -188,27 +224,37 @@ impl AskHost {
             AskEntryIntentMode::SeparateModel => ask::AskIntentMode::SeparateModel,
             AskEntryIntentMode::MainModelTool => ask::AskIntentMode::MainModelTool,
         };
-        let locked = if cfg!(target_os = "macos") {
-            match generation {
-                Some(scope) => self.targets.capture_at_send(scope).await,
-                None => target::CapturedTarget::unavailable(),
-            }
-        } else {
-            self.targets.capture().await
+        let app_grant = self.context.app_metadata_grant();
+        let access = self.context_access();
+        let locked = match generation {
+            Some(scope) => self.targets.capture_at_send(scope, access).await,
+            None => target::CapturedTarget::unavailable(),
         };
         let selection = match locked.selection {
             target::ExternalSelection::None => ask::ExternalSelection::None,
             target::ExternalSelection::Selected(text) => ask::ExternalSelection::Selected(text),
             target::ExternalSelection::Unavailable => ask::ExternalSelection::Unavailable,
         };
-        let original = self.original.lock().as_ref()
-            .filter(|(epoch, _)| Some(*epoch) == generation)
-            .map(|(_, target)| target.clone());
-        let insert = if cfg!(target_os = "macos") {
-            original
-        } else {
-            locked.write_target.clone()
-        };
+        let (insert, mut original_context) = self
+            .original
+            .lock()
+            .as_ref()
+            .filter(|original| Some(original.generation) == generation)
+            .map(|original| (original.caret.clone(), original.context.clone()))
+            .unwrap_or_default();
+        let mut selection_context = locked.context;
+        // Recheck the switches after the asynchronous native read.
+        let access = self.context_access();
+        if !access.surrounding_text {
+            original_context.before = None;
+            original_context.after = None;
+            selection_context.before = None;
+            selection_context.after = None;
+        }
+        original_context.source_app = self.current().and_then(|id| self.context.original_app(id));
+        if app_grant.is_none() || self.context.app_metadata_grant() != app_grant {
+            selection_context.source_app = None;
+        }
         let replace = locked.write_target;
         let writer = (insert.is_some() || replace.is_some()).then(|| {
             Arc::new(TargetWriter {
@@ -223,8 +269,19 @@ impl AskHost {
             intent_mode,
             selection,
             writer,
-            clipboard: (!cfg!(target_os = "macos")).then(|| Arc::new(Clipboard) as Arc<dyn ask::AskClipboard>),
+            clipboard: (!cfg!(target_os = "macos"))
+                .then(|| Arc::new(Clipboard) as Arc<dyn ask::AskClipboard>),
+            original_context,
+            selection_context,
+            recent_voice: Vec::new(),
         })
+    }
+
+    fn context_access(&self) -> target::ContextAccess {
+        target::ContextAccess {
+            app_metadata: self.context.app_metadata_allowed(),
+            surrounding_text: self.backend.get_preferences().cursor_context_enabled,
+        }
     }
 
     pub(crate) fn stop(&self) {
@@ -303,7 +360,7 @@ struct TargetWriter {
 
 impl ask::AskWriter for TargetWriter {
     fn has_original_caret(&self) -> bool {
-        cfg!(target_os = "macos") && self.insert.is_some()
+        self.insert.is_some()
     }
 
     fn write(
@@ -313,8 +370,12 @@ impl ask::AskWriter for TargetWriter {
         claim: ask::AskWriteClaim,
     ) -> futures_util::future::BoxFuture<'_, ask::AskWriteOutcome> {
         let (target, operation) = match operation {
-            ask::AskWriteOperation::Insert => (self.insert.as_ref(), target::WriteOperation::Insert),
-            ask::AskWriteOperation::Replace => (self.replace.as_ref(), target::WriteOperation::Replace),
+            ask::AskWriteOperation::Insert => {
+                (self.insert.as_ref(), target::WriteOperation::Insert)
+            }
+            ask::AskWriteOperation::Replace => {
+                (self.replace.as_ref(), target::WriteOperation::Replace)
+            }
         };
         Box::pin(async move {
             let Some(target) = target else {
@@ -323,9 +384,13 @@ impl ask::AskWriter for TargetWriter {
             let desktop = self.desktop.clone();
             let generation = self.generation;
             let current = move || {
-                !cfg!(target_os = "macos") || generation.is_some_and(|generation| {
-                    desktop.as_ref().and_then(std::sync::Weak::upgrade)
-                        .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))
+                generation.is_some_and(|generation| {
+                    desktop
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade)
+                        .is_some_and(|desktop| {
+                            desktop.external_target_generation() == Some(generation)
+                        })
                 })
             };
             if !current() {
@@ -338,20 +403,25 @@ impl ask::AskWriter for TargetWriter {
             let recover = {
                 let desktop = self.desktop.clone();
                 Arc::new(move |proof| {
-                    if let (Some(desktop), Some(generation)) =
-                        (desktop.as_ref().and_then(std::sync::Weak::upgrade), generation)
-                    {
+                    if let (Some(desktop), Some(generation)) = (
+                        desktop.as_ref().and_then(std::sync::Weak::upgrade),
+                        generation,
+                    ) {
                         desktop.recover_after_write(generation, proof);
                     }
                 })
             };
             match self
                 .tracker
-                .deliver_scoped(target, operation, text,
+                .deliver_scoped(
+                    target,
+                    operation,
+                    text,
                     Arc::new(move || still_foreground() && eligible()),
                     #[cfg(target_os = "macos")]
                     recover,
-                    Box::new(move || current() && claim.claim()))
+                    Box::new(move || current() && claim.claim()),
+                )
                 .await
             {
                 target::WriteOutcome::Written => ask::AskWriteOutcome::Written,
@@ -634,18 +704,29 @@ pub async fn ask_submit(
     let active_desktop = desktop.as_ref().map(|desktop| Arc::clone(&**desktop));
     let transient = host.service.current_is_transient();
     let backend = host.backend.clone();
-    let cancellation = host.fence.issue().requiring(move || {
-        transient || backend.get_preferences().qa_save_history
-    });
+    let cancellation = host
+        .fence
+        .issue()
+        .requiring(move || transient || backend.get_preferences().qa_save_history);
     let current = || host.accepts_policy(transient, active_desktop.as_deref());
     if !host.accepts_submission(conversation_id, active_desktop.as_deref()) {
-        return Err(wire::error(BackendError::new(BackendErrorCode::Cancelled, "askSessionChanged")));
+        return Err(wire::error(BackendError::new(
+            BackendErrorCode::Cancelled,
+            "askSessionChanged",
+        )));
     }
-    let generation = desktop.as_ref().and_then(|desktop| desktop.external_target_generation());
+    let generation = desktop
+        .as_ref()
+        .and_then(|desktop| desktop.external_target_generation());
     let desktop = desktop.as_ref().map(|desktop| Arc::downgrade(&**desktop));
     let turn_id = host
         .service
-        .submit_prepared_guarded(request, || host.prepare_submission(desktop, generation), current, cancellation)
+        .submit_prepared_guarded(
+            request,
+            || host.prepare_submission(desktop, generation),
+            current,
+            cancellation,
+        )
         .await
         .map_err(wire::error)?;
     Ok(json!({"turnId":turn_id}))
@@ -801,31 +882,44 @@ impl super::Integration for DesktopPorts {
         let ask = self.ask.clone();
         Box::pin(async move {
             let conversation = ask.open().map_err(|error| error.message)?;
+            if let (Some(pid), Some(bundle)) = (
+                invocation.foreground_pid,
+                invocation
+                    .foreground_app
+                    .as_ref()
+                    .and_then(|app| app.bundle_id.as_deref()),
+            ) {
+                ask.context.bind_browser_source(conversation, pid, bundle);
+            }
             if let Some(desktop) = app.try_state::<Arc<super::Desktop>>() {
                 desktop.set_conversation(Some(conversation.to_string()));
             }
-            if cfg!(target_os = "macos") {
-                let target = match invocation.foreground_pid {
-                    Some(pid) => {
-                        let captured = ask.targets.capture_before_focus(pid, generation).await;
-                        matches!(captured.selection, target::ExternalSelection::None)
-                            .then_some(captured.write_target).flatten()
-                    }
-                    None => None,
-                };
-                if app.try_state::<Arc<super::Desktop>>().is_some_and(|desktop| {
-                    desktop.external_target_generation() == Some(generation)
-                }) {
-                    *ask.original.lock() = target.map(|target| (generation, target));
-                }
+            let captured = ask
+                .targets
+                .capture_before_focus(invocation.foreground_pid, generation, ask.context_access())
+                .await;
+            if app
+                .try_state::<Arc<super::Desktop>>()
+                .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))
+            {
+                *ask.original.lock() = Some(OriginalTarget {
+                    generation,
+                    caret: matches!(captured.selection, target::ExternalSelection::None)
+                        .then_some(captured.write_target)
+                        .flatten(),
+                    context: captured.context,
+                });
             }
             if let Some(source) = &invocation.foreground_app {
                 if invocation.foreground_pid.is_some_and(|pid| {
                     super::capture::foreground().is_some_and(|foreground| foreground.pid == pid)
                 }) {
                     ask.context.record_external_app(
-                        conversation, invocation.invocation_id, invocation.captured_at,
-                        source.name.as_deref(), source.bundle_id.as_deref(),
+                        conversation,
+                        invocation.invocation_id,
+                        invocation.captured_at,
+                        source.name.as_deref(),
+                        source.bundle_id.as_deref(),
                     );
                 }
             }
@@ -844,9 +938,12 @@ impl super::Integration for DesktopPorts {
                 (fn_commit, edge)
             {
                 let backend = coordinator.backend();
-                if let Err(error) = backend.dispatch_arbitrated_dictation_hotkey_press(edge, || {
-                    super::hotkey::fn_stroke_is_current(press_id, commit)
-                }).await {
+                if let Err(error) = backend
+                    .dispatch_arbitrated_dictation_hotkey_press(edge, || {
+                        super::hotkey::fn_stroke_is_current(press_id, commit)
+                    })
+                    .await
+                {
                     log::warn!("[ask] ordinary Fn dispatch failed: {error}");
                 }
                 return;
@@ -986,6 +1083,53 @@ pub fn ask_set_context_permission(
         grant(true);
     }
     Ok(Value::Null)
+}
+
+#[tauri::command]
+pub fn ask_get_read_permissions(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    Ok(json!(host.context.read_permissions()))
+}
+
+#[tauri::command]
+pub fn ask_set_read_permissions(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    permissions: super::context::ReadPermissions,
+) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    let _guard = host.attachment_gate.lock();
+    let previous = host.context.read_permissions();
+    if previous == permissions {
+        return Ok(json!(previous));
+    }
+    let revoking = (previous.browser_tab && !permissions.browser_tab)
+        || (previous.voice_history && !permissions.voice_history);
+    if revoking {
+        host.context
+            .set_read_permissions(super::context::ReadPermissions {
+                browser_tab: previous.browser_tab && permissions.browser_tab,
+                voice_history: previous.voice_history && permissions.voice_history,
+            });
+        host.service.cancel_active_turns();
+    }
+    let bytes = serde_json::to_vec(&permissions)
+        .map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
+    let path = host.read_permissions_path.as_ref().ok_or_else(
+        || json!({"code":"persistence","message":"Ask permission storage is unavailable."}),
+    )?;
+    crate::persistence::atomic_write(path, &bytes)
+        .map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
+    host.context.set_read_permissions(permissions);
+    Ok(json!(permissions))
 }
 
 fn settings_reply(result: Result<AskEntrySettings, String>) -> IpcResult {

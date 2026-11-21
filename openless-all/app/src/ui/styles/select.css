@@ -4,7 +4,7 @@
   justify-content: space-between;
   gap: 8px;
   height: 32px;
-  min-width: 160px;
+  min-width: min(160px, 100%);
   max-width: 100%;
   padding: 0 10px;
   border: 0.5px solid transparent;

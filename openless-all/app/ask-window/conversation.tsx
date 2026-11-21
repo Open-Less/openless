@@ -5,12 +5,11 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
   askLocale,
-  errorMessage,
-  submissionErrorMessage,
   type AskClient,
   type AskSource,
   type AskSubmission,
   type AskTurn,
+  type AskTool,
   type SearchStatus,
 } from './client';
 
@@ -43,11 +42,27 @@ const SOURCE_READ_LABEL: Record<AskSource['readStatus'], string> = {
   cancelled: 'Reading stopped',
 };
 
+function ToolActivity({ tools }: { tools?: AskTool[] }) {
+  if (!tools?.length) return null;
+  const chinese = /^zh\b/i.test(askLocale());
+  const labels = chinese
+    ? { running: '进行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
+    : { running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' };
+  const names: Record<string, string> = chinese
+    ? { web_search: '联网搜索', calculator: '精确计算', read_context: '读取环境', read_page: '阅读网页', github_releases: '查询发布版本' }
+    : { web_search: 'Web search', calculator: 'Calculate', read_context: 'Read context', read_page: 'Read page', github_releases: 'GitHub releases' };
+  return <ul className="ask-tool-activity" aria-label={chinese ? '工具' : 'Tools'}>
+    {tools.map((tool) => <li key={tool.toolCallId} data-tool-call-id={tool.toolCallId} data-status={tool.status}>
+      <span>{names[tool.name] ?? tool.name}</span><span>{labels[tool.status]}</span>
+    </li>)}
+  </ul>;
+}
+
 function statusFor(turn: Pick<AskTurn, 'status' | 'searchStatus'> & { deepThinking?: boolean }): {
   state: AiStatusState;
   label?: string;
 } {
-  if (turn.status === 'failed') return { state: 'error', label: 'Failed · Incomplete' };
+  if (turn.status === 'failed') return { state: 'error' };
   if (turn.status === 'cancelled') return { state: 'error', label: 'Stopped · Incomplete' };
   if (turn.status === 'completed') return { state: 'done' };
   if (turn.searchStatus === 'searching')
@@ -108,16 +123,8 @@ export function ConversationLayout({
   const jumpLabel = /^zh-(TW|HK|Hant)\b/i.test(askLocale()) ? '跳到最新訊息'
     : /^zh\b/i.test(askLocale()) ? '跳到最新消息' : 'Jump to latest';
 
-  const latest = turns.at(-1);
   return (
     <main className={expanded ? 'transcript-surface' : 'composer-surface'}>
-      {expanded && (
-        <AskNotice
-          key={latest?.turnId}
-          severity={latest?.error ? 'error' : 'warning'}
-          message={latest?.error?.message ?? latest?.searchError?.message}
-        />
-      )}
       <div className="ask-layout-column">
         {expanded && turns.length > 0 && (
           <div
@@ -158,7 +165,10 @@ export function ConversationLayout({
                       </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <AiStatus state={state} label={label} />
+                      <div style={{ minHeight: 24 }}>
+                        {turn.status !== 'failed' && <AiStatus state={state} label={label} />}
+                      </div>
+                      <ToolActivity tools={turn.tools} />
                       <AnimatePresence initial={false}>
                         {turn.assistantMessage?.text && (
                           <motion.p
@@ -221,10 +231,6 @@ export function SubmissionResult({
   active: boolean;
 }) {
   const text = submission.resultText;
-  const unreviewedAnswer = submission.route === 'answer' || submission.route === 'selectionAnswer';
-  const error = submission.status === 'cancelled' && submission.error?.code === 'cancelled'
-    ? undefined
-    : submissionErrorMessage(submission.error) ?? submission.searchError?.message;
   const { state, label } = statusFor(submission);
   const delivery =
     submission.delivery === 'written'
@@ -232,38 +238,23 @@ export function SubmissionResult({
         ? 'Replaced in the original editor.'
         : 'Inserted in the original editor.'
       : submission.delivery === 'unknown'
-        ? 'Ask could not confirm whether the editor changed. Check it before pasting.'
-        : submission.delivery === 'retained' && !error
+        ? 'Check the original editor before pasting.'
+        : submission.delivery === 'retained' && !submission.error
           ? 'Kept here because Ask could not write to the original editor.'
           : undefined;
   return (
     <section className="submission-result" aria-label="Ask result">
       {active && <AiStatus state={state} label={label} />}
-      <AskNotice
-        severity={submission.error ? 'error' : 'warning'}
-        message={error}
-      />
+      <AskNotice message={submission.copyStatus === 'failed' ? 'copy' : undefined} severity="warning" operation="ask-copy" />
       {delivery && <p role="status">{delivery}</p>}
       {submission.copyStatus === 'copied' && <p role="status">Copied to the clipboard.</p>}
-      {submission.copyStatus === 'failed' && <p role="status">Could not copy to the clipboard.</p>}
       {!active && submission.status === 'cancelled' && <p role="status">Request stopped.</p>}
-      {text &&
-        (unreviewedAnswer ? (
-          <details key={submission.currentTurnId}>
-            <summary>{/^zh\b/i.test(askLocale()) ? '查看未核验的答复' : 'Show unreviewed response'}</summary>
-            <textarea className="result-text retained-result" aria-label="Unreviewed response" defaultValue={text} rows={2} />
-          </details>
-        ) : submission.route === 'clarify' ? (
-          <p className="result-text">{text}</p>
-        ) : (
-          <textarea
-            key={submission.currentTurnId}
-            className="result-text retained-result"
-            aria-label="Retained result"
-            defaultValue={text}
-            rows={2}
-          />
-        ))}
+      {text && (submission.route === 'clarify' ? (
+        <p className="result-text">{text}</p>
+      ) : (
+        <textarea key={submission.currentTurnId} className="result-text retained-result"
+          aria-label="Retained result" defaultValue={text} rows={2} />
+      ))}
     </section>
   );
 }
@@ -286,7 +277,7 @@ export function Sources({
   const searched = turns.filter((turn) => turn.searchStatus !== 'idle');
   const open = searched.find((turn) => turn.turnId === openedTurnId);
   const turn = open ?? searched[searched.length - 1];
-  const [failure, setFailure] = useState<{ turnId: string; message: string }>();
+  const [failure, setFailure] = useState<{ turnId: string; message: unknown }>();
   if (!turn) return null;
   const readable = turn.sources.filter((source) => source.readStatus === 'read').length;
   return (
@@ -309,6 +300,7 @@ export function Sources({
           <p role="status">{SEARCH_LABEL[open.searchStatus]}</p>
           <AskNotice
             severity="warning"
+            operation="ask-source"
             message={failure?.turnId === open.turnId ? failure.message : undefined}
           />
           <ul>
@@ -324,7 +316,7 @@ export function Sources({
                       .catch((cause) => {
                         setFailure({
                           turnId: open.turnId,
-                          message: errorMessage(cause, 'Could not open this source.'),
+                          message: cause,
                         });
                       });
                   }}

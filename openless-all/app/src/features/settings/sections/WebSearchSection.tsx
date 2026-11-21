@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
 import { Button as Btn } from '../../../ui/controls/Button';
 import { Card } from '../../../ui/layout/Card';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
+import { SelectLite } from '../../../ui/controls/SelectLite';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 
@@ -89,49 +89,28 @@ export function WebSearchSection() {
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '划词追问和 FN + 空格随便问可由模型自主搜索。仅在需要时发送搜索词；搜索结果会作为参考资料交给当前模型。',
-          'Selection Q&A and voice Ask can search when the model needs external information. Search queries go to the search provider; results go to your current model.',
-        )}
-      </p>
-      <p>
-        {text(
-          '「免费搜索」默认从此设备查询 FreeSerp 和 Keenable，并合并结果，无需注册、API Key 或部署。服务会看到搜索词和请求 IP，并可能限流。「混合搜索」还会查询 DeepSeek，需要你自己的 API Key，可能产生费用。',
-          'Free Search queries FreeSerp and Keenable from this device and merges the results. No account, API key, or setup is required. Providers can see the query and request IP and may rate-limit it. Hybrid Search also queries DeepSeek using your API key and may incur charges.',
-        )}
-      </p>
-      <p>
-        {text(
-          'DeepSeek 大统一的旧问答仍使用其独立的原生搜索；这里的混合搜索不要求使用 DeepSeek 聊天模型。',
-          'Legacy Q&A in DeepSeek Suite keeps its separate native search. Hybrid Search does not require a DeepSeek chat model.',
+          '搜索服务会接收搜索词与 IP；混合搜索会使用你的 DeepSeek API Key，可能产生费用。',
+          'Search providers receive queries and your IP. Hybrid Search uses your DeepSeek API key and may incur charges.',
         )}
       </p>
       {config && (
         <>
           <SettingRow label={text('搜索服务', 'Search provider')}>
-            <select
-              aria-label="Web Search"
-              style={inputStyle}
+            <SelectLite
+              ariaLabel={text('搜索服务', 'Search provider')}
               value={config.provider}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  provider: e.target.value as WebSearchConfig['provider'],
-                  apiKey: '',
-                  endpoint: '',
-                })
-              }
-            >
-              <option value="free">{text('免费搜索', 'Free Search')}</option>
-              <option value="hybrid">
-                {text('混合搜索（免费 + DeepSeek）', 'Hybrid Search (Free + DeepSeek)')}
-              </option>
-              <option value="free_serp">FreeSerp</option>
-              <option value="bing">Bing (RSS)</option>
-              <option value="tavily">Tavily</option>
-              <option value="brave">Brave Search</option>
-              <option value="searxng">SearXNG</option>
-              <option value="off">{text('关闭', 'Off')}</option>
-            </select>
+              onChange={(provider) => setConfig({ ...config, provider: provider as WebSearchConfig['provider'], apiKey: '', endpoint: '' })}
+              options={[
+                { value: 'free', label: text('免费搜索', 'Free Search') },
+                { value: 'hybrid', label: text('混合搜索（免费 + DeepSeek）', 'Hybrid Search (Free + DeepSeek)') },
+                { value: 'free_serp', label: 'FreeSerp' },
+                { value: 'bing', label: 'Bing (RSS)' },
+                { value: 'tavily', label: 'Tavily' },
+                { value: 'brave', label: 'Brave Search' },
+                { value: 'searxng', label: 'SearXNG' },
+                { value: 'off', label: text('关闭', 'Off') },
+              ]}
+            />
           </SettingRow>
           {['tavily', 'brave', 'hybrid'].includes(config.provider) && (
             <SettingRow label={config.provider === 'hybrid' ? 'DeepSeek API Key' : 'API Key'}>

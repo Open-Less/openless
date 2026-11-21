@@ -30,9 +30,9 @@ test('split preferences preserve each other, exclusive intent modes, and reload'
   await page.goto(fixture);
   await openAskSettings(page);
   const autoVoice = page.getByRole('switch', { name: 'Auto-start voice', exact: true });
-  const separate = page.getByRole('radio', { name: 'Independent model', exact: true });
-  const mainTool = page.getByRole('radio', { name: 'Primary model tools', exact: true });
-  const semantic = page.getByRole('radio', { name: 'Semantic hybrid', exact: true });
+  const separate = page.getByRole('switch', { name: 'Independent model · Beta', exact: true });
+  const mainTool = page.getByRole('switch', { name: 'Main model tool · Beta', exact: true });
+  const semantic = page.getByRole('switch', { name: 'Semantic hybrid', exact: true });
   await expect(autoVoice).toBeChecked();
   await expect(separate).toHaveCount(0);
   await expect(page.getByRole('switch', { name: 'Save history' })).toBeChecked();
@@ -49,7 +49,7 @@ test('split preferences preserve each other, exclusive intent modes, and reload'
   await openIntentRouting(page);
   await expect(separate).toBeChecked();
   await expect(mainTool).not.toBeChecked();
-  await semantic.click();
+  await separate.click();
   await expect(separate).not.toBeChecked();
   await expect(mainTool).not.toBeChecked();
   await expect(semantic).toBeChecked();
@@ -71,7 +71,8 @@ test('split preferences preserve each other, exclusive intent modes, and reload'
   await expect(mainTool).toBeChecked();
   await expect(separate).not.toBeChecked();
   await mainTool.click();
-  await expect(mainTool).toBeChecked();
+  await expect(mainTool).not.toBeChecked();
+  await expect(semantic).toBeChecked();
   await separate.click();
   await expect(separate).toBeChecked();
   await expect(mainTool).not.toBeChecked();
@@ -105,12 +106,33 @@ test('keyboard can reach hints and switches without showing inline explanations'
   await expect(page.locator('.ol-setting-row-description:visible')).toHaveCount(0);
 });
 
+test('browser and voice-text permissions are separate opt-ins and persist independently', async ({ page }) => {
+  await page.goto(fixture);
+  await openAskSettings(page);
+  const browser = page.getByRole('switch', { name: 'Current browser tab', exact: true });
+  const voice = page.getByRole('switch', { name: 'Recent voice text', exact: true });
+  await expect(browser).not.toBeChecked();
+  await expect(voice).not.toBeChecked();
+  await expect(page.getByRole('switch', { name: 'Save history' })).toBeChecked();
+  await browser.click();
+  await expect(browser).toBeChecked();
+  await expect(voice).not.toBeChecked();
+  await voice.click();
+  await expect(voice).toBeChecked();
+  await browser.click();
+  await expect(browser).not.toBeChecked();
+  await page.reload();
+  await openAskSettings(page);
+  await expect(browser).not.toBeChecked();
+  await expect(voice).toBeChecked();
+});
+
 test('a failed pending save reports a notice and preserves committed values', async ({ page }) => {
   await page.goto(`${fixture}?defer`);
   await openAskSettings(page);
   const voice = page.getByRole('switch', { name: 'Auto-start voice', exact: true });
-  const separate = page.getByRole('radio', { name: 'Independent model', exact: true });
-  const mainTool = page.getByRole('radio', { name: 'Primary model tools', exact: true });
+  const separate = page.getByRole('switch', { name: 'Independent model · Beta', exact: true });
+  const mainTool = page.getByRole('switch', { name: 'Main model tool · Beta', exact: true });
   await voice.click();
   await expect(voice).toBeChecked();
   await expect(voice).toBeDisabled();
@@ -123,7 +145,8 @@ test('a failed pending save reports a notice and preserves committed values', as
   await expect(voice).toBeEnabled();
   await openIntentRouting(page);
   await mainTool.click();
-  await expect(separate).toBeDisabled();
+  await expect(separate).toHaveAttribute('aria-disabled', 'true');
+  expect(await separate.evaluate((node) => node.matches(':disabled'))).toBe(false);
   await expect
     .poll(() => page.evaluate(() => window.askEntrySettingsFixture.hasPendingWrite()))
     .toBe(true);
@@ -174,5 +197,53 @@ test('a native read failure requires explicit, committed recovery', async ({ pag
   await expect(autoVoice).toBeChecked();
   await expect(restore).toHaveCount(0);
   await openIntentRouting(page);
-  await expect(page.getByRole('radio', { name: 'Independent model', exact: true })).toBeChecked();
+  await expect(page.getByRole('switch', { name: 'Independent model · Beta', exact: true })).toBeChecked();
+});
+
+
+test('intent routing preserves neighbouring switch appearance during a deferred failed save', async ({ page }) => {
+  await page.goto(`${fixture}?defer`);
+  await openIntentRouting(page);
+  const semantic = page.getByRole('switch', { name: 'Semantic hybrid', exact: true });
+  const mainTool = page.getByRole('switch', { name: 'Main model tool · Beta', exact: true });
+  const independent = page.getByRole('switch', { name: 'Independent model · Beta', exact: true });
+  const appearance = () => mainTool.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { opacity: style.opacity, color: style.color, disabled: node.matches(':disabled'), bounds: node.getBoundingClientRect().toJSON() };
+  });
+  const before = await appearance();
+  await semantic.click();
+  await expect.poll(() => page.evaluate(() => window.askEntrySettingsFixture.hasPendingWrite())).toBe(true);
+  expect(await appearance()).toEqual(before);
+  await independent.press('Space');
+  expect(await page.evaluate(() => window.askEntrySettingsFixture.writes.length)).toBe(1);
+  await page.evaluate(() => window.askEntrySettingsFixture.finish(true));
+  await expect(independent).toBeChecked();
+  await expect(mainTool).not.toBeChecked();
+  expect(await appearance()).toEqual(before);
+});
+
+
+test('permissions check once per entry and only recheck focus after opening system settings', async ({ page }) => {
+  await page.goto(fixture);
+  await page.getByRole('button', { name: 'Permissions & data', exact: true }).click();
+  await settleNavigation(page);
+  const reads = () => page.evaluate(() => window.askEntrySettingsFixture.microphoneReads());
+  await expect.poll(reads).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await reads()).toBe(1);
+  await page.getByRole('button', { name: 'Open System Settings', exact: true }).click();
+  expect(await page.evaluate(() => window.askEntrySettingsFixture.settingsOpened())).toBe(1);
+  const beforeReturn = await reads();
+  await page.evaluate(() => {
+    window.askEntrySettingsFixture.grantMicrophone();
+    window.dispatchEvent(new Event('focus'));
+  });
+  await expect.poll(reads).toBe(beforeReturn + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await reads()).toBe(beforeReturn + 1);
+  await page.getByRole('button', { name: 'General', exact: true }).click();
+  await settleNavigation(page);
+  await page.getByRole('button', { name: 'Permissions & data', exact: true }).click();
+  await expect.poll(reads).toBe(beforeReturn + 2);
 });

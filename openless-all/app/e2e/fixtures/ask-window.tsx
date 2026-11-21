@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { AskWindow } from '../../ask-window/ask-window';
 import type {
   AskClient,
+  AskError,
   AskEditor,
   AskEvent,
   AskFocus,
@@ -86,6 +87,7 @@ function resolveRoute(route: AskRoute, request: SubmitAsk, live = true) {
   if (route !== 'answer' && route !== 'selectionAnswer') return;
   const turn: AskTurn = {
     turnId,
+    clientRequestId: request.clientRequestId,
     userMessage: { messageId: `${turnId}-input`, text: request.text },
     attachments: attachmentArchive.filter((item) =>
       request.attachmentIds.includes(item.attachmentId),
@@ -120,6 +122,11 @@ const fixture = {
   expandCount: 0,
   snapshotReads: 0,
   rejectNext: false,
+  deferSubmit: false,
+  releaseSubmit: () => {},
+  rejection: { code: 'not_configured', message: 'Private backend error sentinel' } as AskError,
+  emit(event: AskEvent) { handlers.event.forEach((listener) => listener(event)); },
+  notice(error: AskError) { handlers.window.forEach((listener) => listener({ type: 'notice', error })); },
   route: 'answer' as AskRoute | null,
   truncate: false,
   liveListeners: () => handlers.event.size,
@@ -192,14 +199,16 @@ const client: AskClient = {
   },
   async submit(request) {
     fixture.submits.push(request);
+    if (fixture.deferSubmit) await new Promise<void>((resolve) => { fixture.releaseSubmit = resolve; });
     if (fixture.rejectNext) {
       fixture.rejectNext = false;
-      throw { code: 'not_configured', message: 'Set up an Ask model first.' };
+      throw fixture.rejection;
     }
     const previous = accepted.get(request.clientRequestId);
     if (previous) return { turnId: previous };
     const turnId = `turn-${fixture.submits.length}`;
     const submission: AskSubmission = {
+      clientRequestId: request.clientRequestId,
       currentTurnId: turnId,
       status: 'queued',
       searchStatus: 'idle',

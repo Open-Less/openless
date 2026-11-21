@@ -11,7 +11,7 @@ const DECIMAL_PLACES: usize = 50;
 
 type Result<T> = std::result::Result<T, &'static str>;
 
-pub(super) fn calculate(expression: &str) -> String {
+pub(crate) fn calculate(expression: &str) -> String {
     match evaluate(expression) {
         Ok(value) => {
             let (decimal, rounded) = decimal(&value);

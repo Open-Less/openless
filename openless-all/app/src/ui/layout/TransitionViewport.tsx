@@ -69,7 +69,7 @@ export function TransitionViewport({
   const [handoff, setHandoff] = useState<Handoff | null>(null);
   const switching = committed.key !== contentKey;
   const revealing = switching && handoff?.requestId === target.id;
-  const entering = revealing && (mode === 'crossfade' || handoff?.stage === 'enter');
+  const entering = revealing;
   const restoring = handoff !== null && handoff.requestId !== target.id;
 
   useLayoutEffect(() => {
@@ -108,7 +108,7 @@ export function TransitionViewport({
             ? 'enter'
             : 'waiting'
           : leaving
-            ? 'exit'
+            ? mode === 'page' ? 'retained' : 'exit'
             : !reduced && restoring
               ? 'restore'
               : !reduced && switching && mode === 'page'
@@ -240,7 +240,7 @@ function TransitionSurface({
     const from = {
       opacity: current.opacity,
       transform: current.transform,
-      filter: pageMotion && Number(current.opacity) === 0 ? blurred.filter : current.filter,
+      filter: current.filter,
     };
     // Filter only this bounded page, never the window or its portal layers.
     node.style.willChange = pageMotion ? 'opacity, filter' : 'opacity';
@@ -326,6 +326,7 @@ function TransitionSurface({
       data-transition-phase={phase}
       aria-hidden={!interactive || undefined}
       style={{
+        backgroundColor: mode === 'page' ? 'var(--ol-surface)' : undefined,
         ...(header ? undefined : style),
         ...initialPose.current,
         position: 'absolute',

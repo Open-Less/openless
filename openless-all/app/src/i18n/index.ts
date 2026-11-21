@@ -58,7 +58,7 @@ function localeResources(messages: typeof zhCN, lng: SupportedLocale) {
   return { ...withDeletionMessages(messages, lng), modelDownloads: modelDownloadMessages[lng] };
 }
 
-async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
+export async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
   if (lng === 'zh-CN' || i18n.hasResourceBundle(lng, 'translation')) return;
   try {
     i18n.addResourceBundle(lng, 'translation', localeResources(await localeLoaders[lng](), lng));

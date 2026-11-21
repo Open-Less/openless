@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Switch } from '@base-ui/react/switch';
 import { PageSkeleton } from '../../../components/ui/PageSkeleton';
 import { Button } from '../../../ui/controls/Button';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
@@ -11,6 +12,7 @@ import {
   type AskEntrySettings,
   type AskEntryIntentMode,
 } from './askEntrySettings';
+import './ask-entry-settings.css';
 
 const modes = ['semanticHybrid', 'separateModel', 'mainModelTool'] as const satisfies readonly AskEntryIntentMode[];
 
@@ -105,19 +107,26 @@ export function IntentRoutingSection() {
   }
   return (
     <Card>
-      <fieldset className="ol-intent-routing-options" disabled={saving}>
+      <fieldset className="ol-intent-routing-options" aria-busy={saving}>
         <legend className="ol-sr-only">{t('askEntrySettings.routing')}</legend>
         {modes.map((intentMode) => {
           const label = t(`askEntrySettings.${intentMode}`);
           return (
             <SettingRow key={intentMode} label={label} desc={t(`askEntrySettings.${intentMode}Hint`)}>
-              <input
-                type="radio"
+              <Switch.Root
+                className="ol-switch"
+                data-variant="default"
                 aria-label={label}
-                name="ask-intent-routing"
                 checked={settings === intentMode}
-                onChange={() => commit({ intentMode })}
-              />
+                aria-disabled={saving || undefined}
+                onCheckedChange={(enabled) => {
+                  if (saving) return;
+                  const next = enabled ? intentMode : 'semanticHybrid';
+                  if (next !== settings) commit({ intentMode: next });
+                }}
+              >
+                <Switch.Thumb className="ol-switch-thumb" />
+              </Switch.Root>
             </SettingRow>
           );
         })}

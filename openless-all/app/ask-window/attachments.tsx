@@ -1,7 +1,7 @@
 import { AskNotice } from './notices';
 import { FileText, Image as ImageIcon, Quote, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { errorMessage, type AskClient, type AttachmentInfo } from './client';
+import { type AskClient, type AttachmentInfo } from './client';
 
 function AttachmentCard({
   client,
@@ -25,7 +25,7 @@ function AttachmentCard({
   const [loadedImage, setLoadedImage] = useState<string>();
   const [expanded, setExpanded] = useState(false);
   const [fullText, setFullText] = useState<string>();
-  const [failure, setFailure] = useState<string>();
+  const [failure, setFailure] = useState<unknown>();
   const [loading, setLoading] = useState(false);
   const hasThumbnail = preview?.kind === 'image' && preview.thumbnailAvailable;
   const excerpt = preview?.kind === 'selection' ? preview : undefined;
@@ -51,7 +51,7 @@ function AttachmentCard({
         setImage(`data:${result.mimeType};base64,${result.dataBase64}`);
       })
       .catch((cause) => {
-        if (current) setFailure(errorMessage(cause, 'Could not load the thumbnail.'));
+        if (current) setFailure(cause);
       });
     return () => {
       current = false;
@@ -69,7 +69,7 @@ function AttachmentCard({
       if (lifetime.current) setFullText(result.text);
     } catch (cause) {
       if (lifetime.current)
-        setFailure(errorMessage(cause, 'Could not load the original selection.'));
+        setFailure(cause);
     } finally {
       if (lifetime.current) setLoading(false);
     }
@@ -156,9 +156,10 @@ function AttachmentCard({
       )}
       <AskNotice
         severity="warning"
+        operation="ask-attachment"
         message={
           failure ??
-          (state === 'error' ? error?.message || 'Attachment could not be prepared.' : undefined)
+          (state === 'error' ? error ?? 'attachment' : undefined)
         }
       />
     </article>

@@ -145,6 +145,174 @@ fn request() -> AskModelRequest {
     }
 }
 
+#[tokio::test]
+async fn assistant_http_loop_round_trips_time_and_calculation_before_final_answer() {
+    use crate::assistant::{AssistantDependencies, PersonalAssistant};
+    use crate::assistant_api::*;
+
+    struct Factory(Arc<PreparedModel>);
+    impl AskModelFactory for Factory {
+        fn prepare(&self, _: bool) -> BoxFuture<'_, Result<Arc<dyn AskModel>, BackendError>> {
+            Box::pin(async { Ok(self.0.clone() as Arc<dyn AskModel>) })
+        }
+    }
+    struct LiveClock;
+    impl AssistantContextProvider for LiveClock {
+        fn read(
+            &self,
+            _: AskTurnKey,
+            query: AssistantContextQuery,
+            _: AskCancellation,
+        ) -> BoxFuture<'_, Result<AssistantContextResult, BackendError>> {
+            Box::pin(async move {
+                assert!(matches!(query, AssistantContextQuery::CurrentTime));
+                let now = chrono::Local::now().to_rfc3339();
+                Ok(AssistantContextResult::Available {
+                    data: json!({"iso":now}),
+                    source: "test-live-system-clock".into(),
+                    as_of: now,
+                })
+            })
+        }
+    }
+    async fn request_json(socket: &mut tokio::net::TcpStream) -> Value {
+        let mut bytes = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let n = socket.read(&mut buffer).await.unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buffer[..n]);
+            if let Some(header_end) = bytes.windows(4).position(|p| p == b"\r\n\r\n") {
+                let headers = std::str::from_utf8(&bytes[..header_end]).unwrap();
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                if bytes.len() >= header_end + 4 + length {
+                    return serde_json::from_slice(&bytes[header_end + 4..header_end + 4 + length])
+                        .unwrap();
+                }
+            }
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut final_text = String::new();
+        for index in 0..3 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = request_json(&mut socket).await;
+            assert!(request["tools"].to_string().contains("read_context"));
+            let results: Vec<_> = request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "tool")
+                .collect();
+            assert_eq!(results.len(), index);
+            let frame = match index {
+                0 => {
+                    json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"clock-1","function":{"name":"read_context","arguments":json!({"kind":"currentTime","query":null,"limit":null}).to_string()}}]},"finish_reason":"tool_calls"}]})
+                }
+                1 => {
+                    let time: Value =
+                        serde_json::from_str(results[0]["content"].as_str().unwrap()).unwrap();
+                    let parsed =
+                        chrono::DateTime::parse_from_rfc3339(time["data"]["iso"].as_str().unwrap())
+                            .unwrap();
+                    assert!((chrono::Utc::now().timestamp() - parsed.timestamp()).abs() <= 5);
+                    json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"calc-1","function":{"name":"calculator","arguments":"{\"expression\":\"0.1+0.2\"}"}}]},"finish_reason":"tool_calls"}]})
+                }
+                _ => {
+                    let time: Value =
+                        serde_json::from_str(results[0]["content"].as_str().unwrap()).unwrap();
+                    let calculation: Value =
+                        serde_json::from_str(results[1]["content"].as_str().unwrap()).unwrap();
+                    assert_eq!(calculation["decimal"], "0.3");
+                    final_text = format!(
+                        "当前时间 {}；计算结果 {}。",
+                        time["data"]["iso"].as_str().unwrap(),
+                        calculation["decimal"].as_str().unwrap()
+                    );
+                    json!({"choices":[{"delta":{"content":final_text},"finish_reason":"stop"}]})
+                }
+            };
+            let body = format!("data: {frame}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":100,\"completion_tokens\":10}}}}\n\ndata: [DONE]\n\n");
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+        final_text
+    });
+    let provider = OpenAICompatibleLLMProvider::new(crate::polish::OpenAICompatibleConfig::new(
+        "fixture",
+        "Fixture",
+        &endpoint,
+        "fixture",
+        "fixture-model",
+    ));
+    let mut model = PreparedModel::new("fixture".into(), Wire::Compatible(provider));
+    // The local fixture has this declared window; this does not label an unknown provider.
+    model.capabilities.context_window = Some(128_000);
+    let runtime = PersonalAssistant::new(AssistantDependencies {
+        models: Arc::new(Factory(Arc::new(model))),
+        context: Arc::new(LiveClock),
+        search: Arc::new(crate::ask_search::WebSearchTool::new(Arc::new(
+            crate::InMemoryCredentialStore::default(),
+        ))),
+        usage: None,
+    });
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let observed = received.clone();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        runtime.run(
+            AssistantRequest {
+                key: AskTurnKey {
+                    conversation_id: Uuid::new_v4(),
+                    turn_id: Uuid::new_v4(),
+                },
+                client_request_id: "http-fixture".into(),
+                text: "现在几点？再精确算一下0.1+0.2。".into(),
+                messages: vec![],
+                selection: None,
+                attachments: vec![],
+                options: AskOptions::default(),
+            },
+            AskCancellation::default(),
+            Arc::new(move |event| observed.lock().push(event)),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(answer.text, server.await.unwrap());
+    let events = received.lock();
+    let ids: std::collections::HashSet<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantEvent::Usage(usage) => Some(usage.call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                AssistantEvent::Tool {
+                    status: AssistantToolStatus::Completed,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+}
+
 #[test]
 fn vision_and_thinking_require_verified_origin_format_and_model() {
     use LlmRequestFormat::*;

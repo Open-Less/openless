@@ -528,7 +528,6 @@ impl Desktop {
         #[cfg(target_os = "macos")]
         let placement = trigger.as_ref().map(|trigger| Placement(trigger.screen))
             .or_else(|| self.placement.lock().is_none().then(|| Placement::at_cursor(&self.app)));
-        #[cfg(target_os = "macos")]
         let original_foreground = trigger.as_ref().and_then(|trigger| trigger.foreground.as_ref().map(|app| app.pid));
         let reset = chord.is_some() || trigger.is_some() || self.ports.private_session();
         if reset {
@@ -570,9 +569,11 @@ impl Desktop {
                 return Ok(());
             }
             #[cfg(target_os = "macos")]
-            if placement.as_ref().is_some_and(|place| !place.0.is_current())
-                || original_foreground.is_some_and(|pid| foreground_pid() != Some(pid))
-            {
+            if placement.as_ref().is_some_and(|place| !place.0.is_current()) {
+                desktop.external_target_epoch.store(0, Ordering::Release);
+                return Ok(());
+            }
+            if original_foreground.is_some_and(|pid| foreground_pid() != Some(pid)) {
                 desktop.external_target_epoch.store(0, Ordering::Release);
                 return Ok(());
             }

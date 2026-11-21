@@ -159,7 +159,7 @@ export const ja: typeof zhCN = {
     disableDescription:
       '以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。',
     confirmDisable: '同期をオフにする',
-    refreshBackup: 'クラウドバックアップを表示・更新',
+    refreshBackup: 'クラウドバックアップを表示',
     deleteTitle: '暗号化クラウドバックアップを削除しますか？',
     deleteDescription:
       'このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。',
@@ -1451,7 +1451,7 @@ export const ja: typeof zhCN = {
         spectrumHint:
           'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
-        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        spectrumWaiting: '録音待ち',
         presets: 'Equalizer presets',
         choosePreset: 'Choose a preset',
         preset_normal: 'Flat',

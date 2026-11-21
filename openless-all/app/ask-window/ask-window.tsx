@@ -2,11 +2,11 @@ import { AppViewport } from '../src/ui/layout/AppViewport';
 import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { PromptBox } from '@/components/ui/prompt-box';
-import { errorMessage, type AskClient, type AskFocus, type AskSnapshot } from './client';
+import { askErrorLabel, type AskClient, type AskFocus, type AskSnapshot } from './client';
 import { useComposer } from './composer';
 import { ConversationLayout, Sources, SubmissionResult } from './conversation';
 import { connectAskFeed } from './feed';
-import { AskCurrentNotice, AskNoticeProvider, useAskNotice, useClearAskNotice } from './notices';
+import { AskNoticePopup, AskNoticeProvider, useAskNotice, useClearAskNotice, useCurrentAskNotice } from './notices';
 import { watchTheme } from './theme';
 import './window.css';
 
@@ -20,8 +20,6 @@ type SessionProps = {
   canDeliverVoice: () => boolean;
   expanded: boolean;
   captureSubmitReceipt: () => (turnId: string) => void;
-  streamError?: string;
-  reconnect: () => void;
 };
 
 type Expansion = { width: number; height: number; bottom: number };
@@ -44,20 +42,27 @@ function ComposerSession(props: SessionProps) {
         ]
       : []),
   ];
-  const result = submission && (!current || props.expanded)
-    && (!chatRoute || submission.error || submission.resultText || (!props.expanded && submission.searchError)) ? (
-      <SubmissionResult submission={submission} active={current} />
-    ) : null;
-  const box = useComposer({
-    ...props,
-    result: <>
-      {props.streamError && <div className="ask-inline-notice" role="alert">
-        {props.streamError}
-        <button className="text-button" type="button" onClick={props.reconnect}>Reconnect</button>
-      </div>}
-      {result}
-    </>,
-  });
+  const report = useAskNotice();
+  const reported = useRef(new Set<string>());
+  const latest = snapshot.turns.at(-1);
+  const matchingTurn = !submission || latest?.turnId === submission.currentTurnId ? latest : undefined;
+  const errorTurn = submission?.currentTurnId ?? matchingTurn?.turnId;
+  const failure = submission?.error ?? matchingTurn?.error;
+  const searchFailure = submission?.searchError ?? matchingTurn?.searchError;
+  const tools = submission?.tools ?? matchingTurn?.tools;
+  useEffect(() => {
+    for (const [kind, error] of [['request', failure], ['search', searchFailure], ...(tools ?? []).map((tool) => [tool.toolCallId, tool.error] as const)] as const) {
+      if (!error || error.code === 'cancelled') continue;
+      const key = `${errorTurn}:${kind}:${error.code}:${error.reason ?? ''}`;
+      if (reported.current.has(key)) continue;
+      reported.current.add(key);
+      report(error, 'error');
+    }
+  }, [errorTurn, failure, searchFailure, tools, report]);
+  const result = submission && (!current || props.expanded) && (!chatRoute || submission.resultText) ? (
+    <SubmissionResult submission={submission} active={current} />
+  ) : null;
+  const box = useComposer({ ...props, result });
   return (
     <>
       <ConversationLayout
@@ -93,6 +98,7 @@ export function AskWindow({ client }: { client: AskClient }) {
 function AskScreen({ client }: { client: AskClient }) {
   const notice = useAskNotice();
   const clearNotice = useClearAskNotice();
+  const currentNotice = useCurrentAskNotice();
   const feed = useRef<ReturnType<typeof connectAskFeed>>();
   const shown = useRef(true);
   const hiding = useRef(false);
@@ -108,7 +114,6 @@ function AskScreen({ client }: { client: AskClient }) {
   const [windowFocused, setWindowFocused] = useState(() => document.hasFocus());
   const [focus, setFocus] = useState<AskFocus>();
   const [activation, setActivation] = useState(0);
-  const [streamError, setStreamError] = useState<string>();
   const [platform, setPlatform] = useState<string>();
   const onWindows = platform ? platform === 'windows' : /Windows/i.test(navigator.userAgent);
 
@@ -122,9 +127,10 @@ function AskScreen({ client }: { client: AskClient }) {
   const clearPresentation = useCallback(() => {
     visibilityGeneration.current++;
     expanding.current = undefined;
+    clearNotice();
     setReceipt(undefined);
     setExpansion(undefined);
-  }, []);
+  }, [clearNotice]);
 
   const dismiss = useCallback(() => {
     if (hiding.current || !shown.current) return;
@@ -136,7 +142,7 @@ function AskScreen({ client }: { client: AskClient }) {
       .then(clearPresentation)
       .catch((cause) => {
         shown.current = true;
-        notice(errorMessage(cause, 'Could not hide Ask.'), 'error', 'ask-hide');
+        notice(cause, 'error', 'ask-hide');
         reconnect.current();
       })
       .finally(() => {
@@ -155,11 +161,16 @@ function AskScreen({ client }: { client: AskClient }) {
       )
         return;
       event.preventDefault();
+      if (snapshot?.activeTurnId) {
+        void client.cancel(snapshot.conversationId, snapshot.activeTurnId).catch((cause) => {
+          if (shown.current) notice(cause, 'error', 'ask-stop');
+        });
+      }
       dismiss();
     }
     window.addEventListener('keydown', onEscape);
     return () => window.removeEventListener('keydown', onEscape);
-  }, [dismiss]);
+  }, [client, dismiss, notice, snapshot?.conversationId, snapshot?.activeTurnId]);
 
   useEffect(() => {
     let destroyed = false;
@@ -188,7 +199,7 @@ function AskScreen({ client }: { client: AskClient }) {
             if (!destroyed && shown.current && attempt === connection) {
               if (current.themeMode) theme.setTheme(current.themeMode);
               if (current.platform) setPlatform(current.platform);
-              if (current.notice) notice(current.notice.message, 'warning', 'ask-window-notice');
+              if (current.notice) notice(current.notice, 'warning', 'ask-window-notice');
               updateFocus(current);
             }
             return current;
@@ -197,11 +208,10 @@ function AskScreen({ client }: { client: AskClient }) {
         (view) => {
           sessionId.current = view?.conversationId ?? null;
           setSnapshot(view);
-          setStreamError(undefined);
           setConnected(true);
         },
         (cause) => {
-          setStreamError(errorMessage(cause, 'Could not connect to Ask.'));
+          notice(cause, 'error', 'ask-connection');
           setConnected(false);
         },
       );
@@ -239,7 +249,6 @@ function AskScreen({ client }: { client: AskClient }) {
             clearPresentation();
             clearNotice();
             setSnapshot(null);
-            setStreamError(undefined);
           }
           if (event.type === 'activated') {
             const wasHidden = !shown.current;
@@ -254,7 +263,7 @@ function AskScreen({ client }: { client: AskClient }) {
           }
         }
         if (event.type === 'themeChanged') theme.setTheme(event.themeMode);
-        if (event.type === 'notice') notice(event.error.message, 'warning', 'ask-window-notice');
+        if (event.type === 'notice' && shown.current) notice(event.error, 'warning', 'ask-window-notice');
       })
       .then((stop) => {
         if (destroyed) stop();
@@ -266,7 +275,7 @@ function AskScreen({ client }: { client: AskClient }) {
       .catch((cause) => {
         if (!destroyed) {
           notice(
-            errorMessage(cause, 'Could not connect to the Ask window.'),
+            cause,
             'error',
             'ask-connection',
           );
@@ -326,7 +335,7 @@ function AskScreen({ client }: { client: AskClient }) {
       })
       .catch((cause) => {
         if (shown.current && visibilityGeneration.current === generation) {
-          notice(errorMessage(cause, 'Could not expand Ask.'), 'error', 'ask-expand');
+          notice(cause, 'error', 'ask-expand');
         }
       });
   }, [client, connected, conversationId, expansion, notice, receipt, route, routedTurn]);
@@ -339,6 +348,16 @@ function AskScreen({ client }: { client: AskClient }) {
       }
     };
   }
+
+  useEffect(() => {
+    if (!currentNotice || expansion || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const surface = presentation.current?.querySelector('[data-slot="prompt-box"]');
+    const animation = surface?.animate(
+      [0, -4, 4, -3, 3, 0].map((x) => ({ transform: `translateX(${x}px)` })),
+      { duration: 320, easing: 'ease-in-out' },
+    );
+    return () => animation?.cancel();
+  }, [currentNotice?.id, expansion]);
 
   const expansionStyle =
     expansion &&
@@ -354,6 +373,7 @@ function AskScreen({ client }: { client: AskClient }) {
       data-expanded={Boolean(expansion)}
       style={expansionStyle}
     >
+      <AskNoticePopup expanded={Boolean(expansion)} />
       {expansion && <div className="ask-expansion-backdrop" aria-hidden="true" />}
       {expansion && (
         <div className="window-bar" data-tauri-drag-region data-windows={onWindows}>
@@ -383,8 +403,6 @@ function AskScreen({ client }: { client: AskClient }) {
           focus={focus}
           activation={activation}
           expanded={Boolean(expansion)}
-          streamError={streamError}
-          reconnect={() => reconnect.current()}
           captureSubmitReceipt={captureSubmitReceipt}
           canDeliverVoice={() =>
             shown.current &&
@@ -399,16 +417,9 @@ function AskScreen({ client }: { client: AskClient }) {
           <div className="ask-layout-column"><div className="composer-content">
             <PromptBox
               className="w-full"
-              placeholder={snapshot === null ? 'No active conversation.' : 'Connecting…'}
+              placeholder={currentNotice ? askErrorLabel(currentNotice.code) : snapshot === null ? 'No active conversation.' : 'Connecting…'}
               submitDisabled
               inputProps={{ readOnly: true }}
-              beforeInput={<>
-                <AskCurrentNotice />
-                {streamError && <div className="ask-inline-notice" role="alert">
-                  {streamError}
-                  <button className="text-button" type="button" onClick={() => reconnect.current()}>Reconnect</button>
-                </div>}
-              </>}
             />
           </div></div>
         </div>

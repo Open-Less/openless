@@ -22,13 +22,14 @@ fn definitions(available: AskToolSet) -> impl Iterator<Item = (&'static str, &'s
     [
         available.resolve_intent.then(|| (
             "resolve_intent",
-            "Resolve the user's final destination before answering. This decision does not authorize external effects.",
+            "Resolve the user's final destination before answering. For edit, explicitly identify currentSelection or recentVoice; all other routes require editTarget null. This decision does not authorize external effects or prove that a recent voice record matches the current selection.",
             json!({
                 "type": "object",
-                "properties": {"route": {
-                    "type": "string", "enum": ["answer", "selectionAnswer", "write", "edit", "clarify"]
-                }},
-                "required": ["route"],
+                "properties": {
+                    "route": {"type": "string", "enum": ["answer", "selectionAnswer", "write", "edit", "clarify"]},
+                    "editTarget": {"type": ["string", "null"], "enum": ["currentSelection", "recentVoice", null]}
+                },
+                "required": ["route", "editTarget"],
                 "additionalProperties": false
             }),
         )),
@@ -42,7 +43,9 @@ fn definitions(available: AskToolSet) -> impl Iterator<Item = (&'static str, &'s
             "Evaluate exact arithmetic locally. Use decimal or scientific notation, parentheses, + - * / and ^ with integer exponents. Write percentages as /100. Returns an exact integer or fraction and up to 50 decimal places; no functions, variables, units or code.",
             schema("expression"),
         )),
-    ].into_iter().flatten()
+    ].into_iter().flatten().chain(
+        crate::assistant::tools::definitions().filter(move |_| available.assistant)
+    )
 }
 
 pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, tools: &AskModelTools) {
@@ -76,9 +79,14 @@ pub(super) fn configure(body: &mut Value, format: LlmRequestFormat, tools: &AskM
             }
             _ => json!("auto"),
         };
+        if matches!(
+            format,
+            LlmRequestFormat::ChatCompletions | LlmRequestFormat::Responses
+        ) {
+            body["parallel_tool_calls"] = json!(false);
+        }
         if format == LlmRequestFormat::Responses {
             body["include"] = json!(["reasoning.encrypted_content"]);
-            body["parallel_tool_calls"] = json!(false);
         }
     }
     if format == LlmRequestFormat::Responses
@@ -453,9 +461,16 @@ fn finish_call(
         Some("resolve_intent") if available.resolve_intent => {
             let decision: super::super::entry::Decision =
                 serde_json::from_str(args).map_err(|_| invalid())?;
+            if (decision.route == crate::ask::AskRoute::Edit) != decision.edit_target.is_some() {
+                return Err(invalid());
+            }
             AskToolCall::ResolveIntent {
                 route: decision.route,
+                edit_target: decision.edit_target,
             }
+        }
+        Some(name) if available.assistant => {
+            crate::assistant::tools::parse_call(name, args).map_err(|_| invalid())?
         }
         _ => return Err(invalid()),
     };
@@ -469,8 +484,104 @@ fn finish_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ask::{AskIntentContinuation, AskModelMessage, AskModelRole, AskRoute};
+    use crate::ask::{
+        AskEditTarget, AskIntentContinuation, AskModelMessage, AskModelRole, AskRoute,
+    };
     use crate::llm_protocol::TextEventStream;
+
+    #[test]
+    fn assistant_read_tools_round_trip_on_all_four_protocols_without_granting_other_names() {
+        let arguments = json!({"kind":"currentTime","query":null,"limit":null});
+        let cases = [
+            (
+                LlmRequestFormat::ChatCompletions,
+                false,
+                "messages",
+                vec![
+                    json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"context-1","function":{"name":"read_context","arguments":arguments.to_string()}}]},"finish_reason":"tool_calls"}]}),
+                ],
+            ),
+            (
+                LlmRequestFormat::Responses,
+                false,
+                "input",
+                vec![
+                    json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"context-1","name":"read_context","arguments":arguments.to_string()}]}}),
+                ],
+            ),
+            (
+                LlmRequestFormat::Messages,
+                false,
+                "messages",
+                vec![
+                    json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"context-1","name":"read_context","input":arguments}}),
+                    json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+                ],
+            ),
+            (
+                LlmRequestFormat::ChatCompletions,
+                true,
+                "contents",
+                vec![
+                    json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"context-1","name":"read_context","args":arguments},"thoughtSignature":"opaque-signature"}]},"finishReason":"STOP"}]}),
+                ],
+            ),
+        ];
+        let available = AskToolSet {
+            assistant: true,
+            ..Default::default()
+        };
+        for (format, gemini, key, frames) in cases {
+            let mut observer = ToolStream::new(format, gemini, available);
+            for frame in frames {
+                observer
+                    .observe(&frame, frame["type"].as_str().unwrap_or_default())
+                    .unwrap();
+            }
+            let call = observer.take().unwrap();
+            assert!(
+                matches!(&call.tool, AskToolCall::Assistant { name, arguments:args } if name == "read_context" && *args == arguments)
+            );
+            let tools = AskModelTools {
+                available,
+                results: vec![AskToolResult {
+                    call,
+                    output: r#"{"status":"available","data":{"iso":"2026-11-21T20:00:00+08:00"}}"#
+                        .into(),
+                }],
+                ..Default::default()
+            };
+            let mut body = json!({key:[]});
+            if gemini {
+                configure_gemini(&mut body, &tools);
+            } else {
+                configure(&mut body, format, &tools);
+            }
+            assert!(body["tools"].to_string().contains("read_context"));
+            assert!(body["tools"].to_string().contains("github_releases"));
+            assert!(body[key][1].to_string().contains("2026-11-21"));
+            assert!(body[key][1].to_string().contains("context-1"));
+            if gemini {
+                assert!(body[key][0].to_string().contains("opaque-signature"));
+            }
+        }
+        assert!(finish_call(
+            available,
+            Some("id"),
+            Some("shell"),
+            r#"{"command":"ls"}"#,
+            vec![]
+        )
+        .is_err());
+        assert!(finish_call(
+            AskToolSet::default(),
+            Some("id"),
+            Some("read_context"),
+            &arguments.to_string(),
+            vec![]
+        )
+        .is_err());
+    }
 
     #[test]
     fn required_intent_call_resumes_before_private_generation_material_on_each_protocol() {
@@ -480,28 +591,28 @@ mod tests {
                 false,
                 "messages",
                 2,
-                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"intent-1","function":{"name":"resolve_intent","arguments":"{\"route\":\"edit\"}"}}]},"finish_reason":"tool_calls"}]}),
+                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"intent-1","function":{"name":"resolve_intent","arguments":"{\"route\":\"edit\",\"editTarget\":\"currentSelection\"}"}}]},"finish_reason":"tool_calls"}]}),
             ),
             (
                 LlmRequestFormat::Responses,
                 false,
                 "input",
                 2,
-                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"intent-1","name":"resolve_intent","arguments":"{\"route\":\"edit\"}"}]}}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"intent-1","name":"resolve_intent","arguments":"{\"route\":\"edit\",\"editTarget\":\"currentSelection\"}"}]}}),
             ),
             (
                 LlmRequestFormat::Messages,
                 false,
                 "messages",
                 1,
-                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"intent-1","name":"resolve_intent","input":{"route":"edit"}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"intent-1","name":"resolve_intent","input":{"route":"edit","editTarget":"currentSelection"}}}),
             ),
             (
                 LlmRequestFormat::ChatCompletions,
                 true,
                 "contents",
                 1,
-                json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"intent-1","name":"resolve_intent","args":{"route":"edit"}},"thoughtSignature":"intent-signature"}]},"finishReason":"STOP"}]}),
+                json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"intent-1","name":"resolve_intent","args":{"route":"edit","editTarget":"currentSelection"}},"thoughtSignature":"intent-signature"}]},"finishReason":"STOP"}]}),
             ),
         ];
         let available = AskToolSet {
@@ -528,6 +639,7 @@ mod tests {
                 &body["tool_choice"]
             };
             assert!(forced.to_string().contains("resolve_intent"));
+            assert!(body["tools"].to_string().contains("editTarget"));
             let mut observer = ToolStream::new(format, gemini, available);
             observer
                 .observe(&frame, frame["type"].as_str().unwrap_or_default())
@@ -544,7 +656,8 @@ mod tests {
             assert!(matches!(
                 call.tool,
                 AskToolCall::ResolveIntent {
-                    route: AskRoute::Edit
+                    route: AskRoute::Edit,
+                    edit_target: Some(AskEditTarget::CurrentSelection),
                 }
             ));
             body = json!({key: vec![json!("original sanitized input"); offset]});
@@ -562,7 +675,7 @@ mod tests {
                         },
                         result: AskToolResult {
                             call,
-                            output: r#"{"route":"edit"}"#.into(),
+                            output: r#"{"route":"edit","editTarget":"currentSelection"}"#.into(),
                         },
                     }),
                     ..Default::default()
@@ -580,6 +693,10 @@ mod tests {
         for arguments in [
             r#"{"route":"replaceAll"}"#,
             r#"{"route":"edit","text":"unsafe"}"#,
+            r#"{"route":"edit"}"#,
+            r#"{"route":"edit","editTarget":null}"#,
+            r#"{"route":"edit","editTarget":"arbitraryEditor"}"#,
+            r#"{"route":"answer","editTarget":"recentVoice"}"#,
         ] {
             assert!(finish_call(
                 available,
@@ -589,6 +706,31 @@ mod tests {
                 Vec::new()
             )
             .is_err());
+        }
+        let recent_voice = finish_call(
+            available,
+            Some("intent-1"),
+            Some("resolve_intent"),
+            r#"{"route":"edit","editTarget":"recentVoice"}"#,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            recent_voice.tool,
+            AskToolCall::ResolveIntent {
+                route: AskRoute::Edit,
+                edit_target: Some(AskEditTarget::RecentVoice),
+            }
+        ));
+        for route in ["answer", "selectionAnswer", "write", "clarify"] {
+            assert!(finish_call(
+                available,
+                Some("intent-1"),
+                Some("resolve_intent"),
+                &json!({"route":route,"editTarget":null}).to_string(),
+                Vec::new()
+            )
+            .is_ok());
         }
     }
 

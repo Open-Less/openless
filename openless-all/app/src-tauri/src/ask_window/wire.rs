@@ -2,18 +2,36 @@
 
 use openless_core::ask::{
     AskActivity, AskEvent, AskEventKind, AskMessage, AskSnapshot, AskSubmission, AskTurn,
-    AskTurnStatus,
+    AskToolState, AskTurnStatus,
 };
-use openless_core::BackendError;
+use openless_core::{BackendError, BackendErrorCode};
 use serde_json::{json, Value};
 
 pub(super) fn error(error: BackendError) -> Value {
-    let message = match error.message.as_str() {
+    let public_message = match error.message.as_str() {
         "askTurnInProgress" => {
             "Wait for the current answer or stop it before sending another message."
         }
         "askDeepThinkingUnsupported" => "The configured model does not support deep thinking.",
         "askImageInputUnsupported" => "The configured model does not support images in Ask.",
+        "askAnswerUnusable" | "askEmptyAnswer" | "askEmptyModelOutput" => "The model did not produce a usable answer.",
+        "askAnswerReviewUnavailable" => "The answer could not be verified.",
+        "askCancelled" => "This request was cancelled.",
+        "askSessionChanged" => "This request is no longer active.",
+        "askContextWindowUnknown" => "The configured model's context limit is unknown.",
+        "askContextLimit" | "askCompactNotSmaller" => "The request exceeds the model's context limit.",
+        "askContextDenied" => "Permission to read this context was not granted.",
+        "askContextUnavailable" | "askContextFailed" => "The requested context is unavailable.",
+        "askToolTimeout" => "The tool request took too long.",
+        "askToolLimit" => "The tool request limit was reached.",
+        "askToolFailed" => "The tool request failed.",
+        "askUnexpectedToolCall" | "askInvalidToolCall" | "askModelRejectedTools" => "The model's tool request is not supported.",
+        "askCalculationInvalid" | "askCalculatorFailed" => "The calculation could not be completed.",
+        "askSearchDisabled" => "Web search is disabled.",
+        "askPageBlocked" | "askPageReadFailed" => "The requested page could not be read.",
+        "askReleaseInvalidRepository" | "askReleaseInvalidResponse" | "askReleaseNetworkError"
+            | "askReleaseNotFound" | "askReleaseRateLimited" | "askReleaseRequestFailed"
+            | "askReleaseTooLarge" => "Release information could not be retrieved.",
         "askImageUnsupported" => "This model and endpoint cannot accept the image. The draft and image were kept.",
         "askDraftUnusable" => "The model did not produce usable text. Nothing was written.",
         "askDraftReviewUnavailable" => "The generated text could not be reviewed and was not written.",
@@ -25,6 +43,7 @@ pub(super) fn error(error: BackendError) -> Value {
         "askIntentInvalid" => {
             "Could not determine what to do with this request. Try rephrasing it."
         }
+        "askIntentClarificationRequired" => "Clarify the requested destination or reselect the text to change.",
         "askIntentToolUnsupported" => {
             "The configured model does not support the selected intent tool."
         }
@@ -32,25 +51,29 @@ pub(super) fn error(error: BackendError) -> Value {
         "askEntrySettingsUnavailable" => {
             "Could not read Ask settings. Check Settings and try again."
         }
-        _ => &error.message,
+        _ => "",
     };
-    let mut value = json!({"code": error.code, "message": message});
-    if matches!(
-        error.message.as_str(),
-        "askIntentInvalid"
-            | "askIntentToolUnsupported"
-            | "askIntentTimeout"
-            | "askEntrySettingsUnavailable"
-            | "askImageUnsupported"
-            | "askDraftUnusable"
-            | "askDraftReviewUnavailable"
-            | "askDraftSearchUnavailable"
-            | "askSelectionUnavailable"
-            | "askSelectionRequired"
-    ) {
-        value["reason"] = json!(error.message);
-    }
-    value
+    let (reason, message) = if public_message.is_empty() {
+        // Provider messages/details may include URLs, credentials or private
+        // tool evidence. Only the typed code crosses this public boundary.
+        let message = match error.code {
+            BackendErrorCode::InvalidArgument => "This request is invalid.",
+            BackendErrorCode::InvalidState => "This request is no longer available.",
+            BackendErrorCode::Busy => "Another request is in progress.",
+            BackendErrorCode::Cancelled => "This request was cancelled.",
+            BackendErrorCode::PermissionDenied => "Permission was not granted.",
+            BackendErrorCode::Unsupported => "This operation is not supported.",
+            BackendErrorCode::Provider => "The model or tool request failed.",
+            BackendErrorCode::Persistence => "The result could not be saved.",
+            BackendErrorCode::Platform => "The native operation failed.",
+            BackendErrorCode::OutcomeUnknown => "The operation could not be confirmed.",
+            BackendErrorCode::Internal => "The request could not be completed.",
+        };
+        (json!(error.code), message)
+    } else {
+        (json!(error.message), public_message)
+    };
+    json!({"code": error.code, "reason": reason, "message": message})
 }
 
 fn working(status: Option<AskActivity>) -> &'static str {
@@ -72,9 +95,19 @@ fn status(status: AskTurnStatus, activity: Option<AskActivity>) -> &'static str 
     }
 }
 
+fn tool(tool: &AskToolState) -> Value {
+    json!({
+        "toolCallId": tool.tool_call_id,
+        "name": tool.name,
+        "status": tool.status,
+        "error": tool.error.clone().map(error),
+    })
+}
+
 fn turn(turn: &AskTurn, user: &AskMessage, assistant: &AskMessage) -> Value {
     json!({
         "turnId":turn.turn_id,
+        "clientRequestId":turn.client_request_id,
         "userMessage":{"messageId": user.message_id, "text":user.text},
         "assistantMessage":{"messageId":assistant.message_id, "text":assistant.text},
         "attachments":turn.attachments,
@@ -87,6 +120,7 @@ fn turn(turn: &AskTurn, user: &AskMessage, assistant: &AskMessage) -> Value {
         "searchStatus":turn.search_status,
         "searchError":turn.search_error.clone().map(error),
         "sources":turn.sources,
+        "tools":turn.tools.iter().map(tool).collect::<Vec<_>>(),
         "error":turn.error.clone().map(error),
     })
 }
@@ -94,6 +128,7 @@ fn turn(turn: &AskTurn, user: &AskMessage, assistant: &AskMessage) -> Value {
 fn submission(value: &AskSubmission) -> Value {
     json!({
         "currentTurnId": value.current_turn_id,
+        "clientRequestId": value.client_request_id,
         "route": value.route,
         "status": status(value.status, value.activity),
         "activity": value.activity,
@@ -101,6 +136,7 @@ fn submission(value: &AskSubmission) -> Value {
         "searchError": value.search_error.clone().map(error),
         "toolCallId": value.tool_call_id,
         "sources": value.sources,
+        "tools": value.tools.iter().map(tool).collect::<Vec<_>>(),
         "resultText": value.result_text,
         "delivery": value.delivery,
         "copyStatus": value.copy_status,
@@ -167,6 +203,9 @@ pub(super) fn event(event: &AskEvent) -> Value {
             tool_call_id,
             source,
         } => json!({"type":"sourceChanged","toolCallId":tool_call_id,"source":source}),
+        AskEventKind::Tool { tool_call_id, name, status, error: cause } => {
+            json!({"type":"toolChanged","toolCallId":tool_call_id,"name":name,"status":status,"error":cause.clone().map(error)})
+        }
         AskEventKind::Usage { .. } => json!({"type":"usageChanged"}),
         AskEventKind::Attachment { attachment } => {
             json!({"type":"attachmentChanged","attachment":attachment})
@@ -177,12 +216,16 @@ pub(super) fn event(event: &AskEvent) -> Value {
         AskEventKind::Terminal {
             status: terminal,
             error: cause,
+            text,
         } => {
-            json!({"type":"turnFinished","status":status(*terminal,None), "error":cause.clone().map(error)})
+            json!({"type":"turnFinished","status":status(*terminal,None), "error":cause.clone().map(error), "text":text})
         }
     };
     packet["conversationId"] = json!(event.conversation_id);
     packet["sequence"] = json!(event.sequence);
+    if let Some(id) = &event.client_request_id {
+        packet["clientRequestId"] = json!(id);
+    }
     if let Some(id) = event.turn_id {
         packet["turnId"] = json!(id);
     }
@@ -202,6 +245,7 @@ mod tests {
         let tool = Uuid::new_v4();
         let packet = event(&AskEvent {
             conversation_id: conversation,
+            client_request_id: Some("request-a".into()),
             sequence: 7,
             turn_id: Some(turn),
             kind: AskEventKind::Source {
@@ -216,6 +260,7 @@ mod tests {
             },
         });
         assert_eq!(packet["conversationId"], json!(conversation));
+        assert_eq!(packet["clientRequestId"], "request-a");
         assert_eq!(packet["turnId"], json!(turn));
         assert_eq!(packet["toolCallId"], json!(tool));
         assert_eq!(packet["sequence"], 7);
@@ -231,5 +276,81 @@ mod tests {
             assert_eq!(result["reason"], reason);
             assert_ne!(result["message"], result["reason"]);
         }
+    }
+
+    #[test]
+    fn unknown_provider_errors_expose_a_stable_reason_without_private_evidence() {
+        let mut cause = BackendError::new(BackendErrorCode::Provider, "secret provider URL and prompt");
+        cause.details = Some(json!({"evidence":"private document", "token":"secret"}));
+        let result = error(cause);
+        assert_eq!(result["reason"], "provider");
+        assert_eq!(result["code"], "provider");
+        assert!(!result.to_string().contains("secret"));
+        assert!(result.get("details").is_none());
+    }
+
+    #[test]
+    fn known_request_errors_always_have_symbolic_reasons() {
+        for reason in ["askTurnInProgress", "askRequestConflict", "askConversationUnavailable"] {
+            assert_eq!(error(BackendError::new(BackendErrorCode::InvalidState, reason))["reason"], reason);
+        }
+    }
+
+    #[test]
+    fn generic_tool_events_and_replay_share_public_status_and_redacted_errors() {
+        use openless_core::assistant_api::AssistantToolStatus;
+        for status in [
+            AssistantToolStatus::Running, AssistantToolStatus::Completed,
+            AssistantToolStatus::Failed, AssistantToolStatus::Cancelled,
+        ] {
+            let state = AskToolState {
+                tool_call_id: Uuid::new_v4(),
+                name: "current_time".into(),
+                status,
+                error: Some(BackendError::new(BackendErrorCode::Provider, "private evidence")),
+            };
+            let conversation = Uuid::new_v4();
+            let turn = Uuid::new_v4();
+            let packet = event(&AskEvent {
+                conversation_id: conversation,
+                client_request_id: Some("request-tool".into()),
+                sequence: 9,
+                turn_id: Some(turn),
+                kind: AskEventKind::Tool {
+                    tool_call_id: state.tool_call_id, name: state.name.clone(),
+                    status, error: state.error.clone(),
+                },
+            });
+            assert_eq!(packet["type"], "toolChanged");
+            assert_eq!(packet["conversationId"], json!(conversation));
+            assert_eq!(packet["clientRequestId"], "request-tool");
+            assert_eq!(packet["turnId"], json!(turn));
+            assert_eq!(packet["sequence"], 9);
+            let replay = tool(&state);
+            for field in ["toolCallId", "name", "status", "error"] {
+                assert_eq!(packet[field], replay[field]);
+            }
+            assert_eq!(packet["error"]["reason"], "provider");
+            assert!(!packet.to_string().contains("private evidence"));
+        }
+    }
+
+    #[test]
+    fn terminal_event_carries_the_authoritative_answer_and_request_identity() {
+        let packet = event(&AskEvent {
+            conversation_id: Uuid::new_v4(),
+            turn_id: Some(Uuid::new_v4()),
+            client_request_id: Some("request-final".into()),
+            sequence: 11,
+            kind: AskEventKind::Terminal {
+                status: AskTurnStatus::Completed,
+                error: None,
+                text: Some("complete final answer".into()),
+            },
+        });
+        assert_eq!(packet["type"], "turnFinished");
+        assert_eq!(packet["text"], "complete final answer");
+        assert_eq!(packet["clientRequestId"], "request-final");
+        assert_eq!(packet["sequence"], 11);
     }
 }

@@ -56,7 +56,7 @@ test('a recovered question route expands one frame without replacing the editor'
   await expect.poll(() => page.evaluate(() => window.askFixture.liveListeners())).toBe(0);
   await page.evaluate(() => {
     const fixture = window.askFixture;
-    fixture.push({ type: 'turnFinished', turnId: fixture.active(), status: 'completed' });
+    fixture.push({ type: 'turnFinished', turnId: 'turn-1', status: 'completed' });
     fixture.activate();
   });
   await expect(backdrop).toHaveCount(0);
@@ -118,7 +118,8 @@ test('same-frame attachment references, full selection, IME, caret, and attachme
     window.askFixture.rejectNext = true;
   });
   await prompt.press('Enter');
-  await expect(box.getByRole('alert')).toHaveText('Set up an Ask model first.');
+  await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-1001');
+  await expect(page.locator('[data-slot="prompt-box-placeholder"]')).toHaveText('Something went wrong · ASK-1001');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(prompt).toBeFocused();
   await expect(box.getByText('PDF · 3 pages')).toBeVisible();
@@ -144,12 +145,8 @@ test('DOM image drop validates files before IPC and never sends or loads a path'
       );
     }, invalid);
     expect(prevented).toBe(true);
-    const warning = page.locator('[data-slot="prompt-box"]').getByRole('alert');
-    await expect(warning).toContainText(
-      invalid === 'oversize'
-        ? 'This image is too large to prepare safely.'
-        : 'Drop a valid PNG or JPEG image.',
-    );
+    await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-2003');
+    await expect(page.locator('[data-slot="prompt-box-placeholder"]')).toHaveText('Something went wrong · ASK-2003');
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeFocused();
   }
@@ -299,8 +296,8 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await prompt.fill('  private draft  ');
   await prompt.evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(2, 9, 'backward'));
   await prompt.press('Enter');
-  const errorNotice = page.locator('[data-slot="prompt-box"]').getByRole('alert');
-  await expect(errorNotice).toHaveText('Set up an Ask model first.');
+  await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-1001');
+  await expect(page.locator('[data-slot="prompt-box"] [role="alert"]')).toHaveCount(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(prompt).toBeFocused();
   await expect(prompt).toHaveValue('  private draft  ');
@@ -315,6 +312,53 @@ test('a rejected typed draft is restored with its raw text, selection, and reque
   await expect(page.locator('.user-bubble')).toHaveText('private draft');
   const requests = await page.evaluate(() => window.askFixture.submits);
   expect(requests[1]).toEqual(requests[0]);
+});
+
+test('a compact draft error is visible in the input area and real editing restores the preserved draft', async ({ page }, info) => {
+  await page.setViewportSize({ width: 370, height: 172 });
+  await page.emulateMedia({ colorScheme: 'light' });
+  const prompt = page.locator(promptInput);
+  const box = page.locator('[data-slot="prompt-box"]');
+  const attach = page.getByRole('button', { name: 'Attach a file' });
+  await prompt.fill('Keep this draft');
+  const before = (await box.boundingBox())!;
+  const controlsBefore = (await attach.boundingBox())!;
+  await page.evaluate(() => { window.askFixture.rejectNext = true; });
+  await prompt.press('Enter');
+  const error = page.locator('.ask-draft-error');
+  await expect(error).toHaveText('Something went wrong · ASK-1001');
+  await expect(error).toBeVisible();
+  await expect(error).toBeInViewport();
+  await expect(prompt).toHaveValue('Keep this draft');
+  await expect(prompt).toBeFocused();
+  await expect(prompt).toHaveCSS('opacity', '0');
+  expect(await box.evaluate((node) => node.getAnimations().some((animation) =>
+    animation.effect instanceof KeyframeEffect && animation.effect.target === node &&
+    animation.effect.getKeyframes().some((frame) => String(frame.transform).includes('translateX')),
+  ))).toBe(true);
+  expect(await prompt.evaluate((node) => node.getAnimations().some((animation) =>
+    animation.effect instanceof KeyframeEffect &&
+    animation.effect.getKeyframes().some((frame) => String(frame.transform).includes('translateX')),
+  ))).toBe(false);
+  await expect(box).toHaveCSS('transform', 'none');
+  await prompt.evaluate((input: HTMLTextAreaElement) => input.focus());
+  await expect(error).toBeVisible();
+  const errorBounds = (await error.boundingBox())!;
+  const inputBounds = (await prompt.boundingBox())!;
+  expect(errorBounds.y).toBeCloseTo(inputBounds.y);
+  expect(errorBounds.x).toBeCloseTo(inputBounds.x);
+  expect(errorBounds.y + errorBounds.height).toBeLessThanOrEqual(controlsBefore.y);
+  expect((await box.boundingBox())!.height).toBeCloseTo(before.height);
+  expect((await attach.boundingBox())!.y).toBeCloseTo(controlsBefore.y);
+  await page.screenshot({ path: info.outputPath('compact-draft-error.png') });
+  await prompt.press('!');
+  await expect(error).toHaveCount(0);
+  await expect(prompt).toHaveCSS('opacity', '1');
+  await expect(prompt).toHaveValue('Keep this draft!');
+  expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(1);
+  await prompt.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.askFixture.submits.length)).toBe(2);
+  expect(await page.evaluate(() => window.askFixture.submits[1].text)).toBe('Keep this draft!');
 });
 
 test('compact rewrite uses only the placeholder and restores it on cancellation', async ({ page }) => {
@@ -398,7 +442,7 @@ test('voice claims only the original scoped editor and inserts without submittin
   expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
 });
 
-test('only a current voice failure appears inside the composer; a previous opening and cancellation are silent', async ({
+test('only a current voice failure shakes the compact window without covering the draft', async ({
   page,
 }) => {
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
@@ -420,9 +464,9 @@ test('only a current voice failure appears inside the composer; a previous openi
   });
   await expect(composer.getByRole('alert')).toHaveCount(0);
   await expect(prompt).toHaveValue('Fresh draft sentinel');
-  for (const [stage, message, scheme] of [
-    ['start', 'Could not start voice input.', 'light'],
-    ['processing', 'Voice input did not finish.', 'dark'],
+  for (const [stage, scheme] of [
+    ['start', 'light'],
+    ['processing', 'dark'],
   ] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.evaluate((stage) => {
@@ -431,11 +475,8 @@ test('only a current voice failure appears inside the composer; a previous openi
       fixture.voice({ type: 'failed', recordingId: stage, stage });
       fixture.voice({ type: 'failed', recordingId: stage, stage });
     }, stage);
-    const notice = composer.getByText(message, { exact: false });
-    await expect(notice).toHaveCount(1);
-    await expect(notice).toBeVisible();
-    const noticeBounds = (await notice.boundingBox())!;
-    expect(noticeBounds.y + noticeBounds.height).toBeLessThanOrEqual((await prompt.boundingBox())!.y);
+    await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-2002');
+    await expect(composer.getByRole('alert')).toHaveCount(0);
     await expect(prompt).toHaveValue('Fresh draft sentinel');
     await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
   }
@@ -491,7 +532,7 @@ test('write, edit, and clarify have no reader side effect and retain delivery ou
   const retained = page.getByRole('textbox', { name: 'Retained result' });
   await expect(retained).toHaveValue('Total: $420');
   await retained.fill('Total: $420 USD');
-  await expect(page.getByText('Could not copy to the clipboard.')).toBeVisible();
+  await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-2008');
   await expect(prompt).toHaveValue('Write a short quote');
   await expect(page.getByRole('button', { name: 'Sources · 1' })).toHaveCount(0);
   await retained.press('Escape');
@@ -577,7 +618,7 @@ test('an unconfirmed edit preserves the result and sent instruction without over
   const composer = page.locator('[data-slot="prompt-box"]');
   await expect(prompt).toHaveValue('A newer draft');
   await expect(composer.getByRole('textbox', { name: 'Retained result' })).toHaveValue('Candidate shortened text');
-  await expect(composer.getByText('Ask could not confirm whether the editor changed.', { exact: false })).toBeVisible();
+  await expect(composer.getByText('Check the original editor before pasting.', { exact: false })).toBeVisible();
   const previous = composer.locator('details').filter({ hasText: 'Previous instruction' });
   await previous.locator('summary').click();
   await expect(previous.getByText('Make it shorter', { exact: true })).toBeVisible();
@@ -622,9 +663,8 @@ test('a failed delivery review keeps the original instruction, reference, and co
   const copyable = composer.getByRole('textbox', { name: 'Retained result' });
   const alert = composer.getByRole('alert');
   await expect(copyable).toHaveValue(/May we meet/);
-  await expect(alert).toHaveCount(1);
-  await expect(alert).toContainText('Ask could not review the generated text');
-  await expect(alert).toBeInViewport();
+  await expect(alert).toHaveCount(0);
+  await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-1103');
   await expect(copyable).toBeInViewport();
   await expect(prompt).toBeInViewport();
   await expect(composer.locator('.attachment-card')).toHaveCount(3);
@@ -632,7 +672,7 @@ test('a failed delivery review keeps the original instruction, reference, and co
   expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(1);
 });
 
-test('an expanded attached question retains a failed review as a scoped unreviewed copy, not a chat answer', async ({ page }) => {
+test('expanded errors use the shared top popup and retain generated text without review UI', async ({ page }) => {
   const prompt = page.getByRole('textbox', { name: 'Ask anything' });
   const composer = page.locator('[data-slot="prompt-box"]');
   await page.evaluate(() => window.askFixture.addInitialCards());
@@ -667,13 +707,14 @@ test('an expanded attached question retains a failed review as a scoped unreview
     });
   });
   await expect(page.locator('.assistant-text')).toHaveText('An approved first detail.');
-  await expect(composer.getByRole('alert')).toHaveCount(1);
-  await expect(composer.getByRole('alert')).toContainText('Ask could not review the complete answer.');
+  await expect(composer.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('.ol-notification-center').getByRole('alert')).toHaveText('Something went wrong · ASK-1103');
+  await expect(page.locator('.transcript-surface > [role="alert"]')).toHaveCount(0);
   await expect(prompt).toHaveValue('Describe the attached image');
   await expect(composer.locator('.attachment-card')).toHaveCount(3);
   await expect(composer.getByRole('textbox', { name: 'Unreviewed response' })).toHaveCount(0);
-  await composer.getByText('Show unreviewed response', { exact: true }).click();
-  await expect(composer.getByRole('textbox', { name: 'Unreviewed response' })).toHaveValue(/Unreviewed tail sentinel/);
+  await expect(composer.getByText('Show unreviewed response', { exact: true })).toHaveCount(0);
+  await expect(composer.getByRole('textbox', { name: 'Retained result' })).toHaveValue(/Unreviewed tail sentinel/);
   await page.evaluate(() => window.askFixture.freshOpen());
   await expect(prompt).toHaveValue('');
   await expect(page.getByRole('textbox', { name: 'Unreviewed response' })).toHaveCount(0);
@@ -736,4 +777,226 @@ test('expanded scroll follows growth only while pinned and jump returns to the c
   await expect(jump).toHaveCount(0);
   await expect(prompt).toBeFocused();
   await expect.poll(bottom).toBeLessThan(25);
+});
+
+for (const [locale, message] of [
+  ['zh-CN', '出现了一点错误 · ASK-0000'],
+  ['en-US', 'Something went wrong · ASK-0000'],
+  ['de-DE', 'Ein Fehler ist aufgetreten · ASK-0000'],
+]) {
+  test(`compact errors preserve geometry, clear on input and expire (${locale})`, async ({ page }, info) => {
+    await page.setViewportSize({ width: 370, height: 172 });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.evaluate((locale) => {
+      localStorage.setItem('ol.locale', locale);
+      window.dispatchEvent(new Event('languagechange'));
+    }, locale);
+    const prompt = page.locator(promptInput);
+    const box = page.locator('[data-slot="prompt-box"]');
+    const bounds = (await box.boundingBox())!;
+    await page.evaluate(() => window.askFixture.notice({ code: 'unrecognized-secret', message: 'RAW_BACKEND_SECRET', reason: 'PRIVATE_REASON' }));
+    const placeholder = page.locator('[data-slot="prompt-box-placeholder"]');
+    await expect(placeholder).toHaveText(message);
+    const animationTarget = await box.evaluate((node) => node.getAnimations().some((a) => a.effect instanceof KeyframeEffect && a.effect.target === node));
+    expect(animationTarget).toBe(true);
+    await expect(box).toHaveCSS('transform', 'none');
+    const after = (await box.boundingBox())!;
+    expect(after.height).toBeCloseTo(bounds.height);
+    expect(after.y).toBeCloseTo(bounds.y);
+    expect(await placeholder.locator('.truncate').evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await expect(page.locator('.ol-notification-center [role="alert"]')).toHaveCount(0);
+    await expect(page.getByText('RAW_BACKEND_SECRET', { exact: false })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath(`compact-${locale}.png`) });
+    await prompt.fill('Draft stays exactly here');
+    await expect(page.locator('.composer')).not.toHaveAttribute('data-error-code');
+    const draftBounds = (await box.boundingBox())!;
+    await page.evaluate(() => window.askFixture.notice({ code: 'unknown', message: 'Never render this' }));
+    await expect(page.locator('.composer')).toHaveAttribute('data-error-code', 'ASK-0000');
+    await expect(prompt).toHaveValue('Draft stays exactly here');
+    await expect(placeholder).toHaveCount(0);
+    await expect(page.locator('.ask-draft-error')).toBeVisible();
+    await expect(page.locator('.ask-draft-error')).toHaveText(message);
+    await expect(box).toHaveCSS('transform', 'none');
+    expect((await box.boundingBox())!.height).toBeCloseTo(draftBounds.height);
+    await expect(page.locator('.composer')).not.toHaveAttribute('data-error-code', { timeout: 6000 });
+    await expect(prompt).toHaveValue('Draft stays exactly here');
+    await page.evaluate(() => window.askFixture.notice({ code: 'unknown', message: 'Never render this' }));
+    await expect(page.locator('.ask-draft-error')).toBeVisible();
+    await prompt.press('End');
+    await expect(page.locator('.ask-draft-error')).toHaveCount(0);
+    await prompt.press('!');
+    await expect(prompt).toHaveValue('Draft stays exactly here!');
+    expect(await page.evaluate(() => window.askFixture.submits.length)).toBe(0);
+    await prompt.fill('');
+    await expect(placeholder).not.toContainText('ASK-');
+  });
+}
+
+test('Escape cancels the active turn and replay cannot revive it or apply a foreign request', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('First request');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-presentation')).toHaveAttribute('data-expanded', 'true');
+  await prompt.fill('Next draft');
+  await prompt.press('Escape');
+  await expect.poll(() => page.evaluate(() => window.askFixture.cancelled.length)).toBe(1);
+  await page.evaluate(() => {
+    const f = window.askFixture;
+    f.push({ type: 'answerDelta', turnId: 'turn-1', messageId: 'late', text: 'LATE_CANCELLED' });
+    f.push({ type: 'turnFinished', turnId: 'turn-1', status: 'failed', error: { code: 'provider', message: 'LATE_ERROR' } });
+    f.activate();
+  });
+  await expect(prompt).toHaveValue('Next draft');
+  await expect(page.locator('.composer')).not.toHaveAttribute('data-error-code');
+  await expect(page.getByRole('button', { name: 'Send, hold to think harder' })).toBeEnabled();
+  await prompt.press('Enter');
+  await expect(page.locator('.user-bubble').last()).toHaveText('Next draft');
+  await page.evaluate(() => {
+    const f = window.askFixture;
+    f.push({ type: 'answerDelta', turnId: f.active(), clientRequestId: 'wrong-request', messageId: 'wrong', text: 'FOREIGN_REQUEST' });
+    f.push({ type: 'answerDelta', turnId: f.active(), clientRequestId: f.submits.at(-1)!.clientRequestId, messageId: 'correct', text: 'Correct answer' });
+  });
+  await expect(page.locator('.assistant-text')).toHaveText('Correct answer');
+  await expect(page.getByText(/LATE_CANCELLED|LATE_ERROR|FOREIGN_REQUEST/)).toHaveCount(0);
+});
+
+test('Escape during submit cancels its eventual receipt without expanding or losing the draft', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await page.evaluate(() => { window.askFixture.deferSubmit = true; });
+  await prompt.fill('Pending draft');
+  await prompt.press('Enter');
+  await expect(prompt).toHaveAttribute('readonly');
+  await prompt.press('Escape');
+  await page.evaluate(() => window.askFixture.releaseSubmit());
+  await expect.poll(() => page.evaluate(() => window.askFixture.cancelled)).toEqual([['conversation-1', 'turn-1']]);
+  await page.evaluate(() => window.askFixture.activate());
+  await expect(prompt).toHaveValue('Pending draft');
+  await expect(page.locator('.ask-expansion-backdrop')).toHaveCount(0);
+});
+
+test('an expanded error never moves the editor and clears before a new request', async ({ page }, info) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('Start a question');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-presentation')).toHaveAttribute('data-expanded', 'true');
+  await page.evaluate(() => window.askFixture.push({ type: 'answerDelta', turnId: window.askFixture.active(), messageId: 'partial', text: 'Keep this partial answer.' }));
+  await prompt.fill('A newer instruction');
+  const box = page.locator('[data-slot="prompt-box"]');
+  const bounds = (await box.boundingBox())!;
+  await page.evaluate(() => window.askFixture.notice({ code: 'unexpected', message: 'SECRET_PROVIDER_TITLE' }));
+  const popup = page.locator('.ol-notification-center').getByRole('alert');
+  await expect(popup).toHaveText('Something went wrong · ASK-0000');
+  await expect(popup).toBeInViewport();
+  expect((await popup.boundingBox())!.y).toBeLessThan(100);
+  expect((await box.boundingBox())!.height).toBeCloseTo(bounds.height);
+  expect((await box.boundingBox())!.y).toBeCloseTo(bounds.y);
+  await expect(page.locator('.ask-inline-notice')).toHaveCount(0);
+  await expect(page.getByText('Failed · Incomplete')).toHaveCount(0);
+  await expect(page.locator('.window-bar')).not.toContainText('Ask');
+  await expect(page.getByText('SECRET_PROVIDER_TITLE')).toHaveCount(0);
+  await expect(prompt).toHaveValue('A newer instruction');
+  await page.screenshot({ path: info.outputPath('expanded-error.png') });
+  await prompt.fill('Changed instruction');
+  await expect(popup).toHaveCount(0);
+  await page.evaluate(() => window.askFixture.push({ type: 'turnFinished', turnId: window.askFixture.active(), status: 'completed' }));
+  await prompt.press('Enter');
+  await expect(page.locator('.user-bubble').last()).toHaveText('Changed instruction');
+  await expect(popup).toHaveCount(0);
+});
+
+test('general tools replay independently, expose real statuses and cannot restart after cancellation', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('Check my context');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-presentation')).toHaveAttribute('data-expanded', 'true');
+  await page.evaluate(() => {
+    const f = window.askFixture;
+    f.push({ type: 'toolChanged', turnId: f.active(), toolCallId: 'time', name: 'current_time', status: 'running' }, false);
+    f.push({ type: 'toolChanged', turnId: f.active(), toolCallId: 'history', name: 'voice_history', status: 'running' });
+  });
+  const time = page.locator('[data-tool-call-id="time"]');
+  const history = page.locator('[data-tool-call-id="history"]');
+  await expect(time).toContainText('current_timeRunning');
+  await expect(history).toHaveAttribute('data-status', 'running');
+  await page.evaluate(() => {
+    const f = window.askFixture;
+    f.push({ type: 'toolChanged', turnId: f.active(), toolCallId: 'time', name: 'current_time', status: 'completed' });
+    f.push({ type: 'toolChanged', turnId: f.active(), toolCallId: 'time', name: 'current_time', status: 'running' });
+    f.push({ type: 'toolChanged', turnId: f.active(), toolCallId: 'history', name: 'voice_history', status: 'failed', error: { code: 'unknown', message: 'PRIVATE_TOOL_ERROR' } });
+  });
+  await expect(time).toHaveAttribute('data-status', 'completed');
+  await expect(history).toHaveAttribute('data-status', 'failed');
+  await expect(page.locator('.ol-notification-center').getByRole('alert')).toHaveText('Something went wrong · ASK-0000');
+  await expect(page.getByText('PRIVATE_TOOL_ERROR')).toHaveCount(0);
+  await page.evaluate(() => {
+    const f = window.askFixture;
+    f.push({ type: 'toolChanged', turnId: f.active(), toolCallId: 'system', name: 'system_context', status: 'running' });
+  });
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.locator('[data-tool-call-id="system"]')).toHaveAttribute('data-status', 'cancelled');
+  await page.evaluate(() => window.askFixture.push({ type: 'toolChanged', turnId: 'turn-1', toolCallId: 'system', name: 'system_context', status: 'completed' }));
+  await expect(page.locator('[data-tool-call-id="system"]')).toHaveAttribute('data-status', 'cancelled');
+});
+
+test('a previous failed turn cannot contaminate the next submitted request', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('First question');
+  await prompt.press('Enter');
+  await expect(page.locator('.ask-presentation')).toHaveAttribute('data-expanded', 'true');
+  await page.evaluate(() => window.askFixture.push({ type: 'turnFinished', turnId: window.askFixture.active(), status: 'failed', error: { code: 'provider', message: 'OLD_FAILURE' } }));
+  const popup = page.locator('.ol-notification-center').getByRole('alert');
+  await expect(popup).toContainText('ASK-0000');
+  await prompt.fill('Next question');
+  await expect(popup).toHaveCount(0);
+  await page.evaluate(() => window.askFixture.push({ type: 'submitted', submission: {
+    currentTurnId: 'next-unresolved', clientRequestId: 'next-request', status: 'queued', searchStatus: 'idle', sources: [], copyStatus: 'notNeeded',
+  } }));
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  await expect(popup).toHaveCount(0);
+  await expect(prompt).toHaveValue('Next question');
+});
+
+test('a late delivery after cancellation cannot replace the retained content', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await page.evaluate(() => { window.askFixture.route = 'write'; });
+  await prompt.fill('Write a note');
+  await prompt.press('Enter');
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.evaluate(() => window.askFixture.push({ type: 'delivery', submission: {
+    currentTurnId: 'turn-1', status: 'completed', route: 'write', searchStatus: 'idle', sources: [], copyStatus: 'notNeeded', resultText: 'LATE_DELIVERY', delivery: 'written',
+  } }));
+  await expect(prompt).toHaveValue('Write a note');
+  await expect(page.getByRole('textbox', { name: 'Retained result' })).toHaveCount(0);
+  await expect(page.getByText('Inserted in the original editor.')).toHaveCount(0);
+});
+
+test('a rejected pending request restores its draft after Escape without showing an old error', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await page.evaluate(() => { window.askFixture.deferSubmit = true; window.askFixture.rejectNext = true; });
+  await prompt.fill('Keep this rejected draft');
+  await prompt.press('Enter');
+  await expect(prompt).toHaveAttribute('readonly');
+  await prompt.press('Escape');
+  await page.evaluate(() => window.askFixture.releaseSubmit());
+  await expect(prompt).toHaveValue('Keep this rejected draft');
+  await page.evaluate(() => window.askFixture.activate());
+  await expect(page.getByRole('button', { name: 'Send, hold to think harder' })).toBeEnabled();
+  await expect(page.locator('.composer')).not.toHaveAttribute('data-error-code');
+});
+
+test('a completed request replaces streamed working text with its authoritative final answer', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('Explain this');
+  await prompt.press('Enter');
+  await page.evaluate(() => {
+    const f = window.askFixture;
+    const turnId = f.active();
+    f.push({ type: 'answerDelta', turnId, messageId: 'answer', text: 'Incomplete working text' });
+    f.push({ type: 'turnFinished', turnId, status: 'completed', text: 'The complete final answer.' });
+    f.push({ type: 'answerDelta', turnId, messageId: 'answer', text: 'LATE_DELTA' });
+  });
+  await expect(page.locator('.assistant-text')).toHaveText('The complete final answer.');
+  await expect(page.getByText(/Incomplete working text|LATE_DELTA/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
 });

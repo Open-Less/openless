@@ -1,7 +1,7 @@
 // Permissions / connectivity panel: microphone / accessibility / global hotkey / Windows IME / network.
 // Normal states use localized labels; failed native checks retain their diagnostic details.
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
@@ -40,6 +40,9 @@ const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 
 export function PermissionsSection() {
   const { t } = useTranslation();
+  const active = useRef(false);
+  const pendingPermissions = useRef<Promise<void> | null>(null);
+  const recheckOnReturn = useRef(false);
   const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
   const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
   const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
@@ -65,15 +68,21 @@ export function PermissionsSection() {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
-  const refreshPermissions = async () => {
-    const [a, m] = await Promise.all([
+  const refreshPermissions = () => {
+    if (!platformCaps) return Promise.resolve();
+    if (pendingPermissions.current) return pendingPermissions.current;
+    const request = Promise.all([
       checkAccessibilityPermission(),
-      platformCaps?.platform === 'android'
+      platformCaps.platform === 'android'
         ? checkAndroidMicrophoneAccess()
         : checkMicrophonePermission(),
-    ]);
-    setAccessibility(a);
-    setMicrophone(m);
+    ]).then(([a, m]) => {
+      if (!active.current) return;
+      setAccessibility(a);
+      setMicrophone(m);
+    }).finally(() => { pendingPermissions.current = null; });
+    pendingPermissions.current = request;
+    return request;
   };
 
   const refreshHotkey = async () => {
@@ -93,7 +102,9 @@ export function PermissionsSection() {
   };
 
   useEffect(() => {
-    refreshPermissions();
+    if (!platformCaps) return;
+    active.current = true;
+    void refreshPermissions();
     if (platformCaps?.supportsDesktopHotkey === true) {
       refreshHotkey();
     }
@@ -101,17 +112,10 @@ export function PermissionsSection() {
       refreshWindowsIme();
     }
     refreshNetwork();
-    // issue #470: hotkey status became purely event-driven, removing the per-second poll and
-    // relying on the focus/visibilitychange refreshes below. The microphone check briefly opens
-    // an input stream, so per-second probing would flicker the privacy indicator.
-    const permissionId = window.setInterval(() => {
-      if (!document.hidden) refreshPermissions();
-    }, 10000);
     const networkId = window.setInterval(() => {
       if (!document.hidden) refreshNetwork();
     }, 30000);
     const refreshAll = () => {
-      refreshPermissions();
       if (platformCaps?.supportsDesktopHotkey === true) {
         refreshHotkey();
       }
@@ -120,14 +124,20 @@ export function PermissionsSection() {
       }
       refreshNetwork();
     };
-    const onFocus = () => refreshAll();
+    const onFocus = () => {
+      if (recheckOnReturn.current) {
+        recheckOnReturn.current = false;
+        void refreshPermissions();
+      }
+      refreshAll();
+    };
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') refreshAll();
+      if (document.visibilityState === 'visible') onFocus();
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.clearInterval(permissionId);
+      active.current = false;
       window.clearInterval(networkId);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
@@ -138,16 +148,18 @@ export function PermissionsSection() {
     const result = await requestAccessibilityPermission();
     // If the TCC prompt was denied (or previously denied and no longer shown), guide the user to system settings.
     if (result !== 'granted') {
+      recheckOnReturn.current = true;
       await openSystemSettings('accessibility');
+      return;
     }
-    refreshPermissions();
+    void refreshPermissions();
   };
 
   const reRequestMicrophone = async () => {
     const isAndroid = platformCaps?.platform === 'android';
     if (isAndroid && (microphone === 'denied' || microphone === 'restricted')) {
+      recheckOnReturn.current = true;
       await openSystemSettings('microphone');
-      await refreshPermissions();
       return;
     }
     const status = isAndroid
@@ -155,7 +167,9 @@ export function PermissionsSection() {
       : await requestMicrophonePermission();
     setMicrophone(status);
     if (!isAndroid && (status === 'denied' || status === 'restricted')) {
+      recheckOnReturn.current = true;
       await openSystemSettings('microphone');
+      return;
     }
     await refreshPermissions();
   };

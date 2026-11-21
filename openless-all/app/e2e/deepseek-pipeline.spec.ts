@@ -26,9 +26,10 @@ test('three pipelines retain separate credentials and the selected pipeline afte
   await pipeline.getByRole('button', { name: 'DeepSeek 大统一', exact: true }).click();
   await settleNavigation(page);
   await expect(page.getByLabel('DeepSeek suite API Key')).toHaveValue('traditional-fixture-key');
-  await expect(dialog.locator('.ol-service-views')).toHaveCount(0);
+  await expect(dialog.locator('.ol-service-views')).toBeHidden();
   await page.getByLabel('DeepSeek suite API Key').fill('dedicated-fixture-key');
-  await page.getByLabel('朗读音色', { exact: true }).selectOption('tide');
+  await page.getByRole('combobox', { name: '朗读音色', exact: true }).click();
+  await page.getByRole('option', { name: '暗潮 · 男声', exact: true }).click();
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   const toast = page.getByRole('status').filter({ hasText: '已保存' });
   await expect(toast).toBeVisible();

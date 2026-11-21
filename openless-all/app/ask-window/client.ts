@@ -58,7 +58,16 @@ export type TerminalStatus = 'completed' | 'cancelled' | 'failed';
 export type AskMessage = { messageId: string; text: string };
 export type AskRoute = 'answer' | 'selectionAnswer' | 'write' | 'edit' | 'clarify';
 
+export type AskTool = {
+  toolCallId: string;
+  name: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  error?: AskError;
+};
+
 export type AskTurn = {
+  clientRequestId?: string;
+  tools?: AskTool[];
   turnId: string;
   userMessage: AskMessage;
   assistantMessage?: AskMessage;
@@ -81,6 +90,8 @@ export type AskSnapshot = {
 };
 
 export type AskSubmission = {
+  clientRequestId?: string;
+  tools?: AskTool[];
   currentTurnId: string;
   route?: AskRoute | null;
   status: WorkingStatus | TerminalStatus;
@@ -93,7 +104,7 @@ export type AskSubmission = {
   error?: AskError | null;
 };
 
-export type AskEvent = { conversationId: string; sequence: number } & (
+export type AskEvent = { conversationId: string; clientRequestId?: string; sequence: number } & (
   | { type: 'submitted'; submission: AskSubmission; attachmentIds?: string[] }
   | { type: 'routeResolved'; turnId: string; route: AskRoute }
   | { type: 'delivery'; submission: AskSubmission }
@@ -108,9 +119,10 @@ export type AskEvent = { conversationId: string; sequence: number } & (
       sources?: AskSource[];
       error?: AskError;
     }
+  | ({ type: 'toolChanged'; turnId: string } & AskTool)
   | { type: 'sourceChanged'; turnId: string; source: AskSource }
   | { type: 'usageChanged'; turnId: string }
-  | { type: 'turnFinished'; turnId: string; status: TerminalStatus; error?: AskError }
+  | { type: 'turnFinished'; turnId: string; status: TerminalStatus; text?: string | null; error?: AskError }
   | { type: 'attachmentChanged'; attachment: AttachmentInfo }
   | { type: 'attachmentRemoved'; attachmentId: string }
 );
@@ -165,68 +177,54 @@ export interface AskClient {
   onVoiceEvent(handler: (event: AskVoiceEvent) => void): Promise<() => void>;
 }
 
-export function errorMessage(error: unknown, fallback: string): string {
-  if (
-    typeof error === 'object' &&
-    error &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return error.message || fallback;
+// Public codes are deliberately independent of provider messages and internal error text.
+const ERROR_CODES: Record<string, string> = {
+  not_configured: 'ASK-1001', busy: 'ASK-1002', invalid_argument: 'ASK-1003',
+  askImageUnsupported: 'ASK-1101', askDraftUnusable: 'ASK-1102',
+  askAnswerUnusable: 'ASK-1102', askDraftReviewUnavailable: 'ASK-1103',
+  askAnswerReviewUnavailable: 'ASK-1103', askDraftSearchUnavailable: 'ASK-1104',
+  askSelectionUnavailable: 'ASK-1105', askSelectionRequired: 'ASK-1105',
+  askIntentInvalid: 'ASK-1201', askIntentToolUnsupported: 'ASK-1202',
+  askIntentTimeout: 'ASK-1203', askEntrySettingsUnavailable: 'ASK-1204',
+  askIntentClarificationRequired: 'ASK-1205',
+  askEmptyAnswer: 'ASK-1102', askEmptyModelOutput: 'ASK-1102',
+  askContextLimit: 'ASK-1301', askCompactNotSmaller: 'ASK-1301',
+  askContextDenied: 'ASK-1302', permission_denied: 'ASK-1302',
+  askContextUnavailable: 'ASK-1303', askContextFailed: 'ASK-1303',
+  askToolTimeout: 'ASK-1401', askToolLimit: 'ASK-1402',
+  askToolFailed: 'ASK-1403', askSearchDisabled: 'ASK-1404',
+  askPageBlocked: 'ASK-1405', askPageReadFailed: 'ASK-1405',
+  askReleaseInvalidRepository: 'ASK-1406', askReleaseInvalidResponse: 'ASK-1406',
+  askReleaseNetworkError: 'ASK-1406', askReleaseNotFound: 'ASK-1406',
+  askReleaseRateLimited: 'ASK-1406', askReleaseRequestFailed: 'ASK-1406', askReleaseTooLarge: 'ASK-1406',
+  'ask-connection': 'ASK-2001', 'ask-voice': 'ASK-2002',
+  'ask-attachment': 'ASK-2003', 'ask-source': 'ASK-2004',
+  'ask-stop': 'ASK-2005', 'ask-hide': 'ASK-2006', 'ask-expand': 'ASK-2007',
+  'ask-copy': 'ASK-2008', 'ask-delivery': 'ASK-2009',
+};
+
+export function askErrorCode(error: unknown, operation?: string): string {
+  if (typeof error === 'object' && error !== null) {
+    const { reason, code, message } = error as Partial<AskError>;
+    // Older native builds put a symbolic reason in message. Only exact known tokens qualify.
+    for (const token of [reason, code, message]) {
+      if (typeof token === 'string' && Object.hasOwn(ERROR_CODES, token)) return ERROR_CODES[token];
+    }
   }
-  return typeof error === 'string' && error ? error : fallback;
+  return (operation && ERROR_CODES[operation]) || 'ASK-0000';
 }
 
-const INTENT_ERRORS: Record<string, [english: string, chinese: string]> = {
-  askImageUnsupported: [
-    'This model and endpoint cannot accept the image. Your draft and image were kept; switch to an image-capable model and endpoint in Settings.',
-    '当前模型和接口不支持图片。草稿和图片已保留，可在设置中换用支持图片的模型和接口。',
-  ],
-  askDraftUnusable: [
-    'The model did not produce usable text. Nothing was written. Your instruction was kept.',
-    '模型未生成可用正文，未写入原应用。指令已保留。',
-  ],
-  askDraftReviewUnavailable: [
-    'Ask could not review the generated text and did not write it. The draft is available here to check and copy.',
-    '未能核验生成的正文，未写入原应用。可在这里查看和复制草稿。',
-  ],
-  askAnswerUnusable: [
-    'The model did not give a direct answer. Your instruction and attachments were kept.',
-    '模型未直接回答本轮问题。指令和附件已保留。',
-  ],
-  askAnswerReviewUnavailable: [
-    'Ask could not review the complete answer. Your instruction and attachments were kept, along with the unreviewed response.',
-    '未能核验完整答复。指令、附件和未核验的答复已保留。',
-  ],
-  askDraftSearchUnavailable: [
-    'The search did not produce verifiable evidence. No text was written. Your instruction was kept.',
-    '未取得可核实的搜索资料，未写入原应用。指令已保留。',
-  ],
-  askSelectionUnavailable: [
-    'The selection could not be verified. The original text was not changed.',
-    '未能确认选区，未修改原文。',
-  ],
-  askSelectionRequired: [
-    'No verified selection was available. The original text was not changed.',
-    '没有可验证的选区，未修改原文。',
-  ],
-  askIntentInvalid: [
-    'Ask could not determine what to do. Try making your request more specific.',
-    'Ask 无法确定该怎么处理。请试着把要求说得更具体一些。',
-  ],
-  askIntentToolUnsupported: [
-    'The configured model does not support tool-based intent detection. Change the model or the Ask intent mode in Settings.',
-    '当前模型不支持通过工具识别意图。请在设置中更换模型或调整 Ask 意图识别模式。',
-  ],
-  askIntentTimeout: [
-    'Ask took too long to determine what to do. Try again.',
-    'Ask 判断请求意图超时，请重试。',
-  ],
-  askEntrySettingsUnavailable: [
-    'Ask could not read its settings. Open Ask settings and save your preferences again.',
-    'Ask 无法读取设置。请打开 Ask 设置并重新保存偏好。',
-  ],
-};
+export function askErrorLabel(code: string, locale = askLocale()): string {
+  const label = /^zh-(TW|HK|Hant)\b/i.test(locale) ? '出現了一點錯誤'
+    : /^zh\b/i.test(locale) ? '出现了一点错误'
+    : /^de\b/i.test(locale) ? 'Ein Fehler ist aufgetreten'
+    : 'Something went wrong';
+  return `${label} · ${code}`;
+}
+
+export function errorMessage(error: unknown, _fallback?: string): string {
+  return askErrorLabel(askErrorCode(error));
+}
 
 export function askLocale() {
   let language = navigator.language;
@@ -246,10 +244,7 @@ export function askIdleLabel(locale = askLocale()) {
 }
 
 export function submissionErrorMessage(error?: AskError | null) {
-  if (!error) return undefined;
-  const localized = INTENT_ERRORS[error.reason ?? error.message];
-  if (!localized) return error.message;
-  return localized[/^zh\b/i.test(askLocale()) ? 1 : 0];
+  return error ? errorMessage(error) : undefined;
 }
 
 export function newRequestId(): string {
