@@ -540,6 +540,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.enter_stop_label"),
+                tr_l10n(lang, "settings.recording.enter_stop_desc"),
+                vm.settings.enter_stop_enabled,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::EnterStopEnabled,
+                    ));
+                },
+            );
             // 「静音后自动停止」只在切换式模式下可用（Tauri 同样只在该模式渲染）。
             if vm.settings.recording_mode == 0 {
                 toggle_row(

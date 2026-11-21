@@ -59,6 +59,8 @@ impl SettingsUpdateOptions {
 pub struct HotkeyRuntimeTarget {
     pub dictation: ShortcutBinding,
     pub dictation_mode: HotkeyMode,
+    #[serde(default)]
+    pub enter_stop_enabled: bool,
     pub qa: Option<ShortcutBinding>,
     #[serde(default)]
     pub qa_companion_key: String,
@@ -81,6 +83,7 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
         Self {
             dictation: preferences.dictation_hotkey.clone(),
             dictation_mode: preferences.hotkey.mode,
+            enter_stop_enabled: preferences.enter_stop_enabled,
             qa: if cfg!(target_os = "linux") { preferences.qa_hotkey.clone() } else { None },
             qa_companion_key: preferences.qa_companion_key.clone(),
             quick_note: preferences.quick_note_hotkey.clone(),
@@ -94,6 +97,16 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
             coding_agent_quick: preferences.coding_agent_quick_hotkey.clone(),
             style_packs: preferences.style_pack_hotkeys.clone(),
         }
+    }
+}
+
+impl HotkeyRuntimeTarget {
+    /// Enter-stop is live recording policy, not a native key registration.
+    /// Portable restores may change it without replacing any native bindings.
+    pub fn native_bindings_match(&self, other: &Self) -> bool {
+        let mut bindings = self.clone();
+        bindings.enter_stop_enabled = other.enter_stop_enabled;
+        bindings == *other
     }
 }
 
@@ -255,6 +268,35 @@ mod tests {
             windows_show_openless_in_keyboard_list: show,
             ..UserPreferences::default()
         }
+    }
+
+    #[test]
+    fn hotkey_runtime_target_carries_enter_stop_and_defaults_legacy_payloads_off() {
+        let mut preferences = preferences(WindowsInsertionMode::Tsf, true);
+        assert!(!HotkeyRuntimeTarget::from(&preferences).enter_stop_enabled);
+
+        preferences.enter_stop_enabled = true;
+        let target = HotkeyRuntimeTarget::from(&preferences);
+        assert!(target.enter_stop_enabled);
+
+        let mut legacy = serde_json::to_value(&target).unwrap();
+        legacy.as_object_mut().unwrap().remove("enterStopEnabled");
+        let restored: HotkeyRuntimeTarget = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.enter_stop_enabled);
+    }
+
+    #[test]
+    fn enter_stop_policy_does_not_change_native_bindings() {
+        let previous = HotkeyRuntimeTarget::from(&UserPreferences::default());
+        let mut next = previous.clone();
+        next.enter_stop_enabled = !previous.enter_stop_enabled;
+        assert!(previous.native_bindings_match(&next));
+        assert!(next.native_bindings_match(&previous));
+        next.dictation_mode = HotkeyMode::Hold;
+        assert!(!previous.native_bindings_match(&next));
+        next.dictation_mode = previous.dictation_mode;
+        next.dictation.primary = "F9".into();
+        assert!(!previous.native_bindings_match(&next));
     }
 
     #[test]

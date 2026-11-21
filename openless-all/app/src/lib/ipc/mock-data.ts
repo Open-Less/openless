@@ -57,6 +57,7 @@ export let mockSettings: UserPreferences = {
   voiceActivationTimeoutEnabled: true,
   voiceActivationTimeoutSeconds: 30,
   audioCueOnRecord: true,
+  enterStopEnabled: false,
   silenceAutoStopEnabled: false,
   silenceAutoStopSeconds: 3,
   microphoneDeviceName: '',

@@ -685,7 +685,7 @@ mod linux_app {
         popup_sequences: [u64; POPUP_KIND_COUNT],
         qa_popup_presentation: QaPopupPresentation,
         /// 最近一次下发给窗口/面板的热键配置；变了才重发。
-        hotkeys_sent: Option<openless_core::HotkeyRuntimeTarget>,
+        hotkeys_sent: Option<(openless_core::HotkeyRuntimeTarget, Option<String>)>,
         /// 速记页快捷键卡片是否被收起（持久化在 linux-ui-state.json）。
         quick_note_shortcut_hidden: bool,
         /// 本帧从 UI 收到、待回包的延迟探针序号。
@@ -2046,7 +2046,10 @@ mod linux_app {
                             self.show_qa_popup();
                         }
                     }
-                    PopupKind::Capsule => self.show_capsule_popup(),
+                    PopupKind::Capsule => {
+                        self.send_popup_hotkeys(kind);
+                        self.show_capsule_popup();
+                    }
                 },
                 PopupSupervisorEvent::Message(PopupToHost::Hotkey { edge, .. }) => {
                     log::debug!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
@@ -2093,16 +2096,61 @@ mod linux_app {
                         });
                     }
                 }
-                PopupSupervisorEvent::Message(PopupToHost::StopDictation { .. }) => {
-                    // 胶囊 ✓：结束录音并落字。
-                    let session = self
-                        .snapshot
-                        .as_ref()
-                        .and_then(|snapshot| snapshot.dictation.session_id);
-                    if let (Some(backend), Some(session)) = (self.backend(), session) {
+                PopupSupervisorEvent::Message(PopupToHost::StopDictation { session_id, .. }) => {
+                    // The capsule confirmation keeps its historical all-mode semantics;
+                    // only the session identity is checked before stopping.
+                    let requested = uuid::Uuid::parse_str(&session_id)
+                        .ok()
+                        .map(openless_core::SessionId::from_uuid);
+                    let backend = self.backend();
+                    let session = backend.as_ref().and_then(|backend| {
+                        let snapshot = backend.snapshot();
+                        requested.filter(|requested| snapshot.dictation.session_id == Some(*requested))
+                    });
+                    if let (Some(backend), Some(session)) = (backend, session) {
                         self.spawn(async move {
                             // 没说话（空音频 → InvalidArgument）也是预期内的终态：
                             // 胶囊会显示本地化文案并自动收起，这里不再报错误。
+                            normalize_stop_result(backend.stop_dictation_session(session).await)?;
+                            Ok(String::new())
+                        });
+                    }
+                }
+                PopupSupervisorEvent::Message(PopupToHost::StopDictationFromEnter {
+                    session_id,
+                    ..
+                }) => {
+                    // Local Enter is opt-in and ordinary dictation only. The popup
+                    // carries the accepted session so a delayed message cannot stop
+                    // a newer recording.
+                    let requested = uuid::Uuid::parse_str(&session_id)
+                        .ok()
+                        .map(openless_core::SessionId::from_uuid);
+                    let backend = self.backend();
+                    let session = backend.as_ref().and_then(|backend| {
+                        let snapshot = backend.snapshot();
+                        let preferences = backend.get_preferences();
+                        let active = preferences.enter_stop_enabled
+                            && self.frontend_vm.shortcut_recording.is_none()
+                            && preferences.hotkey.mode
+                                == openless_core::shared_types::HotkeyMode::Toggle
+                            && !matches!(
+                                backend.dictation_output_target(),
+                                Some(
+                                    openless_core::DictationOutputTarget::Qa
+                                        | openless_core::DictationOutputTarget::VoiceEdit
+                                )
+                            )
+                            && matches!(
+                                snapshot.dictation.phase,
+                                DictationPhase::Starting | DictationPhase::Recording
+                            );
+                        requested.filter(|requested| {
+                            active && snapshot.dictation.session_id == Some(*requested)
+                        })
+                    });
+                    if let (Some(backend), Some(session)) = (backend, session) {
+                        self.spawn(async move {
                             normalize_stop_result(backend.stop_dictation_session(session).await)?;
                             Ok(String::new())
                         });
@@ -3733,6 +3781,10 @@ mod linux_app {
                         // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
                         self.schedule_capsule_dismissal(&session_id.to_string(), state.phase);
                     }
+                    if let Some(native) = &self.native {
+                        native.host().sync_dictation_enter_stop();
+                    }
+                    self.send_popup_hotkeys(PopupKind::Capsule);
                 }
                 BackendEventKind::TranscriptDelta(delta)
                     if session_id == self.transcript_session
@@ -3751,6 +3803,9 @@ mod linux_app {
                         "status.dictation_done",
                         &[&format!("{:?}", result.inserted)],
                     );
+                    if let Some(native) = &self.native {
+                        native.host().sync_dictation_enter_stop();
+                    }
                 }
                 BackendEventKind::RecordingControlRequested(request) => {
                     if let Some(backend) = self.backend() {
@@ -3797,6 +3852,9 @@ mod linux_app {
                     }
                     self.load_remote_status();
                     self.load_library();
+                    if let Some(native) = &self.native {
+                        native.host().sync_dictation_enter_stop();
+                    }
                 }
                 BackendEventKind::VocabularyChanged(_) | BackendEventKind::StylePacksChanged(_) => {
                     self.load_library()
@@ -4286,6 +4344,33 @@ mod linux_app {
             events
         }
 
+        fn enter_stop_session_for_popup(&self, kind: PopupKind) -> Option<String> {
+            if kind != PopupKind::Capsule || self.frontend_vm.shortcut_recording.is_some() {
+                return None;
+            }
+            let backend = self.backend()?;
+            let preferences = backend.get_preferences();
+            let snapshot = backend.snapshot();
+            if !preferences.enter_stop_enabled
+                || preferences.hotkey.mode
+                    != openless_core::shared_types::HotkeyMode::Toggle
+                || !matches!(
+                    snapshot.dictation.phase,
+                    DictationPhase::Starting | DictationPhase::Recording
+                )
+                || matches!(
+                    backend.dictation_output_target(),
+                    Some(
+                        openless_core::DictationOutputTarget::Qa
+                            | openless_core::DictationOutputTarget::VoiceEdit
+                    )
+                )
+            {
+                return None;
+            }
+            snapshot.dictation.session_id.map(|session| session.to_string())
+        }
+
         /// 把热键配置发给一个面板（面板有焦点时也要自己匹配本地热键）。
         fn send_popup_hotkeys(&mut self, kind: PopupKind) {
             let Some(bindings) = self.hotkey_target() else {
@@ -4297,8 +4382,12 @@ mod linux_app {
                     .as_ref()
                     .and_then(|state| state.session_id.clone())
                     .unwrap_or_else(|| "qa".to_string()),
-                // 胶囊不接受键盘焦点，本地匹配对它没有意义。
-                PopupKind::Capsule => return,
+                PopupKind::Capsule => self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.dictation.session_id)
+                    .map(|session| session.to_string())
+                    .unwrap_or_else(|| "capsule".to_string()),
             };
             self.send_popup(
                 kind,
@@ -4307,6 +4396,7 @@ mod linux_app {
                     session_id,
                     sequence: self.last_event_sequence.saturating_mul(2).saturating_add(1),
                     bindings: Box::new(bindings),
+                    enter_stop_session: self.enter_stop_session_for_popup(kind),
                 },
             );
         }
@@ -4316,17 +4406,21 @@ mod linux_app {
             let Some(bindings) = self.hotkey_target() else {
                 return;
             };
-            if self.hotkeys_sent.as_ref() == Some(&bindings) {
+            let enter_stop_session = self.enter_stop_session_for_popup(PopupKind::Capsule);
+            let target = (bindings.clone(), enter_stop_session.clone());
+            if self.hotkeys_sent.as_ref() == Some(&target) {
                 return;
             }
             if bridge.is_connected() {
                 bridge.send(HostToWindow::Hotkeys {
                     version: UI_BRIDGE_VERSION,
                     bindings: Box::new(bindings.clone()),
+                    enter_stop_session,
                 });
             }
+            self.send_popup_hotkeys(PopupKind::Capsule);
             self.send_popup_hotkeys(PopupKind::Qa);
-            self.hotkeys_sent = Some(bindings);
+            self.hotkeys_sent = Some(target);
         }
 
         // 宿主没有窗口：ctx 只为保持调用形状（事件泵不再依赖任何视口状态）。
@@ -5551,6 +5645,7 @@ mod linux_app {
                 let s = &mut vm.settings;
                 s.streaming_insert = prefs.streaming_insert;
                 s.stable_transcription = prefs.stable_transcription_enabled;
+                s.enter_stop_enabled = prefs.enter_stop_enabled;
                 s.start_minimized = prefs.start_minimized;
                 s.auto_update = prefs.auto_update_check;
                 s.remote_input = prefs.remote_input_enabled;
@@ -7353,6 +7448,9 @@ mod linux_app {
                     frontend::view_model::FrontendAction::ShortcutRecording(field) => {
                         self.frontend_vm.shortcut_pending_modifier = None;
                         self.frontend_vm.shortcut_recording = field;
+                        if let Some(native) = &self.native {
+                            native.host().set_enter_stop_suppressed(field.is_some());
+                        }
                         self.frontend_vm.settings_notice = None;
                     }
                     frontend::view_model::FrontendAction::ShortcutCaptured(
@@ -7386,6 +7484,9 @@ mod linux_app {
                                 .unwrap_or(0);
                         } else {
                             self.frontend_vm.shortcut_recording = None;
+                            if let Some(native) = &self.native {
+                                native.host().set_enter_stop_suppressed(false);
+                            }
                         }
                     }
                     frontend::view_model::FrontendAction::StyleHotkeyDraftPack(index) => {
@@ -9069,6 +9170,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         overlay: Option<PopupOverlay>,
         /// 面板有焦点时插件收不到按键，所以面板自己也要匹配本地热键。
         hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
+        enter_stop_matcher: crate::ui::local_hotkeys::EnterStopMatcher,
         /// 本次会话「预备态（麦克风还没吐第一帧 PCM）」的开始时刻：用来学习 warmupMs。
         warming_started: Option<std::time::Instant>,
         /// 学出来的「预备 → 就绪」平均耗时（ms），驱动光条的预测式展开。
@@ -9163,10 +9265,26 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
         }
 
+        fn poll_local_enter_stop(&mut self, ctx: &egui::Context) {
+            let eligible = self.state.enter_stop_session.as_deref().filter(|session| {
+                self.kind == PopupKind::Capsule && self.session_id().as_deref() == Some(*session)
+            });
+            if let Some(session_id) = self.enter_stop_matcher.poll(ctx, eligible) {
+                let sequence = self.next_sequence();
+                self.send(PopupToHost::StopDictationFromEnter {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id,
+                    sequence,
+                });
+            }
+        }
+
         /// 面板内的本地热键：命中就报给宿主，由宿主按与插件信号同一套规则处理。
         ///
-        /// 胶囊不接受键盘焦点（layer surface 也拿不到），所以只对需要打字的面板生效。
+        /// 胶囊 Enter 停止走独立的带会话身份 StopDictationFromEnter 消息；其他面板
+        /// 继续使用本地热键边沿协议。
         fn poll_local_hotkeys(&mut self, ctx: &egui::Context) {
+            self.poll_local_enter_stop(ctx);
             if self.kind == PopupKind::Capsule {
                 return;
             }
@@ -9258,6 +9376,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let lang = self.lang;
             let mut action = frontend::popups::CapsuleAction::None;
             let output = ctx.run_ui(raw, |ui| {
+                self.poll_local_enter_stop(ctx);
                 if !exit && self.state.visible {
                     self.track_capsule_warmup(capsule.audio_level.is_none(), &capsule.phase);
                     action =
@@ -9662,6 +9781,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                             lang: load_locale_pref().resolve(),
                             overlay: None,
                             hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
+                            enter_stop_matcher: crate::ui::local_hotkeys::EnterStopMatcher::default(),
                         });
                     }
                     Err(error) => {
@@ -9815,6 +9935,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     lang: load_locale_pref().resolve(),
                     overlay,
                     hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
+                    enter_stop_matcher: crate::ui::local_hotkeys::EnterStopMatcher::default(),
                 }))
             }),
         )
@@ -11195,6 +11316,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 lang: Lang::ZhCn,
                 overlay: None,
                 hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
+                enter_stop_matcher: crate::ui::local_hotkeys::EnterStopMatcher::default(),
             }
         }
 

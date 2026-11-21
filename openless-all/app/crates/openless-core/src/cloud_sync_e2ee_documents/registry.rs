@@ -159,6 +159,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "enter_stop_enabled",
+        key: "enterStopEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "silence_auto_stop_seconds",
         key: "silenceAutoStopSeconds",
         class: PreferenceClass::Portable,
