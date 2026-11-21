@@ -1,36 +1,31 @@
-# Memory Graph — OpenLess ASR polish strategy
+# OpenLess — issue #1376
 
-- slug: openless-polish-asr-llm
-- path: D:/Dev/worktrees/openless/polish-asr-llm
-- updated: 2026-10-27
+## Scope
 
-## Summary
+- Worktree: `D:/Dev/worktrees/openless/issue-1376-remove-keyboard-toggle`.
+- Branch: `fix/issue-1376-remove-keyboard-toggle`.
+- Base: upstream `Open-Less/openless` `beta`, fetched at `81241467c8f1c902bc529af9de83e7bbae2c993f`.
+- Push target: `origin` = `HKLHaoBin/openless`, not upstream.
+- Issue: `Open-Less/openless#1376`.
+- Original checkout `D:/Dev/src/openless` stays on `fix/android-credential-dir`; its existing untracked research document is unrelated and must remain untouched.
 
-OpenLess PR #1262 adds optional, default-off Rhai policies between final corrected ASR and ordinary LLM polishing. This worktree uses branch `HKLHaoBin/polish-asr-llm`; upstream base is `Open-Less/openless:beta`.
+## Verified architecture
 
-## Entities
+- PR #1143 migrated the Windows text service from keyboard TIP to speech TIP. The speech profile remains enabled and does not appear in Win+Space.
+- This change removes the obsolete settings toggle, handler/predicate and label/description/error in all eight frontend locales.
+- Keep the legacy `windowsShowOpenlessInKeyboardList` wire field, defaults and cloud-sync representation for compatibility. Do not alter native registration, activation or insertion behavior.
+- The shared settings provider already reports insertion-setting save failures; do not replace those with a keyboard-list-specific message.
 
-- OpenLess (Repo): upstream `https://github.com/Open-Less/openless`; fork remote `origin` is `HKLHaoBin/openless`.
-- openless-core (Service): Rust pipeline, bounded Rhai evaluation, request overrides and preferences.
-- React settings (Service): strategy editing and copying authoring instructions with the current draft.
-- Linux egui settings (Service): native strategy configuration.
+## Validation and delivery contract
 
-## Relations
+- Tests, CI and desktop/mobile artifact builds run only in GitHub Actions; no local test execution, dependency installation or product build for this task.
+- Regression contract: `openless-all/app/scripts/windows-keyboard-list-removal.test.mjs`; existing insertion/newline predicate tests remain.
+- Require an independent `review-diff-bugs` review of the complete uncommitted candidate, including tests, returning `no bug found` before commit/push. Re-review after any source/test/workflow repair.
+- Dispatch branch-only CI (`platform=all`), Tauri desktop (`platform=all`, no release tag or diagnostics) and Android APK (`abis=all`, standard profile) after verifying remote HEAD.
+- CI includes full Linux egui package validation; its standalone release workflow requires a release tag and must not be dispatched for this branch-only delivery.
+- Watch each Actions run exactly once using `gh run watch --exit-status`. On failure retrieve the complete log and fix demonstrated in-scope causes before the next reviewed candidate.
+- No PR, tag, release or upstream push is authorized.
 
-- dictation_engine --evaluates--> polish_strategy: after ASR correction and final transcript publication.
-- polish_strategy --selects--> ordinary polish: skip, polish or scoped request overrides; invalid scripts fall back.
-- strategy metadata --belongs-to--> winning ASR invocation: unavailable values must not leak from a losing cloud route.
+## Status
 
-## Facts
-
-- Main Rust workspace and frontend: `openless-all/app`.
-- Core tests: `cargo +1.99.0 test --locked -p openless-core --lib` from that directory.
-- Frontend build/test: `npm test`; focused authoring contract: `node --import tsx src/lib/polishStrategyAgentSkill.test.ts`.
-- PR workflows include `CI` and `iOS tests and device build`; validate runs against the exact pushed head rather than old passing runs.
-
-## Decisions
-
-- Integrate beta using merge commits; do not rewrite the published branch history.
-- Preserve translation, Voice Edit, cloud notes, QA and short-input threshold semantics.
-- Strategy sandbox has no file, network or process access; no automatic Agent invocation or script overwrite.
-- Review/fix only bugs both in the selected diff's changed operations and within those operations' responsibility; unrelated upstream bugs are outside this PR.
+Implementation candidate prepared. Review, remote tests and artifact acceptance remain pending until recorded by actual review and Actions results.

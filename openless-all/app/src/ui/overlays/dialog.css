@@ -1,0 +1,285 @@
+.ol-dialog-overlay > .ol-dialog-card.ol-structured-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  color: var(--ol-ink);
+  background: var(--ol-surface-raised);
+  border: 1px solid var(--ol-line);
+}
+.ol-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 24px 18px;
+  flex-shrink: 0;
+}
+.ol-dialog-header :where(h2, h3) {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: -0.02em;
+}
+.ol-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 24px 24px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.ol-dialog-body p {
+  margin: 0 0 14px;
+}
+.ol-dialog-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 16px 24px;
+  border-top: 1px solid var(--ol-line);
+  background: var(--ol-surface-2);
+}
+.ol-dialog-action {
+  min-height: 36px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border-radius: var(--ol-button-radius);
+  font-size: 13.5px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.ol-dialog-action--primary {
+  color: var(--ol-accent-solid-ink);
+  background: var(--ol-accent-solid-bg);
+}
+.ol-dialog-action--danger {
+  color: var(--ol-danger-solid-ink);
+  background: var(--ol-danger-solid-bg);
+}
+.ol-dialog-action--neutral {
+  color: var(--ol-ink-2);
+  background: var(--ol-control-solid);
+  border: 1px solid var(--ol-line-strong);
+}
+.ol-dialog-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ol-dialog-flow {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ol-dialog-flow > .ol-dialog-body {
+  flex: 1;
+}
+.ol-dialog-error {
+  color: var(--ol-err);
+  padding: 0 24px 12px;
+  margin: 0;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.ol-dialog-disclosure {
+  display: grid;
+  gap: 16px;
+}
+.ol-dialog-disclosure section {
+  padding: 16px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
+}
+.ol-dialog-disclosure h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.ol-dialog-disclosure ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.ol-dialog-acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ol-dialog-acknowledgement input {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.ol-sync-password-fields {
+  display: grid;
+  gap: 14px;
+}
+.ol-sync-password-field {
+  display: grid;
+  gap: 6px;
+}
+.ol-sync-password-input {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-control-solid);
+}
+.ol-sync-password-input input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ol-ink);
+  padding: 10px 12px;
+  font: inherit;
+}
+.ol-sync-password-visibility {
+  display: grid;
+  flex: 0 0 40px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  color: var(--ol-ink-2);
+  background: transparent;
+}
+.ol-sync-password-visibility:hover:not(:disabled) {
+  color: var(--ol-ink);
+  background: var(--ol-choice-hover-bg);
+}
+.ol-sync-password-input :is(input, .ol-sync-password-visibility):focus-visible {
+  outline-offset: -2px;
+}
+.ol-sync-password-visibility:disabled {
+  opacity: 0.55;
+}
+@media (max-width: 440px) {
+  .ol-dialog-header {
+    padding: 18px 16px 14px;
+  }
+  .ol-dialog-body {
+    padding: 0 16px 18px;
+  }
+  .ol-dialog-footer {
+    padding: 12px 16px;
+  }
+}
+
+.ol-dialog-overlay.ol-dialog-overlay--origin {
+  background: rgb(0 0 0 / 80%);
+}
+.ol-dialog-overlay--origin::before {
+  display: none;
+}
+.ol-dialog-overlay--origin > .ol-structured-dialog {
+  --ol-dialog-radius: 12px;
+  --ol-corner-radius: var(--ol-dialog-radius);
+  background-image: none;
+  box-shadow: 0 10px 22px rgb(0 0 0 / 10%);
+}
+.ol-dialog-icon-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  margin-block: -4px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ol-ink-3);
+  background: transparent;
+}
+.ol-dialog-icon-close:hover:not(:disabled) {
+  color: var(--ol-ink);
+  background: var(--ol-choice-hover-bg);
+}
+.ol-dialog-icon-close:disabled {
+  opacity: 0.5;
+}
+
+/* Terms panels keep both separators fixed while a single middle pane scrolls. */
+.ol-dialog-overlay > .ol-dialog-card.ol-structured-dialog--terms {
+  max-height: min(640px, 80dvh, 100%);
+}
+.ol-structured-dialog--terms :is(.ol-dialog-header, .ol-channel-dialog-header) {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--ol-line);
+}
+.ol-structured-dialog--terms :is(.ol-dialog-body, .ol-channel-dialog-body) {
+  padding: 16px 24px;
+}
+.ol-structured-dialog--terms :is(.ol-dialog-footer, .ol-channel-dialog-footer) {
+  padding: 16px 24px;
+  background: transparent;
+}
+.ol-structured-dialog--terms :is(.ol-dialog-header, .ol-channel-dialog-header) :is(h2, h3) {
+  font-size: 16px;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure {
+  gap: 16px;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure section {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure h4 {
+  margin-bottom: 4px;
+}
+.ol-structured-dialog--terms .ol-dialog-disclosure p {
+  margin: 0;
+  color: var(--ol-ink-3);
+}
+.ol-structured-dialog--channel .ol-channel-dialog {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Compact destructive decisions use a centered alert and equal action columns. */
+.ol-dialog-overlay > .ol-dialog-card.ol-structured-dialog--decision {
+  overflow: hidden;
+  padding: 24px;
+}
+.ol-structured-dialog--decision .ol-confirm-dialog {
+  min-height: 0;
+}
+.ol-structured-dialog--decision .ol-dialog-header {
+  display: block;
+  padding: 0 26px 4px;
+  text-align: center;
+}
+.ol-structured-dialog--decision .ol-dialog-header h2 {
+  font-size: 18px;
+}
+.ol-structured-dialog--decision .ol-confirm-dialog-icon {
+  margin: 0 auto 8px;
+  border: 1px solid var(--ol-line);
+  border-radius: 50%;
+  color: var(--ol-ink-2);
+  background: transparent;
+}
+.ol-structured-dialog--decision .ol-dialog-icon-close {
+  position: absolute;
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
+  margin: 0;
+}
+.ol-structured-dialog--decision .ol-dialog-body {
+  padding: 0 0 16px;
+  text-align: center;
+}
+.ol-structured-dialog--decision .ol-dialog-footer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}

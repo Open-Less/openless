@@ -1,11 +1,71 @@
-import { test, expect, type Page } from '@playwright/test';
+import { fixtureOrigin } from './support/server';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
+
+test('style and dictionary action buttons share the 12px button radius', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '风格', exact: true }).click();
+  await page.getByRole('button', { name: '润色模式', exact: true }).click();
+  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '12px');
+  await expect(page.getByRole('button', { name: '激活', exact: true }).first()).toHaveCSS(
+    'border-radius',
+    '12px',
+  );
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  const dictionary = page.locator('[data-ol-page="vocab"]');
+  await expect(dictionary).toHaveAttribute('data-transition-phase', 'settled');
+  await expect(dictionary.locator('.ol-action-button').first()).toHaveCSS('border-radius', '12px');
+});
+
 async function openShortcuts(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
+  await settleNavigation(page);
 }
+
+test('shortcut search remains visible without focus', async ({ page }) => {
+  await openShortcuts(page);
+  const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
+  await expect(search).toHaveCSS('clip-path', 'none');
+  await expect(search).toHaveCSS('appearance', 'none');
+  await expect(search).toHaveCSS('border-radius', '16px');
+  const colors = await search.evaluate((element) => ({
+    search: getComputedStyle(element).backgroundColor,
+    page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
+      .backgroundColor,
+  }));
+  expect(colors.search).not.toBe('rgba(0, 0, 0, 0)');
+  expect(colors.search).not.toBe(colors.page);
+  await search.focus();
+  await expect(search).toHaveCSS('clip-path', 'none');
+  await search.fill('速记');
+  await expect(page.locator('.ol-shortcut-row')).toHaveCount(1);
+});
+
+test('awareness settings have a dedicated advanced page', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: /^(高级功能|实验与扩展)$/ }).click();
+  await settleNavigation(dialog);
+  await dialog.locator('[data-ol-advanced-entry="cursorContext"]').click();
+  await expect(dialog.locator('[data-ol-advanced-page="cursorContext"]')).toBeVisible();
+  await expect(dialog.getByText('手改学词', { exact: true })).toBeVisible();
+  const expression = dialog.getByRole('switch', { name: '学习表达习惯', exact: true });
+  await expect(expression).toBeVisible();
+  await expect(expression).toHaveAttribute('aria-checked', 'false');
+  await expression.click();
+  await expect(expression).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '清除表达习惯', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: '清除表达习惯' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: '清空', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(dialog.getByText('已形成 0 项稳定偏好')).toBeVisible();
+});
 
 test('shortcut search and categories live in the flat settings pane; keyboard close preserves exit', async ({
   page,
@@ -35,28 +95,29 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
   await expect(page.locator('.ol-settings-workspace')).toHaveCSS('opacity', '1');
 });
 
-test('native scrolling has no JS wheel interception and is stable when stopped', async ({
+test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
   page,
 }) => {
+  // Make overflow deterministic: the test measures delivery, independent of the default viewport.
+  await page.setViewportSize({ width: 1300, height: 600 });
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
-  const content = page.locator('.ol-settings-scroll');
+  const content = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   await expect(content).toHaveCSS('scroll-behavior', 'auto');
-  await expect(content).toHaveCSS('scrollbar-gutter', 'stable');
+  await expect(content).toHaveCSS('scrollbar-width', 'none');
   await content.evaluate((el) => {
-    const event = new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true });
+    const event = new WheelEvent('wheel', { deltaY: 13.25, bubbles: true, cancelable: true });
     el.dispatchEvent(event);
     el.setAttribute('data-wheel-prevented', String(event.defaultPrevented));
   });
   await expect(content).toHaveAttribute('data-wheel-prevented', 'false');
   await page
     .getByRole('navigation', { name: '设置分类' })
-    .getByRole('button', { name: '录音与输入', exact: true })
+    .getByRole('button', { name: '通用', exact: true })
     .click();
-  await expect(
-    content.locator('[data-section="general"] .ol-shortcut-binding').first(),
-  ).toBeVisible();
+  await openMicrophoneSettings(page);
+  await expect(content.locator('.ol-shortcut-binding').first()).toBeVisible();
   await content.hover();
   const destination = await content.evaluate((el) =>
     Math.min(el.scrollTop + 450, el.scrollHeight - el.clientHeight),
@@ -110,7 +171,7 @@ test('compact typography selects persist font, size and reading width without ne
   });
   await page.reload();
   await expect(page.locator('html')).toHaveCSS('--ol-reading-width', '56ch');
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '外观与语言', exact: true }).click();
   await expect(section.getByRole('combobox', { name: '字体系列' })).toHaveText(
@@ -148,54 +209,102 @@ test('startup has no video and records real navigation-relative milestones', asy
   await expect(page.locator('video')).toHaveCount(0);
 });
 
-test('every main destination and settings category stays readable on desktop and narrow windows', async ({
-  page,
-}) => {
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto('/');
-  for (const name of ['历史', '词典']) {
-    await page.getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('main h1')).toBeVisible();
-  }
-  await page.getByRole('button', { name: '风格', exact: true }).click();
-  for (const name of ['润色模式', '风格市场']) {
-    await page.getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('main h1')).toBeVisible();
-  }
-  await page.getByRole('button', { name: '工具', exact: true }).click();
-  for (const name of ['翻译', '问任何问题', '速记', '纠正规则']) {
-    await page.getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('main h1')).toBeVisible();
-  }
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  for (const name of [
-    '录音与输入',
-    '快捷键',
-    'AI 服务与模型',
-    '外观与语言',
-    '权限与数据',
-    '实验与扩展',
-    '关于与更新',
-  ]) {
-    await page
-      .getByRole('navigation', { name: '设置分类' })
-      .getByRole('button', { name, exact: true })
-      .click();
-    await expect(
-      page
-        .getByRole('dialog', { name: '设置', exact: true })
-        .getByRole('heading', { name, exact: true })
-        .first(),
-    ).toBeVisible();
-  }
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  const scroll = page.locator('.ol-settings-scroll');
-  expect(await scroll.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: 'test-results/refinements-mobile.png' });
-  expect(errors).toEqual([]);
-});
+const styleDestinations = [
+  ['润色模式', 'style'],
+  ['风格市场', 'marketplace'],
+] as const;
+const toolDestinations = [
+  ['纠正规则', 'corrections'],
+  ['随便问', 'selectionAsk'],
+  ['翻译', 'translation'],
+  ['速记', 'quickNote'],
+] as const;
+
+for (const layout of ['desktop', 'narrow'] as const) {
+  test(`every main destination and settings category stays readable · ${layout}`, async ({
+    page,
+  }, info) => {
+    const narrow = layout === 'narrow';
+    if (narrow) await page.setViewportSize({ width: 375, height: 812 });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto('/?os=mac');
+
+    const nav = page.locator(narrow ? '.ol-mobile-bottom-nav' : '.ol-sidebar-surface nav');
+    const expectDestination = async (id: string) => {
+      const heading = page
+        .locator(`main [data-ol-page="${id}"][data-transition-phase="settled"]`)
+        .getByRole('heading', { level: 1 });
+      await expect(heading).toBeVisible();
+      await expect(heading).toBeInViewport();
+    };
+    const visit = async (scope: Locator, name: string, id: string) => {
+      await scope.getByRole('button', { name, exact: true }).click();
+      await expectDestination(id);
+    };
+
+    await expectDestination('overview');
+    await visit(nav, '历史', 'history');
+    await visit(nav, '概览', 'overview');
+
+    if (narrow) {
+      const visitFromSheet = async (sheet: string, name: string, id: string) => {
+        await nav.getByRole('button', { name: sheet, exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: sheet, exact: true });
+        await dialog.getByRole('button', { name, exact: true }).click();
+        await expect(page.locator('.ol-mobile-navigation-sheet')).toHaveCount(0);
+        await expectDestination(id);
+      };
+      for (const [name, id] of styleDestinations) await visitFromSheet('风格', name, id);
+      await visitFromSheet('更多', '词典', 'vocab');
+      for (const [name, id] of toolDestinations) await visitFromSheet('更多', name, id);
+    } else {
+      await visit(nav, '词典', 'vocab');
+      await nav.getByRole('button', { name: '风格', exact: true }).click();
+      for (const [name, id] of styleDestinations) await visit(nav, name, id);
+      const tools = nav.getByRole('button', { name: '工具', exact: true });
+      await tools.click();
+      await expect(tools).toHaveAttribute('aria-expanded', 'true');
+      await expect(nav.getByRole('button', { name: /^(纠正规则|随便问|翻译|速记)$/ })).toHaveText(
+        toolDestinations.map(([name]) => name),
+      );
+      for (const [name, id] of toolDestinations) await visit(nav, name, id);
+      await visit(page.locator('.ol-sidebar-surface'), '用量', 'usage');
+    }
+
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
+    const categories = settings.getByRole('navigation', { name: '设置分类' });
+    for (const name of [
+      '通用',
+      '快捷键',
+      'AI 与模型',
+      '云服务',
+      '外观与语言',
+      '权限与数据',
+      '高级功能',
+      '关于与更新',
+    ]) {
+      const entry = categories.getByRole('button', { name, exact: true });
+      await entry.click();
+      await expect(entry).toHaveAttribute('aria-current', 'page');
+      await settleNavigation(settings);
+      const heading = settings.getByRole('heading', { name, level: 2, exact: true }).first();
+      await expect(heading).toBeVisible();
+      await expect(heading).toBeInViewport();
+    }
+    if (narrow) {
+      await categories.getByRole('button', { name: '快捷键', exact: true }).click();
+      await settleNavigation(settings);
+      const scroll = settings.locator('.ol-settings-scroll[data-transition-phase="settled"]');
+      expect(await scroll.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: info.outputPath('refinements-mobile.png') });
+      await settings.getByRole('button', { name: '关闭', exact: true }).click();
+      await expect(settings).toHaveCount(0);
+    }
+    expect(errors).toEqual([]);
+  });
+}
 
 test('dragging makes a fractional gap, follows the pointer, reverses, cancels and keyboard reorders', async ({
   page,
@@ -286,12 +395,10 @@ test('text height grows with contents and chips give the selection actual layout
     'aria-pressed',
     'true',
   );
-  const selected = await page
-    .getByRole('button', { name: 'Two', exact: true })
-    .evaluate((el) => ({
-      x: (el as HTMLElement).offsetLeft,
-      width: (el as HTMLElement).offsetWidth,
-    }));
+  const selected = await page.getByRole('button', { name: 'Two', exact: true }).evaluate((el) => ({
+    x: (el as HTMLElement).offsetLeft,
+    width: (el as HTMLElement).offsetWidth,
+  }));
   const last = await page
     .getByRole('button', { name: 'Three', exact: true })
     .evaluate((el) => (el as HTMLElement).offsetLeft);
@@ -316,4 +423,35 @@ test('swipe departure is directional, removable and undoable', async ({ page }) 
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(card).toBeVisible();
+});
+
+test('interface corners use continuous curves at the shared 16 px radius', async ({ page }) => {
+  await page.goto(fixture);
+  const support = await page.evaluate(() => ({
+    native: CSS.supports('corner-shape', 'superellipse(1.5)'),
+    fallback: CSS.supports('clip-path', 'shape(from 0 0, line to 100% 0, close)'),
+    radius: getComputedStyle(document.documentElement).getPropertyValue('--ol-radius').trim(),
+  }));
+  expect(support.radius).toBe('16px');
+  const check = async (locator: import('@playwright/test').Locator) => {
+    if (support.native) {
+      await expect(locator).toHaveCSS('border-radius', '16px');
+      expect(
+        await locator.evaluate((node) => getComputedStyle(node).getPropertyValue('corner-shape')),
+      ).toContain('superellipse');
+    } else if (support.fallback) {
+      await expect(locator).toHaveCSS('border-radius', '0px');
+      expect(await locator.evaluate((node) => getComputedStyle(node).clipPath)).toMatch(/^shape\(/);
+    } else {
+      await expect(locator).toHaveCSS('border-radius', '16px');
+    }
+  };
+  const toggle = page.getByRole('switch', { name: 'Switch 0', exact: true });
+  await expect(toggle).toHaveCSS('border-radius', '999px');
+  await expect(toggle).toHaveCSS('clip-path', 'none');
+  const select = page.getByRole('combobox', { name: 'Long menu', exact: true });
+  await expect(select).toHaveCSS('border-radius', '16px');
+  await expect(select).toHaveCSS('clip-path', 'none');
+  await page.getByRole('button', { name: 'Open modal fixture', exact: true }).click();
+  await check(page.locator('.ol-dialog-card'));
 });

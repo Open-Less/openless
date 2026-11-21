@@ -2,11 +2,15 @@ import { useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'r
 
 import { keyboardInteraction } from './interactionMode';
 
-export const OVERLAY_EXIT_MS = 180;
-const ENTER_MS = 240;
-const SETTINGS_ENTER_MS = 240;
-const SETTINGS_BACKDROP_MS = 220;
-const CONTENT_MS = 160;
+// Presence leaves room for the browser to paint the last frame before removal.
+export const OVERLAY_EXIT_MS = 156;
+const SURFACE_EXIT_MS = 120;
+const SURFACE_ENTER_MS = 168;
+const BACKDROP_ENTER_MS = 136;
+const CONTENT_ENTER_MS = 148;
+const SELECTION_MS = 240;
+const SURFACE_EXIT_EASING = 'cubic-bezier(0.4, 0, 0.73, 0.55)';
+const SURFACE_ENTER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 let media: MediaQueryList | undefined;
 
@@ -29,9 +33,10 @@ export function useReducedMotion() {
   );
 }
 
-type Frame = { opacity: string | number; transform: string };
+type Frame = { opacity: string | number; transform: string; width?: string };
 const VISIBLE: Frame = { opacity: 1, transform: 'none' };
 const FADED: Frame = { opacity: 0, transform: 'none' };
+const POP_HIDDEN: Frame = { opacity: 0, transform: 'translate3d(0, 6px, 0) scale(0.94)' };
 
 function currentFrame(element: HTMLElement): Frame {
   const style = getComputedStyle(element);
@@ -44,20 +49,14 @@ function animate(
   to: Frame,
   duration: number,
   exiting: boolean,
-  easingToken = exiting ? '--ol-motion-exit' : '--ol-motion-spring',
+  easing = exiting ? SURFACE_EXIT_EASING : SURFACE_ENTER_EASING,
 ) {
-  const style = getComputedStyle(element);
-  const easing = style.getPropertyValue(easingToken).trim();
   const previousWillChange = element.style.willChange;
   // A flat page/backdrop fade must not create a transform containing block or
   // promote its text as if it were scaling. Cards/indicators still need both.
   element.style.willChange =
     from.transform === 'none' && to.transform === 'none' ? 'opacity' : 'opacity, transform';
-  const animation = element.animate([from, to], {
-    duration,
-    easing: easing || 'cubic-bezier(0.23, 1, 0.32, 1)',
-    fill: 'both',
-  });
+  const animation = element.animate([from, to], { duration, easing, fill: 'both' });
   animation.id = exiting ? 'ol-surface-exit' : 'ol-surface-enter';
   let released = false;
   const releaseLayer = () => {
@@ -79,7 +78,7 @@ function animate(
 export function useOverlayMotion(
   ref: RefObject<HTMLElement>,
   closing: boolean,
-  variant: 'card' | 'backdrop' | 'sheet' | 'drawer' = 'card',
+  variant: 'card' | 'backdrop' | 'sheet' | 'drawer' | 'pop' = 'card',
   enabled = true,
   entrance: 'default' | 'settings' = 'default',
 ) {
@@ -93,19 +92,23 @@ export function useOverlayMotion(
     }
     const settingsEntrance = entrance === 'settings';
     const hidden =
-      variant === 'backdrop'
-        ? FADED
-        : {
-            opacity: 0,
-            transform:
-              variant === 'drawer'
-                ? 'translate3d(12px, 0, 0)'
-                : variant === 'sheet'
-                  ? 'translate3d(0, 16px, 0)'
-                  : settingsEntrance
-                    ? 'translate3d(0, 20px, 0) scale(0.96)'
-                    : 'translate3d(0, 8px, 0) scale(0.985)',
-          };
+      variant === 'pop'
+        ? POP_HIDDEN
+        : variant === 'backdrop'
+          ? settingsEntrance
+            ? { opacity: 0, transform: 'translate3d(0, 10px, 0) scale(0.965)' }
+            : FADED
+          : {
+              opacity: 0,
+              transform:
+                variant === 'drawer'
+                  ? 'translate3d(12px, 0, 0)'
+                  : variant === 'sheet'
+                    ? 'translate3d(0, 16px, 0)'
+                    : settingsEntrance
+                      ? 'translate3d(0, 20px, 0) scale(0.96)'
+                      : 'translate3d(0, 10px, 0) scale(0.95)',
+            };
     const from =
       interrupted.current?.element === element
         ? interrupted.current.frame
@@ -118,30 +121,13 @@ export function useOverlayMotion(
       from,
       closing ? hidden : VISIBLE,
       closing
-        ? OVERLAY_EXIT_MS
-        : settingsEntrance
-          ? variant === 'backdrop'
-            ? SETTINGS_BACKDROP_MS
-            : SETTINGS_ENTER_MS
-          : variant === 'backdrop'
-            ? CONTENT_MS
-            : ENTER_MS,
+        ? SURFACE_EXIT_MS
+        : variant === 'backdrop' && !settingsEntrance
+          ? BACKDROP_ENTER_MS
+          : SURFACE_ENTER_MS,
       closing,
-      closing ? '--ol-motion-exit' : settingsEntrance ? '--ol-motion-soft' : '--ol-motion-spring',
     );
     let cancelled = false;
-    let entryFrame: number | undefined;
-    if (settingsEntrance && !closing) {
-      // Paint the mounted dialog at its starting pose before advancing the entrance clock.
-      motion.animation.pause();
-      motion.animation.currentTime = 0;
-      entryFrame = window.requestAnimationFrame(() => {
-        if (cancelled) return;
-        entryFrame = window.requestAnimationFrame(() => {
-          if (!cancelled) motion.animation.play();
-        });
-      });
-    }
     void motion.animation.finished
       .then(() => {
         if (cancelled) return;
@@ -151,8 +137,10 @@ export function useOverlayMotion(
       .catch(() => {});
     return () => {
       cancelled = true;
-      if (entryFrame !== undefined) window.cancelAnimationFrame(entryFrame);
-      interrupted.current = { element, frame: currentFrame(element) };
+      interrupted.current =
+        motion.animation.playState === 'running' || motion.animation.playState === 'paused'
+          ? { element, frame: currentFrame(element) }
+          : null;
       motion.cancel();
     };
   }, [ref, closing, variant, enabled, entrance, reduced]);
@@ -177,7 +165,7 @@ export function useContentMotion(ref: RefObject<HTMLElement>, key: string) {
         ? interrupted.current.frame
         : { opacity: 0, transform: 'translate3d(0, 6px, 0)' };
     interrupted.current = null;
-    const motion = animate(element, from, VISIBLE, ENTER_MS, false);
+    const motion = animate(element, from, VISIBLE, CONTENT_ENTER_MS, false);
     void motion.animation.finished.then(motion.cancel).catch(() => {});
     return () => {
       interrupted.current =
@@ -211,65 +199,82 @@ export function useSelectionMotion(
         indicator.style.visibility = 'hidden';
         return;
       }
-      // Layout offsets stay correct while the parent dialog is scaled on entry.
-      const y = underline ? group.clientHeight - 2 : button.offsetTop;
-      const target = `translate3d(${button.offsetLeft}px, ${y}px, 0) scaleX(${button.offsetWidth / 100})`;
-      if (target === lastTarget) return;
-      const from = interrupted.current ?? currentFrame(indicator);
+      // Preserve fractional layout coordinates under CSS zoom and dialog transforms.
+      // offsetTop/offsetWidth round half-pixel padding and visibly uncenter the chip.
+      const outer = group.getBoundingClientRect();
+      const inner = button.getBoundingClientRect();
+      const style = getComputedStyle(group);
+      const borderX = parseFloat(style.borderLeftWidth) || 0;
+      const borderY = parseFloat(style.borderTopWidth) || 0;
+      const boxWidth =
+        parseFloat(style.width) +
+        (style.boxSizing === 'border-box'
+          ? 0
+          : (parseFloat(style.paddingLeft) || 0) +
+            (parseFloat(style.paddingRight) || 0) +
+            borderX +
+            (parseFloat(style.borderRightWidth) || 0));
+      const boxHeight =
+        parseFloat(style.height) +
+        (style.boxSizing === 'border-box'
+          ? 0
+          : (parseFloat(style.paddingTop) || 0) +
+            (parseFloat(style.paddingBottom) || 0) +
+            borderY +
+            (parseFloat(style.borderBottomWidth) || 0));
+      const scaleX = outer.width / boxWidth || 1;
+      const scaleY = outer.height / boxHeight || 1;
+      const x = (inner.left - outer.left) / scaleX - borderX;
+      const y = underline
+        ? boxHeight - borderY - (parseFloat(style.borderBottomWidth) || 0) - 2
+        : (inner.top - outer.top) / scaleY - borderY;
+      const height = underline ? 2 : inner.height / scaleY;
+      const target = `translate3d(${x}px, ${y}px, 0)`;
+      const width = `${inner.width / scaleX}px`;
+      const targetKey = `${target}:${width}:${height}`;
+      if (targetKey === lastTarget) return;
+      const from = interrupted.current ?? {
+        ...currentFrame(indicator),
+        width: getComputedStyle(indicator).width,
+      };
       interrupted.current = null;
       motion?.cancel();
       indicator.style.transform = target;
-      indicator.style.height = `${underline ? 2 : button.offsetHeight}px`;
+      indicator.style.width = width;
+      indicator.style.height = `${height}px`;
       indicator.style.visibility = 'visible';
-      lastTarget = target;
+      lastTarget = targetKey;
       if (moving && !reduced && !keyboardInteraction() && typeof indicator.animate === 'function') {
-        motion = animate(indicator, from, { opacity: 1, transform: target }, ENTER_MS, false);
+        motion = animate(
+          indicator,
+          from,
+          { opacity: 1, transform: target, width },
+          SELECTION_MS,
+          false,
+        );
         motion.animation.id = 'ol-selection-move';
         void motion.animation.finished.then(motion.cancel).catch(() => {});
       }
     };
     position(previous.current !== null && previous.current !== selection);
     previous.current = selection;
-    const observer = new ResizeObserver(() => position(false));
+    let resizeFrame = 0;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        position(false);
+      });
+    });
     observer.observe(group);
     return () => {
-      interrupted.current = currentFrame(indicator);
+      interrupted.current = {
+        ...currentFrame(indicator),
+        width: getComputedStyle(indicator).width,
+      };
       observer.disconnect();
+      cancelAnimationFrame(resizeFrame);
       motion?.cancel();
     };
   }, [groupRef, indicatorRef, selection, underline, reduced]);
-}
-
-/** Navigate immediately, then soften the new content without a fade-to-blank gap.
- * No exit queue, translated text, or stale completion can delay a later choice. */
-export function usePageTransition<T extends string>(
-  requested: T,
-  ref: RefObject<HTMLElement>,
-  _mobile: boolean,
-) {
-  const previous = useRef(requested);
-  const reduced = useReducedMotion();
-  useLayoutEffect(() => {
-    const changed = previous.current !== requested;
-    previous.current = requested;
-    const element = ref.current;
-    if (
-      !changed ||
-      !element ||
-      reduced ||
-      keyboardInteraction() ||
-      typeof element.animate !== 'function'
-    )
-      return;
-    const motion = animate(
-      element,
-      { opacity: 0.6, transform: 'none' },
-      VISIBLE,
-      CONTENT_MS,
-      false,
-    );
-    void motion.animation.finished.then(motion.cancel).catch(() => {});
-    return motion.cancel;
-  }, [requested, ref, reduced]);
-  return requested;
 }

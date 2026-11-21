@@ -27,7 +27,10 @@ const sherpaCfg = buildScript.slice(
   buildScript.indexOf('rustc-check-cfg=cfg(local_asr_sherpa)'),
   buildScript.indexOf('cargo:rustc-cfg=local_asr_sherpa'),
 );
-assert.match(sherpaCfg, /cargo_target_os == "windows" \|\| \(target_os == "android" && target_arch == "aarch64"\)/);
+assert.match(
+  sherpaCfg,
+  /cargo_target_os == "windows" \|\| \(target_os == "android" && target_arch == "aarch64"\)/,
+);
 assert.doesNotMatch(sherpaCfg, /macos/);
 const availability = adapters.slice(
   adapters.indexOf('impl openless_core::ModelRuntimeAdapter'),
@@ -50,11 +53,14 @@ assert.match(service, /saved\.download_pending/);
 const native = read('src-tauri/src/asr/local/experimental.rs');
 assert.match(native, /models\.lease\(model\)[^]*?runtime\.prepare\(model[^]*?models\.check_lease/);
 
-const channels = read('src/pages/settings/ChannelList.tsx');
+const channels = read('src/features/providers/ChannelList.tsx');
 assert.match(channels, /data-retired-local-asr=/);
 assert.match(channels, /disabled=\{retired\}/);
-assert.match(channels, /os === 'mac' && isRetiredMacAsrProvider/);
-const page = read('src/pages/settings/ExperimentalAsrSection.tsx');
+assert.match(
+  read('src/features/providers/channelCatalog.ts'),
+  /os === 'mac' && isRetiredMacAsrProvider/,
+);
+const page = read('src/features/local-asr/ExperimentalAsrSection.tsx');
 assert.match(page, /experimentalAsr\.memoryHint/);
 assert.match(page, /controller/);
 const controller = read('src/lib/useExperimentalAsr.ts');

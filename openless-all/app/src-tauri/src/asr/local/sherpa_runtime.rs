@@ -530,9 +530,15 @@ async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
 #[cfg(local_asr_sherpa)]
 fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognizer> {
     let mut config = OfflineRecognizerConfig::default();
-    config.model_config.num_threads = std::thread::available_parallelism()
+    let default_num_threads = std::thread::available_parallelism()
         .map(|n| n.get().clamp(1, 4) as i32)
         .unwrap_or(2);
+    config.model_config.num_threads = default_num_threads;
+    #[cfg(target_os = "windows")]
+    {
+        // Keep Windows offline decode on one ONNX worker until native multi-threaded decode is proven stable.
+        config.model_config.num_threads = 1;
+    }
     config.model_config.provider = Some("cpu".into());
     match sherpa_target(alias)?.sherpa_family() {
         Some(openless_core::SherpaModelFamily::SenseVoice) => {
@@ -570,13 +576,25 @@ fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognize
                 max_new_tokens: QWEN3_ASR_MAX_NEW_TOKENS,
                 ..Default::default()
             };
-            config.model_config.num_threads = 3;
+            #[cfg(target_os = "windows")]
+            {
+                config.model_config.num_threads = 1;
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                config.model_config.num_threads = 3;
+            }
         }
         Some(openless_core::SherpaModelFamily::Zipformer) => {
             anyhow::bail!("zipformer is not supported by offline batch M2")
         }
         None => anyhow::bail!("unknown sherpa-onnx model family: {alias}"),
     }
+    log::info!(
+        "[sherpa-asr] create offline recognizer model={} threads={}",
+        alias,
+        config.model_config.num_threads
+    );
     OfflineRecognizer::create(&config)
         .ok_or_else(|| anyhow::anyhow!("create sherpa-onnx offline recognizer failed"))
 }
@@ -626,33 +644,102 @@ async fn transcribe_loaded_model(
     language_hint: Option<String>,
     audio_timeout: std::time::Duration,
 ) -> Result<String> {
-    run_serialized_decode(
+    let model_alias = loaded.alias.clone();
+    let chunk_count = pcm_chunks.len();
+    let decode_model_alias = model_alias.clone();
+    log::info!(
+        "[sherpa-asr] native decode begin model={} chunks={}",
+        model_alias,
+        chunk_count
+    );
+    let result = run_serialized_decode(
         Arc::clone(&loaded.decode_gate),
         audio_timeout,
         move |cancelled| {
             let mut texts = Vec::with_capacity(pcm_chunks.len());
-            for pcm in pcm_chunks {
+            for (chunk_index, pcm) in pcm_chunks.into_iter().enumerate() {
                 if cancelled.load(Ordering::Acquire) {
                     anyhow::bail!("sherpa-onnx transcribe cancelled");
                 }
+                let chunk_number = chunk_index + 1;
+                let chunk_audio_ms = pcm_duration_ms(&pcm);
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} audio_ms={} stage=chunk_begin",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count,
+                    chunk_audio_ms
+                );
                 let samples = pcm_s16le_to_f32(&pcm)?;
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} samples={} stage=stream_create",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count,
+                    samples.len()
+                );
                 let stream = loaded.recognizer.create_stream();
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} stage=stream_created",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count
+                );
                 if let Some(language) = language_hint.as_deref().filter(|value| !value.is_empty()) {
                     if stream.has_option("language") {
                         stream.set_option("language", language);
                     }
                 }
                 stream.accept_waveform(16_000, &samples);
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} stage=waveform_accepted",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count
+                );
                 loaded.recognizer.decode(&stream);
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} stage=decoded",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count
+                );
                 let result = stream
                     .get_result()
                     .ok_or_else(|| anyhow::anyhow!("sherpa-onnx returned no result"))?;
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} text_chars={} stage=result_received",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count,
+                    result.text.chars().count()
+                );
                 texts.push(result.text);
             }
-            Ok(openless_core::asr::whisper::join_transcript_chunks(&texts))
+            let text = openless_core::asr::whisper::join_transcript_chunks(&texts);
+            log::info!(
+                "[sherpa-asr] native decode complete model={} chunks={} text_chars={}",
+                decode_model_alias,
+                chunk_count,
+                text.chars().count()
+            );
+            Ok(text)
         },
     )
-    .await
+    .await;
+    match &result {
+        Ok(text) => log::info!(
+            "[sherpa-asr] native decode returned model={} text_chars={}",
+            model_alias,
+            text.chars().count()
+        ),
+        Err(error) => log::warn!(
+            "[sherpa-asr] native decode failed model={} error={:#}",
+            model_alias,
+            error
+        ),
+    }
+    result
 }
 
 #[cfg(not(local_asr_sherpa))]

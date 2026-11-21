@@ -1,3 +1,4 @@
+import { desktopGuideEn as desktopGuide } from './desktopGuide';
 import { siwcEn as siwc } from './siwc';
 // English resources — translated from zh-CN.ts. Keep keys in sync.
 
@@ -8,6 +9,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const en: typeof zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -108,6 +110,8 @@ export const en: typeof zhCN = {
     noSnapshot: 'No encrypted cloud backup yet.',
     snapshotUnknown: 'Cloud backup has not been checked yet.',
     lastSync: 'Last synced {{time}}',
+    synced: 'Sync complete',
+    syncing: 'Syncing the latest cloud data…',
     syncNow: 'Sync now',
     checkPending: 'Check pending result',
     unlock: 'Unlock',
@@ -137,6 +141,15 @@ export const en: typeof zhCN = {
     newPassword: 'New sync password',
     currentPassword: 'Current sync password',
     confirmPassword: 'Confirm new password',
+    setSyncPasswordTitle: 'Set your cloud sync password',
+    setSyncPasswordDescription:
+      'OpenLess uses this password to encrypt data on this device and create a cloud backup. Sync turns on after the backup is created.',
+    confirmSyncPassword: 'Confirm sync password',
+    confirmAndContinue: 'Confirm and continue',
+    revealPassword: 'Show password ({{field}})',
+    concealPassword: 'Hide password ({{field}})',
+    previewNotice:
+      'Cloud sync preview. Use a sample password; it will not connect to a server or store any credentials.',
     passwordPolicy:
       'Use 12–128 characters with uppercase and lowercase letters and a number. Avoid common passwords.',
     rememberKey: 'Remember the unlock key in this device’s secure storage',
@@ -144,6 +157,7 @@ export const en: typeof zhCN = {
     disableDescription:
       'This stops further sync. Your cloud backup and local data are kept. Deleting the cloud backup is a separate action.',
     confirmDisable: 'Turn off sync',
+    refreshBackup: 'View or refresh cloud backup',
     deleteTitle: 'Delete the encrypted cloud backup?',
     deleteDescription:
       'Only this account’s cloud backup is deleted. Local data is kept. You will need a new backup to restore on another device.',
@@ -229,6 +243,8 @@ export const en: typeof zhCN = {
       cancelled: 'The task was cancelled.',
       network: 'Could not reach the sync service. Check your connection and try again.',
       rateLimited: 'Too many requests. Wait before retrying.',
+      deletePendingOperation:
+        'An earlier cloud operation is unconfirmed. Refresh the status later and try deleting again.',
       outcomeUnknown:
         'The cloud result is not confirmed. Check the pending result before creating another backup.',
       recovery:
@@ -300,10 +316,14 @@ export const en: typeof zhCN = {
     delete: 'Delete',
     later: 'Later',
     cancel: 'Cancel',
+    confirmAction: 'Confirm',
     close: 'Close',
     show: 'Show',
     hide: 'Hide',
+    apiKeySaved: 'API key saved',
     saved: 'Saved',
+    deleted: 'Deleted',
+    refreshed: 'Refreshed',
     saving: 'Saving…',
     experimental: 'Experimental',
     copied: 'Copied',
@@ -314,6 +334,7 @@ export const en: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    asking: 'Ask anything',
     thinking: 'thinking',
     using: 'using',
     cancelled: 'Cancelled',
@@ -371,6 +392,9 @@ export const en: typeof zhCN = {
     title: 'Ask',
     headerHint: 'Ask anytime',
     thinking: 'Thinking…',
+    thoughtLive: 'Thinking for {{seconds}}s',
+    thoughtDone: 'Thought for {{seconds}}s',
+    stop: 'Stop',
     error: 'Something went wrong. Please try again.',
     errorRetry: 'Retry',
     errorRetryHint: 'Please try again.',
@@ -398,107 +422,6 @@ export const en: typeof zhCN = {
     editApplyUnavailable: 'No edit result to apply',
     editRevertPrevious: 'Keep previous version',
     editInstructionMode: 'Edit instruction',
-  },
-  lessComputer: {
-    activity: {
-      process: 'Activity',
-      count: '{{count}} activities',
-      count_one: '{{count}} activity',
-      count_other: '{{count}} activities',
-      finished: 'Finished',
-      stopped: 'Stopped',
-      search: 'Search',
-      searchRunning: 'Searching…',
-      read: 'Read',
-      readRunning: 'Reading…',
-      command: 'Commands',
-      commandRunning: 'Running commands…',
-      edit: 'Edits',
-      editRunning: 'Editing…',
-      web: 'Web',
-      webRunning: 'Browsing…',
-      other: 'Tools',
-      otherRunning: 'Working…',
-    },
-    desktop: {
-      approvedSubmitted: 'Approval sent',
-      deniedSubmitted: 'Denial sent',
-      agents: 'Your agents',
-      configured: 'Configured agent',
-      agentSettings: 'Choose in Settings',
-      sessionUnavailable: 'New session · unavailable',
-      signedIn: 'Signed in',
-      signIn: 'Sign in',
-      currentSession: 'Current conversation',
-      minimize: 'Minimize',
-      maximize: 'Maximize / restore',
-      windowError: 'The window action failed. Try again.',
-      idle: 'Waiting for a task',
-      waitingApproval: 'Waiting for approval',
-      submittingApproval: 'Submitting…',
-      approvalError: 'Approval was not submitted. Try again.',
-      approvalExpired: 'This turn has ended. Approval is no longer available.',
-      sendError: 'Could not send. Your draft is saved here; try again.',
-      browserUnavailable: 'This browser preview cannot run commands. Use the desktop app.',
-      inputHint: 'Enter to send · Shift + Enter for a new line',
-      apiCost: 'API cost this turn',
-      emptyHint: 'Describe a task, tap the mic, or use your voice shortcut to get started.',
-      showInspector: 'Show workspace panel',
-      hideInspector: 'Hide workspace panel',
-      inspectorTitle: 'Workspace',
-      inspectorStatus: 'Status',
-      inspectorTurn: 'This turn',
-      toolCalls: 'Tool calls',
-      pendingApprovals: 'Waiting for you',
-      inspectorVoice: 'Voice input',
-      voiceShortcutOff: 'No voice shortcut set. You can turn one on in Settings.',
-      voiceModesHint:
-        'Mic: your words go into the input so you can edit before sending. Voice button: sends straight to the agent when you stop.',
-      copy: 'Copy',
-      copied: 'Copied',
-      messagePlaceholder: 'Message {{agent}}',
-    },
-    voice: {
-      dictate: 'Dictate into the input',
-      voiceMode: 'Voice mode (sends when you stop)',
-      stopTask: 'Stop task',
-      cancel: 'Cancel recording',
-      confirmDictation: 'Finish dictation',
-      stopAndSend: 'Stop and send',
-      listening: 'Listening…',
-      starting: 'Preparing microphone…',
-      transcribing: 'Transcribing…',
-      empty: "Didn't catch anything. Try again.",
-      failed: 'Speech recognition failed. Try again.',
-      startFailed: 'Could not start recording: {{message}}',
-      taskCancelFailed: 'The task did not stop. Try again.',
-      dictateCaption: 'Tap ✓ when done — the text goes into the input for editing · Esc to cancel',
-      submitCaption: 'Tap ↑ to send straight to the agent · Esc to cancel',
-      stopHint: 'Task running — tap ■ to stop',
-      holdHint: 'Hold {{key}} to talk',
-      toggleHint: 'Press {{key}} to start or stop talking',
-      autoHint: 'Hold or tap {{key}} to talk',
-    },
-    title: 'Less Computer',
-    subtitle: 'What should your computer do?',
-    you: 'You',
-    working: 'Operating…',
-    tool: 'Used {{name}}',
-    compaction: 'Context compacted',
-    done: 'Done',
-    cost: '${{cost}}',
-    error: 'Failed. Try again.',
-    closeTooltip: 'Close',
-    jumpToLatest: 'Jump to latest',
-    inputPlaceholder: 'Type a command, Enter to send',
-    send: 'Send',
-    approvalTitle: 'Run blocked command?',
-    approvalRerunWarning:
-      'Note: approving re-runs on an already-modified workspace and may have side effects on non-idempotent operations.',
-    approve: 'Approve',
-    deny: 'Deny',
-    approved: 'Approved',
-    denied: 'Denied',
   },
   nav: {
     overview: 'Overview',
@@ -554,7 +477,7 @@ export const en: typeof zhCN = {
     },
     sortLiked: 'Liked',
     likedEmpty: 'You have not liked any style packs yet',
-    likedEmptyHint: 'Open any pack and tap the star — liked packs appear here',
+    likedEmptyHint: 'Open any pack and tap the heart — liked packs appear here',
     derivativeBadge: 'Derived from @{{login}}',
     detail: {
       withdrawBtn: 'Withdraw',
@@ -627,6 +550,7 @@ export const en: typeof zhCN = {
   shell: {
     shortcutLabel: 'Recording shortcut',
     shortcutHint: 'Start / Stop',
+    homeLabel: 'Back to overview',
     betaTag: 'BETA',
     betaNote: 'Local storage, optional cloud backup',
     navHint: {
@@ -640,6 +564,7 @@ export const en: typeof zhCN = {
       settings: 'Preferences: shortcuts, providers, privacy and updates',
     },
     footer: {
+      usage: 'Usage',
       account: 'Account',
       feedback: 'Feedback',
       settings: 'Settings',
@@ -649,6 +574,7 @@ export const en: typeof zhCN = {
         tagline: 'Local-first voice input layer',
         releaseNotes: 'Release notes ↗',
         docs: 'Help center ↗',
+        credits: 'Component credits',
       },
     },
     providerPrompt: {
@@ -730,8 +656,8 @@ export const en: typeof zhCN = {
     },
     actions: {
       refresh: 'Try again',
-      services: 'AI services & models',
-      general: 'Recording & input',
+      services: 'AI & models',
+      general: 'General',
       shortcuts: 'Shortcuts',
       privacy: 'Permissions & data',
     },
@@ -740,7 +666,7 @@ export const en: typeof zhCN = {
       loadingTitle: 'Reading your configuration',
       loadingDesc: 'Your current services and next step will appear shortly.',
       unavailableTitle: 'Service status is unavailable',
-      unavailableDesc: 'Try reading it again, or open AI services to review your configuration.',
+      unavailableDesc: 'Try reading it again, or open AI & models to review your configuration.',
       servicesTitle: 'Set up your voice services',
       servicesDesc:
         'Start here: choose services for speech recognition and text processing. In Omni mode, only the active multimodal model needs configuration.',
@@ -771,6 +697,12 @@ export const en: typeof zhCN = {
     llmConfigured: 'Active LLM configured',
     llmNotConfigured: 'Not configured',
     statusConfigured: 'Configured',
+    statusFailed: 'Failed',
+    serviceHint: {
+      asr: 'Speech recognition: see if it is configured, click to open service settings',
+      llm: 'Text processing: see if it is configured, click to open service settings',
+      omni: 'Multimodal voice: see if it is configured, click to open service settings',
+    },
     statusNotConfigured: 'Not configured',
     statusUnknown: 'Unavailable',
     credentialsLoadError: 'Could not read credential status',
@@ -785,6 +717,15 @@ export const en: typeof zhCN = {
     metricTotalTrend: 'Local archive (max 200)',
     activityTitle: 'Annual activity',
     activityCount: '{{count}} dictation(s)',
+    activityAppsLabel: 'Top apps by dictations',
+    activityAppsShow: 'Show top apps',
+    activityAppsHide: 'Hide top apps',
+    activityAppsUnavailable: 'Yearly activity by app is unavailable on this platform.',
+    activityAppsError: 'Could not load yearly activity by app.',
+    activityYearTitle: 'This year',
+    activityActiveDays: 'Active days',
+    activityPeakDay: 'Busiest day',
+    activityDailyAverage: 'Daily average',
     activityLoadError: 'Activity data load failed',
     period: {
       ariaLabel: 'Reporting period',
@@ -1181,9 +1122,9 @@ export const en: typeof zhCN = {
     target: {
       title: 'Translation target language',
       desc: 'Press Shift during recording to trigger translation. "Disabled" makes Shift a no-op.',
-      disabled: 'Disabled (Shift does nothing)',
+      disabled: 'Disabled ({{shortcut}} does nothing)',
       sameAsWorking:
-        'The target matches your only working language, so translation cannot take effect — Shift will just run a normal polish. Pick a different target, or add another working language above.',
+        'The target matches your only working language, so translation cannot take effect — {{shortcut}} will just run a normal polish. Pick a different target, or add another working language above.',
     },
     style: {
       title: 'Translation style',
@@ -1206,7 +1147,7 @@ export const en: typeof zhCN = {
       step5: 'Translated text is inserted at the cursor.',
       indicatorTitle: 'How to confirm translation mode is on',
       indicatorDesc:
-        'A blue "Translating" indicator appears at the bottom of the screen after pressing Shift.',
+        'A blue "Translating" indicator appears at the bottom of the screen after pressing {{shortcut}}.',
       fallbackTitle: 'Safety fallbacks',
       fallbackDesc: 'If translation fails, the raw transcript is inserted instead.',
     },
@@ -1272,14 +1213,12 @@ export const en: typeof zhCN = {
     cancelledTitle: 'Recording cancelled',
   },
   settings: {
-    testingFeatures: {
-      title: 'Features under testing',
-      enable: 'Enable features under testing',
-      description:
-        'Show Less Computer and the Claude console for setup and use on supported platforms. Turning this off stops active tasks and hides their entries while keeping your settings. Applies only to this device.',
-      unavailable: 'No testing features are available on this platform yet.',
-    },
     selectionWorkspace: {
+      extraControls: 'Advanced controls',
+      extraControlsDesc: 'Configure question/edit routing and model output only when needed.',
+      openExtraControls: 'More',
+      extraControlsSaveHint: 'Changes save automatically.',
+      extraControlsDone: 'Done',
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
       polishHotkey: 'Selection assistant shortcut',
@@ -1330,9 +1269,58 @@ export const en: typeof zhCN = {
       useSystemProxyDesc:
         'When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.',
     },
+    generalPages: {
+      recordingTitle: 'Microphone and recording',
+      recordingDesc: 'Microphone monitoring and recognition, plus monitoring and cues.',
+      capsuleTitle: 'Capsule style',
+      capsuleDesc: 'Capsule switch, multi-screen display, style, and streaming original text.',
+      textInputTitle: 'Text insertion',
+      textInputDesc: 'Selection assistant, insertion and clipboard, and startup.',
+      phoneTitle: 'Phone and remote input',
+      phoneDesc: 'Connect a phone or another device for remote input.',
+    },
+    advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
+      liveInputTitle: 'Text insertion',
+      experiments: 'Configure experimental features and extensions.',
+      voiceEnhancementTitle: 'Voice enhancement and playback suppression',
+      cursorContextTitle: 'Awareness',
+      startupDiagnosticsTitle: 'Startup diagnostics',
+      cursorContextHint:
+        'Cursor context is enabled by default. Disable it if you do not want nearby text sent with polish requests.',
+    },
+    advancedGroups: {
+      recording: 'Recording',
+      text: 'Text and context',
+      diagnostics: 'Diagnostics',
+    },
+    expressionLearning: {
+      clearHint:
+        'After clearing, an in-progress dictation may still use the preferences captured when it started.',
+      lineBreaksMore: 'More line breaks',
+      lineBreaksLess: 'Fewer line breaks',
+      exclamationsMore: 'More exclamation marks',
+      exclamationsLess: 'Fewer exclamation marks',
+      terminalPunctuationMore: 'Use terminal punctuation',
+      terminalPunctuationLess: 'Use less terminal punctuation',
+
+      title: 'Expression habits',
+      enabled: 'Learn expression habits',
+      description:
+        'Observes formatting edits locally after dictation; expression data stores abstract statistics, not observed text. History is managed separately. Repeated, consistent line-break and punctuation preferences become short instructions sent to the selected text model. Turning this off stops learning immediately and applying preferences to new dictations; an in-progress dictation may still use its captured preferences.',
+      status: '{{count}} stable preferences',
+      clear: 'Clear expression habits',
+      error: 'Could not read or save expression habits. Try again.',
+    },
     vocabularyLearning: {
       title: 'Learn from corrections',
       enabled: 'Enable learning from corrections',
+      suggestionPosition: 'Suggestion card position',
+      positionNearInput: 'Near input',
+      positionBottomRight: 'Fixed bottom-right',
+      suggestionPositionHint:
+        'Windows only: prefer the text caret or input field; if unavailable, fall back to the original input screen’s bottom-right corner. Fixed bottom-right always uses that screen’s work area.',
       observationSeconds: 'Observation duration',
       observationSecondsHint:
         'Maximum time to observe the current field after dictation: 10–60 seconds.',
@@ -1368,102 +1356,6 @@ export const en: typeof zhCN = {
       opening: 'Opening…',
       openFailed: 'Could not open the local migration flow. Try again from Settings.',
     },
-    codingConsole: {
-      title: 'Claude Console',
-      desc: 'Detect your local Claude Code and MCP (computer use) status, then run Claude headlessly behind guardrails and watch the streamed output and cost.',
-      guardNote:
-        'Reversible actions are allowed by default; high-risk commands (rm -rf, sudo, force push) are blocked; if the working dir is a git repo, a snapshot is taken before each run for rollback.',
-      status: 'Status',
-      detect: 'Detect',
-      detecting: 'Detecting…',
-      installed: 'Claude detected',
-      notInstalled: 'claude not found',
-      notInstalledHint:
-        'Install Claude Code first (see docs.anthropic.com/claude-code), or enter the full path to its executable below.',
-      mcpServers: '{{count}} MCP server(s) configured',
-      computerUsePresent: 'Desktop-control (computer use) MCP configured',
-      computerUseAbsent:
-        'No desktop-control MCP (light actions like copy/paste work via Bash — not required)',
-      exePath: 'Executable',
-      workdir: 'Working directory',
-      workdirDesc:
-        'Optional. Claude runs inside this dir; a git repo enables a pre-run snapshot for rollback.',
-      workdirPlaceholder: 'Empty = run in a temp dir',
-      permissionMode: 'Permission mode',
-      mode: {
-        acceptEdits: 'Allow (reversible)',
-        plan: 'Read-only / plan',
-        default: 'Default (ask each)',
-        bypassPermissions: 'Full bypass (risky)',
-      },
-      promptPlaceholder: 'Ask Claude to do something, e.g. list files in the current directory',
-      run: 'Run',
-      running: 'Running…',
-      cancel: 'Cancel',
-      clear: 'Clear',
-      riskWarn:
-        'High-risk intent detected: {{reason}}. The guardrail blocks high-risk commands at execution time.',
-      toolUse: 'tool {{name}}',
-      done: 'Done',
-      doneCost: 'Done · cost ${{cost}}',
-      cancelled: 'Cancelled',
-      outputPlaceholder: 'Output streams here…',
-    },
-    codingAgent: {
-      title: 'Less Computer',
-      desc: 'Hold a key, speak, and your selected agent operates your computer. macOS only.',
-      enable: 'Enable Less Computer',
-      comingSoonNote:
-        'Config is saved now; hotkey triggering and the execution flow land in a later version.',
-      hotkeyHint:
-        'When enabled, hold the shortcut to talk; release it and the selected agent shows the result in the capsule.',
-      voiceHotkey: 'Hold-to-talk key',
-      voiceHotkeyDesc:
-        'Hold to talk, release to run. Supports Ctrl/Option/Fn single keys. See the Advanced settings page for what it does.',
-      provider: 'Agent backend',
-      opencodeReady: 'OpenCode v{{version}} detected.',
-      opencodeMissing:
-        'opencode command not found. Install it (npm i -g opencode-ai) and sign in with opencode auth login before use.',
-      cliReady: 'Detected {{name}} v{{version}}.',
-      cliMissing:
-        '{{name}} command not found. Install and sign in first, or enter its absolute path under Executable below.',
-      sandboxGuardHint:
-        'This backend only offers coarse sandbox levels, not a per-command high-risk list: when it hits a limit it reports the failure as-is instead of showing an "approve this command" card.',
-      codexModelHint:
-        'Enter a Codex model name (e.g. gpt-5); leave empty to use the setting in ~/.codex/config.toml.',
-      codexBudgetHint:
-        'Codex has no per-run USD budget cap; charges depend on your configured provider.',
-      codexMode: {
-        plan: 'Read-only / plan',
-        workspaceWrite: 'Allow workspace writes',
-      },
-      codexModelPlaceholder: 'Empty = Codex default',
-      dshModelHint:
-        "dsh's headless profile has no model switch: the model is decided by dsh's own profile and cannot be changed here.",
-      panelHotkey: 'Panel hotkey (voice agent)',
-      panelHotkeyDesc:
-        'Record voice → ASR → Claude → streamed into a panel. Default Cmd/Ctrl+Shift+Enter.',
-      quickHotkey: 'Quick-take hotkey',
-      quickHotkeyDesc: 'Take selected text → Claude → result back at the cursor. No panel, faster.',
-      model: 'Model',
-      modelPlaceholder: 'Default: sonnet',
-      modelDefault: 'Default (auto sonnet)',
-      modelHint: 'Haiku = fastest · Sonnet = balanced · Opus = strongest',
-      opencodeModelDefault: 'Use OpenCode default model',
-      opencodeModelHint:
-        'Automatically fetches provider/model choices available to the current OpenCode account and saves your selection immediately.',
-      opencodeModelsRefresh: 'Refresh models',
-      opencodeModelsRefreshing: 'Fetching OpenCode models…',
-      opencodeModelsLoaded: 'Fetched {{count}} models.',
-      opencodeModelsEmpty:
-        'No models were returned. Sign in to OpenCode or configure a model provider first.',
-      opencodeModelsError: 'Failed to fetch models: {{message}}',
-      exe: 'Executable path',
-      openPanel: 'Text test',
-      openPanelHint:
-        'Open the Less Computer panel and verify the current agent and model with text.',
-      openPanelAction: 'Open Less Computer',
-    },
     debug: {
       cursorLabel: 'Cursor',
       title: 'Debug tools',
@@ -1490,7 +1382,7 @@ export const en: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Recording & input',
+      title: 'General',
       desc: 'Global recording hotkey and trigger mode.',
       hotkeyLabel: 'Recording hotkey',
       hotkeyDescAcc: 'Press to capture voice globally (requires Accessibility permission).',
@@ -1537,7 +1429,7 @@ export const en: typeof zhCN = {
         'Switching from all-screen display requires a restart to clear the previous capsule windows. Restart now?',
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
-      capsuleStyleClassic: 'OpenLess default style',
+      capsuleStyleClassic: 'Default style',
       stableTranscriptionLabel: 'Stable mode (record, then transcribe)',
       stableTranscriptionDesc:
         'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',
@@ -1614,6 +1506,10 @@ export const en: typeof zhCN = {
       audioCueDesc:
         'Play a short synthesized chime when you press the hotkey to start recording. Plays even when the capsule is hidden.',
       audioCuePreview: 'Preview',
+      captureGroupTitle: 'Microphone monitoring and recognition',
+      capsuleGroupTitle: 'Capsule style',
+      recognitionGroupTitle: 'Monitoring and cues',
+      feedbackGroupTitle: 'Monitoring and cues',
       insertGroupTitle: 'Insertion & clipboard',
       restoreClipboardLabel: 'Restore clipboard after insert',
       restoreClipboardDesc:
@@ -1664,11 +1560,6 @@ export const en: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (most editors)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (chat input boxes)',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'Show OpenLess in keyboard list',
-      windowsShowOpenlessInKeyboardListDesc:
-        'When off, Win+Space will not cycle to OpenLess. SendInput and clipboard-paste insertion are unaffected. Turn this back on to restore the entry.',
-      windowsShowOpenlessInKeyboardListError:
-        'Could not update the keyboard list: the system rejected changing the OpenLess language profile.',
       historyGroupTitle: 'History & context',
       historyRetentionLabel: 'History retention (days)',
       historyRetentionDesc:
@@ -1693,9 +1584,11 @@ export const en: typeof zhCN = {
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
       debugArchiveProcessedLabel: 'Keep processed audio',
-      debugArchiveProcessedDesc: 'The version after noise reduction and gain, stored in the existing recording file.',
+      debugArchiveProcessedDesc:
+        'The version after noise reduction and gain, stored in the existing recording file.',
       debugArchiveRawLabel: 'Also keep pre-processing audio',
-      debugArchiveRawDesc: 'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
+      debugArchiveRawDesc:
+        'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
       recordAudioForDebugLabel: 'Keep raw recording (debug)',
       recordAudioForDebugDesc:
         'Save raw microphone audio as wav for diagnosing recognition issues.',
@@ -1705,6 +1598,15 @@ export const en: typeof zhCN = {
       voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
       voiceActivationLocalOnly:
         'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationHotkeyLinked: "Link recording shortcut",
+      voiceActivationHotkeyLinkedDesc: "Click the recording shortcut to toggle wake listening instead of the usual recording gesture. Starts paused after launch. Pausing disables idle microphone prewarming, not other recordings. Wake listening is local; dictation still uses your current service.",
+      voiceActivationDisabled: "Voice activation disabled",
+      voiceActivationPaused: "Wake listening temporarily paused",
+      voiceActivationPausing: "Stopping wake listening…",
+      voiceActivationStarting: "Starting wake listening…",
+      voiceActivationListening: "Listening for the wake phrase",
+      voiceActivationDictating: "Dictating or finishing",
+      voiceActivationError: "Unable to start wake listening. Check the model, microphone permissions and device.",
       voiceActivationMultimodalModels:
         'Prepare the voice activation model here. Dictation still uses your current multimodal service.',
       voiceActivationModelMissing: 'The local Zipformer model is not installed.',
@@ -1716,16 +1618,6 @@ export const en: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Stop after timeout',
       voiceActivationTimeoutSeconds: 'Timeout (seconds)',
       startupGroupTitle: 'Startup',
-      lowMemoryBackgroundLabel: 'Low-memory background mode',
-      lowMemoryBackgroundDesc:
-        'Applies after restart. Release the main window on close and show a native capsule on demand. Disable microphone prewarming while idle. Local models keep their existing release settings.',
-      lowMemoryRestartLabel: 'Applies after restart',
-      lowMemoryRestartDesc:
-        'The low-memory background switch is saved; the running mode changes after the app restarts.',
-      lowMemoryRestartNow: 'Restart now',
-      lowMemoryCapsuleErrorLabel: 'Native capsule unavailable',
-      lowMemoryCapsuleErrorDesc:
-        'Dictation still works, but the floating capsule will not appear. The helper may be missing or blocked; reinstall the app.',
       startMinimizedLabel: 'Start minimized (no main window)',
       startMinimizedDesc: 'No main window on any launch path — menu bar / tray only.',
       autoUpdateCheckLabel: 'Auto-check for updates',
@@ -1769,13 +1661,13 @@ export const en: typeof zhCN = {
       validationTitle: 'Connection check',
       validationHint:
         'Manually send a real request to check this configuration. It may use service credits. Saving settings does not run a check.',
-      validationHintOmni:
-        'Manually send a text-only connectivity request (no recording). Passing does not mean audio dictation works—please confirm with a short recording. It may use service credits.',
+      validationHintOmni: 'Manually send a text-only connection request. It may use server credits.',
       autoSaveHint:
         'Changes save automatically. Once configured, you can check the connection manually.',
       nameHint:
         'This name distinguishes channels from the same provider. It does not affect the model or connection.',
       errModel: 'Model',
+      errThinking: 'turn on Thinking',
       verify: 'Verify',
       verifyHint: 'Makes one real API call to check this channel works right now',
       errTimeout: 'timeout',
@@ -1801,8 +1693,7 @@ export const en: typeof zhCN = {
       minutesAgo: '{{count}}m ago',
       hoursAgo: '{{count}}h ago',
       daysAgo: '{{count}}d ago',
-      localEngineModelHint:
-        'Download and switch local models under AI services & models → Local models.',
+      localEngineModelHint: 'Download and switch local models under AI & models → Local models.',
     },
     providers: {
       localEngineNoCredentials: 'Local engines need no API key or endpoint.',
@@ -1828,11 +1719,12 @@ export const en: typeof zhCN = {
         'One model that turns audio + prompt into the final text directly (experimental pipeline).',
       pipelineModeLabel: 'Pipeline mode',
       pipelineModeHint:
-        'Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.',
+        'Traditional uses ASR + LLM; multimodal uses one audio model; DeepSeek suite combines its speech, language and search services.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Traditional',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.',
+        'All three pipelines retain independent credentials. Your selection persists after closing settings, closing the window, or restarting the app.',
       presets: {
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
@@ -2002,6 +1894,8 @@ export const en: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.',
       llmStreamError: 'The server returned a stream error. Check the model and request parameters.',
+      llmThinkingRequired:
+        'This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.',
       saveProtocol: 'Save protocol settings',
       thinkingModeHint:
         'Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.',
@@ -2331,7 +2225,10 @@ export const en: typeof zhCN = {
         'SendInput Unicode types directly, bypassing TSF / IME — no input-method switching needed.',
       streamingInsertHintLinux:
         'Uses fcitx5 plugin for text submission; streaming insertion uses enigo + XTest for keystroke synthesis.',
-      windowsCompositionInputLabel: 'Show live transcript in the input box (Windows)',
+      macosCompositionInputLabel: 'Live transcript in the input field',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
+      windowsCompositionInputLabel: 'Show live transcript in the input box',
       windowsCompositionInputDesc:
         'While you speak, the recognized text appears underlined in the input box and is replaced by the final result when you finish. Requires the OpenLess TSF input component and a target app that supports the Text Services Framework (TSF).',
       streamingInsertSaveClipboardLabel: 'Copy to clipboard',
@@ -2519,7 +2416,10 @@ export const en: typeof zhCN = {
     details: 'Show error details',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Service settings',
       llm: 'Language models',
       asr: 'Speech recognition',
@@ -2527,11 +2427,11 @@ export const en: typeof zhCN = {
       models: 'Local models',
       connections: 'Connections',
       inactive: 'Not used in this mode',
+      unavailable: 'Unavailable',
       inactiveDetail:
         'These settings are saved, but the current recognition pipeline does not use them.',
-      statusConfigured:
-        'Green dot: at least one service is on. Requests use the first enabled service.',
-      statusMissing: 'Red dot: no service is turned on yet.',
+      statusConfigured: 'At least one service is on. Requests use the first enabled service.',
+      statusMissing: 'No service is turned on yet.',
     },
     searchPlaceholder: 'Find a settings category…',
     clearSearch: 'Clear search',
@@ -2540,51 +2440,59 @@ export const en: typeof zhCN = {
     searchCount: 'Categories found: {{count}}',
     noResults: 'No matching categories. Try “microphone”, “models” or “theme”.',
     autoSaveHint: 'Changes save automatically',
-    backToAdvanced: 'Back to Experiments & extensions',
-    backToTestingFeatures: 'Back to features under testing',
+    backToAdvanced: 'Back to advanced features',
+    back: 'Back',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
+      liveInput: 'Configure the live transcript in the input field.',
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer: 'For self-hosted services only; official sync needs no configuration.',
       localModels: experimentalAsr.description,
-      testingFeatures: 'Opt in to features that are still being tested.',
       vocabularyLearning:
         'Learn from manual corrections after dictation; configure observation, confirmation time and phrase length.',
-      lessComputer: 'Choose an agent and configure its model, permissions, and working directory.',
-      claudeConsole: 'Detect Claude Code and view output from test tasks.',
       multimodal: 'Manage the experimental multimodal recognition switch.',
       debug: 'Keep debug recordings, inspect cursor context, and export logs.',
+      voiceEnhancement: 'Advanced audio processing, noise reduction and playback echo suppression.',
+      cursorContext:
+        'Configure context captured around the cursor for polish requests and short-input handling.',
+      startupDiagnostics: 'Inspect startup timings, backend handshakes, and delayed probes.',
     },
     descriptions: {
-      general: 'Choose a microphone, adjust recording and text input, or connect your phone.',
+      general: 'Microphone monitoring, capsule style, text insertion, and remote input.',
       inputMethod: 'Configure the Android overlay and input method for phone typing.',
       shortcuts: 'Search, browse and customize keyboard shortcuts.',
       services:
         'Choose speech recognition and text processing services. Manage channels, local models and connections.',
+      cloudServices: 'Manage the extension marketplace, GitHub sign-in, and encrypted cloud sync.',
       appearance: 'Adjust the theme, page layout and interface language for comfortable reading.',
       privacy:
         'Check system permissions and connections. Manage history, recordings and local data.',
-      advanced: 'Configure testing features, vocabulary learning, and debugging tools.',
+      advanced: 'Configure experimental features and extensions.',
       about: 'View your version, update channel and automatic update settings.',
     },
     searchKeywords: {
       general: 'microphone recording input phone remote LAN PIN capsule mute startup autostart',
       inputMethod: 'input method IME keyboard overlay Android',
       shortcuts: 'shortcut hotkey key combination selection polish voice editing',
-      services:
-        'ASR LLM API channel model cloud local offline network proxy marketplace multimodal pipeline Omni',
+      services: 'ASR LLM API channel model local offline network proxy multimodal pipeline Omni',
+      cloudServices: 'cloud sync encrypted marketplace GitHub login official extension',
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
-      advanced: 'Less Computer Claude Agent debug logs experiment vocabulary learning',
+      advanced:
+        'Less Computer Claude Agent debug logs experiment voice enhancement cursor diagnostics manual edits vocabulary learning Beta ',
       about: 'version Beta stable update upgrade',
     },
 
     sections: {
       appearance: 'Appearance & language',
       shortcuts: 'Shortcuts',
-      general: 'Recording & input',
+      general: 'General',
       inputMethod: 'Input method',
-      services: 'AI services & models',
+      services: 'AI & models',
+      cloudServices: 'Cloud services',
       privacy: 'Permissions & data',
-      advanced: 'Experiments & extensions',
+      advanced: 'Advanced features',
       personalize: 'Personalize',
       about: 'About & updates',
       helpCenter: 'Help center',

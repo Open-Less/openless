@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "openless"
-version = "2.0.2-Beta.3+build.20261026-c9f49c60"
+version = "2.0.3-Beta.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4493,7 +4493,7 @@ dependencies = [
  "winreg 0.52.0",
  "x509-parser",
  "zeroize",
- "zip 2.6.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -4530,6 +4530,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rhai",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha1 0.11.0",
@@ -5558,6 +5559,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -6880,8 +6890,6 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-wry"
 version = "2.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d61892587aea2a85245bcaec98c6fe46268874c0a0deae5535fb71ca7b93eae"
 dependencies = [
  "gtk",
  "http",

@@ -211,6 +211,7 @@ fn emit_capsule_with_context_locked(
             )
             && !dictation.recording_ready,
         selection_polish,
+        qa: false,
         capsule_style: inner.host.cached_capsule_style(),
     };
     let captured_revision = inner.host.capsule_revision();
@@ -308,16 +309,42 @@ fn emit_capsule_payload_locked(
         log::debug!("[capsule] skipped stale payload commit at revision {captured_revision}");
         return event_epoch;
     }
+    // On Windows, callers include the cpal audio callback (~30 Hz) and the backend event
+    // task. Keep Tauri handle access on the event-loop thread there; other platforms retain
+    // their existing presentation path.
+    #[cfg(target_os = "windows")]
+    {
+        let inner_for_main = Arc::clone(inner);
+        inner.host.on_main_thread(move || {
+            present_capsule_payload(&inner_for_main, payload, event_epoch, prev_state)
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    present_capsule_payload(inner, payload, event_epoch, prev_state);
+    event_epoch
+}
+
+/// Native or WebView capsule presentation plus the `capsule:state` events. On Windows this
+/// runs on the event-loop thread; other platforms keep their existing dispatch behavior.
+fn present_capsule_payload(
+    inner: &Arc<Inner>,
+    payload: CapsulePayload,
+    event_epoch: u64,
+    prev_state: Option<CapsuleState>,
+) {
+    let state = payload.state;
     #[cfg(not(mobile))]
     if inner
         .host
         .present_native_capsule(&payload, event_epoch, prev_state)
     {
         inner.host.emit_capsule_state_to_main(&payload);
-        return event_epoch;
+        return;
     }
+    #[cfg(mobile)]
+    let _ = event_epoch;
     let Some(capsule) = inner.host.capsule_window() else {
-        return event_epoch;
+        return;
     };
 
     #[cfg(target_os = "android")]
@@ -386,7 +413,6 @@ fn emit_capsule_payload_locked(
     // recording cues. On Linux the cue must still work while the capsule is hidden, so it is
     // also sent to the main window. Always immediate, decoupled from capsule window show timing.
     inner.host.emit_capsule_state_to_main(&payload);
-    event_epoch
 }
 
 /// Whether a selection-polish terminal timer is still eligible to collapse the capsule.
@@ -404,7 +430,7 @@ pub(super) fn selection_polish_capsule_epoch_is_current(
 /// Collapse path for old dictation/QA timers. It shares one short lock with all emits: it
 /// yields if Selection Polish is showing, and if a new voice/QA session emitted first, that
 /// emission is ordered before Idle by the lock.
-pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
+pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>, expected_epoch: u64) {
     // Read session state first, then enter the capsule lock. The event epoch cancels this Idle
     // if any new payload arrived between the two reads.
     #[cfg(all(not(mobile), target_os = "windows"))]
@@ -416,13 +442,12 @@ pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
         && inner.backend.less_computer_active_session().is_none()
         && selection_voice_idle;
     let selection_polish_active = inner.selection_polish_capsule_active.load(Ordering::SeqCst);
-    let observed_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
     if !dictation_idle || selection_polish_active {
         return;
     }
 
     let _event_guard = inner.capsule_event_lock.lock();
-    if inner.capsule_event_epoch.load(Ordering::SeqCst) == observed_epoch
+    if inner.capsule_event_epoch.load(Ordering::SeqCst) == expected_epoch
         && !inner.selection_polish_capsule_active.load(Ordering::SeqCst)
     {
         emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false);
@@ -491,6 +516,7 @@ mod tests {
             operating: false,
             warming: false,
             selection_polish: false,
+            qa: false,
             capsule_style: CapsuleStyle::Siri,
         }
     }

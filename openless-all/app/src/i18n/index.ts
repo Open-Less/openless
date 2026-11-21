@@ -5,6 +5,7 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { zhCN } from './zh-CN';
+import { withDeletionMessages } from './deletionMessages';
 import { setRemoteLocale } from '../lib/ipc';
 
 export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'] as const;
@@ -55,7 +56,7 @@ const localeLoaders: Record<Exclude<SupportedLocale, 'zh-CN'>, () => Promise<typ
 async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
   if (lng === 'zh-CN' || i18n.hasResourceBundle(lng, 'translation')) return;
   try {
-    i18n.addResourceBundle(lng, 'translation', await localeLoaders[lng]());
+    i18n.addResourceBundle(lng, 'translation', withDeletionMessages(await localeLoaders[lng](), lng));
   } catch (e) {
     console.warn('[i18n] load locale failed, staying on zh-CN fallback:', lng, e);
   }
@@ -63,7 +64,7 @@ async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
 
 const initialReady = i18n.use(initReactI18next).init({
   // Simplified Chinese is the canonical fallback; the selected chunk loads before rendering.
-  resources: { 'zh-CN': { translation: zhCN } },
+  resources: { 'zh-CN': { translation: withDeletionMessages(zhCN, 'zh-CN') } },
   lng: initialLng,
   fallbackLng: 'zh-CN',
   supportedLngs: SUPPORTED_LOCALES as unknown as string[],
@@ -138,11 +139,6 @@ export async function setLocalePreference(
 // requests its index). Non-Tauri (browser dev) hits a mock no-op; failures are silent.
 function syncRemoteLocale(resolved: SupportedLocale): void {
   void setRemoteLocale(resolved).catch(() => {});
-  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-    void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke('native_capsule_set_locale', { locale: resolved }))
-      .catch(() => {});
-  }
 }
 
 export const FOLLOW_SYSTEM = FOLLOW_SYSTEM_VALUE;

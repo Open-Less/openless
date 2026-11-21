@@ -468,6 +468,16 @@ pub const CATALOG: &[Msg] = &[
             "사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.",
         ),
     },
+    Msg {
+        key: "settings.providers.llmThinkingRequired",
+        text: row(
+            "该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。",
+            "此模型不接受關閉思考。請開啟模型旁的「思考」開關後重新驗證。",
+            "This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.",
+            "このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。",
+            "이 모델은 사고를 끌 수 없습니다. 모델 옆의 \"사고\"를 켠 뒤 다시 검증하세요.",
+        ),
+    },
     // ---- Shell / navigation ------------------------------------------------
 
     Msg {
@@ -2727,11 +2737,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.sections.general",
         text: row(
-            "录音与输入",
             "通用",
-            "Recording & input",
-            "録音と入力",
-            "녹음 및 입력",
+            "通用",
+            "General",
+            "一般",
+            "일반",
         ),
     },
     Msg {
@@ -2803,11 +2813,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.title",
         text: row(
-            "录音与输入",
-            "錄音與輸入",
-            "Recording & input",
-            "録音と入力",
-            "녹음 및 입력",
+            "麦克风与录音",
+            "麥克風與錄音",
+            "Microphone and recording",
+            "マイクと録音",
+            "마이크와 녹음",
         ),
     },
     Msg {
@@ -4498,11 +4508,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.descriptions.general",
         text: row(
-            "选择麦克风、设置录音方式与文字输入，也可连接手机输入。",
-            "選擇麥克風、設定錄音方式與文字輸入，也可連接手機輸入。",
-            "Choose a microphone, adjust recording and text input, or connect your phone.",
-            "マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。",
-            "마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.",
+            "麦克风监听、胶囊样式、文字插入，也可连接手机远程输入。",
+            "麥克風監聽、膠囊樣式、文字插入，也可連接手機遠端輸入。",
+            "Microphone monitoring, capsule style, text insertion, and remote input.",
+            "マイク監視、カプセルのスタイル、文字の挿入、リモート入力。",
+            "마이크 모니터링, 캡슐 스타일, 텍스트 삽입, 원격 입력.",
         ),
     },
     Msg {
@@ -8037,6 +8047,15 @@ pub fn tr_catalog<L: IntoLang>(lang: L, key: &'static str) -> &'static str {
     tr(CATALOG, lang, key)
 }
 
+/// Localize provider guidance at display time; stored validation codes stay unchanged.
+pub fn provider_error_text(lang: Lang, message: &str) -> &str {
+    if message == "llmThinkingRequired" || message.ends_with(": llmThinkingRequired") {
+        tr_catalog(lang, "settings.providers.llmThinkingRequired")
+    } else {
+        message
+    }
+}
+
 /// Global formatted lookup against [`CATALOG`].
 pub fn fmt_catalog<L: IntoLang>(lang: L, key: &str, args: &[&dyn Display]) -> String {
     fmt(CATALOG, lang, key, args)
@@ -8071,12 +8090,12 @@ mod tests {
     use super::*;
 
     const TEST_CATALOG: &[Msg] = &[
-    Msg {
+        Msg {
             key: "k.full",
             text: row("完整", "完整", "Full", "完全", "전체"),
         },
         // `k.missing_en` deliberately leaves `en` empty to exercise fallback.
-    Msg {
+        Msg {
             key: "k.missing_en",
             text: row("来源", "來源", "", "ソース", "출처"),
         },
@@ -8088,6 +8107,24 @@ mod tests {
         assert_eq!(tr(TEST_CATALOG, Lang::ZhCn, "k.missing_en"), "来源");
         // Fully translated keys return their own locale.
         assert_eq!(tr(TEST_CATALOG, Lang::En, "k.full"), "Full");
+    }
+
+    #[test]
+    fn thinking_required_provider_errors_are_localized_without_changing_other_errors() {
+        for lang in LANGS {
+            let expected = tr_catalog(lang, "settings.providers.llmThinkingRequired");
+            assert_ne!(expected, "settings.providers.llmThinkingRequired");
+            for message in [
+                "llmThinkingRequired",
+                "Provider: llmThinkingRequired",
+                "LLM provider failed: parse error: llmThinkingRequired",
+            ] {
+                assert_eq!(provider_error_text(lang, message), expected);
+            }
+            for message in ["providerHttpStatus:401", "notllmThinkingRequired"] {
+                assert_eq!(provider_error_text(lang, message), message);
+            }
+        }
     }
 
     #[test]

@@ -3946,6 +3946,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rhai",
+ "roxmltree 0.21.1",
  "rsa",
  "serde",
  "serde_json",

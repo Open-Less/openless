@@ -1746,6 +1746,7 @@ pub struct BackendRepositories {
     pub preferences: Arc<PreferencesStore>,
     pub history: Arc<HistoryStore>,
     pub activity: Arc<ActivityStore>,
+    pub expression_profile: crate::expression_observation::SharedExpressionProfile,
     pub vocabulary: Arc<DictionaryStore>,
     pub correction_rules: Arc<CorrectionRuleStore>,
     pub style_packs: Arc<StylePackStore>,
@@ -1770,6 +1771,9 @@ impl BackendRepositories {
             history: Arc::new(HistoryStore::at_data_dir(data_dir)),
             activity: Arc::new(
                 ActivityStore::at_data_dir(data_dir).unwrap_or_else(|_| ActivityStore::in_memory()),
+            ),
+            expression_profile: crate::expression_observation::open_shared_expression_profile(
+                data_dir.join("expression-profile.json"),
             ),
             vocabulary: Arc::new(DictionaryStore::at_data_dir(data_dir)),
             correction_rules: Arc::new(CorrectionRuleStore::at_data_dir(data_dir)),
@@ -2614,6 +2618,7 @@ pub struct OpenLessBackend {
     history: Arc<HistoryStore>,
     history_revision: Arc<AtomicU64>,
     activity: Arc<ActivityStore>,
+    expression_profile: crate::expression_observation::SharedExpressionProfile,
     style_packs: Arc<StylePackStore>,
     style_pack_revision: Arc<AtomicU64>,
     preferences: Arc<PreferencesStore>,
@@ -2624,7 +2629,7 @@ pub struct OpenLessBackend {
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
-    local_migration_store: Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>,
+    local_migration_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
@@ -2635,6 +2640,7 @@ pub struct OpenLessBackend {
     voice_activation_generation: Arc<AtomicU64>,
     voice_activation_handoff_generation: AtomicU64,
     voice_activation_configure_gate: tokio::sync::Mutex<()>,
+    voice_activation_link: Mutex<crate::voice_activation_hotkey::VoiceActivationLink>,
     backend_lifecycle_gate: tokio::sync::Mutex<()>,
     backend_shutdown_requested: AtomicBool,
     voice_activation_session: Arc<Mutex<Option<crate::voice_activation::VoiceActivationSession>>>,
@@ -2667,6 +2673,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    session_id: SessionId,
     settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
@@ -2675,7 +2682,74 @@ struct CoreEditObservationSink {
     events: Arc<EventBus>,
 }
 
+struct CombinedEditObservationSink {
+    vocabulary: Option<CoreEditObservationSink>,
+    expression_profile: Option<Arc<crate::expression_observation::ExpressionProfileStore>>,
+    expression_generation: Option<u64>,
+    typed_text: String,
+    session_id: SessionId,
+    clock: Arc<dyn Clock>,
+    generation: Arc<AtomicU64>,
+    expected_generation: u64,
+    settings_gate: Arc<Mutex<()>>,
+    duration: std::time::Duration,
+}
+
+impl EditObservationSink for CombinedEditObservationSink {
+    fn observation_id(&self) -> Option<u64> {
+        Some(self.expected_generation)
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        Some(self.session_id)
+    }
+
+    fn observation_duration(&self) -> std::time::Duration {
+        self.duration
+    }
+
+    fn publish(&self, edit: crate::host_document::EditPair) -> bool {
+        use chrono::Datelike;
+        if self.generation.load(Ordering::Acquire) != self.expected_generation {
+            return false;
+        }
+        let signal = self.expression_profile.as_ref().and_then(|_| {
+            crate::expression_observation::signal_from_observed_edit(&self.typed_text, &edit).ok()
+        });
+        let mut recorded = false;
+        if let (Some(profile), Some(profile_generation), Some(signal)) =
+            (&self.expression_profile, self.expression_generation, signal)
+        {
+            if let Ok(_guard) = self.settings_gate.try_lock() {
+                if self.generation.load(Ordering::Acquire) == self.expected_generation {
+                    match profile.record_if_generation(
+                        self.session_id.as_uuid(),
+                        self.clock.today_local().num_days_from_ce(),
+                        signal,
+                        profile_generation,
+                    ) {
+                        Ok(saved) => recorded = saved,
+                        Err(error) => log::warn!("failed to save expression evidence: {error}"),
+                    }
+                }
+            }
+        }
+        self.vocabulary
+            .as_ref()
+            .is_some_and(|sink| sink.publish(edit))
+            || recorded
+    }
+}
+
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_id(&self) -> Option<u64> {
+        Some(self.expected_generation)
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        Some(self.session_id)
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.settings.observation_seconds as u64)
     }
@@ -2685,6 +2759,9 @@ impl EditObservationSink for CoreEditObservationSink {
         // callback may still arrive after the next session starts. The Core
         // generation is therefore the authoritative stale-report barrier.
         if self.generation.load(Ordering::Acquire) != self.expected_generation {
+            return false;
+        }
+        if !crate::correction_observation::permits_vocabulary_suggestion(&self.typed_text, &edit) {
             return false;
         }
         let rules = crate::host_document::learned_rules_with_max_chars(
@@ -2751,6 +2828,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
+            observation_id: generation.map(|(_, expected)| expected),
             expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
@@ -2789,7 +2867,8 @@ impl HistoryProviderAttribution {
         llm_call_label: Option<&crate::polish::LlmCallLabel>,
     ) -> Self {
         match context.pipeline_mode {
-            crate::shared_types::PipelineMode::Traditional => Self {
+            crate::shared_types::PipelineMode::Traditional
+            | crate::shared_types::PipelineMode::Deepseek => Self {
                 asr_provider: Some(
                     asr_call_label
                         .map(|label| label.provider.clone())
@@ -2914,15 +2993,24 @@ impl OpenLessBackend {
     /// Construct an explicitly unavailable Core so the native shell can show
     /// its startup error instead of panicking before any window is visible.
     /// This path never opens the user's files or a credential store.
-    pub fn blocked_startup(mut config: BackendConfig, error: BackendError) -> Self {
-        // A blocked backend must never touch the caller's failed data path. Use
-        // an isolated temporary store solely to satisfy the normal constructor.
-        config.data_dir =
+    pub fn blocked_startup(config: BackendConfig, error: BackendError) -> Self {
+        let isolated_path =
             std::env::temp_dir().join(format!("openless-startup-blocked-{}", uuid::Uuid::new_v4()));
+        Self::blocked_startup_at(config, error, isolated_path)
+    }
+
+    fn blocked_startup_at(
+        mut config: BackendConfig,
+        error: BackendError,
+        isolated_path: std::path::PathBuf,
+    ) -> Self {
+        // A blocked backend must not touch either the failed data path or this placeholder.
+        config.data_dir = isolated_path;
         let repositories = BackendRepositories {
             preferences: Arc::new(PreferencesStore::in_memory()),
             history: Arc::new(HistoryStore::at_path(std::path::PathBuf::new())),
             activity: Arc::new(ActivityStore::in_memory()),
+            expression_profile: Arc::new(Mutex::new(None)),
             vocabulary: Arc::new(DictionaryStore::at_path(std::path::PathBuf::new())),
             correction_rules: Arc::new(CorrectionRuleStore::at_path(std::path::PathBuf::new())),
             style_packs: Arc::new(StylePackStore::in_memory()),
@@ -2948,11 +3036,21 @@ impl OpenLessBackend {
         self.startup_error.clone()
     }
 
+    fn local_migration_store(
+        &self,
+    ) -> Result<&crate::cloud_sync_e2ee_store::CoreSyncStore, BackendError> {
+        self.local_migration_store.as_deref().ok_or_else(|| {
+            self.startup_error.clone().unwrap_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidState, "local migration is unavailable")
+            })
+        })
+    }
+
     pub fn bind_restore_runtime_effects(
         &self,
         effects: Arc<dyn crate::config::RestoreRuntimeEffects>,
     ) -> Result<(), BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .bind_runtime_effects(effects)
             .map_err(|_| {
                 BackendError::new(
@@ -3192,16 +3290,19 @@ impl OpenLessBackend {
         } else {
             None
         };
-        let local_migration_store = if let Some(store) = &encrypted_sync_store {
-            Arc::clone(store)
+        let local_migration_store = if restore_guard.is_some() {
+            // Blocked startup must not depend on filesystem or credential availability.
+            None
+        } else if let Some(store) = &encrypted_sync_store {
+            Some(Arc::clone(store))
         } else {
-            crate::cloud_sync_e2ee::build_local_store(
+            Some(crate::cloud_sync_e2ee::build_local_store(
                 &config.data_dir,
                 repositories.clone(),
                 Arc::clone(&deps.credential_store),
                 env!("CARGO_PKG_VERSION").into(),
                 Arc::clone(&deps.task_spawner),
-            )?
+            )?)
         };
         match (
             deps.selection_runtime.take(),
@@ -3274,9 +3375,16 @@ impl OpenLessBackend {
             .remote_input
             .bind_event_publisher(BackendEventPublisher::new(Arc::clone(&events)));
         {
-            let store = &local_migration_store;
-            let guard: crate::domains::RuntimeRestoreGuard = restore_guard.unwrap_or_else(|| {
-                let weak_store = Arc::downgrade(&local_migration_store);
+            let guard: crate::domains::RuntimeRestoreGuard = if let Some(guard) = restore_guard {
+                guard
+            } else {
+                let store = local_migration_store.as_ref().ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "local migration is unavailable",
+                    )
+                })?;
+                let weak_store = Arc::downgrade(store);
                 Arc::new(move || {
                     let store = weak_store.upgrade().ok_or_else(|| {
                         BackendError::new(
@@ -3291,7 +3399,7 @@ impl OpenLessBackend {
                         )
                     })
                 })
-            });
+            };
             voice_sessions.bind_restore_guard(Arc::clone(&guard))?;
             runtime_start_work.bind(Arc::clone(&guard), Arc::clone(&deps.task_spawner))?;
             deps.services
@@ -3311,30 +3419,32 @@ impl OpenLessBackend {
             // Each probe releases its lock before the next one. Starts check
             // Store's already-raised flag while holding the matching lock.
             // Both directions are weak, so neither binding owns the backend.
-            store
-                .bind_runtime_idle_probe(Arc::new(move || {
-                    voice
-                        .upgrade()
-                        .is_some_and(|gate| gate.runtime_restore_idle())
-                        && starts
+            if let Some(store) = &local_migration_store {
+                store
+                    .bind_runtime_idle_probe(Arc::new(move || {
+                        voice
                             .upgrade()
                             .is_some_and(|gate| gate.runtime_restore_idle())
-                        && qa
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                        && selection
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                        && selection_voice
-                            .upgrade()
-                            .is_some_and(|service| service.runtime_restore_idle())
-                }))
-                .map_err(|_| {
-                    BackendError::new(
-                        BackendErrorCode::InvalidState,
-                        "failed to bind encrypted sync runtime barrier",
-                    )
-                })?;
+                            && starts
+                                .upgrade()
+                                .is_some_and(|gate| gate.runtime_restore_idle())
+                            && qa
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                            && selection
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                            && selection_voice
+                                .upgrade()
+                                .is_some_and(|service| service.runtime_restore_idle())
+                    }))
+                    .map_err(|_| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidState,
+                            "failed to bind encrypted sync runtime barrier",
+                        )
+                    })?;
+            }
         }
         Ok(Self {
             config,
@@ -3365,6 +3475,7 @@ impl OpenLessBackend {
             history: repositories.history,
             history_revision,
             activity: repositories.activity,
+            expression_profile: repositories.expression_profile,
             style_packs: repositories.style_packs,
             style_pack_revision,
             preferences: repositories.preferences,
@@ -3385,6 +3496,7 @@ impl OpenLessBackend {
             voice_activation_generation: Arc::new(AtomicU64::new(0)),
             voice_activation_handoff_generation: AtomicU64::new(0),
             voice_activation_configure_gate: tokio::sync::Mutex::new(()),
+            voice_activation_link: Mutex::new(crate::voice_activation_hotkey::VoiceActivationLink::default()),
             backend_lifecycle_gate: tokio::sync::Mutex::new(()),
             backend_shutdown_requested: AtomicBool::new(false),
             voice_activation_session: Arc::new(Mutex::new(None)),
@@ -3398,7 +3510,7 @@ impl OpenLessBackend {
         if let Some(error) = &self.startup_error {
             return Err(error.clone());
         }
-        self.local_migration_store
+        self.local_migration_store()?
             .ensure_runtime_available()
             .map_err(|_| {
                 BackendError::new(
@@ -3409,12 +3521,171 @@ impl OpenLessBackend {
         Ok(())
     }
 
+    fn voice_activation_intent(&self) -> (bool, bool, u64) {
+        let prefs = self.get_preferences();
+        let linked = prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked
+            && self.deps.voice_activation_runtime.is_some();
+        let (requested, revision) = {
+            let mut state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            state.configure(linked);
+            (state.requested, state.revision)
+        };
+        let paused = linked && !requested;
+        if let Some(runtime) = &self.deps.voice_activation_runtime {
+            runtime.set_capture_paused(revision, paused);
+        }
+        (prefs.voice_activation_enabled && !paused, paused, revision)
+    }
+
+    fn pause_linked_voice_activation_after_failure(&self, generation: u64) {
+        let prefs = self.get_preferences();
+        if !prefs.voice_activation_enabled || !prefs.voice_activation_hotkey_linked {
+            return;
+        }
+        let revision = {
+            let mut state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            if self.voice_activation_generation.load(Ordering::Acquire) != generation {
+                return;
+            }
+            state.pause();
+            state.revision
+        };
+        if let Some(runtime) = &self.deps.voice_activation_runtime {
+            runtime.set_capture_paused(revision, true);
+        }
+    }
+
+    async fn recover_voice_activation_failure(&self, generation: u64, error: BackendError) {
+        self.pause_linked_voice_activation_after_failure(generation);
+        match self.stop_voice_activation_if_current(generation,
+            crate::voice_activation::VoiceActivationStopReason::RuntimeFailure).await
+        {
+            Ok(true) => {
+                if self.voice_activation_intent().1 {
+                    self.events.publish(None, BackendEventKind::VoiceActivationStateChanged(
+                        crate::voice_activation::VoiceActivationStateSnapshot {
+                            phase: voice_activation_failure_phase(error.code),
+                            activation_generation: self.voice_activation_generation.load(Ordering::Acquire),
+                            session_id: None,
+                            message: Some(error.message),
+                        }));
+                } else if self.voice_activation_is_requested() {
+                    let _ = self.configure_voice_activation().await;
+                }
+            }
+            Ok(false) => {}
+            Err(error) => log::warn!("voice activation recovery stop failed: {error}"),
+        }
+    }
+
+    fn voice_activation_is_requested(&self) -> bool {
+        self.voice_activation_intent().0
+    }
+
+    /// Accept clicks synchronously so native FIFO delivery never waits for ASR startup.
+    /// Some(false) consumes an edge; Some(true) schedules reconciliation.
+    pub fn accept_voice_activation_hotkey_edge(&self, edge: DictationHotkeyEdge) -> Option<bool> {
+        self.voice_activation_intent();
+        let prefs = self.get_preferences();
+        if !prefs.voice_activation_enabled || !prefs.voice_activation_hotkey_linked
+            || self.deps.voice_activation_runtime.is_none()
+        {
+            return None;
+        }
+        let (changed, paused, revision, generation) = {
+            let mut state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            let changed = state.edge(edge);
+            let generation = if changed {
+                let handoff = self.voice_activation_handoff_generation.load(Ordering::Acquire);
+                if !state.requested {
+                    state.finalize_session = self.voice_activation_session.lock()
+                        .expect("voice activation session lock poisoned").as_ref().map(|s| s.session_id);
+                    if handoff != 0 {
+                        state.finalize_generation = Some(handoff);
+                    }
+                }
+                // A handoff may already own staged body PCM before it has a
+                // session ID. Keep its ticket valid until that body can finish.
+                if handoff != 0 && state.finalize_generation == Some(handoff) {
+                    self.voice_activation_generation.load(Ordering::Acquire)
+                } else {
+                    self.voice_activation_generation.fetch_add(1, Ordering::AcqRel) + 1
+                }
+            } else {
+                self.voice_activation_generation.load(Ordering::Acquire)
+            };
+            (changed, !state.requested, state.revision, generation)
+        };
+        if changed {
+            if let Some(runtime) = &self.deps.voice_activation_runtime {
+                runtime.set_capture_paused(revision, paused);
+            }
+            self.events.publish(None, BackendEventKind::VoiceActivationStateChanged(
+                crate::voice_activation::VoiceActivationStateSnapshot {
+                    phase: if paused { crate::voice_activation::VoiceActivationPhase::Pausing }
+                        else { crate::voice_activation::VoiceActivationPhase::Starting },
+                    activation_generation: generation,
+                    session_id: None,
+                    message: None,
+                }));
+        }
+        Some(changed)
+    }
+
+    /// Runtime-only intent token for host feedback; never changes saved preferences.
+    pub fn voice_activation_hotkey_intent(&self) -> Option<(bool, u64)> {
+        let preferences = self.get_preferences();
+        if !preferences.voice_activation_enabled || !preferences.voice_activation_hotkey_linked {
+            return None;
+        }
+        let state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+        Some((state.requested, state.revision))
+    }
+
+    pub async fn reconcile_voice_activation_hotkey(&self) -> Result<(), BackendError> {
+        let paused_session = self.voice_activation_link.lock()
+            .expect("voice link lock poisoned").finalize_session;
+        let session_id = paused_session.or_else(|| {
+            self.voice_activation_intent().1.then(|| self.voice_activation_session.lock()
+                .expect("voice activation session lock poisoned").as_ref().map(|s| s.session_id)).flatten()
+        });
+        if let Some(session_id) = session_id {
+            // Recorder stop can reconfigure activation: never hold configure_gate here.
+            if let Err(error) = self.stop_dictation_session(session_id).await {
+                if !matches!(error.code, BackendErrorCode::InvalidState | BackendErrorCode::Busy) {
+                    return Err(error);
+                }
+            }
+        }
+        self.configure_voice_activation().await
+    }
+
+    async fn settle_stale_voice_dictation(&self, session_id: SessionId) {
+        let must_finalize = self.voice_activation_link.lock()
+            .expect("voice link lock poisoned").finalize_session == Some(session_id);
+        if must_finalize || self.voice_activation_intent().1 {
+            let _ = self.stop_dictation_session(session_id).await;
+            let _ = self.configure_voice_activation().await;
+        } else {
+            let _ = self.cancel_dictation(Some(session_id)).await;
+        }
+    }
+
     /// Configure the opt-in local voice activation listener from the current
     /// preference snapshot. Reconfiguration replaces the previous native
     /// handle only after it has been stopped, so one process owns one mic.
     pub async fn configure_voice_activation(&self) -> Result<(), BackendError> {
+        self.voice_activation_intent();
         let _configure_gate = self.voice_activation_configure_gate.lock().await;
+        let (effective, paused, revision) = self.voice_activation_intent();
         let preferences = self.get_preferences();
+        let pending_body = self.voice_activation_link.lock()
+            .expect("voice link lock poisoned").finalize_generation;
+        if pending_body.is_some_and(|generation| {
+            self.voice_activation_handoff_generation.load(Ordering::Acquire) == generation
+        }) {
+            return Ok(());
+        }
         if self
             .voice_activation_session
             .lock()
@@ -3447,7 +3718,7 @@ impl OpenLessBackend {
                 .stop(crate::voice_activation::VoiceActivationStopReason::Disabled)
                 .await;
         }
-        if !preferences.voice_activation_enabled
+        if !effective
             || self.backend_shutdown_requested.load(Ordering::Acquire)
             || !self.snapshot().running
         {
@@ -3455,7 +3726,7 @@ impl OpenLessBackend {
             // activation was never enabled. Existing subscribers expect
             // BackendStarted to be the first startup event; later disable/error
             // transitions still publish Disabled below when a visible state exists.
-            let should_publish_disabled = had_previous_handle
+            let should_publish_disabled = paused || had_previous_handle
                 || self
                     .events
                     .latest_voice_activation_state()
@@ -3468,7 +3739,8 @@ impl OpenLessBackend {
                     None,
                     BackendEventKind::VoiceActivationStateChanged(
                         crate::voice_activation::VoiceActivationStateSnapshot {
-                            phase: crate::voice_activation::VoiceActivationPhase::Disabled,
+                            phase: if paused { crate::voice_activation::VoiceActivationPhase::Paused }
+                                else { crate::voice_activation::VoiceActivationPhase::Disabled },
                             activation_generation: generation,
                             session_id: None,
                             message: None,
@@ -3528,14 +3800,22 @@ impl OpenLessBackend {
         let sink: Arc<dyn crate::ports::VoiceActivationSink> = Arc::new(CoreVoiceActivationSink {
             events: Arc::clone(&self.events),
         });
-        match runtime.configure(config, sink).await {
+        let configured = if preferences.voice_activation_hotkey_linked && !config.wake_enabled {
+            Err(crate::ports::VoiceActivationError::InvalidConfig(
+                "enable the wake phrase before linking the recording shortcut".into()))
+        } else {
+            runtime.configure(config, sink).await
+        };
+        match configured {
             Ok(handle) => {
                 let stale_handle = {
                     let mut slot = self
                         .voice_activation_handle
                         .lock()
                         .expect("voice activation handle lock poisoned");
-                    if self.voice_activation_generation.load(Ordering::Acquire) != generation {
+                    if self.voice_activation_generation.load(Ordering::Acquire) != generation
+                        || self.voice_activation_link.lock().expect("voice link lock poisoned").revision != revision
+                    {
                         Some(handle)
                     } else {
                         *slot = Some(handle.into());
@@ -3565,7 +3845,11 @@ impl OpenLessBackend {
                 Ok(())
             }
             Err(error) => {
+                if self.voice_activation_generation.load(Ordering::Acquire) != generation {
+                    return Ok(());
+                }
                 let error = map_voice_activation_error(error);
+                self.pause_linked_voice_activation_after_failure(generation);
                 self.events.publish(
                     None,
                     BackendEventKind::VoiceActivationStateChanged(
@@ -3760,22 +4044,22 @@ impl OpenLessBackend {
                     {
                         Ok(handoff) => handoff,
                         Err(error) => {
-                            log::warn!("voice activation handoff failed: {error}");
-                            match backend
-                                .stop_voice_activation_if_current(
-                                    signal_generation,
-                                    crate::voice_activation::VoiceActivationStopReason::RuntimeFailure,
-                                )
-                                .await
-                            {
-                                Ok(true) if backend.get_preferences().voice_activation_enabled => {
-                                    let _ = backend.configure_voice_activation().await;
-                                }
-                                Ok(_) => {}
-                                Err(error) => {
-                                    log::warn!("voice activation recovery stop failed: {error}");
-                                }
+                            let paused_handoff = {
+                                let mut link = backend.voice_activation_link.lock()
+                                    .expect("voice link lock poisoned");
+                                if link.finalize_generation == Some(signal_generation) {
+                                    link.finalize_generation = None;
+                                    true
+                                } else { false }
+                            };
+                            if paused_handoff {
+                                drop(_handoff_guard);
+                                let _ = backend.configure_voice_activation().await;
+                                return;
                             }
+                            log::warn!("voice activation handoff failed: {error}");
+                            backend.recover_voice_activation_failure(signal_generation,
+                                map_voice_activation_error(error)).await;
                             return;
                         }
                     };
@@ -3792,12 +4076,14 @@ impl OpenLessBackend {
                         .await
                     {
                         Ok(session_id) => {
-                            if backend
+                            let must_finalize = backend.voice_activation_link.lock()
+                                .expect("voice link lock poisoned").finalize_session == Some(session_id);
+                            if must_finalize || backend
                                 .voice_activation_generation
                                 .load(Ordering::Acquire)
                                 != signal_generation
                             {
-                                let _ = backend.cancel_dictation(Some(session_id)).await;
+                                backend.settle_stale_voice_dictation(session_id).await;
                                 return;
                             }
                             let committed = {
@@ -3821,7 +4107,7 @@ impl OpenLessBackend {
                                 }
                             };
                             if !committed {
-                                let _ = backend.cancel_dictation(Some(session_id)).await;
+                                backend.settle_stale_voice_dictation(session_id).await;
                                 return;
                             }
                             backend.events.publish(
@@ -3838,21 +4124,7 @@ impl OpenLessBackend {
                         }
                         Err(error) => {
                             log::warn!("voice dictation start failed: {error}");
-                            match backend
-                                .stop_voice_activation_if_current(
-                                    signal_generation,
-                                    crate::voice_activation::VoiceActivationStopReason::RuntimeFailure,
-                                )
-                                .await
-                            {
-                                Ok(true) if backend.get_preferences().voice_activation_enabled => {
-                                    let _ = backend.configure_voice_activation().await;
-                                }
-                                Ok(_) => {}
-                                Err(error) => {
-                                    log::warn!("voice activation recovery stop failed: {error}");
-                                }
-                            }
+                            backend.recover_voice_activation_failure(signal_generation, error).await;
                         }
                     }
                 }));
@@ -3878,21 +4150,9 @@ impl OpenLessBackend {
             } => {
                 let backend = Arc::clone(self);
                 self.deps.task_spawner.spawn(Box::pin(async move {
-                    match backend
-                        .stop_voice_activation_if_current(
-                            activation_generation,
-                            crate::voice_activation::VoiceActivationStopReason::RuntimeFailure,
-                        )
-                        .await
-                    {
-                        Ok(true) if backend.get_preferences().voice_activation_enabled => {
-                            let _ = backend.configure_voice_activation().await;
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            log::warn!("voice activation recovery stop failed: {error}");
-                        }
-                    }
+                    backend.recover_voice_activation_failure(activation_generation,
+                        BackendError::new(BackendErrorCode::Platform,
+                            "voice activation microphone capture failed")).await;
                 }));
             }
             VoiceActivationSignal::RuntimeStateChanged { .. } => {}
@@ -3980,6 +4240,12 @@ impl OpenLessBackend {
                     },
                 });
         }
+        {
+            let mut link = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            if link.finalize_generation == Some(generation) {
+                link.finalize_session = Some(session_id);
+            }
+        }
         match self
             .start_reserved_dictation(reservation, DictationStartOptions::default())
             .await
@@ -4010,13 +4276,18 @@ impl OpenLessBackend {
         if !is_voice_session {
             return;
         }
-        let enabled = self.get_preferences().voice_activation_enabled;
+        {
+            let mut link = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            if link.finalize_session == Some(session_id) {
+                link.finalize_session = None;
+                link.finalize_generation = None;
+            }
+        }
         let _ = self
             .stop_voice_activation(crate::voice_activation::VoiceActivationStopReason::Cancelled)
             .await;
-        if enabled {
-            let _ = self.configure_voice_activation().await;
-        }
+        // Paused is a durable enabled-but-idle state, not Disabled.
+        let _ = self.configure_voice_activation().await;
     }
 
     async fn finish_voice_activation(
@@ -4050,7 +4321,7 @@ impl OpenLessBackend {
             .is_some_and(|session| session.session_id == session_id);
         if still_voice_session {
             let _ = self.stop_voice_activation(reason).await;
-            if self.get_preferences().voice_activation_enabled {
+            if self.voice_activation_is_requested() {
                 let _ = self.configure_voice_activation().await;
             }
         }
@@ -4061,6 +4332,7 @@ impl OpenLessBackend {
             preferences: Arc::clone(&self.preferences),
             history: Arc::clone(&self.history),
             activity: Arc::clone(&self.activity),
+            expression_profile: Arc::clone(&self.expression_profile),
             vocabulary: Arc::clone(&self.vocabulary),
             correction_rules: Arc::clone(&self.correction_rules),
             style_packs: Arc::clone(&self.style_packs),
@@ -4978,7 +5250,9 @@ impl OpenLessBackend {
             self.recover_cloud_notes()?;
         }
         let before = self.get_preferences();
-        let warmed = self.deps.credential_store.status(before).await;
+        let warmed =
+            crate::deepseek_suite::credentials_status(self.deps.credential_store.as_ref(), before)
+                .await;
         if let Some(sync) = &self.encrypted_sync {
             // Keep Settings available even after a denied/failed warm read.
             // The service records its own retryable recovery/storage error;
@@ -4987,14 +5261,18 @@ impl OpenLessBackend {
         } else {
             // Local migration has the same crash journal as cloud sync, but it
             // has no service startup hook when the user is signed out.
-            let _ = self.local_migration_store.recover_registered().await;
+            let _ = self.local_migration_store()?.recover_registered().await;
         }
         let preferences = self.get_preferences();
         let status = match warmed {
             // Recovery can replace both preferences and credentials. Recompute
             // from the new in-memory target after it has settled.
             Ok(_) if self.encrypted_sync.is_some() => {
-                self.deps.credential_store.status(preferences.clone()).await
+                crate::deepseek_suite::credentials_status(
+                    self.deps.credential_store.as_ref(),
+                    preferences.clone(),
+                )
+                .await
             }
             Ok(credentials) => Ok(credentials),
             Err(error) => Err(error),
@@ -5432,6 +5710,13 @@ impl OpenLessBackend {
     ) -> Result<CliDispatchOutcome, BackendError> {
         use crate::hotkey_interpreter::HotkeyIntent;
 
+        if let Some(changed) = self.accept_voice_activation_hotkey_edge(edge) {
+            if changed {
+                self.reconcile_voice_activation_hotkey().await?;
+            }
+            return Ok(CliDispatchOutcome::Noop);
+        }
+
         // Pressed and Released stay FIFO for toggle-like modes even though start/finalize await
         // native work. Hold-mode release deliberately bypasses the gate so a physical key-up can
         // cancel native startup instead of waiting for the recorder to become live. Combined also
@@ -5800,6 +6085,9 @@ impl OpenLessBackend {
         &self,
         mut status: CredentialsStatus,
     ) -> Result<CredentialsStatus, BackendError> {
+        if status.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            return Ok(status);
+        }
         if let Some(service) = self.deps.credential_store.siwc() {
             let channel_id = self
                 .deps
@@ -5833,11 +6121,11 @@ impl OpenLessBackend {
     }
 
     pub async fn get_credentials_status(&self) -> Result<CredentialsStatus, BackendError> {
-        let status = self
-            .deps
-            .credential_store
-            .status(self.get_preferences())
-            .await?;
+        let status = crate::deepseek_suite::credentials_status(
+            self.deps.credential_store.as_ref(),
+            self.get_preferences(),
+        )
+        .await?;
         let status = self.with_siwc_status(status).await?;
         self.state
             .write()
@@ -6366,6 +6654,9 @@ impl OpenLessBackend {
         &self,
         preferences: &crate::UserPreferences,
     ) -> Result<crate::dictation_context::ProviderInvocation, BackendError> {
+        if preferences.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            return Ok(crate::deepseek_suite::invocation(true));
+        }
         let provider = match self
             .resolve_session_provider(ProviderSlot::Asr, &preferences.active_asr_provider)
             .await
@@ -6565,11 +6856,11 @@ impl OpenLessBackend {
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
-        let status = self
-            .deps
-            .credential_store
-            .status(self.get_preferences())
-            .await?;
+        let status = crate::deepseek_suite::credentials_status(
+            self.deps.credential_store.as_ref(),
+            self.get_preferences(),
+        )
+        .await?;
         let status = self.with_siwc_status(status).await?;
         self.state
             .write()
@@ -6815,6 +7106,16 @@ impl OpenLessBackend {
                 .reset();
         }
 
+        if previous.expression_learning_enabled && !preferences.expression_learning_enabled {
+            if let Ok(profile) = self.expression_profile.lock() {
+                if let Some(profile) = profile.as_ref() {
+                    if let Err(error) = profile.invalidate_observers() {
+                        log::warn!("failed to invalidate expression observers: {error}");
+                    }
+                }
+            }
+            self.disarm_edit_observation();
+        }
         if (previous.vocabulary_learning_enabled && !preferences.vocabulary_learning_enabled)
             || previous.vocabulary_learning_settings != preferences.vocabulary_learning_settings
         {
@@ -7091,6 +7392,10 @@ impl OpenLessBackend {
         self.activity.snapshot()
     }
 
+    pub fn list_activity_apps(&self, year: u32) -> Result<Vec<(String, u32)>, BackendError> {
+        self.activity.app_counts(&format!("{year:04}-"))
+    }
+
     pub fn record_activity(
         &self,
         date: &str,
@@ -7283,6 +7588,38 @@ impl OpenLessBackend {
         pending.clone()
     }
 
+    pub fn expression_profile_directions(
+        &self,
+    ) -> Result<Vec<crate::expression_observation::StableExpressionDirection>, BackendError> {
+        let profile = self.expression_profile.lock().map_err(|_| {
+            BackendError::new(BackendErrorCode::Internal, "expression profile lock unavailable")
+        })?.clone();
+        profile
+            .ok_or_else(|| BackendError::new(BackendErrorCode::Persistence, "expression profile is unavailable"))?
+            .stable_directions()
+    }
+
+    pub fn clear_expression_profile(&self) -> Result<(), BackendError> {
+        self.ensure_runtime_ready()?;
+        let _guard = self.settings_write_gate.lock().map_err(|_| {
+            BackendError::new(BackendErrorCode::Internal, "settings lock unavailable")
+        })?;
+        self.disarm_edit_observation();
+        let mut profile = self.expression_profile.lock().map_err(|_| {
+            BackendError::new(BackendErrorCode::Internal, "expression profile lock unavailable")
+        })?;
+        if let Some(existing) = profile.as_ref() {
+            if existing.clear().is_ok() {
+                return Ok(());
+            }
+        }
+        let store = crate::expression_observation::ExpressionProfileStore::reset(
+            self.config.data_dir.join("expression-profile.json"),
+        )?;
+        *profile = Some(Arc::new(store));
+        Ok(())
+    }
+
     /// Queue one observed manual correction. Duplicate pairs are ignored and
     /// the oldest item is dropped when the bounded card capacity is reached.
     pub fn queue_pending_correction(
@@ -7334,24 +7671,49 @@ impl OpenLessBackend {
             }
         }
         self.disarm_edit_observation();
+        let preferences = self.get_preferences();
         if !enabled
-            || !self.get_preferences().vocabulary_learning_enabled
+            || (!preferences.vocabulary_learning_enabled && !preferences.expression_learning_enabled)
             || !matches!(insert_outcome, Some(InsertOutcome::Inserted))
             || typed_text.trim().is_empty()
         {
             return;
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
-        let sink = Arc::new(CoreEditObservationSink {
-            settings: self
-                .get_preferences()
-                .vocabulary_learning_settings
-                .normalized(),
-            expected_generation,
-            generation: Arc::clone(&self.edit_observation_generation),
+        let settings = preferences.vocabulary_learning_settings.normalized();
+        let vocabulary = preferences
+            .vocabulary_learning_enabled
+            .then(|| CoreEditObservationSink {
+                session_id,
+                settings,
+                expected_generation,
+                generation: Arc::clone(&self.edit_observation_generation),
+                typed_text: typed_text.to_string(),
+                pending: Arc::clone(&self.pending_corrections),
+                events: Arc::clone(&self.events),
+            });
+        let expression_profile = if preferences.expression_learning_enabled {
+            self.expression_profile
+                .lock()
+                .ok()
+                .and_then(|profile| profile.clone())
+        } else {
+            None
+        };
+        if vocabulary.is_none() && expression_profile.is_none() {
+            return;
+        }
+        let sink = Arc::new(CombinedEditObservationSink {
+            vocabulary,
+            expression_generation: expression_profile.as_ref().map(|profile| profile.generation()),
+            expression_profile,
             typed_text: typed_text.to_string(),
-            pending: Arc::clone(&self.pending_corrections),
-            events: Arc::clone(&self.events),
+            session_id,
+            clock: Arc::clone(&self.clock),
+            generation: Arc::clone(&self.edit_observation_generation),
+            expected_generation,
+            settings_gate: Arc::clone(&self.settings_write_gate),
+            duration: std::time::Duration::from_secs(settings.observation_seconds as u64),
         });
         if let Err(error) = self
             .deps
@@ -8551,6 +8913,7 @@ impl OpenLessBackend {
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let session = DictationSession {
@@ -8684,6 +9047,7 @@ impl OpenLessBackend {
         };
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let llm_used = context.uses_llm_polisher()
@@ -8724,12 +9088,16 @@ impl OpenLessBackend {
             asr_ms: attribution.asr_ms,
             polish_ms: attribution.polish_ms,
         };
+        let activity_app = session.app_name.clone();
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
         ) {
             log::warn!("failed to persist completed dictation history: {error}");
+        }
+        if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
+            log::warn!("failed to persist application activity: {error}");
         }
         if let Err(error) = self.record_activity(
             &self.clock.today_local().format("%Y-%m-%d").to_string(),
@@ -8767,6 +9135,7 @@ impl OpenLessBackend {
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Deepseek => "deepseek",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
         let attribution = HistoryProviderAttribution::from_context(
@@ -9255,7 +9624,7 @@ impl OpenLessBackend {
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
-        let traditional = pipeline_mode == crate::shared_types::PipelineMode::Traditional;
+        let traditional = pipeline_mode != crate::shared_types::PipelineMode::Multimodal;
         let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
             self.resolve_dictation_asr_provider(&preferences).await?
         } else {
@@ -9265,7 +9634,9 @@ impl OpenLessBackend {
         };
         let mut deferred_llm_error = None;
         let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if traditional && !skip_llm_at_capture {
+        let active_llm_provider = if pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+            crate::deepseek_suite::invocation(false)
+        } else if traditional && !skip_llm_at_capture {
             match self
                 .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
                 .await
@@ -9320,6 +9691,32 @@ impl OpenLessBackend {
             options,
         );
         context.pipeline_mode = pipeline_mode;
+        if purpose == DictationContextPurpose::Dictation
+            && !context.polish.translation_active
+            && preferences.expression_learning_enabled
+        {
+            if let Ok(_guard) = self.settings_write_gate.try_lock() {
+                if self.get_preferences().expression_learning_enabled {
+                    if let Some(profile) = self
+                        .expression_profile
+                        .lock()
+                        .ok()
+                        .and_then(|profile| profile.clone())
+                    {
+                        match profile.stable_directions() {
+                            Ok(directions) => {
+                                if let Some(instructions) =
+                                    crate::expression_observation::prompt_instructions(&directions)
+                                {
+                                    context.polish.style_system_prompt.push_str(&instructions);
+                                }
+                            }
+                            Err(error) => log::warn!("expression profile unavailable: {error}"),
+                        }
+                    }
+                }
+            }
+        }
         // Issue #1032: when the LLM channel is not configured, mark the
         // session as eligible for the Raw fallback instead of dispatching a
         // polish request that cannot succeed. The context keeps its original
@@ -9508,6 +9905,7 @@ mod tests {
     fn vocabulary_learning_settings_migrate_normalize_and_roundtrip() {
         let old: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(!old.vocabulary_learning_enabled);
+        assert!(!old.expression_learning_enabled);
         assert_eq!(old.vocabulary_learning_settings, Default::default());
         let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
             "vocabularyLearningSettings": {
@@ -9518,12 +9916,256 @@ mod tests {
         assert_eq!(prefs.vocabulary_learning_settings.observation_seconds, 10);
         assert_eq!(prefs.vocabulary_learning_settings.suggestion_seconds, 60);
         assert_eq!(prefs.vocabulary_learning_settings.max_phrase_chars, 32);
+        assert_eq!(
+            prefs.vocabulary_learning_settings.suggestion_position,
+            crate::shared_types::VocabularySuggestionPosition::NearInput
+        );
         let restored: UserPreferences =
             serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
         assert_eq!(
             restored.vocabulary_learning_settings,
             prefs.vocabulary_learning_settings
         );
+    }
+
+    #[test]
+    fn vocabulary_suggestion_position_roundtrips_and_defaults_for_old_settings() {
+        use crate::shared_types::{VocabularyLearningSettings, VocabularySuggestionPosition};
+        let old: VocabularyLearningSettings = serde_json::from_value(serde_json::json!({
+            "observationSeconds": 20, "suggestionSeconds": 30, "maxPhraseChars": 16
+        }))
+        .unwrap();
+        assert_eq!(
+            old.suggestion_position,
+            VocabularySuggestionPosition::NearInput
+        );
+        for (value, expected) in [
+            ("nearInput", VocabularySuggestionPosition::NearInput),
+            ("bottomRight", VocabularySuggestionPosition::BottomRight),
+        ] {
+            let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
+                "vocabularyLearningSettings": { "suggestionPosition": value }
+            }))
+            .unwrap();
+            assert_eq!(
+                prefs.vocabulary_learning_settings.suggestion_position,
+                expected
+            );
+            let encoded = serde_json::to_value(&prefs).unwrap();
+            assert_eq!(
+                encoded["vocabularyLearningSettings"]["suggestionPosition"],
+                value
+            );
+            let restored: UserPreferences = serde_json::from_value(encoded).unwrap();
+            assert_eq!(
+                restored.vocabulary_learning_settings.suggestion_position,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn changing_only_vocabulary_card_position_invalidates_pending_and_stale_sink() {
+        use crate::shared_types::VocabularySuggestionPosition;
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let before = backend.get_preferences();
+        let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
+            settings: before.vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "ZIP".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        let edit = crate::host_document::minimal_edit("ZIP", "VIP").unwrap();
+        assert!(sink.publish(edit.clone()));
+        assert!(!backend.pending_corrections().is_empty());
+        let mut prefs = before.clone();
+        prefs.vocabulary_learning_settings.suggestion_position =
+            VocabularySuggestionPosition::BottomRight;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        assert!(backend.pending_corrections().is_empty());
+        assert!(!sink.publish(edit));
+        let saved = backend.get_preferences();
+        assert!(saved.vocabulary_learning_enabled);
+        assert_eq!(
+            saved.vocabulary_learning_settings.suggestion_position,
+            VocabularySuggestionPosition::BottomRight
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.observation_seconds,
+            before.vocabulary_learning_settings.observation_seconds
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.suggestion_seconds,
+            before.vocabulary_learning_settings.suggestion_seconds
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.max_phrase_chars,
+            before.vocabulary_learning_settings.max_phrase_chars
+        );
+    }
+
+    #[test]
+    fn expression_observation_obeys_generation_and_never_persists_text() {
+        let directory = TestDataDir::new("expression-observation");
+        let path = directory.path().join("profile.json");
+        let profile = Arc::new(crate::expression_observation::ExpressionProfileStore::open(path.clone()).unwrap());
+        let generation = Arc::new(AtomicU64::new(4));
+        let gate = Arc::new(Mutex::new(()));
+        let sink = CombinedEditObservationSink {
+            vocabulary: None,
+            expression_generation: Some(profile.generation()),
+            expression_profile: Some(profile),
+            typed_text: "今天我们先完成这个工作然后再讨论".into(),
+            session_id: SessionId::new(),
+            clock: Arc::new(SystemClock),
+            generation: Arc::clone(&generation),
+            expected_generation: 4,
+            settings_gate: Arc::clone(&gate),
+            duration: std::time::Duration::from_secs(60),
+        };
+        let edit = crate::host_document::EditPair {
+            source: String::new(),
+            target: "\n".into(),
+            before: "今天我们先完成这个工作".into(),
+            after: "然后再讨论".into(),
+        };
+        {
+            let _guard = gate.lock().unwrap();
+            assert!(!sink.publish(edit.clone()));
+            assert!(!path.exists());
+        }
+        assert!(sink.publish(edit.clone()));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("今天"));
+        generation.fetch_add(1, Ordering::AcqRel);
+        assert!(!sink.publish(edit));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    }
+
+    #[tokio::test]
+    async fn expression_prompt_requires_consent_and_clear_removes_stable_directions() {
+        let (backend, _) = backend();
+        assert!(Arc::ptr_eq(&backend.expression_profile, &backend.repositories().expression_profile));
+        backend.set_credential(
+            crate::CredentialKey::new(crate::CredentialNamespace::Llm, Some("ark".into()), crate::credentials::LLM_API_KEY_ACCOUNT).unwrap(),
+            crate::SecretValue::new("fixture-key"),
+        ).await.unwrap();
+        let profile = backend.expression_profile.lock().unwrap().as_ref().unwrap().clone();
+        let signal = crate::expression_observation::ExpressionSignal {
+            line_breaks: 1,
+            exclamations: 0,
+            terminal_punctuation: 0,
+        };
+        for index in 0..10 {
+            profile.record(uuid::Uuid::new_v4(), 100 + index % 4, signal).unwrap();
+        }
+        assert_eq!(profile.stable_directions().unwrap().len(), 1);
+        let options = DictationStartOptions::default();
+        let capture = || backend.capture_dictation_context(&options, DictationContextPurpose::Dictation);
+        assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        assert!(backend.get_preferences().expression_learning_enabled);
+        let context = capture().await.unwrap();
+        assert!(context.polish.style_system_prompt.contains("用户经多次编辑"), "translation={} prompt={:?}", context.polish.translation_active, context.polish.style_system_prompt);
+        backend.clear_expression_profile().unwrap();
+        assert!(backend.expression_profile_directions().unwrap().is_empty());
+        assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
+    }
+
+    #[tokio::test]
+    async fn expression_capture_does_not_wait_for_busy_settings_gate() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        let gate = Arc::clone(&backend.settings_write_gate);
+        let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = gate.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        let options = DictationStartOptions::default();
+        let context = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            backend.capture_dictation_context(&options, DictationContextPurpose::Dictation),
+        ).await.expect("busy settings must not block capture").unwrap();
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(!context.polish.style_system_prompt.contains("用户经多次编辑"));
+    }
+
+    #[test]
+    fn expression_profile_corruption_requires_explicit_clear() {
+        let directory = TestDataDir::new("expression-corruption");
+        let path = directory.path().join("expression-profile.json");
+        std::fs::create_dir_all(directory.path()).unwrap();
+        std::fs::write(&path, b"unknown profile").unwrap();
+        let backend = OpenLessBackend::new(
+            BackendConfig { data_dir: directory.path().to_path_buf(), ..BackendConfig::default() },
+            BackendDependencies::unsupported(),
+        ).unwrap();
+        assert!(backend.expression_profile_directions().is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"unknown profile");
+        backend.clear_expression_profile().unwrap();
+        assert!(backend.expression_profile_directions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn expression_opt_out_preserves_pending_vocabulary_suggestions() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        prefs.vocabulary_learning_enabled = true;
+        backend.set_preferences(prefs.clone()).unwrap();
+        backend.queue_pending_correction("原词".into(), "新词".into()).unwrap();
+        prefs.expression_learning_enabled = false;
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
+        assert_eq!(backend.pending_corrections().len(), 1);
+    }
+
+    #[test]
+    fn vocabulary_observer_does_not_offer_fact_changes_as_words() {
+        let (backend, _) = backend();
+        let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
+            settings: crate::shared_types::VocabularyLearningSettings::default(),
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "今天买了十个苹果".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        let edit = crate::host_document::EditPair {
+            before: "今天买了".into(),
+            source: "十".into(),
+            target: "九".into(),
+            after: "个苹果".into(),
+        };
+        assert!(!sink.publish(edit));
+        assert!(backend.pending_corrections().is_empty());
     }
 
     #[test]
@@ -9542,6 +10184,7 @@ mod tests {
             )
             .unwrap();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9590,6 +10233,7 @@ mod tests {
     fn observed_spelling_correction_saves_only_the_complete_confirmed_word() {
         let (backend, _) = backend();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9602,6 +10246,8 @@ mod tests {
         ));
         let suggestions = backend.pending_corrections();
         assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].observation_id, sink.observation_id());
+        assert_eq!(suggestions[1].observation_id, sink.observation_id());
         assert_eq!(suggestions[0].pattern, "ZIP");
         assert_eq!(suggestions[0].replacement, "VIP");
         assert_eq!(suggestions[1].pattern, "codx");
@@ -11889,7 +12535,7 @@ mod tests {
         let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(FakeEngine));
         assert_eq!(backend.asr_usage().unwrap(), AsrUsage::default());
 
-        let recorded_at = chrono::Utc::now() - chrono::Duration::hours(1);
+        let start = backend.clock.now_utc() - chrono::Duration::days(1);
         let entries = [
             ("a", 0, Some("volcengine")),
             ("b", 1, Some("sherpa-onnx-local")),
@@ -11897,11 +12543,12 @@ mod tests {
             ("d", 3, Some("volcengine")),
             ("e", 4, Some("sherpa-onnx-local")),
         ];
-        for (id, minutes, provider) in entries {
+        for (id, offset_minutes, provider) in entries {
             let mut entry = history_session(id);
-            entry.created_at = (recorded_at + chrono::Duration::minutes(minutes)).to_rfc3339();
+            entry.created_at = (start + chrono::Duration::minutes(offset_minutes)).to_rfc3339();
             entry.asr_provider = provider.map(Into::into);
-            backend.append_history(entry, 30, None).unwrap();
+            // Fixed timestamps determine ordering. Age-based retention is tested separately.
+            backend.append_history(entry, 0, None).unwrap();
         }
 
         assert_eq!(
@@ -11923,7 +12570,7 @@ mod tests {
         ));
         let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(FakeEngine));
 
-        let recorded_at = chrono::Utc::now() - chrono::Duration::hours(1);
+        let start = backend.clock.now_utc() - chrono::Duration::days(1);
         let entries = [
             (
                 "completed-local",
@@ -11974,12 +12621,12 @@ mod tests {
                 Some("polishFailed"),
             ),
         ];
-        for (id, minutes, provider, error_code) in entries {
+        for (id, offset_minutes, provider, error_code) in entries {
             let mut entry = history_session(id);
-            entry.created_at = (recorded_at + chrono::Duration::minutes(minutes)).to_rfc3339();
+            entry.created_at = (start + chrono::Duration::minutes(offset_minutes)).to_rfc3339();
             entry.asr_provider = Some(provider.into());
             entry.error_code = error_code.map(Into::into);
-            backend.append_history(entry, 30, None).unwrap();
+            backend.append_history(entry, 0, None).unwrap();
         }
 
         assert_eq!(
@@ -12066,6 +12713,8 @@ mod tests {
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()
             .unwrap();
+        assert_eq!(first.observation_id, None);
+        assert!(serde_json::to_value(&first).unwrap().get("observationId").is_none());
         assert!(backend
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()
@@ -13587,9 +14236,16 @@ mod tests {
         );
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
-        backend.start_dictation().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
         backend.stop_dictation().await.unwrap();
 
+        let observation_id = {
+            let sinks = observation.sinks.lock().unwrap();
+            assert_eq!(sinks[0].session_id(), Some(session_id));
+            sinks[0]
+                .observation_id()
+                .expect("host needs observation identity")
+        };
         assert_eq!(
             observation.typed_texts.lock().unwrap().as_slice(),
             ["polished"]
@@ -13602,6 +14258,10 @@ mod tests {
         };
         observation.publish(0, edit.clone());
         assert_eq!(backend.pending_corrections().len(), 1);
+        assert_eq!(
+            backend.pending_corrections()[0].observation_id,
+            Some(observation_id)
+        );
 
         backend.dismiss_pending_corrections();
         let mut preferences = backend.get_preferences();
@@ -13615,6 +14275,86 @@ mod tests {
             .unwrap();
         observation.publish(0, edit);
         assert!(backend.pending_corrections().is_empty());
+    }
+
+    #[tokio::test]
+    async fn expression_learning_can_observe_without_vocabulary_and_stops_on_opt_out() {
+        let data_dir = TestDataDir::new("expression-consent");
+        let observation = Arc::new(FakeEditObservation::default());
+        let mut services = crate::domains::BackendServices::unsupported();
+        services.edit_observation = observation.clone();
+        let text = "今天我们先完成这个工作然后再讨论";
+        let backend = OpenLessBackend::new(
+            BackendConfig { data_dir: data_dir.path().to_path_buf(), ..BackendConfig::default() },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(crate::testing::FixtureDictationEngine::successful(text, text)),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services,
+                ..BackendDependencies::unsupported()
+            },
+        ).unwrap();
+        let mut prefs = backend.get_preferences();
+        assert!(!prefs.expression_learning_enabled);
+        prefs.expression_learning_enabled = true;
+        prefs.vocabulary_learning_enabled = false;
+        backend.set_preferences(prefs).unwrap();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+        backend.stop_dictation().await.unwrap();
+        {
+            let sinks = observation.sinks.lock().unwrap();
+            assert_eq!(sinks[0].session_id(), Some(session_id));
+            assert!(sinks[0].observation_id().is_some());
+        }
+        assert_eq!(observation.typed_texts.lock().unwrap().as_slice(), [text]);
+        let edit = crate::host_document::EditPair {
+            source: String::new(), target: "\n".into(),
+            before: "今天我们先完成这个工作".into(), after: "然后再讨论".into(),
+        };
+        observation.publish(0, edit.clone());
+        let path = data_dir.path().join("expression-profile.json");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains(text));
+        assert!(backend.pending_corrections().is_empty());
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = false;
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
+        observation.publish(0, edit);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn expression_opt_out_during_dictation_does_not_arm_an_observer() {
+        let data_dir = TestDataDir::new("expression-opt-out-during-dictation");
+        let observation = Arc::new(FakeEditObservation::default());
+        let mut services = crate::domains::BackendServices::unsupported();
+        services.edit_observation = observation.clone();
+        let backend = OpenLessBackend::new(
+            BackendConfig { data_dir: data_dir.path().to_path_buf(), ..BackendConfig::default() },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(FakeEngine),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services,
+                ..BackendDependencies::unsupported()
+            },
+        ).unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        backend.start().await.unwrap();
+        backend.start_dictation().await.unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.expression_learning_enabled = false;
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
+        backend.stop_dictation().await.unwrap();
+        assert!(observation.typed_texts.lock().unwrap().is_empty());
+        assert!(!data_dir.path().join("expression-profile.json").exists());
+        backend.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -19386,6 +20126,30 @@ mod tests {
         }
         assert!(selection.runtime_restore_idle());
     }
+    #[tokio::test]
+    async fn blocked_startup_does_not_require_a_usable_temporary_directory() {
+        let fixture = TestDataDir::new("blocked-no-temp");
+        std::fs::create_dir_all(fixture.path()).unwrap();
+        let file = fixture.path().join("not-a-directory");
+        std::fs::write(&file, b"untouched").unwrap();
+        let original = fixture.path().join("original-user-data");
+        let error = BackendError::new(BackendErrorCode::Persistence, "storage unavailable");
+        let backend = OpenLessBackend::blocked_startup_at(
+            BackendConfig {
+                data_dir: original.clone(),
+                ..BackendConfig::default()
+            },
+            error.clone(),
+            file.join("unusable-placeholder"),
+        );
+        assert_eq!(backend.startup_error().unwrap().code, error.code);
+        assert_eq!(backend.local_migration_store().err().unwrap().code, error.code);
+        assert_eq!(backend.start().await.unwrap_err().code, error.code);
+        assert_eq!(backend.ensure_runtime_ready().unwrap_err().code, error.code);
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(file).unwrap(), b"untouched");
+    }
+
     #[tokio::test]
     async fn restore_host_blocked_startup_is_visible_and_never_opens_or_mutates_real_stores() {
         struct ForbiddenRuntime;

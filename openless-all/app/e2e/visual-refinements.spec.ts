@@ -1,6 +1,8 @@
+import { settleNavigation } from './support/navigation';
 import { test, expect, type Locator } from '@playwright/test';
 
 async function expectReadableLayout(dialog: Locator) {
+  await settleNavigation(dialog);
   const scroll = dialog.locator('.ol-settings-scroll');
   expect(
     await scroll.evaluate((element) => element.scrollWidth - element.clientWidth),
@@ -19,7 +21,7 @@ for (const theme of ['dark', 'light'] as const) {
     await page.getByRole('button', { name: '设置', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '设置', exact: true });
     const navigation = dialog.getByRole('navigation', { name: '设置分类' });
-    await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+    await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
     await expect(page.locator('html')).toHaveCSS('color-scheme', theme);
 
     for (const section of ['快捷键', '外观与语言']) {
@@ -29,7 +31,7 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(button).toHaveCSS('cursor', 'pointer');
       await expect(button).toHaveCSS(
         'color',
-        theme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)',
+        theme === 'dark' ? 'rgb(250, 250, 250)' : 'rgb(9, 9, 11)',
       );
       const heading = dialog.getByRole('heading', { name: section, exact: true });
       await expect(heading).toBeVisible();
@@ -42,7 +44,7 @@ for (const theme of ['dark', 'light'] as const) {
         const rows = dialog.locator('.ol-shortcut-row');
         await expect(rows.first()).toBeVisible();
         expect(await rows.count()).toBeGreaterThanOrEqual(9);
-        await expect(dialog.getByText('问任何问题', { exact: true })).toBeVisible();
+        await expect(dialog.getByText('随便问', { exact: true })).toBeVisible();
         const bounds = await rows.evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();

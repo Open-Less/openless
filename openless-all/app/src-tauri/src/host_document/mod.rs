@@ -41,7 +41,7 @@ mod windows;
 pub(crate) use windows::insert_with_delivery_check;
 
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome};
+pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome, LiveComposition};
 
 // `minimal_edit` is currently used only by the macOS observation callback; no consumer on non-macOS builds.
 #[allow(unused_imports)]
@@ -537,30 +537,46 @@ impl Drop for EditWatcher {
 ///
 /// `on_edit` is called on the observer thread, possibly multiple times. Returns `None` on any
 /// failure — failing to learn is acceptable; breaking typing is not.
-pub fn watch_for_edits<F>(
+pub fn watch_for_edits<F, E>(
     typed_text: String,
     lifetime: std::time::Duration,
+    target: Option<crate::selection::SelectionInsertionTarget>,
     on_edit: F,
+    on_end: E,
 ) -> Option<EditWatcher>
 where
-    F: Fn(EditPair) -> bool + Send + Sync + 'static,
+    F: Fn(EditPair, Option<crate::vocab_card_placement::AnchorSnapshot>) -> bool
+        + Send
+        + Sync
+        + 'static,
+    E: Fn() + Send + Sync + 'static,
 {
+    #[cfg(not(target_os = "windows"))]
+    let _ = (target, on_end);
     #[cfg(target_os = "macos")]
     {
         if typed_text.trim().is_empty() {
             return None;
         }
-        let stop = macos::spawn_edit_watcher(typed_text, lifetime, Box::new(on_edit))?;
+        let callback = move |edit| on_edit(edit, None);
+        let stop = macos::spawn_edit_watcher(typed_text, lifetime, Box::new(callback))?;
         Some(EditWatcher { stop })
     }
     #[cfg(target_os = "windows")]
     {
-        windows::spawn_edit_watcher(typed_text, lifetime, Box::new(on_edit))
-            .map(|stop| EditWatcher { stop })
+        windows::spawn_edit_watcher(
+            typed_text,
+            lifetime,
+            target?,
+            Box::new(on_edit),
+            Box::new(on_end),
+        )
+        .map(|stop| EditWatcher { stop })
     }
     #[cfg(target_os = "android")]
     {
-        crate::android::edit_observation::arm(typed_text, lifetime, Box::new(on_edit))
+        let callback = move |edit| on_edit(edit, None);
+        crate::android::edit_observation::arm(typed_text, lifetime, Box::new(callback))
             .map(|generation| EditWatcher { generation })
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
@@ -785,4 +801,9 @@ mod tests {
         let result = probe_around_cursor(DEFAULT_BUDGET_CHARS).await;
         assert_ne!(result.status, HostDocumentStatus::Unsupported);
     }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn read_qa_selection() -> Option<String> {
+    windows::read_qa_selection()
 }

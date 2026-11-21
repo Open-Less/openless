@@ -1,4 +1,5 @@
-import type { NativeCapsuleStatus, StyleSystemPrompts, UserPreferences } from '../types';
+import type { VoiceActivationStateSnapshot } from '../voiceActivation';
+import type { StyleSystemPrompts, UserPreferences } from '../types';
 export type { UpdateChannel } from '../types';
 import {
   BACKEND_CONTRACT_VERSION,
@@ -6,7 +7,12 @@ import {
   requireBackendReady,
   type StartupSnapshot,
 } from './shared';
-import { mockSettings, mockDefaultStyleSystemPrompts, mockSetSettings } from './mock-data';
+import {
+  mockSettings,
+  mockDefaultStyleSystemPrompts,
+  mockSetSettings,
+  mockSettingsRevision,
+} from './mock-data';
 import { invalidateMockChannelTests } from './channels';
 
 export { BACKEND_CONTRACT_VERSION };
@@ -17,7 +23,7 @@ export async function getStartupSnapshot(): Promise<StartupSnapshot> {
 }
 
 export function getSettings(): Promise<UserPreferences> {
-  return invokeOrMock('get_settings', undefined, () => ({ ...mockSettings }));
+  return invokeOrMock('get_settings', undefined, () => structuredClone(mockSettings));
 }
 
 export function getDefaultStyleSystemPrompts(): Promise<StyleSystemPrompts> {
@@ -31,7 +37,7 @@ export function setSettings(prefs: UserPreferences): Promise<UserPreferences> {
     const thinkingChanged = mockSettings.llmThinkingEnabled !== prefs.llmThinkingEnabled;
     mockSetSettings(prefs);
     if (thinkingChanged) invalidateMockChannelTests('llm');
-    return prefs;
+    return structuredClone(mockSettings);
   });
 }
 
@@ -39,11 +45,10 @@ export interface SettingsSnapshot {
   preferences: UserPreferences;
   revision: number;
 }
-let mockRevision = 0;
 export function getSettingsSnapshot(): Promise<SettingsSnapshot> {
   return invokeOrMock('get_settings_snapshot', undefined, () => ({
     preferences: structuredClone(mockSettings),
-    revision: mockRevision,
+    revision: mockSettingsRevision,
   }));
 }
 export function updateSettingFields(edits: Record<string, unknown>): Promise<SettingsSnapshot> {
@@ -61,15 +66,14 @@ export function updateSettingFields(edits: Record<string, unknown>): Promise<Set
     const thinkingChanged = mockSettings.llmThinkingEnabled !== prefs.llmThinkingEnabled;
     mockSetSettings(prefs);
     if (thinkingChanged) invalidateMockChannelTests('llm');
-    return { preferences: prefs, revision: ++mockRevision };
+    return { preferences: structuredClone(mockSettings), revision: mockSettingsRevision };
   });
 }
 
-/** Runtime mode + sidecar health for the low-memory background switch (desktop). */
-export function getNativeCapsuleStatus(): Promise<NativeCapsuleStatus> {
-  return invokeOrMock('native_capsule_status', undefined, () => ({
-    active: false,
-    available: true,
-    error: null,
-  }));
+export function getVoiceActivationState(): Promise<VoiceActivationStateSnapshot | null> {
+  return invokeOrMock('get_voice_activation_state', undefined, () =>
+    mockSettings.voiceActivationEnabled && mockSettings.voiceActivationHotkeyLinked
+      ? { phase: 'paused' as const, activationGeneration: 0 }
+      : null,
+  );
 }

@@ -1,0 +1,36 @@
+.ol-history-menu-trigger {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  min-height: 28px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--ol-button-radius);
+  color: var(--ol-ink-2);
+  background: var(--ol-surface-2);
+}
+
+.ol-history-menu-positioner {
+  z-index: 30;
+}
+
+.ol-history-menu {
+  --ol-history-menu-scale: var(--ol-interface-scale, 1);
+  width: min(260px, calc(var(--available-width, 260px) / var(--ol-history-menu-scale)));
+  max-height: min(420px, calc(var(--available-height, 420px) / var(--ol-history-menu-scale)));
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 0.5px solid var(--ol-line-strong);
+  border-radius: var(--ol-r-md);
+  color: var(--ol-ink-2);
+  background: var(--ol-surface);
+  box-shadow: var(--ol-shadow-md, 0 12px 30px rgba(0, 0, 0, 0.18));
+  pointer-events: auto;
+  zoom: var(--ol-history-menu-scale);
+}
+
+.ol-history-menu-item[data-highlighted] {
+  background: var(--ol-surface-2);
+}

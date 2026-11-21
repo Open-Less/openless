@@ -55,11 +55,29 @@ try {
   };
   const cases: Array<[string, unknown, () => Promise<unknown>]> = [
     ['status', undefined, api.cloudSyncE2eeStatus],
+    ['refresh_backup_metadata', undefined, api.cloudSyncE2eeRefreshBackupMetadata],
     ['claim_setup_prompt', undefined, api.cloudSyncE2eeClaimSetupPrompt],
     [
       'prepare_enable',
       { consentVersion: api.CLOUD_SYNC_E2EE_CONSENT_VERSION },
       () => api.cloudSyncE2eePrepareEnable(api.CLOUD_SYNC_E2EE_CONSENT_VERSION),
+    ],
+    [
+      'prepare_enable',
+      {
+        consentVersion: api.CLOUD_SYNC_E2EE_CONSENT_VERSION,
+        expectedScope: {
+          serviceOrigin: 'https://sync.example',
+          accountId: 'owner',
+          vaultId: 'vault',
+        },
+      },
+      () =>
+        api.cloudSyncE2eePrepareEnable(api.CLOUD_SYNC_E2EE_CONSENT_VERSION, {
+          serviceOrigin: 'https://sync.example',
+          accountId: 'owner',
+          vaultId: 'vault',
+        }),
     ],
     ['create', create, () => api.cloudSyncE2eeCreate(create)],
     [

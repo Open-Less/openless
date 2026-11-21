@@ -7,8 +7,7 @@
 // only enters the key when `shared-key` is absent, so two different jobs share a
 // cache exactly when they declare the same `shared-key`.
 //
-// Runs without `npm ci` (the Linux contract job has no node_modules), so the
-// workflows are read as text.
+// Runs without `npm ci`, so the workflows are read as text.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -20,8 +19,6 @@ const read = (name) => readFileSync(join(root, '.github/workflows', name), 'utf8
 const ci = read('ci.yml');
 const release = read('release-tauri.yml');
 const androidApk = read('android-apk.yml');
-const linux = read('check-linux-egui.yml');
-const linuxRelease = read('release-linux-egui.yml');
 const releaseHarmony = read('release-harmony.yml');
 
 const sharedKeys = (yaml) =>
@@ -40,8 +37,6 @@ for (const [yaml, label] of [
   [ci, 'ci.yml'],
   [release, 'release-tauri.yml'],
   [androidApk, 'android-apk.yml'],
-  [linux, 'check-linux-egui.yml'],
-  [linuxRelease, 'release-linux-egui.yml'],
   [releaseHarmony, 'release-harmony.yml'],
 ]) {
   assert.ok(
@@ -85,34 +80,27 @@ assert.ok(saveIfs.length >= 3, 'every shared cache in ci.yml must be beta-only f
 assert.doesNotMatch(androidApk, /^\s*key:\s/m);
 assert.ok(sharedKeys(androidApk).some((key) => key.startsWith('android-')));
 
-// 5. Linux already shares one job between CI and release: the release entry point
-//    must reuse the same reusable workflow rather than a second build path.
-assert.match(linuxRelease, /uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
-assert.match(linux, /cargo build --locked --release -p openless-linux-egui/);
-
-// 6. Release entry points pin the tag, so the artifacts cannot come from a branch.
-assert.match(linuxRelease, /release_tag: \$\{\{ inputs\.tag \}\}/);
-assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
-
-// The capsule crates used to run in their own pull-request-only workflow: it
-// wrote a dependency tree under `refs/pull/<n>/merge` (never restored again)
-// while beta produced nothing to restore. It now lives here, behind the same
-// `Changed areas` verdict, and saves only from beta.
+// The capsule crates used to run in a pull-request-only workflow that wrote a
+// dependency tree under `refs/pull/<n>/merge` (never restored again) while beta
+// produced nothing to restore. They now live in `ci.yml` behind their own area
+// gate and save only from beta, so a run costs ~40 s and the common PR pays no
+// runner for them at all.
 {
   const capsuleJob = ci.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
   assert.ok(capsuleJob, 'ci.yml must run the capsule crates as the native-capsule job');
   assert.match(capsuleJob, /shared-key: native-capsule/);
   assert.match(capsuleJob, /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/);
+  assert.match(
+    capsuleJob,
+    /if: needs\.changes\.outputs\.capsule != 'false'/,
+    'the capsule job must be gated on its own area, not run for every desktop change',
+  );
   assert.ok(
     !existsSync(join(root, '.github/workflows/native-capsule.yml')),
     'native-capsule.yml must stay merged into ci.yml',
   );
 }
 
-const linuxJob = (name) =>
-  linux.match(new RegExp('\\n  ' + name + ':[\\s\\S]*?(?=\\n  [a-z-]+:|$)'))?.[0] ?? '';
-assert.match(linuxJob('test-linux-egui'), /shared-key: test-linux-egui/);
-assert.match(linuxJob('build-linux-egui'), /shared-key: build-linux-egui/);
 const before = (producer, save) => {
   const producerIndex = ci.indexOf('- name: ' + producer);
   const saveIndex = ci.indexOf('- name: ' + save);

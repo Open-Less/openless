@@ -136,8 +136,16 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(snapshots.update("你好", "你好")["draft"], "")
         final = snapshots.update("你好", "你好！", terminal=True)
         self.assertEqual((final["finalized"], final["draft"]), ("你好！", ""))
-        with self.assertRaises(ValueError):
-            snapshots.update("cannot match", "different")
+        # A rewritten decode must re-commit only the agreed prefix instead of
+        # failing: audio is already captured and the terminal text wins.
+        recovered = snapshots.update("cannot match", "different")
+        self.assertEqual(recovered["finalized"], "")
+        self.assertEqual(recovered["finalized"] + recovered["draft"], "different")
+        partial = snapshots.update("我们去了Co", "我们去了科蒂纳。")
+        self.assertEqual(
+            (partial["finalized"], partial["draft"]), ("我们去了", "科蒂纳。")
+        )
+        self.assertNotEqual(snapshots.sequence, 0)
 
     def run_fake(self, finish=True, gpu_available=True):
         FakeSession.calls = []

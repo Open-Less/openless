@@ -1,5 +1,5 @@
 use eframe::egui;
-use openless_linux_egui::{fmt_l10n, tr_l10n, Lang};
+use openless_linux_egui::{fmt_l10n, provider_error_text, tr_l10n, Lang};
 
 use super::icons::{self, IconName};
 use super::layout;
@@ -19,7 +19,7 @@ enum SettingsIcon {
     Settings,
     Mic,
     Sparkle,
-    Cloud,
+    Flask,
     Shield,
     Bolt,
     Info,
@@ -60,9 +60,9 @@ impl SettingsSection {
             Self::General => SettingsIcon::Mic,
             Self::Shortcuts => SettingsIcon::Bolt,
             Self::Appearance => SettingsIcon::Settings,
-            Self::Services => SettingsIcon::Cloud,
+            Self::Services => SettingsIcon::Sparkle,
             Self::Privacy => SettingsIcon::Shield,
-            Self::Advanced => SettingsIcon::Sparkle,
+            Self::Advanced => SettingsIcon::Flask,
             Self::About => SettingsIcon::Info,
         }
     }
@@ -336,7 +336,7 @@ fn draw_rail_icon(ui: &egui::Ui, center: egui::Pos2, icon: SettingsIcon, color: 
         SettingsIcon::Settings => IconName::Settings,
         SettingsIcon::Mic => IconName::Mic,
         SettingsIcon::Sparkle => IconName::Sparkle,
-        SettingsIcon::Cloud => IconName::Cloud,
+        SettingsIcon::Flask => IconName::Flask,
         SettingsIcon::Shield => IconName::Shield,
         SettingsIcon::Bolt => IconName::Bolt,
         SettingsIcon::Info => IconName::Info,
@@ -445,7 +445,11 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             save_state(ui, vm, actions);
             if let Some(notice) = &vm.settings_notice {
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(notice).size(11.0).color(theme::BLUE));
+                ui.label(
+                    egui::RichText::new(provider_error_text(lang, notice))
+                        .size(11.0)
+                        .color(theme::BLUE),
+                );
             }
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
@@ -638,7 +642,9 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ui,
                     tr_l10n(lang, "settings.audioDsp.aecReferenceLabel"),
                     tr_l10n(lang, "settings.audioDsp.aecReferenceDesc"),
-                    vm.settings.aec_reference_index.min(options.len().saturating_sub(1)),
+                    vm.settings
+                        .aec_reference_index
+                        .min(options.len().saturating_sub(1)),
                     &options,
                     |index| {
                         actions.push(FrontendAction::SettingsCombo(
@@ -2395,6 +2401,20 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
                     false,
                     actions,
                 );
+                if state.provider == "gemini"
+                    && !matches!(
+                        state.model.trim(),
+                        "gemini-3.5-transcribe" | "gemini-3.5-transcribe-live"
+                    )
+                {
+                    toggle_row(
+                        ui,
+                        tr_l10n(lang, "settings.providers.thinkingModeLabel"),
+                        tr_l10n(lang, "settings.providers.thinkingModeHint"),
+                        vm.settings.llm_thinking_enabled,
+                        || actions.push(FrontendAction::SettingsToggle(SettingsField::LlmThinking)),
+                    );
+                }
                 changed |= omni_text_field(
                     ui,
                     tr_l10n(lang, "settings.providers.apiKeyLabel"),
@@ -2490,7 +2510,7 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
                 }
             });
             if let Some(notice) = &state.notice {
-                ui.label(notice);
+                ui.label(provider_error_text(lang, notice));
             }
             if !state.busy
                 && (!state.loaded || (state.dirty && state.notice.is_some()))
@@ -3084,89 +3104,87 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     // The Tauri page is a list of drill-in rows; the panel swaps to the detail
     // page (title + back button) while `advanced_open` is set.
     // Keep existing drill-in IDs, but the pipeline now lives only on Services.
-    let rows = [
-        (
-            2,
-            SettingsIcon::Bolt,
-            tr_l10n(lang, "settings.debug.title"),
-            tr_l10n(lang, "modal.advanced_pages.debug"),
-        ),
-    ];
+    let rows = [(
+        2,
+        SettingsIcon::Bolt,
+        tr_l10n(lang, "settings.debug.title"),
+        tr_l10n(lang, "modal.advanced_pages.debug"),
+    )];
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| {
-                toggle_row(
-                    ui,
-                    tr_l10n(lang, "settings.recording.record_audio_for_debug_label"),
-                    "",
-                    vm.settings.record_audio_for_debug,
-                    || {
-                        actions.push(FrontendAction::SettingsToggle(
-                            SettingsField::RecordAudioForDebug,
-                        ));
-                    },
-                );
-                // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
-                // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
-                if vm.settings.record_audio_for_debug {
-                    ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
-                        toggle_row(
-                            ui,
-                            tr_l10n(lang, "settings.recording.archive_processed_label"),
-                            tr_l10n(lang, "settings.recording.archive_processed_desc"),
-                            vm.settings.debug_archive_processed,
-                            || {
-                                actions.push(FrontendAction::SettingsToggle(
-                                    SettingsField::DebugArchiveProcessed,
-                                ));
-                            },
-                        );
-                        toggle_row(
-                            ui,
-                            tr_l10n(lang, "settings.recording.archive_raw_label"),
-                            tr_l10n(lang, "settings.recording.archive_raw_desc"),
-                            vm.settings.debug_archive_raw,
-                            || {
-                                actions.push(FrontendAction::SettingsToggle(
-                                    SettingsField::DebugArchiveRaw,
-                                ));
-                            },
-                        );
-                    });
-                }
-                text_edit_row(
-                    ui,
-                    tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
-                    tr_l10n(lang, "settings.recording.audio_recording_max_entries_desc"),
-                    &mut vm.settings.audio_recording_max_entries,
-                    "50",
-                    |text| {
-                        actions.push(FrontendAction::SettingsText(
-                            SettingsTextField::AudioRecordingMaxEntries,
-                            text.to_owned(),
-                        ));
-                    },
-                );
-                combo_index_row(
-                    ui,
-                    tr_l10n(lang, "settings.debug.log_level_label"),
-                    tr_l10n(lang, "settings.debug.log_level_desc"),
-                    vm.settings.log_level.min(2),
-                    &["info", "debug", "trace"],
-                    |index| {
-                        actions.push(FrontendAction::SettingsCombo(
-                            SettingsComboField::LogLevel,
-                            index,
-                        ));
-                    },
-                );
-                action_row(
-                    ui,
-                    tr_l10n(lang, "settings.debug.title"),
-                    "",
-                    tr_l10n(lang, "btn.export_error_log"),
-                    SettingsActionField::ExportDiagnostics,
-                    actions,
-                );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.record_audio_for_debug_label"),
+                "",
+                vm.settings.record_audio_for_debug,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::RecordAudioForDebug,
+                    ));
+                },
+            );
+            // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
+            // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
+            if vm.settings.record_audio_for_debug {
+                ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
+                    toggle_row(
+                        ui,
+                        tr_l10n(lang, "settings.recording.archive_processed_label"),
+                        tr_l10n(lang, "settings.recording.archive_processed_desc"),
+                        vm.settings.debug_archive_processed,
+                        || {
+                            actions.push(FrontendAction::SettingsToggle(
+                                SettingsField::DebugArchiveProcessed,
+                            ));
+                        },
+                    );
+                    toggle_row(
+                        ui,
+                        tr_l10n(lang, "settings.recording.archive_raw_label"),
+                        tr_l10n(lang, "settings.recording.archive_raw_desc"),
+                        vm.settings.debug_archive_raw,
+                        || {
+                            actions.push(FrontendAction::SettingsToggle(
+                                SettingsField::DebugArchiveRaw,
+                            ));
+                        },
+                    );
+                });
+            }
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
+                tr_l10n(lang, "settings.recording.audio_recording_max_entries_desc"),
+                &mut vm.settings.audio_recording_max_entries,
+                "50",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::AudioRecordingMaxEntries,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            combo_index_row(
+                ui,
+                tr_l10n(lang, "settings.debug.log_level_label"),
+                tr_l10n(lang, "settings.debug.log_level_desc"),
+                vm.settings.log_level.min(2),
+                &["info", "debug", "trace"],
+                |index| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::LogLevel,
+                        index,
+                    ));
+                },
+            );
+            action_row(
+                ui,
+                tr_l10n(lang, "settings.debug.title"),
+                "",
+                tr_l10n(lang, "btn.export_error_log"),
+                SettingsActionField::ExportDiagnostics,
+                actions,
+            );
         });
         return;
     }
@@ -3685,7 +3703,8 @@ fn channel_status_line(
                 );
             }
         } else {
-            let error = channel.last_error.as_deref().unwrap_or_default();
+            let error =
+                provider_error_text(lang, channel.last_error.as_deref().unwrap_or_default());
             let text = if error.trim().is_empty() {
                 tr_l10n(lang, "settings.channels.failed_plain").to_string()
             } else {
@@ -6070,6 +6089,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gemini_omni_exposes_thinking_except_for_dedicated_transcription_models() {
+        for (provider, model, expected) in [
+            ("gemini", "gemini-3.5-flash-lite", true),
+            ("gemini", "gemini-3.5-transcribe", false),
+            ("gemini", "gemini-3.5-transcribe-live", false),
+            ("custom", "model", false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: Lang::En,
+                ..Default::default()
+            };
+            vm.omni.loaded = true;
+            vm.omni.provider = provider.into();
+            vm.omni.model = model.into();
+            vm.omni.endpoint = "https://example.com/v1beta".into();
+            vm.omni.api_key = "fixture".into();
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 1400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| omni_settings(ui, &mut vm, &mut Vec::new()),
+            );
+            let mut text = String::new();
+            for clipped in &output.shapes {
+                collect_shape_text(&clipped.shape, &mut text);
+            }
+            assert_eq!(
+                text.contains(tr_l10n(Lang::En, "settings.providers.thinkingModeLabel")),
+                expected,
+                "{provider}: {model}",
+            );
+        }
+    }
+
+    #[test]
     fn short_polish_threshold_row_emits_the_edited_value_only_when_changed() {
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {
@@ -6480,7 +6540,7 @@ mod tests {
             });
             assert!(
                 actions.is_empty(),
-                "渲染 {auth:?} 形态的编辑器时不应产生动作"
+                "rendering the {auth:?} editor must not emit actions"
             );
         }
     }
@@ -6710,7 +6770,7 @@ mod tests {
         // 右栏覆盖不该出现设置页自己的标题（编辑器整栏盖住内容区）。
         let section_title = tr_l10n(Lang::ZhCn, "modal.service_views.llm");
         assert!(
-            !painted(&format!("{section_title}服务")),
+            !painted(section_title),
             "the settings section body must not show through the editor"
         );
 
