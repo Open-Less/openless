@@ -1266,7 +1266,7 @@ export const fr: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'Microphone et enregistrement',
-      recordingDesc: 'Surveillance et reconnaissance du micro, puis surveillance et signaux.',
+      recordingDesc: 'Choisit le microphone et configure l’enregistrement et les signaux sonores.',
       capsuleTitle: 'Style de la capsule',
       capsuleDesc:
         'Activation de la capsule, multi-écran, style et affichage du texte original en flux.',
@@ -1285,7 +1285,7 @@ export const fr: typeof zhCN = {
       cursorContextTitle: 'Perception',
       startupDiagnosticsTitle: 'Diagnostic de démarrage',
       cursorContextHint:
-        'Le contexte du curseur est activé par défaut. Désactivez-le ici si le texte voisin ne doit pas partir avec les demandes de reformulation.',
+        'Activé par défaut.',
     },
     advancedGroups: {
       recording: 'Enregistrement',
@@ -1351,8 +1351,6 @@ export const fr: typeof zhCN = {
         'Les requêtes suivent le proxy système si cette option est activée. Sinon, elles se connectent directement, ce qui réduit souvent la latence des services locaux, mais peut empêcher l’accès à GitHub ou aux mises à jour dans certaines régions. Les flux vocaux en temps réel et Less Computer ne sont pas concernés.',
     },
     expressionLearning: {
-      clearHint:
-        'Après effacement, une dictée en cours peut encore utiliser les préférences capturées à son démarrage.',
       lineBreaksMore: 'Plus de sauts de ligne',
       lineBreaksLess: 'Moins de sauts de ligne',
       exclamationsMore: 'Plus de points d’exclamation',
@@ -1363,7 +1361,7 @@ export const fr: typeof zhCN = {
       title: 'Habitudes d’expression',
       enabled: 'Apprendre les habitudes',
       description:
-        'Observe localement les modifications après dictée ; les données d’expression ne stockent que des statistiques abstraites. L’historique est géré séparément. Les préférences répétées et cohérentes deviennent de courtes instructions envoyées au modèle de texte choisi. La désactivation arrête immédiatement l’apprentissage et leur application aux prochaines dictées ; une dictée en cours peut encore utiliser les préférences déjà capturées.',
+        'Apprend les préférences de sauts de ligne et de ponctuation pour les prochaines reformulations.',
       status: '{{count}} préférences stables',
       clear: 'Effacer les habitudes',
       error: 'Impossible de lire ou enregistrer les habitudes.',
@@ -1387,19 +1385,17 @@ export const fr: typeof zhCN = {
         'Limiter le texte original et son remplacement à 2–32 caractères dans les suggestions automatiques. Les ajouts manuels ne sont pas concernés.',
       seconds: '{{count}} s',
       characters: '{{count}} caractères',
-      changeHint:
-        'Modifier les paramètres arrête l’observation et efface les suggestions en attente. Ils s’appliquent à la prochaine dictée. La réinitialisation ne change pas l’activation.',
       reset: 'Réinitialiser les paramètres',
       saveError: 'Échec de l’enregistrement. Réessayez.',
       description:
-        'Après insertion, les modifications du champ sont détectées localement pendant 60 secondes maximum. Chaque mot nécessite une confirmation. Le texte observé n’est pas envoyé au modèle. Les champs de mot de passe et les applications sensibles connues sont exclus. Sous Windows et Android, la prise en charge dépend de l’éditeur ; Android nécessite le service d’accessibilité. Désactiver arrête l’observation.',
+        'Apprend les corrections manuelles après la dictée et ajoute les mots confirmés au dictionnaire.',
     },
     dataStorage: {
       title: 'Stockage des données',
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
-        'Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Windows / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
+        'Envoie au modèle le texte près du curseur comme référence pour la reformulation.',
     },
     localMigration: {
       title: 'Migration de la configuration locale',
@@ -1499,11 +1495,11 @@ export const fr: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          'Utilise l’annulation d’écho, la réduction du bruit et le gain automatique de l’appareil.',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          'Compare le spectre de l’enregistrement avant et après traitement.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
         spectrumWaiting: 'En attente d’enregistrement',
         presets: 'Equalizer presets',
@@ -1519,9 +1515,9 @@ export const fr: typeof zhCN = {
         aecLight: 'Léger (CPU réduit)',
         aecModel: 'Modèle (plus fort)',
         aecModelHint:
-          'Le modèle annule davantage mais coûte environ 3x plus de CPU ; préférez Léger sur les machines anciennes.',
+          'Annulation d’écho renforcée avec une utilisation CPU plus élevée.',
         aecHint:
-          'Réduit le retour du haut-parleur. Nécessite un signal de référence; inutile au casque.',
+          'Réduit le son des haut-parleurs capté par le microphone.',
         buffer: 'Tampon de sortie',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1531,7 +1527,7 @@ export const fr: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          'Règle la réduction du bruit, l’annulation d’écho, le volume et l’égaliseur.',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1539,11 +1535,11 @@ export const fr: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          'Réduit le volume des passages faibles.',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          'Ajuste la résonance et le timbre de la voix.',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1552,10 +1548,10 @@ export const fr: typeof zhCN = {
       },
       echoCancellationLabel: 'Annulation de l’écho de lecture',
       echoCancellationDesc:
-        'Utilise une référence de lecture locale sans couper le son. Sur macOS, nécessite 14.6+ et une autorisation de capture audio système. Les appareils, routes Bluetooth ou configurations Linux ALSA non pris en charge utilisent uniquement le microphone. Prend effet à la prochaine capture.',
+        'Utilise la lecture locale comme référence pour réduire l’écho. S’applique au prochain enregistrement.',
       audioEnhancementLabel: 'Amélioration de la voix',
       audioEnhancementDesc:
-        'Réduction du bruit RNNoise ou PureVox, gain automatique et limitation. Désactivée par défaut ; les changements prennent effet au prochain enregistrement.',
+        'Réduit le bruit de fond et ajuste automatiquement le volume. S’applique au prochain enregistrement.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',
@@ -2561,7 +2557,7 @@ export const fr: typeof zhCN = {
       voiceEnhancement:
         'Configurer le traitement audio avancé, la réduction du bruit et la suppression de l’écho de lecture.',
       cursorContext:
-        'Configurer le contexte autour du curseur pour les reformulations et le traitement des saisies courtes.',
+        'Gère le contexte du curseur, l’apprentissage des corrections et les habitudes d’expression.',
       startupDiagnostics:
         'Consulter les durées de démarrage, les échanges avec le backend et les sondes différées.',
     },

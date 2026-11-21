@@ -330,6 +330,9 @@ function TransitionSurface({
         ...(header ? undefined : style),
         ...initialPose.current,
         position: 'absolute',
+        // Keep sticky/z-index descendants inside their own retained page even
+        // after the incoming opacity animation releases its stacking context.
+        isolation: 'isolate',
         inset: 0,
         width: '100%',
         height: '100%',

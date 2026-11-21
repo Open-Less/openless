@@ -387,8 +387,8 @@
   --ol-pill-selected-bg: linear-gradient(180deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.92));
   --ol-pill-selected-ink: #f4f7fb;
   --ol-pill-selected-border: rgba(147, 197, 253, 0.44);
-  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
-  --ol-select-popover-bg: #202024;
+  --ol-select-trigger-bg: var(--ol-field-bg);
+  --ol-select-popover-bg: var(--ol-field-bg);
   --ol-select-popover-border: rgba(226, 232, 240, 0.12);
   --ol-select-popover-shadow:
     0 18px 42px -16px rgba(0, 0, 0, 0.62), 0 0 0 0.5px rgba(226, 232, 240, 0.08);

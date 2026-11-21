@@ -3,7 +3,7 @@ import { TextField } from '../../../ui/controls/TextField';
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
 import { useTranslation } from 'react-i18next';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../../components/Icon';
 import { isRetiredMacAsrProvider } from '../../../lib/experimentalAsr';
@@ -145,6 +145,7 @@ function SettingsCategoryEntry({
   general = false,
   icon,
   title,
+  description,
   beta = false,
   onClick,
 }: {
@@ -152,15 +153,18 @@ function SettingsCategoryEntry({
   general?: boolean;
   icon: string;
   title: string;
-  description?: string;
+  description: string;
   beta?: boolean;
   onClick: () => void;
 }) {
   const { t } = useTranslation();
+  const descriptionId = useId();
   return (
     <button
       type="button"
       className="ol-settings-category-entry"
+      aria-label={t(title)}
+      aria-describedby={descriptionId}
       data-ol-general-entry={general ? id : undefined}
       data-ol-advanced-entry={general ? undefined : id}
       onClick={onClick}
@@ -173,6 +177,7 @@ function SettingsCategoryEntry({
           <span>{t(title)}</span>
           {beta && <span className="ol-beta-tag">Beta</span>}
         </strong>
+        <span id={descriptionId}>{t(description)}</span>
       </span>
       <Icon name="chevRight" size={17} />
     </button>
@@ -537,6 +542,7 @@ function VoiceEnhancementSection() {
         {platformCaps?.platform === 'desktop' && (
           <SettingRow
             label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
           >
             <Toggle
               on={prefs.echoCancellationEnabled ?? false}
@@ -548,6 +554,7 @@ function VoiceEnhancementSection() {
         )}
         <SettingRow
           label={t('settings.recording.audioEnhancementLabel')}
+          desc={t('settings.recording.audioEnhancementDesc')}
         >
           <Toggle
             on={prefs.audioEnhancementEnabled}
@@ -564,6 +571,9 @@ function VoiceEnhancementSection() {
           </span>
           <span className="ol-advanced-entry-copy">
             <span className="ol-advanced-entry-title">{t('settings.recording.dsp.title')}</span>
+            <span className="ol-advanced-entry-description">
+              {t('settings.recording.dsp.description')}
+            </span>
           </span>
           <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
         </button>
@@ -687,7 +697,7 @@ export function AdvancedTab({
           icon={item.icon}
           title={item.titleKey}
           beta={'beta' in item && item.beta}
-          description={item.id === 'voiceEnhancement' ? undefined : item.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${item.id}`}
+          description={item.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${item.id}`}
           onClick={() => onOpenPage(item.id)}
         />
       ))}

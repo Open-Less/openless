@@ -102,6 +102,9 @@ export function AndroidAudioEffects({
   );
   return (
     <div style={{ marginTop: 12 }}>
+      <p style={{ fontSize: 12, color: 'var(--ol-muted)' }}>
+        {label('androidEffectsHint', 'Uses device echo cancellation, noise reduction and automatic gain.')}
+      </p>
       {toggle(
         'androidAecEnabled',
         label('aec', 'System echo cancellation'),
@@ -129,6 +132,7 @@ export function AndroidAudioEffects({
       )}
       <SettingRow
         label={label('spectrum', 'Input / processed spectrum')}
+        desc={label('spectrumHint', 'Compares the recording spectrum before and after processing.')}
       >
         <Toggle
           on={monitoring}

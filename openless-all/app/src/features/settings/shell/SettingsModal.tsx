@@ -1,7 +1,7 @@
 import { officialLinks } from '../../../lib/officialLinks';
 import { TextField } from '../../../ui/controls/TextField';
 // Settings categories reuse the existing consumers; complex experiments open in the right pane.
-import { useRef, useState, type CSSProperties } from 'react';
+import { useId, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { openExternal } from '../../../api/files';
@@ -59,6 +59,7 @@ export function SettingsModal({
   onPaintedChange,
 }: SettingsModalProps) {
   const { t } = useTranslation();
+  const resultDescriptionId = useId();
   // The provider form's writes settle before close/section switch (async saves don't
   // lose drafts); the revision counter excludes credential content.
   const providerForm = useProviderForm();
@@ -398,7 +399,7 @@ export function SettingsModal({
                                   {contentTitle}
                                 </h2>
                               )}
-                              {searching && (
+                              {activeAdvancedPage?.id !== 'localModels' && (
                                 <p
                                   style={{
                                     margin:
@@ -444,6 +445,8 @@ export function SettingsModal({
                                 <button
                                   key={item.id}
                                   type="button"
+                                  aria-label={item.title}
+                                  aria-describedby={`${resultDescriptionId}-${item.id}`}
                                   onClick={() => selectSection(item.id, true)}
                                   style={{
                                     ...navButtonStyle,
@@ -459,9 +462,20 @@ export function SettingsModal({
                                       style={{
                                         display: 'block',
                                         fontWeight: 'var(--ol-font-weight-semibold)',
+                                        marginBottom: 5,
                                       }}
                                     >
                                       {item.title}
+                                    </span>
+                                    <span
+                                      id={`${resultDescriptionId}-${item.id}`}
+                                      style={{
+                                        fontSize: 12,
+                                        color: 'var(--ol-ink-3)',
+                                        lineHeight: 1.6,
+                                      }}
+                                    >
+                                      {item.description}
                                     </span>
                                   </span>
                                   <Icon name="chevRight" size={14} />

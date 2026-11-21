@@ -1257,7 +1257,7 @@ export const de: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'Mikrofon und Aufnahme',
-      recordingDesc: 'Mikrofonüberwachung und Erkennung sowie Überwachung und Signale.',
+      recordingDesc: 'Mikrofon auswählen sowie Aufnahme und Hinweistöne einstellen.',
       capsuleTitle: 'Kapselstil',
       capsuleDesc: 'Kapselschalter, mehrere Bildschirme, Stil und gestreamter Originaltext.',
       textInputTitle: 'Texteinfügung',
@@ -1275,7 +1275,7 @@ export const de: typeof zhCN = {
       cursorContextTitle: 'Wahrnehmung',
       startupDiagnosticsTitle: 'Startdiagnose',
       cursorContextHint:
-        'Der Cursorkontext ist standardmäßig aktiv. Hier deaktivieren, wenn naher Text nicht mit Überarbeitungsanfragen gesendet werden soll.',
+        'Standardmäßig aktiviert.',
     },
     advancedGroups: {
       recording: 'Aufnahme',
@@ -1340,8 +1340,6 @@ export const de: typeof zhCN = {
         'Anfragen verwenden den Systemproxy, wenn diese Option aktiv ist. Andernfalls werden alle Anfragen direkt gesendet, was bei inländischen Diensten meist schneller ist. Ausländische Dienste wie GitHub-Anmeldung und Updates können dann fehlschlagen. Echtzeit-Sprachstreams und Less Computer sind davon unabhängig.',
     },
     expressionLearning: {
-      clearHint:
-        'Nach dem Löschen kann ein laufendes Diktat noch die beim Start erfassten Vorlieben verwenden.',
       lineBreaksMore: 'Mehr Zeilenumbrüche',
       lineBreaksLess: 'Weniger Zeilenumbrüche',
       exclamationsMore: 'Mehr Ausrufezeichen',
@@ -1352,7 +1350,7 @@ export const de: typeof zhCN = {
       title: 'Ausdrucksgewohnheiten',
       enabled: 'Ausdrucksgewohnheiten lernen',
       description:
-        'Beobachtet Formatänderungen nach dem Diktat lokal; Ausdrucksdaten speichern nur abstrakte Statistiken. Der Verlauf wird separat verwaltet. Wiederholte, konsistente Zeilenumbruch- und Satzzeichenpräferenzen werden als kurze Anweisungen an das gewählte Textmodell gesendet. Ausschalten beendet das Lernen sofort und die Anwendung ab dem nächsten Diktat; ein laufendes Diktat kann noch erfasste Vorlieben verwenden.',
+        'Zeilenumbruch- und Zeichensetzungsvorlieben für künftige Textüberarbeitungen lernen.',
       status: '{{count}} stabile Vorlieben',
       clear: 'Ausdrucksgewohnheiten löschen',
       error: 'Ausdrucksgewohnheiten konnten nicht gelesen oder gespeichert werden.',
@@ -1376,19 +1374,17 @@ export const de: typeof zhCN = {
         'Original und Ersatz in automatischen Vorschlägen auf 2–32 Zeichen begrenzen. Manuelle Einträge bleiben unverändert.',
       seconds: '{{count}} s',
       characters: '{{count}} Zeichen',
-      changeHint:
-        'Änderungen beenden die aktuelle Beobachtung und löschen offene Vorschläge. Sie gelten ab dem nächsten Diktat. Zurücksetzen ändert den Aktivierungsschalter nicht.',
       reset: 'Parameter zurücksetzen',
       saveError: 'Speichern fehlgeschlagen. Bitte erneut versuchen.',
       description:
-        'Nach dem Einfügen werden Änderungen im Eingabefeld bis zu 60 Sekunden lokal erkannt. Wörter werden erst nach Bestätigung gespeichert. Der beobachtete Text wird nicht an ein Modell gesendet. Passwortfelder und bekannte sensible Apps sind ausgeschlossen. Die Unterstützung unter Windows und Android hängt vom Editor ab; Android benötigt Bedienungshilfen. Ausschalten beendet die Beobachtung.',
+        'Aus manuellen Wortkorrekturen nach dem Diktieren lernen und bestätigte Wörter ins Wörterbuch aufnehmen.',
     },
     dataStorage: {
       title: 'Datenspeicherung',
       desc: 'Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.',
       cursorContextLabel: 'Cursorkontext (experimentell)',
       cursorContextDesc:
-        'Einen kurzen Textabschnitt rund um den Cursor als Referenz für Eigennamen, Homophone und Bezüge mit der Überarbeitung an das Modell senden (macOS / Windows / Android). Diktat, Schnellnotizen und Cloud-Notizen nutzen ihn, der Kontext selbst wird aber nie in Notizen, Verlauf oder Protokolle geschrieben; bei einem Cloud-Modell wird er mit der Überarbeitungsanfrage an diesen Anbieter gesendet. Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder, Terminals und bekannte sensible Apps sind ausgeschlossen.',
+        'Text am Cursor dem Modell als Referenz für die Textüberarbeitung senden.',
     },
     localMigration: {
       title: 'Lokale Konfigurationsmigration',
@@ -1490,11 +1486,11 @@ export const de: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          'Echounterdrückung, Rauschunterdrückung und automatische Verstärkung des Geräts nutzen.',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          'Das Aufnahmespektrum vor und nach der Verarbeitung vergleichen.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
         spectrumWaiting: 'Warten auf Aufnahme',
         presets: 'Equalizer presets',
@@ -1510,9 +1506,9 @@ export const de: typeof zhCN = {
         aecLight: 'Leicht (wenig CPU)',
         aecModel: 'Modell (stärker)',
         aecModelHint:
-          'Das Modell unterdrückt mehr Echo, kostet aber rund 3x CPU; auf älteren Geräten besser Leicht.',
+          'Stärkere Echounterdrückung mit höherer CPU-Auslastung.',
         aecHint:
-          'Unterdrückt Lautsprecher-Rückkopplung. Braucht ein Referenzsignal; mit Kopfhörern aus lassen.',
+          'Vom Mikrofon erfasste Lautsprecherwiedergabe unterdrücken.',
         buffer: 'Ausgabepuffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1522,7 +1518,7 @@ export const de: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          'Rauschunterdrückung, Echounterdrückung, Lautstärke und Equalizer einstellen.',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1530,11 +1526,11 @@ export const de: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          'Die Lautstärke leiser Passagen absenken.',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          'Resonanz und Stimmklang anpassen.',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1543,10 +1539,10 @@ export const de: typeof zhCN = {
       },
       echoCancellationLabel: 'Wiedergabe-Echounterdrückung',
       echoCancellationDesc:
-        'Verwendet eine lokale Wiedergabereferenz, ohne die Wiedergabe stummzuschalten. macOS benötigt 14.6+ und die Berechtigung zur Systemaudioaufnahme. Nicht unterstützte Geräte, Bluetooth-Routen und Linux ALSA verwenden nur das Mikrofon. Gilt ab der nächsten Aufnahme.',
+        'Lokale Wiedergabe als Referenz nutzen, um Echo in Aufnahmen zu verringern. Gilt ab der nächsten Aufnahme.',
       audioEnhancementLabel: 'Sprachverbesserung',
       audioEnhancementDesc:
-        'RNNoise- oder PureVox-Rauschunterdrückung, automatische Verstärkung und Begrenzung. Standardmäßig aus; Änderungen gelten ab der nächsten Aufnahme.',
+        'Hintergrundgeräusche reduzieren und die Lautstärke automatisch anpassen. Gilt ab der nächsten Aufnahme.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',
@@ -2551,7 +2547,7 @@ export const de: typeof zhCN = {
       voiceEnhancement:
         'Erweiterte Audioverarbeitung, Rauschunterdrückung und Unterdrückung von Wiedergabehall festlegen.',
       cursorContext:
-        'Den Kontext um den Cursor für Überarbeitungsanfragen und den Umgang mit kurzen Eingaben festlegen.',
+        'Cursor-Kontext, Korrekturlernen und Ausdrucksgewohnheiten verwalten.',
       startupDiagnostics: 'Startzeiten, Backend-Verbindungen und verzögerte Prüfungen ansehen.',
     },
     descriptions: {
