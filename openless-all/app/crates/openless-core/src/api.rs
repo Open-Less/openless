@@ -140,6 +140,23 @@ struct DictationReservation {
     pending_capture: Option<Box<dyn PendingAudioCapture>>,
 }
 
+#[derive(Clone)]
+struct ResolvedDictationProviders {
+    asr: crate::dictation_context::ProviderInvocation,
+    llm: crate::dictation_context::ProviderInvocation,
+    omni: crate::dictation_context::ProviderInvocation,
+    llm_error: Option<BackendError>,
+}
+
+struct DictationProviderWarmth {
+    token: Arc<()>,
+    revision: (u64, u64),
+    until: std::time::Instant,
+    providers: Option<ResolvedDictationProviders>,
+}
+
+const DICTATION_PROVIDER_WARMTH: std::time::Duration = std::time::Duration::from_millis(1500);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PendingAudioCaptureKey {
     Hotkey(u64),
@@ -2625,6 +2642,8 @@ pub struct OpenLessBackend {
     style_pack_revision: Arc<AtomicU64>,
     preferences: Arc<PreferencesStore>,
     preferences_revision: Arc<AtomicU64>,
+    dictation_provider_warmth: Mutex<Option<DictationProviderWarmth>>,
+    provider_credentials_revision: AtomicU64,
     settings_write_gate: Arc<Mutex<()>>,
     // Serialize channel ownership changes through runtime cleanup, not status reads.
     local_asr_channel_gate: tokio::sync::Mutex<()>,
@@ -3482,6 +3501,8 @@ impl OpenLessBackend {
             style_pack_revision,
             preferences: repositories.preferences,
             preferences_revision,
+            dictation_provider_warmth: Mutex::new(None),
+            provider_credentials_revision: Default::default(),
             settings_write_gate,
             local_asr_channel_gate: tokio::sync::Mutex::new(()),
             cloud_sync,
@@ -5736,8 +5757,30 @@ impl OpenLessBackend {
         edge: DictationHotkeyEdge,
         options: DictationHotkeyDispatchOptions,
     ) -> Result<CliDispatchOutcome, BackendError> {
+        self.dispatch_dictation_hotkey_edge_inner(edge, options, None).await
+    }
+
+    pub async fn dispatch_arbitrated_dictation_hotkey_press(
+        &self,
+        edge: DictationHotkeyEdge,
+        still_held: impl Fn() -> bool + Send + Sync,
+    ) -> Result<CliDispatchOutcome, BackendError> {
+        self.dispatch_dictation_hotkey_edge_inner(
+            edge, DictationHotkeyDispatchOptions::default(), Some(&still_held),
+        ).await
+    }
+
+    async fn dispatch_dictation_hotkey_edge_inner(
+        &self,
+        edge: DictationHotkeyEdge,
+        options: DictationHotkeyDispatchOptions,
+        still_held: Option<&(dyn Fn() -> bool + Send + Sync)>,
+    ) -> Result<CliDispatchOutcome, BackendError> {
         use crate::hotkey_interpreter::HotkeyIntent;
 
+        if still_held.is_some_and(|check| !check()) {
+            return Ok(CliDispatchOutcome::Noop);
+        }
         if let Some(changed) = self.accept_voice_activation_hotkey_edge(edge) {
             if changed {
                 self.reconcile_voice_activation_hotkey().await?;
@@ -5759,12 +5802,15 @@ impl OpenLessBackend {
         } else {
             Some(self.hotkey_dispatch_gate.lock().await)
         };
-        let modifier_only =
-            crate::shortcut_types::is_modifier_chord_binding(&preferences.dictation_hotkey)
+        if still_held.is_some_and(|check| !check()) {
+            return Ok(CliDispatchOutcome::Noop);
+        }
+        let modifier_only = still_held.is_none() &&
+            (crate::shortcut_types::is_modifier_chord_binding(&preferences.dictation_hotkey)
                 || crate::hotkey_interpreter::modifier_arbitration_required(
                     crate::shortcut_types::legacy_modifier_trigger(&preferences.dictation_hotkey),
                     mode,
-                );
+                ));
         let intent = {
             let mut hotkey = self
                 .hotkey
@@ -6884,6 +6930,8 @@ impl OpenLessBackend {
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
+        self.provider_credentials_revision.fetch_add(1, Ordering::AcqRel);
+        self.dictation_provider_warmth.lock().unwrap().take();
         let status = crate::deepseek_suite::credentials_status(
             self.deps.credential_store.as_ref(),
             self.get_preferences(),
@@ -8008,6 +8056,18 @@ impl OpenLessBackend {
         output_target: DictationOutputTarget,
         capture_key: Option<PendingAudioCaptureKey>,
     ) -> Result<DictationReservation, BackendError> {
+        self.reserve_dictation_session_with_id(
+            SessionId::new(), insert_text, output_target, capture_key,
+        )
+    }
+
+    fn reserve_dictation_session_with_id(
+        &self,
+        session_id: SessionId,
+        insert_text: bool,
+        output_target: DictationOutputTarget,
+        capture_key: Option<PendingAudioCaptureKey>,
+    ) -> Result<DictationReservation, BackendError> {
         {
             let state = self.state.read().expect("backend state lock poisoned");
             ensure_running(&state)?;
@@ -8018,7 +8078,6 @@ impl OpenLessBackend {
                 ));
             }
         }
-        let session_id = SessionId::new();
         self.voice_sessions.acquire(
             session_id,
             crate::voice_session::VoiceSessionKind::Dictation,
@@ -8091,6 +8150,28 @@ impl OpenLessBackend {
         self.start_reserved_dictation(reservation, options).await
     }
 
+    pub async fn start_dictation_for_ask_composer(
+        &self,
+        session_id: SessionId,
+        is_current: impl Fn() -> bool,
+    ) -> Result<SessionId, BackendError> {
+        if !is_current() {
+            return Err(VoiceCaptureLifecycle::cancelled_error());
+        }
+        let options = DictationStartOptions {
+            insert_text: false,
+            output_target: DictationOutputTarget::AskComposer,
+            ..Default::default()
+        };
+        let reservation =
+            self.reserve_dictation_session_with_id(session_id, false, options.output_target, None)?;
+        if !is_current() {
+            let _ = self.cancel_dictation(Some(session_id)).await;
+            return Err(VoiceCaptureLifecycle::cancelled_error());
+        }
+        self.start_reserved_dictation(reservation, options).await
+    }
+
     async fn start_reserved_dictation(
         &self,
         reservation: DictationReservation,
@@ -8115,7 +8196,11 @@ impl OpenLessBackend {
             .capture_dictation_context_with_host(
                 &options,
                 DictationContextPurpose::Dictation,
-                host_context.as_ref(),
+                if options.output_target == DictationOutputTarget::AskComposer {
+                    &crate::ports::NoopHostContextAdapter
+                } else {
+                    host_context.as_ref()
+                },
             )
             .await
         {
@@ -8473,6 +8558,14 @@ impl OpenLessBackend {
                                 "active dictation session has no captured context",
                             )
                         })?;
+                        if captured.output_target == DictationOutputTarget::AskComposer
+                            && (output_target.is_some() || options.quick_note.is_some())
+                        {
+                            return Err(BackendError::new(
+                                BackendErrorCode::InvalidState,
+                                "Ask composer dictation cannot change destinations",
+                            ));
+                        }
                         let target = output_target.unwrap_or_else(|| match options.quick_note {
                             Some(true) => DictationOutputTarget::QuickNote,
                             Some(false)
@@ -8931,7 +9024,7 @@ impl OpenLessBackend {
     }
 
     fn persist_recording_started(&self, context: &DictationContext, session_id: SessionId) {
-        if context.output_target == DictationOutputTarget::CloudNote
+        if matches!(context.output_target, DictationOutputTarget::CloudNote | DictationOutputTarget::AskComposer)
             || self.is_cloud_note(session_id)
         {
             return;
@@ -9051,6 +9144,7 @@ impl OpenLessBackend {
     ) {
         if context.output_target == DictationOutputTarget::Qa
             || context.output_target == DictationOutputTarget::VoiceEdit
+            || context.output_target == DictationOutputTarget::AskComposer
             || context.output_target == DictationOutputTarget::CloudNote
             || self.is_cloud_note(result.session_id)
         {
@@ -9153,7 +9247,7 @@ impl OpenLessBackend {
         asr_call_label: Option<crate::auxiliary::AsrCallLabel>,
         llm_call_label: Option<crate::polish::LlmCallLabel>,
     ) {
-        if context.output_target == DictationOutputTarget::CloudNote
+        if matches!(context.output_target, DictationOutputTarget::CloudNote | DictationOutputTarget::AskComposer)
             || self.is_cloud_note(session_id)
         {
             return;
@@ -9605,6 +9699,7 @@ impl OpenLessBackend {
         purpose: DictationContextPurpose,
         host_context: &dyn HostContextAdapter,
     ) -> Result<DictationContext, BackendError> {
+        let revision = self.dictation_provider_revision();
         let preferences = self.get_preferences();
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
@@ -9644,53 +9739,22 @@ impl OpenLessBackend {
             .filter(|entry| entry.enabled)
             .map(|entry| entry.phrase)
             .collect();
-        // Auxiliary Voice (Selection / Less) and QA Voice respect multimodal
-        // preferences. Skip unused traditional channels so a valid Omni route
-        // is not blocked by missing ASR/LLM. QA text needs no microphone
-        // provider.
         let pipeline_mode = crate::shared_types::effective_pipeline_mode(
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
         let traditional = pipeline_mode != crate::shared_types::PipelineMode::Multimodal;
-        let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
-            self.resolve_dictation_asr_provider(&preferences).await?
-        } else {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_asr_provider,
-            )
+        let warmed = (purpose == DictationContextPurpose::Dictation)
+            .then(|| self.warmed_dictation_providers(revision))
+            .flatten();
+        let providers = match warmed {
+            Some(providers) => providers,
+            None => self.resolve_dictation_providers(&preferences, purpose, pipeline_mode).await?,
         };
-        let mut deferred_llm_error = None;
-        let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
-            crate::deepseek_suite::invocation(false)
-        } else if traditional && !skip_llm_at_capture {
-            match self
-                .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
-                .await
-            {
-                Ok(provider) => provider,
-                Err(error) => {
-                    deferred_llm_error = Some(error);
-                    crate::dictation_context::ProviderInvocation::for_provider(
-                        &preferences.active_llm_provider,
-                    )
-                }
-            }
-        } else {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_llm_provider,
-            )
-        };
-        let active_omni_provider = if traditional {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_omni_provider,
-            )
-        } else {
-            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
-                .await?
-        };
-        let recent_history = if preferences.polish_context_window_minutes == 0 {
+        let deferred_llm_error = providers.llm_error;
+        let recent_history = if options.output_target == DictationOutputTarget::AskComposer
+            || preferences.polish_context_window_minutes == 0
+        {
             Vec::new()
         } else {
             match self
@@ -9710,9 +9774,9 @@ impl OpenLessBackend {
             &preferences,
             &style_pack,
             DictationProviderInvocations::new(
-                active_asr_provider,
-                active_llm_provider,
-                active_omni_provider,
+                providers.asr,
+                providers.llm,
+                providers.omni,
             ),
             hotwords,
             recent_history,
@@ -9720,6 +9784,7 @@ impl OpenLessBackend {
         );
         context.pipeline_mode = pipeline_mode;
         if purpose == DictationContextPurpose::Dictation
+            && options.output_target != DictationOutputTarget::AskComposer
             && !context.polish.translation_active
             && preferences.expression_learning_enabled
         {
@@ -9789,6 +9854,124 @@ impl OpenLessBackend {
             .filter(|rule| rule.enabled)
             .collect();
         Ok(context)
+    }
+
+    fn dictation_provider_revision(&self) -> (u64, u64) {
+        (
+            self.preferences_revision.load(Ordering::Acquire),
+            self.provider_credentials_revision.load(Ordering::Acquire),
+        )
+    }
+
+    fn warmed_dictation_providers(&self, revision: (u64, u64)) -> Option<ResolvedDictationProviders> {
+        let warm = self.dictation_provider_warmth.lock().unwrap();
+        let warm = warm.as_ref()?;
+        (warm.revision == revision
+            && self.dictation_provider_revision() == revision
+            && warm.until > std::time::Instant::now())
+            .then(|| warm.providers.clone())
+            .flatten()
+    }
+
+    pub async fn warm_dictation_provider(self: &Arc<Self>) {
+        let revision = self.dictation_provider_revision();
+        let until = std::time::Instant::now() + DICTATION_PROVIDER_WARMTH;
+        let token = {
+            let mut warm = self.dictation_provider_warmth.lock().unwrap();
+            if let Some(existing) = warm.as_mut().filter(|warm| {
+                warm.revision == revision && warm.until > std::time::Instant::now()
+            }) {
+                existing.until = until;
+                self.expire_dictation_warmth(until);
+                return;
+            }
+            let token = Arc::new(());
+            *warm = Some(DictationProviderWarmth {
+                token: token.clone(),
+                revision,
+                until,
+                providers: None,
+            });
+            token
+        };
+        self.expire_dictation_warmth(until);
+        let preferences = self.get_preferences();
+        let mode = crate::shared_types::effective_pipeline_mode(
+            preferences.multimodal_pipeline_enabled,
+            preferences.pipeline_mode,
+        );
+        let result = tokio::time::timeout(
+            DICTATION_PROVIDER_WARMTH,
+            self.resolve_dictation_providers(&preferences, DictationContextPurpose::Dictation, mode),
+        )
+        .await;
+        let mut slot = self.dictation_provider_warmth.lock().unwrap();
+        if slot.as_ref().is_some_and(|warm| Arc::ptr_eq(&warm.token, &token)) {
+            match (result, self.dictation_provider_revision() == revision) {
+                (Ok(Ok(providers)), true) => slot.as_mut().unwrap().providers = Some(providers),
+                _ => { slot.take(); }
+            }
+        }
+    }
+
+    pub fn retain_dictation_warmth(self: &Arc<Self>) {
+        let Some(until) = self.dictation_provider_warmth.lock().unwrap().as_mut().and_then(|warm| {
+            let now = std::time::Instant::now();
+            if warm.until <= now || warm.revision != self.dictation_provider_revision() {
+                return None;
+            }
+            warm.until = now + DICTATION_PROVIDER_WARMTH;
+            Some(warm.until)
+        }) else { return };
+        self.expire_dictation_warmth(until);
+    }
+
+    fn expire_dictation_warmth(self: &Arc<Self>, until: std::time::Instant) {
+        let backend = Arc::downgrade(self);
+        self.deps.task_spawner.spawn(Box::pin(async move {
+            tokio::time::sleep_until(until.into()).await;
+            if let Some(backend) = backend.upgrade() {
+                let mut warm = backend.dictation_provider_warmth.lock().unwrap();
+                if warm.as_ref().is_some_and(|warm| warm.until <= std::time::Instant::now()) {
+                    warm.take();
+                }
+            }
+        }));
+    }
+
+    async fn resolve_dictation_providers(
+        &self,
+        preferences: &crate::UserPreferences,
+        purpose: DictationContextPurpose,
+        mode: crate::shared_types::PipelineMode,
+    ) -> Result<ResolvedDictationProviders, BackendError> {
+        use crate::{dictation_context::ProviderInvocation, shared_types::PipelineMode};
+        let traditional = mode != PipelineMode::Multimodal;
+        let asr = if traditional && purpose != DictationContextPurpose::QaText {
+            self.resolve_dictation_asr_provider(preferences).await?
+        } else {
+            ProviderInvocation::for_provider(&preferences.active_asr_provider)
+        };
+        let mut llm_error = None;
+        let llm = if mode == PipelineMode::Deepseek {
+            crate::deepseek_suite::invocation(false)
+        } else if traditional && purpose != DictationContextPurpose::AuxiliaryVoice {
+            match self.resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider).await {
+                Ok(provider) => provider,
+                Err(error) => {
+                    llm_error = Some(error);
+                    ProviderInvocation::for_provider(&preferences.active_llm_provider)
+                }
+            }
+        } else {
+            ProviderInvocation::for_provider(&preferences.active_llm_provider)
+        };
+        let omni = if traditional {
+            ProviderInvocation::for_provider(&preferences.active_omni_provider)
+        } else {
+            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider).await?
+        };
+        Ok(ResolvedDictationProviders { asr, llm, omni, llm_error })
     }
 
     async fn resolve_session_provider(
@@ -14887,6 +15070,45 @@ mod tests {
         assert!(!contexts.last().unwrap().insertion.streaming);
         assert!(backend.list_history().unwrap().is_empty());
         backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ask_composer_has_no_draft_or_terminal_history_side_effect_at_cap() {
+        use crate::testing::FixtureDictationEngine;
+        let data = TestDataDir::new("ask-composer-history-cap");
+        let backend = backend_with_dictation_engine(
+            data.path().to_owned(),
+            Arc::new(FixtureDictationEngine::successful("spoken sentinel", "ordinary polish")),
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.history_max_entries = Some(5);
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        for _ in 0..5 {
+            let id = backend.start_dictation().await.unwrap();
+            backend.stop_dictation_session(id).await.unwrap();
+        }
+        let original = backend.list_history().unwrap();
+        assert_eq!(original.len(), 5);
+        backend.shutdown().await.unwrap();
+
+        for (engine, succeeds) in [
+            (FixtureDictationEngine::successful("Ask-only speech", "Ask-only composer text"), true),
+            (FixtureDictationEngine::failing(BackendError::new(BackendErrorCode::Provider, "fixture failure")), false),
+        ] {
+            let backend = backend_with_dictation_engine(data.path().to_owned(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let id = SessionId::new();
+            backend.start_dictation_for_ask_composer(id, || true).await.unwrap();
+            assert_eq!(backend.list_history().unwrap(), original);
+            assert_eq!(backend.stop_dictation_session(id).await.is_ok(), succeeds);
+            assert_eq!(backend.list_history().unwrap(), original);
+            let cancelled_id = SessionId::new();
+            backend.start_dictation_for_ask_composer(cancelled_id, || true).await.unwrap();
+            backend.cancel_dictation(Some(cancelled_id)).await.unwrap();
+            assert_eq!(backend.list_history().unwrap(), original);
+            backend.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test]

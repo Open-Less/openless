@@ -34,6 +34,8 @@ pub(super) struct Foreground {
 pub(super) struct Trigger {
     pub(super) captured_at: DateTime<Utc>,
     pub(super) foreground: Option<Foreground>,
+    #[cfg(target_os = "macos")]
+    pub(super) screen: super::macos_window::ScreenPoint,
 }
 
 impl Trigger {
@@ -41,6 +43,8 @@ impl Trigger {
         Self {
             captured_at: Utc::now(),
             foreground,
+            #[cfg(target_os = "macos")]
+            screen: super::macos_window::ScreenPoint::capture(),
         }
     }
 

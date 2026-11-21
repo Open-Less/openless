@@ -11,43 +11,10 @@ use openless_core::{
     BackendError, BackendErrorCode, CapsulePayload, CapsuleState, SessionId,
 };
 use parking_lot::Mutex;
-use serde::Deserialize;
 use tokio::sync::mpsc;
 
+pub(crate) use super::voice_types::{Delivery, Editor, Target};
 use super::Desktop;
-
-#[derive(Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Editor {
-    pub(crate) conversation_id: String,
-    pub(crate) mount_id: String,
-    pub(crate) editor_id: String,
-    pub(crate) revision: u64,
-    pub(crate) editable: bool,
-    pub(crate) selection_start: u32,
-    pub(crate) selection_end: u32,
-}
-
-#[derive(Clone)]
-pub(crate) struct Target {
-    pub(crate) focus_epoch: u64,
-    pub(crate) editor: Editor,
-}
-
-impl Target {
-    pub(super) fn matches(&self, current: &Self) -> bool {
-        self.focus_epoch == current.focus_epoch
-            && self.editor.editable
-            && self.editor == current.editor
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct Delivery {
-    pub(crate) recording_id: SessionId,
-    pub(crate) target: Target,
-    pub(crate) text: String,
-}
 
 pub(super) struct Controller {
     tx: mpsc::UnboundedSender<Message>,

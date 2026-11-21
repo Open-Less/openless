@@ -142,7 +142,8 @@ const fixture = {
   voice(
     event:
       | { type: 'transcribed'; recordingId: string; text: string }
-      | { type: 'started' | 'cancelled'; recordingId: string },
+      | { type: 'started' | 'cancelled'; recordingId: string }
+      | { type: 'failed'; recordingId: string; stage: 'start' | 'processing' },
   ) {
     if (event.type === 'started' && lastEditor?.editable) {
       voiceScope.set(event.recordingId, {
@@ -159,7 +160,11 @@ const fixture = {
     reset('conversation-2');
     lastEditor = undefined;
     focus = { focusEpoch: focus.focusEpoch + 1, focusRequest: focus.focusRequest };
-    handlers.window.forEach((listener) => listener({ type: 'sessionChanged', ...focus }));
+    handlers.window.forEach((listener) => listener({ type: 'sessionChanged', conversationId: current.conversationId, ...focus }));
+  },
+  freshOpen() {
+    this.switch();
+    this.activate();
   },
 };
 
@@ -203,8 +208,9 @@ const client: AskClient = {
     };
     attachmentArchive = current.attachments;
     accepted.set(request.clientRequestId, turnId);
-    push({ type: 'submitted', submission, attachmentIds: request.attachmentIds });
-    if (fixture.route) resolveRoute(fixture.route, request);
+    push({ type: 'submitted', submission });
+    if (current.turns.length) resolveRoute('answer', request);
+    else if (fixture.route) resolveRoute(fixture.route, request);
     return { turnId };
   },
   async cancel(conversationId, turnId) {

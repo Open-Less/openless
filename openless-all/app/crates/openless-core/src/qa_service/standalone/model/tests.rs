@@ -1,6 +1,129 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[cfg(feature = "ask-attachments")]
+#[tokio::test]
+async fn official_suite_and_flash_aliases_carry_the_selected_photo_as_user_bytes() {
+    use crate::credentials::{CredentialKey, CredentialNamespace};
+    use crate::{InMemoryCredentialStore, SecretValue};
+    use image::{ImageEncoder, Rgb, RgbImage};
+
+    let store = InMemoryCredentialStore::default();
+    store.write(CredentialKey::new(
+        CredentialNamespace::Application, None, crate::deepseek_suite::CONFIG_ACCOUNT,
+    ).unwrap(), SecretValue::new(r#"{"apiKey":"disposable-fixture-key","voice":"stella"}"#))
+        .await.unwrap();
+    let route = crate::deepseek_suite::invocation(false);
+    let CloudPolisherProvider::OpenAi(ActiveLLMProvider::OpenAI(suite)) =
+        build_cloud_channel_provider(&store, &route, true, false).await.unwrap()
+    else { panic!("suite resolved to an unexpected protocol") };
+
+    let digits = [0x7b6f_u16, 0x2492, 0x73e7, 0x73cf, 0x5bc9, 0x79cf, 0x79ef, 0x7249, 0x7bef, 0x7bcf];
+    let seed = uuid::Uuid::new_v4();
+    let mut pixels = RgbImage::from_pixel(100, 42, Rgb([255_u8; 3]));
+    for (index, value) in seed.as_bytes().iter().take(4).enumerate() {
+        let glyph = digits[usize::from(*value % 10)];
+        for row in 0..5 {
+            for column in 0..3 {
+                if glyph & (1 << (14 - row * 3 - column)) != 0 {
+                    for dy in 0..6 {
+                        for dx in 0..6 {
+                            pixels.put_pixel(4 + index as u32 * 24 + column * 6 + dx, 6 + row * 6 + dy, Rgb([0_u8; 3]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(pixels.as_raw(), 100, 42, image::ExtendedColorType::Rgb8).unwrap();
+    let exact = AskModelPart::Image(AskImage {
+        mime: AskImageMime::Png, bytes: Arc::from(png.as_slice()), width: 100, height: 42,
+    });
+
+    use LlmRequestFormat::*;
+    let mut providers = vec![(suite, ChatCompletions, "/v1/chat/completions")];
+    for (format, base, path) in [
+        (ChatCompletions, crate::deepseek_suite::ENDPOINT, "/v1/chat/completions"),
+        (Responses, "https://api.deepseek.com", "/responses"),
+        (Responses, crate::deepseek_suite::ENDPOINT, "/v1/responses"),
+        (Messages, "https://api.deepseek.com/anthropic", "/anthropic/messages"),
+        (Messages, "https://api.deepseek.com/anthropic/v1", "/anthropic/v1/messages"),
+    ] {
+        for alias in ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                crate::polish::OpenAICompatibleConfig::new("deepseek", "Fixture", base, "fixture", alias)
+                    .with_protocol(crate::llm_protocol::LlmProtocolConfig { format, ..Default::default() }),
+            );
+            providers.push((provider, format, path));
+        }
+    }
+    for (provider, expected_format, path) in providers {
+        let model = PreparedModel::new(route.provider_id.clone(), Wire::Compatible(provider));
+        assert!(model.capabilities().image_input);
+        for already_in_chat in [false, true] {
+            let mut request = request();
+            request.deep_thinking = false;
+            request.messages[0].parts = vec![AskModelPart::Text("Read the visible code.".into()), exact.clone()];
+            if already_in_chat {
+                request.messages.insert(0, AskModelMessage {
+                    role: AskModelRole::Assistant, parts: vec![AskModelPart::Text("Prior disposable turn.".into())],
+                });
+            }
+            let (builder, format, _) = model.request_builder(&request).unwrap();
+            assert_eq!(format, expected_format);
+            let wire = builder.build().unwrap();
+            assert_eq!(wire.url().host_str(), Some("api.deepseek.com"));
+            assert_eq!(wire.url().path(), path);
+            let body: Value = serde_json::from_slice(wire.body().unwrap().as_bytes().unwrap()).unwrap();
+            assert_eq!(body["model"], model.label().model);
+            assert!(body.get("previous_response_id").is_none());
+            let history_key = if format == Responses {
+                assert_eq!(body["store"], false);
+                "input"
+            } else { "messages" };
+            let final_message = body[history_key].as_array().unwrap().last().unwrap();
+            assert_eq!(final_message["role"], "user");
+            let part = &final_message["content"][1];
+            let data = match format {
+                ChatCompletions => {
+                    assert_eq!(part["type"], "image_url");
+                    part["image_url"]["url"].as_str().unwrap().strip_prefix("data:image/png;base64,").unwrap()
+                }
+                Responses => {
+                    assert_eq!(part["type"], "input_image");
+                    part["image_url"].as_str().unwrap().strip_prefix("data:image/png;base64,").unwrap()
+                }
+                Messages => {
+                    assert_eq!(part["type"], "image");
+                    assert_eq!(part["source"]["type"], "base64");
+                    assert_eq!(part["source"]["media_type"], "image/png");
+                    part["source"]["data"].as_str().unwrap()
+                }
+            };
+            use base64::Engine as _;
+            assert!(base64::engine::general_purpose::STANDARD.decode(data).unwrap() == png,
+                "the actual request must contain the fixture's original PNG");
+        }
+    }
+    for (endpoint, model, format) in [
+        (crate::deepseek_suite::ENDPOINT, "deepseek-pro", ChatCompletions),
+        (crate::deepseek_suite::ENDPOINT, "deepseek-v4-pro", Responses),
+        ("https://api.deepseek.com/anthropic", "deepseek-pro", Messages),
+        ("https://fixture.invalid/v1", "deepseek-flash", ChatCompletions),
+        ("https://fixture.invalid/anthropic", "deepseek-v4-flash", Messages),
+        ("https://api.deepseek.com/v1", "deepseek-flash", Messages),
+    ] {
+        let unknown = PreparedModel::new("fixture".into(), Wire::Compatible(
+            OpenAICompatibleLLMProvider::new(crate::polish::OpenAICompatibleConfig::new(
+                "deepseek", "Fixture", endpoint, "fixture", model,
+            ).with_protocol(crate::llm_protocol::LlmProtocolConfig { format, ..Default::default() })),
+        ));
+        assert!(!unknown.capabilities().image_input);
+    }
+}
+
 fn request() -> AskModelRequest {
     AskModelRequest {
         instructions: "fixed".to_owned(),

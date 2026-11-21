@@ -13,7 +13,7 @@ export const askEntrySettingsEn = {
   mainModelToolHint: 'Require the main model to resolve intent with a tool before responding.',
   loadFailed: 'Could not load Ask settings.',
   restoreDefaults: 'Restore Defaults',
-  restoreDefaultsHint: 'Turn on auto-start voice and restore Semantic hybrid.',
+  restoreDefaultsHint: 'Turn on auto-start voice and restore Separate model.',
   saveFailed: 'Could not save Ask settings. Your previous settings are unchanged.',
 };
 
@@ -32,7 +32,7 @@ export const askEntrySettingsZhCN: typeof askEntrySettingsEn = {
   mainModelToolHint: '要求主模型先调用工具判断意图，再生成内容。',
   loadFailed: '无法读取「随便问」设置。',
   restoreDefaults: '恢复默认设置',
-  restoreDefaultsHint: '开启自动语音输入，并恢复语义混合模式。',
+  restoreDefaultsHint: '开启自动语音输入，并恢复独立模型模式。',
   saveFailed: '无法保存「随便问」设置。原有设置未更改。',
 };
 
@@ -51,6 +51,6 @@ export const askEntrySettingsZhTW: typeof askEntrySettingsEn = {
   mainModelToolHint: '要求主模型先呼叫工具判斷意圖，再產生內容。',
   loadFailed: '無法讀取「隨便問」設定。',
   restoreDefaults: '恢復預設設定',
-  restoreDefaultsHint: '開啟自動語音輸入，並恢復語意混合模式。',
+  restoreDefaultsHint: '開啟自動語音輸入，並恢復獨立模型模式。',
   saveFailed: '無法儲存「隨便問」設定。原有設定未變更。',
 };

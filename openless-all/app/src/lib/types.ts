@@ -36,7 +36,7 @@ export type PipelineMode = 'traditional' | 'multimodal' | 'deepseek';
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
 export type HistorySource =
-  'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
+  'voice' | 'qa' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {

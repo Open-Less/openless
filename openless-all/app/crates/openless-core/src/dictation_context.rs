@@ -38,6 +38,7 @@ pub enum DictationOutputTarget {
     Qa,
     /// Keep a polished draft for explicit Voice Edit confirmation, without insertion or history.
     VoiceEdit,
+    AskComposer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,7 +334,7 @@ impl DictationContext {
                 // batch-mode preference silently buffer its entire recording.
                 transcribe_after_stop: preferences.stable_transcription_enabled
                     && asr.provider_type != "experimental-textstream",
-                archive_enabled: true,
+                archive_enabled: options.output_target != DictationOutputTarget::AskComposer,
                 archive_successful_recording: matches!(
                     options.output_target,
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
@@ -401,6 +402,7 @@ impl DictationContext {
                         DictationOutputTarget::QuickNote
                             | DictationOutputTarget::Qa
                             | DictationOutputTarget::VoiceEdit
+                            | DictationOutputTarget::AskComposer
                     ),
                 observe_edits: preferences.vocabulary_learning_enabled
                     || preferences.expression_learning_enabled,
@@ -412,6 +414,7 @@ impl DictationContext {
                         | DictationOutputTarget::QuickNote
                         | DictationOutputTarget::Qa
                         | DictationOutputTarget::VoiceEdit
+                        | DictationOutputTarget::AskComposer
                 ) && preferences.streaming_insert,
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
                 // macOS AX composition is retired. Ignore legacy enabled values so saved
@@ -472,6 +475,15 @@ impl DictationContext {
                     self.normal_archive_successful_recording;
                 next.recording.archive_processed = normal_archive_processed;
                 next.recording.archive_raw = normal_archive_raw;
+                next.recording.archive_required = false;
+            }
+            DictationOutputTarget::AskComposer => {
+                next.insertion.enabled = false;
+                next.insertion.streaming = false;
+                next.recording.archive_enabled = false;
+                next.recording.archive_successful_recording = false;
+                next.recording.archive_processed = false;
+                next.recording.archive_raw = false;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::QuickNote => {

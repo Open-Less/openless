@@ -19,14 +19,14 @@ export type AttachmentPreview =
   | { kind: 'selection'; text: string };
 
 export type SearchStatus =
-  'idle' | 'searching' | 'reading' | 'done' | 'no_results' | 'error' | 'cancelled';
+  'idle' | 'disabled' | 'unsupported' | 'rejected' | 'snippet_only' | 'searching' | 'reading' | 'done' | 'no_results' | 'error' | 'cancelled';
 
 export type AskSource = {
   sourceId: string;
   url: string;
   title: string;
   snippet?: string;
-  readStatus: 'not_attempted' | 'reading' | 'read' | 'blocked' | 'failed' | 'cancelled';
+  readStatus: 'not_attempted' | 'reading' | 'read' | 'not_relevant' | 'blocked' | 'failed' | 'cancelled';
 };
 
 export type AskOptions = {
@@ -53,7 +53,7 @@ export type AskEditor = {
   selectionEnd: number;
 };
 
-export type WorkingStatus = 'queued' | 'thinking' | 'writing' | 'compacting';
+export type WorkingStatus = 'queued' | 'thinking' | 'writing' | 'compacting' | 'polishing';
 export type TerminalStatus = 'completed' | 'cancelled' | 'failed';
 export type AskMessage = { messageId: string; text: string };
 export type AskRoute = 'answer' | 'selectionAnswer' | 'write' | 'edit' | 'clarify';
@@ -125,7 +125,9 @@ export type AskWindowEvent =
 export type AskVoiceEvent = Omit<AskEditor, 'editable'> & {
   recordingId: string;
   focusEpoch: number;
-} & ({ type: 'started' } | { type: 'cancelled' } | { type: 'transcribed'; text: string });
+} & ({ type: 'started' } | { type: 'cancelled' } | {
+  type: 'failed'; stage: 'start' | 'processing';
+} | { type: 'transcribed'; text: string });
 
 export interface AskClient {
   current(): Promise<
@@ -176,6 +178,38 @@ export function errorMessage(error: unknown, fallback: string): string {
 }
 
 const INTENT_ERRORS: Record<string, [english: string, chinese: string]> = {
+  askImageUnsupported: [
+    'This model and endpoint cannot accept the image. Your draft and image were kept; switch to an image-capable model and endpoint in Settings.',
+    '当前模型和接口不支持图片。草稿和图片已保留，可在设置中换用支持图片的模型和接口。',
+  ],
+  askDraftUnusable: [
+    'The model did not produce usable text. Nothing was written. Your instruction was kept.',
+    '模型未生成可用正文，未写入原应用。指令已保留。',
+  ],
+  askDraftReviewUnavailable: [
+    'Ask could not review the generated text and did not write it. The draft is available here to check and copy.',
+    '未能核验生成的正文，未写入原应用。可在这里查看和复制草稿。',
+  ],
+  askAnswerUnusable: [
+    'The model did not give a direct answer. Your instruction and attachments were kept.',
+    '模型未直接回答本轮问题。指令和附件已保留。',
+  ],
+  askAnswerReviewUnavailable: [
+    'Ask could not review the complete answer. Your instruction and attachments were kept, along with the unreviewed response.',
+    '未能核验完整答复。指令、附件和未核验的答复已保留。',
+  ],
+  askDraftSearchUnavailable: [
+    'The search did not produce verifiable evidence. No text was written. Your instruction was kept.',
+    '未取得可核实的搜索资料，未写入原应用。指令已保留。',
+  ],
+  askSelectionUnavailable: [
+    'The selection could not be verified. The original text was not changed.',
+    '未能确认选区，未修改原文。',
+  ],
+  askSelectionRequired: [
+    'No verified selection was available. The original text was not changed.',
+    '没有可验证的选区，未修改原文。',
+  ],
   askIntentInvalid: [
     'Ask could not determine what to do. Try making your request more specific.',
     'Ask 无法确定该怎么处理。请试着把要求说得更具体一些。',
@@ -194,15 +228,28 @@ const INTENT_ERRORS: Record<string, [english: string, chinese: string]> = {
   ],
 };
 
-export function submissionErrorMessage(error?: AskError | null) {
-  if (!error) return undefined;
-  const localized = error.reason && INTENT_ERRORS[error.reason];
-  if (!localized) return error.message;
+export function askLocale() {
   let language = navigator.language;
   try {
     language = window.localStorage.getItem('ol.locale') ?? language;
   } catch {}
-  return localized[/^zh\b/i.test(language) ? 1 : 0];
+  return language;
+}
+
+export function askIdleLabel(locale = askLocale()) {
+  if (/^zh-(TW|HK|Hant)\b/i.test(locale)) return '問任何問題';
+  const language = locale.toLowerCase().split('-')[0];
+  return ({
+    zh: '问任何问题', ja: '何でも聞いてください', ko: '무엇이든 물어보세요',
+    de: 'Frag mich alles', es: 'Pregunta lo que quieras', fr: 'Posez toutes vos questions',
+  } as Record<string, string>)[language] ?? 'Ask anything';
+}
+
+export function submissionErrorMessage(error?: AskError | null) {
+  if (!error) return undefined;
+  const localized = INTENT_ERRORS[error.reason ?? error.message];
+  if (!localized) return error.message;
+  return localized[/^zh\b/i.test(askLocale()) ? 1 : 0];
 }
 
 export function newRequestId(): string {

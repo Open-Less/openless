@@ -24,9 +24,9 @@ test('defaults, full commits, exclusive Beta modes, and reload', async ({ page }
   const separate = page.getByRole('switch', { name: 'Separate model (Beta)', exact: true });
   const mainTool = page.getByRole('switch', { name: 'Main model tool (Beta)', exact: true });
   await expect(autoVoice).toBeChecked();
-  await expect(separate).not.toBeChecked();
+  await expect(separate).toBeChecked();
   await expect(mainTool).not.toBeChecked();
-  await expect(page.getByText('Semantic hybrid', { exact: true })).toBeVisible();
+  await expect(page.getByText('Separate model', { exact: true })).toBeVisible();
   await expect(page.getByRole('switch', { name: 'Save history' })).toBeChecked();
   await expect(
     page.getByRole('switch', { name: 'Share desktop app names with Ask' }),
@@ -38,16 +38,17 @@ test('defaults, full commits, exclusive Beta modes, and reload', async ({ page }
   await expect(autoVoice).toBeChecked();
   await autoVoice.click();
   await separate.click();
-  await expect(separate).toBeChecked();
+  await expect(separate).not.toBeChecked();
   await expect(mainTool).not.toBeChecked();
+  await expect(page.getByText('Semantic hybrid', { exact: true })).toBeVisible();
   await mainTool.click();
   await expect(mainTool).toBeChecked();
   await expect(separate).not.toBeChecked();
   expect(await page.evaluate(() => window.askEntrySettingsFixture.writes)).toEqual([
-    { autoVoiceOnOpen: false, intentMode: 'semanticHybrid' },
-    { autoVoiceOnOpen: true, intentMode: 'semanticHybrid' },
-    { autoVoiceOnOpen: false, intentMode: 'semanticHybrid' },
     { autoVoiceOnOpen: false, intentMode: 'separateModel' },
+    { autoVoiceOnOpen: true, intentMode: 'separateModel' },
+    { autoVoiceOnOpen: false, intentMode: 'separateModel' },
+    { autoVoiceOnOpen: false, intentMode: 'semanticHybrid' },
     { autoVoiceOnOpen: false, intentMode: 'mainModelTool' },
   ]);
 
@@ -95,6 +96,7 @@ test('a failed pending save reports a notice and preserves committed values', as
   await openAskSettings(page);
   const voice = page.getByRole('switch', { name: 'Auto-start voice', exact: true });
   const separate = page.getByRole('switch', { name: 'Separate model (Beta)', exact: true });
+  const mainTool = page.getByRole('switch', { name: 'Main model tool (Beta)', exact: true });
   await voice.click();
   await expect(voice).toBeChecked();
   await expect(separate).toBeDisabled();
@@ -105,15 +107,15 @@ test('a failed pending save reports a notice and preserves committed values', as
   await expect(page.getByRole('alert')).toContainText('Could not save Ask settings');
   await expect(voice).toBeChecked();
   await expect(separate).toBeEnabled();
-  await separate.click();
+  await mainTool.click();
   await expect
     .poll(() => page.evaluate(() => window.askEntrySettingsFixture.hasPendingWrite()))
     .toBe(true);
   await page.getByRole('button', { name: 'Back', exact: true }).click();
   await openAskSettings(page);
-  await expect(separate).toHaveCount(0);
+  await expect(mainTool).toHaveCount(0);
   await page.evaluate(() => window.askEntrySettingsFixture.finish(false));
-  await expect(separate).toBeChecked();
+  await expect(mainTool).toBeChecked();
 });
 
 test('a native read failure requires explicit, committed recovery', async ({ page }) => {
@@ -142,12 +144,12 @@ test('a native read failure requires explicit, committed recovery', async ({ pag
   await expect(autoVoice).toHaveCount(0);
   await page.evaluate(() => window.askEntrySettingsFixture.finish(false));
   await expect(autoVoice).toBeChecked();
-  await expect(page.getByText('Semantic hybrid', { exact: true })).toBeVisible();
+  await expect(page.getByText('Separate model', { exact: true })).toBeVisible();
   await expect(restore).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(await page.evaluate(() => window.askEntrySettingsFixture.writes)).toEqual([
-    { autoVoiceOnOpen: true, intentMode: 'semanticHybrid' },
-    { autoVoiceOnOpen: true, intentMode: 'semanticHybrid' },
+    { autoVoiceOnOpen: true, intentMode: 'separateModel' },
+    { autoVoiceOnOpen: true, intentMode: 'separateModel' },
   ]);
 
   await page.reload();

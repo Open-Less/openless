@@ -4,8 +4,12 @@ pub(crate) mod chat;
 pub(crate) mod context;
 pub(crate) mod entry_settings;
 pub(crate) mod hotkey;
+#[cfg(target_os = "macos")]
+mod macos_window;
 pub(crate) mod target;
+#[cfg_attr(target_os = "macos", path = "voice_macos.rs")]
 pub(crate) mod voice;
+mod voice_types;
 mod wire;
 
 use std::{
@@ -16,14 +20,16 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use openless_core::{CapsulePayload, DictationHotkeyEdge, OpenLessBackend};
 use parking_lot::Mutex;
+#[cfg(not(target_os = "macos"))]
+use tauri::{LogicalSize, Monitor, PhysicalPosition, PhysicalSize};
 use tauri::{
-    webview::PageLoadEvent, AppHandle, Emitter, EventTarget, LogicalSize, Manager, Monitor,
-    PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    webview::PageLoadEvent, AppHandle, Emitter, EventTarget, Manager, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 use capture::{Invocation, Trigger};
@@ -35,16 +41,21 @@ const CONVERSATION_WIDTH: f64 = 800.0;
 const COMPOSER_HEIGHT: f64 = 300.0;
 const CONVERSATION_HEIGHT: f64 = 920.0;
 const WINDOW_GAP: f64 = 12.0;
+const COMPOSER_READY_TIMEOUT: Duration = Duration::from_secs(3);
 static OPEN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub(crate) type Task<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 pub(crate) trait Integration: Send + Sync {
-    fn prepare_open(&self, invocation: Invocation) -> Task<Result<(), String>>;
+    fn prepare_open(&self, invocation: Invocation, generation: u64) -> Task<Result<(), String>>;
     fn auto_voice_on_open(&self) -> bool {
         true
     }
-    fn ordinary_dictation_edge(&self, edge: DictationHotkeyEdge) -> Task<()>;
+    fn private_session(&self) -> bool {
+        false
+    }
+    fn revoke_requests(&self) {}
+    fn ordinary_dictation_edge(&self, edge: DictationHotkeyEdge, fn_commit: Option<hotkey::FnCommit>) -> Task<()>;
     fn ordinary_dictation_is_active(&self) -> bool;
     fn capsule(&self, frame: CapsulePayload);
 }
@@ -55,6 +66,8 @@ pub(crate) struct Desktop {
     backend: Arc<OpenLessBackend>,
     focused: AtomicBool,
     invocation_epoch: AtomicU64,
+    pending_open: AtomicU64,
+    external_target_epoch: AtomicU64,
     #[cfg(target_os = "windows")]
     native_window: std::sync::atomic::AtomicUsize,
     current_conversation: Mutex<Option<String>>,
@@ -77,10 +90,12 @@ struct ComposerFocus {
 struct AutoVoice {
     request: u64,
     queued: bool,
+    expires_at: Instant,
 }
 
 impl ComposerFocus {
     fn request_focus(&mut self, chord: Option<bool>, recording: bool) {
+        self.expire_autostart();
         if chord.is_some() && self.auto_voice.is_some() {
             return;
         }
@@ -88,10 +103,12 @@ impl ComposerFocus {
         self.auto_voice = (chord == Some(true) && !recording).then_some(AutoVoice {
             request: self.request,
             queued: false,
+            expires_at: Instant::now() + COMPOSER_READY_TIMEOUT,
         });
     }
 
     fn acknowledge(&mut self, epoch: u64, request: u64, editor: voice::Editor) -> Option<bool> {
+        self.expire_autostart();
         if self.epoch != epoch
             || self.request != request
             || self.target.as_ref().is_some_and(|previous| {
@@ -123,6 +140,12 @@ impl ComposerFocus {
         self.target = None;
         self.auto_voice = None;
     }
+
+    fn expire_autostart(&mut self) {
+        if self.auto_voice.as_ref().is_some_and(|pending| pending.expires_at <= Instant::now()) {
+            self.auto_voice = None;
+        }
+    }
 }
 
 impl Desktop {
@@ -137,6 +160,8 @@ impl Desktop {
             backend,
             focused: AtomicBool::new(false),
             invocation_epoch: AtomicU64::new(0),
+            pending_open: Default::default(),
+            external_target_epoch: AtomicU64::new(0),
             #[cfg(target_os = "windows")]
             native_window: std::sync::atomic::AtomicUsize::new(0),
             current_conversation: Mutex::new(None),
@@ -148,6 +173,8 @@ impl Desktop {
             voice: voice::Controller::new(),
         });
         desktop.voice.listen(Arc::downgrade(&desktop));
+        #[cfg(target_os = "macos")]
+        macos_window::observe_spaces();
         hotkey::install(Arc::downgrade(&desktop));
         desktop
     }
@@ -222,7 +249,7 @@ impl Desktop {
     }
 
     pub(crate) fn owns_capsule(&self) -> bool {
-        self.voice.owner().is_some()
+        !cfg!(target_os = "macos") && self.voice.owner().is_some()
     }
 
     pub(crate) fn capsule_stop(&self, recording_id: &str) -> bool {
@@ -234,7 +261,7 @@ impl Desktop {
     }
 
     pub(crate) fn recognizes_capsule(&self, recording_id: &str) -> bool {
-        uuid::Uuid::parse_str(recording_id)
+        !cfg!(target_os = "macos") && uuid::Uuid::parse_str(recording_id)
             .ok()
             .map(openless_core::SessionId::from_uuid)
             .is_some_and(|id| self.recent_recordings.lock().contains(&id))
@@ -251,7 +278,7 @@ impl Desktop {
     pub(crate) fn cancel_active_voice(&self) -> bool {
         let pending = self.composer.lock().auto_voice.take().is_some();
         let delivery = self.voice_result.lock().take().is_some();
-        if self.owns_capsule() {
+        if self.voice.owner().is_some() {
             self.voice.cancel();
             true
         } else {
@@ -262,6 +289,8 @@ impl Desktop {
     pub(crate) fn shutdown(&self) {
         hotkey::set_suspended(true);
         self.invocation_epoch.fetch_add(1, Ordering::AcqRel);
+        self.pending_open.store(0, Ordering::Release);
+        self.external_target_epoch.store(0, Ordering::Release);
         self.mark_unfocused();
     }
 
@@ -298,9 +327,9 @@ impl Desktop {
     }
 
     fn autostart_is_pending(&self, request: u64) -> bool {
-        self.composer
-            .lock()
-            .auto_voice
+        let mut composer = self.composer.lock();
+        composer.expire_autostart();
+        composer.auto_voice
             .as_ref()
             .is_some_and(|pending| pending.request == request && pending.queued)
     }
@@ -317,7 +346,9 @@ impl Desktop {
     }
 
     fn voice_is_pending(&self) -> bool {
-        self.composer.lock().auto_voice.is_some() || self.owns_capsule()
+        let mut composer = self.composer.lock();
+        composer.expire_autostart();
+        composer.auto_voice.is_some() || self.voice.owner().is_some()
     }
 
     fn revoke_target(&self) {
@@ -339,6 +370,7 @@ impl Desktop {
                     "type": "activated", "focusEpoch": focus_epoch, "focusRequest": focus_request
                 })
             }
+            #[cfg(not(target_os = "macos"))]
             "ask-window:voice-unavailable" => serde_json::json!({"type": "notice", "error": {
                 "code": "voice_unavailable", "message": "Could not start voice input."
             }}),
@@ -354,7 +386,14 @@ impl Desktop {
             return Err("Not an Ask window.".into());
         }
         self.invocation_epoch.fetch_add(1, Ordering::AcqRel);
-        window.hide().map_err(|error| error.to_string())?;
+        self.pending_open.store(0, Ordering::Release);
+        self.external_target_epoch.store(0, Ordering::Release);
+        self.ports.revoke_requests();
+        let hidden = window.hide().map_err(|error| error.to_string());
+        if self.app.try_state::<Arc<chat::AskHost>>().is_some_and(|host| host.clear_on_hide()) {
+            self.set_conversation(None);
+        }
+        hidden?;
         self.expanded.store(false, Ordering::Release);
         self.mark_unfocused();
         let _ = self.app.emit_to(
@@ -397,7 +436,7 @@ impl Desktop {
             "selectionEnd": target.editor.selection_end
         });
         if let Some(text) = text {
-            payload["text"] = serde_json::json!(text);
+            payload[if event == "failed" { "stage" } else { "text" }] = serde_json::json!(text);
         }
         let _ = self
             .app
@@ -419,37 +458,106 @@ impl Desktop {
         let foreground = capture::foreground();
         let trigger = (!self.is_native_target(foreground.as_ref()))
             .then(|| Trigger::at_key_event(foreground));
-        self.open_with(trigger, None).await
+        self.open_with(trigger, None, self.begin_open()).await
+    }
+
+    fn begin_open(&self) -> u64 {
+        let generation = self.invocation_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        self.pending_open.fetch_max(generation, Ordering::AcqRel);
+        self.external_target_epoch.store(0, Ordering::Release);
+        self.ports.revoke_requests();
+        generation
+    }
+
+    pub(super) fn opening(&self) -> bool {
+        self.pending_open.load(Ordering::Acquire) != 0
+    }
+
+    fn cancel_pending_open(&self) {
+        let pending = self.pending_open.swap(0, Ordering::AcqRel);
+        if pending != 0 {
+            let _ = self.invocation_epoch.compare_exchange(
+                pending, pending + 1, Ordering::AcqRel, Ordering::Acquire,
+            );
+        }
+    }
+
+    pub(crate) fn external_target_generation(&self) -> Option<u64> {
+        Some(self.external_target_epoch.load(Ordering::Acquire)).filter(|epoch| *epoch != 0)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn recover_after_write(self: &Arc<Self>, generation: u64, proof: target::FocusRecovery) {
+        let desktop = self.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            if desktop.external_target_generation() != Some(generation) || desktop.opening()
+                || !proof.is_current()
+            {
+                return;
+            }
+            if let Some(window) = desktop.app.get_webview_window(LABEL)
+                .filter(|window| window.is_visible().unwrap_or(false))
+            {
+                let _ = focus_composer(&window);
+            }
+        });
+    }
+
+    fn warm_dictation(&self) {
+        let backend = self.backend.clone();
+        tauri::async_runtime::spawn(async move {
+            backend.warm_dictation_provider().await;
+        });
     }
 
     async fn open_with(
         self: &Arc<Self>,
         trigger: Option<Trigger>,
         chord: Option<bool>,
+        generation: u64,
     ) -> Result<(), String> {
-        let generation = self.invocation_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        let _pending = PendingOpen(&self.pending_open, generation);
         let _opening = OPEN.lock().await;
         let is_latest = || self.invocation_epoch.load(Ordering::Acquire) == generation;
-        if !is_latest() {
+        if !is_latest() || (chord.is_some() && trigger.is_none() && !self.is_focused()) {
             return Ok(());
         }
+        #[cfg(not(target_os = "macos"))]
         let placement = (trigger.is_some() || self.placement.lock().is_none())
             .then(|| Placement::at_cursor(&self.app));
-        if let Some(trigger) = trigger {
-            let captured_at = trigger.captured_at;
-            let invocation = match tokio::time::timeout(
-                Duration::from_millis(450),
-                tauri::async_runtime::spawn_blocking(move || trigger.read()),
-            )
-            .await
-            {
-                Ok(Ok(invocation)) => invocation,
-                _ => Invocation::empty(captured_at),
+        #[cfg(target_os = "macos")]
+        let placement = trigger.as_ref().map(|trigger| Placement(trigger.screen))
+            .or_else(|| self.placement.lock().is_none().then(|| Placement::at_cursor(&self.app)));
+        #[cfg(target_os = "macos")]
+        let original_foreground = trigger.as_ref().and_then(|trigger| trigger.foreground.as_ref().map(|app| app.pid));
+        let reset = chord.is_some() || trigger.is_some() || self.ports.private_session();
+        if reset {
+            self.expanded.store(false, Ordering::Release);
+        }
+        if trigger.is_some() || reset {
+            self.external_target_epoch.store(generation, Ordering::Release);
+            let invocation = if let Some(trigger) = trigger {
+                let captured_at = trigger.captured_at;
+                let captured_pid = trigger.foreground.as_ref().map(|app| app.pid);
+                match tokio::time::timeout(
+                    Duration::from_millis(450),
+                    tauri::async_runtime::spawn_blocking(move || trigger.read()),
+                ).await {
+                    Ok(Ok(invocation)) => invocation,
+                    _ => {
+                        let mut invocation = Invocation::empty(captured_at);
+                        invocation.foreground_pid = captured_pid
+                            .filter(|pid| *pid != std::process::id());
+                        invocation
+                    }
+                }
+            } else {
+                Invocation::empty(chrono::Utc::now())
             };
             if !is_latest() {
                 return Ok(());
             }
-            self.ports.prepare_open(invocation).await?;
+            self.ports.prepare_open(invocation, generation).await?;
         }
         if !is_latest() {
             return Ok(());
@@ -461,18 +569,25 @@ impl Desktop {
             if desktop.invocation_epoch.load(Ordering::Acquire) != generation {
                 return Ok(());
             }
+            #[cfg(target_os = "macos")]
+            if placement.as_ref().is_some_and(|place| !place.0.is_current())
+                || original_foreground.is_some_and(|pid| foreground_pid() != Some(pid))
+            {
+                desktop.external_target_epoch.store(0, Ordering::Release);
+                return Ok(());
+            }
             let was_visible = window.is_visible().map_err(|error| error.to_string())?;
             if let Some(placement) = placement {
                 *desktop.placement.lock() = Some(placement);
             }
-            if !was_visible || !desktop.is_focused() {
+            if reset || !was_visible || !desktop.is_focused() {
                 let placement = desktop.placement.lock().clone().unwrap_or_default();
                 placement.position(&window, desktop.expanded.load(Ordering::Acquire))?;
             }
             desktop
                 .composer
                 .lock()
-                .request_focus(chord, desktop.owns_capsule());
+                .request_focus(chord, desktop.voice.owner().is_some());
             if !desktop.is_focused() {
                 if let Err(error) = focus_composer(&window) {
                     desktop.composer.lock().auto_voice = None;
@@ -480,6 +595,9 @@ impl Desktop {
                 }
             }
             desktop.notify_frontend("ask-window:shown");
+            if cfg!(target_os = "macos") && chord.is_some() {
+                desktop.backend.retain_dictation_warmth();
+            }
             Ok(())
         })
         .await
@@ -516,9 +634,19 @@ impl Desktop {
     }
 }
 
+struct PendingOpen<'a>(&'a AtomicU64, u64);
+
+impl Drop for PendingOpen<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.compare_exchange(self.1, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+
 #[derive(Clone, Default)]
+#[cfg(not(target_os = "macos"))]
 struct Placement(Option<Monitor>);
 
+#[cfg(not(target_os = "macos"))]
 impl Placement {
     fn at_cursor(app: &AppHandle) -> Self {
         Self(
@@ -566,6 +694,31 @@ impl Placement {
             })
             .map_err(|error| error.to_string())
     }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Default)]
+struct Placement(macos_window::ScreenPoint);
+
+#[cfg(target_os = "macos")]
+impl Placement {
+    fn at_cursor(_app: &AppHandle) -> Self {
+        Self(macos_window::ScreenPoint::capture())
+    }
+
+    fn position(&self, window: &WebviewWindow, expanded: bool) -> Result<(), String> {
+        macos_window::position(window, self.0, expanded)
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn active_space_epoch() -> u64 {
+    macos_window::space_epoch()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn foreground_pid() -> Option<u32> {
+    capture::foreground().map(|app| app.pid)
 }
 
 fn ensure_window(app: &AppHandle, desktop: &Arc<Desktop>) -> Result<WebviewWindow, String> {
@@ -637,22 +790,12 @@ async fn on_ui_thread(
 }
 
 fn focus_composer(window: &WebviewWindow) -> Result<(), String> {
-    window.show().map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
-    {
-        use objc2::{
-            msg_send,
-            runtime::{AnyClass, AnyObject, Bool},
-        };
-        unsafe {
-            if let Some(class) = AnyClass::get("NSApplication") {
-                let app: *mut AnyObject = msg_send![class, sharedApplication];
-                let _: () = msg_send![app, activateIgnoringOtherApps: Bool::YES];
-            }
-        }
-    }
+    return macos_window::focus(window);
+    #[cfg(not(target_os = "macos"))]
     window
-        .unminimize()
+        .show()
+        .and_then(|()| window.unminimize())
         .and_then(|()| window.set_focus())
         .map_err(|error| error.to_string())
 }
@@ -723,5 +866,13 @@ mod tests {
                 Some(false)
             );
         }
+    }
+
+    #[test]
+    fn expired_focus_ack_cannot_start_a_recording() {
+        let mut composer = ComposerFocus::default();
+        composer.request_focus(Some(true), false);
+        composer.auto_voice.as_mut().unwrap().expires_at = Instant::now();
+        assert_eq!(composer.acknowledge(composer.epoch, composer.request, editor(1, true)), Some(false));
     }
 }

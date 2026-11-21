@@ -110,6 +110,7 @@ pub enum ReadStatus {
     NotAttempted,
     Reading,
     Read,
+    NotRelevant,
     Blocked,
     Failed,
     Cancelled,
@@ -346,7 +347,11 @@ impl SearchRun<'_> {
             return Ok(SearchStatus::NoResults);
         }
         join_all(pages.into_iter().map(|(index, url)| self.read(index, url))).await;
-        Ok(SearchStatus::Done)
+        Ok(if self.state.lock().evidence.iter().any(|entry| usable_evidence(entry, self.attempt.public_query())) {
+            SearchStatus::Done
+        } else {
+            SearchStatus::NoResults
+        })
     }
 
     async fn read(&self, index: usize, url: String) {
@@ -367,7 +372,16 @@ impl SearchRun<'_> {
         }
         match result {
             Ok(excerpt) => {
-                self.update_read(index, ReadStatus::Read, Some(excerpt));
+                let relevant = {
+                    let state = self.state.lock();
+                    relevant_title(&state.evidence[index].source.title, self.attempt.public_query())
+                        && !excerpt.trim().is_empty()
+                };
+                if relevant {
+                    self.update_read(index, ReadStatus::Read, Some(excerpt));
+                } else {
+                    self.update_read(index, ReadStatus::NotRelevant, None);
+                }
             }
             Err(PageReadError::Blocked) => self.update_read(index, ReadStatus::Blocked, None),
             _ => self.update_read(index, ReadStatus::Failed, None),
@@ -435,11 +449,11 @@ fn timestamp() -> String {
 }
 
 impl crate::ask::SearchTool for WebSearchTool {
-    fn enabled(&self) -> BoxFuture<'_, bool> {
+    fn enabled(&self) -> BoxFuture<'_, Result<bool, crate::BackendError>> {
         Box::pin(async move {
             WebSearchConfig::load(self.credentials.as_ref())
                 .await
-                .is_ok_and(|config| config.provider != SearchProvider::Off)
+                .map(|config| config.provider != SearchProvider::Off)
         })
     }
 
@@ -496,6 +510,7 @@ impl crate::ask::SearchTool for WebSearchTool {
                             ReadStatus::NotAttempted => AskReadStatus::Discovered,
                             ReadStatus::Reading => AskReadStatus::Reading,
                             ReadStatus::Read => AskReadStatus::Read,
+                            ReadStatus::NotRelevant => AskReadStatus::NotRelevant,
                             ReadStatus::Blocked => AskReadStatus::Blocked,
                             ReadStatus::Failed => AskReadStatus::Error,
                             ReadStatus::Cancelled => AskReadStatus::Cancelled,
@@ -513,14 +528,26 @@ impl crate::ask::SearchTool for WebSearchTool {
             };
             match outcome.status {
                 SearchStatus::Idle => Ok(AskSearchResult::Disabled),
-                SearchStatus::NoResults => Ok(AskSearchResult::NoResults),
+                SearchStatus::NoResults => Ok(if outcome.sources.iter().any(|source| source.snippet.is_some()) {
+                    AskSearchResult::SnippetOnly
+                } else {
+                    AskSearchResult::NoResults
+                }),
                 SearchStatus::Cancelled => Err(BackendError::new(
                     BackendErrorCode::Cancelled,
                     "Search cancelled",
                 )),
-                SearchStatus::Done => Ok(AskSearchResult::Done {
-                    evidence: budgeted_evidence(outcome.evidence, request.evidence_token_budget),
-                }),
+                SearchStatus::Done => {
+                    let evidence = outcome.evidence.into_iter()
+                        .filter(|entry| usable_evidence(entry, &request.public_query))
+                        .collect();
+                    let evidence = budgeted_evidence(evidence, request.evidence_token_budget);
+                    if evidence.is_empty() || evidence == "[]" {
+                        Ok(AskSearchResult::NoResults)
+                    } else {
+                        Ok(AskSearchResult::Done { evidence })
+                    }
+                }
                 _ => Err(BackendError::new(
                     BackendErrorCode::Provider,
                     outcome
@@ -530,6 +557,25 @@ impl crate::ask::SearchTool for WebSearchTool {
             }
         })
     }
+}
+
+fn usable_evidence(entry: &SearchEvidence, query: &str) -> bool {
+    if entry.source.read_status != ReadStatus::Read
+        || entry.excerpt.as_ref().is_none_or(|excerpt| excerpt.trim().is_empty())
+    {
+        return false;
+    }
+    relevant_title(&entry.source.title, query)
+}
+
+fn relevant_title(title: &str, query: &str) -> bool {
+    let title = title.to_lowercase();
+    let query = query.to_lowercase();
+    let about_tools = ["web search settings", "enable web search", "怎么开启搜索", "如何启用搜索", "如何开通搜索"];
+    if about_tools.iter().any(|cue| title.contains(cue)) && !about_tools.iter().any(|cue| query.contains(cue)) {
+        return false;
+    }
+    true
 }
 
 fn budgeted_evidence(entries: Vec<SearchEvidence>, budget: usize) -> String {
@@ -671,7 +717,7 @@ mod tests {
                     read_status: ReadStatus::Blocked,
                     ..
                 }),
-                SearchUpdate::Status(SearchStatus::Done),
+                SearchUpdate::Status(SearchStatus::NoResults),
             ]
         ));
         assert_eq!(

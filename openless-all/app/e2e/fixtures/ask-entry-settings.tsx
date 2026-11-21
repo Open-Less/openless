@@ -51,7 +51,7 @@ mockIPC(
         if (!stored && params.has('failRead')) throw new Error('Fixture storage is not readable');
         return stored
           ? JSON.parse(stored)
-          : { autoVoiceOnOpen: true, intentMode: 'semanticHybrid' };
+          : { autoVoiceOnOpen: true, intentMode: 'separateModel' };
       }
       case 'ask_set_entry_settings': {
         const { settings } = args as { settings: AskEntrySettings };

@@ -8,6 +8,8 @@ use tokio::sync::oneshot;
 #[cfg(target_os = "macos")]
 #[path = "target/macos.rs"]
 mod native;
+#[cfg(target_os = "macos")]
+pub(super) use native::FocusRecovery;
 #[cfg(target_os = "windows")]
 #[path = "target/windows.rs"]
 mod native;
@@ -17,26 +19,28 @@ mod native;
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(1200);
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
+const TARGET_FRESHNESS: Duration = Duration::from_secs(90);
 const OBSERVER_TICK: Duration = Duration::from_millis(25);
 const FOCUS_REFRESH: Duration = Duration::from_millis(175);
 const MAX_SELECTION_UTF16: usize = 8_000;
 const MAX_SELECTION_SCALARS: usize = 4_000;
 const MAX_DOCUMENT_UTF16: usize = 20_000;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExternalSelection {
     None,
     Selected(String),
     Unavailable,
 }
 
+#[derive(Clone)]
 pub(crate) struct CapturedTarget {
     pub(crate) selection: ExternalSelection,
     pub(crate) write_target: Option<WriteTarget>,
 }
 
 impl CapturedTarget {
-    fn unavailable() -> Self {
+    pub(super) fn unavailable() -> Self {
         Self {
             selection: ExternalSelection::Unavailable,
             write_target: None,
@@ -44,6 +48,7 @@ impl CapturedTarget {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct WriteTarget(Arc<()>);
 
 #[derive(Clone, Copy)]
@@ -63,6 +68,7 @@ pub(crate) enum WriteOutcome {
 #[derive(Default)]
 pub(crate) struct TargetTracker {
     running: Mutex<Option<Running>>,
+    scope: Arc<AtomicU64>,
 }
 
 struct Running {
@@ -77,14 +83,22 @@ impl Drop for Running {
 }
 
 type Claim = Box<dyn FnOnce() -> bool + Send>;
+type Eligible = Arc<dyn Fn() -> bool + Send + Sync>;
 
 enum Request {
-    Capture(oneshot::Sender<CapturedTarget>),
+    Capture {
+        expected_pid: Option<u32>,
+        scope: Option<u64>,
+        reply: oneshot::Sender<CapturedTarget>,
+    },
     Deliver {
         target: Arc<()>,
         operation: WriteOperation,
         text: String,
         claim: Claim,
+        eligible: Eligible,
+        #[cfg(target_os = "macos")]
+        recover: Arc<dyn Fn(FocusRecovery) + Send + Sync>,
         phase: Arc<DeliveryPhase>,
         reply: oneshot::Sender<WriteOutcome>,
     },
@@ -106,10 +120,11 @@ impl TargetTracker {
         let (sender, receiver) = mpsc::sync_channel(4);
         let active = Arc::new(AtomicBool::new(true));
         let worker_active = active.clone();
+        let scope = self.scope.clone();
         std::thread::Builder::new()
             .name("ask-external-target".into())
             .spawn(move || {
-                run(receiver, &worker_active);
+                run(receiver, &worker_active, &scope);
                 worker_active.store(false, Ordering::Release);
             })?;
         *running = Some(Running { sender, active });
@@ -129,9 +144,28 @@ impl TargetTracker {
     }
 
     pub(crate) async fn capture(&self) -> CapturedTarget {
+        self.capture_for(None, None, CAPTURE_TIMEOUT).await
+    }
+
+    pub(crate) fn clear_capture(&self) {
+        self.scope.store(0, Ordering::Release);
+    }
+
+    pub(crate) async fn capture_before_focus(&self, pid: u32, scope: u64) -> CapturedTarget {
+        self.scope.store(scope, Ordering::Release);
+        self.capture_for(Some(pid), Some(scope), Duration::from_millis(400)).await
+    }
+
+    pub(crate) async fn capture_at_send(&self, scope: u64) -> CapturedTarget {
+        self.capture_for(None, Some(scope), CAPTURE_TIMEOUT).await
+    }
+
+    async fn capture_for(
+        &self, expected_pid: Option<u32>, scope: Option<u64>, timeout: Duration,
+    ) -> CapturedTarget {
         let (reply, result) = oneshot::channel();
-        if self.send(Request::Capture(reply)) {
-            if let Ok(Ok(captured)) = tokio::time::timeout(CAPTURE_TIMEOUT, result).await {
+        if self.send(Request::Capture { expected_pid, scope, reply }) {
+            if let Ok(Ok(captured)) = tokio::time::timeout(timeout, result).await {
                 return captured;
             }
         }
@@ -145,6 +179,19 @@ impl TargetTracker {
         text: String,
         claim: Claim,
     ) -> WriteOutcome {
+        self.deliver_scoped(target, operation, text, Arc::new(|| true),
+            #[cfg(target_os = "macos")]
+            Arc::new(|_| {}),
+            claim).await
+    }
+
+    pub(crate) async fn deliver_scoped(
+        &self, target: &WriteTarget, operation: WriteOperation, text: String,
+        eligible: Eligible,
+        #[cfg(target_os = "macos")]
+        recover: Arc<dyn Fn(FocusRecovery) + Send + Sync>,
+        claim: Claim,
+    ) -> WriteOutcome {
         let guard = AbandonOnDrop(Arc::new(DeliveryPhase::default()));
         let (reply, result) = oneshot::channel();
         if !self.send(Request::Deliver {
@@ -152,6 +199,9 @@ impl TargetTracker {
             operation,
             text,
             claim,
+            eligible,
+            #[cfg(target_os = "macos")]
+            recover,
             phase: guard.0.clone(),
             reply,
         }) {
@@ -215,13 +265,25 @@ impl<Key: Copy + Eq, Identity> Latest<Key, Identity> {
     }
 }
 
-fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
+type TargetLease = (Weak<()>, native::Identity, Baseline, Instant, u64);
+
+#[cfg(target_os = "macos")]
+struct CapturedScope {
+    id: u64,
+    revision: u64,
+    at: Instant,
+    identity: native::Identity,
+}
+
+fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64) {
     let epoch = Arc::new(AtomicU64::new(0));
     let Some(mut platform) = native::Platform::new(epoch.clone()) else {
         return;
     };
     let mut latest = Latest::new(Instant::now());
-    let mut targets: Vec<(Weak<()>, native::Identity, Baseline)> = Vec::new();
+    let mut targets: Vec<TargetLease> = Vec::new();
+    #[cfg(target_os = "macos")]
+    let mut captured_scope: Option<CapturedScope> = None;
     while active.load(Ordering::Acquire) {
         let request = match receiver.recv_timeout(OBSERVER_TICK) {
             Ok(request) => Some(request),
@@ -231,41 +293,73 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
         if !active.load(Ordering::Acquire) {
             break;
         }
-        targets.retain(|(lease, _, _)| lease.strong_count() != 0);
+        targets.retain(|(lease, _, _, at, _)| {
+            lease.strong_count() != 0 && at.elapsed() <= TARGET_FRESHNESS
+        });
+        platform.poll();
+        #[cfg(target_os = "macos")]
+        if captured_scope.as_ref().is_some_and(|item| {
+            item.id != scope.load(Ordering::Acquire) || item.at.elapsed() > TARGET_FRESHNESS
+        }) {
+            captured_scope = None;
+        }
 
         if let Some(Request::Deliver {
             target,
             operation,
             text,
             claim,
+            eligible,
+            #[cfg(target_os = "macos")]
+            recover,
             phase,
             reply,
         }) = request
         {
             let outcome = targets
                 .iter()
-                .position(|(lease, _, _)| lease.as_ptr() == Arc::as_ptr(&target))
+                .position(|(lease, _, _, _, _)| lease.as_ptr() == Arc::as_ptr(&target))
                 .map_or(WriteOutcome::NotWritten, |index| {
-                    let (_, identity, baseline) = targets.swap_remove(index);
+                    let (_, identity, baseline, _, revision) = targets.swap_remove(index);
                     if !active.load(Ordering::Acquire)
                         || !phase.pending()
+                        || !eligible()
+                        || revision != epoch.load(Ordering::Acquire)
                         || text.is_empty()
                         || text.len() > MAX_DOCUMENT_UTF16 * 4
                         || !baseline.permits(operation)
                     {
                         return WriteOutcome::NotWritten;
                     }
+                    #[cfg(target_os = "macos")]
+                    return platform.write(
+                        &identity, &baseline, &text,
+                        || active.load(Ordering::Acquire) && phase.pending() && eligible(),
+                        |proof| recover(proof),
+                        || phase.claim(active, claim),
+                    );
+                    #[cfg(not(target_os = "macos"))]
                     platform.write(&identity, &baseline, &text, || phase.claim(active, claim))
                 });
             let _ = reply.send(outcome);
             continue;
         }
 
-        platform.poll();
         let front = platform.foreground();
         let revision = epoch.load(Ordering::Acquire);
         let capture = match request {
-            Some(Request::Capture(reply)) if !reply.is_closed() => Some(reply),
+            Some(Request::Capture { expected_pid, scope: requested, reply }) if !reply.is_closed() => {
+                #[cfg(target_os = "macos")]
+                let mismatched = expected_pid
+                    .is_some_and(|pid| front != Foreground::External(pid as i32));
+                #[cfg(not(target_os = "macos"))]
+                let mismatched = expected_pid.is_some();
+                if mismatched || requested.is_some_and(|id| id != scope.load(Ordering::Acquire)) {
+                    let _ = reply.send(CapturedTarget::unavailable());
+                    continue;
+                }
+                Some((expected_pid, requested, reply))
+            }
             _ => None,
         };
         latest.refresh(front, revision, Instant::now(), capture.is_some(), |key| {
@@ -278,29 +372,59 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool) {
         if !stable(&platform) {
             latest.bound = None;
         }
-        if let Some(reply) = capture {
+        if let Some((expected_pid, requested, reply)) = capture {
             let mut captured = CapturedTarget::unavailable();
-            if let Some((identity, selection, baseline)) = latest.bound.as_ref().and_then(|bound| {
-                platform
-                    .capture(bound)
-                    .map(|(selection, baseline)| (bound, selection, baseline))
-            }) {
+            #[cfg(target_os = "macos")]
+            let retained = captured_scope.as_ref().filter(|item| {
+                expected_pid.is_none() && requested == Some(item.id)
+                    && revision == item.revision && front == Foreground::Own
+            });
+            let bound = latest.bound.as_ref();
+            #[cfg(target_os = "macos")]
+            let bound = if front == Foreground::Own && requested.is_some() {
+                bound.or_else(|| retained.map(|old| &old.identity))
+            } else { bound };
+            #[cfg(not(target_os = "macos"))]
+            let _ = expected_pid;
+            if let Some(identity) = bound {
+                #[cfg(target_os = "macos")]
+                let read = if front == Foreground::Own && requested.is_some() {
+                    platform.capture_retained(identity)
+                } else {
+                    platform.capture(identity)
+                };
+                #[cfg(not(target_os = "macos"))]
+                let read = platform.capture(identity);
                 platform.poll();
-                if active.load(Ordering::Acquire) && !reply.is_closed() && stable(&platform) {
-                    captured.selection = selection;
-                    if let Some(baseline) = baseline {
-                        let lease = Arc::new(());
-                        targets.push((Arc::downgrade(&lease), identity.clone(), baseline));
-                        captured.write_target = Some(WriteTarget(lease));
+                if active.load(Ordering::Acquire) && !reply.is_closed() && stable(&platform)
+                    && requested.is_none_or(|id| id == scope.load(Ordering::Acquire))
+                {
+                    if let Some((selection, baseline)) = read {
+                        captured = lease_capture(&mut targets, identity, selection, baseline, revision);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let (Some(_), Some(id)) = (expected_pid, requested) {
+                        captured_scope = Some(CapturedScope {
+                            id, revision, at: Instant::now(), identity: identity.clone(),
+                        });
                     }
                 }
-            }
-            if captured.selection == ExternalSelection::Unavailable {
-                latest.bound = None;
             }
             let _ = reply.send(captured);
         }
     }
+}
+
+fn lease_capture(
+    targets: &mut Vec<TargetLease>, identity: &native::Identity, selection: ExternalSelection,
+    baseline: Option<Baseline>, revision: u64,
+) -> CapturedTarget {
+    let write_target = baseline.map(|baseline| {
+        let lease = Arc::new(());
+        targets.push((Arc::downgrade(&lease), identity.clone(), baseline, Instant::now(), revision));
+        WriteTarget(lease)
+    });
+    CapturedTarget { selection, write_target }
 }
 
 #[derive(PartialEq, Eq)]

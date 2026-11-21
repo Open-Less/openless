@@ -10,7 +10,7 @@ use openless_core::{BackendError, BackendErrorCode, OpenLessBackend};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WebviewWindow};
 use tauri_plugin_shell::ShellExt;
 use uuid::Uuid;
@@ -29,6 +29,9 @@ pub(crate) struct AskHost {
     context_preference: Option<PathBuf>,
     entry_settings: Arc<AskEntrySettingsStore>,
     targets: Arc<TargetTracker>,
+    original: Mutex<Option<(u64, target::WriteTarget)>>,
+    keep_history: AtomicBool,
+    fence: ask::AskSessionFence,
 }
 
 impl AskHost {
@@ -64,19 +67,74 @@ impl AskHost {
             registry,
             context,
             attachment_gate: Mutex::new(()),
+            keep_history: AtomicBool::new(backend.get_preferences().qa_save_history),
+            fence: ask::AskSessionFence::default(),
             backend,
             context_preference,
             entry_settings,
             targets,
+            original: Mutex::new(None),
         }
     }
 
     pub(crate) fn open(&self) -> Result<Uuid, BackendError> {
         self.backend.ensure_runtime_ready()?;
         let _guard = self.attachment_gate.lock();
-        let id = self.service.open();
+        let keep_history = self.backend.get_preferences().qa_save_history;
+        self.keep_history.store(keep_history, Ordering::Release);
+        self.clear_session();
+        let id = if keep_history { self.service.open() } else { self.service.open_transient() };
         self.initialize_scope(id);
         Ok(id)
+    }
+
+    fn clear_session(&self) {
+        self.fence.revoke();
+        let current = self.service.current();
+        self.service.end_all();
+        self.registry.clear();
+        self.original.lock().take();
+        self.targets.clear_capture();
+        if let Some(id) = current {
+            self.context.close_conversation(id);
+        }
+    }
+
+    pub(super) fn clear_on_hide(&self) -> bool {
+        let _guard = self.attachment_gate.lock();
+        if self.backend.get_preferences().qa_save_history && !self.service.current_is_transient() {
+            return false;
+        }
+        self.clear_session();
+        true
+    }
+
+    fn watch_history_setting(app: AppHandle, backend: &OpenLessBackend) {
+        let mut changes = backend.subscribe();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match changes.recv().await {
+                    Ok(event) if matches!(event.kind, openless_core::BackendEventKind::PreferencesChanged(_)) => {}
+                    Err(openless_core::EventRecvError::Lagged(_)) => {}
+                    Err(openless_core::EventRecvError::Closed) => return,
+                    _ => continue,
+                }
+                let ui = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    let Some(host) = ui.try_state::<Arc<Self>>() else { return };
+                    let next = host.backend.get_preferences().qa_save_history;
+                    if host.keep_history.swap(next, Ordering::AcqRel) && !next {
+                        if let (Some(window), Some(desktop)) = (
+                            ui.get_webview_window(LABEL), ui.try_state::<Arc<super::Desktop>>(),
+                        ) {
+                            let _ = desktop.hide(&window);
+                        } else {
+                            host.clear_on_hide();
+                        }
+                    }
+                });
+            }
+        });
     }
 
     fn initialize_scope(&self, id: Uuid) {
@@ -100,6 +158,16 @@ impl AskHost {
         }
     }
 
+    fn accepts_submission(&self, id: Uuid, desktop: Option<&super::Desktop>) -> bool {
+        self.current() == Some(id)
+            && self.accepts_policy(self.service.current_is_transient(), desktop)
+    }
+
+    fn accepts_policy(&self, transient: bool, desktop: Option<&super::Desktop>) -> bool {
+        (self.backend.get_preferences().qa_save_history || transient)
+            && !desktop.is_some_and(super::Desktop::opening)
+    }
+
     fn scope(&self, id: Uuid) -> Result<AttachmentScope, BackendError> {
         self.require_current(id)?;
         self.registry
@@ -107,7 +175,11 @@ impl AskHost {
             .map_err(attachment_error)
     }
 
-    async fn prepare_submission(&self) -> Result<ask::AskPreparation, BackendError> {
+    async fn prepare_submission(
+        &self,
+        desktop: Option<std::sync::Weak<super::Desktop>>,
+        generation: Option<u64>,
+    ) -> Result<ask::AskPreparation, BackendError> {
         let committed_settings = self.entry_settings.read().map_err(|_| {
             BackendError::new(BackendErrorCode::Persistence, "askEntrySettingsUnavailable")
         })?;
@@ -116,23 +188,42 @@ impl AskHost {
             AskEntryIntentMode::SeparateModel => ask::AskIntentMode::SeparateModel,
             AskEntryIntentMode::MainModelTool => ask::AskIntentMode::MainModelTool,
         };
-        let locked = self.targets.capture().await;
+        let locked = if cfg!(target_os = "macos") {
+            match generation {
+                Some(scope) => self.targets.capture_at_send(scope).await,
+                None => target::CapturedTarget::unavailable(),
+            }
+        } else {
+            self.targets.capture().await
+        };
         let selection = match locked.selection {
             target::ExternalSelection::None => ask::ExternalSelection::None,
             target::ExternalSelection::Selected(text) => ask::ExternalSelection::Selected(text),
             target::ExternalSelection::Unavailable => ask::ExternalSelection::Unavailable,
         };
-        let writer = locked.write_target.map(|target| {
+        let original = self.original.lock().as_ref()
+            .filter(|(epoch, _)| Some(*epoch) == generation)
+            .map(|(_, target)| target.clone());
+        let insert = if cfg!(target_os = "macos") {
+            original
+        } else {
+            locked.write_target.clone()
+        };
+        let replace = locked.write_target;
+        let writer = (insert.is_some() || replace.is_some()).then(|| {
             Arc::new(TargetWriter {
                 tracker: self.targets.clone(),
-                target,
+                insert,
+                replace,
+                desktop,
+                generation,
             }) as Arc<dyn ask::AskWriter>
         });
         Ok(ask::AskPreparation {
             intent_mode,
             selection,
             writer,
-            clipboard: Some(Arc::new(Clipboard)),
+            clipboard: (!cfg!(target_os = "macos")).then(|| Arc::new(Clipboard) as Arc<dyn ask::AskClipboard>),
         })
     }
 
@@ -151,6 +242,7 @@ impl AskHost {
         let Some(host) = app.try_state::<Arc<Self>>() else {
             return;
         };
+        Self::watch_history_setting(app.clone(), &host.backend);
         let mut events = host.service.subscribe();
         tauri::async_runtime::spawn(async move {
             loop {
@@ -203,24 +295,63 @@ impl AskHost {
 
 struct TargetWriter {
     tracker: Arc<TargetTracker>,
-    target: target::WriteTarget,
+    insert: Option<target::WriteTarget>,
+    replace: Option<target::WriteTarget>,
+    desktop: Option<std::sync::Weak<super::Desktop>>,
+    generation: Option<u64>,
 }
 
 impl ask::AskWriter for TargetWriter {
+    fn has_original_caret(&self) -> bool {
+        cfg!(target_os = "macos") && self.insert.is_some()
+    }
+
     fn write(
         &self,
         operation: ask::AskWriteOperation,
         text: String,
         claim: ask::AskWriteClaim,
     ) -> futures_util::future::BoxFuture<'_, ask::AskWriteOutcome> {
-        let operation = match operation {
-            ask::AskWriteOperation::Insert => target::WriteOperation::Insert,
-            ask::AskWriteOperation::Replace => target::WriteOperation::Replace,
+        let (target, operation) = match operation {
+            ask::AskWriteOperation::Insert => (self.insert.as_ref(), target::WriteOperation::Insert),
+            ask::AskWriteOperation::Replace => (self.replace.as_ref(), target::WriteOperation::Replace),
         };
         Box::pin(async move {
+            let Some(target) = target else {
+                return ask::AskWriteOutcome::NotWritten;
+            };
+            let desktop = self.desktop.clone();
+            let generation = self.generation;
+            let current = move || {
+                !cfg!(target_os = "macos") || generation.is_some_and(|generation| {
+                    desktop.as_ref().and_then(std::sync::Weak::upgrade)
+                        .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))
+                })
+            };
+            if !current() {
+                return ask::AskWriteOutcome::NotWritten;
+            }
+            let eligible = claim.still_current();
+            let current = Arc::new(current);
+            let still_foreground = current.clone();
+            #[cfg(target_os = "macos")]
+            let recover = {
+                let desktop = self.desktop.clone();
+                Arc::new(move |proof| {
+                    if let (Some(desktop), Some(generation)) =
+                        (desktop.as_ref().and_then(std::sync::Weak::upgrade), generation)
+                    {
+                        desktop.recover_after_write(generation, proof);
+                    }
+                })
+            };
             match self
                 .tracker
-                .deliver(&self.target, operation, text, claim)
+                .deliver_scoped(target, operation, text,
+                    Arc::new(move || still_foreground() && eligible()),
+                    #[cfg(target_os = "macos")]
+                    recover,
+                    Box::new(move || current() && claim.claim()))
                 .await
             {
                 target::WriteOutcome::Written => ask::AskWriteOutcome::Written,
@@ -256,6 +387,14 @@ impl ask::AskClipboard for Clipboard {
 struct AttachmentPort(Arc<AttachmentRegistry>);
 
 impl ask::AttachmentReader for AttachmentPort {
+    fn consume(&self, conversation_id: Uuid, attachment_ids: &[Uuid]) {
+        if let Ok(scope) = self.0.scope(&conversation_id.to_string()) {
+            for id in attachment_ids {
+                scope.remove(&id.to_string());
+            }
+        }
+    }
+
     fn acquire(
         &self,
         turn: AskTurnKey,
@@ -421,7 +560,12 @@ pub fn ask_new_conversation(window: WebviewWindow, host: AskState<'_>) -> IpcRes
     authorize(&window)?;
     host.backend.ensure_runtime_ready().map_err(wire::error)?;
     let _guard = host.attachment_gate.lock();
-    let conversation_id = host.service.new_conversation();
+    let conversation_id = if host.backend.get_preferences().qa_save_history {
+        host.service.new_conversation()
+    } else {
+        host.clear_session();
+        host.service.open_transient()
+    };
     host.initialize_scope(conversation_id);
     if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
         desktop.set_conversation(Some(conversation_id.to_string()));
@@ -485,19 +629,25 @@ pub async fn ask_submit(
     authorize(&window)?;
     host.require_current(request.conversation_id)
         .map_err(wire::error)?;
+    let desktop = window.try_state::<Arc<super::Desktop>>();
     let conversation_id = request.conversation_id;
-    let used_attachments = request.attachment_ids.clone();
+    let active_desktop = desktop.as_ref().map(|desktop| Arc::clone(&**desktop));
+    let transient = host.service.current_is_transient();
+    let backend = host.backend.clone();
+    let cancellation = host.fence.issue().requiring(move || {
+        transient || backend.get_preferences().qa_save_history
+    });
+    let current = || host.accepts_policy(transient, active_desktop.as_deref());
+    if !host.accepts_submission(conversation_id, active_desktop.as_deref()) {
+        return Err(wire::error(BackendError::new(BackendErrorCode::Cancelled, "askSessionChanged")));
+    }
+    let generation = desktop.as_ref().and_then(|desktop| desktop.external_target_generation());
+    let desktop = desktop.as_ref().map(|desktop| Arc::downgrade(&**desktop));
     let turn_id = host
         .service
-        .submit_prepared(request, || host.prepare_submission())
+        .submit_prepared_guarded(request, || host.prepare_submission(desktop, generation), current, cancellation)
         .await
         .map_err(wire::error)?;
-    let _guard = host.attachment_gate.lock();
-    if let Ok(scope) = host.registry.scope(&conversation_id.to_string()) {
-        for id in used_attachments {
-            scope.remove(&id.to_string());
-        }
-    }
     Ok(json!({"turnId":turn_id}))
 }
 
@@ -627,6 +777,14 @@ pub(crate) struct DesktopPorts {
 }
 
 impl super::Integration for DesktopPorts {
+    fn revoke_requests(&self) {
+        self.ask.fence.revoke();
+    }
+
+    fn private_session(&self) -> bool {
+        !self.ask.backend.get_preferences().qa_save_history
+    }
+
     fn auto_voice_on_open(&self) -> bool {
         self.ask
             .entry_settings
@@ -637,6 +795,7 @@ impl super::Integration for DesktopPorts {
     fn prepare_open(
         &self,
         invocation: super::capture::Invocation,
+        generation: u64,
     ) -> super::Task<Result<(), String>> {
         let app = self.app.clone();
         let ask = self.ask.clone();
@@ -645,52 +804,53 @@ impl super::Integration for DesktopPorts {
             if let Some(desktop) = app.try_state::<Arc<super::Desktop>>() {
                 desktop.set_conversation(Some(conversation.to_string()));
             }
-            if let Some(source) = &invocation.foreground_app {
-                if ask.context.app_metadata_allowed() {
-                    let context = ask.context.clone();
-                    let pid = invocation.foreground_pid;
-                    let invocation_id = invocation.invocation_id;
-                    let (send, receive) = tokio::sync::oneshot::channel();
-                    let scheduled = app.run_on_main_thread(move || {
-                        let original = || {
-                            super::capture::foreground().map(|app| app.pid) == pid && pid.is_some()
-                        };
-                        let captured = original()
-                            .then(|| context.capture_before_activation(invocation_id))
-                            .flatten()
-                            .filter(|_| original());
-                        let _ = send.send(captured);
-                    });
-                    let captured = match scheduled {
-                        Ok(()) => {
-                            tokio::time::timeout(std::time::Duration::from_millis(180), receive)
-                                .await
-                                .ok()
-                                .and_then(Result::ok)
-                                .flatten()
-                        }
-                        Err(_) => None,
-                    };
-                    if let Some(capture) = captured {
-                        ask.context.record_invocation(conversation, capture);
-                    } else {
-                        ask.context.record_external_app(
-                            conversation,
-                            invocation_id,
-                            invocation.captured_at,
-                            source.name.as_deref(),
-                            source.bundle_id.as_deref(),
-                        );
+            if cfg!(target_os = "macos") {
+                let target = match invocation.foreground_pid {
+                    Some(pid) => {
+                        let captured = ask.targets.capture_before_focus(pid, generation).await;
+                        matches!(captured.selection, target::ExternalSelection::None)
+                            .then_some(captured.write_target).flatten()
                     }
+                    None => None,
+                };
+                if app.try_state::<Arc<super::Desktop>>().is_some_and(|desktop| {
+                    desktop.external_target_generation() == Some(generation)
+                }) {
+                    *ask.original.lock() = target.map(|target| (generation, target));
+                }
+            }
+            if let Some(source) = &invocation.foreground_app {
+                if invocation.foreground_pid.is_some_and(|pid| {
+                    super::capture::foreground().is_some_and(|foreground| foreground.pid == pid)
+                }) {
+                    ask.context.record_external_app(
+                        conversation, invocation.invocation_id, invocation.captured_at,
+                        source.name.as_deref(), source.bundle_id.as_deref(),
+                    );
                 }
             }
             Ok(())
         })
     }
 
-    fn ordinary_dictation_edge(&self, edge: openless_core::DictationHotkeyEdge) -> super::Task<()> {
+    fn ordinary_dictation_edge(
+        &self,
+        edge: openless_core::DictationHotkeyEdge,
+        fn_commit: Option<super::hotkey::FnCommit>,
+    ) -> super::Task<()> {
         let coordinator = self.coordinator.clone();
         Box::pin(async move {
+            if let (Some(commit), openless_core::DictationHotkeyEdge::Pressed { press_id, .. }) =
+                (fn_commit, edge)
+            {
+                let backend = coordinator.backend();
+                if let Err(error) = backend.dispatch_arbitrated_dictation_hotkey_press(edge, || {
+                    super::hotkey::fn_stroke_is_current(press_id, commit)
+                }).await {
+                    log::warn!("[ask] ordinary Fn dispatch failed: {error}");
+                }
+                return;
+            }
             coordinator.dispatch_ask_passthrough(edge).await;
         })
     }

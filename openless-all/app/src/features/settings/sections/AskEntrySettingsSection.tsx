@@ -85,7 +85,7 @@ export function AskEntrySettingsSection() {
           <Button
             size="sm"
             disabled={saving}
-            onClick={() => commit({ autoVoiceOnOpen: true, intentMode: 'semanticHybrid' })}
+            onClick={() => commit({ autoVoiceOnOpen: true, intentMode: 'separateModel' })}
           >
             {t('askEntrySettings.restoreDefaults')}
           </Button>
