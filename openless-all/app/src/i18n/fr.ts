@@ -1276,6 +1276,7 @@ export const fr: typeof zhCN = {
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
     advancedPages: {
+      polishStrategyTitle: 'Stratégie de reformulation',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInputTitle: 'Insertion de texte',
@@ -1628,14 +1629,16 @@ export const fr: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Ignorer l’amélioration pour les courtes dictées (caractères max)',
       polishSkipMaxCharsDesc:
         'Les transcriptions d’au plus N caractères (espaces non comptés) sont insérées telles quelles, sans appel au LLM. 0 = désactivé. La traduction est toujours améliorée.',
-      polishStrategyEnabledLabel: 'Utiliser une stratégie d’amélioration personnalisée',
+      polishStrategyEnabledLabel: 'Utiliser une stratégie personnalisée',
       polishStrategyEnabledDesc:
         'Exécute une stratégie locale limitée après l’ASR. Les erreurs reviennent à l’amélioration normale ; aucun accès aux fichiers, au réseau ou aux identifiants.',
-      polishStrategyScriptLabel: 'Script de stratégie d’amélioration',
+      polishStrategyEdit: 'Modifier',
+      polishStrategyEditorTitle: 'Modifier la stratégie de reformulation',
+      polishStrategyScriptLabel: 'Script',
       polishStrategyScriptDesc:
         'Définissez strategy(input) et renvoyez skip, polish ou request. Les valeurs manquantes de langue, confiance et modèle sont ().',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: 'Copier le skill pour l’Agent',
       polishStrategySkillCopied: 'Skill de l’Agent copié',
       polishStrategySkillCopyFailed:
@@ -2542,6 +2545,7 @@ export const fr: typeof zhCN = {
     backToAdvanced: 'Retour aux fonctions avancées',
     back: 'Retour',
     advancedPages: {
+      polishStrategy: 'Adapter la reformulation au résultat de reconnaissance.',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInput: 'Configurer la transcription en direct dans le champ.',
@@ -2589,7 +2593,7 @@ export const fr: typeof zhCN = {
       privacy:
         'autorisation microphone accessibilité historique enregistrement stockage confidentialité exporter',
       advanced:
-        'Less Computer Claude agent débogage journaux expérience Apprendre des corrections vocabulary learning manual edits vocabulary learning Beta ',
+        'Less Computer Claude agent débogage journaux expérience Apprendre des corrections vocabulary learning manual edits vocabulary learning Beta Stratégie de reformulation Rhai script',
       about: 'version Beta stable mise à jour actualisation',
     },
     sections: {

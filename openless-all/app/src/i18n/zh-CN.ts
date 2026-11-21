@@ -1245,6 +1245,7 @@ export const zhCN = {
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },
     advancedPages: {
+      polishStrategyTitle: '润色策略',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
@@ -1533,14 +1534,16 @@ export const zhCN = {
       polishSkipMaxCharsLabel: '短句跳过润色（最大字数）',
       polishSkipMaxCharsDesc:
         '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
-      polishStrategyEnabledLabel: '使用自定义润色策略',
+      polishStrategyEnabledLabel: '启用自定义策略',
       polishStrategyEnabledDesc:
         '在 ASR 后运行受限的本地策略；异常会回退到默认润色规则，脚本无法访问文件、网络或凭据。',
-      polishStrategyScriptLabel: '润色策略脚本',
+      polishStrategyEdit: '修改',
+      polishStrategyEditorTitle: '修改润色策略',
+      polishStrategyScriptLabel: '脚本',
       polishStrategyScriptDesc:
         '定义 strategy(input)，返回 skip、polish 或 request。缺失的语言、置信度和模型值为 ()。',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: '复制 Agent 编写说明',
       polishStrategySkillCopied: '已复制 Agent 编写说明',
       polishStrategySkillCopyFailed: '复制失败，请检查剪贴板权限',
@@ -2327,6 +2330,7 @@ export const zhCN = {
     backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
+      polishStrategy: '按识别结果控制润色。',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInput: '配置实时原文在输入框中的显示。',
@@ -2360,7 +2364,7 @@ export const zhCN = {
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
       privacy: '权限 麦克风 辅助功能 历史 录音 存储 隐私 导出',
       advanced:
-        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 高级功能 手改学词',
+        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 高级功能 手改学词 润色策略 Rhai script',
       about: '版本 Beta 稳定 更新 升级',
     },
 

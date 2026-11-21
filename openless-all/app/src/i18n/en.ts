@@ -1298,6 +1298,7 @@ export const en: typeof zhCN = {
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
     advancedPages: {
+      polishStrategyTitle: 'Polish strategy',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInputTitle: 'Text insertion',
@@ -1587,14 +1588,16 @@ export const en: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Skip polish for short dictations (max characters)',
       polishSkipMaxCharsDesc:
         'Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.',
-      polishStrategyEnabledLabel: 'Use custom polish strategy',
+      polishStrategyEnabledLabel: 'Use custom strategy',
       polishStrategyEnabledDesc:
         'Run a local, bounded Rhai function after ASR. Errors fall back to the normal polish rules; the script cannot access files, network, or credentials.',
-      polishStrategyScriptLabel: 'Polish strategy script',
+      polishStrategyEdit: 'Edit',
+      polishStrategyEditorTitle: 'Edit polish strategy',
+      polishStrategyScriptLabel: 'Script',
       polishStrategyScriptDesc:
         'Define strategy(input) and return #{ action: "skip" }, #{ action: "polish" }, or #{ action: "request", temperature: 0.4, maxTokens: 400, reasoningEffort: "low" }. Missing language/confidence/model values are ().',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: 'Copy Agent skill',
       polishStrategySkillCopied: 'Agent skill copied',
       polishStrategySkillCopyFailed: 'Copy failed; check clipboard permissions',
@@ -2464,6 +2467,7 @@ export const en: typeof zhCN = {
     backToAdvanced: 'Back to advanced features',
     back: 'Back',
     advancedPages: {
+      polishStrategy: 'Control polishing based on recognition results.',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInput: 'Configure the live transcript in the input field.',
@@ -2501,7 +2505,7 @@ export const en: typeof zhCN = {
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
       advanced:
-        'Less Computer Claude Agent debug logs experiment voice enhancement cursor diagnostics manual edits vocabulary learning Beta ',
+        'Less Computer Claude Agent debug logs experiment voice enhancement cursor diagnostics manual edits vocabulary learning Beta Polish strategy Rhai script',
       about: 'version Beta stable update upgrade',
     },
 

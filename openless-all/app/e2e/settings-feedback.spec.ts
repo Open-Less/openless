@@ -712,7 +712,7 @@ test('normal download cancellation is available only outside a modal and before 
   ).toHaveAttribute('data-type', 'warning');
 });
 
-test('polish strategy editor copies an Agent skill without changing the draft', async ({
+test('polish strategy stays behind Advanced and edits in a separate side panel', async ({
   page,
 }) => {
   const clipboard: string[] = [];
@@ -732,17 +732,95 @@ test('polish strategy editor copies an Agent skill without changing the draft', 
   });
 
   await settings(page, '权限与数据');
+  await expect(page.getByPlaceholder(/fn strategy\(input\)/)).toHaveCount(0);
+  await expect(page.getByRole('switch', { name: '启用自定义策略' })).toHaveCount(0);
+  await page.getByRole('button', { name: '高级功能', exact: true }).click();
+  await settleNavigation(page);
+  await expect(page.locator('.ol-polish-strategy')).toHaveCount(0);
+  await page.locator('[data-ol-advanced-entry="polishStrategy"]').click();
+  await settleNavigation(page);
+  const enabled = page.getByRole('switch', { name: '启用自定义策略', exact: true });
+  const edit = page.getByRole('button', { name: '修改', exact: true });
+  await expect(enabled).not.toBeChecked();
+  await expect(edit).toHaveCount(0);
+  await expect(page.getByPlaceholder(/fn strategy\(input\)/)).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('polish-strategy-disabled.png') });
+
+  await enabled.click();
+  await expect(edit).toBeVisible();
+  await expect(page.getByPlaceholder(/fn strategy\(input\)/)).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('polish-strategy-enabled.png') });
+  await edit.click();
+  const panel = page.getByRole('dialog', { name: '修改润色策略', exact: true });
+  const editor = panel.getByRole('textbox', { name: '脚本', exact: true });
+  await expect(editor).toBeFocused();
   const draft = 'fn strategy(input) { #{ action: "polish" } }';
-  const editor = page.getByPlaceholder(/fn strategy\(input\)/).first();
   await editor.fill(draft);
-  const copy = page.getByRole('button', { name: '复制 Agent 编写说明', exact: true });
+  const copy = panel.getByRole('button', { name: '复制 Agent 编写说明', exact: true });
   await expect(copy).toBeVisible();
+  const copyBounds = (await copy.boundingBox())!;
   await copy.click();
-  await expect(
-    page.getByRole('button', { name: '已复制 Agent 编写说明', exact: true }),
-  ).toBeVisible();
+  const copied = panel.getByRole('button', { name: '已复制 Agent 编写说明', exact: true });
+  await expect(copied).toBeVisible();
+  expect((await copied.boundingBox())!.width).toBeCloseTo(copyBounds.width, 0);
   await expect.poll(() => clipboard[0] ?? '').toContain('OpenLess ASR polish strategy skill');
   await expect.poll(() => clipboard[0] ?? '').toContain(draft);
   await expect(editor).toHaveValue(draft);
-  await page.screenshot({ path: test.info().outputPath('polish-strategy-settings.png') });
+  await page.screenshot({ path: test.info().outputPath('polish-strategy-side-panel.png') });
+
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(edit).toBeFocused();
+  await enabled.click();
+  await expect(edit).toHaveCount(0);
+  await enabled.click();
+  await edit.click();
+  await expect(editor).toHaveValue(draft);
+  await panel.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(edit).toBeFocused();
 });
+
+for (const { locale, width, title, enable, edit, editorTitle } of [
+  {
+    locale: 'en',
+    width: 1120,
+    title: 'Polish strategy',
+    enable: 'Use custom strategy',
+    edit: 'Edit',
+    editorTitle: 'Edit polish strategy',
+  },
+  {
+    locale: 'de',
+    width: 820,
+    title: 'Überarbeitungsstrategie',
+    enable: 'Eigene Strategie verwenden',
+    edit: 'Bearbeiten',
+    editorTitle: 'Überarbeitungsstrategie bearbeiten',
+  },
+] as const) {
+  test(`polish strategy side panel fits ${locale} at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await settings(page, '高级功能');
+    await page.evaluate(async (language) => {
+      const { setLocalePreference } = await import('/src/i18n/index.ts');
+      await setLocalePreference(language);
+    }, locale);
+    await page.locator('[data-ol-advanced-entry="polishStrategy"]').click();
+    await settleNavigation(page);
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+    await page.getByRole('switch', { name: enable, exact: true }).click();
+    await page.getByRole('button', { name: edit, exact: true }).click();
+    const panel = page.getByRole('dialog', { name: editorTitle, exact: true });
+    await expect(panel.getByRole('textbox')).toBeFocused();
+    await expect.poll(() => panel.evaluate((element) => getComputedStyle(element).transform)).toBe('none');
+    const bounds = (await panel.boundingBox())!;
+    const editorBounds = (await panel.getByRole('textbox').boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(721);
+    expect(editorBounds.y + editorBounds.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`polish-strategy-${locale}.png`) });
+  });
+}

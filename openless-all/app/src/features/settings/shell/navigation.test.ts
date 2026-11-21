@@ -120,6 +120,7 @@ assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
   [
     'webSearch',
+    'polishStrategy',
     'voiceEnhancement',
     'cursorContext',
     'startupDiagnostics',
@@ -312,6 +313,7 @@ assert.deepEqual(
   visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
   [
     'webSearch',
+    'polishStrategy',
     'voiceEnhancement',
     'cursorContext',
     'startupDiagnostics',

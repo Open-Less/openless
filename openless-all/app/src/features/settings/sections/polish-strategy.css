@@ -1,0 +1,100 @@
+.ol-polish-strategy .ol-polish-strategy-toggle,
+.ol-polish-strategy .ol-polish-strategy-edit-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ol-polish-strategy-toggle {
+  border-top: 0;
+}
+
+.ol-dialog-overlay.ol-polish-strategy-overlay {
+  place-items: stretch end;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.ol-polish-strategy-overlay > .ol-dialog-card.ol-polish-strategy-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: var(--ol-surface-raised);
+}
+
+.ol-polish-strategy-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border-bottom: 0.5px solid var(--ol-line-soft);
+}
+
+.ol-polish-strategy-panel-header h2 {
+  margin: 0 0 6px;
+  color: var(--ol-ink);
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.ol-polish-strategy-panel-header span {
+  color: var(--ol-ink-3);
+  font-size: 12px;
+}
+
+.ol-polish-strategy-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px;
+}
+
+.ol-polish-strategy-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  min-width: 0;
+}
+
+.ol-polish-strategy-toolbar label {
+  color: var(--ol-ink);
+  font-size: 13.5px;
+  font-weight: var(--ol-font-weight-medium);
+}
+
+.ol-polish-strategy-toolbar .ol-action-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ol-polish-strategy-field.ol-field {
+  height: 100%;
+  min-height: 0;
+  padding: 14px;
+  align-items: stretch;
+  font-family: var(--ol-font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.ol-polish-strategy-field > textarea.ol-field-control {
+  resize: none;
+  overflow: auto;
+  tab-size: 2;
+}
+
+@media (max-width: 600px) {
+  .ol-dialog-overlay.ol-polish-strategy-overlay {
+    padding: 8px;
+  }
+
+  .ol-polish-strategy-panel-header,
+  .ol-polish-strategy-editor {
+    padding: 16px;
+  }
+}

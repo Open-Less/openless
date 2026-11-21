@@ -1192,6 +1192,7 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      polishStrategyTitle: '潤飾策略',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
@@ -1514,14 +1515,16 @@ export const zhTW: typeof zhCN = {
       polishSkipMaxCharsLabel: '短句跳過潤色（最大字數）',
       polishSkipMaxCharsDesc:
         '轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。',
-      polishStrategyEnabledLabel: '使用自訂潤色策略',
+      polishStrategyEnabledLabel: '啟用自訂策略',
       polishStrategyEnabledDesc:
         '在 ASR 後執行受限的本機策略；異常會回退到預設潤色規則，腳本無法存取檔案、網路或憑證。',
-      polishStrategyScriptLabel: '潤色策略腳本',
+      polishStrategyEdit: '修改',
+      polishStrategyEditorTitle: '修改潤飾策略',
+      polishStrategyScriptLabel: '腳本',
       polishStrategyScriptDesc:
         '定義 strategy(input)，回傳 skip、polish 或 request。缺少的語言、信心度和模型值為 ()。',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: '複製 Agent 編寫說明',
       polishStrategySkillCopied: '已複製 Agent 編寫說明',
       polishStrategySkillCopyFailed: '複製失敗，請檢查剪貼簿權限',
@@ -2328,6 +2331,7 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      polishStrategy: '依辨識結果控制潤飾。',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInput: '設定即時原文在輸入框中的顯示。',
@@ -2361,7 +2365,7 @@ export const zhTW: typeof zhCN = {
       appearance: '主題 深色 淺色 暗色 語言 字體 排版 版面 熱圖',
       privacy: '權限 麥克風 輔助功能 歷史 錄音 儲存 隱私 匯出',
       advanced:
-        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 進階功能 手改學詞',
+        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 進階功能 手改學詞 潤飾策略 Rhai script',
       about: '版本 Beta 穩定 更新 升級',
     },
     sections: {

@@ -1228,6 +1228,7 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      polishStrategyTitle: '推敲ルール',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInputTitle: '文字入力',
@@ -1571,14 +1572,16 @@ export const ja: typeof zhCN = {
       polishSkipMaxCharsLabel: '短い入力は整形をスキップ（最大文字数）',
       polishSkipMaxCharsDesc:
         '空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。',
-      polishStrategyEnabledLabel: 'カスタム整形戦略を使う',
+      polishStrategyEnabledLabel: 'カスタムルールを使用',
       polishStrategyEnabledDesc:
         'ASR 後に制限付きのローカル戦略を実行します。エラー時は通常の整形に戻り、ファイル・ネットワーク・認証情報にはアクセスできません。',
-      polishStrategyScriptLabel: '整形戦略スクリプト',
+      polishStrategyEdit: '変更',
+      polishStrategyEditorTitle: '推敲ルールを編集',
+      polishStrategyScriptLabel: 'スクリプト',
       polishStrategyScriptDesc:
         'strategy(input) を定義し、skip、polish、request のいずれかを返します。不明な言語・信頼度・モデルは () です。',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: 'Agent 用スキルをコピー',
       polishStrategySkillCopied: 'Agent 用スキルをコピーしました',
       polishStrategySkillCopyFailed: 'コピーに失敗しました。クリップボードの権限を確認してください',
@@ -2430,6 +2433,7 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      polishStrategy: '認識結果に応じて推敲を制御します。',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInput: '入力欄に表示するリアルタイム原文を設定します。',
@@ -2465,7 +2469,7 @@ export const ja: typeof zhCN = {
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
       advanced:
-        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning manual edits vocabulary learning Beta ',
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning manual edits vocabulary learning Beta 推敲ルール Rhai script',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 

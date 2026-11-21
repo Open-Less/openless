@@ -17,6 +17,11 @@ export const ADVANCED_PAGES = [
   { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   { id: 'intentRouting', icon: 'sparkle', titleKey: 'askEntrySettings.routing', beta: true },
   {
+    id: 'polishStrategy',
+    icon: 'pencil',
+    titleKey: 'settings.advancedPages.polishStrategyTitle',
+  },
+  {
     id: 'voiceEnhancement',
     icon: 'mic',
     titleKey: 'settings.advancedPages.voiceEnhancementTitle',

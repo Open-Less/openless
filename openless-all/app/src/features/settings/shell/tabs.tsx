@@ -41,6 +41,7 @@ import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
 import { AskEntrySettingsSection, IntentRoutingSection } from '../sections/AskEntrySettingsSection';
+import { PolishStrategySection } from '../sections/PolishStrategySection';
 import { AskHistorySection } from '../sections/AskHistorySection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
@@ -751,6 +752,7 @@ export function AdvancedTab({
             )}
             {item.id === 'webSearch' && <WebSearchSection />}
             {item.id === 'intentRouting' && <IntentRoutingSection />}
+            {item.id === 'polishStrategy' && <PolishStrategySection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

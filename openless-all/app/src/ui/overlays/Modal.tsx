@@ -24,7 +24,7 @@ export interface ModalProps {
   describedBy?: string;
   initialFocus?: RefObject<HTMLElement>;
   focusKey?: number | string;
-  motionVariant?: 'card' | 'pop' | 'sheet';
+  motionVariant?: 'card' | 'pop' | 'sheet' | 'side-panel';
   backdrop?: 'default' | 'blur-only';
 }
 

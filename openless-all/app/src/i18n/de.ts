@@ -1266,6 +1266,7 @@ export const de: typeof zhCN = {
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
     advancedPages: {
+      polishStrategyTitle: 'Überarbeitungsstrategie',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInputTitle: 'Texteingabe',
@@ -1618,14 +1619,16 @@ export const de: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Überarbeitung bei kurzen Eingaben überspringen (max. Zeichen)',
       polishSkipMaxCharsDesc:
         'Transkripte mit höchstens N Zeichen (ohne Leerzeichen) werden ohne LLM-Aufruf als Rohtext eingefügt. 0 = aus. Übersetzungen werden immer überarbeitet.',
-      polishStrategyEnabledLabel: 'Benutzerdefinierte Überarbeitungsstrategie verwenden',
+      polishStrategyEnabledLabel: 'Eigene Strategie verwenden',
       polishStrategyEnabledDesc:
         'Führt nach ASR eine begrenzte lokale Strategie aus. Fehler fallen auf die normale Überarbeitung zurück; Dateien, Netzwerk und Zugangsdaten sind nicht erreichbar.',
-      polishStrategyScriptLabel: 'Skript der Überarbeitungsstrategie',
+      polishStrategyEdit: 'Bearbeiten',
+      polishStrategyEditorTitle: 'Überarbeitungsstrategie bearbeiten',
+      polishStrategyScriptLabel: 'Skript',
       polishStrategyScriptDesc:
         'strategy(input) definieren und skip, polish oder request zurückgeben. Fehlende Werte für Sprache, Konfidenz und Modell sind ().',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: 'Agent-Anleitung kopieren',
       polishStrategySkillCopied: 'Agent-Anleitung kopiert',
       polishStrategySkillCopyFailed:
@@ -2533,6 +2536,7 @@ export const de: typeof zhCN = {
     backToAdvanced: 'Zurück zu erweiterten Funktionen',
     back: 'Zurück',
     advancedPages: {
+      polishStrategy: 'Überarbeitung anhand des Erkennungsergebnisses steuern.',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInput: 'Live-Transkript im Eingabefeld konfigurieren.',
@@ -2577,7 +2581,7 @@ export const de: typeof zhCN = {
       privacy:
         'Berechtigung Mikrofon Bedienungshilfen Verlauf Aufnahme Speicher Datenschutz Export',
       advanced:
-        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning manual edits vocabulary learning Beta ',
+        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning manual edits vocabulary learning Beta Überarbeitungsstrategie Rhai script',
       about: 'Version Beta Stabil Update Aktualisierung',
     },
     sections: {

@@ -1,6 +1,6 @@
 # ASR polish strategy
 
-OpenLess can optionally run a local strategy after ASR has finished and correction rules have been applied, but before the polish LLM request is sent. Enable **Use custom polish strategy** in Settings → Privacy → Data storage, then enter a Rhai function named `strategy`.
+OpenLess can optionally run a local strategy after ASR has finished and correction rules have been applied, but before the polish LLM request is sent. Open Settings → Advanced features → Polish strategy, enable **Use custom strategy**, then select **Edit** to open the script panel from the right. Enter a Rhai function named `strategy`; changes save automatically. Turning the feature off hides its editing controls and preserves the saved script.
 
 The feature is disabled by default. When it is disabled, empty, or fails, OpenLess keeps the normal polish and short-transcript rules. A strategy failure never prevents dictation.
 
