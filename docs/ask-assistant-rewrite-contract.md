@@ -1,5 +1,69 @@
 # Personal assistant replacement contract
 
+## 延后状态与恢复入口（2026-11-22）
+
+**状态：Deferred / 延后。** 用户决定先处理更重要的功能和严重 bug。本轮只保存已有实现、整理逻辑与提示词缺口；停止 Ask 的新增开发、测试、CI、Beta 合并、打包和发布。恢复开发需要用户重新安排优先级。
+
+- 保存分支：`deferred/ask-anything-20261122`。该分支是开发快照，不是可发布版本。
+- 历史保存点：`07353f9c` 保存原 Ask 实现和当时共享现场；`95587040` 合并了较新的通用 UI。此冻结提交另保存审核阶段的 13 个 Ask/Core/native/usage 接点文件及本说明。
+- 分支继承了混合开发历史，不能整体当作“仅 Ask 补丁”合入其他分支。后续集成必须重新比较实际差异和共享依赖。
+- 由临时独立 Git 索引生成快照；不切换或改写当前 Main 共享 checkout、HEAD、Git 索引或 AOCI，也不收录其他会话之后的严重 bug 修复。
+- 本轮没有收录尚未提交的 `scripts/capsule-ready-replay.test.mjs` 与 `src/features/cloud-sync/CloudSyncSection.test.ts` 两项通用测试调整；它们仍留在原工作区，由对应负责人处理。
+- 集成负责人给出的不含本轮 Ask 重写的候选基线是当时的 `origin/beta@3798c446`。这只是恢复前的参考，不授权覆盖本地 Beta，也不把已经前进的远端引用视为固定事实。
+
+### 目前写到哪里
+
+| 范围 | 已有实现 | 尚不能据此宣布完成的部分 |
+| --- | --- | --- |
+| 助手后端 | 独立 Rust `assistant.rs/assistant/`、依赖注入、只读工具循环、取消、最终正文、逐真实调用用量记录，替换旧 Chat 执行链 | 未完成真实供应商与完整 Ask 窗口的集成验收 |
+| 四路入口 | 每次提交重新识别普通提问、划词追问、帮我写、语音修改；工具/JSON 路由与可检查的 `editTarget` | “独立模型”目前是独立分类调用，模型工厂仍取当前 LLM 配置；没有独立路由模型配置入口 |
+| 前端 | `ask-window/` 的请求归属、工具状态、取消、最终全文收敛、紧凑/展开错误展示，路由互斥设置 | 最新审核修正尚未完成主 Agent 的最终集成复核 |
+| 原生写回 | 打开前 A 光标与提交时 B 选区分离；恢复、重验和一次性 claim；失效保留结果 | 完整 GUI → 真实模型 → A/B 写回尚未验证；Windows 支持范围较窄，Linux 原生写回尚不可用 |
+| 上下文 | 当前对话、提交的选区/文本/PDF 材料；按授权读取时间、系统、原 App、浏览器与近期语音文字 | `app_purpose` 等字段当前没有可靠来源；历史语音没有原生范围绑定，多轮原图未保留 |
+| 预算与联网 | 有效能力窗口内的预算、旧交换/工具证据压缩、公共网页/GitHub Releases、高精度计算、Fake-IP 兼容 | 未知模型使用 16,384 的保守运行上限，不能宣称任意模型都支持 256K；真实供应商压缩语义质量仍待确认 |
+
+审核阶段留下的修正已随分支保存：大工具结果的预算截限、后续追问保留提交的选区/PDF/文本引用、取消时 Reading 来源收敛；新会话和 App 上下文撤权覆盖模型准备期；Windows 前台进程获取的条件编译；共享 usage 通知保持 main-only Host 动作。它们是已有修正的冻结，不是本轮继续实现新功能。
+
+### 逻辑链路与需要守住的边界
+
+1. **打开入口**：在焦点移入 Ask 前保存 A 的位置与授权上下文。胶囊继续作为通用听写，只把文字送入输入框。
+2. **显式提交**：以 conversationId/clientRequestId/turnId 和生命周期 fence 绑定本轮；确认当时外部 B 的选区。展开状态不跳过路由。
+3. **决定交付位置**：普通提问和划词追问共用助手后端，只回答；帮我写与语音修改单次生成正文，分别交给 A 插入与 B 替换。
+4. **模型和工具**：助手只得到受控只读能力。外部材料与历史引用是数据，不能取得写回、系统命令或焦点权限。
+5. **回传与结束**：事件按请求与顺序归属，最终正文权威覆盖流式片段；取消/失败后不能复活为成功。已 claim 的原生操作仍须报告真实 Written/Unknown 结果。
+6. **原生交付**：生成完再次恢复并验证同一控件和范围；原位置失效不改写到当前碰巧聚焦的编辑器。
+
+以下问题仍应留到恢复时处理，不能只通过追加提示词解决：
+
+- **先查证再写作的复合任务**：当前路由示例将“查汇率、计算、写报价单”归为 write，但 write/edit 的生成路径没有搜索或计算工具。需要决定是否由受控前置取证提供材料，或明确无法完成时的交付；不能让单次正文生成凭空补出实时价格。
+- **“刚才那句”的替换**：native preparation 的 recent_voice 当前为空，历史是在 edit 确认后按需读取，且持久语音记录全部 matches_selection=false。现阶段没有“语音记录 → 原 App 控件/范围”的可靠绑定，recentVoice 路由应澄清，不应声称已经完成该能力。
+- **独立分类与独立模型的区别**：现有 SeparateModel 再次调用同一 ConfiguredAskModels；语义混合也使用模型输出 JSON。后续应对齐设置名称、模型来源与预期差异，不能用提示词把相同配置描述成独立模型。
+- **材料连续性和来源**：审核修正保留提交的选区/PDF/文本；图片仅作为当前轮附件，不能保证后续能重读原图。App 用途和来源 URL 没有实际数据时应保持缺失，不能由提示词推断成已采集。
+- **平台与容量**：macOS AX、Windows 标准 Unicode Edit 和其他平台的实际能力不同；未知上下文窗口不是已知有效窗口。恢复时仍需能力数据与真实运行确认。
+
+### 提示词需要加强的位置（本轮只记录，不改行为）
+
+现有基础提示词已经包含自然交流、按需工具、来源与权限规则。以下是下一轮应补充或校准的具体内容，不表示这些边界完全没有实现。
+
+| 优先级 | 位置 | 需要加强的内容 |
+| --- | --- | --- |
+| 先处理 | `qa_service/standalone/entry.rs` 的 RULES/routing_instructions | 用成对例子覆盖“解释/翻译给我看”与“替换原文”、“写一段”与“怎么写”、有无关选区、跨轮指代、明确留在 Ask，以及复合任务。含糊写入继续 clarify；不能让提示词掩盖 write 无工具或语音绑定缺失 |
+| 先处理 | 同文件 ASK_COMMON/execution_rule 与 `standalone/prompt.rs` | 明确正文会立即输入且没有第二轮润色；按真实目标用途决定称呼、长度、格式和语言；默认不包代码围栏、不复述指令/周围文本，必要引用与用户明确格式要求保留；编辑只修改指令要求，保留人名、数字、链接、事实和原意。目标用途缺失时不得假装知道 |
+| 先处理 | `assistant/prompt.rs` 的 SYSTEM 与 `assistant/tools.rs` 的工具说明 | 对 `truncated/contextBudget`、部分搜索命中、读取失败/拒绝、来源冲突和重复失败给出明确收敛规则：证据不完整不能声称穷尽或已核实；可以用已有证据完成的部分直接回答，不循环重试同一失败。已有公开检索隐私限制和证据/推断区分继续保留 |
+| 随后处理 | `assistant/prompt.rs` 的 COMPACT 与 `assistant/budget.rs` 的摘要约束 | 进一步约束代词的来源和原话、仍有效/已撤回约束、数量/单位/代码符号、精确 URL、读取状态与失败证据。当前逐用户覆盖和原句校验不等于语义上一定无遗漏；用真实供应商确认摘要质量 |
+| 随后处理 | SYSTEM 的角色与表达占位符 | 用户确定角色后再补稳定身份、性格、幽默尺度与表达示例；现在保持占位，不擅自编名字/背景/故事。自然聊天不强行工具化，不习惯性反问或生成任务清单 |
+| 随后处理 | SYSTEM 的环境/下载建议段及工具说明 | 对“当前网页”与原 App 绑定、授权拒绝、页面不可读、tag/latest/prerelease、ARM/x64/universal 与进程架构的区别给出简短决策例子；只推荐核实存在的资产，不宣称能读取登录态页面或安装软件 |
+
+写回目标校验、权限撤销、取消、模型能力上限和 requestId 归属必须继续由代码硬约束，不能迁移成模型自行遵守的提示词。
+
+### 证据与恢复条件
+
+- 本轮仅做静态阅读、分支快照与文档整理，没有重新运行测试、CI、启动 App 或访问系统授权。
+- 审核负责人交接的局部结果为 Core 41 passed / 2 ignored，ask_session 7 passed，ask_native 13 passed / 1 ignored；这些是对方报告的局部证据，主 Agent 尚未完成最终集成复核。
+- 下文保留前一阶段的已执行检查和用户人工清单作为历史记录。完整 Ask GUI、真实模型、麦克风和跨平台验收仍有缺口，不能用局部测试或 CI 替代。
+- 恢复时先比较届时 Beta、共享上下文/语音接口与本分支的变化；按模块重新认领并解决共享依赖，再执行用户重新授权的检查。暂不指定继续日期或后台任务。
+
+
 This is the current development contract for the Ask Anything replacement. It supersedes the old standalone contract's single-search restriction, output marker/review pipeline, and rule that an expanded window always bypasses intent routing.
 
 ## Ownership
@@ -70,7 +134,7 @@ Required runtime acceptance uses two real editors: A caret → open Ask → sele
 - The independent backend session reported passing real local HTTP tool-loop tests, four-protocol model regressions, usage/cancellation and context-compaction tests, including older user input and tool-work compression. Real anonymous GitHub release metadata and real public-page reading passed. The latter required the Fake-IP compatibility change and the realistic 15-second reading deadline.
 - `tauri build --debug --bundles app --ci` produced a local debug App. Its startup reached macOS SecurityAgent authorization; the computer-control tool refuses access to `com.apple.SecurityAgent`. The user subsequently directed the agents to stop further testing and leave manual acceptance to the user. Real provider calls and the full Ask GUI → model → native A/B workflow, plus live microphone transcription, remain unverified. Windows/Linux runtime acceptance has not run.
 
-The local source remains on `appergb/Main-workspace` at the original development baseline with unrelated shared UI changes preserved. Other sessions delivered later general UI work from separate branches; it was not silently merged into this Ask acceptance snapshot.
+The verification list above records the earlier acceptance snapshot. A later review candidate merged the newer general UI and retained additional corrections; the 2026-11-22 deferred status at the top is authoritative. The full native/provider acceptance remains unfinished.
 
 ### 用户手动验收清单
 

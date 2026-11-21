@@ -8,8 +8,8 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::assistant_api::{
-    AssistantActivity, AssistantEvent, AssistantMessage, AssistantRequest, AssistantRole,
-    AssistantSelection, AssistantToolStatus,
+    AssistantActivity, AssistantEvent, AssistantMessage, AssistantReference, AssistantRequest,
+    AssistantRole, AssistantSelection, AssistantToolStatus,
 };
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::usage_ledger::{
@@ -833,6 +833,8 @@ struct Turn {
     effect_claimed: bool,
     pending_body: Option<String>,
     assistant_events_open: bool,
+    references: Vec<AssistantReference>,
+    source_tools: HashMap<String, Uuid>,
 }
 
 enum AskEffect {
@@ -1545,14 +1547,16 @@ impl StandaloneQaService {
                     AssistantMessage {
                         role: AssistantRole::User,
                         text: turn.user.text.clone(),
+                        references: turn.references.clone(),
                     },
                     AssistantMessage {
                         role: AssistantRole::Assistant,
                         text: turn.assistant.text.clone(),
+                        references: Vec::new(),
                     },
                 ]
             })
-            .filter(|message| !message.text.is_empty())
+            .filter(|message| !message.text.is_empty() || !message.references.is_empty())
             .collect())
     }
 
@@ -1612,6 +1616,8 @@ impl StandaloneQaService {
                     mut source,
                 } => {
                     source.url = public_url(&source.url)?;
+                    turn.source_tools
+                        .insert(source.source_id.clone(), tool_call_id);
                     if let Some(saved) = turn
                         .snapshot
                         .sources
@@ -1717,13 +1723,44 @@ impl StandaloneQaService {
                         })
                 })
                 .flatten();
+            let text = material.question().to_owned();
+            let attachments = material.into_attachments();
+            // Retain only submitted text, never ambient App/browser metadata.
+            let mut references = Vec::new();
+            if let Some(selection) = &selection {
+                references.push(AssistantReference::Selection {
+                    text: selection.text.clone(),
+                });
+            }
+            for (index, attachment) in attachments.iter().enumerate() {
+                match attachment {
+                    AskAttachment::Selection { text } => {
+                        references.push(AssistantReference::TextAttachment {
+                            attachment: index + 1,
+                            text: text.to_string(),
+                        })
+                    }
+                    AskAttachment::Pdf { pages } => {
+                        references.extend(pages.iter().map(|page| AssistantReference::PdfPage {
+                            attachment: index + 1,
+                            page: page.number,
+                            text: page.text.to_string(),
+                        }))
+                    }
+                    AskAttachment::Image(_) => {}
+                }
+            }
+            self.update(key, |turn| {
+                turn.references = references;
+                None
+            });
             let request = AssistantRequest {
                 key,
                 client_request_id,
-                text: material.question().to_owned(),
+                text,
                 messages,
                 selection,
-                attachments: material.into_attachments(),
+                attachments,
                 options,
             };
             let service = Arc::downgrade(&self.0);
@@ -2109,6 +2146,21 @@ impl Conversation {
                 });
             }
         }
+        for source in &mut turn.snapshot.sources {
+            if source.read_status == AskReadStatus::Reading {
+                source.read_status = if status == AskTurnStatus::Cancelled {
+                    AskReadStatus::Cancelled
+                } else {
+                    AskReadStatus::Error
+                };
+                if let Some(tool_call_id) = turn.source_tools.get(&source.source_id) {
+                    events.push(AskEventKind::Source {
+                        tool_call_id: *tool_call_id,
+                        source: source.clone(),
+                    });
+                }
+            }
+        }
         turn.snapshot.status = status;
         turn.snapshot.activity = None;
         turn.snapshot.error = error.clone();
@@ -2237,6 +2289,8 @@ impl Turn {
             effect_claimed: false,
             pending_body: None,
             assistant_events_open: false,
+            references: Vec::new(),
+            source_tools: HashMap::new(),
         }
     }
 

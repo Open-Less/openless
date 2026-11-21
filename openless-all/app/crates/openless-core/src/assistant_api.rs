@@ -22,6 +22,26 @@ pub enum AssistantRole {
 pub struct AssistantMessage {
     pub role: AssistantRole,
     pub text: String,
+    /// Ephemeral quoted material, excluded from routing/public serialization.
+    #[serde(skip)]
+    pub references: Vec<AssistantReference>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AssistantReference {
+    Selection {
+        text: String,
+    },
+    TextAttachment {
+        attachment: usize,
+        text: String,
+    },
+    PdfPage {
+        attachment: usize,
+        page: u32,
+        text: String,
+    },
 }
 
 /// A quotation supplied for this question. It never grants permission to replace text.

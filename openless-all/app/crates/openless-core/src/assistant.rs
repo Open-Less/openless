@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::ask::{
-    AskCancellation, AskModel, AskModelCompletion, AskModelFactory, AskToolCall, AskToolResult,
+    AskCancellation, AskModel, AskModelCompletion, AskModelFactory, AskToolCall,
     AskUsagePersistence, SearchTool,
 };
 use crate::assistant_api::{
@@ -133,7 +133,7 @@ impl PersonalAssistant {
                             serde_json::json!({"status":"failed", "code":public.code, "reason":public.message}).to_string()
                         }
                     };
-                    plan.results.push(AskToolResult { call, output });
+                    plan.push_result(call, output)?;
                 }
             }
         }
