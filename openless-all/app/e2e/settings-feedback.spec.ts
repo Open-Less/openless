@@ -641,7 +641,7 @@ test('polish strategy editor copies an Agent skill without changing the draft', 
   await page.exposeFunction('capturePolishStrategyClipboard', (text: string) => {
     clipboard.push(text);
   });
-  await page.evaluate(() => {
+  await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
