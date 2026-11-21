@@ -90,8 +90,7 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 3. 被打标签的提交上 CI 通过。
 4. 满足适用的[桌面功能与设备验收](docs/2.0-desktop-acceptance.md)、签名和分发要求；仅构建通过并不能证明产品就绪。在包含 Linux 资产之前，必须完成后文的 Linux 验收。
 5. 然后——且仅在那时——推送发布标签。
-6. Beta 和 Stable 的标签工作流都会把 Tauri 和 Android 资产上传到共享的草稿。等待**两个**工作流都成功，验证软件包，然后发布该草稿（Beta 作为预发布；Stable 作为 latest）。
-   发布之后，如果不先把该发布退回草稿状态，就不要重新运行资产工作流。
+6. 标签启动统一发布工作流。桌面、Android 和 HarmonyOS 作业把资产上传到同一个草稿。确认所有必需作业通过并核对文件、签名与校验和，再发布为 Beta 预发布或 Stable latest。草稿修复只适用于仍为草稿的发布，已发布资产保持不变。
 
    这些工作流还会写入渠道更新器清单（`latest-{target}-{arch}.json` 和
    `latest-{target}-{arch}-beta.json`），但有意将它们**排除**在发布资产之外——
@@ -237,5 +236,5 @@ base64 -w0 release.p12       # → HARMONY_RELEASE_KEYSTORE_BASE64
 
 1. 通过 PR 将工作落到 `beta` 上（PR 针对 `beta` 开启，绝不针对 `main`）。
 2. 对于 Stable 发布，由维护者合并 `beta → main`。
-3. **管理员**升级 Tauri 版本（五个位置同步），确认 CI 通过，并推送发布标签，从而触发 macOS/Windows/Android 资产工作流及其渠道更新器清单。
-4. 两个发布工作流都通过后，由管理员验证并发布共享草稿。只有在完成确切标签的 Linux 验收之后，Linux 软件包才会被独立附加。
+3. **管理员**升级 Tauri 版本（五个位置同步），确认 CI 通过，并推送标签。统一发布工作流调度桌面、Android 和 HarmonyOS 作业及各自的渠道清单。
+4. 所有必需作业通过后，管理员核对文件、签名和校验和，再发布共享草稿。草稿修复仅适用于仍为草稿的发布，已经发布的资产保持不变。Linux 软件包须在确切标签通过独立验收后附加。

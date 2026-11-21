@@ -1,14 +1,12 @@
 # 阿里百炼（DashScope）ASR 模型
 
-状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
-
 ## 1. 代码中的定义
 
 - Provider：`bailian`，`authRequirement = api_key`；默认端点 `wss://dashscope.aliyuncs.com/api-ws/v1/inference/`；默认模型 `fun-asr-realtime`。
-- 协议按模型名选择（DashScope WebSocket 推理协议）；验证探针 `asr_silence`。
+- 自动模式按模型路由到 DashScope 经典 WebSocket、Qwen 实时 WebSocket 或录音文件转写。自定义模型可在高级设置显式选择协议，由 Core 校验可用值。验证探针随有效路由选择。
 - 目录来源：`provider_rules::provider_descriptors` → 生成文件 `src/lib/ipc/provider-descriptors.generated.json`（重新生成：`cargo run --locked -p openless-core --example export_provider_descriptors`）。
 
-## 2. 当前静态模型目录（14 个）
+## 2. 内置模型示例
 
 | 模型 | 说明 |
 | --- | --- |

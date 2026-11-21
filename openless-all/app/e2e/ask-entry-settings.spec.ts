@@ -23,10 +23,11 @@ test('defaults, full commits, exclusive Beta modes, and reload', async ({ page }
   const autoVoice = page.getByRole('switch', { name: 'Auto-start voice', exact: true });
   const separate = page.getByRole('switch', { name: 'Separate model (Beta)', exact: true });
   const mainTool = page.getByRole('switch', { name: 'Main model tool (Beta)', exact: true });
+  const currentMode = page.locator('span[aria-live="polite"]');
   await expect(autoVoice).toBeChecked();
   await expect(separate).toBeChecked();
   await expect(mainTool).not.toBeChecked();
-  await expect(page.getByText('Separate model', { exact: true })).toBeVisible();
+  await expect(currentMode).toHaveText('Separate model');
   await expect(page.getByRole('switch', { name: 'Save history' })).toBeChecked();
   await expect(
     page.getByRole('switch', { name: 'Share desktop app names with Ask' }),
@@ -37,10 +38,11 @@ test('defaults, full commits, exclusive Beta modes, and reload', async ({ page }
   await autoVoice.click();
   await expect(autoVoice).toBeChecked();
   await autoVoice.click();
+  await expect(autoVoice).not.toBeChecked();
   await separate.click();
   await expect(separate).not.toBeChecked();
   await expect(mainTool).not.toBeChecked();
-  await expect(page.getByText('Semantic hybrid', { exact: true })).toBeVisible();
+  await expect(currentMode).toHaveText('Semantic hybrid');
   await mainTool.click();
   await expect(mainTool).toBeChecked();
   await expect(separate).not.toBeChecked();
@@ -58,10 +60,11 @@ test('defaults, full commits, exclusive Beta modes, and reload', async ({ page }
   await expect(mainTool).toBeChecked();
   await expect(separate).not.toBeChecked();
   await mainTool.click();
-  await expect(page.getByText('Semantic hybrid', { exact: true })).toBeVisible();
+  await expect(currentMode).toHaveText('Semantic hybrid');
   await separate.click();
+  await expect(separate).toBeChecked();
   await separate.click();
-  await expect(page.getByText('Semantic hybrid', { exact: true })).toBeVisible();
+  await expect(currentMode).toHaveText('Semantic hybrid');
 });
 
 test('keyboard can reach hints and switches without showing inline explanations', async ({
@@ -144,7 +147,7 @@ test('a native read failure requires explicit, committed recovery', async ({ pag
   await expect(autoVoice).toHaveCount(0);
   await page.evaluate(() => window.askEntrySettingsFixture.finish(false));
   await expect(autoVoice).toBeChecked();
-  await expect(page.getByText('Separate model', { exact: true })).toBeVisible();
+  await expect(page.locator('span[aria-live="polite"]')).toHaveText('Separate model');
   await expect(restore).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(await page.evaluate(() => window.askEntrySettingsFixture.writes)).toEqual([

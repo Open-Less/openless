@@ -1,6 +1,6 @@
 # Release 签名索引、OSS 同步与双源更新
 
-本次在 PR #1426 中补充单一签名 JSON、从 `aeoform/openless-workspace` 迁移 OSS 同步，并适配 PR #1399 的阿里云优先／GitHub 二进制回退。只改变配置生效后的发行；不删除或迁移已有 GitHub Release 附件。
+本页维护发布资产、签名索引和 OSS 更新镜像的运维合同。历史 GitHub Release 附件保持原有格式。
 
 ## 单一 Release 入口，平台并行
 
@@ -59,7 +59,7 @@ tag → prepare-release（仅创建／验证共享草稿，不构建）
 - Android 对相同候选依次尝试阿里云和 GitHub，每次完整传输后均验签；超时、流中断、长度不匹配或签名失败均不能把坏包交给安装器。
 - 阿里云传输总预算 120 秒，GitHub 600 秒；Android 既有整体下载与分块停滞预算仍保留。两源都失败则明确报错，不声称更新成功。
 
-## OSS 同步迁入主仓库
+## OSS 同步
 
 实现：`.github/workflows/mirror-release.yml` 和 `openless-all/app/scripts/mirror-release.py`。
 
@@ -72,26 +72,18 @@ tag → prepare-release（仅创建／验证共享草稿，不构建）
 5. 先把包上传到 `releases/<tag>/`，全部成功后才替换 `updates/<channel>/` 的滚动 JSON。包保持 immutable 缓存头，清单缓存 60 秒。每个对象的 PUT 是原子的，不声称七个平台的清单能事务性同时切换。
 6. 使用 `rclone copy` 而非 `sync`／`purge`，不删除历史 OSS 对象，也不修改 GitHub 附件。无需重写或单独上传每个平台的 `.sig` 才能让新版 CDN 客户端更新。
 
-### 必须人工完成的切换前置条件
+### 配置与恢复
 
-主仓库必须配置以下三个仓库 Secrets（本次已从历史会话恢复配置；值不写入仓库）：
+主仓库镜像作业需要以下仓库 Secrets：
 
 - `OSS_BUCKET`
 - `OSS_ACCESS_KEY_ID`
 - `OSS_ACCESS_KEY_SECRET`
 
-可选仓库变量 `OSS_ENDPOINT`，默认 `oss-cn-zhangjiakou.aliyuncs.com`。Bucket 继续私有，不将凭据放入代码、日志或普通变量。GitHub API 无法读回网站仓库已有 Secret 的值；本次恢复使用的是用户先前提供的原始配置，已通过标准输入写入主仓库 Secrets，未回显或落盘密钥。配置存在不等同于 OSS 同步验收通过。
-
-切换顺序：
-
-1. 在主仓库配置三个 Secrets，合并本 PR。
-2. 手动运行主仓库 `Mirror release assets to OSS`，验证七个平台清单、对应对象与签名；无需新发版即可读取现有发布版。
-3. 再合并网站仓库的迁移 PR，删除旧镜像 workflow 和重复生成器；保留网站部署与 release.json 快照。
-
-网站仓库的迁移分支不会自动禁用线上旧任务，避免凭据未就绪时切断现有更新。
+可选仓库变量 `OSS_ENDPOINT` 默认使用 `oss-cn-zhangjiakou.aliyuncs.com`。Bucket 保持私有。凭据只放在仓库 Secrets。配置变更或漏掉发布事件时，手动运行主仓库的 `Mirror release assets to OSS`，然后检查七个更新目标的对象、清单与签名。流程读取已发布版本，无需创建新标签或重建安装包。网站的部署与 `release.json` 快照独立于二进制镜像。
 
 ## 验证边界
 
 本地离线测试覆盖两发布者任意顺序合并、重跑不丢记录、旧格式维修不迁移、已发布拒绝改写、API 错误不覆盖、索引标签／缺记录错误、七目标生成、历史签名、缺包／摘要／验签失败不推进、下载中途错误后一次 GitHub 重试。Rust 直接包含生产模块的独立 harness 测试覆盖更新发现、签名解析、源合并与 APK 验签。
 
-真实 OSS 上传、桌面系统安装、Android 设备安装及真实网络故障注入仍需远端／设备验收；未在本地调用 OSS 写入或触发产品发行。
+真实 OSS 上传、系统安装与网络故障回退须分别在远端或设备上验收。

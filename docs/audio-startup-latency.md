@@ -4,14 +4,9 @@
 PCM，而不是等待识别器后再开麦。缓冲按需增长、保留原有上限，不新增常驻录音或
 第二套大队列。
 
-## 与现有代码的区别
+## 采集与准备顺序
 
-[用户提供的讨论](https://chatgpt.com/share/6ad78b77-04b8-83e8-a106-bb97ea5acb5c)
-区分了设备冷启动和 ASR 网络等待。当前 beta 已有按键时的 Windows provisional
-capture，以及默认关闭的预热/预录选项；#1150 已在 2026-10-12 关闭。因此不能将
-讨论里的早期流程直接当作当前实现。
-
-这项前置等待已经移走：`PipelineDictationEngine::start` 会先提交 provisional
+`PipelineDictationEngine::start` 会先提交 provisional
 capture 或启动普通 recorder，再并行准备 `transcription.prepare()`。当前流程为：
 
 ```text
@@ -51,6 +46,12 @@ Tauri 录音日志增加 `[audio-startup]` 阶段，只有时间和录音/按键
 - `first_output_pcm`：第一个可交付给识别器/归档的处理结果。
 
 比较 `first_raw_pcm` 与 `first_output_pcm` 可以区分硬件等待与处理/分帧等待。
+
+## 播放回声消除
+
+播放抑制是会话开始时冻结的独立设置。Windows 使用 WASAPI loopback，macOS 在 14.6 及以后使用 Core Audio 进程 tap，Linux 尝试匹配 PipeWire/Pulse 输出监视器。`audio/echo.rs` 对齐带时间戳的播放参考和麦克风采样。无可用参考、路由更改或权限受限时，仍保留普通麦克风处理。更换输出设备后开始新会话以重新选择参考源。播放参考只用于实时处理，录音归档和识别请求不包含参考音频。
+
+信号夹具可以验证对齐、回声衰减和双讲保护。蓝牙延迟、设备切换、长录音时钟漂移和系统播放不被打断需要实际设备验证。源码与溯源见 [MicYou DSP 上游说明](../openless-all/app/crates/micyou-dsp/UPSTREAM.md)和 [#1223](https://github.com/Open-Less/openless/issues/1223)。
 Windows 快捷键日志使用 `press` 和 `capture` 关联；预热路线标记为 `warm_hub`。
 
 回归测试 `capture_starts_before_slow_preparation_and_cancellation_releases_it_promptly`
