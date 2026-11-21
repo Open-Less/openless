@@ -12,4 +12,4 @@
 | 客户端数据流 | [`data-flow.png`](openless-client-data-flow.png) · [`data-flow.svg`](openless-client-data-flow.svg) · [`data-flow.mmd`](openless-client-data-flow.mmd) | [`data-flow.zh-CN.png`](openless-client-data-flow.zh-CN.png) · [`data-flow.zh-CN.svg`](openless-client-data-flow.zh-CN.svg) · [`data-flow.zh-CN.mmd`](openless-client-data-flow.zh-CN.mmd) |
 | 启动、权限与录音 | [`startup-recording-flow.png`](openless-client-startup-recording-flow.png) · [`startup-recording-flow.svg`](openless-client-startup-recording-flow.svg) · [`startup-recording-flow.mmd`](openless-client-startup-recording-flow.mmd) | [`startup-recording-flow.zh-CN.png`](openless-client-startup-recording-flow.zh-CN.png) · [`startup-recording-flow.zh-CN.svg`](openless-client-startup-recording-flow.zh-CN.svg) · [`startup-recording-flow.zh-CN.mmd`](openless-client-startup-recording-flow.zh-CN.mmd) |
 
-依赖与模块审查记录见 [`openless-client-dependency-module-review.md`](openless-client-dependency-module-review.md)。
+当前依赖与模块边界见[架构](../../architecture.md)和[源码目录](../../structure.md)。

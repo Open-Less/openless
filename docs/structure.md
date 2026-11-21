@@ -1,6 +1,6 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-10-19。分层与调用链见 [架构](architecture.md)。
+分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
@@ -9,7 +9,7 @@ openless-src/                     Git 仓库、分支与发布边界
 ├── docs/                         架构、合同说明、平台交接、已知缺口与参考样例
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
-├── .github/workflows/            CI、Tauri / Android / Linux / HarmonyOS 发布
+├── .github/workflows/            CI、Tauri / Android / HarmonyOS 发布
 ├── Casks/                        Homebrew 分发定义
 ├── assets/                       产品展示材料
 ├── scripts/                      仓库级辅助脚本（版本号同步等）
@@ -18,6 +18,7 @@ openless-src/                     Git 仓库、分支与发布边界
     ├── ios/                    原生 iPhone App、键盘扩展与录音组件
     └── app/                     npm 与 Core/Linux Cargo 工作目录
         ├── src/                  React / TypeScript 界面
+        ├── ask-window/           桌面 Ask 独立前端入口
         ├── crates/openless-core/  共享业务 Rust crate
         ├── src-tauri/            Tauri Host（macOS / Windows / Android），独立 Cargo manifest
         ├── linux-egui/           Linux Host 和 egui UI（不链接 Tauri / WebKitGTK）
@@ -42,6 +43,7 @@ openless-src/                     Git 仓库、分支与发布边界
 | 共享界面组件 | `src/ui/controls/`、`src/ui/layout/`、`src/ui/overlays/` | 控件和布局通过参数与回调复用；每窗一个 AppViewport，内容与浮层共享可见边界 |
 | 多语言与主题 | `src/i18n/`、`src/styles/` | 文案、语种与主题样式 |
 | 共享快照、偏好和预览 | `src/data/`、`src/preview/` | data 管理读写次序；preview 提供浏览器的设备预设、模拟数据和事件 |
+| 桌面 Ask | `ask-window/`、`src-tauri/src/ask_window/`、Core `qa_service/standalone/` | 独立窗口、原生目标、语音所有权和模型路由。见 [Ask 桌面契约](ask-unified-entry-contract.md) |
 | 新增或调整 IPC | `src/api/`、`src/runtime/`、`src-tauri/src/commands/` | React 通过分域 API 读写；Rust/TypeScript 类型、注册、事件与 `contract/` 同步 |
 | 共享业务入口 | `crates/openless-core/src/api.rs` | `events.rs`、`ports.rs`、`domains.rs`、`config.rs` |
 | 听写和服务 | Core `dictation_engine.rs`、`provider_*`、`asr/`、`polish.rs` | Host 的录音、插入和本地模型适配 |

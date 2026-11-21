@@ -1,61 +1,29 @@
-# OpenLess Android IME：架构、功能与 fork 演进
+# OpenLess Android 输入法
 
-这份页面记录 Android 输入法分支从 `beta` fork 基线到当前实现的功能演进，并把界面截图与实际源码入口对应起来。它描述的是当前代码状态，不把构建成功等同于完整真机验收。
+构建、脚手架和源码定位见 [Android 平台指南](../openless-all/app/android/README.zh.md)。共享 Rime 引擎和词库维护见[移动端输入法后端](../openless-all/app/mobile-ime/README.zh.md)。
 
-## 当前架构
+## 运行架构
 
-用户操作进入 `OpenLessImeService`，它提供语音、笔画、剪贴板和英文四个输入面板，并通过 Android `InputConnection` 将结果提交到当前应用。Rust/Tauri 负责 ASR、AI 处理和共享后端；`OpenLessRuntimeService` 作为 `START_STICKY` 前台运行时监督器持有 JNI Activity Context；`OpenLessBackendWarmupActivity` 承载 Tauri/WebView 设置页与启动入口。
+`OpenLessImeService` 管理键盘面板与当前编辑器，通过 Android `InputConnection` 提交结果。`OpenLessRuntimeService` 监督 Rust/Tauri 后端的驻留和恢复。`OpenLessBackendWarmupActivity` 承载设置 WebView 与应用启动入口。与 Core 的语音、词汇和设备操作经 [`native_bridge.rs`](../openless-all/app/src-tauri/src/android/native_bridge.rs) 连接。
 
-主要源码入口：
+- **语音**支持录音、取消、草稿替换、原文和整理模式。草稿替换前核对原文本与编辑位置。
+- **笔画与英文**在原生键盘提供离线候选、个人词频和数字／符号输入。笔画由 `StrokeInputController` 调度，英文由 `EnglishCandidateProvider` 提供排名。
+- **拼音**由 `RimePinyinController` 接入共享 librime。候选提交经当前 `InputConnection` 确认后才通知引擎。密码框禁用拼音，禁止学习的编辑场景使用独立的无用户词典方案。
+- **剪贴板**提供本机历史、收藏、筛选和粘贴。键盘数据导入导出与应用级迁移使用各自的格式。
+- **手改学词**使用独立授权，默认关闭。原生无障碍观察只在同一编辑器与有界观察期内报告改动，Core 生成建议，用户明确确认后才加入词典。
+- **光标上下文**在启用时由 `ImePrivacyPolicy.kt` 审核并有界采样。密码框、`TYPE_NULL`、禁止学习的输入框和敏感应用被排除。文本可作为当前听写、速记或云笔记润色的临时输入，历史、Webhook 和日志里没有这个字段。悬浮球与 IME 的采集路径各自验证。
+- **跨应用插入**依次使用获准的无障碍、Shizuku 和剪贴板回退。供用户启用的开关、服务连接与插入成功是独立状态。
 
-- `openless-all/app/android/kotlin/OpenLessImeService.kt`：四面板切换、语音生命周期、剪贴板/英文面板与跨面板 UI 基础设施。
-- `openless-all/app/android/kotlin/StrokeInputController.kt`：笔画编码、候选/联想查询与提交、数字符号子面板；这是 2026-09-24 完成的第一处面板拆分。
-- `openless-all/app/android/kotlin/OpenLessRuntimeService.kt`：运行时守护和 JNI Context 挂载。
-- `openless-all/app/android/kotlin/OpenLessBackendWarmupActivity.kt`：Tauri host、设置页和 WebView 冷启动恢复。
-- `openless-all/app/src-tauri/src/android/native_bridge.rs`：Rust ↔ Kotlin JNI 桥接。
+## 界面示例
 
-## 已实现的 Android 输入能力
-
-- 语音输入：录音、取消、原文/整理模式、波形/状态反馈，并通过 `commitText()` 写入当前光标位置。
-- 笔画输入：离线笔画字典、单字候选、确认后的词语联想、分词、简繁偏好、数字/符号面板、上滑数字和个人词频。
-- 剪贴板：历史记录、收藏/删除/分类、选择/复制/粘贴、纠正词写入全局词典。
-- 手改学词：独立授权默认关闭，无障碍服务在有界观察期内报告当前编辑器的文本变化，主进程 Core 判断建议与过期时间；确认卡或编辑结果的显式勾选才加入词典。跨进程共享截止时间，服务重连不延长观察。
-- 光标上下文（默认开启）：开始录音时通过 `InputConnection` 读取光标前后各一小段文字（`ImePrivacyPolicy.kt` 负责门禁：密码框、`TYPE_NULL`、`IME_FLAG_NO_PERSONALIZED_LEARNING` 和敏感应用一律不读），随 `start` 命令结构化传给 Rust，由 Core 裁剪到 600 字并组装 Prompt。听写、速记、云笔记润色时都参考，但不写入笔记、历史、Webhook 或日志；悬浮球路径暂未接入。
-- 英文键盘：字母/数字/符号三层布局、英文候选词、个人词频、自定义词长按删除、按键预览和上滑输入数字/符号。
-- 跨应用插入：按可用性使用无障碍、Shizuku 或剪贴板回退；权限和输入法启用状态在 Android 侧单独管理。
-
-## 2026-09-11 至 2026-09-24 的演进
-
-`615d6ac4` 是 fork 后开发使用的 `beta` 基线，`0bc3a979` 是第一笔 Android IME 实现。之后的提交按功能阶段演进：
-
-1. IME 服务骨架与四面板交互。
-2. 笔画字典、索引、候选排序、联想、多编码、分词、简繁和个人词频。
-3. 剪贴板历史、纠正词桥接、英文键盘、候选词和手势预览。
-4. Runtime Service、Activity 生命周期、JNI Context、WebView 黑屏/冷启动恢复和重启诊断。
-5. 2026-09-23 至 24：英文上滑数字/符号和长按删词；候选 View 复用；联想词典预热、缓存和 Trie 建索引优化；新增 `StrokeInputController`。
-
-完整提交时间线可用以下命令复核：
-
-```text
-git log --reverse --format='%h %ad %s' --date=short 615d6ac4..HEAD
-```
-
-## 截图与使用说明
-
-![OpenLess Android 架构与使用指南](images/android-ime/android-architecture-guide.png)
+下列图片记录早期的面板样式。当前键盘布局、可选模式和权限流程以安装版本为准。
 
 | 面板 | 截图 |
 | --- | --- |
-| 语音：待机、录音、思考 | ![语音待机](images/android-ime/voice-idle-green.jpg) ![录音](images/android-ime/voice-recording-red.jpg) ![思考](images/android-ime/voice-thinking.jpg) |
-| 笔画：中文与数字/符号 | ![中文笔画](images/android-ime/stroke-chinese.jpg) ![数字面板](images/android-ime/stroke-numeric.jpg) |
+| 语音 | ![待机](images/android-ime/voice-idle-green.jpg) ![录音](images/android-ime/voice-recording-red.jpg) ![处理](images/android-ime/voice-thinking.jpg) |
+| 笔画 | ![中文笔画](images/android-ime/stroke-chinese.jpg) ![数字面板](images/android-ime/stroke-numeric.jpg) |
 | 剪贴板与英文 | ![剪贴板](images/android-ime/clipboard.jpg) ![英文键盘](images/android-ime/english.jpg) |
 
-## 小米/Redmi 真机边界
+## 设备验收
 
-现有开发记录确认 APK 已安装到包含小米设备在内的测试设备；但候选栏复用、控制器拆分和英文/笔画手势仍需要完整真机回归。正式发布前应继续覆盖：正常输入、分词联想、退格、数字/符号切换、简繁切换、跨键滑动、后台恢复、Activity 被系统回收后的冷启动，以及不同 OEM 的插入权限路径。
-
-## 相关文档
-
-- [Android 源码架构与开发记录](../openless-all/app/android/README.md)
-- [根 README 的 Android 状态说明](../README.md#android-input-method)
-- [Android 架构总览](architecture.md)
+在匹配 ABI 的安装包上复核正常输入、候选和联想、退格、数字／符号、简繁切换、跨键滑动、后台恢复，以及 Activity 被系统回收后的冷启动。在小米／Redmi 等设备上分别记录悬浮球、无障碍和 Shizuku 的安装、授权、断连、恢复及失败反馈。可用 `adb exec-out screencap` 留取截图，界面尺寸依据设备 `adb shell wm density` 和实测像素换算。APK 能安装与上述交互通过分别取证。

@@ -6,13 +6,23 @@
 
 ### macOS
 
-1. Download `OpenLess_<version>_aarch64.dmg` from [Releases](https://github.com/Open-Less/openless/releases/latest).
+1. Download `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel) from [Releases](https://github.com/Open-Less/openless/releases/latest). Both require macOS 14 or later.
 2. Open the dmg and drag OpenLess.app into the Applications folder.
 3. Double-click to launch.
 
+You can also install the stable version through Homebrew:
+
+```bash
+brew tap Open-Less/openless https://github.com/Open-Less/openless
+brew install --cask openless
+brew update && brew upgrade openless
+```
+
+Published releases follow the [signing and notarization checks](RELEASING.md). Separately delivered Dev builds may use ad-hoc signing.
+
 ### Windows
 
-1. Download `OpenLess_<version>_x64-setup.exe` from [Releases](https://github.com/Open-Less/openless/releases/latest).
+1. Download `OpenLess_<version>_x64-setup.exe` or `OpenLess_<version>_x64_en-US.msi` from [Releases](https://github.com/Open-Less/openless/releases/latest).
 2. Run the installer and follow the prompts.
 3. Launch OpenLess from the Start menu.
 
@@ -20,7 +30,7 @@
 
 Linux runs on a native egui host and does not depend on Tauri or WebKitGTK.
 
-1. No package is shipped with Releases yet: Linux packaging stays paused until the L01–L12 on-device acceptance is complete, so build from source for now (see the build sections in the [README](README.md)).
+1. No package is shipped with Releases yet: Linux packaging stays paused until the L01–L12 on-device acceptance is complete, so build from source for now (see the [cross-platform build guide](openless-all/README.md#shared-backend-and-linux-host)).
 2. Requires glibc ≥ 2.39 (Ubuntu 24.04 or an equivalent distribution).
 3. The global hotkey is provided by the fcitx5 plugin: enable the OpenLess addon in fcitx5 and bind a key. There is no in-app updater and no AppImage.
 
@@ -134,6 +144,10 @@ Switch the mode from the capsule in the main window or under Settings:
 | Formal | Converts speech into formal written prose |
 
 ---
+
+## Ask Anything (desktop)
+
+On macOS or Windows, press the recording shortcut with Space to open Ask Anything. Type a question or dictate into the draft, then send it when ready. Answers expand in the same window. Write and edit requests can deliver to a verified external input target. If OpenLess cannot confirm the write, the result stays available in Ask for manual copying. See the [desktop Ask contract](docs/ask-unified-entry-contract.md) for routing and delivery details.
 
 ## Dictionary
 

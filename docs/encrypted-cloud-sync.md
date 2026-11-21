@@ -1,10 +1,10 @@
 # 加密云同步客户端
 
-实现版本：`2.0.0-Beta.3+build.20260925`。协议版本为 `1`，密码学 profile 为 `argon2id-xchacha20poly1305-v1`。本页描述客户端实现和验证边界；正式发布状态以对应 GitHub Release 为准。
+协议版本为 `1`，密码学 profile 为 `argon2id-xchacha20poly1305-v1`。本页描述客户端实现和验证边界。服务部署和正式发布状态由各自的发布记录确认。
 
 ## 地址与协议边界
 
-新客户端使用独立入口 `https://apic.openless.top:9443/v1/...`。启动同步前读取 `/v1/capabilities`，核对协议、体积上限及现有 OpenLess GitHub OAuth client ID，再使用原生层的 GitHub 登录令牌交换短期同步会话。数字 GitHub ID 是账号隔离依据。新请求不回退到旧 `/me/sync`；旧四个 `cloud_sync_*` 命令不改接新协议。旧 standalone 仓库仍保留有限明文快照语义；已注册加密同步写入门的仓库暂不支持旧 `cloud_sync_restore`，明确返回 Unsupported，避免绕过加密恢复事务。
+客户端默认使用 `https://apic.openless.top:9443/v1/...`。启动同步前读取 `/v1/capabilities`，核对协议、体积上限及配置的 GitHub OAuth client ID，再使用原生层的 GitHub 登录令牌交换短期同步会话。数字 GitHub ID 是账号隔离依据。旧 `cloud_sync_*` 命令继续使用[独立的手动同步合同](cloud-sync.md)。已注册加密同步写入门的仓库拒绝旧 `cloud_sync_restore`，保护加密恢复事务。
 
 2026-09-26 的不带凭据检查中，正式 origin 的 `/v1/capabilities` 返回了协议 `1`、匹配的 OAuth client ID 与加密 profile，备份保留上限为 7 天。这仅证明能力接口当时可用，不代表真实账号授权、私有数据往返或生产验收已经完成。
 
