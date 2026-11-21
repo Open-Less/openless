@@ -475,7 +475,7 @@ test('settings search matches foreign-language category aliases without changing
   await search.fill('language');
   const result = dialog.locator('.ol-settings-scroll').getByRole('button', { name: '外观与语言', exact: true });
   await expect(result).toBeVisible();
-  await expect(result).not.toContainText('调整主题');
+  await expect(result).toContainText('调整主题');
   await search.fill('Sprache');
   await expect(result).toBeVisible();
   await result.click();

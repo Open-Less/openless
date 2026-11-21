@@ -89,8 +89,8 @@ export function WebSearchSection() {
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '搜索服务会接收搜索词与 IP；混合搜索会使用你的 DeepSeek API Key，可能产生费用。',
-          'Search providers receive queries and your IP. Hybrid Search uses your DeepSeek API key and may incur charges.',
+          '为提问提供联网搜索。搜索服务会接收搜索词与 IP；混合搜索使用你的 DeepSeek API Key，按官方标准计费。',
+          'Search the web for questions. Providers receive queries and your IP; Hybrid Search uses your DeepSeek API key and is billed by DeepSeek.',
         )}
       </p>
       {config && (

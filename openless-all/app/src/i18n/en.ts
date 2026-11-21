@@ -1289,7 +1289,7 @@ export const en: typeof zhCN = {
     },
     generalPages: {
       recordingTitle: 'Microphone and recording',
-      recordingDesc: 'Microphone monitoring and recognition, plus monitoring and cues.',
+      recordingDesc: 'Choose a microphone and configure recording and sound cues.',
       capsuleTitle: 'Capsule style',
       capsuleDesc: 'Capsule switch, multi-screen display, style, and streaming original text.',
       textInputTitle: 'Text insertion',
@@ -1307,7 +1307,7 @@ export const en: typeof zhCN = {
       cursorContextTitle: 'Awareness',
       startupDiagnosticsTitle: 'Startup diagnostics',
       cursorContextHint:
-        'Cursor context is enabled by default. Disable it if you do not want nearby text sent with polish requests.',
+        'Enabled by default.',
     },
     advancedGroups: {
       recording: 'Recording',
@@ -1315,8 +1315,6 @@ export const en: typeof zhCN = {
       diagnostics: 'Diagnostics',
     },
     expressionLearning: {
-      clearHint:
-        'After clearing, an in-progress dictation may still use the preferences captured when it started.',
       lineBreaksMore: 'More line breaks',
       lineBreaksLess: 'Fewer line breaks',
       exclamationsMore: 'More exclamation marks',
@@ -1327,7 +1325,7 @@ export const en: typeof zhCN = {
       title: 'Expression habits',
       enabled: 'Learn expression habits',
       description:
-        'Observes formatting edits locally after dictation; expression data stores abstract statistics, not observed text. History is managed separately. Repeated, consistent line-break and punctuation preferences become short instructions sent to the selected text model. Turning this off stops learning immediately and applying preferences to new dictations; an in-progress dictation may still use its captured preferences.',
+        'Learn line-break and punctuation preferences for future polishing.',
       status: '{{count}} stable preferences',
       clear: 'Clear expression habits',
       error: 'Could not read or save expression habits. Try again.',
@@ -1351,19 +1349,17 @@ export const en: typeof zhCN = {
         'Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.',
       seconds: '{{count}} s',
       characters: '{{count}} characters',
-      changeHint:
-        'Changing parameters stops the current observation and clears pending suggestions. New values apply to the next dictation. Resetting parameters does not change the enable switch.',
       reset: 'Reset parameters',
       saveError: 'Could not save. Please try again.',
       description:
-        'After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.',
+        'Learn from manual word corrections after dictation and add confirmed words to the vocabulary.',
     },
     dataStorage: {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
       cursorContextDesc:
-        'Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.',
+        'Send text near the cursor to the model as a reference when polishing.',
     },
     localMigration: {
       title: 'Local configuration migration',
@@ -1461,11 +1457,11 @@ export const en: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          'Use device echo cancellation, noise reduction and automatic gain.',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          'Compare the recording spectrum before and after processing.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
         spectrumWaiting: 'Waiting for recording',
         presets: 'Equalizer presets',
@@ -1481,9 +1477,9 @@ export const en: typeof zhCN = {
         aecLight: 'Light (low CPU)',
         aecModel: 'Model (stronger)',
         aecModelHint:
-          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
+          'Stronger echo cancellation with higher CPU use.',
         aecHint:
-          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+          'Reduce speaker playback picked up by the microphone.',
         buffer: 'Output buffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1493,7 +1489,7 @@ export const en: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          'Adjust noise reduction, echo cancellation, volume and equalization.',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1501,11 +1497,11 @@ export const en: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          'Lower the volume of quiet passages.',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          'Adjust resonance and vocal tone.',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1514,10 +1510,10 @@ export const en: typeof zhCN = {
       },
       echoCancellationLabel: 'Playback echo cancellation',
       echoCancellationDesc:
-        'Uses a local playback reference while keeping playback audible. On macOS, requires 14.6+ and System Audio Recording permission. Unsupported devices, Bluetooth routes, or Linux ALSA use microphone-only recording. Applies to the next capture.',
+        'Use local playback as a reference to reduce echo in recordings. Applies to the next recording.',
       audioEnhancementLabel: 'Speech enhancement',
       audioEnhancementDesc:
-        'Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.',
+        'Reduce background noise and adjust volume automatically. Applies to the next recording.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',
@@ -2480,7 +2476,7 @@ export const en: typeof zhCN = {
       debug: 'Keep debug recordings, inspect cursor context, and export logs.',
       voiceEnhancement: 'Advanced audio processing, noise reduction and playback echo suppression.',
       cursorContext:
-        'Configure context captured around the cursor for polish requests and short-input handling.',
+        'Manage cursor context, correction learning and expression habits.',
       startupDiagnostics: 'Inspect startup timings, backend handshakes, and delayed probes.',
     },
     descriptions: {

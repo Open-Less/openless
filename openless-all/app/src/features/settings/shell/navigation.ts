@@ -14,12 +14,12 @@ export type SettingsSectionId =
 
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
-  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   { id: 'intentRouting', icon: 'sparkle', titleKey: 'askEntrySettings.routing', beta: true },
   {
-    id: 'polishStrategy',
-    icon: 'pencil',
-    titleKey: 'settings.advancedPages.polishStrategyTitle',
+    id: 'cursorContext',
+    icon: 'search',
+    titleKey: 'settings.advancedPages.cursorContextTitle',
+    beta: true,
   },
   {
     id: 'voiceEnhancement',
@@ -34,11 +34,12 @@ export const ADVANCED_PAGES = [
     beta: true,
   },
   {
-    id: 'cursorContext',
-    icon: 'search',
-    titleKey: 'settings.advancedPages.cursorContextTitle',
+    id: 'polishStrategy',
+    icon: 'pencil',
+    titleKey: 'settings.advancedPages.polishStrategyTitle',
     beta: true,
   },
+  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   {
     id: 'startupDiagnostics',
     icon: 'bolt',

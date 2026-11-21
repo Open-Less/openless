@@ -1219,7 +1219,7 @@ export const ja: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'マイクと録音',
-      recordingDesc: 'マイクの監視と認識、および監視と通知です。',
+      recordingDesc: 'マイクを選び、録音と通知音を設定します。',
       capsuleTitle: 'カプセルのスタイル',
       capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
       textInputTitle: '文字の挿入',
@@ -1237,7 +1237,7 @@ export const ja: typeof zhCN = {
       cursorContextTitle: '認識',
       startupDiagnosticsTitle: '起動診断',
       cursorContextHint:
-        'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',
+        '初期設定で有効です。',
     },
     advancedGroups: {
       recording: '録音',
@@ -1300,7 +1300,6 @@ export const ja: typeof zhCN = {
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
     expressionLearning: {
-      clearHint: '消去後も、進行中の音声入力には開始時の好みが使われる場合があります。',
       lineBreaksMore: '改行を増やす',
       lineBreaksLess: '改行を減らす',
       exclamationsMore: '感嘆符を増やす',
@@ -1311,7 +1310,7 @@ export const ja: typeof zhCN = {
       title: '表現の習慣',
       enabled: '表現の習慣を学習',
       description:
-        '音声入力後の書式変更を端末内で観察し、表現の習慣には抽象的な統計のみを保存します。履歴は別に管理されます。繰り返し確認された改行や句読点の傾向を、選択した文字モデルへの短い指示として利用します。オフにすると学習は直ちに停止し、次の音声入力から適用されません。進行中の入力には取得済みの好みが使われる場合があります。',
+        '改行や句読点の好みを学習し、次回以降の文章調整に使います。',
       status: '安定した好み {{count}} 件',
       clear: '表現の習慣を消去',
       error: '表現の習慣を読み書きできませんでした。',
@@ -1333,19 +1332,17 @@ export const ja: typeof zhCN = {
         '自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。',
       seconds: '{{count}} 秒',
       characters: '{{count}} 文字',
-      changeHint:
-        '設定を変更すると現在の監視を終了し、未確認の候補を消去します。次の音声入力から適用されます。リセットしても有効化スイッチは変わりません。',
       reset: '設定値をリセット',
       saveError: '保存できませんでした。再試行してください。',
       description:
-        '挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。',
+        '音声入力後の手動修正を学習し、確認した単語を辞書に追加します。',
     },
     dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
+        '文章調整の際に、カーソル付近のテキストを参考としてモデルに送信します。',
     },
     localMigration: {
       title: 'ローカル設定の移行',
@@ -1445,11 +1442,11 @@ export const ja: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          '端末のエコー除去、ノイズ抑制、自動ゲインを使います。',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          '処理前後の録音スペクトルを比較します。',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
         spectrumWaiting: '録音待ち',
         presets: 'Equalizer presets',
@@ -1465,9 +1462,9 @@ export const ja: typeof zhCN = {
         aecLight: '軽量（低 CPU）',
         aecModel: 'モデル（高精度）',
         aecModelHint:
-          'モデル版はより強く抑圧しますが CPU は約 3 倍です。古い端末では軽量版を推奨します。',
+          'エコー抑制を強化し、CPU 使用量が増えます。',
         aecHint:
-          'スピーカー使用時の回り込みを抑えます。参照信号が必要なので、ヘッドホンならオフで構いません。',
+          'スピーカーの再生音がマイクに入ることで生じるエコーを抑えます。',
         buffer: '出力バッファ',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1477,7 +1474,7 @@ export const ja: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          'ノイズ除去、エコー抑制、音量、イコライザーを調整します。',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1485,11 +1482,11 @@ export const ja: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          '小さい音の区間の音量を下げます。',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          '声の響きと音色を調整します。',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1498,10 +1495,10 @@ export const ja: typeof zhCN = {
       },
       echoCancellationLabel: '再生エコーキャンセル',
       echoCancellationDesc:
-        '再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。',
+        '本機の再生音を参照して録音のエコーを抑えます。次の録音から適用します。',
       audioEnhancementLabel: '音声強調',
       audioEnhancementDesc:
-        'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
+        '背景ノイズを減らし、音量を自動調整します。次の録音から適用します。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -2445,7 +2442,7 @@ export const ja: typeof zhCN = {
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
       debug: 'デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。',
       voiceEnhancement: '高度な音声処理、ノイズ低減、再生エコーの抑制を設定します。',
-      cursorContext: '推敲リクエストに使うカーソル付近の文脈と、短い入力の扱いを設定します。',
+      cursorContext: 'カーソルの文脈、修正学習、表現の好みを管理します。',
       startupDiagnostics: '起動時間、バックエンドの接続、遅延プローブを確認します。',
     },
     descriptions: {

@@ -1183,7 +1183,7 @@ export const zhTW: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: '麥克風與錄音',
-      recordingDesc: '麥克風監聽與辨識，以及監聽與提示。',
+      recordingDesc: '選擇麥克風，設定錄音與提示音。',
       capsuleTitle: '膠囊樣式',
       capsuleDesc: '膠囊開關、多螢幕顯示、樣式，以及原文的串流顯示。',
       textInputTitle: '文字插入',
@@ -1200,7 +1200,7 @@ export const zhTW: typeof zhCN = {
       voiceEnhancementTitle: '語音增強與播放抑制',
       cursorContextTitle: '感知',
       startupDiagnosticsTitle: '啟動診斷',
-      cursorContextHint: '游標上下文預設開啟。如果不希望潤色請求帶上附近文字，可以在這裡關閉。',
+      cursorContextHint: '預設開啟。',
     },
     advancedGroups: {
       recording: '錄音',
@@ -1258,7 +1258,6 @@ export const zhTW: typeof zhCN = {
         '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
     },
     expressionLearning: {
-      clearHint: '清除後，進行中的聽寫可能仍使用開始時已擷取的偏好。',
       lineBreaksMore: '更常分行',
       lineBreaksLess: '減少分行',
       exclamationsMore: '更常使用驚嘆號',
@@ -1269,7 +1268,7 @@ export const zhTW: typeof zhCN = {
       title: '表達習慣',
       enabled: '學習表達習慣',
       description:
-        '僅在本機觀察聽寫後的排版修改；表達習慣資料只儲存抽象統計，不儲存觀察到的文字。歷史記錄另行管理。反覆且一致的分行、驚嘆號及句末標點偏好穩定後，會以簡短形式指令傳給所選文字模型；關閉後立即停止學習，並從下一次聽寫起停止套用；進行中的聽寫可能仍使用已擷取的偏好。',
+        '學習分行和標點習慣，用於後續潤飾。',
       status: '已形成 {{count}} 項穩定偏好',
       clear: '清除表達習慣',
       error: '無法讀取或儲存表達習慣，請重試。',
@@ -1290,19 +1289,17 @@ export const zhTW: typeof zhCN = {
       maxPhraseCharsHint: '自動建議中原詞和替換詞的長度上限，2–32 個字元；不影響手動加詞。',
       seconds: '{{count}} 秒',
       characters: '{{count}} 個字元',
-      changeHint:
-        '變更參數會結束目前觀察並清除待確認建議，下次聽寫生效。恢復參數不會改變啟用開關。',
       reset: '恢復預設參數',
       saveError: '儲存失敗，請重試。',
       description:
-        '插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。',
+        '從聽寫後的手動改詞中學習，確認後加入詞典。',
     },
     dataStorage: {
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
+        '潤飾時將游標附近的文字提供給模型參考。',
     },
     localMigration: {
       title: '本機設定遷移',
@@ -1399,11 +1396,11 @@ export const zhTW: typeof zhCN = {
         systemAgc: '系統自動增益',
         unavailable: '目前裝置不支援',
         androidEffectsHint:
-          'Android 系統音效在軟體處理鏈之前生效。建議避免重複開啟同類效果。啟動不支援時退回一般擷取。',
+          '使用裝置提供的回聲消除、降噪和自動增益。',
         effectsActive: '本次錄音已啟用系統音效。',
         spectrum: '輸入／處理後頻譜',
         spectrumHint:
-          '僅顯示目前增強錄音，不會啟動麥克風、儲存或上傳音訊。關閉面板或進入背景後停止監測。',
+          '比較錄音處理前後的頻譜。',
         spectrumLegend: '灰色：輸入 · 彩色：處理後 · 20 Hz–24 kHz',
         spectrumWaiting: '等待錄音',
         presets: '均衡器預設',
@@ -1418,11 +1415,11 @@ export const zhTW: typeof zhCN = {
         aecOff: '關閉',
         aecLight: '輕量（省 CPU）',
         aecModel: '模型（更強）',
-        aecModelHint: '模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。',
-        aecHint: '外放時壓掉揚聲器回授；需要揚聲器參考訊號，戴耳機可以關掉。',
+        aecModelHint: '增強回聲抑制，CPU 使用量較高。',
+        aecHint: '抑制揚聲器播放聲音進入麥克風產生的回聲。',
         buffer: '輸出緩衝區',
         title: '語音增強設定',
-        description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
+        description: '調整降噪、回聲抑制、音量與等化器。',
         noise: '降噪演算法',
         dereverb: '梳狀濾波',
         equalizer: '等化器',
@@ -1435,10 +1432,10 @@ export const zhTW: typeof zhCN = {
         target: '目標電平',
         attack: '啟動速度',
         decay: '釋放速度',
-        vadHint: '衰減低音量片段，不會停止錄音。閾值過高可能丟失輕聲。',
+        vadHint: '降低低音量片段的音量。',
         threshold: '語音閾值',
         tone: '音色與房間調整',
-        combHint: '梳狀濾波沿用 MicYou 的簡單延遲相減，可能改變音色，建議從 0% 開始。',
+        combHint: '調整聲音的共鳴與音色。',
         preamp: '等化器前置增益',
         order: '處理順序',
         up: '上移',
@@ -1447,10 +1444,10 @@ export const zhTW: typeof zhCN = {
       },
       echoCancellationLabel: '播放回聲抑制',
       echoCancellationDesc:
-        '保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。',
+        '使用本機播放參考，抑制錄音中的系統聲音回聲。下次錄音生效。',
       audioEnhancementLabel: '語音增強',
       audioEnhancementDesc:
-        '套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。',
+        '降低背景噪音，並自動調整音量。下次錄音生效。',
       muteDuringRecordingLabel: '錄音時靜音',
       muteDuringRecordingDesc: '錄音期間臨時靜音系統輸出，避免揚聲器迴音。',
       audioCueLabel: '錄音提示音',
@@ -2342,7 +2339,7 @@ export const zhTW: typeof zhCN = {
       multimodal: '管理多模態辨識的實驗性開關。',
       debug: '保留偵錯錄音、探測游標上下文與匯出日誌。',
       voiceEnhancement: '設定進階音訊處理、降噪與播放回聲抑制。',
-      cursorContext: '設定潤色請求使用的游標附近上下文與短句行為。',
+      cursorContext: '管理游標上下文、手動改詞學習與表達習慣。',
       startupDiagnostics: '查看啟動耗時、後端握手和延遲探測結果。',
     },
     descriptions: {

@@ -55,6 +55,7 @@ import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { TextField } from '../../ui/controls/TextField';
 import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { MicrophoneSelect } from './MicrophoneSelect';
+import { useMicrophoneAccess } from './useMicrophoneAccess';
 import { getRuntimeOS, type OS } from '../../runtime/environment';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
@@ -85,6 +86,9 @@ export function RecordingInputSection({
     useState<VoiceActivationStateSnapshot | null>(null);
   const voiceActivationStateObservedRef = useRef(false);
   const deviceReadRevision = useRef(0);
+  const microphoneAccess = useMicrophoneAccess(surface === 'microphone');
+  const microphoneAvailable =
+    microphoneAccess.status === 'granted' || microphoneAccess.status === 'notApplicable';
 
   useEffect(() => {
     let current = true;
@@ -122,7 +126,7 @@ export function RecordingInputSection({
   );
 
   useEffect(() => {
-    if (surface !== 'microphone') return;
+    if (surface !== 'microphone' || !microphoneAvailable) return;
     const signal = { cancelled: false };
     let unlisten: (() => void) | undefined;
     void (async () => {
@@ -141,7 +145,7 @@ export function RecordingInputSection({
       signal.cancelled = true;
       unlisten?.();
     };
-  }, [loadMicrophoneDevices, surface]);
+  }, [loadMicrophoneDevices, surface, microphoneAvailable]);
 
   useEffect(() => {
     if (!isTauriHost() || os !== 'win') {
@@ -463,18 +467,47 @@ export function RecordingInputSection({
             label={t('settings.recording.microphoneLabel')}
             desc={t('settings.recording.microphoneDesc')}
           >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <MicrophoneSelect
-                devices={microphoneDevices}
-                selectedName={effectiveMicrophoneDeviceName}
-                onSelect={onMicrophoneDeviceChange}
-                onOpen={() => {
-                  void loadMicrophoneDevices(undefined, { showLoading: false });
-                }}
-              />
-              {microphoneDevicesError && (
+            <div
+              style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 200, maxWidth: '100%' }}
+            >
+              {microphoneAvailable ? (
+                <MicrophoneSelect
+                  devices={microphoneDevices}
+                  selectedName={effectiveMicrophoneDeviceName}
+                  onSelect={onMicrophoneDeviceChange}
+                  onOpen={() => {
+                    void loadMicrophoneDevices(undefined, { showLoading: false });
+                  }}
+                />
+              ) : (
+                <Btn
+                  variant="ghost"
+                  size="sm"
+                  style={{ minHeight: 32 }}
+                  disabled={microphoneAccess.status === 'loading' && !microphoneAccess.error}
+                  onClick={
+                    microphoneAccess.error || microphoneAccess.status === 'noDevice'
+                      ? microphoneAccess.refresh
+                      : microphoneAccess.request
+                  }
+                >
+                  {t(
+                    microphoneAccess.error || microphoneAccess.status === 'noDevice'
+                      ? 'common.retry'
+                      : microphoneAccess.status === 'loading'
+                        ? 'settings.permissions.checking'
+                        : microphoneAccess.status === 'denied' ||
+                            microphoneAccess.status === 'restricted'
+                          ? 'settings.permissions.openSystem'
+                          : 'settings.permissions.grant',
+                  )}
+                </Btn>
+              )}
+              {(microphoneAccess.error || microphoneDevicesError) && (
                 <div style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.5 }}>
-                  {t('settings.recording.microphoneLoadError', { message: microphoneDevicesError })}
+                  {t('settings.recording.microphoneLoadError', {
+                    message: microphoneAccess.error || microphoneDevicesError,
+                  })}
                 </div>
               )}
             </div>
