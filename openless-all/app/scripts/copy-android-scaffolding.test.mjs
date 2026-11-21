@@ -128,6 +128,12 @@ try {
   assert.equal(run(['--dry-run']), original);
   const first = run();
   assert.match(first, /android:name="com\.openless\.app\.OpenLessKeyboardSettingsActivity"/);
+  assert.match(first, /android:name="com\.openless\.app\.OpenLessRuntimeService"/);
+  assert.equal(
+    readFileSync(join(app, 'src/androidTest/java/com/openless/app/OpenLessRuntimeServiceInstrumentedTest.kt'), 'utf8'),
+    readFileSync(new URL('../android/kotlin/androidTest/OpenLessRuntimeServiceInstrumentedTest.kt', import.meta.url), 'utf8'),
+    'runtime lifecycle regression must reach the generated instrumentation source set',
+  );
   assert.match(first, /android:usesCleartextTraffic="true"/);
   assert.equal(run(), first, 'repeated scaffolding copies must preserve the debug manifest');
 } finally {
