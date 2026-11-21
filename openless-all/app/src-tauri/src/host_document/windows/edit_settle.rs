@@ -37,6 +37,14 @@ impl EditSettle {
         self.composing = active;
     }
 
+    pub(crate) fn confirm_snapshot(&mut self, snapshot: &str, latest: &str, now: Instant) -> bool {
+        if snapshot != latest {
+            self.mark_changed(now);
+            return false;
+        }
+        true
+    }
+
     pub(crate) fn clear(&mut self) {
         self.changed_at = None;
     }
@@ -108,6 +116,26 @@ mod tests {
         settle.observe_composition(false, at(2000));
         assert!(!settle.ready(at(2000)));
         assert!(settle.ready(at(3999)));
+    }
+
+    #[test]
+    fn ime_commit_between_text_and_composition_reads_restarts_quiet_period() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut settle = EditSettle::new(start);
+        assert!(settle.ready(at(2000)));
+
+        let snapshot = "我要bu'ji";
+        // The first read captured preedit text. The IME has since committed,
+        // but the watcher has received no finalization event.
+        settle.observe_composition(false, at(2001));
+        assert!(settle.ready(at(2001)));
+        assert!(!settle.confirm_snapshot(snapshot, "我要补给", at(2002)));
+
+        assert!(!settle.ready(at(4001)));
+        assert!(settle.ready(at(4002)));
+        assert!(settle.confirm_snapshot("我要补给", "我要补给", at(4002)));
+        assert!(settle.ready(at(4002)));
     }
 
     #[test]

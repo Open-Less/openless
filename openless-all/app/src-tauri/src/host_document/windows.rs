@@ -810,7 +810,13 @@ unsafe fn observe(request: &Request) -> Result<()> {
                 if started.elapsed() >= request.lifetime || !active()? {
                     break;
                 }
-                if settle.ready(Instant::now()) && !dirty.load(Ordering::Acquire) {
+                // An IME can commit between the text read and the composition
+                // check, with its finalization event still in flight.
+                if settle.ready(Instant::now())
+                    && !dirty.load(Ordering::Acquire)
+                    && settle.confirm_snapshot(&current, &read_text(&element)?, Instant::now())
+                    && !dirty.load(Ordering::Acquire)
+                {
                     settle.clear();
                     if !anchor.observe(&current, |edit| {
                         let snapshot = capture_placement(&element, HWND(request.window as *mut _));
