@@ -204,7 +204,11 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 
 ## Stability freeze
 
-OpenLess is currently in a stability phase. The project is not accepting pull requests that add new product features or expand the existing feature set. Work should focus on making the current release reliable: bug fixes, regressions, security fixes, documentation, tests, compatibility, and release maintenance are welcome. New-feature proposals and implementation PRs will be held or closed until the stability phase ends.
+OpenLess is prioritizing reliable voice input and a better day-to-day experience. Targeted fixes to recording, transcription, history recovery, and text insertion are welcome, along with compatibility fixes, tests, documentation, and small improvements to existing behavior. We are not accepting out-of-scope features, large backend rewrites, or bulk feature changes.
+
+The only planned product work in this phase is improving voice prompts and prompt-cache hit rate, starting a new recording while the previous capsule is still processing, explicitly adding text, links, screenshots or attachments at the corresponding point in dictation, and improving hotwords and recognition accuracy.
+
+PR size counts additions plus deletions. Changes over 1,000 lines are reviewed case by case; changes over 2,000 and up to 4,000 lines are generally held for separate review rather than merged. For one month from November 21, 2026, PRs over 4,000 lines will be closed without merging. Please split them and resubmit. See the [maintainer announcement](https://github.com/Open-Less/openless/issues/1479) for details.
 
 ## Comparison
 
