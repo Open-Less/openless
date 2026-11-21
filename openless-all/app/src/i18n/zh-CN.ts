@@ -1236,7 +1236,7 @@ export const zhCN = {
     },
     generalPages: {
       recordingTitle: '麦克风与录音',
-      recordingDesc: '麦克风监听与识别，以及监听与提示。',
+      recordingDesc: '选择麦克风，设置录音与提示音。',
       capsuleTitle: '胶囊样式',
       capsuleDesc: '胶囊开关、多屏显示、样式，以及原文的流式显示。',
       textInputTitle: '文字插入',
@@ -1253,10 +1253,9 @@ export const zhCN = {
       voiceEnhancementTitle: '语音增强与播放抑制',
       cursorContextTitle: '感知',
       startupDiagnosticsTitle: '启动诊断',
-      cursorContextHint: '光标上下文默认开启。如果不希望润色请求携带附近文字，可以在这里关闭。',
+      cursorContextHint: '默认开启。',
     },
     expressionLearning: {
-      clearHint: '清除后，正在进行的听写可能仍使用开始时已捕获的偏好。',
       lineBreaksMore: '更常分行',
       lineBreaksLess: '减少分行',
       exclamationsMore: '更常使用感叹号',
@@ -1267,7 +1266,7 @@ export const zhCN = {
       title: '表达习惯',
       enabled: '学习表达习惯',
       description:
-        '仅在本机观察听写后的排版修改；表达习惯数据只保存抽象统计，不保存观察到的文本。历史记录另行管理。重复且一致的分行、感叹号和句末标点偏好达到稳定阈值后，会作为简短形式指令发送给所选文字模型；关闭后立即停止学习，并从下一次听写起停止应用；正在进行的听写可能仍使用已捕获的偏好。',
+        '学习分行和标点习惯，用于后续润色。',
       status: '已形成 {{count}} 项稳定偏好',
       clear: '清除表达习惯',
       error: '无法读取或保存表达习惯，请重试。',
@@ -1288,19 +1287,17 @@ export const zhCN = {
       maxPhraseCharsHint: '自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。',
       seconds: '{{count}} 秒',
       characters: '{{count}} 个字符',
-      changeHint:
-        '更改参数会结束当前观察并清除待确认建议，下次听写生效。恢复参数不会改变启用开关。',
       reset: '恢复默认参数',
       saveError: '保存失败，请重试。',
       description:
-        '插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。',
+        '从听写后的手动改词中学习，确认后加入词典。',
     },
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
+        '润色时将光标附近的文字提供给模型作参考。',
     },
     localMigration: {
       title: '本地配置迁移',
@@ -1394,11 +1391,11 @@ export const zhCN = {
         systemAgc: '系统自动增益',
         unavailable: '当前设备不支持',
         androidEffectsHint:
-          'Android 系统音效在软件处理链之前生效。建议避免重复开启同类效果。启动不支持时回退到常规采集。',
+          '使用设备提供的回声消除、降噪和自动增益。',
         effectsActive: '本次录音已启用系统音效。',
         spectrum: '输入／处理后频谱',
         spectrumHint:
-          '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
+          '对比录音处理前后的频谱。',
         spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
         spectrumWaiting: '等待录音',
         presets: '均衡器预设',
@@ -1413,11 +1410,11 @@ export const zhCN = {
         aecOff: '关闭',
         aecLight: '轻量（省 CPU）',
         aecModel: '模型（更强）',
-        aecModelHint: '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
-        aecHint: '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        aecModelHint: '增强回声抑制，CPU 占用较高。',
+        aecHint: '抑制扬声器播放声音进入麦克风产生的回声。',
         buffer: '输出缓冲区',
         title: '语音增强设置',
-        description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
+        description: '调整降噪、回声抑制、音量与均衡器。',
         noise: '降噪算法',
         dereverb: '梳状滤波',
         equalizer: '均衡器',
@@ -1430,10 +1427,10 @@ export const zhCN = {
         target: '目标电平',
         attack: '启动速度',
         decay: '释放速度',
-        vadHint: '衰减低音量片段，不会停止录音。门限过高可能丢失轻声。',
+        vadHint: '降低低音量片段的音量。',
         threshold: '语音门限',
         tone: '音色与房间调整',
-        combHint: '梳状滤波沿用 MicYou 的简单延迟相减，可能改变音色，建议从 0% 开始。',
+        combHint: '调节声音的共鸣与音色。',
         preamp: '均衡器前置增益',
         order: '处理顺序',
         up: '上移',
@@ -1442,10 +1439,10 @@ export const zhCN = {
       },
       echoCancellationLabel: '播放回声抑制',
       echoCancellationDesc:
-        '保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。',
+        '使用本机播放参考，抑制录音中的系统声音回声。下次录音生效。',
       audioEnhancementLabel: '语音增强',
       audioEnhancementDesc:
-        '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',
+        '降低背景噪声，并自动调整音量。下次录音生效。',
       voiceActivationLabel: '语音唤醒听写',
       voiceActivationDesc:
         '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
@@ -2341,7 +2338,7 @@ export const zhCN = {
       multimodal: '管理多模态识别的实验性开关。',
       debug: '保留调试录音、探测光标上下文和导出日志。',
       voiceEnhancement: '配置高级音频处理、降噪与播放回声抑制。',
-      cursorContext: '管理光标上下文、短句行为和手改学词。',
+      cursorContext: '管理光标上下文、手改学词与表达习惯。',
       startupDiagnostics: '查看启动耗时、后端握手和延迟探测结果。',
     },
     descriptions: {

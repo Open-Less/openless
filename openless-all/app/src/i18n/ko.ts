@@ -1211,7 +1211,7 @@ export const ko: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: '마이크와 녹음',
-      recordingDesc: '마이크 모니터링과 인식, 그리고 모니터링과 알림입니다.',
+      recordingDesc: '마이크를 선택하고 녹음과 알림음을 설정합니다.',
       capsuleTitle: '캡슐 스타일',
       capsuleDesc: '캡슐 스위치, 여러 화면 표시, 스타일, 원문 스트리밍 표시.',
       textInputTitle: '텍스트 삽입',
@@ -1229,7 +1229,7 @@ export const ko: typeof zhCN = {
       cursorContextTitle: '인식',
       startupDiagnosticsTitle: '시작 진단',
       cursorContextHint:
-        '커서 문맥은 기본적으로 켜져 있습니다. 주변 텍스트를 다듬기 요청에 포함하지 않으려면 여기서 끄세요.',
+        '기본으로 켜져 있습니다.',
     },
     advancedGroups: {
       recording: '녹음',
@@ -1291,7 +1291,6 @@ export const ko: typeof zhCN = {
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
     expressionLearning: {
-      clearHint: '삭제 후에도 진행 중인 받아쓰기에는 시작할 때 캡처한 선호가 사용될 수 있습니다.',
       lineBreaksMore: '줄바꿈 늘리기',
       lineBreaksLess: '줄바꿈 줄이기',
       exclamationsMore: '느낌표 늘리기',
@@ -1302,7 +1301,7 @@ export const ko: typeof zhCN = {
       title: '표현 습관',
       enabled: '표현 습관 학습',
       description:
-        '받아쓰기 후 서식 수정을 기기에서만 관찰하며 표현 습관에는 추상적인 통계만 저장합니다. 기록은 별도로 관리됩니다. 반복되고 일관된 줄바꿈과 문장 부호 선호를 선택한 텍스트 모델에 짧은 지시로 전달합니다. 끄면 학습은 즉시 중단되고 다음 받아쓰기부터 적용되지 않습니다. 진행 중인 받아쓰기에는 이미 캡처한 선호가 사용될 수 있습니다.',
+        '줄바꿈과 문장부호 선호를 학습해 이후 문장 다듬기에 사용합니다.',
       status: '안정된 선호 {{count}}개',
       clear: '표현 습관 지우기',
       error: '표현 습관을 읽거나 저장하지 못했습니다.',
@@ -1324,19 +1323,17 @@ export const ko: typeof zhCN = {
         '자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.',
       seconds: '{{count}}초',
       characters: '{{count}}자',
-      changeHint:
-        '설정을 변경하면 현재 관찰을 중지하고 대기 중인 제안을 지웁니다. 다음 음성 입력부터 적용됩니다. 초기화해도 사용 스위치는 바뀌지 않습니다.',
       reset: '매개변수 초기화',
       saveError: '저장하지 못했습니다. 다시 시도하세요.',
       description:
-        '입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.',
+        '받아쓰기 후 수동으로 고친 단어를 학습하고 확인한 단어를 사전에 추가합니다.',
     },
     dataStorage: {
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
+        '문장을 다듬을 때 커서 주변의 텍스트를 모델에 참고 자료로 보냅니다.',
     },
     localMigration: {
       title: '로컬 구성 마이그레이션',
@@ -1436,11 +1433,11 @@ export const ko: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          '기기의 에코 제거, 소음 억제와 자동 게인을 사용합니다.',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          '처리 전후의 녹음 스펙트럼을 비교합니다.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
         spectrumWaiting: '녹음 대기 중',
         presets: 'Equalizer presets',
@@ -1456,8 +1453,8 @@ export const ko: typeof zhCN = {
         aecLight: '경량(저 CPU)',
         aecModel: '모델(강화)',
         aecModelHint:
-          '모델 버전은 더 강하게 제거하지만 CPU를 약 3배 사용합니다. 오래된 기기에서는 경량을 권장합니다.',
-        aecHint: '스피커 사용 시 되먹임을 줄입니다. 참조 신호가 필요하므로 헤드폰이면 꺼 두세요.',
+          '에코 억제를 강화하며 CPU 사용량이 늘어납니다.',
+        aecHint: '마이크에 들어오는 스피커 재생음을 억제합니다.',
         buffer: '출력 버퍼',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1467,7 +1464,7 @@ export const ko: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          '소음 제거, 에코 억제, 음량과 이퀄라이저를 조절합니다.',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1475,11 +1472,11 @@ export const ko: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          '작은 소리 구간의 음량을 낮춥니다.',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          '공명과 음색을 조절합니다.',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1488,10 +1485,10 @@ export const ko: typeof zhCN = {
       },
       echoCancellationLabel: '재생 에코 제거',
       echoCancellationDesc:
-        '재생을 유지하면서 로컬 재생음을 참조합니다. macOS는 14.6 이상 및 시스템 오디오 녹음 권한이 필요합니다. 지원하지 않는 장치, Bluetooth 경로 또는 Linux ALSA에서는 일반 마이크 녹음으로 전환합니다. 다음 캡처부터 적용됩니다.',
+        '기기의 재생음을 참고해 녹음의 에코를 줄입니다. 다음 녹음부터 적용됩니다.',
       audioEnhancementLabel: '음성 향상',
       audioEnhancementDesc:
-        'RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.',
+        '배경 소음을 줄이고 음량을 자동 조절합니다. 다음 녹음부터 적용됩니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
@@ -2428,7 +2425,7 @@ export const ko: typeof zhCN = {
       multimodal: '실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.',
       debug: '디버그 녹음을 보관하고 커서 문맥을 확인하며 로그를 내보냅니다.',
       voiceEnhancement: '고급 오디오 처리, 소음 감소, 재생 에코 억제를 설정합니다.',
-      cursorContext: '다듬기 요청에 쓰는 커서 주변 문맥과 짧은 입력 처리를 설정합니다.',
+      cursorContext: '커서 문맥, 수정 학습과 표현 습관을 관리합니다.',
       startupDiagnostics: '시작 시간, 백엔드 연결, 지연 검사를 확인합니다.',
     },
     descriptions: {

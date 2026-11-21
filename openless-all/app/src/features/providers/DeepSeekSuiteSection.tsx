@@ -44,8 +44,8 @@ export function DeepSeekSuiteSection() {
       <h3>{text('DeepSeek 大统一', 'DeepSeek suite')}</h3>
       <p>
         {text(
-          '录音会发送至 DeepSeek，每段最长 120 秒。联网与语音服务按官方标准计费。',
-          'Recordings are sent to DeepSeek, up to 120 seconds per segment. Search and speech services are billed by DeepSeek.',
+          '使用 DeepSeek 进行语音识别、对话、联网搜索和朗读。录音会发送至 DeepSeek，联网与语音按官方标准计费。',
+          'Use DeepSeek for speech recognition, conversation, web search and read aloud. Recordings are sent to DeepSeek; search and speech are billed by DeepSeek.',
         )}
       </p>
       {config && (

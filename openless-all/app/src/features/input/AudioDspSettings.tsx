@@ -83,8 +83,14 @@ export function AudioDspSettings({
   };
   const body = (
     <>
+      {!page && (
+        <p style={{ fontSize: 12, color: 'var(--ol-muted)', lineHeight: 1.6 }}>
+          {label('description', 'Adjust noise reduction, echo cancellation, volume and equalization.')}
+        </p>
+      )}
       <SettingRow
         label={stageLabels.acousticEchoCancellation}
+        desc={label('aecHint', 'Reduces speaker playback picked up by the microphone.')}
       >
         <SelectLite
           ariaLabel={stageLabels.acousticEchoCancellation}
@@ -97,6 +103,11 @@ export function AudioDspSettings({
           ]}
         />
       </SettingRow>
+      {draft.aecMode === 'model' && (
+        <p className="ol-section-note">
+          {label('aecModelHint', 'Stronger echo cancellation with higher CPU use.')}
+        </p>
+      )}
       {isAndroid() && expanded && <AndroidAudioEffects value={draft} onChange={save} />}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite
@@ -126,6 +137,7 @@ export function AudioDspSettings({
       )}
       <SettingRow
         label={stageLabels.vad}
+        desc={label('vadHint', 'Lowers the volume of quiet passages.')}
       >
         <Toggle on={draft.vadEnabled} onToggle={() => save({ vadEnabled: !draft.vadEnabled })} />
       </SettingRow>
@@ -135,6 +147,9 @@ export function AudioDspSettings({
         <summary style={{ cursor: 'pointer', fontSize: 12 }}>
           {label('tone', 'Tone and room adjustments')}
         </summary>
+        <p style={{ fontSize: 12, color: 'var(--ol-muted)' }}>
+          {label('combHint', 'Adjusts resonance and vocal tone.')}
+        </p>
         {slider('dereverbLevel', stageLabels.dereverb, 0, 100, '%')}
         <SettingRow label={stageLabels.equalizer}>
           <Toggle
