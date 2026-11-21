@@ -12,7 +12,7 @@ macOS 的旧本地模型管理功能已下架。「设置 → AI 服务与模型
 | **SenseVoice Small** | 约 240 MB；macOS | CPU；普通话、粤语、英语、日语、韩语；录音停止后返回全文 |
 | **Embedding Gemma** | 约 715 MB；Apple Silicon，macOS 15+ | Core ML 英语语音转文字；录音停止后返回全文；不是语言模型或多模态生成服务 |
 
-TextStream 本身使用 Qwen3-ASR/MLX。移除的是主程序中的旧 Qwen/Whisper/Apple Speech 原生实现、MLX 链接和 Metal 资源，不是声称 TextStream 不再依赖 Qwen/MLX。它的依赖只进入所选模型目录中的 `.runtime`，不安装到系统 Python，也不打开自己的麦克风。
+TextStream 使用 Qwen3-ASR／MLX，依赖安装在所选模型目录的 `.runtime` 中。主安装包省略旧 Qwen／Whisper 运行时、MLX 链接和 Metal 资源。Apple Speech 继续使用 macOS 系统框架。TextStream 不使用系统 Python 或独立麦克风。
 
 每个模型都有独立开关、下载/安装状态、错误与重试入口，以及明确的内存占用警告。网络失败不会初始化推理，也不会把失败的模型标成可用。
 
