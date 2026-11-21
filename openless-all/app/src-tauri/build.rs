@@ -7,13 +7,22 @@ fn main() {
     // TARGET for old toolchains missing the variable, so cross-compiling
     // armv7 Android from a Linux host does not link desktop runtime libraries.
     let target = std::env::var("TARGET").unwrap_or_default();
-    let target_os = build_target::classify_target_os(
-        &target,
-        std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref(),
-    );
+    let cargo_cfg_target_os = std::env::var("CARGO_CFG_TARGET_OS").ok();
+    let cargo_target_os = cargo_cfg_target_os.as_deref().unwrap_or_default();
+    let target_os = build_target::classify_target_os(&target, cargo_cfg_target_os.as_deref());
     println!("cargo:warning=OpenLess build target={target}, target_os={target_os}");
     if target_os == "windows" {
         link_windows_common_controls_v6_manifest_dependency();
+    }
+    // The legacy classifier does not return "windows"; use Cargo's actual target OS here.
+    if cargo_target_os == "windows" {
+        println!("cargo:rerun-if-changed=src/activity_app_icon_windows.c");
+        cc::Build::new()
+            .file("src/activity_app_icon_windows.c")
+            .compile("openless_activity_app_icon");
+        for library in ["windowscodecs", "ole32", "shell32", "user32", "uuid"] {
+            println!("cargo:rustc-link-lib={library}");
+        }
     }
     if target_os == "macos" {
         // Apple system recognition is independent of downloadable model runtimes.
@@ -31,6 +40,12 @@ fn main() {
             .flag("-fobjc-arc")
             .flag("-mmacosx-version-min=14.0")
             .compile("openless_accessibility_guide");
+        println!("cargo:rerun-if-changed=src/activity_app_icon_macos.m");
+        cc::Build::new()
+            .file("src/activity_app_icon_macos.m")
+            .flag("-fobjc-arc")
+            .flag("-mmacosx-version-min=14.0")
+            .compile("openless_activity_app_icon");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=Foundation");
@@ -50,7 +65,6 @@ fn main() {
     // classify_target_os() only names android/macos/linux, so Windows is
     // read from Cargo's own variable.
     println!("cargo::rustc-check-cfg=cfg(local_asr_sherpa)");
-    let cargo_target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     if cargo_target_os == "windows" || (target_os == "android" && target_arch == "aarch64") {
         println!("cargo:rustc-cfg=local_asr_sherpa");

@@ -17,6 +17,9 @@ const state = params.get('state');
 const profile = getPreviewProfile('mac');
 const year = new Date().getFullYear();
 const day = `${year}-01-01`;
+const icons = params.get('icons');
+const appIcon =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2Z0AAAAASUVORK5CYII=';
 let count = 2;
 let reads = 0;
 let deferred: (() => void) | undefined;
@@ -61,6 +64,16 @@ mockIPC(
           });
         return value;
       }
+      case 'get_activity_app_icons': {
+        if ((args as { year: number }).year !== year) throw new Error('Expected current year');
+        return icons !== null
+          ? {
+              Editor: appIcon,
+              Terminal: appIcon,
+              ...(icons === 'broken' && { Browser: 'data:image/png;base64,AAAA' }),
+            }
+          : {};
+      }
       case 'get_activity_apps': {
         if ((args as { year: number }).year !== year) throw new Error('Expected current year');
         if (dashboard) {
@@ -70,6 +83,7 @@ mockIPC(
         }
         reads++;
         const rows = [
+          ...(icons !== null ? [['Terminal', 1]] : []),
           ['Browser', 1],
           ['Editor', count],
         ];

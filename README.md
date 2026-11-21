@@ -493,12 +493,10 @@ This acknowledgement does not imply official endorsement or affiliation.
 
 ## Third-party components
 
-The Overview yearly-activity card is a port of **Rare UI**'s [GitHub Activity](https://rareui.com/components/githubactivity)
-component (Copyright (c) 2026 Swami Malode, MIT + Commons Clause, attribution required).
-The port keeps the upstream layout, week/month maths, tooltip and expandable panel, and
-replaces the GitHub data source with local dictation counts. Source:
-`openless-all/app/src/components/ui/GitHubActivity.tsx` and `github-activity.css`.
-The same credit is shown in Settings → About → Component credits.
+The Overview annual activity card adapts calendar and expandable-panel code from **Rare UI**'s
+[GitHub Activity](https://rareui.com/components/githubactivity) (Copyright (c) 2026 Swami Malode).
+OpenLess supplies its own dictation data, app ranking, and desktop icons. See the
+[component attribution and license](docs/ATTRIBUTION.md). The credit is also shown in Settings → About → Component credits.
 
 ## License
 

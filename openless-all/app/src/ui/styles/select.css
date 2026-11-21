@@ -155,9 +155,11 @@ html[data-ol-input='pointer'] .ol-select-trigger:focus-visible {
 .ol-select-search input {
   flex: 1;
   min-width: 0;
+  padding: 0;
   border: 0;
   outline: 0;
-  background: transparent;
+  /* The search wrapper is the only field surface. */
+  background-color: transparent !important;
   color: inherit;
   font: inherit;
 }
