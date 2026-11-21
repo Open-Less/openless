@@ -1121,7 +1121,7 @@ diff --git a/crates/openless-core/src/dictation_engine.rs b/crates/openless-core
 index 3a95c61..3657e6f 100644
 --- a/crates/openless-core/src/dictation_engine.rs
 +++ b/crates/openless-core/src/dictation_engine.rs
-@@ -1016,6 +1016,13 @@ impl DictationEngine for PipelineDictationEngine {
+@@ -1016,7 +1016,14 @@ impl DictationEngine for PipelineDictationEngine {
              let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
              // Optional polish may be skipped after fallback; an explicit translation is still required.
              let translation_active = context.polish.translation_active;
@@ -1132,7 +1132,8 @@ index 3a95c61..3657e6f 100644
 +            } else {
 +                policy
 +            };
-             let uses_polisher = context.uses_llm_polisher()
+             let uses_polisher = !strategy_skips
+                 && context.uses_llm_polisher()
                  && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
                  && !skips_polish_for_short_text
 @@ -1068,6 +1075,16 @@ impl DictationEngine for PipelineDictationEngine {
@@ -1188,8 +1189,8 @@ index 3a95c61..3657e6f 100644
 +    }
 +
      #[tokio::test]
-     async fn voice_activation_commands_are_cleaned_before_correction_and_polishing() {
-         use crate::testing::{
+     async fn custom_strategy_skip_bypasses_the_polisher() {
+         let fixture = fixture_engine(
 diff --git a/crates/openless-core/src/language_catalog.rs b/crates/openless-core/src/language_catalog.rs
 index 6bcfcf2..b8ac2f0 100644
 --- a/crates/openless-core/src/language_catalog.rs

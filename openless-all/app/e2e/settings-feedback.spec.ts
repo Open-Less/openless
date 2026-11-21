@@ -711,3 +711,38 @@ test('normal download cancellation is available only outside a modal and before 
     page.locator('[data-notification-key="download:qwen3:broken-model"][data-type="warning"]'),
   ).toHaveAttribute('data-type', 'warning');
 });
+
+test('polish strategy editor copies an Agent skill without changing the draft', async ({
+  page,
+}) => {
+  const clipboard: string[] = [];
+  await page.exposeFunction('capturePolishStrategyClipboard', (text: string) => {
+    clipboard.push(text);
+  });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (text: string) =>
+          (
+            window as unknown as { capturePolishStrategyClipboard: (value: string) => void }
+          ).capturePolishStrategyClipboard(text),
+      },
+    });
+  });
+
+  await settings(page, '权限与数据');
+  const draft = 'fn strategy(input) { #{ action: "polish" } }';
+  const editor = page.getByPlaceholder(/fn strategy\(input\)/).first();
+  await editor.fill(draft);
+  const copy = page.getByRole('button', { name: '复制 Agent 编写说明', exact: true });
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect(
+    page.getByRole('button', { name: '已复制 Agent 编写说明', exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => clipboard[0] ?? '').toContain('OpenLess ASR polish strategy skill');
+  await expect.poll(() => clipboard[0] ?? '').toContain(draft);
+  await expect(editor).toHaveValue(draft);
+  await page.screenshot({ path: test.info().outputPath('polish-strategy-settings.png') });
+});

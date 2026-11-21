@@ -335,7 +335,7 @@ fn read_events(
             protocol::Update::Preview { finalized, draft } => {
                 // Offset zero is a replacement: drafts may be corrected/shrunk.
                 partials.publish(TextStreamChunk {
-                    text: finalized + &draft,
+                    text: finalized + draft.as_str(),
                     offset: 0,
                 })?;
             }

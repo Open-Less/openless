@@ -71,7 +71,7 @@ impl AskModelFactory for ConfiguredAskModels {
                 ));
             }
             let provider =
-                build_cloud_channel_provider(self.credentials.as_ref(), &route, suite, false)
+                build_cloud_channel_provider(self.credentials.as_ref(), &route, suite, false, None)
                     .await
                     .map_err(|error| {
                         if error.code == BackendErrorCode::Provider {

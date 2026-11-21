@@ -15,7 +15,7 @@ async fn official_suite_and_flash_aliases_carry_the_selected_photo_as_user_bytes
         .await.unwrap();
     let route = crate::deepseek_suite::invocation(false);
     let CloudPolisherProvider::OpenAi(ActiveLLMProvider::OpenAI(suite)) =
-        build_cloud_channel_provider(&store, &route, true, false).await.unwrap()
+        build_cloud_channel_provider(&store, &route, true, false, None).await.unwrap()
     else { panic!("suite resolved to an unexpected protocol") };
 
     let digits = [0x7b6f_u16, 0x2492, 0x73e7, 0x73cf, 0x5bc9, 0x79cf, 0x79ef, 0x7249, 0x7bef, 0x7bcf];

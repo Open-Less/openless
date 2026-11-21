@@ -21,6 +21,7 @@
 
 - [录音启动与回声消除](audio-startup-latency.md) · [本地 ASR 生命周期](local-asr-lifecycle.md) · [macOS 实验模型](experimental-local-asr.md)
 - [渠道选择](provider-channel-selection.md) · [Prompt 缓存](prompt-cache-policy.md) · [DeepSeek 大统一与联网追问](deepseek-suite.md)
+- [ASR 结果驱动的润色策略](polish-strategy.md)
 - [Gemini 转写](gemini-transcribe.md) · [腾讯混元长语音](tencent-long-audio.md) · [火山引擎](volcengine-setup.md) · [讯飞](xfyun-asr.md) · [百炼](bailian-asr-models.md)
 - [感知待办与边界](awareness-follow-up.md) · [用量账本待补范围](usage-accounting-follow-up.md)
 
