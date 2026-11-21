@@ -61,9 +61,9 @@ Only `temperature` (`0..=2`), `maxTokens`, and `reasoningEffort` (`none`, `low`,
 
 - Chat Completions uses `temperature`, `max_tokens`, and provider-specific reasoning controls; official OpenAI reasoning models use `max_completion_tokens` for a `maxTokens` override.
 - Responses uses `max_output_tokens` and the provider's `reasoning.effort` mapping. Official OpenAI reasoning models also omit `temperature`, including when a `none` override removes the reasoning object.
-- Messages uses `max_tokens`; its existing thinking mode and budget validation remain authoritative. If a `maxTokens` override would be no larger than a configured budget-thinking request, it is omitted to avoid an invalid request.
+- Messages uses `max_tokens`; `none` disables thinking for this request, while `low`/`medium`/`high` enable the configured adaptive or budget thinking mode. If thinking is enabled and a `maxTokens` override would be no larger than the configured thinking budget, it is omitted to avoid an invalid request. When thinking is disabled, the override applies without reserving that budget.
 - Gemini maps `temperature` to `generationConfig.temperature` and `maxTokens` to `generationConfig.maxOutputTokens`; `none` disables thinking and other effort values enable it. Gemini does not expose four distinct effort levels. Providers that expose only a boolean thinking switch likewise treat `low`/`medium`/`high` as enabled and cannot preserve the exact level.
-- Codex uses Responses `max_output_tokens` and maps `reasoningEffort` to Responses `reasoning.effort`.
+- Codex maps `reasoningEffort` to Responses `reasoning.effort`. Its subscription endpoint rejects `max_output_tokens` and sampling parameters, so `maxTokens` and `temperature` overrides are omitted.
 - Existing model capability rules still win. For example, official OpenAI chat models that do not support `reasoning_effort` receive no such field, and `gpt-5-pro` remains at its required `high` tier. Unsupported overrides are omitted or reduced to the configured provider capability, not retried as a second request.
 
 Other returned keys, malformed values, out-of-range numbers, and actions with incompatible overrides are rejected and the normal policy is used.

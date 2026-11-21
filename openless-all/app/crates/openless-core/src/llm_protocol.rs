@@ -255,6 +255,11 @@ pub(crate) fn request_body(
     if config.provider_id == crate::siwc::PROVIDER_ID {
         return crate::siwc::inference::request_body(&config.model, messages);
     }
+    let messages_thinking_enabled = config.protocol.format == LlmRequestFormat::Messages
+        && config
+            .reasoning_effort
+            .as_deref()
+            .map_or(config.thinking_enabled, |effort| effort != "none");
     let mut body = match config.protocol.format {
         LlmRequestFormat::ChatCompletions => {
             unreachable!("Chat Completions retains its provider rules")
@@ -313,7 +318,7 @@ pub(crate) fn request_body(
                 }
             }
             let max_tokens = config.max_tokens_override.filter(|max_tokens| {
-                let conflicts_with_thinking_budget = config.thinking_enabled
+                let conflicts_with_thinking_budget = messages_thinking_enabled
                     && config.protocol.messages_thinking == MessagesThinking::Budget
                     && config.protocol.thinking_budget >= *max_tokens;
                 if conflicts_with_thinking_budget {
@@ -328,7 +333,7 @@ pub(crate) fn request_body(
             if !system.is_empty() {
                 body["system"] = json!(system.join("\n\n"));
             }
-            if config.thinking_enabled {
+            if messages_thinking_enabled {
                 body["thinking"] =
                     if config.protocol.messages_thinking == MessagesThinking::Adaptive {
                         json!({"type": "adaptive"})
@@ -345,7 +350,7 @@ pub(crate) fn request_body(
         && crate::polish::openai_model_uses_max_completion_tokens(&config.model)
         && body.get("reasoning").is_none();
     if body.get("reasoning").is_none()
-        && !(config.protocol.format == LlmRequestFormat::Messages && config.thinking_enabled)
+        && !messages_thinking_enabled
         && !official_openai_reasoning_model_without_reasoning
     {
         if let Some(temperature) = config.temperature {
@@ -534,8 +539,10 @@ impl TextEventStream {
                     None
                 }
                 "response.failed" | "response.incomplete" => {
-                    if self.siwc { return Err(LLMError::Siwc(crate::siwc::error("response_incomplete"))); }
-                    return Err(response_error("llmResponseIncomplete"))
+                    if self.siwc {
+                        return Err(LLMError::Siwc(crate::siwc::error("response_incomplete")));
+                    }
+                    return Err(response_error("llmResponseIncomplete"));
                 }
                 _ => None,
             },
@@ -872,6 +879,7 @@ mod tests {
         assert_eq!(messages_body["max_tokens"], 321);
         assert!(messages_body.get("reasoning_effort").is_none());
 
+        config.reasoning_effort = None;
         config.thinking_enabled = true;
         config.protocol.messages_thinking = MessagesThinking::Budget;
         config.protocol.thinking_budget = 1024;
@@ -883,6 +891,60 @@ mod tests {
         assert_eq!(messages_body["max_tokens"], config.protocol.max_tokens);
         assert_eq!(messages_body["thinking"]["budget_tokens"], 1024);
     }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_messages_thinking_and_token_budget() {
+        for (configured_thinking, effort, thinking_enabled) in [
+            (false, None, false),
+            (true, None, true),
+            (false, Some("none"), false),
+            (true, Some("none"), false),
+            (false, Some("low"), true),
+            (true, Some("low"), true),
+            (false, Some("medium"), true),
+            (true, Some("medium"), true),
+            (false, Some("high"), true),
+            (true, Some("high"), true),
+        ] {
+            for mode in [MessagesThinking::Adaptive, MessagesThinking::Budget] {
+                let mut config = OpenAICompatibleConfig::new(
+                    "custom_messages",
+                    "test",
+                    "https://example.com/v1",
+                    "key",
+                    "claude-sonnet-4-5",
+                )
+                .with_thinking_enabled(configured_thinking)
+                .with_reasoning_effort(effort.map(str::to_owned))
+                .with_max_tokens_override(Some(400))
+                .with_temperature(Some(0.4));
+                config.protocol.format = LlmRequestFormat::Messages;
+                config.protocol.messages_thinking = mode;
+                let body = request_body(
+                    &config,
+                    false,
+                    vec![json!({"role":"user","content":"hello"})],
+                );
+
+                assert_eq!(body.get("thinking").is_some(), thinking_enabled);
+                assert_eq!(body.get("temperature").is_none(), thinking_enabled);
+                if thinking_enabled && mode == MessagesThinking::Budget {
+                    assert_eq!(body["thinking"]["budget_tokens"], 1024);
+                    assert_eq!(body["max_tokens"], config.protocol.max_tokens);
+                } else {
+                    assert_eq!(body["max_tokens"], 400);
+                }
+                if thinking_enabled && mode == MessagesThinking::Adaptive {
+                    assert_eq!(body["thinking"]["type"], "adaptive");
+                }
+                if !thinking_enabled {
+                    assert_eq!(body["temperature"], 0.4);
+                }
+                assert_eq!(config.thinking_enabled, configured_thinking);
+            }
+        }
+    }
+
     #[test]
     fn service_tier_is_validated_and_applied_only_to_ark_requests() {
         let mut protocol = LlmProtocolConfig::default();

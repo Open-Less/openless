@@ -1194,6 +1194,7 @@ pub struct CodexOAuthConfig {
     pub model: String,
     pub auth_path: Option<PathBuf>,
     pub reasoning_effort: Option<String>,
+    /// Requested strategy limit; omitted because the Codex endpoint rejects it.
     pub max_output_tokens: Option<u32>,
     pub text_verbosity: Option<String>,
     pub request_timeout_secs: u64,
@@ -1510,7 +1511,12 @@ impl CodexOAuthLLMProvider {
             body["reasoning"] = json!({ "effort": effort });
         }
         if let Some(max_tokens) = self.config.max_output_tokens {
-            body["max_output_tokens"] = json!(max_tokens);
+            // The subscription endpoint accepts a subset of Responses fields;
+            // unlike the public API, it rejects max_output_tokens with HTTP 400.
+            log::debug!(
+                "[llm] omitting unsupported Codex strategy maxTokens={}",
+                max_tokens
+            );
         }
         if let Some(verbosity) = self.config.text_verbosity.as_deref() {
             body["text"] = json!({ "verbosity": verbosity });
@@ -5177,7 +5183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_oauth_provider_streams_text_from_codex_responses() {
+    async fn codex_oauth_provider_omits_unsupported_token_limit_and_streams_text() {
         let auth_path = write_codex_auth_fixture("acct-openless", unix_now_secs() + 3600);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -5197,7 +5203,7 @@ mod tests {
             assert!(request_text.contains(r#""role":"developer"#));
             assert!(request_text.contains(r#""type":"input_text"#));
             assert!(request_text.contains(r#""reasoning":{"effort":"medium"}"#));
-            assert!(request_text.contains(r#""max_output_tokens":321"#));
+            assert!(!request_text.contains(r#""max_output_tokens":"#));
             assert!(!request_text.contains(r#""temperature":"#));
 
             let body = concat!(
