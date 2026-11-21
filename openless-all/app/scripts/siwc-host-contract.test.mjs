@@ -1,7 +1,7 @@
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const read = (path) => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
+const read = (path) => readFileSync(new URL('../' + path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const commands = read('src-tauri/src/commands/siwc.rs');
 assert(/app\s*\.shell\(\)\s*\.open\(launch\.authorization_url\(\),\s*None\)/.test(commands));
 assert(commands.includes('siwc_authorization_lease(true)'));
@@ -13,10 +13,16 @@ for (const name of ['siwc_status', 'siwc_models', 'siwc_action'])
 const runtime = read('android/kotlin/OpenLessRuntimeService.kt');
 for (const method of ['acquireAuthorization', 'releaseAuthorization'])
   assert(new RegExp('@androidx.annotation.Keep\\s+@JvmStatic fun ' + method).test(runtime));
-assert(runtime.includes('remaining == 0 && !imeRequested'));
+// IME teardown now uses the same current-demand reconciliation as JNI releases;
+// behavioral lease/IME overlap and stale-release coverage runs in Android instrumentation.
+assert(runtime.includes('authorizationUsers = maxOf(0, authorizationUsers - 1)'));
+assert(runtime.includes('imeRequested || authorizationUsers > 0'));
+assert(runtime.includes('if (!runtimeRequestedLocked())'));
+assert(runtime.includes('mainHandler.post'));
+assert(runtime.includes('synchronized(demandLock)'));
 assert(
   read('android/kotlin/OpenLessImeService.kt').includes(
-    'if (OpenLessRuntimeService.authorizationActive()) return',
+    'OpenLessRuntimeService.setImeRequested(this, false)',
   ),
 );
 const assets = read('harmony/rust/src/siwc.rs');

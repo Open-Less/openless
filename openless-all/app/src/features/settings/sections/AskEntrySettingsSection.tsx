@@ -105,7 +105,7 @@ export function IntentRoutingSection() {
   }
   return (
     <Card>
-      <fieldset className="ol-intent-routing-options" disabled={saving}>
+      <fieldset className="ol-intent-routing-options" aria-busy={saving}>
         <legend className="ol-sr-only">{t('askEntrySettings.routing')}</legend>
         {modes.map((intentMode) => {
           const label = t(`askEntrySettings.${intentMode}`);
@@ -116,7 +116,8 @@ export function IntentRoutingSection() {
                 aria-label={label}
                 name="ask-intent-routing"
                 checked={settings === intentMode}
-                onChange={() => commit({ intentMode })}
+                aria-disabled={saving}
+                onChange={() => { if (!saving) commit({ intentMode }); }}
               />
             </SettingRow>
           );

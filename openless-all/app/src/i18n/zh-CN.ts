@@ -148,7 +148,7 @@ export const zhCN = {
     disableDescription:
       '关闭后停止后续同步，云端备份和本机资料都会保留。删除云端备份是另一项独立操作。',
     confirmDisable: '关闭同步',
-    refreshBackup: '查看或刷新云端备份',
+    refreshBackup: '查看云端备份',
     deleteTitle: '删除云端加密备份？',
     deleteDescription:
       '仅删除当前账号的云端备份，本机资料保留。以后在其他设备恢复前，需要重新创建备份。',
@@ -1400,7 +1400,7 @@ export const zhCN = {
         spectrumHint:
           '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
         spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
-        spectrumWaiting: '开启语音增强并开始录音后显示频谱。',
+        spectrumWaiting: '等待录音',
         presets: '均衡器预设',
         choosePreset: '选择预设',
         preset_normal: '平直',

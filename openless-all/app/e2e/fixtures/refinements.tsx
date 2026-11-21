@@ -192,9 +192,13 @@ const catalogEntries: SidebarModelEntry[] = [
 ];
 
 function CatalogFixture() {
+  const [mirror, setMirror] = useState('official');
   const [selected, setSelected] = useState('qwen');
   return (
     <DownloadDialog
+      mirror={{ label: 'Download mirror', value: mirror, onChange: setMirror, options: [
+        { value: 'official', label: 'Official' }, { value: 'mirror', label: 'Mirror' },
+      ] }}
       entries={catalogEntries}
       selectedId={selected}
       onSelect={setSelected}

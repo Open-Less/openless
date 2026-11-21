@@ -488,11 +488,30 @@ fn shared_backend_from_stores(
         style_packs: style_packs.core(),
     };
     #[cfg(not(mobile))]
-    let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(config.data_dir.join("service-usage.json"))
-        .and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start(Arc::new(ledger)))
-    {
-        Ok(recorder) => Some(Arc::new(recorder)),
-        Err(error) => { log::warn!("service usage unavailable: {error}"); None }
+    let usage_recorder = {
+        let usage_app = Arc::clone(&app);
+        let notify_usage_changed = move || {
+            use tauri::Emitter;
+            let handle = usage_app.lock().clone();
+            if let Some(handle) = handle {
+                let _ = handle.emit_to("main", "service-usage:changed", ());
+            }
+        };
+        match openless_core::usage_ledger::UsageLedger::open(
+            config.data_dir.join("service-usage.json"),
+        )
+        .and_then(|ledger| {
+            openless_core::usage_ledger::UsageRecorder::start_with_change_listener(
+                Arc::new(ledger),
+                notify_usage_changed,
+            )
+        }) {
+            Ok(recorder) => Some(Arc::new(recorder)),
+            Err(error) => {
+                log::warn!("service usage unavailable: {error}");
+                None
+            }
+        }
     };
     #[cfg(mobile)]
     let usage_recorder = None;

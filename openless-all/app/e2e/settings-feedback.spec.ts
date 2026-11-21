@@ -592,17 +592,19 @@ test('Web Search reports failures on its page and completes a departed save quie
   await page.goto('/e2e/fixtures/settings-status.html?webSearch');
   await page.getByRole('button', { name: 'Open web search', exact: true }).click();
   await settleNavigation(page);
-  const provider = page.getByRole('combobox', { name: 'Web Search' });
+  const provider = page.getByRole('combobox', { name: '搜索服务' });
   const save = page.getByRole('button', { name: '保存', exact: true });
   const notice = page.locator('.ol-notification-card');
   const key = page.getByLabel('Search API Key');
-  await expect(provider).toHaveValue('free');
+  await expect(provider).toContainText('免费搜索');
   await expect(key).toHaveCount(0);
-  await provider.selectOption('hybrid');
+  await provider.click();
+  await page.getByRole('option', { name: '混合搜索（免费 + DeepSeek）', exact: true }).click();
   await expect(save).toBeDisabled();
   await key.fill('test-deepseek-key');
   await expect(save).toBeEnabled();
-  await provider.selectOption('off');
+  await provider.click();
+  await page.getByRole('option', { name: '关闭', exact: true }).click();
   await save.click();
   await finishSettingsOperation(page, 'save', 1, true);
   await expect(notice.getByRole('alert')).toHaveText('保存失败，请重试。');
@@ -613,7 +615,7 @@ test('Web Search reports failures on its page and completes a departed save quie
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (frames, options) {
       const animation = animate.call(this, frames, options);
-      if (this.matches('[data-ol-page="web-search"][data-transition-phase="exit"]')) {
+      if (this.matches('[data-ol-page="next-page"][data-transition-phase="enter"]')) {
         animation.pause();
         Element.prototype.animate = animate;
       }
@@ -621,25 +623,25 @@ test('Web Search reports failures on its page and completes a departed save quie
     };
   });
   await page.getByRole('button', { name: 'Leave web search', exact: true }).click();
-  const outgoing = page.locator('[data-ol-page="web-search"][data-transition-phase="exit"]');
+  const outgoing = page.locator('[data-ol-page="web-search"][data-transition-phase="retained"]');
   await expect(outgoing).toHaveAttribute('inert', '');
   await finishSettingsOperation(page, 'save', 2);
   await expect
     .poll(() => page.evaluate(() => JSON.parse(window.settingsStatusFixture.stored()).provider))
     .toBe('off');
   // The retained save handler finished while its form was still mounted.
-  await expect(outgoing.locator('button')).not.toHaveAttribute('disabled', '');
+  await expect(outgoing.getByRole('button', { name: '保存', exact: true, includeHidden: true })).not.toHaveAttribute('disabled', '');
   await expect(notice.filter({ hasText: '已保存' })).toHaveCount(0);
-  await outgoing.evaluate((element) =>
+  await page.locator('[data-ol-page="next-page"]').evaluate((element) =>
     element
       .getAnimations()
-      .find(({ id }) => id === 'ol-page-exit')
+      .find(({ id }) => id === 'ol-page-enter')
       ?.finish(),
   );
   await expect(page.getByRole('heading', { name: 'Next settings page' })).toBeVisible();
   await expect(notice).toHaveCount(0);
   await page.getByRole('button', { name: 'Open web search', exact: true }).click();
-  await expect(provider).toHaveValue('off');
+  await expect(provider).toContainText('关闭');
 });
 
 test('normal download cancellation is available only outside a modal and before terminal progress', async ({

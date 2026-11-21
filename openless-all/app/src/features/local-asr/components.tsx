@@ -1,3 +1,4 @@
+import { SelectLite } from '../../ui/controls/SelectLite';
 // Presentational sub-components for the Local ASR page, extracted from
 // LocalAsr/index.tsx. Native state/actions stay in the parent; the catalog owns
 // only its engine filter, narrow-layout navigation and keyboard focus.
@@ -862,21 +863,15 @@ export function DownloadDialog({
             <h2 id={titleId}>{t('localAsr.downloadDialogTitle')}</h2>
             <p id={descriptionId}>{t('localAsr.downloadDialogDesc')}</p>
             {mirror && (
-              // A native select: on Android it opens the system picker, which no
-              // dialog layer or clipping can hide.
               <label className="ol-model-dialog-mirror">
                 <span>{mirror.label}</span>
-                <select
+                <SelectLite
+                  ariaLabel={mirror.label}
                   value={mirror.value}
                   disabled={busy}
-                  onChange={(event) => mirror.onChange(event.target.value)}
-                >
-                  {mirror.options.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={mirror.onChange}
+                  options={mirror.options}
+                />
               </label>
             )}
           </div>

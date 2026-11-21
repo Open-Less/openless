@@ -148,7 +148,7 @@ export const zhTW: typeof zhCN = {
     disableDescription:
       '關閉後停止後續同步，雲端備份和本機資料都會保留。刪除雲端備份是另一項獨立操作。',
     confirmDisable: '關閉同步',
-    refreshBackup: '查看或重新整理雲端備份',
+    refreshBackup: '查看雲端備份',
     deleteTitle: '刪除雲端加密備份？',
     deleteDescription:
       '僅刪除目前帳號的雲端備份，本機資料保留。之後在其他裝置還原前，需要重新建立備份。',
@@ -1405,7 +1405,7 @@ export const zhTW: typeof zhCN = {
         spectrumHint:
           '僅顯示目前增強錄音，不會啟動麥克風、儲存或上傳音訊。關閉面板或進入背景後停止監測。',
         spectrumLegend: '灰色：輸入 · 彩色：處理後 · 20 Hz–24 kHz',
-        spectrumWaiting: '開啟語音增強並開始錄音後顯示頻譜。',
+        spectrumWaiting: '等待錄音',
         presets: '均衡器預設',
         choosePreset: '選擇預設',
         preset_normal: '平直',

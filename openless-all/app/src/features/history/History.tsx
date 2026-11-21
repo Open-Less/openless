@@ -172,11 +172,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         title={quickNotesOnly ? t('quickNote.title', 'Quick notes') : t('history.title')}
         desc={quickNotesOnly ? t('quickNote.desc', 'Permanent audio notes.') : t('history.desc')}
         right={
-          quickNotesOnly ? (
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
-              {t('common.refresh')}
-            </Btn>
-          ) : (
+          !quickNotesOnly && (
             <Btn
               icon="trash"
               variant="ghost"

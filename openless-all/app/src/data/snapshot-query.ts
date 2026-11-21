@@ -15,6 +15,7 @@ export class SnapshotQuery<T> {
     private readonly read: () => Promise<T>,
     private readonly beforeRead: () => Promise<void>,
     private readonly hydration: { initialData?: T | null; remember?: (data: T) => void } = {},
+    private readonly shouldRead: () => boolean = () => true,
   ) {
     this.snapshot = { data: hydration.initialData ?? null, loading: true, error: null };
   }
@@ -50,12 +51,14 @@ export class SnapshotQuery<T> {
     this.running ??= Promise.resolve().then(async () => {
       try {
         while (this.published !== this.wanted) {
+          if (!this.shouldRead()) break;
           if (!this.snapshot.loading) {
             this.publish({ ...this.snapshot, loading: true, error: null });
           }
           let generation = this.wanted;
           try {
             await this.beforeRead();
+            if (!this.shouldRead()) break;
             generation = this.wanted;
             const data = await this.read();
             // Signals invalidate requests even when their actual response arrives later.

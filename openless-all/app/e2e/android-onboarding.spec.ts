@@ -154,24 +154,24 @@ test('Android overlay changes use shared field writes and roll back on failure',
   page,
 }) => {
   await reachOverlayConfig(page);
-  const activation = page
-    .locator('select')
-    .filter({ has: page.locator('option[value="long_press"]') });
-  await expect(activation).toHaveValue('tap');
+  const activation = page.getByRole('combobox', { name: '悬浮窗激活方式', exact: true });
+  await expect(activation).toContainText('点按激活');
   await page.evaluate(() => (window as any).androidGuideFixture.rejectNextWrite());
-  await activation.selectOption('long_press');
+  await activation.click();
+  await page.getByRole('option', { name: '长按激活', exact: true }).click();
   const alert = page.getByRole('alert');
   await expect(alert).toHaveCount(1);
   await expect(alert).toHaveText('Fixture rejected the preference write');
-  await expect(activation).toHaveValue('tap');
-  await activation.selectOption('long_press');
+  await expect(activation).toContainText('点按激活');
+  await activation.click();
+  await page.getByRole('option', { name: '长按激活', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => (window as any).androidGuideFixture.writes))
     .toEqual([
       { '/androidOverlayActivationMode': 'long_press' },
       { '/androidOverlayActivationMode': 'long_press' },
     ]);
-  await expect(activation).toHaveValue('long_press');
+  await expect(activation).toContainText('长按激活');
   expect(await page.evaluate(() => (window as any).androidGuideFixture.calls)).not.toContain(
     'set_settings',
   );

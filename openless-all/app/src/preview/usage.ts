@@ -1,3 +1,4 @@
+import { publishPreviewChange } from './events';
 import type { ServiceUsageRecord, ServiceUsageSnapshot } from '../lib/ipc/service-usage';
 
 const now = Date.now();
@@ -44,4 +45,5 @@ export function getPreviewServiceUsage(): ServiceUsageSnapshot {
 
 export function clearPreviewServiceUsage(): void {
   records = [];
+  publishPreviewChange('service-usage');
 }

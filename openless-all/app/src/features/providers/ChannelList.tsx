@@ -24,7 +24,6 @@ import { PageSkeleton } from '../../components/ui/PageSkeleton';
 import { useHotkeySettings } from '../../data/preferences';
 import { isExperimentalAsrProvider, isRetiredMacAsrProvider } from '../../lib/experimentalAsr';
 import { emitSaved } from '../../lib/savedEvent';
-import { toggleGroupFeedback } from '../../lib/toggleFeedback';
 import { useExitMount } from '../../lib/useExitMount';
 import {
   useConservativeLayout,
@@ -516,7 +515,6 @@ export function ChannelList({
                   disabled={retired}
                   aria-label={t('settings.channels.enabledFor', { name: label })}
                   onClick={(event) => {
-                    if (event.detail > 0) toggleGroupFeedback(event.currentTarget);
                     void onToggle(channel, event.currentTarget);
                   }}
                   style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 7 }}

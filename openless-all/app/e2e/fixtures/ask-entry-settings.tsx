@@ -11,9 +11,17 @@ import '../../src/styles/refinements.css';
 const params = new URLSearchParams(location.search);
 const settingsKey = 'fixture.askEntrySettings';
 const writes: Partial<AskEntrySettings>[] = [];
+let microphoneReads = 0;
+let microphoneStatus = 'denied';
+let permissionRequests = 0;
+let settingsOpened = 0;
 let finishWrite: ((failed: boolean) => void) | undefined;
 const fixture = {
   writes,
+  microphoneReads: () => microphoneReads,
+  permissionRequests: () => permissionRequests,
+  settingsOpened: () => settingsOpened,
+  grantMicrophone: () => { microphoneStatus = 'granted'; },
   hasPendingWrite: () => finishWrite !== undefined,
   finish(failed: boolean) {
     if (!finishWrite) throw new Error('No pending Ask settings write');
@@ -31,6 +39,17 @@ mockWindows('main');
 mockIPC(
   (command, args) => {
     switch (command) {
+      case 'check_microphone_permission':
+        microphoneReads++;
+        return microphoneStatus;
+      case 'request_microphone_permission':
+        permissionRequests++;
+        return microphoneStatus;
+      case 'check_accessibility_permission': return 'granted';
+      case 'get_hotkey_status': return { state: 'installed' };
+      case 'get_windows_ime_status': return { state: 'notWindows' };
+      case 'check_network': return { online: true, latencyMs: 1 };
+      case 'open_system_settings': settingsOpened++; return;
       case 'get_startup_snapshot':
         return { backend: { running: true }, contractVersion: '2.0.0' };
       case 'get_platform_capabilities':
