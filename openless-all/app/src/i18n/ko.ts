@@ -395,6 +395,7 @@ export const ko: typeof zhCN = {
     mobileRecordStart: '녹음 시작',
     mobileRecordStop: '종료하고 제출',
     composerPlaceholder: '질문을 입력하세요. Enter로 보내기',
+    voiceInputPlaceholder: '음성으로 입력 중입니다',
     composerSend: '보내기',
     statusIdle: '{{recordHotkey}} 로 질문',
     statusRecording: '녹음 중',

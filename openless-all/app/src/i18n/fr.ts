@@ -418,6 +418,7 @@ export const fr: typeof zhCN = {
     mobileRecordStart: 'Démarrer l’enregistrement',
     mobileRecordStop: 'Arrêter et envoyer',
     composerPlaceholder: 'Saisissez une question. Appuyez sur Entrée pour envoyer',
+    voiceInputPlaceholder: 'Vous utilisez la saisie vocale',
     composerSend: 'Envoyer',
     statusIdle: 'Appuyez sur {{recordHotkey}} pour poser une question',
     statusRecording: 'Enregistrement',

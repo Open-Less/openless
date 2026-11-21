@@ -2,13 +2,11 @@
 
 ## Rare UI GitHub Activity
 
-The overview yearly activity card is a port of Rare UI's GitHub Activity component.
+The Overview annual activity card adapts the calendar and expandable-panel code from Rare UI's GitHub Activity component. OpenLess uses local dictation activity and native desktop app icons instead of GitHub data. The card also supports a fitted calendar and an in-flow ranking panel.
 
 - Page: https://rareui.com/components/githubactivity
-- Upstream: https://github.com/swamimalode07/rare-ui
-- License: MIT License + Commons Clause
+- Upstream source: [github-activity.tsx](https://github.com/swamimalode07/rare-ui/blob/main/components/ui/github-activity.tsx)
 - Copyright (c) 2026 Swami Malode
+- License: [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt)
 
-The port keeps the original geometry: 11px cells, 3px gap, 28px corner radius, 16px padding, week and month layout, the hover tooltip, and the expandable bottom panel. Local dictation counts replace GitHub contributions. The software with the most voice input (name and count) replaces repositories. Cells are not redrawn or resized to fit a narrow column.
-
-The in-app credit is Settings → About and updates → Component credits. The repository READMEs (`openless-all/README.md` and `openless-all/README.zh.md`) carry the same credit.
+The adapted component lives in `openless-all/app/src/ui/controls/GitHubActivity.tsx`, with styles in `openless-all/app/src/ui/styles/github-activity.css`. The in-app credit is Settings → About and updates → Component credits.

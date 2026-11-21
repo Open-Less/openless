@@ -56,7 +56,7 @@ pub(crate) fn capture_focus_target() -> Option<usize> {
 /// context for LLM polish/translate so the model can adapt style per app. See issue #116.
 ///
 /// macOS uses NSWorkspace.frontmostApplication (public API, no extra permission);
-/// Windows reuses the foreground HWND for the window title; Linux and other platforms return None.
+/// Windows resolves the executable for the foreground HWND; other platforms return None.
 pub(crate) fn capture_frontmost_app() -> Option<String> {
     // This once held an NSWorkspace/Win32 implementation duplicated verbatim from
     // `selection.rs` (three cfg branches, even the nsstring conversion helper). Consolidated

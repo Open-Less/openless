@@ -8,6 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 const ACTIVITY_RETENTION_DAYS: usize = 731;
+// Older Windows buckets contain arbitrary document titles with no recoverable app identity.
+const ACTIVITY_APPS_FILE: &str = if cfg!(target_os = "windows") {
+    "activity-apps-v2.json"
+} else {
+    "activity-apps.json"
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +115,7 @@ impl ActivityStore {
     }
     pub fn at_path(path: PathBuf) -> Result<Self, BackendError> {
         let days = read_days(&path)?;
-        let apps_path = path.with_file_name("activity-apps.json");
+        let apps_path = path.with_file_name(ACTIVITY_APPS_FILE);
         let apps = match std::fs::read(&apps_path) {
             Ok(bytes) => serde_json::from_slice(&bytes).ok(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(BTreeMap::new()),
@@ -165,7 +171,7 @@ impl ActivityStore {
         if let Some(path) = &self.path {
             let bytes = serde_json::to_vec_pretty(&next)
                 .map_err(|_| persistence_error("encode application activity"))?;
-            atomic_write(&path.with_file_name("activity-apps.json"), &bytes)?;
+            atomic_write(&path.with_file_name(ACTIVITY_APPS_FILE), &bytes)?;
         }
         *state = Some(next);
         Ok(())

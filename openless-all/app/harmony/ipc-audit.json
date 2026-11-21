@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 197,
+  "total": 198,
   "wired": 108,
-  "missing": 89,
+  "missing": 90,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -428,6 +428,13 @@
       "name": "finalize_voice_edit_dictation",
       "calledFrom": [
         "src/lib/ipc/voice-edit-session.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "get_activity_app_icons",
+      "calledFrom": [
+        "src/lib/ipc/history.ts"
       ],
       "implementation": "unimplemented"
     },
