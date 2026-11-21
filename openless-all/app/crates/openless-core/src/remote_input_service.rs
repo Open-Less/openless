@@ -24,6 +24,11 @@ const PIN_LOCK_SECS: u64 = 60;
 const PIN_FAILS_MAX_ENTRIES: usize = 256;
 const PIN_GLOBAL_MAX_FAILS: u32 = 20;
 const PIN_GLOBAL_WINDOW_SECS: u64 = 60;
+/// Total wrong PINs accepted for one pairing code before pairing locks until the
+/// user regenerates the code on the PC. The windowed limits above only slow a
+/// LAN attacker down (20/min still finds a 6-digit PIN within weeks); this
+/// budget bounds the overall guess success probability to 100 / 10^6.
+const PIN_MAX_TOTAL_FAILS: u32 = 100;
 const RECOVERY_SESSION_CAP: usize = 64;
 const RECOVERY_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
@@ -149,6 +154,8 @@ struct RemoteInputState {
     recoverable_sessions: VecDeque<(SessionId, SecretValue, std::time::Instant)>,
     pin_fails: HashMap<String, (u32, Option<std::time::Instant>)>,
     global_pin_fails: (u32, std::time::Instant),
+    /// Wrong PINs since the current code was issued or last used successfully.
+    total_pin_fails: u32,
 }
 
 struct RemoteConnectionState {
@@ -198,6 +205,7 @@ impl RemoteInputService {
                 recoverable_sessions: VecDeque::new(),
                 pin_fails: HashMap::new(),
                 global_pin_fails: (0, std::time::Instant::now()),
+                total_pin_fails: 0,
             })),
         })
     }
@@ -370,6 +378,9 @@ impl RemoteInputService {
         let (restart, port) = {
             let mut state = self.state.lock().expect("remote input state lock poisoned");
             state.pairing_pin = Some(pin);
+            state.total_pin_fails = 0;
+            state.pin_fails.clear();
+            state.global_pin_fails = (0, std::time::Instant::now());
             (state.running && state.enabled, state.port)
         };
         if restart {
@@ -398,6 +409,9 @@ impl RemoteInputService {
             ));
         }
         let now = std::time::Instant::now();
+        if state.total_pin_fails >= PIN_MAX_TOTAL_FAILS {
+            return Ok(RemoteAuthResult::Locked);
+        }
         if now.duration_since(state.global_pin_fails.1).as_secs() >= PIN_GLOBAL_WINDOW_SECS {
             state.global_pin_fails = (0, now);
         }
@@ -417,6 +431,7 @@ impl RemoteInputService {
         if pin_ok {
             state.pin_fails.remove(&peer);
             state.global_pin_fails.0 = 0;
+            state.total_pin_fails = 0;
             state.connections.insert(
                 connection_id,
                 RemoteConnectionState {
@@ -429,6 +444,13 @@ impl RemoteInputService {
             return Ok(RemoteAuthResult::Ok);
         }
         state.global_pin_fails.0 = state.global_pin_fails.0.saturating_add(1);
+        state.total_pin_fails = state.total_pin_fails.saturating_add(1);
+        if state.total_pin_fails >= PIN_MAX_TOTAL_FAILS {
+            log::warn!(
+                "[remote-input] pairing locked after {PIN_MAX_TOTAL_FAILS} wrong PINs; regenerate the pairing code to unlock"
+            );
+            return Ok(RemoteAuthResult::Locked);
+        }
         if state.global_pin_fails.0 >= PIN_GLOBAL_MAX_FAILS {
             return Ok(RemoteAuthResult::Locked);
         }
@@ -1012,5 +1034,52 @@ mod protocol_tests {
         assert!(guard.accept(0).is_err());
         assert!(guard.accept(2).is_err());
         assert!(guard.accept(1).is_ok());
+    }
+
+    #[tokio::test]
+    async fn exhausted_pin_budget_locks_pairing_until_the_code_is_regenerated() {
+        let service = RemoteInputService::new(
+            Arc::new(crate::testing::RecordingRemoteInputRuntime::default()),
+            8443,
+            "zh-CN",
+        )
+        .unwrap();
+        service.bind_event_publisher(BackendEventPublisher::new(Arc::new(
+            crate::events::EventBus::new(16),
+        )));
+        let pin = SecretValue::new("123456");
+        {
+            let mut state = service.state.lock().unwrap();
+            state.running = true;
+            state.pairing_pin = Some(pin.clone());
+            // The windowed limits cap real attempts at 20/min; start one short of the budget.
+            state.total_pin_fails = PIN_MAX_TOTAL_FAILS - 1;
+        }
+        let peer = || "192.168.1.20".to_string();
+        assert_eq!(
+            service
+                .authenticate_inner(SessionId::new(), peer(), SecretValue::new("000000"))
+                .await
+                .unwrap(),
+            RemoteAuthResult::Locked
+        );
+        assert_eq!(
+            service
+                .authenticate_inner(SessionId::new(), peer(), pin.clone())
+                .await
+                .unwrap(),
+            RemoteAuthResult::Locked,
+            "the correct PIN must not unlock an exhausted pairing code"
+        );
+
+        service.regenerate_pairing_pin_inner().await.unwrap();
+        let fresh = service.state.lock().unwrap().pairing_pin.clone().unwrap();
+        assert_eq!(
+            service
+                .authenticate_inner(SessionId::new(), peer(), fresh)
+                .await
+                .unwrap(),
+            RemoteAuthResult::Ok
+        );
     }
 }
