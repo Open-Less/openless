@@ -158,7 +158,10 @@ mod tests {
             AskEntrySettingsStore::load(Some(path.clone()))
                 .read()
                 .unwrap(),
-            AskEntrySettings::default()
+            AskEntrySettings {
+                auto_voice_on_open: true,
+                intent_mode: AskEntryIntentMode::SeparateModel,
+            }
         );
         fs::write(&path, br#"{"autoVoiceOnOpen":false}"#).unwrap();
         assert_eq!(
