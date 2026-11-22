@@ -545,3 +545,85 @@ test('Escape from an exiting mirror popup cancels its queued reopening', async (
   await expect(dialog).toBeVisible();
   await expect(mirror).toBeFocused();
 });
+
+test('Select owns Escape after Root accepts a click but before open commits', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=accepted`);
+  const dialog = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-observed')).toHaveText('false');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(mirror).toBeFocused();
+});
+
+test('Select respects a controlled open that refuses closing and then delegates ordinary Escape', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=held`);
+  await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false]');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false,false]');
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+});
+
+test('Select releases refused controlled opening requests', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=refused`);
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true]');
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,true]');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+for (const mode of ['disabled', 'removed', 'new-layer']) {
+  test(`Select revokes its opening transition when ${mode}`, async ({ page }) => {
+    await page.goto(`${fixture}?handoff=${mode}`);
+    await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+    const parent = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+    if (mode === 'new-layer') {
+      await expect(page.getByRole('dialog', { name: 'Handoff child', exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog', { name: 'Handoff child', exact: true })).toHaveCount(0);
+      await expect(parent).toBeVisible();
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+    } else {
+      if (mode === 'disabled') await expect(page.getByRole('combobox')).toBeDisabled();
+      else await expect(page.getByRole('combobox')).toHaveCount(0);
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(parent).toHaveCount(0);
+    }
+  });
+}
+
+test('Select leaves composition-end Escape to IME during its opening handoff', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=ime`);
+  await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+  await expect(page.getByTestId('handoff-observed')).toHaveText('false');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true]');
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+});
+
+test('Select keeps a newer open intent after revoking its accepted predecessor', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=new-intent`);
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false,true]');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+  await expect(mirror).toBeFocused();
+});

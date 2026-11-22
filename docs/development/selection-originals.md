@@ -156,3 +156,15 @@ Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为�
 本机同一 `cargo clippy -p openless-core --all-targets -- -D warnings` 入口进一步指出本批引入或暴露的静态问题，均按具体原因修复：去掉多余借用；把两个声帧用例的互斥锁限定在同步断言块中，避免显式 drop 仍被判断跨 await；为重复的夹具类型命名；断言改为借用单元素 slice；超时来源夹具按完整 HTTP 请求头读取并检查真实 EOF；偏好测试使用原值的结构体初始化；仅测试使用的 legacy prompt helper 移到测试模块之前，函数内容不变。没有添加 `allow`、`ignore` 或降低 `-D warnings`。
 
 本机的 iOS Host 精确用例、隔离目标编译、严格 all-targets 检查及受影响的来源超时单测均通过。本机编译器为 Rust 1.100，CI 仍使用原来固定的 Rust 1.99；因此新提交继续由正常 PR CI 确认，不能把本机结果写成固定 CI 版本已通过，也不重复执行无关业务矩阵或 live 模型。
+
+### PR1487 后继依赖与 Select 事件交接
+
+在 `acd9f9cb` 之后保留祖先合入 `24625f14`（本地 live partial）、`c0c710bb`（共享剪贴板交付边界）和 `f8a69312`（voice-edit 在交付锁内复核准备目标），三次整合无冲突。三份生产修复的独立复审已通过；它们的受控模型、宿主与平台编译证据不等同于物理音频、真实 AX/UIA 或系统剪贴板验收。原有 750ms 消费窗口边界保留。
+
+`0baa8a85` 的正常 CI 暴露 iOS 取消夹具收到 `cancelled` 后停止回复 `speechCancel`，而生产 finish owner 仍等待原生清理。`42307b75` 仅修该夹具，保留迟到转录拒绝、没有 completed 以及 admission 最终释放断言，精确入口先红后绿。`42307b75` 和 `aefa83be` 的后继 CI 均有 13 项门禁成功，但真实窄屏模型目录的 click → 立即 Escape 仍使 WebKit 菜单残留，不能把旧 popup 的受控测试通过当作原真实入口已修。
+
+固定 Base UI 先调用应用 `onOpenChange`、后提交自己的 open 状态。一次本机原入口观测确认应用清 pending 至 DOM 更新之间存在交接空档；它没有证明 Linux CI 的唯一失败分支。按协调者确认的内部契约，Select wrapper 现在以标准受控 Root 使用唯一有效开关值（外部 `open` 始终优先），精确作废旧 native 请求；modalStack 只保留当前表面的唯一过渡所有者和同一次 Escape 的父层归属。queued 与 accepted 未提交均连续负责，匹配请求的受控提交与子层 effects 完成后交给库的普通 Escape、焦点和键盘策略。没有每个 Select 的常驻 document 监听，也不修改 DOM/data-open 伪造关闭。
+
+禁用、卸载、表面／顶层变化及新意图会撤销旧记录；旧 native 回调不能重新打开后继意图。accepted 打开被撤销后，只在该关闭请求已经提交且有效 open=false 时，通过库的公开 unmount 动作结算尚未完成挂载的 popup，保留外部控制器坚持 open=true 的行为。IME 的 compositionend 零任务保护沿 Base UI 的 WebKit 语义，仅让组合输入保留自己的按键，不用于延迟关闭或重试断言。
+
+新增真实 Select 回调边界回归在 Root 已接受 click 而 DOM 仍 false 时同步触发 Escape，旧实现错误关闭父 dialog，修复后保留父层、关闭当前意图并返回焦点。原目录真实 click → 立即 Escape 和已打开 Escape 断言均保留。两浏览器定向共 22 项及 TypeScript 通过，包含 queued／旧 popup、accepted、受控 open 接受／拒绝、IME、禁用／卸载、新顶层和后继意图。最终资格仍以新增提交的正常 PR CI 和独立增量审查为准；不重跑音频、同步矩阵或收费模型，不合 beta、不改版本和安装。

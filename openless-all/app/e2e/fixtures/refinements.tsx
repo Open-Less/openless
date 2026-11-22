@@ -7,8 +7,9 @@ import { initInteractionMode } from '../../src/lib/interactionMode';
 import { Toggle } from '../../src/ui/controls/SettingRow';
 import { Collapse, ExpandableText } from '../../src/components/ui/Disclosure';
 import { SelectLite } from '../../src/ui/controls/SelectLite';
+import { Select } from '../../src/ui/controls/Select';
 import { AppViewport } from '../../src/ui/layout/AppViewport';
-import { PresenceModal } from '../../src/ui/overlays/Modal';
+import { Modal, PresenceModal } from '../../src/ui/overlays/Modal';
 import { ChoiceChips } from '../../src/components/ui/ChoiceChips';
 import { DownloadDialog, type SidebarModelEntry } from '../../src/features/local-asr/components';
 import { DismissibleCard } from '../../src/components/ui/DismissibleCard';
@@ -216,12 +217,70 @@ function CatalogFixture() {
   );
 }
 
+function SelectHandoffFixture() {
+  const mode = new URLSearchParams(location.search).get('handoff');
+  const [parent, setParent] = useState(true);
+  const [child, setChild] = useState(false);
+  const [disabled, setDisabled] = useState(false);
+  const [mounted, setMounted] = useState(true);
+  const [externalOpen, setExternalOpen] = useState(false);
+  const [value, setValue] = useState('official');
+  const [requests, setRequests] = useState<boolean[]>([]);
+  const [observed, setObserved] = useState('');
+  const [complete, setComplete] = useState(false);
+  const once = useRef(false);
+  const request = (next: boolean) => {
+    setRequests((current) => [...current, next]);
+    if (mode === 'held' && next) setExternalOpen(true);
+    if (!next || once.current) return;
+    once.current = true;
+    if (mode === 'disabled') setDisabled(true);
+    if (mode === 'removed') setMounted(false);
+    if (mode === 'new-layer') setChild(true);
+    if (mode === 'new-intent') {
+      document.querySelector('[aria-label="Handoff mirror"]')!.dispatchEvent(
+        new MouseEvent('mousedown', { button: 0, bubbles: true }),
+      );
+    }
+    if (mode !== 'accepted' && mode !== 'ime') return;
+    const trigger = document.querySelector<HTMLElement>('[aria-label="Handoff mirror"]')!;
+    const dialog = trigger.closest<HTMLElement>('[role="dialog"]')!;
+    // Root has accepted this native click request but has not yet committed open.
+    setObserved(trigger.getAttribute('aria-expanded') ?? 'missing');
+    dialog.focus();
+    if (mode === 'ime') {
+      dialog.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      dialog.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    }
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  };
+  return <>
+    <output data-testid="handoff-requests">{JSON.stringify(requests)}</output>
+    <output data-testid="handoff-observed">{observed}</output>
+    <output data-testid="handoff-complete">{String(complete)}</output>
+    {parent && <Modal labelledBy="handoff-title" onClose={() => setParent(false)}>
+      <h2 id="handoff-title">Handoff dialog</h2>
+      {mounted && <Select
+        ariaLabel="Handoff mirror" value={value} onChange={setValue} disabled={disabled}
+        options={[{ value: 'official', label: 'Official' }, { value: 'mirror', label: 'Mirror' }]}
+        open={mode === 'held' ? externalOpen : mode === 'refused' ? false : undefined}
+        onOpenChange={request} onOpenChangeComplete={setComplete}
+      />}
+    </Modal>}
+    {child && <Modal labelledBy="handoff-child-title" onClose={() => setChild(false)}>
+      <h2 id="handoff-child-title">Handoff child</h2>
+      <button onClick={() => setChild(false)}>Close child</button>
+    </Modal>}
+  </>;
+}
+
 initInteractionMode();
 void i18nReady.then(() =>
   createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <AppViewport>
-        {new URLSearchParams(location.search).has('catalog') ? <CatalogFixture /> : <Fixture />}
+        {new URLSearchParams(location.search).has('handoff') ? <SelectHandoffFixture /> :
+          new URLSearchParams(location.search).has('catalog') ? <CatalogFixture /> : <Fixture />}
       </AppViewport>
     </React.StrictMode>,
   ),
