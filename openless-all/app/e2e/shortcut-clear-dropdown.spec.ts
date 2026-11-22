@@ -1,7 +1,7 @@
 import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
-import { openMicrophoneSettings } from './support/navigation';
+import { openMicrophoneSettings, settleSelectDismissal } from './support/navigation';
 
 test('every configurable shortcut can be cleared and stays clear after remount', async ({
   page,
@@ -64,6 +64,8 @@ for (const scale of [0.9, 1, 1.1]) {
       await trigger.click();
       const popup = page.locator('.ol-select-popup[data-open]');
       await expect(popup).toBeVisible();
+      await expect(popup).toHaveAttribute('data-side', 'bottom');
+      await expect(popup).toHaveCSS('opacity', '1');
       await expect(async () => {
         const anchor = (await trigger.boundingBox())!;
         const bounds = (await popup.boundingBox())!;
@@ -71,7 +73,7 @@ for (const scale of [0.9, 1, 1.1]) {
         expect(Math.abs(bounds.x - anchor.x)).toBeLessThan(2);
       }).toPass({ timeout: 3000 });
       await page.keyboard.press('Escape');
-      await expect(popup).toBeHidden();
+      await settleSelectDismissal(page);
     }
   });
 }

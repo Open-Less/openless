@@ -2,7 +2,7 @@ import { FONT_SCALE_VALUES } from '../src/lib/fontScale';
 import type { SettingsOperation, SettingsStatusFixture } from './fixtures/settings-status';
 import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
-import { settleNavigation } from './support/navigation';
+import { settleNavigation, settleSelectDismissal } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 // Development React is intentional: production builds hide special-prop/ref warnings.
@@ -119,9 +119,7 @@ for (const zoom of ['0.9', '1', '1.1']) {
       .getByRole('option', { name: `${Math.round(Number(zoom) * 100)}%`, exact: true })
       .click();
     await expect(page.locator('html')).toHaveCSS('--ol-interface-scale', zoom);
-    await expect(
-      page.locator('.ol-select-popup:is([data-open], [data-ending-style]):visible'),
-    ).toHaveCount(0);
+    await settleSelectDismissal(page);
     const trigger = page.getByRole('combobox', { name: '字体系列', exact: true });
     await trigger.press('Enter');
     const popup = page.locator('.ol-select-popup[data-open]');
