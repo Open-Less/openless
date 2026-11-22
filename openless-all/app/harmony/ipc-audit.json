@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 202,
+  "total": 203,
   "wired": 108,
-  "missing": 94,
+  "missing": 95,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -948,6 +948,13 @@
         "src/lib/ipc/channels.ts"
       ],
       "implementation": "rust"
+    },
+    {
+      "name": "refresh_app_style_catalog",
+      "calledFrom": [
+        "src/lib/ipc/style-packs.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "regenerate_remote_pin",
