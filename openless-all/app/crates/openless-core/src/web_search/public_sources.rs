@@ -423,13 +423,19 @@ mod tests {
 
     #[tokio::test]
     async fn timed_out_source_preserves_other_results() {
-        use tokio::io::AsyncReadExt;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut header = String::new();
+            loop {
+                header.clear();
+                assert!(socket.read_line(&mut header).await.unwrap() > 0);
+                if header == "\r\n" { break; }
+            }
             let mut bytes = [0; 8192];
-            socket.read(&mut bytes).await.unwrap();
             // The client must close its pending response when the source times out.
             assert_eq!(socket.read(&mut bytes).await.unwrap(), 0);
         });

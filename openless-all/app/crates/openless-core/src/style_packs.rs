@@ -1104,6 +1104,11 @@ pub fn default_selection_polish_style_prompt_for_mode(mode: PolishMode) -> Strin
 }
 
 #[cfg(test)]
+pub(crate) fn legacy_structured_prompt() -> &'static str {
+    STRUCTURED_BUILTIN_PROMPT
+}
+
+#[cfg(test)]
 mod tests {
     use super::{build_style_pack_runtime_diagnostics, StylePack};
     use crate::shared_types::UserPreferences;
@@ -1132,9 +1137,4 @@ mod tests {
         assert!(diagnostics.single_turn_prompt.contains("OpenLess"));
         assert!(diagnostics.preview_omits_front_app);
     }
-}
-
-#[cfg(test)]
-pub(crate) fn legacy_structured_prompt() -> &'static str {
-    STRUCTURED_BUILTIN_PROMPT
 }

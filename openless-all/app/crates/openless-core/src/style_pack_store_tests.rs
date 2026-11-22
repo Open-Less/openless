@@ -708,9 +708,11 @@ fn modified_and_namesake_packs_are_never_overwritten_or_adopted() {
 fn newly_bundled_intent_does_not_replace_structured_preferences() {
     let mut packs = builtin_style_packs();
     packs.reverse();
-    let mut prefs = UserPreferences::default();
-    prefs.active_style_pack_id = "builtin.light".into();
-    prefs.selection_polish_style_pack_id = "builtin.formal".into();
+    let mut prefs = UserPreferences {
+        active_style_pack_id: "builtin.light".into(),
+        selection_polish_style_pack_id: "builtin.formal".into(),
+        ..Default::default()
+    };
     sync_style_pack_preferences(&mut prefs, &packs);
     assert_eq!(prefs.active_style_pack_id, "builtin.light");
     assert_eq!(prefs.selection_polish_style_pack_id, "builtin.formal");

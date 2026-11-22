@@ -52,10 +52,11 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             })
         }
     }
+    type TranscriptSessions = Arc<Mutex<Vec<(SessionId, Arc<Transcript>)>>>;
     struct Transcriber {
         release: Arc<tokio::sync::Semaphore>,
         entered: Arc<tokio::sync::Notify>,
-        sessions: Arc<Mutex<Vec<(SessionId, Arc<Transcript>)>>>,
+        sessions: TranscriptSessions,
         fail: bool,
     }
     struct Transcript {
@@ -389,27 +390,28 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             };
             assert_eq!(result.raw_text, "second");
             assert_eq!(owner.load(Ordering::SeqCst), 0);
-            let sessions = sessions.lock().unwrap();
-            assert_eq!(
-                sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-                [first, second]
-            );
-            assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
-            assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
-            let history = backend.list_history().unwrap();
-            assert!(history
-                .iter()
-                .any(|entry| entry.id == second.to_string() && entry.raw_transcript == "second" && entry.translation_active));
-            assert_eq!(
-                history.iter().any(|entry| entry.id == first.to_string()),
-                outcome != "cancel"
-            );
-            if let Some(entry) = history.iter().find(|entry| entry.id == first.to_string()) {
-                assert!(!entry.translation_active);
+            {
+                let sessions = sessions.lock().unwrap();
+                assert_eq!(
+                    sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                    [first, second]
+                );
+                assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
+                assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
+                let history = backend.list_history().unwrap();
+                assert!(history
+                    .iter()
+                    .any(|entry| entry.id == second.to_string() && entry.raw_transcript == "second" && entry.translation_active));
+                assert_eq!(
+                    history.iter().any(|entry| entry.id == first.to_string()),
+                    outcome != "cancel"
+                );
+                if let Some(entry) = history.iter().find(|entry| entry.id == first.to_string()) {
+                    assert!(!entry.translation_active);
+                }
+                assert!(backend.snapshot().processing_dictations.is_empty());
+                assert!(backend.voice_sessions.runtime_restore_idle());
             }
-            assert!(backend.snapshot().processing_dictations.is_empty());
-            assert!(backend.voice_sessions.runtime_restore_idle());
-            drop(sessions);
             let bodies = tokio::time::timeout(std::time::Duration::from_secs(3), requests)
                 .await
                 .unwrap()

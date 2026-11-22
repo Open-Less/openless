@@ -8984,7 +8984,7 @@ impl OpenLessBackend {
             .is_some_and(|insertion| insertion.has_written_text());
         if !correction_rules.is_empty() && !streamed_text_is_visible {
             engine_result.polished_text =
-                apply_correction_rules(&engine_result.polished_text, &correction_rules);
+                apply_correction_rules(&engine_result.polished_text, correction_rules);
         }
 
         // Cancellation may happen while ASR/LLM work is in flight. Never

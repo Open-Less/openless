@@ -138,3 +138,13 @@ Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为�
 | Classic 仅翻译徽章仍期待 top=88 | 录音 owner 用身体124..156、上球体106..126和徽章72..100独立核对：旧值会重叠球体。仅更新遗漏的测试期望为72并补相对几何。 | Native 单项和 TS 几何测试通过；保留24px身体预留、2px球体连接、文本 rail48、复合翻译 rail top12/height88，生产布局不改。 |
 
 本地受影响的 Chromium 四项页面测试通过；未以它代替 WebKit、Windows 或安装 GUI。后续以新提交的正常 PR CI 为准，未手动重跑旧 SHA、未调用模型 live、未重复 211 旧版矩阵。
+
+### 隔离 iOS Core 的最后入口检查
+
+`f5fd1b44` 的 [CI 45067669435](https://github.com/Open-Less/openless/actions/runs/45067669435) 中，Windows stable/MSRV、macOS/MSRV、两端原生胶囊、Android、Harmony、iOS device-build 及 Chromium/WebKit 均通过；iOS `test` 在 Host 的一条旧预览断言失败。该断言仍要求历史为空，与处理前保存完整原文的新契约矛盾。现改为检查一条历史保留首尾空白的原文、完整预览及 `NotRequested`，同时保留 Cancelled 终态和没有待插入请求的检查；iOS 仍不自动读写剪贴板或写入外部选区。本机精确运行该 Host 用例通过。
+
+为验证此修复之后声明的严格门禁，直接编译隔离 Core 的目标集成测试，复现其读不到 `src-tauri/src/selection/target_position.rs`：准备脚本原来只共享 assets/contract/src，没有给测试所引用的生产范围 helper 提供只读路径。沿原有 source-link 机制补充 `src-tauri`，不复制或改写宿主源文件；该目标随后编译通过。
+
+本机同一 `cargo clippy -p openless-core --all-targets -- -D warnings` 入口进一步指出本批引入或暴露的静态问题，均按具体原因修复：去掉多余借用；把两个声帧用例的互斥锁限定在同步断言块中，避免显式 drop 仍被判断跨 await；为重复的夹具类型命名；断言改为借用单元素 slice；超时来源夹具按完整 HTTP 请求头读取并检查真实 EOF；偏好测试使用原值的结构体初始化；仅测试使用的 legacy prompt helper 移到测试模块之前，函数内容不变。没有添加 `allow`、`ignore` 或降低 `-D warnings`。
+
+本机的 iOS Host 精确用例、隔离目标编译、严格 all-targets 检查及受影响的来源超时单测均通过。本机编译器为 Rust 1.100，CI 仍使用原来固定的 Rust 1.99；因此新提交继续由正常 PR CI 确认，不能把本机结果写成固定 CI 版本已通过，也不重复执行无关业务矩阵或 live 模型。

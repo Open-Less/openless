@@ -75,13 +75,15 @@ impl CredentialStore for DelayedCredentials {
     }
 }
 
+type PositionAnchor = Arc<Mutex<Option<(u64, u64)>>>;
+
 struct Focus {
     current: &'static str,
     captured: Vec<&'static str>,
     context_captured: Vec<&'static str>,
     prepared: Vec<&'static str>,
     delivered: Vec<(&'static str, String)>,
-    last_anchor: Option<Arc<Mutex<Option<(u64, u64)>>>>,
+    last_anchor: Option<PositionAnchor>,
     delivered_positions: Vec<(u64, u64)>,
     position: Option<(u64, u64)>,
 }
@@ -134,7 +136,7 @@ struct FocusInserter {
     focus: Arc<Mutex<Focus>>,
     target: Option<&'static str>,
     enforce_position: bool,
-    position: Option<Arc<Mutex<Option<(u64, u64)>>>>,
+    position: Option<PositionAnchor>,
 }
 
 impl TextInserter for FocusInserter {
@@ -204,7 +206,7 @@ impl TextInserter for FocusInserter {
 struct FocusSession {
     focus: Arc<Mutex<Focus>>,
     target: &'static str,
-    position: Option<Arc<Mutex<Option<(u64, u64)>>>>,
+    position: Option<PositionAnchor>,
 }
 
 impl TextInsertionSession for FocusSession {
@@ -563,8 +565,9 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
         }
     }
 
+    type TranscriptSessions = Arc<Mutex<Vec<(SessionId, Arc<Transcript>)>>>;
     struct Transcriber {
-        sessions: Arc<Mutex<Vec<(SessionId, Arc<Transcript>)>>>,
+        sessions: TranscriptSessions,
         entered: Arc<Notify>,
         release: Arc<Notify>,
     }
@@ -803,14 +806,15 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             );
         }
         assert_eq!(owner.load(Ordering::SeqCst), 0);
-        let sessions = sessions.lock().unwrap();
-        assert_eq!(
-            sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-            [first, second]
-        );
-        assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
-        assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
-        drop(sessions);
+        {
+            let sessions = sessions.lock().unwrap();
+            assert_eq!(
+                sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                [first, second]
+            );
+            assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
+            assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
+        }
         assert_eq!(
             *calls.lock().unwrap(),
             [

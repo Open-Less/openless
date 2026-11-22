@@ -995,7 +995,7 @@ async fn every_selection_length_preserves_original_and_reaches_the_model() {
             .await
             .unwrap();
         assert_eq!(polisher.call_count(), 1);
-        assert_eq!(*runtime.protected.lock().unwrap(), [original.clone()]);
+        assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
         assert_eq!(runtime.applied()[0].1, original);
         let history = backend.list_history().unwrap();
         assert_eq!(history.len(), 1);
@@ -1127,7 +1127,7 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         let request = server.await.unwrap();
         assert_eq!(request["messages"][1]["content"], openless_core::prompts::selection_user_prompt(&original));
         assert!(request["messages"][1]["content"].as_str().unwrap().contains("UNIQUE_MIDDLE_全文"));
-        assert_eq!(*runtime.protected.lock().unwrap(), [original.clone()]);
+        assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
         let history = backend.list_history().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].raw_transcript, original);
