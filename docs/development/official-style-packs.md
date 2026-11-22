@@ -78,3 +78,19 @@ cargo test --locked -p openless-core --lib style_live_official_deepseek -- --ign
 仅显式手动触发一次：[运行 45056385541](https://github.com/Open-Less/openless/actions/runs/45056385541)，提交 f10c62b6。GitHub 无密钥编译成功，普通平台检查全部跳过；执行步骤获得 Secret，但第一例 scope 返回 Provider 错误后停止，未取得正文或响应模型，其余七例未运行。没有再次触发、重试或扩展付费调用。
 
 [逐例结果证据](evidence/style-live-45056385541.json)记录官方 endpoint、请求模型 deepseek-flash、首例输入和预期，以及所有未执行例。该结果不能证明任何真实语义遵循，也不能核实用户 Ark 下的型号；轻度和正式没有真实模型覆盖。旧入口没有记录 HTTP 状态码，无法据 Provider 分类区分凭据、模型和服务问题。后续仅补充测试入口的安全诊断：打印发送序号/HTTP状态码及失败例元数据，不打印错误响应正文、凭据或隐藏推理；已无密钥编译，未再次运行真实请求。后续排查和重跑须另行协调，不把失败隐藏为语义通过。
+
+## 官方诊断前核对与同步组交叉证据
+
+2026-11-23 读取 [DeepSeek 官方入门](https://api-docs.deepseek.com/)及[模型列表说明](https://api-docs.deepseek.com/api/list-models/)，确认 deepseek-flash 仍是公开模型名；入门说明由 DeepSeek-V4.1-Flash-1017 提供服务，这不等于本次响应已经报告该型号。[官方 WorkBuddy/CodeBuddy 接入](https://api-docs.deepseek.com/quick_start/agent_integrations/workbuddy/)包含 `https://api.deepseek.com/v1/chat/completions`，因此未随机更换型号或路径。[官方错误说明](https://api-docs.deepseek.com/quick_start/error_codes/)区分 401 鉴权、402 余额、422 参数等，需要实际状态码才能定位外部条件。
+
+在 29efa3cb 的诊断基础上，4d450e6e 增加手动 style-diagnostic 选项：仅首例、最多一次实际 HTTP 发送、无重试，不继续其余七例；只保留状态码、最终 URL、白名单公开 error.code 和公开响应 model，不保存错误正文、请求头或凭据。已通过无密钥编译和 workflow YAML 语法检查，未重跑普通平台或已过夹具。
+
+同步组已交付 38a8ed0a（依赖风格 helper 3330347d），本会话只读了其 `docs/development/sync-v1-compatibility.md`：真实已发布 v2.0.2 stable 与 v2.0.3 Beta.1 各覆盖 canonical/alias × 未编辑/编辑三类提示词四组，经原生产提交服务 router/Store、SQLite 重开和新旧客户端原生仓储往返，选择、实体和编辑均保留，编辑包保持 imported。此为同步组实现与证据，不等于本会话重复运行；没有安装旧 GUI 或真实模型效果证据，也不承诺更早 v2.0.0 的既有 registry 差异兼容。风格工作区没有合入或修改同步模块。
+
+### 一次有界诊断结论
+
+[诊断运行 45057806632](https://github.com/Open-Less/openless/actions/runs/45057806632)使用 4d450e6e，只重发 scope 首例一次：最终 URL 为 `https://api.deepseek.com/v1/chat/completions`，HTTP 401，公开 error.code 为 invalid_request_error，response model 与正文均为空。公开错误码的名字不能当成 HTTP 400；依据官方错误说明，实际 HTTP 401 对应鉴权失败，不是模型效果证据。
+
+[安全诊断记录](evidence/style-diagnostic-45057806632.json)保存实际发送序号 1、状态码、最终 URL、公开错误码及首例元数据。没有重试、没有额外 models GET、没有补跑其余七例，也没有替换凭据或修改用户 Ark 设置。GitHub 无密钥构建成功，普通平台 CI 跳过；本轮仅做本机无密钥编译与 YAML 语法检查，没有重跑已过夹具。
+
+外部处理事项已明确：由仓库凭据维护者在官方 DeepSeek 账号中核对有效 API Key，并按需更新仓库 DEEPSEEK_API_KEY Secret；不要回传或导出密钥。此结论不证明余额状态，也未核实用户 Ark 下的模型。凭据处理后才具备继续真实语义验收的条件，首例与其余七例均仍没有语义成功结论。
