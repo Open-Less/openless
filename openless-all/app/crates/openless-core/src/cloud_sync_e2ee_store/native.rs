@@ -331,14 +331,28 @@ impl CoreSyncStore {
                 }
                 DocumentKind::DeviceProfile => retained.push(doc.clone()),
                 DocumentKind::StylePacks => {
-                    let record: StylePackRecord = typed(&doc.value)?;
-                    let pack: crate::style_packs::StylePack = typed(record.pack.expose())?;
+                    let mut record: StylePackRecord = typed(&doc.value)?;
+                    let mut pack: crate::style_packs::StylePack = typed(record.pack.expose())?;
+                    let was_imported = pack.kind == crate::style_packs::StylePackKind::Imported;
+                    crate::style_packs::normalize_synced_builtin_pack(&mut pack);
+                    let recognized_projection = was_imported
+                        && pack.kind == crate::style_packs::StylePackKind::Builtin;
                     let known_builtin = crate::style_packs::builtin_style_packs()
                         .iter()
                         .any(|builtin| builtin.id == pack.id);
-                    if known_builtin != (pack.kind == crate::style_packs::StylePackKind::Builtin) {
+                    let legacy = legacy_builtin_style_id(&pack.id);
+                    if legacy && pack.kind != crate::style_packs::StylePackKind::Builtin
+                        || !legacy
+                            && pack.kind == crate::style_packs::StylePackKind::Builtin
+                            && !known_builtin
+                            && !recognized_projection
+                            && !crate::style_packs::is_shipped_dictation_style(&pack)
+                    {
                         return Err(DocumentError::Unsupported);
                     }
+                    // Keep an edited projection imported, even at the official ID.
+                    // Only the style module can prove an unedited release/alias.
+                    record.pack = SecretJson::from_serializable(&pack)?;
                     if let Some(icon) = &record.icon {
                         validate_icon(icon)?;
                     }
