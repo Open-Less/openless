@@ -138,8 +138,11 @@ fn legacy_ask_shortcut_survives_encrypted_device_profile_validation() {
             .unwrap();
         let prefs: crate::UserPreferences =
             serde_json::from_value(profile.value["preferences"].clone()).unwrap();
+        let serialized = serde_json::to_value(prefs).unwrap();
         let mut local = snapshot();
-        local.preferences = SecretJson::new(serde_json::to_value(prefs).unwrap());
+        local.preferences = SecretJson::new(json!({
+            "qaShortcutBehavior": serialized["qaShortcutBehavior"],
+        }));
         let exported = export_snapshot(local).unwrap();
         let profile = exported
             .documents
