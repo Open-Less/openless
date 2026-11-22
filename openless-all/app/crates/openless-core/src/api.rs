@@ -9892,7 +9892,9 @@ impl OpenLessBackend {
                     ),
                 )
             });
-        if explicit_style.is_some() {
+        // Caller-supplied app context preserves the existing manual-style fallback.
+        // The actual target still supplies scene metadata independently of style routing.
+        if explicit_style.is_some() || options.front_app.is_some() {
             assigned_ids.clear();
         }
         let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);

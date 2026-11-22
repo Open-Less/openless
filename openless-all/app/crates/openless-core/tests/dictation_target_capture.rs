@@ -622,6 +622,30 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         })
         .unwrap();
 
+    // Explicit caller context must not activate the host app/category assignments.
+    fixture.focus.lock().unwrap().current = "VS Code";
+    for (style_pack_id, expected_pack, marker) in [
+        (None, current.id.as_str(), "MANUAL-STYLE"),
+        (Some(mail.id.clone()), mail.id.as_str(), "MAIL-STYLE"),
+    ] {
+        backend.start_dictation_with_options(DictationStartOptions {
+            front_app: Some("Caller supplied context".into()),
+            style_pack_id,
+            ..Default::default()
+        }).await.unwrap();
+        let result = backend.stop_dictation().await.unwrap();
+        let payload = payloads.try_recv().unwrap();
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(system.starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
+        assert!(system.contains("当前输入位置：代码编辑区（可信控件标签）"));
+        assert!(!system.contains("CHAT-STYLE"));
+        assert!(!system.contains("CODING-STYLE"));
+        expect_request(payload, marker);
+        let history = backend.list_history().unwrap();
+        let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
+        assert_eq!(entry.style_pack_id.as_deref(), Some(expected_pack));
+    }
+
     for (app, marker) in [
         ("WeChat", "CHAT-STYLE"),
         ("Mail", "MAIL-STYLE"),
