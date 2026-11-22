@@ -12,6 +12,7 @@
 
 - [2.0 范围](2.0-requirements.md) · [架构与验证命令](architecture.md) · [源码目录](structure.md) · [客户端图源与导出](images/client-diagrams/README.md) · [桌面验收](2.0-desktop-acceptance.md)
 - [CI 触发与缓存](ci-trigger-and-cache-policy.md) · [Apple Silicon DMG 布局](../openless-all/app/src-tauri/dmg/README.zh.md) · [界面滑块](../openless-all/app/docs/sliders.md)
+- [Ask 桌面入口](ask-unified-entry-contract.md) · [Ask 附件、上下文与工具](ask-standalone-contract.md) · [原生编辑器适配边界](../openless-all/app/src-tauri/src/ask_window/target/README.md)
 - [加密云同步](encrypted-cloud-sync.md) · [旧版手动快照](cloud-sync.md) · [加密同步条款草案与审查](cloud-sync-agreement/facts-and-legal-review.md)
 - [Linux 宿主交接](linux-egui-handoff/README.md) · [后端契约](linux-egui-backend-contract.md) · [缺口和设备证据](linux-egui-handoff/02-gap-register.md) · [日志约定](linux-egui-logging.md)
 - [远程输入证书](remote-input-certificates.md) · [录音中断与恢复](remote-input-recording-recovery.md) · [Tauri CSP](tauri-csp.md) · [桌面输入与更新源](desktop-input-and-update.md)

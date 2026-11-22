@@ -1137,6 +1137,14 @@ export const ko: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '질문 단축키 동작',
+      desc: '녹음 단축키와 보조 키를 함께 사용합니다. 녹음 단축키만 누르면 커서 위치에 받아씁니다.',
+      record: '열고 즉시 녹음',
+      open: '열기만 하고 다시 눌러 녹음',
+      draft: '열고 텍스트 입력란에 포커스',
+      failed: '단축키 동작을 저장하지 못했습니다.',
+    },
     dictation: '받아쓰기',
     translation: '번역',
     question: '무엇이든 질문',
@@ -1150,6 +1158,11 @@ export const ko: typeof zhCN = {
       '선택한 텍스트를 문맥으로 사용합니다. 선택 없이도 질문할 수 있으며 매번 새 질문을 시작합니다.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Ask에 데스크톱 앱 이름 공유',
+      description: 'Ask를 열 때 활성 앱과 열려 있는 앱의 이름을 기록하고, 질문을 보낼 때 모델에 전달합니다. 창의 내용은 읽지 않습니다.',
+      saveFailed: 'Ask의 데스크톱 정보 공유 설정을 업데이트하지 못했습니다.',
+    },
     title: '무엇이든 질문',
     desc: '텍스트 선택 후 음성으로 질문. 다중 라운드 후속 질문 지원.',
     shortcutSettings: '단축키 설정',

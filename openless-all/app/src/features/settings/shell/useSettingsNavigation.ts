@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ensureLocaleLoaded, SUPPORTED_LOCALES } from '../../../i18n';
-import type { OS } from '../../../runtime/environment';
+import { isTauriHost, type OS } from '../../../runtime/environment';
 import { getCachedPlatformCapabilities, getPlatformCapabilities } from '../../../runtime/platform';
 import {
   SETTINGS_SECTIONS,
@@ -81,7 +81,9 @@ export function useSettingsNavigation({
       : undefined;
   const activeGeneralPage =
     section === 'general' && !searching
-      ? visibleGeneralPages(platformCaps?.platform).find((page) => page.id === generalPage)
+      ? visibleGeneralPages(platformCaps?.platform, os, isTauriHost()).find(
+          (page) => page.id === generalPage,
+        )
       : undefined;
   const showingVoiceSettings = activeAdvancedPage?.id === 'voiceEnhancement' && voiceSettingsOpen;
   const contentTitle = searching
@@ -98,7 +100,11 @@ export function useSettingsNavigation({
     : showingVoiceSettings
       ? t('settings.recording.dsp.description')
       : activeAdvancedPage
-        ? t(`modal.advancedPages.${activeAdvancedPage.id}`)
+        ? t(
+            activeAdvancedPage.id === 'intentRouting'
+              ? 'askEntrySettings.routingHint'
+              : `modal.advancedPages.${activeAdvancedPage.id}`,
+          )
         : activeGeneralPage
           ? t(activeGeneralPage.descriptionKey)
           : t(`modal.descriptions.${section}`);

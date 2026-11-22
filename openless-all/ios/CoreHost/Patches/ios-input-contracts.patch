@@ -215,7 +215,7 @@ index 14d0521..dc54279 100644
      ) -> Result<SessionId, BackendError> {
          let DictationReservation {
              session_id,
-@@ -7721,14 +7900,25 @@ impl OpenLessBackend {
+@@ -7721,18 +7900,29 @@ impl OpenLessBackend {
                  return Err(error);
              }
          }
@@ -223,7 +223,11 @@ index 14d0521..dc54279 100644
 -            .capture_dictation_context_with_host(
 -                &options,
 -                DictationContextPurpose::Dictation,
--                host_context.as_ref(),
+-                if options.output_target == DictationOutputTarget::AskComposer {
+-                    &crate::ports::NoopHostContextAdapter
+-                } else {
+-                    host_context.as_ref()
+-                },
 -            )
 -            .await
 -        {
@@ -240,7 +244,11 @@ index 14d0521..dc54279 100644
 +                self.capture_dictation_context_with_host(
 +                    &options,
 +                    DictationContextPurpose::Dictation,
-+                    host_context.as_ref(),
++                    if options.output_target == DictationOutputTarget::AskComposer {
++                        &crate::ports::NoopHostContextAdapter
++                    } else {
++                        host_context.as_ref()
++                    },
 +                )
 +                .await
 +            }
@@ -286,8 +294,9 @@ index 14d0521..dc54279 100644
      async fn capture_dictation_context(
          &self,
          options: &DictationStartOptions,
-@@ -9210,6 +9430,11 @@ impl OpenLessBackend {
+@@ -9210,7 +9430,12 @@ impl OpenLessBackend {
      ) -> Result<DictationContext, BackendError> {
+         let revision = self.dictation_provider_revision();
          let preferences = self.get_preferences();
          let mut captured_options = options.clone();
 +        if let Some(target) = &options.translation_target_language {

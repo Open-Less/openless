@@ -4,11 +4,13 @@ import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const de: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Sprachbearbeitung',
@@ -1178,6 +1180,14 @@ export const de: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Verhalten des Fragen-Kürzels',
+      desc: 'Verwendet das Aufnahme-Kürzel und die Zusatztaste. Das Aufnahme-Kürzel allein diktiert weiterhin am Cursor.',
+      record: 'Öffnen und sofort aufnehmen',
+      open: 'Öffnen, erneut drücken zum Aufnehmen',
+      draft: 'Öffnen und Textfeld fokussieren',
+      failed: 'Das Verhalten konnte nicht gespeichert werden.',
+    },
     dictation: 'Diktieren',
     translation: 'Übersetzen',
     question: 'Alles fragen',
@@ -1192,6 +1202,11 @@ export const de: typeof zhCN = {
       'Ausgewählter Text dient als Kontext. Eine Auswahl ist optional. Jede Kombination beginnt eine neue Frage.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'App-Namen mit Ask teilen',
+      description: 'Beim Öffnen von Ask die Namen der aktiven und geöffneten Apps erfassen und beim Senden einer Frage an das Modell weitergeben. Fensterinhalte werden nicht gelesen.',
+      saveFailed: 'Die Berechtigung zum Teilen des Desktop-Kontexts konnte nicht geändert werden.',
+    },
     title: 'Alles fragen',
     desc: 'Text auswählen und Fragen dazu sprechen, auch mit mehreren Rückfragen.',
     shortcutSettings: 'Kurzbefehlseinstellungen',

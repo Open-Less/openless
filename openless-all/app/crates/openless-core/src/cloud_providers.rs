@@ -1091,7 +1091,7 @@ impl Drop for PolishRegistration {
     }
 }
 
-enum CloudPolisherProvider {
+pub(crate) enum CloudPolisherProvider {
     OpenAi(crate::polish::ActiveLLMProvider),
     Gemini(crate::llm_gemini::GeminiProvider),
 }
@@ -1554,7 +1554,24 @@ async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<CloudPolisherProvider, BackendError> {
-    if context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+    build_cloud_channel_provider(
+        credentials,
+        &context.llm,
+        context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek,
+        context.polish.llm_thinking_enabled,
+        context.polish.polish_request_overrides.as_ref(),
+    )
+    .await
+}
+
+pub(crate) async fn build_cloud_channel_provider(
+    credentials: &dyn CredentialStore,
+    route: &crate::dictation_context::ProviderInvocation,
+    deepseek_suite: bool,
+    thinking: bool,
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> Result<CloudPolisherProvider, BackendError> {
+    if deepseek_suite {
         let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
         require_configured(&suite.api_key, "DeepSeek suite API key")?;
         let config = crate::polish::OpenAICompatibleConfig::new(
@@ -1564,23 +1581,22 @@ async fn build_cloud_polisher_provider(
             suite.api_key,
             crate::deepseek_suite::MODEL,
         )
-        .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        .with_thinking_enabled(thinking);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::OpenAI(
                 crate::polish::OpenAICompatibleLLMProvider::new(config),
             ),
         ));
     }
-    let channel_id = context.llm.provider_id.trim();
-    let provider_type = context.llm.provider_type.trim();
+    let channel_id = route.provider_id.trim();
+    let provider_type = route.provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
         return Err(BackendError::new(
             BackendErrorCode::InvalidArgument,
             "LLM channel id and provider type must not be empty",
         ));
     }
-    let model = context
-        .llm
+    let model = route
         .model
         .clone()
         .and_then(non_blank_owned)
@@ -1612,15 +1628,15 @@ async fn build_cloud_polisher_provider(
     }
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
         let mut config = crate::polish::CodexOAuthConfig::new(model)
-            .with_thinking_enabled(context.polish.llm_thinking_enabled);
-        if let Some(effort) = strategy_reasoning_effort(context) {
+            .with_thinking_enabled(thinking);
+        if let Some(effort) = strategy_reasoning_effort(overrides) {
             // Codex uses the Responses API, whose effort enum does not accept
             // `none`; omit that unsupported override rather than sending a
             // request that the endpoint rejects.
             let effort = (effort != "none").then_some(effort);
             config = config.with_reasoning_effort(effort);
         }
-        config = config.with_max_output_tokens(strategy_max_tokens(context));
+        config = config.with_max_output_tokens(overrides.and_then(|value| value.max_tokens));
         let provider = crate::polish::CodexOAuthLLMProvider::new(config);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::Codex(provider),
@@ -1658,12 +1674,15 @@ async fn build_cloud_polisher_provider(
     crate::endpoint_security::validate_http_endpoint(&endpoint)
         .map_err(|error| map_llm_error(error.to_string()))?;
     if provider_type == "gemini" {
-        let thinking_enabled = strategy_thinking_enabled(context);
+        let thinking_enabled = overrides
+            .and_then(|value| value.reasoning_effort)
+            .map(|effort| !matches!(effort, crate::polish_strategy::ReasoningEffort::None))
+            .unwrap_or(thinking);
         let mut config =
             crate::llm_gemini::GeminiConfig::new(api_key, model, endpoint.trim_end_matches('/'))
                 .with_thinking_enabled(thinking_enabled)
-                .with_max_output_tokens(strategy_max_tokens(context));
-        if let Some(temperature) = strategy_temperature(context) {
+                .with_max_output_tokens(overrides.and_then(|value| value.max_tokens));
+        if let Some(temperature) = overrides.and_then(|value| value.temperature()) {
             config = config.with_temperature(temperature);
         }
         let provider = crate::llm_gemini::GeminiProvider::new(config);
@@ -1684,10 +1703,7 @@ async fn build_cloud_polisher_provider(
     .map(parse_temperature)
     .transpose()?
     .flatten();
-    let strategy_temperature = context
-        .polish
-        .polish_request_overrides
-        .as_ref()
+    let strategy_temperature = overrides
         .and_then(|overrides| overrides.temperature());
     let temperature = strategy_temperature.or_else(|| {
         crate::polish::openai_compatible_temperature_for_provider(
@@ -1714,9 +1730,9 @@ async fn build_cloud_polisher_provider(
         model,
     )
     .with_protocol(protocol)
-    .with_thinking_enabled(context.polish.llm_thinking_enabled)
-    .with_reasoning_effort(strategy_reasoning_effort(context))
-    .with_max_tokens_override(strategy_max_tokens(context))
+    .with_thinking_enabled(thinking)
+    .with_reasoning_effort(strategy_reasoning_effort(overrides))
+    .with_max_tokens_override(overrides.and_then(|value| value.max_tokens))
     .with_temperature(temperature)
     .with_extra_headers(extra_headers);
     Ok(CloudPolisherProvider::OpenAi(
@@ -1747,11 +1763,10 @@ fn omni_temperature(
     })
 }
 
-fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
-    context
-        .polish
-        .polish_request_overrides
-        .as_ref()
+fn strategy_reasoning_effort(
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> Option<String> {
+    overrides
         .and_then(|overrides| overrides.reasoning_effort)
         .map(|effort| match effort {
             crate::polish_strategy::ReasoningEffort::None => "none",
@@ -2230,7 +2245,7 @@ async fn build_omni_provider_with_task_spawner(
         temperature,
         thinking_enabled: strategy_thinking_enabled(context),
         max_tokens_override: strategy_max_tokens(context),
-        reasoning_effort: strategy_reasoning_effort(context),
+        reasoning_effort: strategy_reasoning_effort(context.polish.polish_request_overrides.as_ref()),
     };
     let provider = crate::omni::OmniProvider::with_task_spawner(config, task_spawner)
         .with_transcription_hints(&context.polish.working_languages, &context.polish.hotwords);
@@ -3105,7 +3120,7 @@ mod tests {
             PipelineMode::Traditional
         ));
         let search = crate::web_search::WebSearchConfig::default();
-        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, false).contains("FreeSerp 与 Keenable"));
         assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
     }
 
@@ -3220,6 +3235,51 @@ mod tests {
             omni_temperature(&DictationContext::default(), "custom", Some(1.2)),
             Some(1.2)
         );
+    }
+
+    #[tokio::test]
+    async fn strategy_overrides_reach_dictation_without_leaking_into_ask() {
+        let store = InMemoryCredentialStore::default();
+        for (account, value) in [
+            (LLM_ENDPOINT_ACCOUNT, "http://127.0.0.1:8080/v1"),
+            (LLM_TEMPERATURE_ACCOUNT, "1.2"),
+            (crate::llm_protocol::REQUEST_FORMAT_ACCOUNT, "responses"),
+        ] {
+            write_channel_secret(&store, CredentialNamespace::Llm, "strategy-channel", account, value)
+                .await;
+        }
+        let mut context = DictationContext::default();
+        context.llm = ProviderInvocation::new("strategy-channel", "custom");
+        context.llm.model = Some("fixture-model".into());
+        context.polish.llm_thinking_enabled = true;
+        context.polish.polish_request_overrides =
+            Some(crate::polish_strategy::PolishRequestOverrides {
+                temperature_milli: Some(400),
+                max_tokens: Some(321),
+                reasoning_effort: Some(crate::polish_strategy::ReasoningEffort::High),
+            });
+        let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(dictation)) =
+            build_cloud_polisher_provider(&store, &context).await.unwrap()
+        else {
+            panic!("expected the configured compatible provider");
+        };
+        let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(ask)) =
+            build_cloud_channel_provider(&store, &context.llm, false, false, None).await.unwrap()
+        else {
+            panic!("expected the same compatible channel for Ask");
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "fixture"})];
+        let dictation_body =
+            crate::llm_protocol::request_body(dictation.ask_config(), false, messages.clone());
+        let ask_body = crate::llm_protocol::request_body(ask.ask_config(), false, messages);
+        assert_eq!(dictation.ask_config().temperature, Some(0.4));
+        assert_eq!(dictation_body["max_output_tokens"], 321);
+        assert_eq!(dictation_body["reasoning"]["effort"], "high");
+        assert_eq!(ask.ask_config().temperature, Some(1.2));
+        assert_eq!(ask_body["reasoning"]["effort"], "low");
+        assert!(ask_body.get("max_output_tokens").is_none());
+        assert!(ask.ask_config().reasoning_effort.is_none());
+        assert!(!ask.ask_config().thinking_enabled);
     }
 
     struct ObservedTranslationStream {

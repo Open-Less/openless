@@ -79,6 +79,15 @@ impl NativeCapsule {
             Arc::new(move |session_id: String, action: Action| {
                 let app = app_for_action.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(ask) = app.try_state::<Arc<crate::ask_window::Desktop>>() {
+                        if (match action {
+                            Action::Cancel => ask.capsule_cancel(&session_id),
+                            Action::Confirm => ask.capsule_stop(&session_id),
+                            _ => false,
+                        }) || ask.recognizes_capsule(&session_id) {
+                            return;
+                        }
+                    }
                     let coordinator = app.state::<Arc<crate::coordinator::Coordinator>>();
                     let backend = coordinator.backend();
                     // Recheck Core ownership after the process/async hop. A delayed

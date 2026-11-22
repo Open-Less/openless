@@ -148,6 +148,13 @@ export function AboutSection() {
             >
               Rare UI · Toast
             </button>
+            <button
+              style={btnGhostStyle}
+              title="Rare UI Prompt Box — MIT License + Commons Clause"
+              onClick={() => void openExternal('https://rareui.com/components/promptbox')}
+            >
+              Rare UI · Prompt Box
+            </button>
           </div>
         </Row>
         <Row label={t('modal.about.feedback')}>

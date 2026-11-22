@@ -231,7 +231,7 @@ OpenLess 现阶段优先修复语音输入的稳定性与体验。录音、转�
 - **本地 ASR**：Windows 上的 Foundry Local Whisper 与 sherpa-onnx（实验性）。macOS 上旧的本地模型管理已下架，改为 设置 → 实验与扩展 中的三个实验：TextStream（Qwen3-ASR on MLX，约 1.9 GB，Apple Silicon，macOS 14+）、SenseVoice Small（约 240 MB）、Embedding Gemma（约 715 MB，Apple Silicon，macOS 15+）。模型按需下载，不随安装包分发。
 - **润色渠道**：Ark（火山引擎）、DeepSeek、OpenAI、Google Gemini、Codex OAuth、SiliconFlow、Atlas Cloud、小米 MiMo、腾讯云 TokenHub、CometAPI、OpenRouter、Requesty、API Route、OrcaRouter、阿里云 Coding Plan、CodingPlanX、MiniMax、阶跃星辰，以及 OpenCode Zen——外加上你自带的任意 OpenAI 兼容端点。
 - **四种输出模式**：原文、轻度润色、清晰结构（**AI 提示词模式**）、正式表达。另有**翻译快捷键**，把口述内容直接转成配置的目标语言（[#43](https://github.com/Open-Less/openless/issues/43)）。
-- **划词提问 QA 面板**——另一个快捷键会打开悬浮面板，对任意应用中选中的文本做语音问答（[#118](https://github.com/Open-Less/openless/issues/118)）。
+- **随便问（macOS / Windows）**——录音快捷键加空格打开独立输入框。提交后可问答、按需引用选区，或把写作和编辑结果交给已验证的外部输入目标。操作说明见[使用指南](USAGE.zh.md#随便问桌面端)。
 - **主窗口**：概览 / 历史 / 词典 / 风格 / Marketplace / 设置。常驻托盘图标，以及一个跟随你正在输入的显示器（多屏）的迷你状态胶囊。
 - **本地模型管理**——在设置中管理磁盘上的本地 ASR 模型存储。
 - **多语言界面**——设置 → 语言 可在 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Español / Français / Deutsch 之间切换（首次启动自动检测）。

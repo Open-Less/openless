@@ -82,8 +82,13 @@ impl HistoryStore {
             || {
                 let _guard = self.lock_store()?;
                 let mut sessions = self.read_locked()?;
+                let ask = session.source == HistorySource::Qa;
                 sessions.insert(0, session);
-                retain_with_policy(&mut sessions, retention_days, max_entries, self.now_utc());
+                if ask {
+                    retain_ask_history(&mut sessions, retention_days, max_entries, self.now_utc());
+                } else {
+                    retain_with_policy(&mut sessions, retention_days, max_entries, self.now_utc());
+                }
                 self.write_locked(&sessions)
             },
         )
@@ -232,7 +237,7 @@ fn retain_with_policy(
     if retention_days > 0 {
         let cutoff = now - chrono::Duration::days(i64::from(retention_days));
         sessions.retain(|session| {
-            session.source == HistorySource::QuickNote
+            matches!(session.source, HistorySource::QuickNote | HistorySource::Qa)
                 || session.error_code.as_deref() == Some("recording")
                 || chrono::DateTime::parse_from_rfc3339(&session.created_at)
                     .map(|time| time.with_timezone(&chrono::Utc) >= cutoff)
@@ -244,7 +249,7 @@ fn retain_with_policy(
         .unwrap_or(HISTORY_CAP);
     let mut ordinary_seen = 0usize;
     sessions.retain(|session| {
-        if session.source == HistorySource::QuickNote
+        if matches!(session.source, HistorySource::QuickNote | HistorySource::Qa)
             || session.error_code.as_deref() == Some("recording")
         {
             true
@@ -252,6 +257,24 @@ fn retain_with_policy(
             ordinary_seen += 1;
             ordinary_seen <= cap
         }
+    });
+}
+
+fn retain_ask_history(
+    sessions: &mut Vec<DictationSession>,
+    retention_days: u32, max_entries: Option<u32>, now: chrono::DateTime<chrono::Utc>,
+) {
+    let cutoff = (retention_days > 0).then(|| now - chrono::Duration::days(i64::from(retention_days)));
+    let cap = max_entries.map(|count| (count as usize).clamp(5, HISTORY_CAP)).unwrap_or(HISTORY_CAP);
+    let mut seen = 0;
+    sessions.retain(|session| {
+        if session.source != HistorySource::Qa { return true; }
+        if cutoff.is_some_and(|cutoff| chrono::DateTime::parse_from_rfc3339(&session.created_at)
+            .is_ok_and(|time| time.with_timezone(&chrono::Utc) < cutoff)) {
+            return false;
+        }
+        seen += 1;
+        seen <= cap
     });
 }
 

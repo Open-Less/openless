@@ -4,11 +4,13 @@ import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const fr: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Session de modification vocale',
@@ -1186,6 +1188,14 @@ export const fr: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Action du raccourci de question',
+      desc: 'Utilise le raccourci d’enregistrement et la touche supplémentaire. Le raccourci seul dicte toujours à la position du curseur.',
+      record: 'Ouvrir et enregistrer immédiatement',
+      open: 'Ouvrir, puis appuyer à nouveau pour enregistrer',
+      draft: 'Ouvrir et placer le curseur dans le champ',
+      failed: 'Impossible d’enregistrer le comportement du raccourci.',
+    },
     dictation: 'Dicter',
     translation: 'Traduire',
     question: 'Poser une question',
@@ -1200,6 +1210,11 @@ export const fr: typeof zhCN = {
       'Le texte sélectionné sert de contexte. La sélection est facultative. Chaque combinaison commence une nouvelle question.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Partager les noms des applications avec Ask',
+      description: 'À l’ouverture d’Ask, relever le nom de l’application active et des applications ouvertes, puis les transmettre au modèle avec la question. Le contenu des fenêtres n’est pas lu.',
+      saveFailed: 'Impossible de mettre à jour l’autorisation de partage du contexte du bureau.',
+    },
     title: 'Poser une question',
     desc: 'Sélectionnez du texte et posez des questions à voix haute, puis poursuivez la conversation.',
     shortcutSettings: 'Réglages des raccourcis',

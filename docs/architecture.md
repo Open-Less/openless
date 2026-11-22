@@ -78,7 +78,7 @@ Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装
 
 ## 5. 窗口体系
 
-`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/app/bootstrap.tsx` 读取 `?window=`，`src/app/windowRoutes.tsx` 分派胶囊、Windows 转写轨、`qa`（含复用它的「润色结果」模式）、语音编辑和选区意图。Less Computer 的兼容路由保持空界面；无辅助类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
+`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/app/windowRoutes.tsx` 分派主窗口、胶囊、转写轨、语音编辑和选区意图。Less Computer 的兼容路由保持空界面。移动端依据平台能力选择布局。macOS 与 Windows 的独立 Ask WebView 使用 `ask-window/index.html` 和 `src-tauri/src/ask_window/`，入口与事件见 [Ask 桌面契约](ask-unified-entry-contract.md)。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
 
 主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
 

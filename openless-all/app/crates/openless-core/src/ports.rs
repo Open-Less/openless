@@ -814,6 +814,11 @@ pub trait TextInserter: Send + Sync {
         None
     }
 
+    /// Host-owned editors can bind feedback to this exact recording before Starting is emitted.
+    fn capture_target_for_session(&self, _session_id: SessionId) -> Option<CapturedTextTarget> {
+        self.capture_target()
+    }
+
     fn begin(
         &self,
         session_id: SessionId,

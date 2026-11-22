@@ -14,6 +14,7 @@ export type SettingsSectionId =
 
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
+  { id: 'intentRouting', icon: 'sparkle', titleKey: 'askEntrySettings.routing', beta: true },
   {
     id: 'cursorContext',
     icon: 'search',
@@ -59,6 +60,18 @@ export const GENERAL_PAGES = [
     descriptionKey: 'settings.generalPages.recordingDesc',
   },
   {
+    id: 'askEntry',
+    icon: 'sparkle',
+    titleKey: 'askEntrySettings.title',
+    descriptionKey: 'askEntrySettings.description',
+  },
+  {
+    id: 'askHistory',
+    icon: 'history',
+    titleKey: 'selectionAsk.history.title',
+    descriptionKey: 'selectionAsk.history.desc',
+  },
+  {
     id: 'capsule',
     icon: 'layout',
     titleKey: 'settings.generalPages.capsuleTitle',
@@ -81,8 +94,15 @@ export const GENERAL_PAGES = [
 export type GeneralPage = (typeof GENERAL_PAGES)[number];
 export type GeneralPageId = GeneralPage['id'];
 
-export function visibleGeneralPages(platform: PlatformKind | undefined): GeneralPage[] {
+export function visibleGeneralPages(
+  platform: PlatformKind | undefined,
+  os?: OS,
+  native = false,
+): GeneralPage[] {
+  const unifiedAsk = native && platform === 'desktop' && (os === 'mac' || os === 'win');
   return GENERAL_PAGES.filter((page) => {
+    if (page.id === 'askEntry') return unifiedAsk;
+    if (page.id === 'askHistory') return !unifiedAsk;
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;
@@ -91,6 +111,7 @@ export function visibleGeneralPages(platform: PlatformKind | undefined): General
 
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (page.id === 'intentRouting') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
     if (page.id === 'debug')

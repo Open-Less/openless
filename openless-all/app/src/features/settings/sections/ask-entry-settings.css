@@ -1,0 +1,13 @@
+.ol-intent-routing-options > .ol-setting-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ol-intent-routing-options .ol-setting-row-label {
+  overflow-wrap: normal;
+}
+
+@media (max-width: 719px) {
+  .ol-intent-routing-options > .ol-setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

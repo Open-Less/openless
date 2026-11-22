@@ -5,11 +5,13 @@ import { siwcZhCN as siwc } from './siwc';
 
 import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsZhCN as askEntrySettings } from './askEntrySettings';
 
 export const zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: '语音编辑会话',
@@ -1105,6 +1107,14 @@ export const zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提问快捷键行为',
+      desc: '使用当前录音快捷键加提问附加键。单独按录音快捷键仍会在光标处听写。',
+      record: '打开并立即录音',
+      open: '仅打开，再按一次录音',
+      draft: '打开并聚焦文字框',
+      failed: '无法保存提问快捷键行为。',
+    },
     dictation: '口述',
     translation: '翻译',
     question: '随便问',
@@ -1117,6 +1127,11 @@ export const zhCN = {
     selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。关闭对话窗口后开始新会话。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: '向「随便问」提供应用名称',
+      description: '唤起「随便问」时，记录前台和已打开应用的名称，并在发送问题时提供给模型。不读取窗口内容。',
+      saveFailed: '无法更新「随便问」的桌面上下文权限。',
+    },
     title: '随便问',
     desc: '选中文字后语音提问，支持多轮追问。',
     shortcutSettings: '快捷键设置',
@@ -1138,7 +1153,7 @@ export const zhCN = {
     },
     history: {
       title: '保存历史',
-      desc: '开启后在本地保存问答记录，默认关闭。',
+      desc: '开启后在此设备上保存「随便问」的历史记录，默认关闭。',
     },
     howto: {
       title: '使用方法',

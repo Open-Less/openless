@@ -128,6 +128,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
+                #[cfg(not(mobile))]
+                crate::ask_window::hotkey::set_binding(&target.dictation, target.dictation_mode);
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
                     let (qa_trigger, selection_polish_trigger, translation_trigger) =
                         modifier_shortcut_triggers(&inner);
@@ -171,149 +173,6 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 }
                 drop(registration);
                 std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-// ─────────────────────────── QA hotkey supervisor ───────────────────────────
-
-fn take_qa_hotkey_on_main_thread(inner: &Arc<Inner>) {
-    let main = Arc::clone(inner);
-    if let Err(error) = inner.host.run_on_main_thread(move || {
-        main.qa_hotkey.lock().take();
-    }) {
-        log::warn!("[qa] cannot dispatch hotkey removal: {error}");
-    }
-}
-
-pub(super) fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let registration =
-            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::QaHotkey);
-        if inner.backend.ensure_runtime_ready().is_err() {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        // QA disabled: sleep until the runtime target changes; changes arrive
-        // via the explicit settings effect.
-        let binding = match hotkey_runtime_target(&inner).qa {
-            Some(b) => b,
-            None => {
-                take_qa_hotkey_on_main_thread(&inner);
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                continue;
-            }
-        };
-        if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
-            take_qa_hotkey_on_main_thread(&inner);
-            if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, selection_polish_trigger, translation_trigger) =
-                    modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(
-                    qa_trigger,
-                    selection_polish_trigger,
-                    translation_trigger,
-                );
-            }
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        if inner.qa_hotkey.lock().is_some() {
-            // Already registered -> do not reinstall; recheck after 5s (binding
-            // changes go through the manual update path).
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        // On macOS the global-hotkey crate uses Carbon RegisterEventHotKey and
-        // requires the manager to be constructed on the main thread; otherwise
-        // register() looks Ok but events are never dispatched (the step missed
-        // by the first version of issue #118 / PR #119, leaving hotkey presses
-        // completely dead). Run QaHotkeyMonitor::start on the main thread via
-        // run_on_main_thread and receive the result back on the channel.
-        let (tx, rx) = mpsc::channel::<QaHotkeyEvent>();
-        let (init_tx, init_rx) = mpsc::sync_channel::<Result<QaHotkeyMonitor, QaHotkeyError>>(0);
-        let binding_for_main = binding.clone();
-        if inner
-            .host
-            .run_on_main_thread(move || {
-                let result = QaHotkeyMonitor::start(binding_for_main, tx);
-                let _ = init_tx.send(result);
-            })
-            .is_err()
-        {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        // run_on_main_thread is fire-and-forget; wait for the main thread to
-        // send the result back, capped at 5s so a busy main thread cannot block
-        // the supervisor forever.
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                drop(init_rx);
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] QA hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
-                    );
-                }
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-        };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.qa_hotkey.lock() = Some(monitor);
-                log::info!(
-                    "[coord] QA hotkey listener installed on main thread (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-qa-hotkey-bridge".into())
-                    .spawn(move || qa_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                attempts = 0;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
-                }
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-pub(super) fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotkeyEvent>) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        let inner_cloned = Arc::clone(&inner);
-        match evt {
-            QaHotkeyEvent::Pressed => {
-                inner
-                    .host
-                    .spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
             }
         }
     }
@@ -2026,10 +1885,6 @@ pub(super) fn modifier_shortcut_triggers(
     Option<crate::types::HotkeyTrigger>,
 ) {
     let target = hotkey_runtime_target(inner);
-    let qa_trigger = target
-        .qa
-        .as_ref()
-        .and_then(crate::shortcut_binding::legacy_modifier_trigger);
     let translation_trigger = if is_builtin_translation_shift(&target.translation) {
         None
     } else {
@@ -2039,7 +1894,7 @@ pub(super) fn modifier_shortcut_triggers(
         .selection_polish
         .as_ref()
         .and_then(crate::shortcut_binding::legacy_modifier_trigger);
-    (qa_trigger, selection_polish_trigger, translation_trigger)
+    (None, selection_polish_trigger, translation_trigger)
 }
 
 /// Decides "will translation actually happen" here, not on the read side:
@@ -2228,11 +2083,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     });
                 }
             }
-            HotkeyEvent::QaShortcutPressed => {
-                inner.host.block_on(async {
-                    handle_qa_hotkey_pressed(&inner_cloned).await;
-                });
-            }
+            HotkeyEvent::QaShortcutPressed => {}
             #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed => {
                 handle_selection_workspace_hotkey_pressed(&inner_cloned);
@@ -2267,15 +2118,6 @@ pub(super) fn reset_shortcut_held_state(inner: &Arc<Inner>) {
         monitor.reset_held_state();
     }
     let target = hotkey_runtime_target(inner);
-    if let Some(binding) = target.qa.as_ref() {
-        if crate::shortcut_binding::legacy_modifier_trigger(binding).is_none() {
-            if let Some(monitor) = inner.qa_hotkey.lock().as_ref() {
-                if let Err(e) = monitor.update_binding(binding.clone()) {
-                    log::warn!("[coord] reset QA hotkey latch failed: {e}");
-                }
-            }
-        }
-    }
     if !is_builtin_translation_shift(&target.translation)
         && crate::shortcut_binding::legacy_modifier_trigger(&target.translation).is_none()
     {
@@ -2490,7 +2332,6 @@ pub(crate) mod less_computer_test_support {
             less_computer_voice: Mutex::new(None),
             settings_host_gate: Mutex::new(()),
             hotkey_resume_started: AtomicBool::new(false),
-            overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
             vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
@@ -2518,7 +2359,6 @@ pub(crate) mod less_computer_test_support {
             voice_edit_host: Arc::new(
                 Mutex::new(voice_edit_session::VoiceEditHostState::default()),
             ),
-            qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
             last_capsule_state: Mutex::new(None),

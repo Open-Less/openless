@@ -4,11 +4,13 @@ import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const es: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Sesión de edición por voz',
@@ -1171,6 +1173,14 @@ export const es: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Comportamiento del atajo de preguntas',
+      desc: 'Usa el atajo de grabación junto con la tecla auxiliar. El atajo de grabación solo sigue dictando en el cursor.',
+      record: 'Abrir y grabar inmediatamente',
+      open: 'Abrir y pulsar de nuevo para grabar',
+      draft: 'Abrir y enfocar el campo de texto',
+      failed: 'No se pudo guardar el comportamiento del atajo.',
+    },
     dictation: 'Dictar',
     translation: 'Traducir',
     question: 'Pregunta lo que quieras',
@@ -1185,6 +1195,11 @@ export const es: typeof zhCN = {
       'El texto seleccionado sirve de contexto. La selección es opcional. Cada combinación inicia una pregunta nueva.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Compartir los nombres de las aplicaciones con Ask',
+      description: 'Al abrir Ask, registra los nombres de la aplicación activa y de las abiertas para enviarlos al modelo junto con la pregunta. No se lee el contenido de las ventanas.',
+      saveFailed: 'No se pudo actualizar el permiso para compartir el contexto del escritorio.',
+    },
     title: 'Pregunta lo que quieras',
     desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
     shortcutSettings: 'Ajustes de atajos',

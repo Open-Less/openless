@@ -1,0 +1,1196 @@
+//! Host bindings for the standalone chat. No main-window or legacy QA state enters this surface.
+
+use openless_core::ask::{self, AskAttachmentMetadata, AskTurnKey, StandaloneQaService};
+use openless_core::ask_attachment::{
+    AttachmentContent, AttachmentError, AttachmentKind, AttachmentMetadata,
+    AttachmentPreviewSummary, AttachmentReader as _, AttachmentRegistry, AttachmentScope,
+    AttachmentState, ImageMime,
+};
+use openless_core::{BackendError, BackendErrorCode, OpenLessBackend};
+use parking_lot::Mutex;
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WebviewWindow};
+use tauri_plugin_shell::ShellExt;
+use uuid::Uuid;
+
+use super::attachment_files::{decode_dropped_image, pick_attachment_file, NativeAttachmentFile};
+use super::entry_settings::{AskEntryIntentMode, AskEntrySettings, AskEntrySettingsStore};
+use super::target::{self, TargetTracker};
+use super::{context::DesktopContext, wire, LABEL};
+
+pub(crate) struct AskHost {
+    service: StandaloneQaService,
+    registry: Arc<AttachmentRegistry>,
+    pub(crate) context: Arc<DesktopContext>,
+    attachment_gate: Mutex<()>,
+    backend: Arc<OpenLessBackend>,
+    context_preference: Option<PathBuf>,
+    read_permissions_path: Option<PathBuf>,
+    entry_settings: Arc<AskEntrySettingsStore>,
+    targets: Arc<TargetTracker>,
+    original: Mutex<Option<OriginalTarget>>,
+    keep_history: AtomicBool,
+    fence: ask::AskSessionFence,
+}
+
+struct OriginalTarget {
+    generation: u64,
+    caret: Option<target::WriteTarget>,
+    context: ask::AskCompositionContext,
+}
+
+impl AskHost {
+    pub(crate) fn new(app: &AppHandle, backend: Arc<OpenLessBackend>) -> Self {
+        let registry = Arc::new(AttachmentRegistry::default());
+        let context = Arc::new(DesktopContext::with_backend(backend.clone()));
+        let context_preference = crate::persistence::data_dir()
+            .ok()
+            .map(|dir| dir.join("ask-app-context.json"));
+        let entry_settings = Arc::new(AskEntrySettingsStore::load(
+            app.path()
+                .app_local_data_dir()
+                .ok()
+                .map(|dir| dir.join(AskEntrySettingsStore::FILE_NAME)),
+        ));
+        let allowed = context_preference
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|data| serde_json::from_slice::<bool>(&data).ok())
+            .unwrap_or(false);
+        context.set_authorization(openless_core::ask_context::ContextAuthorization {
+            app_metadata: allowed,
+            usage: false,
+        });
+        let read_permissions_path = context_preference
+            .as_ref()
+            .map(|path| path.with_file_name("ask-read-context.json"));
+        let permissions = read_permissions_path
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| {
+                serde_json::from_slice::<super::context::ReadPermissions>(&bytes).ok()
+            })
+            .unwrap_or_default();
+        context.set_read_permissions(permissions);
+        let service = backend.create_standalone_ask(
+            context.clone(),
+            context.clone(),
+            Arc::new(AttachmentPort(registry.clone())),
+        );
+        let targets = Arc::new(TargetTracker::new());
+        if let Err(error) = targets.start() {
+            log::warn!("[ask] external target observation unavailable: {error}");
+        }
+        Self {
+            service,
+            registry,
+            context,
+            attachment_gate: Mutex::new(()),
+            keep_history: AtomicBool::new(backend.get_preferences().qa_save_history),
+            fence: ask::AskSessionFence::default(),
+            backend,
+            context_preference,
+            read_permissions_path,
+            entry_settings,
+            targets,
+            original: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn open(&self) -> Result<Uuid, BackendError> {
+        self.backend.ensure_runtime_ready()?;
+        let _guard = self.attachment_gate.lock();
+        let keep_history = self.backend.get_preferences().qa_save_history;
+        self.keep_history.store(keep_history, Ordering::Release);
+        self.clear_session();
+        let id = if keep_history {
+            self.service.open()
+        } else {
+            self.service.open_transient()
+        };
+        self.initialize_scope(id);
+        Ok(id)
+    }
+
+    fn clear_session(&self) {
+        self.fence.revoke();
+        let current = self.service.current();
+        self.service.end_all();
+        self.registry.clear();
+        self.original.lock().take();
+        self.targets.clear_capture();
+        if let Some(id) = current {
+            self.context.close_conversation(id);
+        }
+    }
+
+    pub(super) fn clear_on_hide(&self) -> bool {
+        let _guard = self.attachment_gate.lock();
+        if self.backend.get_preferences().qa_save_history && !self.service.current_is_transient() {
+            return false;
+        }
+        self.clear_session();
+        true
+    }
+
+    fn watch_history_setting(app: AppHandle, backend: &OpenLessBackend) {
+        let mut changes = backend.subscribe();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match changes.recv().await {
+                    Ok(event)
+                        if matches!(
+                            event.kind,
+                            openless_core::BackendEventKind::PreferencesChanged(_)
+                        ) => {}
+                    Err(openless_core::EventRecvError::Lagged(_)) => {}
+                    Err(openless_core::EventRecvError::Closed) => return,
+                    _ => continue,
+                }
+                let ui = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    let Some(host) = ui.try_state::<Arc<Self>>() else {
+                        return;
+                    };
+                    let next = host.backend.get_preferences().qa_save_history;
+                    if host.keep_history.swap(next, Ordering::AcqRel) && !next {
+                        if let (Some(window), Some(desktop)) = (
+                            ui.get_webview_window(LABEL),
+                            ui.try_state::<Arc<super::Desktop>>(),
+                        ) {
+                            let _ = desktop.hide(&window);
+                        } else {
+                            host.clear_on_hide();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    fn initialize_scope(&self, id: Uuid) {
+        self.registry.open_conversation(&id.to_string());
+        self.context.open_conversation(id);
+    }
+
+    pub(crate) fn current(&self) -> Option<Uuid> {
+        self.service.current()
+    }
+
+    fn require_current(&self, id: Uuid) -> Result<(), BackendError> {
+        self.backend.ensure_runtime_ready()?;
+        if self.current() == Some(id) {
+            Ok(())
+        } else {
+            Err(BackendError::new(
+                BackendErrorCode::InvalidState,
+                "This Ask conversation is no longer active.",
+            ))
+        }
+    }
+
+    fn accepts_submission(&self, id: Uuid, desktop: Option<&super::Desktop>) -> bool {
+        self.current() == Some(id)
+            && self.accepts_policy(self.service.current_is_transient(), desktop)
+    }
+
+    fn accepts_policy(&self, transient: bool, desktop: Option<&super::Desktop>) -> bool {
+        (self.backend.get_preferences().qa_save_history || transient)
+            && !desktop.is_some_and(super::Desktop::opening)
+    }
+
+    fn scope(&self, id: Uuid) -> Result<AttachmentScope, BackendError> {
+        self.require_current(id)?;
+        self.registry
+            .scope(&id.to_string())
+            .map_err(attachment_error)
+    }
+
+    async fn prepare_submission(
+        &self,
+        desktop: Option<std::sync::Weak<super::Desktop>>,
+        generation: Option<u64>,
+    ) -> Result<ask::AskPreparation, BackendError> {
+        let committed_settings = self.entry_settings.read().map_err(|_| {
+            BackendError::new(BackendErrorCode::Persistence, "askEntrySettingsUnavailable")
+        })?;
+        let intent_mode = match committed_settings.intent_mode {
+            AskEntryIntentMode::SemanticHybrid => ask::AskIntentMode::SemanticHybrid,
+            AskEntryIntentMode::SeparateModel => ask::AskIntentMode::SeparateModel,
+            AskEntryIntentMode::MainModelTool => ask::AskIntentMode::MainModelTool,
+        };
+        let app_grant = self.context.app_metadata_grant();
+        let access = self.context_access();
+        let locked = match generation {
+            Some(scope) => self.targets.capture_at_send(scope, access).await,
+            None => target::CapturedTarget::unavailable(),
+        };
+        let selection = match locked.selection {
+            target::ExternalSelection::None => ask::ExternalSelection::None,
+            target::ExternalSelection::Selected(text) => ask::ExternalSelection::Selected(text),
+            target::ExternalSelection::Unavailable => ask::ExternalSelection::Unavailable,
+        };
+        let (insert, mut original_context) = self
+            .original
+            .lock()
+            .as_ref()
+            .filter(|original| Some(original.generation) == generation)
+            .map(|original| (original.caret.clone(), original.context.clone()))
+            .unwrap_or_default();
+        let mut selection_context = locked.context;
+        // Recheck the switches after the asynchronous native read.
+        let access = self.context_access();
+        if !access.surrounding_text {
+            original_context.before = None;
+            original_context.after = None;
+            selection_context.before = None;
+            selection_context.after = None;
+        }
+        original_context.source_app = self.current().and_then(|id| self.context.original_app(id));
+        if app_grant.is_none() || self.context.app_metadata_grant() != app_grant {
+            selection_context.source_app = None;
+        }
+        let replace = locked.write_target;
+        let writer = (insert.is_some() || replace.is_some()).then(|| {
+            Arc::new(TargetWriter {
+                tracker: self.targets.clone(),
+                insert,
+                replace,
+                desktop,
+                generation,
+            }) as Arc<dyn ask::AskWriter>
+        });
+        Ok(ask::AskPreparation {
+            intent_mode,
+            selection,
+            writer,
+            clipboard: (!cfg!(target_os = "macos"))
+                .then(|| Arc::new(Clipboard) as Arc<dyn ask::AskClipboard>),
+            original_context,
+            selection_context,
+            recent_voice: Vec::new(),
+        })
+    }
+
+    fn context_access(&self) -> target::ContextAccess {
+        target::ContextAccess {
+            app_metadata: self.context.app_metadata_allowed(),
+            surrounding_text: self.backend.get_preferences().cursor_context_enabled,
+        }
+    }
+
+    pub(crate) fn stop(&self) {
+        let _guard = self.attachment_gate.lock();
+        let current = self.current();
+        self.service.end_all();
+        self.targets.stop();
+        self.registry.clear();
+        if let Some(id) = current {
+            self.context.close_conversation(id);
+        }
+    }
+
+    pub(crate) fn bind_feed(app: AppHandle) {
+        let Some(host) = app.try_state::<Arc<Self>>() else {
+            return;
+        };
+        Self::watch_history_setting(app.clone(), &host.backend);
+        let mut events = host.service.subscribe();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(event) => {
+                        let Some(host) = app.try_state::<Arc<Self>>() else {
+                            return;
+                        };
+                        if host.current() == Some(event.conversation_id) {
+                            let _ = app.emit_to(
+                                EventTarget::webview_window(LABEL),
+                                "ask:event",
+                                wire::event(&event),
+                            );
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
+    }
+
+    fn add_file(
+        self: &Arc<Self>,
+        id: Uuid,
+        file: NativeAttachmentFile,
+    ) -> Result<AttachmentMetadata, BackendError> {
+        let job = {
+            let _guard = self.attachment_gate.lock();
+            let job = file.register(&self.scope(id)?).map_err(attachment_error)?;
+            self.service
+                .publish_attachment(id, attachment_metadata(job.metadata())?, true)?;
+            job
+        };
+        let metadata = job.metadata().clone();
+        let host = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let finished = job.process().await;
+            let _guard = host.attachment_gate.lock();
+            if let Some(metadata) = finished.commit() {
+                if let Ok(metadata) = attachment_metadata(&metadata) {
+                    let _ = host.service.publish_attachment(id, metadata, false);
+                }
+            }
+        });
+        Ok(metadata)
+    }
+}
+
+struct TargetWriter {
+    tracker: Arc<TargetTracker>,
+    insert: Option<target::WriteTarget>,
+    replace: Option<target::WriteTarget>,
+    desktop: Option<std::sync::Weak<super::Desktop>>,
+    generation: Option<u64>,
+}
+
+impl ask::AskWriter for TargetWriter {
+    fn has_original_caret(&self) -> bool {
+        self.insert.is_some()
+    }
+
+    fn write(
+        &self,
+        operation: ask::AskWriteOperation,
+        text: String,
+        claim: ask::AskWriteClaim,
+    ) -> futures_util::future::BoxFuture<'_, ask::AskWriteOutcome> {
+        let (target, operation) = match operation {
+            ask::AskWriteOperation::Insert => {
+                (self.insert.as_ref(), target::WriteOperation::Insert)
+            }
+            ask::AskWriteOperation::Replace => {
+                (self.replace.as_ref(), target::WriteOperation::Replace)
+            }
+        };
+        Box::pin(async move {
+            let Some(target) = target else {
+                return ask::AskWriteOutcome::NotWritten;
+            };
+            let desktop = self.desktop.clone();
+            let generation = self.generation;
+            let current = move || {
+                generation.is_some_and(|generation| {
+                    desktop
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade)
+                        .is_some_and(|desktop| {
+                            desktop.external_target_generation() == Some(generation)
+                        })
+                })
+            };
+            if !current() {
+                return ask::AskWriteOutcome::NotWritten;
+            }
+            let eligible = claim.still_current();
+            let current = Arc::new(current);
+            let still_foreground = current.clone();
+            #[cfg(target_os = "macos")]
+            let recover = {
+                let desktop = self.desktop.clone();
+                Arc::new(move |proof| {
+                    if let (Some(desktop), Some(generation)) = (
+                        desktop.as_ref().and_then(std::sync::Weak::upgrade),
+                        generation,
+                    ) {
+                        desktop.recover_after_write(generation, proof);
+                    }
+                })
+            };
+            match self
+                .tracker
+                .deliver_scoped(
+                    target,
+                    operation,
+                    text,
+                    Arc::new(move || still_foreground() && eligible()),
+                    #[cfg(target_os = "macos")]
+                    recover,
+                    Box::new(move || current() && claim.claim()),
+                )
+                .await
+            {
+                target::WriteOutcome::Written => ask::AskWriteOutcome::Written,
+                target::WriteOutcome::NotWritten => ask::AskWriteOutcome::NotWritten,
+                target::WriteOutcome::Unknown => ask::AskWriteOutcome::Unknown,
+                target::WriteOutcome::Declined => ask::AskWriteOutcome::Declined,
+            }
+        })
+    }
+}
+
+struct Clipboard;
+
+impl ask::AskClipboard for Clipboard {
+    fn copy(&self, text: String) -> futures_util::future::BoxFuture<'_, Result<(), BackendError>> {
+        Box::pin(async move {
+            let copy = tauri::async_runtime::spawn_blocking(move || {
+                crate::insertion::copy_text_to_clipboard(&text)
+            })
+            .await;
+            if matches!(copy, Ok(Ok(()))) {
+                Ok(())
+            } else {
+                Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "Could not copy the Ask result.",
+                ))
+            }
+        })
+    }
+}
+
+struct AttachmentPort(Arc<AttachmentRegistry>);
+
+impl ask::AttachmentReader for AttachmentPort {
+    fn consume(&self, conversation_id: Uuid, attachment_ids: &[Uuid]) {
+        if let Ok(scope) = self.0.scope(&conversation_id.to_string()) {
+            for id in attachment_ids {
+                scope.remove(&id.to_string());
+            }
+        }
+    }
+
+    fn acquire(
+        &self,
+        turn: AskTurnKey,
+        ids: &[Uuid],
+    ) -> Result<Vec<ask::AskAttachment>, BackendError> {
+        let ids: Vec<_> = ids.iter().map(Uuid::to_string).collect();
+        let lease = self
+            .0
+            .lease(
+                &turn.conversation_id.to_string(),
+                &turn.turn_id.to_string(),
+                &ids,
+            )
+            .map_err(attachment_error)?;
+        Ok(lease
+            .attachments()
+            .iter()
+            .map(|entry| match entry.content() {
+                AttachmentContent::Selection(text) => ask::AskAttachment::Selection {
+                    text: Arc::from(text.text()),
+                },
+                AttachmentContent::Pdf(pdf) => ask::AskAttachment::Pdf {
+                    pages: pdf
+                        .pages()
+                        .iter()
+                        .map(|page| ask::AskPdfPage {
+                            number: page.page_number,
+                            text: Arc::from(page.text.as_str()),
+                        })
+                        .collect(),
+                },
+                AttachmentContent::Image(image) => {
+                    let (width, height) = image.dimensions();
+                    ask::AskAttachment::Image(ask::AskImage {
+                        mime: match image.mime() {
+                            ImageMime::Png => ask::AskImageMime::Png,
+                            ImageMime::Jpeg => ask::AskImageMime::Jpeg,
+                        },
+                        bytes: Arc::from(image.bytes()),
+                        width,
+                        height,
+                    })
+                }
+            })
+            .collect())
+    }
+
+    fn end_conversation(&self, id: Uuid) {
+        self.0.end_conversation(&id.to_string());
+    }
+}
+
+fn attachment_metadata(value: &AttachmentMetadata) -> Result<AskAttachmentMetadata, BackendError> {
+    Ok(AskAttachmentMetadata {
+        attachment_id: Uuid::parse_str(&value.attachment_id)
+            .map_err(|_| BackendError::new(BackendErrorCode::Internal, "Invalid attachment ID."))?,
+        kind: match value.kind {
+            AttachmentKind::Image => ask::AskAttachmentKind::Image,
+            AttachmentKind::Pdf => ask::AskAttachmentKind::Pdf,
+            AttachmentKind::Selection => ask::AskAttachmentKind::Selection,
+        },
+        display_name: value.display_name.clone(),
+        preview: value.preview.as_ref().map(|preview| match preview {
+            AttachmentPreviewSummary::Selection { text, has_more } => {
+                ask::AskAttachmentPreview::Selection {
+                    excerpt: text.clone(),
+                    has_more: *has_more,
+                }
+            }
+            AttachmentPreviewSummary::Image {
+                width,
+                height,
+                thumbnail_available,
+            } => ask::AskAttachmentPreview::Image {
+                width: *width,
+                height: *height,
+                thumbnail_available: *thumbnail_available,
+            },
+        }),
+        page_count: value.page_count,
+        source_app: value.source_app.clone(),
+        state: match value.state {
+            AttachmentState::Processing => ask::AskAttachmentStatus::Processing,
+            AttachmentState::Ready => ask::AskAttachmentStatus::Ready,
+            AttachmentState::Error => ask::AskAttachmentStatus::Error,
+        },
+        error: value
+            .error
+            .as_ref()
+            .map(|error| attachment_error(error.code)),
+    })
+}
+
+fn attachment_error(error: AttachmentError) -> BackendError {
+    let code = match error {
+        AttachmentError::Cancelled => BackendErrorCode::Cancelled,
+        AttachmentError::PickerBusy | AttachmentError::CapacityExceeded => BackendErrorCode::Busy,
+        AttachmentError::NotFound | AttachmentError::NotReady => BackendErrorCode::InvalidState,
+        AttachmentError::PdfUnavailable | AttachmentError::PickerUnavailable => {
+            BackendErrorCode::Unsupported
+        }
+        _ => BackendErrorCode::InvalidArgument,
+    };
+    BackendError::new(code, error.to_string())
+}
+
+fn authorize(window: &WebviewWindow) -> Result<(), Value> {
+    if window.label() == LABEL {
+        Ok(())
+    } else {
+        Err(
+            json!({"code": "permission_denied", "message": "This command belongs to the Ask window."}),
+        )
+    }
+}
+
+pub(crate) fn restricted_command_allowed(label: &str, command: &str) -> bool {
+    label != LABEL
+        || matches!(
+            command,
+            "ask_current"
+                | "ask_snapshot"
+                | "ask_events"
+                | "ask_cancel"
+                | "ask_open_source"
+                | "ask_window_hide"
+                | "ask_expand_chat"
+                | "ask_new_conversation"
+                | "ask_end_conversation"
+                | "ask_submit"
+                | "ask_add_attachment"
+                | "ask_add_dropped_image"
+                | "ask_remove_attachment"
+                | "ask_get_attachment_preview"
+                | "ask_sync_editor"
+                | "ask_ack_voice"
+        )
+}
+
+type AskState<'a> = State<'a, Arc<AskHost>>;
+type IpcResult = Result<Value, Value>;
+
+#[tauri::command]
+pub fn ask_current(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    authorize(&window)?;
+    let mut status = json!({
+        "conversationId": host.current(),
+        "themeMode": host.backend.get_preferences().theme_mode,
+        "platform": std::env::consts::OS,
+    });
+    if window.label() == LABEL {
+        if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
+            let (epoch, request) = desktop.composer_focus();
+            status["focusEpoch"] = json!(epoch);
+            status["focusRequest"] = json!(request);
+        }
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn ask_new_conversation(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    authorize(&window)?;
+    host.backend.ensure_runtime_ready().map_err(wire::error)?;
+    let _guard = host.attachment_gate.lock();
+    let conversation_id = if host.backend.get_preferences().qa_save_history {
+        super::session::new_persistent_conversation(&host.service, &host.fence)
+    } else {
+        host.clear_session();
+        host.service.open_transient()
+    };
+    host.initialize_scope(conversation_id);
+    if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
+        desktop.set_conversation(Some(conversation_id.to_string()));
+    }
+    Ok(json!({"conversationId": conversation_id}))
+}
+
+#[tauri::command]
+pub fn ask_end_conversation(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    let _guard = host.attachment_gate.lock();
+    host.require_current(conversation_id).map_err(wire::error)?;
+    host.service
+        .end_conversation(conversation_id)
+        .map_err(wire::error)?;
+    host.context.close_conversation(conversation_id);
+    if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() {
+        desktop.set_conversation(None);
+    }
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub fn ask_snapshot(window: WebviewWindow, host: AskState<'_>, conversation_id: Uuid) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    host.service
+        .snapshot(conversation_id)
+        .map(wire::snapshot)
+        .map_err(wire::error)
+}
+
+#[tauri::command]
+pub fn ask_events(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+    after_sequence: u64,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    let replay = host
+        .service
+        .events(conversation_id, after_sequence)
+        .map_err(wire::error)?;
+    Ok(
+        json!({"events": replay.events.iter().map(wire::event).collect::<Vec<_>>(), "latestSequence":replay.latest_sequence, "truncated":replay.truncated}),
+    )
+}
+
+#[tauri::command]
+pub async fn ask_submit(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    request: ask::AskSubmit,
+) -> IpcResult {
+    authorize(&window)?;
+    let desktop = window.try_state::<Arc<super::Desktop>>();
+    let conversation_id = request.conversation_id;
+    let active_desktop = desktop.as_ref().map(|desktop| Arc::clone(&**desktop));
+    let (transient, cancellation, generation) = {
+        // Bind the permit to the checked conversation atomically with session
+        // changes and permission revocation. Never hold this gate across await.
+        let _guard = host.attachment_gate.lock();
+        host.require_current(conversation_id).map_err(wire::error)?;
+        if !host.accepts_submission(conversation_id, active_desktop.as_deref()) {
+            return Err(wire::error(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "askSessionChanged",
+            )));
+        }
+        let transient = host.service.current_is_transient();
+        let backend = host.backend.clone();
+        let cancellation = host
+            .fence
+            .issue()
+            .requiring(move || transient || backend.get_preferences().qa_save_history);
+        let generation = desktop
+            .as_ref()
+            .and_then(|desktop| desktop.external_target_generation());
+        (transient, cancellation, generation)
+    };
+    let current = || host.accepts_policy(transient, active_desktop.as_deref());
+    let desktop = desktop.as_ref().map(|desktop| Arc::downgrade(&**desktop));
+    let turn_id = host
+        .service
+        .submit_prepared_guarded(
+            request,
+            || host.prepare_submission(desktop, generation),
+            current,
+            cancellation,
+        )
+        .await
+        .map_err(wire::error)?;
+    Ok(json!({"turnId":turn_id}))
+}
+
+#[tauri::command]
+pub fn ask_cancel(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+    turn_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    host.service
+        .cancel(AskTurnKey {
+            conversation_id,
+            turn_id,
+        })
+        .map_err(wire::error)?;
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub async fn ask_add_attachment(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    let Some(file) = pick_attachment_file(&window)
+        .await
+        .map_err(attachment_error)
+        .map_err(wire::error)?
+    else {
+        return Ok(Value::Null);
+    };
+    Ok(json!(host
+        .inner()
+        .add_file(conversation_id, file)
+        .map_err(wire::error)?))
+}
+
+#[tauri::command]
+pub async fn ask_add_dropped_image(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+    display_name: String,
+    data_base64: String,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    let file = decode_dropped_image(&display_name, &data_base64)
+        .map_err(attachment_error)
+        .map_err(wire::error)?;
+    Ok(json!(host
+        .inner()
+        .add_file(conversation_id, file)
+        .map_err(wire::error)?))
+}
+
+#[tauri::command]
+pub fn ask_remove_attachment(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+    attachment_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    let _guard = host.attachment_gate.lock();
+    let scope = host.scope(conversation_id).map_err(wire::error)?;
+    if scope.remove(&attachment_id.to_string()) {
+        host.service
+            .publish_attachment_removed(conversation_id, attachment_id)
+            .map_err(wire::error)?;
+    }
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub fn ask_get_attachment_preview(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+    attachment_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    let scope = host.scope(conversation_id).map_err(wire::error)?;
+    Ok(json!(scope
+        .preview(&attachment_id.to_string())
+        .map_err(attachment_error)
+        .map_err(wire::error)?))
+}
+
+#[tauri::command]
+pub fn ask_open_source(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    conversation_id: Uuid,
+    turn_id: Uuid,
+    source_id: String,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    let url = host
+        .service
+        .source_url(
+            AskTurnKey {
+                conversation_id,
+                turn_id,
+            },
+            &source_id,
+        )
+        .map_err(wire::error)?;
+    #[allow(deprecated)]
+    window
+        .shell()
+        .open(url, None)
+        .map_err(|_| json!({"code":"platform", "message":"Could not open this source."}))?;
+    Ok(Value::Null)
+}
+
+pub(crate) struct DesktopPorts {
+    pub(crate) app: AppHandle,
+    pub(crate) ask: Arc<AskHost>,
+    pub(crate) coordinator: Arc<crate::coordinator::Coordinator>,
+}
+
+impl super::Integration for DesktopPorts {
+    fn revoke_requests(&self) {
+        self.ask.fence.revoke();
+    }
+
+    fn private_session(&self) -> bool {
+        !self.ask.backend.get_preferences().qa_save_history
+    }
+
+    fn auto_voice_on_open(&self) -> bool {
+        self.ask
+            .entry_settings
+            .read()
+            .is_ok_and(|settings| settings.auto_voice_on_open)
+    }
+
+    fn prepare_open(
+        &self,
+        invocation: super::capture::Invocation,
+        generation: u64,
+    ) -> super::Task<Result<(), String>> {
+        let app = self.app.clone();
+        let ask = self.ask.clone();
+        Box::pin(async move {
+            let conversation = ask.open().map_err(|error| error.message)?;
+            if let (Some(pid), Some(bundle)) = (
+                invocation.foreground_pid,
+                invocation
+                    .foreground_app
+                    .as_ref()
+                    .and_then(|app| app.bundle_id.as_deref()),
+            ) {
+                ask.context.bind_browser_source(conversation, pid, bundle);
+            }
+            if let Some(desktop) = app.try_state::<Arc<super::Desktop>>() {
+                desktop.set_conversation(Some(conversation.to_string()));
+            }
+            let captured = ask
+                .targets
+                .capture_before_focus(invocation.foreground_pid, generation, ask.context_access())
+                .await;
+            if app
+                .try_state::<Arc<super::Desktop>>()
+                .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))
+            {
+                *ask.original.lock() = Some(OriginalTarget {
+                    generation,
+                    caret: matches!(captured.selection, target::ExternalSelection::None)
+                        .then_some(captured.write_target)
+                        .flatten(),
+                    context: captured.context,
+                });
+            }
+            if let Some(source) = &invocation.foreground_app {
+                if invocation.foreground_pid.is_some_and(|pid| {
+                    super::capture::foreground().is_some_and(|foreground| foreground.pid == pid)
+                }) {
+                    ask.context.record_external_app(
+                        conversation,
+                        invocation.invocation_id,
+                        invocation.captured_at,
+                        source.name.as_deref(),
+                        source.bundle_id.as_deref(),
+                    );
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn ordinary_dictation_edge(
+        &self,
+        edge: openless_core::DictationHotkeyEdge,
+        fn_commit: Option<super::hotkey::FnCommit>,
+    ) -> super::Task<()> {
+        let coordinator = self.coordinator.clone();
+        Box::pin(async move {
+            if let (Some(commit), openless_core::DictationHotkeyEdge::Pressed { press_id, .. }) =
+                (fn_commit, edge)
+            {
+                let backend = coordinator.backend();
+                if let Err(error) = backend
+                    .dispatch_arbitrated_dictation_hotkey_press(edge, || {
+                        super::hotkey::fn_stroke_is_current(press_id, commit)
+                    })
+                    .await
+                {
+                    log::warn!("[ask] ordinary Fn dispatch failed: {error}");
+                }
+                return;
+            }
+            coordinator.dispatch_ask_passthrough(edge).await;
+        })
+    }
+
+    fn ordinary_dictation_is_active(&self) -> bool {
+        matches!(
+            self.coordinator.backend().snapshot().dictation.phase,
+            openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+        )
+    }
+
+    fn capsule(&self, frame: openless_core::CapsulePayload) {
+        self.coordinator.present_ask_capsule(frame);
+    }
+}
+
+#[tauri::command]
+pub async fn ask_expand_chat(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    desktop: State<'_, Arc<super::Desktop>>,
+    conversation_id: Uuid,
+    turn_id: Uuid,
+) -> IpcResult {
+    authorize(&window)?;
+    host.require_current(conversation_id).map_err(wire::error)?;
+    let snapshot = host
+        .service
+        .snapshot(conversation_id)
+        .map_err(wire::error)?;
+    if !snapshot.submission.is_some_and(|submission| {
+        submission.current_turn_id == turn_id
+            && matches!(
+                submission.route,
+                Some(ask::AskRoute::Answer | ask::AskRoute::SelectionAnswer)
+            )
+    }) {
+        return Err(
+            json!({"code":"invalid_state","message":"This request is not an Ask conversation."}),
+        );
+    }
+    desktop
+        .inner()
+        .expand_chat(window, conversation_id)
+        .await
+        .map_err(|message| json!({"code":"platform","message":message}))?;
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub fn ask_window_hide(
+    window: WebviewWindow,
+    desktop: State<'_, Arc<super::Desktop>>,
+) -> IpcResult {
+    authorize(&window)?;
+    desktop
+        .hide(&window)
+        .map_err(|message| json!({"code":"platform","message":message}))?;
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub fn ask_sync_editor(
+    window: WebviewWindow,
+    desktop: State<'_, Arc<super::Desktop>>,
+    focus_epoch: u64,
+    focus_request: u64,
+    editor: super::voice::Editor,
+) -> IpcResult {
+    authorize(&window)?;
+    if editor.mount_id.len() > 128 || editor.editor_id.len() > 128 {
+        return Err(json!({"code":"invalid_argument","message":"Invalid Ask editor state."}));
+    }
+    Ok(json!(desktop.update_composer(
+        focus_epoch,
+        focus_request,
+        editor
+    )))
+}
+
+#[tauri::command]
+pub fn ask_ack_voice(
+    window: WebviewWindow,
+    desktop: State<'_, Arc<super::Desktop>>,
+    recording_id: openless_core::SessionId,
+) -> IpcResult {
+    authorize(&window)?;
+    Ok(json!(desktop.acknowledge_voice_delivery(recording_id)))
+}
+
+#[tauri::command]
+pub fn ask_get_context_permission(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    Ok(json!(host.context.app_metadata_allowed()))
+}
+
+#[tauri::command]
+pub fn ask_set_context_permission(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    allowed: bool,
+) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    let _guard = host.attachment_gate.lock();
+    let grant = |enabled| {
+        host.context
+            .set_authorization(openless_core::ask_context::ContextAuthorization {
+                app_metadata: enabled,
+                usage: false,
+            })
+    };
+    if !allowed {
+        super::session::revoke_app_context(&host.context, &host.service, &host.fence);
+    }
+    let stored = host.context_preference.as_ref().is_some_and(|path| {
+        crate::persistence::atomic_write(path, if allowed { b"true" } else { b"false" }).is_ok()
+    });
+    if !stored {
+        return Err(
+            json!({"code":"persistence","message":"Could not save the Ask context permission."}),
+        );
+    }
+    if allowed {
+        grant(true);
+    }
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub fn ask_get_read_permissions(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    Ok(json!(host.context.read_permissions()))
+}
+
+#[tauri::command]
+pub fn ask_set_read_permissions(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    permissions: super::context::ReadPermissions,
+) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    let _guard = host.attachment_gate.lock();
+    let previous = host.context.read_permissions();
+    if previous == permissions {
+        return Ok(json!(previous));
+    }
+    let revoking = (previous.browser_tab && !permissions.browser_tab)
+        || (previous.voice_history && !permissions.voice_history);
+    if revoking {
+        host.context
+            .set_read_permissions(super::context::ReadPermissions {
+                browser_tab: previous.browser_tab && permissions.browser_tab,
+                voice_history: previous.voice_history && permissions.voice_history,
+            });
+        host.service.cancel_active_turns();
+    }
+    let bytes = serde_json::to_vec(&permissions)
+        .map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
+    let path = host.read_permissions_path.as_ref().ok_or_else(
+        || json!({"code":"persistence","message":"Ask permission storage is unavailable."}),
+    )?;
+    crate::persistence::atomic_write(path, &bytes)
+        .map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
+    host.context.set_read_permissions(permissions);
+    Ok(json!(permissions))
+}
+
+fn settings_reply(result: Result<AskEntrySettings, String>) -> IpcResult {
+    result
+        .map(|settings| json!(settings))
+        .map_err(|_| json!({"code":"persistence","message":"Could not access Ask settings."}))
+}
+
+#[tauri::command]
+pub fn ask_get_entry_settings(window: WebviewWindow, host: AskState<'_>) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    settings_reply(host.entry_settings.read())
+}
+
+#[tauri::command]
+pub async fn ask_set_entry_settings(
+    window: WebviewWindow,
+    host: AskState<'_>,
+    settings: super::entry_settings::AskEntrySettingsPatch,
+) -> IpcResult {
+    if window.label() != "main" {
+        return Err(
+            json!({"code":"permission_denied","message":"Open Ask settings in the main window."}),
+        );
+    }
+    let store = host.entry_settings.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || store.write(settings))
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+    settings_reply(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ask_window_is_limited_to_its_own_commands() {
+        for command in [
+            "ask_snapshot",
+            "ask_expand_chat",
+            "ask_window_hide",
+            "ask_submit",
+        ] {
+            assert!(restricted_command_allowed(LABEL, command));
+        }
+        for command in [
+            "ask_get_entry_settings",
+            "ask_set_entry_settings",
+            "copy_text_to_clipboard",
+        ] {
+            assert!(!restricted_command_allowed(LABEL, command));
+            assert!(restricted_command_allowed("main", command));
+        }
+    }
+}

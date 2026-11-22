@@ -410,7 +410,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
+pub(crate) fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     show: bool,
 ) -> bool {
@@ -2446,6 +2446,10 @@ impl TauriCoordinatorHost {
 
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        #[cfg(not(mobile))]
+        if self.ask_owns_capsule() {
+            return;
+        }
         self.capsule.snapshot.lock().record_backend_event(event);
         #[cfg(not(mobile))]
         if crate::desktop_resources::active()
@@ -2463,6 +2467,18 @@ impl TauriCoordinatorHost {
                 native.update_transcript(&session_id, text);
             }
         }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn claim_ask_capsule(&self, session_id: &str) -> u64 {
+        self.capsule.snapshot.lock().claim_ask(session_id)
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn ask_owns_capsule(&self) -> bool {
+        self.app().as_ref()
+            .and_then(|app| app.try_state::<Arc<crate::ask_window::Desktop>>())
+            .is_some_and(|ask| ask.owns_capsule())
     }
 
     pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {

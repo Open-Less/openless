@@ -193,17 +193,6 @@ pub enum SideModifier {
     ShiftRight,
 }
 
-impl SideModifier {
-    fn recording_key(self) -> &'static str {
-        match self {
-            Self::CmdLeft => "LeftCommand", Self::CmdRight => "RightCommand",
-            Self::CtrlLeft => "LeftControl", Self::CtrlRight => "RightControl",
-            Self::AltLeft => "LeftAlt", Self::AltRight => "RightAlt",
-            Self::ShiftLeft => "LeftShift", Self::ShiftRight => "RightShift",
-        }
-    }
-}
-
 pub struct SideAwareComboMonitor;
 
 impl SideAwareComboMonitor {
@@ -381,12 +370,10 @@ pub mod platform {
 
     pub fn dispatch_vk(vk_code: u32, pressed: bool) -> bool {
         if let Some(side) = side_from_vk(vk_code) {
-            crate::recording_companion::event(side.recording_key(), pressed);
             handle_side_modifier(side, pressed);
             return false;
         }
         if let Some(primary) = primary_from_vk(vk_code) {
-            if crate::recording_companion::event(&primary, pressed) { return true; }
             handle_primary_key(&primary, pressed);
         }
         false
@@ -406,7 +393,7 @@ pub mod platform {
         }
     }
 
-    fn primary_from_vk(vk_code: u32) -> Option<String> {
+    pub(crate) fn primary_from_vk(vk_code: u32) -> Option<String> {
         if (0x41..=0x5A).contains(&vk_code) {
             return Some(((vk_code as u8) as char).to_string());
         }
@@ -560,7 +547,7 @@ pub mod platform {
 }
 
 /// macOS virtual keycode → ShortcutBinding.primary (US ANSI layout).
-fn macos_keycode_to_primary(keycode: i64) -> Option<&'static str> {
+pub(crate) fn macos_keycode_to_primary(keycode: i64) -> Option<&'static str> {
     match keycode {
         // A-Z (non-contiguous on macOS)
         0 => Some("A"),
@@ -682,17 +669,12 @@ pub mod platform {
                     // `CGEventSourceKeyState` (Apple's standard way to resolve side).
                     None => keycode_is_down(keycode),
                 };
-                crate::recording_companion::event(side.recording_key(), down);
                 handle_side_modifier(side, down);
-            } else if keycode == 63 {
-                crate::recording_companion::event("Fn", flags & (1 << 23) != 0);
             }
             return false;
         }
 
-        crate::recording_companion::sync_fn(flags & (1 << 23) != 0);
         if let Some(primary) = primary_from_keycode(keycode) {
-            if crate::recording_companion::event(&primary, pressed) { return true; }
             handle_primary_key(&primary, pressed);
         }
         false
@@ -730,7 +712,7 @@ pub mod platform {
         }
     }
 
-    fn keycode_is_down(keycode: i64) -> bool {
+    pub(crate) fn keycode_is_down(keycode: i64) -> bool {
         unsafe { CGEventSourceKeyState(COMBINED_SESSION, keycode as u16) }
     }
 

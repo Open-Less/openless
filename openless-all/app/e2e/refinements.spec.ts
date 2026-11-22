@@ -217,7 +217,6 @@ const styleDestinations = [
 ] as const;
 const toolDestinations = [
   ['纠正规则', 'corrections'],
-  ['随便问', 'selectionAsk'],
   ['翻译', 'translation'],
   ['速记', 'quickNote'],
 ] as const;

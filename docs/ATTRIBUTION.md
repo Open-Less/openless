@@ -18,3 +18,17 @@ The adapted component lives in `openless-all/app/src/ui/controls/GitHubActivity.
 ## Rare UI Toast
 
 The shared toast surface adapts Rare UI's [Toast](https://www.rareui.com/components/toast) panel, glyphs, and tile transitions from [toast.tsx](https://github.com/swamimalode07/rare-ui/blob/main/components/ui/toast.tsx) (Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt)). OpenLess uses its existing per-window notification controller and viewport instead of Sonner's global store. `useToast()` exposes non-modal variants and task updates; `confirm`, `warn`, and `openDialog` remain separate modal APIs. The credit appears in Settings → About and updates → Component credits.
+
+## Rare UI AI Prompt Box and Streaming Response
+
+[AI Prompt Box](https://www.rareui.com/components/promptbox) and
+[Streaming Response](https://www.rareui.com/components/streamingresponse) are the
+interaction references for OpenLess Ask Anything. The OpenLess implementation uses
+its own native shortcut, voice, and streaming contracts rather than the demo's mock backend.
+
+The upstream Prompt Box files in `openless-all/app/third_party/rare-ui` come from
+[`33f7ce51`](https://github.com/swamimalode07/rare-ui/tree/33f7ce51e5a41fb7caef66b7aad0812b5bb2ab17)
+and are included as part of the app, not offered as a component library.
+
+- Rare UI code: Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](../openless-all/app/public/licenses/rare-ui-LICENSE.txt).
+- Open Runde fonts: [SIL Open Font License 1.1](../openless-all/app/public/licenses/open-runde-OFL.txt).

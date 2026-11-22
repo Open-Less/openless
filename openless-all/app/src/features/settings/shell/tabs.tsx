@@ -7,7 +7,7 @@ import { createContext, useContext, useEffect, useId, useRef, useState } from 'r
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../../components/Icon';
 import { isRetiredMacAsrProvider } from '../../../lib/experimentalAsr';
-import { getRuntimeOS } from '../../../runtime/environment';
+import { getRuntimeOS, isTauriHost } from '../../../runtime/environment';
 import {
   ExperimentalAsrSection,
   type ExperimentalAsrController,
@@ -40,7 +40,9 @@ import { BetaChannelSection } from '../sections/BetaChannelSection';
 import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
+import { AskEntrySettingsSection, IntentRoutingSection } from '../sections/AskEntrySettingsSection';
 import { PolishStrategySection } from '../sections/PolishStrategySection';
+import { AskHistorySection } from '../sections/AskHistorySection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
 import type { PipelineMode, PlatformCapabilities, PlatformKind } from '../../../api/contracts';
@@ -91,7 +93,7 @@ export function GeneralTab({
   page: GeneralPageId | 'root';
   onPageChange: (page: GeneralPageId | 'root') => void;
 }) {
-  const categories = visibleGeneralPages(platform);
+  const categories = visibleGeneralPages(platform, os, isTauriHost());
   const activePage = page;
   if (activePage !== 'root') {
     return (
@@ -103,6 +105,13 @@ export function GeneralTab({
             surface="microphone"
           />
         )}
+        {activePage === 'askEntry' && (
+          <>
+            <AskEntrySettingsSection />
+            <AskHistorySection compact />
+          </>
+        )}
+        {activePage === 'askHistory' && <AskHistorySection />}
         {activePage === 'capsule' && <RecordingInputSection forcedOs={os} surface="capsule" />}
         {activePage === 'textInput' && (
           <>
@@ -688,7 +697,7 @@ export function AdvancedTab({
           icon={item.icon}
           title={item.titleKey}
           beta={'beta' in item && item.beta}
-          description={`modal.advancedPages.${item.id}`}
+          description={item.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${item.id}`}
           onClick={() => onOpenPage(item.id)}
         />
       ))}
@@ -727,8 +736,9 @@ export function AdvancedTab({
                   )}
               </div>
             )}
-            {item.id === 'polishStrategy' && <PolishStrategySection />}
             {item.id === 'webSearch' && <WebSearchSection />}
+            {item.id === 'intentRouting' && <IntentRoutingSection />}
+            {item.id === 'polishStrategy' && <PolishStrategySection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

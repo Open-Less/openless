@@ -55,7 +55,7 @@ export function listenStylePackChanges(onChange: () => void): Promise<() => void
   }
 }
 
-/** Usage is invalidated independently of dictation history. */
+/** Usage is invalidated independently of dictation history (including standalone Ask). */
 export function listenServiceUsageChanges(onChange: () => void): Promise<() => void> {
   switch (getRuntimeEnvironment().host) {
     case 'preview':

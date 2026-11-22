@@ -7,11 +7,13 @@ import type { zhCN } from './zh-CN';
 // Type-level guarantee that en mirrors the zh-CN shape.
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const en: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Voice editing session',
@@ -1156,6 +1158,14 @@ export const en: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'When the Ask shortcut is pressed',
+      desc: 'Uses your recording shortcut plus the Ask companion key. The recording shortcut alone still dictates at the cursor.',
+      record: 'Open and record immediately',
+      open: 'Open first; press again to record',
+      draft: 'Open and focus the text box',
+      failed: 'Could not save the Ask shortcut behavior.',
+    },
     dictation: 'Dictate',
     translation: 'Translate',
     question: 'Ask anything',
@@ -1170,6 +1180,11 @@ export const en: typeof zhCN = {
       'Selected text becomes context. A selection is optional. Each shortcut starts a fresh question.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'Share desktop app names with Ask',
+      description: 'When you open Ask, include the focused app and the names of open apps in the answer request. Window contents are not included.',
+      saveFailed: 'Could not update Ask’s desktop context permission.',
+    },
     title: 'Ask anything',
     desc: 'Select text and ask questions by voice, with multi-turn follow-ups.',
     shortcutSettings: 'Shortcut settings',
@@ -1191,7 +1206,7 @@ export const en: typeof zhCN = {
     },
     history: {
       title: 'Save history',
-      desc: 'Save Q&A records locally when enabled. Off by default.',
+      desc: 'Save Ask Anything history on this device. Off by default.',
     },
     howto: {
       title: 'How to use',

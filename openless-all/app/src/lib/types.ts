@@ -36,7 +36,7 @@ export type PipelineMode = 'traditional' | 'multimodal' | 'deepseek';
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
 export type HistorySource =
-  'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
+  'voice' | 'qa' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
@@ -458,6 +458,7 @@ export interface UserPreferences {
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
   qaCompanionKey: string;
+  qaShortcutBehavior?: QaShortcutBehavior;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
   /** Selection polish hotkey. null = disabled. */
@@ -705,7 +706,10 @@ export interface QaActivity {
   toolName?: string;
 }
 
+export type QaShortcutBehavior = 'record' | 'open' | 'draft';
+
 export interface QaStatePayload {
+  panelOpen?: boolean;
   activity?: QaActivity;
   kind: QaStateKind;
   /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */

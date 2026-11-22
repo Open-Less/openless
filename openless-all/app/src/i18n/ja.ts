@@ -1144,6 +1144,14 @@ export const ja: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '質問ショートカットの動作',
+      desc: '録音ショートカットと追加キーを使用します。録音ショートカット単体ではカーソル位置に文字を入力します。',
+      record: '開いてすぐに録音',
+      open: '開くだけ（再度押して録音）',
+      draft: '開いて入力欄にフォーカス',
+      failed: 'ショートカットの動作を保存できませんでした。',
+    },
     dictation: '音声入力',
     translation: '翻訳',
     question: '何でも質問',
@@ -1158,6 +1166,11 @@ export const ja: typeof zhCN = {
       '選択した文字を質問の文脈に使います。選択は任意です。毎回、新しい質問を開始します。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'アプリ名を「Ask」と共有',
+      description: '「Ask」を開いたときに使用中と起動中のアプリ名を記録し、質問を送信するときにモデルへ渡します。ウィンドウの内容は読み取りません。',
+      saveFailed: '「Ask」のデスクトップ情報の共有設定を更新できませんでした。',
+    },
     title: '何でも質問',
     desc: 'テキストを選択して音声で質問。複数ターンの追問対応。',
     shortcutSettings: 'ショートカット設定',

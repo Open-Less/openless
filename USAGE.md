@@ -145,6 +145,10 @@ Switch the mode from the capsule in the main window or under Settings:
 
 ---
 
+## Ask Anything (desktop)
+
+On macOS or Windows, press the recording shortcut with Space to open Ask Anything. Type a question or dictate into the draft, then send it when ready. Answers expand in the same window. Write and edit requests can deliver to a verified external input target. If OpenLess cannot confirm the write, the result stays available in Ask for manual copying. See the [desktop Ask contract](docs/ask-unified-entry-contract.md) for routing and delivery details.
+
 ## Dictionary
 
 The dictionary improves recognition of specific words (product names, people, jargon).

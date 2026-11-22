@@ -44,7 +44,7 @@ pub(crate) fn less_computer_event_replay_after(
     }
 }
 
-async fn dispatch(
+pub(super) async fn dispatch(
     inner: &Arc<Inner>,
     edge: openless_core::DictationHotkeyEdge,
 ) -> Result<openless_core::CliDispatchOutcome, openless_core::BackendError> {
@@ -73,14 +73,6 @@ pub(super) async fn handle_pressed_edge(
     pressed_at: std::time::Instant,
     press_id: u64,
 ) {
-    if crate::recording_companion::claimed() || inner.qa_context.is_panel_visible() {
-        // Result/recording windows never hijack the recording key into the old
-        // second-stage follow-up flow. Only the explicit companion chord asks.
-        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if crate::recording_companion::claimed() || matches!(qa.phase,
-                openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
-        }
-    }
     match dispatch(
         inner,
         openless_core::DictationHotkeyEdge::Pressed {
@@ -100,11 +92,6 @@ pub(super) async fn handle_released_edge(
     released_at: std::time::Instant,
     press_id: u64,
 ) {
-    if inner.qa_context.is_panel_visible() {
-        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if matches!(qa.phase, openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
-        }
-    }
     match dispatch(
         inner,
         openless_core::DictationHotkeyEdge::Released {

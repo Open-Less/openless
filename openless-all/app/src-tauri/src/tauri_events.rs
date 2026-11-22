@@ -589,6 +589,12 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
         coordinator.tauri_host().refresh_native_capsule_theme();
     }
     let _ = app.emit("prefs:changed", &preferences);
+    #[cfg(not(mobile))]
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window(crate::ask_window::LABEL),
+        "ask:window",
+        serde_json::json!({"type": "themeChanged", "themeMode": preferences.theme_mode}),
+    );
 }
 
 fn transcription_notice_payload(

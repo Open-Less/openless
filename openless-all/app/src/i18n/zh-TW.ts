@@ -5,11 +5,13 @@ import type { zhCN } from './zh-CN';
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsZhTW as askEntrySettings } from './askEntrySettings';
 
 export const zhTW: typeof zhCN = {
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: '語音編輯工作階段',
@@ -1107,6 +1109,14 @@ export const zhTW: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提問快捷鍵行為',
+      desc: '使用目前錄音快捷鍵加提問附加鍵。單獨按錄音快捷鍵仍會在游標處聽寫。',
+      record: '開啟並立即錄音',
+      open: '僅開啟，再按一次錄音',
+      draft: '開啟並聚焦文字框',
+      failed: '無法儲存提問快捷鍵行為。',
+    },
     dictation: '口述',
     translation: '翻譯',
     question: '隨便問',
@@ -1120,6 +1130,11 @@ export const zhTW: typeof zhCN = {
       '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。關閉對話視窗後開始新對話。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: '向「隨便問」提供應用程式名稱',
+      description: '喚起「隨便問」時，記錄前景及已開啟的應用程式名稱，並在送出問題時提供給模型。不讀取視窗內容。',
+      saveFailed: '無法更新「隨便問」的桌面內容權限。',
+    },
     title: '隨便問',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
