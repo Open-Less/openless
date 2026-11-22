@@ -182,6 +182,7 @@ impl crate::ask::SearchTool for Search {
                 url: "https://example.com/release".into(),
                 title: "Release".into(),
                 snippet: None,
+                providers: Vec::new(),
                 read_status: AskReadStatus::Read,
             };
             progress(AskToolProgress::Source(source.clone()));

@@ -255,6 +255,7 @@ mod tests {
                     url: "https://example.com/".into(),
                     title: "Result".into(),
                     snippet: None,
+                    providers: vec!["FreeSerp".into(), "Keenable".into()],
                     read_status: AskReadStatus::Blocked,
                 },
             },
@@ -266,6 +267,7 @@ mod tests {
         assert_eq!(packet["sequence"], 7);
         assert_eq!(packet["type"], "sourceChanged");
         assert_eq!(packet["source"]["readStatus"], "blocked");
+        assert_eq!(packet["source"]["providers"], json!(["FreeSerp", "Keenable"]));
         assert!(packet.get("evidence").is_none());
     }
 

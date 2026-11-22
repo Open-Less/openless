@@ -159,6 +159,7 @@ impl SearchTool for Search {
                 url: "https://example.com/result".into(),
                 title: "Example".into(),
                 snippet: None,
+                providers: Vec::new(),
                 read_status: AskReadStatus::Discovered,
             };
             progress(AskToolProgress::Source(source.clone()));
@@ -1566,6 +1567,7 @@ async fn p2_terminal_sources_finish_in_snapshot_and_replay_before_terminal() {
             url: "https://example.com/".into(),
             title: "source".into(),
             snippet: None,
+            providers: Vec::new(),
             read_status: AskReadStatus::Reading,
         };
         sink(AssistantEvent::Source {
@@ -1619,4 +1621,442 @@ async fn p2_terminal_sources_finish_in_snapshot_and_replay_before_terminal() {
             expected
         );
     }
+}
+
+// Use the production Standalone -> PersonalAssistant -> WebSearchTool chain.
+// Only the model and host context are fixtures; live variants use real public sources.
+async fn selected_search_chain(
+    provider: crate::web_search::SearchProvider,
+    endpoint: String,
+    expected: &str,
+    live: bool,
+) {
+    use crate::assistant::{AssistantDependencies, PersonalAssistant};
+    use crate::assistant_api::*;
+    use crate::{CredentialKey, CredentialNamespace, InMemoryCredentialStore, SecretValue};
+    struct NoAmbientContext;
+    impl AssistantContextProvider for NoAmbientContext {
+        fn read(
+            &self,
+            _: AskTurnKey,
+            _: AssistantContextQuery,
+            _: AskCancellation,
+        ) -> BoxFuture<'_, Result<AssistantContextResult, BackendError>> {
+            Box::pin(async { panic!("unexpected ambient context read") })
+        }
+    }
+    let store = InMemoryCredentialStore::default().with_secret(
+        CredentialKey::new(
+            CredentialNamespace::Application,
+            None,
+            crate::web_search::CONFIG_ACCOUNT,
+        )
+        .unwrap(),
+        SecretValue::new(
+            serde_json::to_string(&crate::web_search::WebSearchConfig {
+                provider,
+                endpoint,
+                ..Default::default()
+            })
+            .unwrap(),
+        ),
+    );
+    let search = Arc::new(crate::ask_search::WebSearchTool::new(Arc::new(store)));
+    let (sender, mut calls) = mpsc::unbounded_channel();
+    let models = Arc::new(Factory(Arc::new(TestModel {
+        label: AskModelLabel {
+            service: "fixture".into(),
+            channel: "fixture".into(),
+            model: "fixture".into(),
+            protocol: "fixture".into(),
+        },
+        caps: AskModelCapabilities {
+            context_window: Some(128_000),
+            output_tokens: 256,
+            image_input: false,
+            image_token_reserve: 0,
+            deep_thinking: false,
+        },
+        calls: sender,
+        intent_tool: true,
+    })));
+    let service = StandaloneQaService::new(StandaloneQaDependencies {
+        assistant: Arc::new(PersonalAssistant::new(AssistantDependencies {
+            models: models.clone(),
+            context: Arc::new(NoAmbientContext),
+            search: search.clone(),
+            usage: None,
+        })),
+        models,
+        context: Arc::new(Context::default()),
+        search,
+        attachments: Arc::new(Attachments::default()),
+        spawner: Arc::new(crate::TokioTaskSpawner),
+        history: None,
+        usage: None,
+    });
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let turn_id = service
+        .submit(request(
+            conversation_id,
+            "selected-search",
+            "Search Rust documentation",
+        ))
+        .await
+        .unwrap();
+    let key = AskTurnKey {
+        conversation_id,
+        turn_id,
+    };
+    let routing = tokio::time::timeout(Duration::from_secs(3), calls.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    routing.complete_raw(r#"{"route":"answer"}"#);
+    let assistant = tokio::time::timeout(Duration::from_secs(3), calls.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assistant.tool(AskToolCall::WebSearch {
+        public_query: "Rust language documentation".into(),
+    });
+    let final_call = tokio::time::timeout(Duration::from_secs(20), calls.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let data = final_call
+        .request
+        .tools
+        .results
+        .last()
+        .expect("search tool result")
+        .output
+        .clone();
+    assert!(data.contains(expected), "unexpected tool result: {data}");
+    let snapshot = service.snapshot(conversation_id).unwrap();
+    let encoded = serde_json::to_value(&snapshot).unwrap();
+    if live {
+        let sources = &encoded["turns"][0]["sources"];
+        let sources = sources
+            .as_array()
+            .expect("source events reach standalone snapshot");
+        assert!(!sources.is_empty());
+        assert!(sources.iter().all(|s| s["providers"]
+            .as_array()
+            .is_some_and(|p| !p.is_empty() && !p.contains(&serde_json::json!("DeepSeek")))));
+        if data.contains("available") && !data.contains("unavailable") {
+            assert!(data.contains("excerpt"));
+            assert!(data.contains("providers"));
+        } else {
+            assert!(data.contains("snippetOnly"));
+            assert!(!data.contains("excerpt"));
+        }
+        println!("Live source snapshot: {}", sources.len());
+    }
+    final_call.complete_raw("Fixture answer; not a real model answer.");
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+}
+
+#[tokio::test]
+async fn selected_search_chain_off() {
+    selected_search_chain(
+        crate::web_search::SearchProvider::Off,
+        String::new(),
+        "webSearchDisabled",
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn selected_search_chain_snippet_and_empty() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for (body, expected) in [
+        (
+            r#"{"results":[{"title":"Rust","url":"http://127.0.0.1/private","content":"unverified snippet"}]}"#,
+            "snippetOnly",
+        ),
+        (r#"{"results":[]}"#, "noResults"),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/search", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 8192];
+            let n = socket.read(&mut bytes).await.unwrap();
+            assert!(String::from_utf8_lossy(&bytes[..n]).contains("q=Rust+language+documentation"));
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        selected_search_chain(
+            crate::web_search::SearchProvider::Searxng,
+            endpoint,
+            expected,
+            false,
+        )
+        .await;
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "real free providers; fixture model answer"]
+async fn selected_search_chain_free_live() {
+    selected_search_chain(
+        crate::web_search::SearchProvider::Free,
+        String::new(),
+        "status",
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "real free fallback without any DeepSeek key; fixture model answer"]
+async fn selected_search_chain_hybrid_missing_key_live() {
+    selected_search_chain(
+        crate::web_search::SearchProvider::Hybrid,
+        String::new(),
+        "status",
+        true,
+    )
+    .await;
+}
+
+#[cfg(feature = "ask-attachments")]
+async fn host_factory_selected_search(provider: crate::web_search::SearchProvider, live: bool) {
+    use crate::assistant_api::*;
+    use crate::{
+        BackendConfig, BackendDependencies, CredentialKey, CredentialNamespace, CredentialStore,
+        InMemoryCredentialStore, OpenLessBackend, SecretValue,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    struct NoContext;
+    impl AssistantContextProvider for NoContext {
+        fn read(
+            &self,
+            _: AskTurnKey,
+            _: AssistantContextQuery,
+            _: AskCancellation,
+        ) -> BoxFuture<'_, Result<AssistantContextResult, BackendError>> {
+            Box::pin(async { panic!("unexpected context read") })
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut models = 0;
+        let mut searches = 0;
+        while models < 3 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 8192];
+            let (headers, body) = loop {
+                let n = socket.read(&mut buffer).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buffer[..n]);
+                if let Some(end) = bytes.windows(4).position(|p| p == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]).into_owned();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (k, v) = line.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + length {
+                        break (headers, bytes[end + 4..end + 4 + length].to_vec());
+                    }
+                }
+            };
+            let response = if headers.starts_with("GET /search?") {
+                searches += 1;
+                assert!(headers.contains("q=Rust+documentation"));
+                r#"{"results":[{"title":"Rust docs","url":"http://127.0.0.1/blocked","content":"Not read"}]}"#.to_owned()
+            } else {
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                models += 1;
+                let delta = match models {
+                    1 => serde_json::json!({"content":r#"{"route":"answer"}"#}),
+                    2 => {
+                        serde_json::json!({"tool_calls":[{"index":0,"id":"search-fixture","function":{"name":"web_search","arguments":r#"{"query":"Rust documentation"}"#}}]})
+                    }
+                    _ => {
+                        let tools: Vec<_> = request["messages"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|m| m["role"] == "tool")
+                            .collect();
+                        assert_eq!(tools.len(), 1);
+                        let output = tools[0]["content"].as_str().unwrap();
+                        assert!(
+                            output.contains("snippetOnly")
+                                || (live && output.contains("available"))
+                        );
+                        if output.contains("available") {
+                            assert!(output.contains("excerpt") && output.contains("providers"));
+                        }
+                        assert!(!tools[0]["content"].as_str().unwrap().contains("Not read"));
+                        serde_json::json!({"content":"Fixture answer only"})
+                    }
+                };
+                format!(
+                    "data: {}\n\ndata: [DONE]\n\n",
+                    serde_json::json!({"choices":[{"delta":delta,"finish_reason":if models == 2 {"tool_calls"} else {"stop"}}]})
+                )
+            };
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+        }
+        assert_eq!(searches, usize::from(!live));
+    });
+    let credentials = Arc::new(InMemoryCredentialStore::default());
+    credentials
+        .mutate_channel(crate::ChannelMutation::Create {
+            kind: crate::ChannelKind::Llm,
+            provider_type: "openai-compatible".into(),
+            name: "Fixture".into(),
+        })
+        .await
+        .unwrap();
+    let channel_id = credentials
+        .list_channels(crate::ChannelKind::Llm)
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    for (namespace, id, account, value) in [
+        (
+            CredentialNamespace::Llm,
+            Some(channel_id.clone()),
+            "ark.endpoint",
+            format!("{origin}/v1"),
+        ),
+        (
+            CredentialNamespace::Llm,
+            Some(channel_id.clone()),
+            "ark.api_key",
+            "fixture".into(),
+        ),
+        (
+            CredentialNamespace::Llm,
+            Some(channel_id),
+            "ark.model_id",
+            "gpt-4o-mini".into(),
+        ),
+        (
+            CredentialNamespace::Application,
+            None,
+            crate::web_search::CONFIG_ACCOUNT,
+            serde_json::json!({"provider":provider,"endpoint":format!("{origin}/search")})
+                .to_string(),
+        ),
+    ] {
+        credentials
+            .write(
+                CredentialKey::new(namespace, id, account).unwrap(),
+                SecretValue::new(value),
+            )
+            .await
+            .unwrap();
+    }
+    let dir = std::env::temp_dir().join(format!("ask-search-host-{}", Uuid::new_v4()));
+    let mut deps = BackendDependencies::unsupported();
+    deps.credential_store = credentials;
+    deps.task_spawner = Arc::new(crate::TokioTaskSpawner);
+    let backend = OpenLessBackend::new(
+        BackendConfig {
+            data_dir: dir.clone(),
+            ..Default::default()
+        },
+        deps,
+    )
+    .unwrap();
+    let service = backend.create_standalone_ask(
+        Arc::new(Context::default()),
+        Arc::new(NoContext),
+        Arc::new(Attachments::default()),
+    );
+    let conversation_id = service.open();
+    let mut events = service.subscribe();
+    let turn_id = service
+        .submit(request(
+            conversation_id,
+            "host-factory",
+            "Search Rust documentation",
+        ))
+        .await
+        .unwrap();
+    let key = AskTurnKey {
+        conversation_id,
+        turn_id,
+    };
+    let status = tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.conversation_id == key.conversation_id && event.turn_id == Some(key.turn_id) {
+                if let AskEventKind::Terminal { status, .. } = event.kind {
+                    break status;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        status,
+        AskTurnStatus::Completed,
+        "{}",
+        serde_json::to_value(service.snapshot(conversation_id).unwrap()).unwrap()
+    );
+    let snapshot = serde_json::to_value(service.snapshot(conversation_id).unwrap()).unwrap();
+    if live {
+        let sources = snapshot["turns"][0]["sources"].as_array().unwrap();
+        assert!(!sources.is_empty());
+        for source in sources {
+            let providers = source["providers"].as_array().unwrap();
+            assert!(!providers.is_empty());
+            assert!(!providers.contains(&serde_json::json!("DeepSeek")));
+        }
+        println!(
+            "Host factory real sources: {}",
+            serde_json::to_string(sources).unwrap()
+        );
+    } else {
+        assert_eq!(snapshot["turns"][0]["sources"][0]["readStatus"], "blocked");
+    }
+    server.await.unwrap();
+    service.end_all();
+    drop(backend);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(feature = "ask-attachments")]
+#[tokio::test]
+async fn host_factory_selected_search_reaches_http_model_and_source_events() {
+    host_factory_selected_search(crate::web_search::SearchProvider::Searxng, false).await;
+}
+
+#[cfg(feature = "ask-attachments")]
+#[tokio::test]
+#[ignore = "real free providers via production factory; HTTP fixture model"]
+async fn host_factory_free_live() {
+    host_factory_selected_search(crate::web_search::SearchProvider::Free, true).await;
+}
+
+#[cfg(feature = "ask-attachments")]
+#[tokio::test]
+#[ignore = "real free fallback via production factory; no DeepSeek key or paid request"]
+async fn host_factory_hybrid_missing_key_live() {
+    host_factory_selected_search(crate::web_search::SearchProvider::Hybrid, true).await;
 }

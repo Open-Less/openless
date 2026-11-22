@@ -17,6 +17,8 @@
 - [Linux 宿主交接](linux-egui-handoff/README.md) · [后端契约](linux-egui-backend-contract.md) · [缺口和设备证据](linux-egui-handoff/02-gap-register.md) · [日志约定](linux-egui-logging.md)
 - [远程输入证书](remote-input-certificates.md) · [录音中断与恢复](remote-input-recording-recovery.md) · [Tauri CSP](tauri-csp.md) · [桌面输入与更新源](desktop-input-and-update.md)
 
+- [Ask 搜索兼容专项验收](development/ask-search-compat.md)
+
 ## 语音与服务
 
 - [录音启动与回声消除](audio-startup-latency.md) · [本地 ASR 生命周期](local-asr-lifecycle.md) · [macOS 实验模型](experimental-local-asr.md)

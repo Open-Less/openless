@@ -12,25 +12,12 @@ function isInteractive(element: HTMLElement | null) {
   return element?.isConnected && !element.closest('[inert]');
 }
 
-export interface WebSearchConfig {
-  provider:
-    'auto' | 'free' | 'hybrid' | 'free_serp' | 'bing' | 'tavily' | 'brave' | 'searxng' | 'off';
-  apiKey: string;
-  endpoint: string;
-}
-export const defaultSearchConfig: WebSearchConfig = {
-  provider: 'free',
-  apiKey: '',
-  endpoint: '',
-};
+export { defaultSearchConfig } from './webSearchConfig';
+import { parseSearchConfig, selectSearchProvider, type WebSearchConfig } from './webSearchConfig';
+export type { WebSearchConfig } from './webSearchConfig';
+
 export async function loadSearchConfig(): Promise<WebSearchConfig> {
-  const raw = await readCredential('web_search.config');
-  const parsed = raw ? JSON.parse(raw) : {};
-  return {
-    provider: parsed.provider === 'auto' ? 'free' : (parsed.provider ?? 'free'),
-    apiKey: parsed.apiKey ?? '',
-    endpoint: parsed.endpoint ?? '',
-  };
+  return parseSearchConfig(await readCredential('web_search.config'));
 }
 
 export function saveSearchConfig(value: WebSearchConfig): Promise<void> {
@@ -89,8 +76,8 @@ export function WebSearchSection() {
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '为提问提供联网搜索。搜索服务会接收搜索词与 IP；混合搜索使用你的 DeepSeek API Key，按官方标准计费。',
-          'Search the web for questions. Providers receive queries and your IP; Hybrid Search uses your DeepSeek API key and is billed by DeepSeek.',
+          '为提问提供联网搜索。免费聚合使用 FreeSerp 与 Keenable，受来源限额约束；搜索服务接收搜索词与 IP。',
+          'Search questions using FreeSerp and Keenable within their free limits. Providers receive queries and your IP.',
         )}
       </p>
       {config && (
@@ -98,11 +85,11 @@ export function WebSearchSection() {
           <SettingRow label={text('搜索服务', 'Search provider')}>
             <SelectLite
               ariaLabel={text('搜索服务', 'Search provider')}
-              value={config.provider}
-              onChange={(provider) => setConfig({ ...config, provider: provider as WebSearchConfig['provider'], apiKey: '', endpoint: '' })}
+              value={config.provider === 'auto' ? 'free' : config.provider}
+              onChange={(provider) => setConfig(selectSearchProvider(config, provider as WebSearchConfig['provider']))}
               options={[
-                { value: 'free', label: text('免费搜索', 'Free Search') },
-                { value: 'hybrid', label: text('混合搜索（免费 + DeepSeek）', 'Hybrid Search (Free + DeepSeek)') },
+                { value: 'free', label: text('免费聚合搜索', 'Free Aggregated Search') },
+                { value: 'hybrid', label: text('免费聚合搜索 + DeepSeek Web Search', 'Free Aggregated Search + DeepSeek Web Search') },
                 { value: 'free_serp', label: 'FreeSerp' },
                 { value: 'bing', label: 'Bing (RSS)' },
                 { value: 'tavily', label: 'Tavily' },
@@ -112,6 +99,21 @@ export function WebSearchSection() {
               ]}
             />
           </SettingRow>
+          {config.provider === 'hybrid' && (
+            <p>
+              {text(
+                '使用你的 DeepSeek API Key 调用官方独立 Search API；截至 2026-11-23，每千次非空成功请求 $0.75，问答模型用量另计。失败时仍使用免费有效结果。',
+                'Uses your DeepSeek API key for the official standalone Search API: $0.75 per 1,000 successful non-empty requests as of 2026-11-23. Answer model usage is separate. Free results remain available if DeepSeek fails.',
+              )}{' '}
+              <a
+                href="https://api-docs.deepseek.com/guides/search/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {text('官方说明', 'Official details')}
+              </a>
+            </p>
+          )}
           {['tavily', 'brave', 'hybrid'].includes(config.provider) && (
             <SettingRow label={config.provider === 'hybrid' ? 'DeepSeek API Key' : 'API Key'}>
               <TextField
@@ -146,7 +148,7 @@ export function WebSearchSection() {
             variant="primary"
             disabled={
               busy ||
-              (['tavily', 'brave', 'hybrid'].includes(config.provider) && !config.apiKey.trim()) ||
+              (['tavily', 'brave'].includes(config.provider) && !config.apiKey.trim()) ||
               (config.provider === 'searxng' && !/^https?:\/\//.test(config.endpoint))
             }
             onClick={async () => {

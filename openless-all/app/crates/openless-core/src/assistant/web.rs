@@ -171,6 +171,7 @@ fn source(url: String, title: String) -> AskSource {
         url,
         title,
         snippet: None,
+        providers: Vec::new(),
         read_status: AskReadStatus::Read,
     }
 }

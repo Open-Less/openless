@@ -124,6 +124,8 @@ pub struct SearchSource {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
     pub read_status: ReadStatus,
 }
 
@@ -277,12 +279,6 @@ impl SearchRun<'_> {
                     message: "The configured Web Search provider needs an API key".into(),
                 });
             }
-            SearchProvider::Hybrid if config.api_key.trim().is_empty() => {
-                return Err(SearchError {
-                    code: SearchErrorCode::Configuration,
-                    message: "Mixed Search needs a DeepSeek Search API key".into(),
-                });
-            }
             SearchProvider::Searxng if config.endpoint.trim().is_empty() => {
                 return Err(SearchError {
                     code: SearchErrorCode::Configuration,
@@ -321,6 +317,7 @@ impl SearchRun<'_> {
                 source_id: Uuid::new_v4(),
                 url: result.url,
                 title: result.title,
+                providers: result.providers,
                 snippet: (!result.snippet.trim().is_empty()).then_some(result.snippet),
                 read_status: ReadStatus::NotAttempted,
             };
@@ -505,6 +502,7 @@ impl crate::ask::SearchTool for WebSearchTool {
                         source_id: source.source_id.to_string(),
                         url: source.url,
                         title: source.title,
+                        providers: source.providers,
                         snippet: source.snippet,
                         read_status: match source.read_status {
                             ReadStatus::NotAttempted => AskReadStatus::Discovered,

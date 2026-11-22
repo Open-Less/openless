@@ -26,6 +26,7 @@ export type AskSource = {
   url: string;
   title: string;
   snippet?: string;
+  providers?: string[];
   readStatus: 'not_attempted' | 'reading' | 'read' | 'not_relevant' | 'blocked' | 'failed' | 'cancelled';
 };
 

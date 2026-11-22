@@ -58,6 +58,8 @@ pub struct SearchResult {
     pub title: String,
     pub url: String,
     pub snippet: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
 }
 fn result(title: &str, link: &str, snippet: &str) -> Option<SearchResult> {
     let url = url::Url::parse(link).ok()?;
@@ -71,6 +73,7 @@ fn result(title: &str, link: &str, snippet: &str) -> Option<SearchResult> {
         title: title.chars().take(200).collect(),
         url: url.to_string(),
         snippet: snippet.chars().take(1500).collect(),
+        providers: Vec::new(),
     })
 }
 pub fn native_deepseek(base: &str, model: &str) -> bool {
@@ -176,9 +179,6 @@ pub(crate) async fn query_sources(
             | SearchProvider::FreeSerp
             | SearchProvider::Hybrid
     ) {
-        if config.provider == SearchProvider::Hybrid && config.api_key.trim().is_empty() {
-            return Err("Mixed Search needs a DeepSeek Search API key".into());
-        }
         return public_sources::query(config, query, on_request).await;
     }
     let client = match policy {

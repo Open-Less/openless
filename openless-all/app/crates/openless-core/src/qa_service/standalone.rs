@@ -286,6 +286,8 @@ pub struct AskSource {
     pub url: String,
     pub title: String,
     pub snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
     pub read_status: AskReadStatus,
 }
 
