@@ -21,7 +21,7 @@
 
 普通桌面 stop/cancel IPC 现在接收可选的 sessionId，原生胶囊与 React 胶囊的按钮都传递明确身份。新录音上方的处理指示器取消最早后台任务，下方取消按钮只取消当前段。原生 helper 也核对显示帧携带的后台 id；过期按钮不能取消后来显示的任务。
 
-翻译仍复用 `get_dictation_translation_target`、`select_dictation_translation_target(sessionId, language)` 和现有 Shift 意图入口，只允许当前采集段改变。在 stop 将阶段切到 Transcribing 后，迟到的语言选择、Shift 或新设置不能改变本段快照。前台应用及输入上下文继续在开始时捕获，最终模式/目的地与语言选择在停止提交前封存。
+翻译复用 `get_dictation_translation_target`、`select_dictation_translation_target(sessionId, language)` 与 `toggle_dictation_translation_for_session(sessionId)`，只允许当前采集段改变。内置 Shift 现在识别完整独立短按，并按通用设置的次数双向切换；自定义翻译快捷键保留原开启入口，见 [Shift 翻译契约](shift-translation.md)。在 stop 将阶段切到 Transcribing 后，迟到的语言选择、Shift 或新设置不能改变本段快照。前台应用及输入上下文继续在开始时捕获，最终模式/目的地与语言选择在停止提交前封存。
 
 音频和历史文件沿原 sessionId 命名。音频生产者先停止并加入，缓冲区和归档仍属于原 PipelineSession；新段创建新缓冲区。普通听写当前没有截图、剪贴板正文或文件附件参数，本次没有新增隐式读取；后继功能接收这些素材时必须放进本段冻结上下文，不能在后台读取全局“当前素材”。
 

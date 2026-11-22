@@ -1318,6 +1318,7 @@ async fn run_cloud_polish(
     } else {
         context.polish.style_system_prompt.clone()
     };
+    let style_system_prompt = context.with_input_scene_prefix(style_system_prompt);
     let stream = PolishStreamPublisher::new(
         Arc::clone(&partials),
         Arc::clone(&cancellation),
@@ -3099,6 +3100,20 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn omni_scene_precedes_style_and_preserves_translation() {
+        let mut context = crate::DictationContext::default();
+        context.polish.input_scene_prefix = Some("当前应用：Frozen target".into());
+        context.polish.style_system_prompt = "SELECTED-STYLE".into();
+        for translation in [false, true] {
+            context.polish.translation_active = translation;
+            let prompt = super::build_omni_prompt(&context);
+            assert!(prompt.starts_with("当前应用：Frozen target\n\nSELECTED-STYLE"));
+            assert_eq!(prompt.matches("当前应用：").count(), 1);
+            assert_eq!(prompt.contains("# 翻译"), translation);
+        }
+    }
+
     #[test]
     fn native_search_is_exclusive_to_the_deepseek_pipeline() {
         use super::*;

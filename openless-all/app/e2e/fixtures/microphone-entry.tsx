@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import { mockSettings } from '../../src/lib/ipc/mock-data';
+import { mockSettings, mockSetSettings } from '../../src/lib/ipc/mock-data';
 import { getPreviewProfile } from '../../src/preview/profiles';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
@@ -19,6 +19,7 @@ let releasePermission: (() => void) | undefined;
 let deferPermission = false;
 const fixture = {
   calls,
+  settings: () => mockSettings,
   releaseCapabilities,
   setStatus: (next: string) => {
     status = next;
@@ -36,7 +37,7 @@ Object.assign(window, { microphoneEntryFixture: fixture });
 localStorage.setItem('ol.locale', 'en');
 mockWindows('main');
 mockIPC(
-  async (command) => {
+  async (command, args) => {
     calls.push(command);
     switch (command) {
       case 'get_platform_capabilities':
@@ -46,6 +47,16 @@ mockIPC(
         return profile.hotkeyCapability;
       case 'get_settings_snapshot':
         return { preferences: mockSettings, revision: 1 };
+      case 'update_setting_fields': {
+        const prefs = structuredClone(mockSettings);
+        for (const [path, value] of Object.entries(
+          (args as { edits: Record<string, unknown> }).edits,
+        )) {
+          Object.assign(prefs, { [path.slice(1)]: value });
+        }
+        mockSetSettings(prefs);
+        return { preferences: mockSettings, revision: 2 };
+      }
       case 'get_startup_snapshot':
         return { backend: { running: true }, contractVersion: '2.0.0' };
       case 'check_microphone_permission': {

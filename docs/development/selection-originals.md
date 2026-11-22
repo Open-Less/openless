@@ -1,6 +1,6 @@
 # 选区全文、原文历史与安全写回
 
-本页记录从 `504747c8` 开始的开发实现与可复现证据，不代表正式发布或真实平台验收。录音收尾的恢复 lease 修复 `def20a5e` 由协调者在集成时带入；本分支不重写该 fence，也没有改版本号或安装应用。
+本页记录从 `504747c8` 开始的开发实现与可复现证据，不代表正式发布或真实平台验收。长选区实现提交为 `25045ab2`；后续在本分支保留祖先合入 Shift 最终提交 `d701af09`，同时带入录音收尾的恢复 lease 修复 `def20a5e` 与独立场景前缀 `51d183e1`（含 `95c6d204`）。本分支不重写该 fence，也没有改版本号或安装应用。
 
 ## 原文与请求
 
@@ -66,3 +66,30 @@ OPENLESS_E2E_PREVIEW_PORT=5571 OPENLESS_E2E_FIXTURE_PORT=5572 npx playwright tes
 ```
 
 界面已经 `npm run build`，macOS 宿主已编译并运行上述不需要真实编辑器的单元测试。未做发布构建、签名、安装或部署；未触碰真实用户数据。真实 macOS/Windows 编辑器、Windows 浏览器、Linux/fcitx5、iOS、系统剪贴板及物理麦克风需要后续平台验收，不能用这些夹具代替。
+
+## 与 Shift、场景及恢复 lease 的组合验收
+
+组合由 `25045ab2` 合入 `d701af098a500809d2c44aeac765d5cfe0fd2756`，没有文本冲突。共享的 `api.rs`、`cloud_providers.rs`、目标集成测试和热键桥接均自动合并；除新增一条联合回归及本节记录，没有手工修改生产逻辑、风格或手势 API。
+
+协调者已代表场景/Shift owner 确认请求合成边界：普通前台听写在最终请求最前方合成一次冻结的场景，所选风格仍保留原身份；`selection_input` 显式排除场景前缀，继续通过 `effective_polish_prompts` 传递完整选区。选区分支没有在调用方再加一次场景，原文不随场景合成而 trim 或截断。
+
+| 新交叉风险 | 实际入口 / 源码 | 本次证据与复用范围 |
+| --- | --- | --- |
+| 场景独立、风格之前且一次，调用者 `front_app` / 明确风格守卫不丢 | `tests/dictation_target_capture.rs::routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app` → 正常 start/stop → 生产 SharedCloudTextPolisher → 本机 HTTP | 合并后原有六项目标集成测试通过；该生产请求测试继续断言前缀唯一、场景在风格前、显式应用上下文和选择守卫。`dictation_context.rs::with_input_scene_prefix` 仍显式排除 `selection_input`；没有更改 owner 的合成接口。 |
+| canonical Raw + 表达 profile + 翻译起录后取消零模型，自定义 Raw 保持模型行为 | 同一 `routed_dictation...` 生产请求测试 | 定向关闭与 stop 时关闭两条 canonical Raw 路径请求数为零；普通 Raw 也为零；自定义 Raw 恰有一次请求。普通润色在全局 profile 被清空后取消翻译，仍发送一次开始时冻结的表达指令；翻译不带该指令。复用合入的 d701af09 断言，无另写表达/风格实现。 |
+| 同次流程证明实际交付与音频完整，而非拼接两套独立证据 | 新增 `tests/dictation_target_capture.rs::overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progress` | 一条测试的两个受控子场景都使用真实 DictationEngineRouter / PipelineDictationEngine、受控 Recorder / Transcriber / Polisher 和既有 Focus 目标适配器。第一段转写延迟期间启动第二段；第一段最终返回 `Inserted`，`delivered` 含 `polished-first` 且位置为 4，同时第二段仍为 Recording、唯一麦克风 owner 为 2。第二段最终首中尾 PCM 为 `[2,1,2,2,2,3]`；第一段为 `[1,1,1,2,1,3]`。第一段最终普通模式、第二段最终翻译模式，调用和历史均按原 sessionId 归属。 |
+| 已确认写入后续接、用户移动拒写 | 同一新联合测试 → 既有 FocusInserter / FocusSession → 生产 `selection/target_position.rs` 判定 | 未移动时 `delivered` 顺序为 `polished-first`、`translated-second`，第二个位置为 `4 + utf16_len(polished-first)`；另一子场景在第一段交付后将用户位置改为 88，第二段明确拒写，`delivered` 仍仅第一段且位置 88 不被改动，同时第二段声帧、结果与翻译历史完整保留。不是物理麦克风或 AX/UIA 真机输入。 |
+| 选区首尾空白、中段和超过 16000 字不因场景合成丢失 | `tests/selection_contract.rs` → 正常 SelectionApi / SelectionVoiceApi → 生产 HTTP 序列化 | 合并后 21 项选区测试通过，包含完整 user 消息、独特中段、原文历史、翻译入口、HTTP 拒绝及不完整流。其余原文存储/剪贴板/目标生产文件相对 `25045ab2` 无组合差异，因此复用首轮事务、未派发兜底、新复制优先及不确定交付的证据和限制，不冒称真实系统剪贴板已验收。 |
+| 恢复 admission 继续覆盖最终历史落盘 | `api.rs` 合入的 `_finalization_resources` → `api::tests::submitted_dictation_restore_fence_covers_final_history` | 本次定向重跑通过：两个显示槽已经空时，恢复仍受资源 lease 阻挡，直到最终历史完成。没有重跑 211 项旧版同步矩阵或修改同步协议。 |
+
+本次执行并通过：
+
+```sh
+cargo test --locked -p openless-core --test dictation_target_capture --test selection_contract
+cargo test --locked -p openless-core --test dictation_target_capture overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progress
+cargo test --locked -p openless-core --lib submitted_dictation_restore_fence_covers_final_history
+cargo check --locked --manifest-path src-tauri/Cargo.toml --lib
+npx tsc --noEmit
+```
+
+第一条为合并后的既有 6 项目标集成 + 21 项选区回归；第二条为新增联合测试的两个子场景；第三条为单项恢复 fence 回归。macOS 编译保留现有告警，未开展 Windows 编译、真实系统剪贴板/焦点竞态、真实模型或物理硬件验收，也未重跑所有旧套件。组合达到开发集成检查标准后停止，发布资格仍由后续平台验收决定。

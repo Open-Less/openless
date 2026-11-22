@@ -16,6 +16,7 @@ import { RecordingInputSection } from '../../input/RecordingInputSection';
 import { RemoteInputSection } from '../../remote-input/RemoteInputSection';
 import { ShortcutsSection } from '../../input/ShortcutsSection';
 import { SelectionWorkspaceSection } from '../../input/SelectionWorkspaceSection';
+import { ShiftTranslationSection } from '../sections/ShiftTranslationSection';
 import { LanguageSection } from '../sections/LanguageSection';
 import { TypographySection } from '../sections/TypographySection';
 import { ThemeSection } from '../sections/ThemeSection';
@@ -103,6 +104,7 @@ export function GeneralTab({
             surface="microphone"
           />
         )}
+        {activePage === 'translation' && <ShiftTranslationSection />}
         {activePage === 'capsule' && <RecordingInputSection forcedOs={os} surface="capsule" />}
         {activePage === 'textInput' && (
           <>

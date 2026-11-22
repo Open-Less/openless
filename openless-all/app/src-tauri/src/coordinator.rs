@@ -1738,6 +1738,8 @@ impl Coordinator {
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&self.inner, &monitor);
                 let adapter = monitor.kind();
                 let inner_clone = Arc::clone(&self.inner);
                 std::thread::Builder::new()

@@ -6031,6 +6031,20 @@ impl OpenLessBackend {
         &self,
         requested: bool,
     ) -> Result<(), BackendError> {
+        self.change_dictation_translation(None, Some(requested))
+    }
+
+    /// Toggle only the capture that owned the completed native Shift gesture.
+    /// Startup retains raw intent until context capture resolves the effective mode.
+    pub fn toggle_dictation_translation_for_session(
+        &self, session_id: SessionId,
+    ) -> Result<(), BackendError> {
+        self.change_dictation_translation(Some(session_id), None)
+    }
+
+    fn change_dictation_translation(
+        &self, expected_session_id: Option<SessionId>, requested: Option<bool>,
+    ) -> Result<(), BackendError> {
         let preferences = self.get_preferences();
         {
             let mut state = self.state.write().expect("backend state lock poisoned");
@@ -6050,6 +6064,12 @@ impl OpenLessBackend {
                     "no active dictation session",
                 )
             })?;
+            if expected_session_id.is_some_and(|expected| expected != session_id) {
+                return Err(BackendError::new(BackendErrorCode::InvalidState,
+                    "translation gesture belongs to a recording that has ended"));
+            }
+            let requested = requested.unwrap_or_else(|| !state.dictation_translation_requested
+                .unwrap_or(state.dictation.translation_active));
             state.dictation_translation_requested = Some(requested);
             let effective = if let Some(context) = state.dictation_context.as_ref() {
                 let updated = Arc::new(context.with_translation_requested(requested));
@@ -8748,6 +8768,10 @@ impl OpenLessBackend {
             changed.await;
         };
 
+        // Reset removes the visible job before terminal history is persisted.
+        // Keep restore admission busy until every finalization write has ended.
+        let _finalization_resources = self.voice_sessions.hold_resources(session_id)?;
+
         // Android's undecided capture prepared a non-streaming insertion
         // resource so an ordinary tap can still finish normally. A quick-note
         // gesture changes the target at the stop boundary, so cancel that
@@ -9866,11 +9890,10 @@ impl OpenLessBackend {
         host_context: &dyn HostContextAdapter,
     ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
-        let input_app = if purpose == DictationContextPurpose::Dictation
+        let foreground_output = purpose == DictationContextPurpose::Dictation
             && options.insert_text
-            && options.output_target == DictationOutputTarget::ForegroundApp
-            && options.front_app.is_none()
-        {
+            && options.output_target == DictationOutputTarget::ForegroundApp;
+        let input_app = if foreground_output {
             host_context.input_app()
         } else {
             None
@@ -9879,11 +9902,24 @@ impl OpenLessBackend {
             .style_pack_id
             .as_deref()
             .filter(|id| !id.trim().is_empty());
-        let (mut assigned_ids, input_guidance) = input_app
+        // Capture target metadata before any asynchronous host or credential access.
+        let input_location = (foreground_output && preferences.cursor_context_enabled)
+            .then(|| host_context.input_location())
+            .flatten();
+        let (mut assigned_ids, input_scene_prefix) = input_app
             .as_ref()
-            .map(|app| self.app_styles.selection(app))
-            .unwrap_or_default();
-        if explicit_style.is_some() {
+            .map(|app| self.app_styles.selection(app, input_location.as_deref()))
+            .unwrap_or_else(|| {
+                (
+                    Vec::new(),
+                    crate::app_style_routing::input_scene_prefix(
+                        None, None, None, None, input_location.as_deref(),
+                    ),
+                )
+            });
+        // Caller-supplied app context preserves the existing manual-style fallback.
+        // The actual target still supplies scene metadata independently of style routing.
+        if explicit_style.is_some() || options.front_app.is_some() {
             assigned_ids.clear();
         }
         let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);
@@ -9996,22 +10032,12 @@ impl OpenLessBackend {
             recent_history,
             options,
         );
-        if let Some(guidance) = input_guidance.filter(|_| context.uses_llm_polisher()) {
-            let raw_passthrough = context.polish.mode == crate::types::PolishMode::Raw
-                && context.polish.style_system_prompt
-                    == crate::style_packs::default_style_system_prompt_for_mode(
-                        crate::types::PolishMode::Raw,
-                    );
-            context.polish.style_system_prompt.push_str("\n\n# 输入场景参考\n以下场景信息辅助理解术语与对象，具体输出遵循当前风格包。\n");
-            context.polish.style_system_prompt.push_str(&guidance);
-            if raw_passthrough {
-                context.raw_passthrough_prompt = Some(context.polish.style_system_prompt.clone());
-            }
+        if foreground_output {
+            context.polish.input_scene_prefix = Some(input_scene_prefix);
         }
         context.input_app = input_app;
         context.pipeline_mode = pipeline_mode;
         if purpose == DictationContextPurpose::Dictation
-            && !context.polish.translation_active
             && preferences.expression_learning_enabled
         {
             if let Ok(_guard) = self.settings_write_gate.try_lock() {
@@ -10027,7 +10053,7 @@ impl OpenLessBackend {
                                 if let Some(instructions) =
                                     crate::expression_observation::prompt_instructions(&directions)
                                 {
-                                    context.polish.style_system_prompt.push_str(&instructions);
+                                    context = context.with_expression_instructions(instructions);
                                 }
                             }
                             Err(error) => log::warn!("expression profile unavailable: {error}"),
@@ -10157,6 +10183,7 @@ fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<
 #[cfg(test)]
 mod tests {
     include!("recording_overlap_tests.rs");
+    include!("sync_dictation_fence_tests.rs");
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;
@@ -10408,11 +10435,28 @@ mod tests {
         assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
         let mut prefs = backend.get_preferences();
         prefs.expression_learning_enabled = true;
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
         backend.set_preferences(prefs).unwrap();
         assert!(backend.get_preferences().expression_learning_enabled);
         let context = capture().await.unwrap();
         assert!(context.polish.style_system_prompt.contains("用户经多次编辑"), "translation={} prompt={:?}", context.polish.translation_active, context.polish.style_system_prompt);
+        let translated = context.with_translation_requested(true);
+        assert!(!translated.polish.style_system_prompt.contains("用户经多次编辑"));
+        let normal = translated.with_translation_requested(false);
+        assert_eq!(normal.polish.style_system_prompt, context.polish.style_system_prompt);
+        let mut translated_options = options.clone();
+        translated_options.translation_requested = true;
+        // Enable an effective target while keeping the original profile frozen.
+        let mut prefs = backend.get_preferences();
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
+        backend.set_preferences(prefs).unwrap();
+        let translated_start = backend.capture_dictation_context(&translated_options, DictationContextPurpose::Dictation).await.unwrap();
+        assert!(translated_start.polish.translation_active);
+        assert!(!translated_start.polish.style_system_prompt.contains("用户经多次编辑"));
         backend.clear_expression_profile().unwrap();
+        assert!(translated_start.with_translation_requested(false).polish.style_system_prompt.contains("用户经多次编辑"));
         assert!(backend.expression_profile_directions().unwrap().is_empty());
         assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
     }
@@ -15369,6 +15413,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_translation_toggle_never_claims_an_ineffective_target_or_a_new_session() {
+        let data = TestDataDir::new("translation-toggle-effective");
+        let engine = crate::testing::FixtureDictationEngine::successful("raw", "polished");
+        let backend = backend_with_dictation_engine(data.path().into(), Arc::new(engine.clone()));
+        backend.start().await.unwrap();
+        for language in ["", "English"] {
+            let mut prefs = backend.get_preferences();
+            prefs.translation_target_language = language.into();
+            prefs.working_languages = vec!["English".into()];
+            backend.set_preferences(prefs).unwrap();
+            let id = backend.start_dictation().await.unwrap();
+            for _ in 0..2 {
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                assert!(!backend.snapshot().dictation.translation_active);
+            }
+            backend.stop_dictation().await.unwrap();
+            let next = backend.start_dictation().await.unwrap();
+            assert!(backend.toggle_dictation_translation_for_session(id).is_err());
+            assert!(!backend.snapshot().dictation.translation_active);
+            backend.cancel_dictation(Some(next)).await.unwrap();
+        }
+        assert!(engine.contexts().iter().all(|context| !context.polish.translation_active));
+        assert!(backend.list_history().unwrap().iter().all(|entry| !entry.translation_active));
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn translation_requested_during_context_capture_is_session_scoped() {
         struct SlowContext {
             entered: Arc<tokio::sync::Notify>,
@@ -15422,7 +15493,10 @@ mod tests {
             });
             entered.notified().await;
             if requested {
-                let result = backend.update_dictation_translation_requested(true).await;
+                let id = backend.snapshot().dictation.session_id.unwrap();
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                let result = backend.toggle_dictation_translation_for_session(id);
                 release.notify_one();
                 assert!(
                     result.is_ok(),

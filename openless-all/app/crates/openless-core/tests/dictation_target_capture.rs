@@ -106,6 +106,11 @@ impl HostContextAdapter for FocusContextAdapter {
         InputApp::macos(bundle, Some(self.target))
     }
 
+    fn input_location(&self) -> Option<String> {
+        // A host-provided control label, tied to the captured target rather than current focus.
+        (self.target == "VS Code").then(|| "代码编辑区（可信控件标签）".into())
+    }
+
     fn capture(
         &self,
         _include_cursor: bool,
@@ -510,6 +515,321 @@ async fn delayed_result_never_uses_a_moved_caret_or_a_successor_capture_in_the_s
 }
 
 #[tokio::test]
+async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progress() {
+    use openless_core::{
+        ActiveRecording, AudioConsumer, AudioRecorder, PolishOutput, RecordingProgressSink,
+        TextPolisher, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    };
+    use std::sync::atomic::AtomicUsize;
+
+    struct Recorder {
+        owner: Arc<AtomicUsize>,
+        next: AtomicUsize,
+    }
+    struct Recording {
+        owner: Arc<AtomicUsize>,
+        consumer: Arc<dyn AudioConsumer>,
+        number: usize,
+    }
+    impl ActiveRecording for Recording {
+        fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async move {
+                self.consumer.consume_pcm_chunk(&[self.number as u8, 3]);
+                assert_eq!(self.owner.swap(0, Ordering::SeqCst), self.number);
+                Ok(())
+            })
+        }
+    }
+    impl AudioRecorder for Recorder {
+        fn start(
+            &self,
+            _: SessionId,
+            _: Arc<DictationContext>,
+            consumer: Arc<dyn AudioConsumer>,
+            _: Arc<dyn RecordingProgressSink>,
+        ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+            let number = self.next.fetch_add(1, Ordering::SeqCst) + 1;
+            assert_eq!(self.owner.swap(number, Ordering::SeqCst), 0);
+            let owner = self.owner.clone();
+            Box::pin(async move {
+                consumer.consume_pcm_chunk(&[number as u8, 1]);
+                consumer.consume_pcm_chunk(&[number as u8, 2]);
+                Ok(Box::new(Recording {
+                    owner,
+                    consumer,
+                    number,
+                }) as Box<dyn ActiveRecording>)
+            })
+        }
+    }
+
+    struct Transcriber {
+        sessions: Arc<Mutex<Vec<(SessionId, Arc<Transcript>)>>>,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+    struct Transcript {
+        pcm: Mutex<Vec<u8>>,
+        first: bool,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+    impl AudioConsumer for Transcript {
+        fn consume_pcm_chunk(&self, pcm: &[u8]) {
+            self.pcm.lock().unwrap().extend_from_slice(pcm);
+        }
+    }
+    impl TranscriptionSession for Transcript {
+        fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
+            let (first, entered, release) =
+                (self.first, self.entered.clone(), self.release.clone());
+            Box::pin(async move {
+                if first {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                Ok(TranscriptOutput {
+                    text: if first { "first" } else { "second" }.into(),
+                    duration_ms: 3,
+                })
+            })
+        }
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    impl TranscriptionEngine for Transcriber {
+        fn start(
+            &self,
+            id: SessionId,
+            _: Arc<DictationContext>,
+            _: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+            let mut sessions = self.sessions.lock().unwrap();
+            let transcript = Arc::new(Transcript {
+                pcm: Mutex::new(Vec::new()),
+                first: sessions.is_empty(),
+                entered: self.entered.clone(),
+                release: self.release.clone(),
+            });
+            sessions.push((id, transcript.clone()));
+            Box::pin(async { Ok(transcript as Arc<dyn TranscriptionSession>) })
+        }
+    }
+    struct Polisher {
+        calls: Arc<Mutex<Vec<(SessionId, bool, String)>>>,
+    }
+    impl TextPolisher for Polisher {
+        fn polish(
+            &self,
+            id: SessionId,
+            context: Arc<DictationContext>,
+            raw: String,
+            _: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<PolishOutput, BackendError>> {
+            let (system, _) = context.effective_polish_prompts(&raw);
+            assert!(system.starts_with("当前应用：VS Code"));
+            assert_eq!(system.matches("当前应用：").count(), 1);
+            assert!(
+                system.find("本次输入场景：").unwrap()
+                    < system.find("PIPELINE_STYLE_MARKER").unwrap()
+            );
+            self.calls
+                .lock()
+                .unwrap()
+                .push((id, context.polish.translation_active, raw.clone()));
+            let prefix = if context.polish.translation_active {
+                "translated"
+            } else {
+                "polished"
+            };
+            Box::pin(async move { Ok(PolishOutput::text(format!("{prefix}-{raw}"))) })
+        }
+        fn cancel(&self, _: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    // These are controlled audio and target ports around the production Pipeline,
+    // not physical microphone or AX/UIA acceptance. Every case traverses Core start/stop.
+    for move_second in [false, true] {
+        let owner = Arc::new(AtomicUsize::new(0));
+        let sessions = Arc::new(Mutex::new(Vec::new()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let fixture = Fixture::with_position_engine(
+            |_| {
+                Arc::new(openless_core::DictationEngineRouter::new(Arc::new(
+                    PipelineDictationEngine::new(
+                        Arc::new(Recorder {
+                            owner: owner.clone(),
+                            next: AtomicUsize::new(0),
+                        }),
+                        Arc::new(Transcriber {
+                            sessions: sessions.clone(),
+                            entered: entered.clone(),
+                            release: release.clone(),
+                        }),
+                        Arc::new(Polisher {
+                            calls: calls.clone(),
+                        }),
+                    ),
+                )))
+            },
+            true,
+        )
+        .await;
+        fixture.credentials.waited.store(true, Ordering::Release);
+        fixture
+            .credentials
+            .write(
+                CredentialKey::new(CredentialNamespace::Llm, Some("ark".into()), "ark.api_key")
+                    .unwrap(),
+                SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
+        fixture.focus.lock().unwrap().current = "VS Code";
+        let backend = fixture.backend.clone();
+        let mut prefs = backend.get_preferences();
+        prefs.multimodal_pipeline_enabled = false;
+        prefs.active_llm_provider = "ark".into();
+        prefs.streaming_insert = false;
+        prefs.polish_skip_max_chars = 0;
+        prefs.cursor_context_enabled = true;
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["zh".into()];
+        backend
+            .update_settings(
+                prefs,
+                openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+                &openless_core::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let style = backend
+            .create_style_pack(StylePack {
+                name: "PIPELINE-STYLE".into(),
+                prompt: "PIPELINE_STYLE_MARKER".into(),
+                ..StylePack::default()
+            })
+            .unwrap();
+        let options = DictationStartOptions {
+            style_pack_id: Some(style.id),
+            insert_text: true,
+            ..Default::default()
+        };
+
+        let first = backend
+            .start_dictation_with_options(options.clone())
+            .await
+            .unwrap();
+        backend
+            .toggle_dictation_translation_for_session(first)
+            .unwrap();
+        backend
+            .toggle_dictation_translation_for_session(first)
+            .unwrap();
+        let stopping = tokio::spawn({
+            let backend = backend.clone();
+            async move { backend.stop_dictation_session(first).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified())
+            .await
+            .unwrap();
+        assert_eq!(owner.load(Ordering::SeqCst), 0);
+        let second = backend.start_dictation_with_options(options).await.unwrap();
+        backend
+            .toggle_dictation_translation_for_session(second)
+            .unwrap();
+        assert!(backend
+            .toggle_dictation_translation_for_session(first)
+            .is_err());
+        assert_eq!(owner.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *sessions.lock().unwrap()[1].1.pcm.lock().unwrap(),
+            [2, 1, 2, 2]
+        );
+        release.notify_one();
+        let first_result = tokio::time::timeout(std::time::Duration::from_secs(3), stopping)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_result.inserted, DictationInsertStatus::Inserted);
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered,
+            [("VS Code", "polished-first".into())]
+        );
+        assert_eq!(fixture.focus.lock().unwrap().delivered_positions, [(4, 0)]);
+        assert_eq!(backend.snapshot().dictation.session_id, Some(second));
+        assert_eq!(
+            backend.snapshot().dictation.phase,
+            openless_core::DictationPhase::Recording
+        );
+        assert!(backend.snapshot().dictation.translation_active);
+        assert_eq!(
+            owner.load(Ordering::SeqCst),
+            2,
+            "finishing A must not stop B's microphone"
+        );
+
+        if move_second {
+            fixture.focus.lock().unwrap().position = Some((88, 0));
+        }
+        let second_result = backend.stop_dictation_session(second).await;
+        if move_second {
+            assert!(second_result.unwrap_err().is_target_unavailable());
+            assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
+            assert_eq!(fixture.focus.lock().unwrap().position, Some((88, 0)));
+        } else {
+            assert_eq!(
+                second_result.unwrap().inserted,
+                DictationInsertStatus::Inserted
+            );
+            assert_eq!(
+                fixture.focus.lock().unwrap().delivered,
+                [
+                    ("VS Code", "polished-first".into()),
+                    ("VS Code", "translated-second".into()),
+                ]
+            );
+            assert_eq!(
+                fixture.focus.lock().unwrap().delivered_positions,
+                [
+                    (4, 0),
+                    (4 + "polished-first".encode_utf16().count() as u64, 0),
+                ]
+            );
+        }
+        assert_eq!(owner.load(Ordering::SeqCst), 0);
+        let sessions = sessions.lock().unwrap();
+        assert_eq!(
+            sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            [first, second]
+        );
+        assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
+        assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                (first, false, "first".into()),
+                (second, true, "second".into())
+            ]
+        );
+        let history = backend.list_history().unwrap();
+        assert!(history.iter().any(|row| row.id == first.to_string()
+            && row.final_text == "polished-first"
+            && !row.translation_active));
+        assert!(history.iter().any(|row| row.id == second.to_string()
+            && row.raw_transcript == "second"
+            && row.final_text == "translated-second"
+            && row.translation_active));
+        backend.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -587,6 +907,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     preferences.active_llm_provider = "ark".into();
     preferences.polish_skip_max_chars = 0;
     preferences.streaming_insert = false;
+    preferences.cursor_context_enabled = true;
     preferences.translation_target_language = "English".into();
     preferences.working_languages = vec!["zh".into()];
     backend
@@ -625,6 +946,11 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     }
     let expect_request = |payload: serde_json::Value, marker: &str| {
         let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(system.starts_with("当前应用："));
+        assert_eq!(system.matches("当前应用：").count(), 1);
+        assert!(!system.contains("# 输入场景参考"));
+        assert!(system.find("本次输入场景：").unwrap() < system.find(marker).unwrap());
+        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
         assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         assert!(system.find(marker).unwrap() < system.find(openless_core::DICTATION_REVISION_RULES).unwrap());
         if marker == "CODING-STYLE" {
@@ -656,7 +982,12 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     starting.await.unwrap().unwrap();
     let result = backend.stop_dictation().await.unwrap();
     assert_eq!(result.polished_text, "polished");
-    expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+    let first_payload = payloads.try_recv().unwrap();
+    let first_system = first_payload["messages"][0]["content"].as_str().unwrap();
+    assert!(first_system.starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
+    assert!(first_system.contains("应用主要用途：fixture editor context"));
+    assert!(first_system.contains("当前输入位置：代码编辑区（可信控件标签）"));
+    expect_request(first_payload, "CODING-STYLE");
     assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "VS Code");
     assert_eq!(
         backend.app_style_routing().unwrap().apps[0].app.name,
@@ -675,6 +1006,30 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         })
         .unwrap();
 
+    // Explicit caller context must not activate the host app/category assignments.
+    fixture.focus.lock().unwrap().current = "VS Code";
+    for (style_pack_id, expected_pack, marker) in [
+        (None, current.id.as_str(), "MANUAL-STYLE"),
+        (Some(mail.id.clone()), mail.id.as_str(), "MAIL-STYLE"),
+    ] {
+        backend.start_dictation_with_options(DictationStartOptions {
+            front_app: Some("Caller supplied context".into()),
+            style_pack_id,
+            ..Default::default()
+        }).await.unwrap();
+        let result = backend.stop_dictation().await.unwrap();
+        let payload = payloads.try_recv().unwrap();
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(system.starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
+        assert!(system.contains("当前输入位置：代码编辑区（可信控件标签）"));
+        assert!(!system.contains("CHAT-STYLE"));
+        assert!(!system.contains("CODING-STYLE"));
+        expect_request(payload, marker);
+        let history = backend.list_history().unwrap();
+        let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
+        assert_eq!(entry.style_pack_id.as_deref(), Some(expected_pack));
+    }
+
     for (app, marker) in [
         ("WeChat", "CHAT-STYLE"),
         ("Mail", "MAIL-STYLE"),
@@ -688,12 +1043,51 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             backend.stop_dictation().await.unwrap().polished_text,
             "polished"
         );
-        expect_request(payloads.try_recv().unwrap(), marker);
+        let payload = payloads.try_recv().unwrap();
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        if app == "Custom" {
+            assert!(system.starts_with("当前应用：Custom\n应用标识：macos:org.example.unknown\n应用分类：未知\n应用主要用途：未知"));
+        }
+        if app == "No stable identifier" {
+            assert!(system.starts_with("当前应用：未知\n应用标识：未知"));
+        }
+        if app != "VS Code" {
+            assert!(system.contains("当前输入位置：应用内输入，无法正确确定"));
+        }
+        expect_request(payload, marker);
         assert_eq!(
             fixture.focus.lock().unwrap().delivered.last().unwrap().0,
             app
         );
     }
+
+    // User membership changes affect the next capture, not an in-flight snapshot.
+    fixture.focus.lock().unwrap().current = "VS Code";
+    backend.set_app_style_assignment(AppStyleAssignment::Membership {
+        member_id: "catalog:vscode".into(), category: Some("email".into()),
+    }).unwrap();
+    backend.start_dictation_with_options(DictationStartOptions {
+        style_pack_id: Some(current.id.clone()), ..Default::default()
+    }).await.unwrap();
+    backend.set_app_style_assignment(AppStyleAssignment::Membership {
+        member_id: "catalog:vscode".into(), category: Some("coding".into()),
+    }).unwrap();
+    backend.stop_dictation().await.unwrap();
+    let payload = payloads.try_recv().unwrap();
+    assert!(payload["messages"][0]["content"].as_str().unwrap().contains("应用分类：邮件"));
+    expect_request(payload, "MANUAL-STYLE");
+
+    let mut preferences = backend.get_preferences();
+    preferences.cursor_context_enabled = false;
+    backend.update_settings(preferences, openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT, &openless_core::NoopSettingsRuntime).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    let payload = payloads.try_recv().unwrap();
+    let system = payload["messages"][0]["content"].as_str().unwrap();
+    assert!(system.starts_with("当前应用：VS Code"));
+    assert!(system.contains("应用分类：编程"));
+    assert!(system.contains("当前输入位置：应用内输入，无法正确确定"));
+    expect_request(payload, "CHAT-STYLE");
 
     // A newly observed agent client inherits its category on its first input.
     for app in ["ChatGPT", "Orca"] {
@@ -800,6 +1194,30 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         .unwrap()
         .contains("fixture coding context"));
     while payloads.try_recv().is_ok() {}
+    // A real opted-in profile must not turn canonical Raw into a polish request.
+    let profile = backend.repositories().expression_profile.lock().unwrap().as_ref().unwrap().clone();
+    for index in 0..10 {
+        profile.record(uuid::Uuid::new_v4(), 100 + index % 4,
+            openless_core::expression_observation::ExpressionSignal {
+                line_breaks: 1, exclamations: 0, terminal_punctuation: 0,
+            }).unwrap();
+    }
+    let frozen_expression = openless_core::expression_observation::prompt_instructions(
+        &profile.stable_directions().unwrap()).unwrap();
+    let mut preferences = backend.get_preferences();
+    preferences.expression_learning_enabled = true;
+    backend.update_settings(preferences, openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+        &openless_core::NoopSettingsRuntime).unwrap();
+    backend.start_dictation_with_options(DictationStartOptions {
+        translation_requested: true, ..Default::default()
+    }).await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    let translated = payloads.try_recv().unwrap();
+    let translated_system = translated["messages"][0]["content"].as_str().unwrap();
+    assert!(translated_system.starts_with("当前应用："));
+    assert!(translated_system.contains(openless_core::POLISH_TRANSLATE_TGT_MARKER));
+    assert!(!translated_system.contains(&frozen_expression));
+    assert!(payloads.try_recv().is_err(), "translation must issue exactly one request");
     for live in [true, false] {
         backend
             .start_dictation_with_options(DictationStartOptions {
@@ -809,10 +1227,8 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             .await
             .unwrap();
         let result = if live {
-            backend
-                .update_dictation_translation_requested(false)
-                .await
-                .unwrap();
+            let id = backend.snapshot().dictation.session_id.unwrap();
+            backend.toggle_dictation_translation_for_session(id).unwrap();
             backend.stop_dictation().await.unwrap()
         } else {
             backend
@@ -832,7 +1248,15 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             fixture.focus.lock().unwrap().delivered.last().unwrap(),
             &("VS Code", "spoken test transcript".into())
         );
+        let history = backend.list_history().unwrap();
+        let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
+        assert!(!entry.translation_active);
+        assert_eq!(entry.style_pack_id.as_deref(), Some("builtin.raw"));
+        assert_eq!(entry.final_text, "spoken test transcript");
     }
+    backend.start_dictation().await.unwrap();
+    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, "spoken test transcript");
+    assert!(payloads.try_recv().is_err(), "profile must not turn canonical Raw into a request");
     let custom_raw = backend
         .create_style_pack(StylePack {
             name: "CUSTOM-RAW".into(),
@@ -847,12 +1271,33 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             style_pack_id: Some(custom_raw.id),
         })
         .unwrap();
-    backend.start_dictation().await.unwrap();
+    let id = backend.start_dictation_with_options(DictationStartOptions {
+        translation_requested: true, ..Default::default()
+    }).await.unwrap();
+    backend.toggle_dictation_translation_for_session(id).unwrap();
     assert_eq!(
         backend.stop_dictation().await.unwrap().polished_text,
         "polished"
     );
-    expect_request(payloads.try_recv().unwrap(), "CUSTOM-RAW");
+    let custom_payload = payloads.try_recv().unwrap();
+    assert!(custom_payload["messages"][0]["content"].as_str().unwrap().contains(&frozen_expression));
+    expect_request(custom_payload, "CUSTOM-RAW");
+    assert!(payloads.try_recv().is_err(), "custom Raw must issue exactly one request");
+
+    // Translation suppresses expression guidance; cancelling restores this capture's profile.
+    let id = backend.start_dictation_with_options(DictationStartOptions {
+        style_pack_id: Some(coding.id.clone()), translation_requested: true,
+        ..Default::default()
+    }).await.unwrap();
+    backend.clear_expression_profile().unwrap();
+    backend.toggle_dictation_translation_for_session(id).unwrap();
+    backend.stop_dictation().await.unwrap();
+    let restored = payloads.try_recv().unwrap();
+    assert!(restored["messages"][0]["content"].as_str().unwrap().contains(&frozen_expression));
+    assert_eq!(restored["messages"][0]["content"].as_str().unwrap().matches(&frozen_expression).count(), 1);
+    expect_request(restored, "CODING-STYLE");
+    assert!(payloads.try_recv().is_err(), "restored ordinary polish must issue exactly one request");
+
     backend
         .set_app_style_assignment(AppStyleAssignment::App {
             app_id: "macos:com.microsoft.VSCode".into(),
@@ -899,6 +1344,9 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             backend.stop_dictation().await.unwrap();
             let payload = payloads.try_recv().unwrap();
             let system = payload["messages"][0]["content"].as_str().unwrap();
+            assert!(system.starts_with("当前应用：VS Code"));
+            let pack = backend.get_style_pack(id).unwrap();
+            assert!(system.find("本次输入场景：").unwrap() < system.find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim()).unwrap());
             assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
             assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
             if translation_requested {

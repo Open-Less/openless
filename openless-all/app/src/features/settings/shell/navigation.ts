@@ -59,6 +59,13 @@ export const GENERAL_PAGES = [
     descriptionKey: 'settings.generalPages.recordingDesc',
   },
   {
+    id: 'translation',
+    icon: 'globe',
+    titleKey: 'shiftTranslation.title',
+    descriptionKey: 'shiftTranslation.description',
+  },
+
+  {
     id: 'capsule',
     icon: 'layout',
     titleKey: 'settings.generalPages.capsuleTitle',
@@ -83,6 +90,7 @@ export type GeneralPageId = GeneralPage['id'];
 
 export function visibleGeneralPages(platform: PlatformKind | undefined): GeneralPage[] {
   return GENERAL_PAGES.filter((page) => {
+    if (page.id === 'translation') return platform == null || platform === 'desktop';
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;

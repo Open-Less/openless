@@ -7,6 +7,15 @@ import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
 
 export const zhTW: typeof zhCN = {
+  shiftTranslation: {
+    title: '錄音翻譯',
+    description: 'Shift 開關與連按次數',
+    count: 'Shift 連按次數',
+    scope:
+      '錄音時獨立短按相同次數的 Shift 可開啟或取消翻譯。僅適用於預設 Shift 翻譯快捷鍵；Shift 用作錄音鍵時不啟用。',
+    times_one: '{{count}} 次',
+    times_other: '{{count}} 次',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,

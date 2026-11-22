@@ -126,6 +126,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&inner, &monitor);
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
@@ -722,6 +724,8 @@ pub(super) fn less_computer_modifier_bridge_loop(
             // esc_cancel_bridge_loop / combo_abort_bridge_loop (see those
             // functions).
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
+            #[cfg(not(mobile))]
+            HotkeyEvent::TranslationShiftTapped(_) => {}
             #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed
             | HotkeyEvent::SelectionPolishShortcutReleased => {}
@@ -2046,6 +2050,29 @@ pub(super) fn handle_style_pack_hotkey_pressed(inner: &Arc<Inner>, pack_id: &str
     }
 }
 
+#[cfg(not(mobile))]
+pub(super) fn configure_shift_translation(inner: &Arc<Inner>, monitor: &HotkeyMonitor) {
+    let weak = Arc::downgrade(inner);
+    monitor.set_shift_translation_source(Arc::new(move || {
+        let inner = weak.upgrade()?;
+        let target = hotkey_runtime_target(&inner);
+        if !is_builtin_translation_shift(&target.translation)
+            || matches!(crate::shortcut_binding::legacy_modifier_trigger(&target.dictation),
+                Some(crate::types::HotkeyTrigger::LeftShift | crate::types::HotkeyTrigger::RightShift))
+        { return None; }
+        let snapshot = inner.backend.snapshot();
+        if !matches!(snapshot.dictation.phase,
+            openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording)
+        { return None; }
+        Some(crate::hotkey::ShiftTranslationContext {
+            session_id: snapshot.dictation.session_id?,
+            preferences_revision: snapshot.preferences_revision,
+            tap_count: inner.backend.get_preferences().translation_shift_tap_count(),
+            held_recording_key: None,
+        })
+    }));
+}
+
 pub(super) fn is_builtin_translation_shift(binding: &crate::types::ShortcutBinding) -> bool {
     binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift")
 }
@@ -2249,11 +2276,18 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // esc_cancel_bridge_loop / combo_abort_bridge_loop so they are not
             // stuck in the queue behind the synchronous Released → end_session
             // / Pressed → begin_session flows above (see those functions).
+            #[cfg(not(mobile))]
+            HotkeyEvent::TranslationShiftTapped(context) => {
+                if inner.backend.snapshot().preferences_revision == context.preferences_revision
+                    && is_builtin_translation_shift(&hotkey_runtime_target(&inner).translation)
+                {
+                    let _ = inner.backend.toggle_dictation_translation_for_session(context.session_id);
+                }
+            }
             HotkeyEvent::TranslationModifierPressed => {
                 let translation_hotkey = hotkey_runtime_target(&inner_cloned).translation;
-                if is_builtin_translation_shift(&translation_hotkey)
-                    || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
-                        .is_some()
+                if !is_builtin_translation_shift(&translation_hotkey)
+                    && crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey).is_some()
                 {
                     inner.host.block_on(async {
                         arm_translation_if_effective(&inner_cloned).await;

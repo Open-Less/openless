@@ -6,6 +6,15 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const de: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Aufnahmeübersetzung',
+    description: 'Shift-Umschaltung und Anzahl der Tastendrücke',
+    count: 'Anzahl der Shift-Tastendrücke',
+    scope:
+      'Drücke während der Aufnahme Shift allein so oft kurz, um die Übersetzung ein- oder auszuschalten. Gilt für das standardmäßige Shift-Kürzel; deaktiviert, wenn Shift die Aufnahmetaste ist.',
+    times_one: '{{count}} Tastendruck',
+    times_other: '{{count}} Tastendrücke',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,

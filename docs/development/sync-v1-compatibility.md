@@ -21,7 +21,7 @@
 1. 先评审范围：可迁移偏好用 Portable；设备路径、平台授权与本机状态按既有 DeviceProfile / Excluded 处理；服务密钥继续使用既有受控 credential accounts。不得把密钥转进 Portable，不新增应用历史、输入内容、瞬态录音任务。
 2. 在 `UserPreferences`、对应 Wire 的默认/解码映射和 registry 登记真实的新字段；使用旧版尚未认识的稳定顶层 preferences id。不向 style_packs、channels、device_profile 等旧严格 value 增加字段，不改变旧 id 的类型/枚举含义，不借提示词存设置。
 3. 新增可缺省设置用可区分“未设置”和“明确选择默认”的本机表示。此批 `translation_shift_tap_count: Option<NonZeroU8>`：None 不序列化，getter 有效值为 1；Some(1) 必须序列化为 1，允许值 1..255，UI 可以更窄。不能把恢复默认实现为清除字段/设 None。
-4. registry 为 `translationShiftTapCount` / Portable / Unsigned8，并拒绝零。界面与手势代码使用 getter 读取、通过原有设置写入入口保存显式值。此提交只供应数据/同步契约，Shift 手势与次数控件由后继任务实现。
+4. registry 为 `translationShiftTapCount` / Portable / Unsigned8，并拒绝零。界面与手势代码使用有效默认 1、通过原有设置写入入口保存显式值。数据/同步依赖提供字段合同；后继 [Shift 翻译实现](shift-translation.md)已接入原生完整手势、Core getter、前端类型和通用设置控件，不重复扩展同步协议。
 5. 为字段增加有效值、排除项、旧版保留、升级物化和显式默认回归。无需服务发布；遇到旧版已经认识且严格限制的旧 id，应使用新的稳定设置 id 和明确的客户端兼容投影，而非改 schemaVersion 或放松生产校验。
 
 未认识的 preferences / ui_preferences 值只在原有受账号、origin、vault、device 绑定的加密 ScopeState 中保留，不散入本机原生设置，也不据此执行任何操作。新客户端首次导出时发现 retained 中已有本版理解的 Portable 设置，会通过现有 `restore_scope` 的完整预检、加密 journal、独占写门、Host 副作用及读回流程物化；已明确存在的本机值优先。随后移除已物化的 retained 副本，避免旧副本重新盖过用户显式选择。服务收到本地物化回执后发布原有恢复事件，使界面重新读取设置。
@@ -94,3 +94,18 @@ runner 从固定 Git 对象读取完整的旧 Core、原 workspace manifest / lo
 | 未知种类及协议限制如实报告 | 旧 DocumentSet parser / registry / preflight | 旧版固定源码；本页“合并、删除与边界” | 未知 kind / 严格实体新字段 / 新 builtin 原样发送均有拒绝反例；v2.0.0 另有既有排除项差异，不声称完全向后兼容。 |
 
 该结果不等于已安装旧应用 GUI、真实 OAuth、两台物理设备、系统钥匙串或真实模型输出的验收。包可用的证据是原生仓储实际解析到所选实体及其指令，而非模型效果。
+
+## 与后台录音任务组合时的恢复保护
+
+在集成基线 `504747c8` 上单独核对了录音 A 的 `processingDictations` 拆分。原保护已覆盖后台处理：`api.rs::stop_dictation_session_with_options` 在释放采集后调用 `voice_sessions.submit`；`voice_session.rs::runtime_restore_idle` 同时检查 active 和 submitted，`api.rs` 绑定给 CoreSyncStore 的 probe 使用这个 lease，而非只检查界面采集槽。E2EE 与本地迁移复用同一 Store。
+
+但成功收尾会先 `reset_dictation_session`，再清理语音激活并执行 `persist_completed_dictation`，原 lease 可能在最终历史写入前已经消失。本次只在停止函数封存上下文后增加一个现有 `hold_resources`，将同一 lease 保持到整个收尾函数返回；没有新增状态源，也不改变采集 owner 的释放或后台串行处理规则。
+
+`src/sync_dictation_fence_tests.rs::submitted_dictation_restore_fence_covers_final_history` 使用实际 stop 和 CoreSyncStore 恢复入口，分别验证“采集 Idle、后台任务在途”和“两个界面槽都空、最终历史创建尚未进入仓库写入门”两个时刻均返回 RuntimeBusy，最终历史落盘后 lease 才空闲。第二个窗口通过测试时钟暂停，使用可控引擎，不代表实际麦克风。测试在修复前明确失败，修复后仅运行这一项定向回归；既有 2.0.2 / Beta.1 矩阵不重复运行，也不扩大兼容承诺。
+
+只读 `capture_readonly` 不使用 runtime idle probe，保持原有代次一致性检查；没有把录音处理中一律禁止导出。retained 物化仍由 `export_scope` 调用原 `restore_scope`，因此在同一个 `begin_runtime_restore` 门前被拒绝，不能借“导出”覆盖仍在收尾的数据。selection 与其他组实现未修改。
+
+```sh
+cd openless-all/app
+cargo test --locked -p openless-core --lib api::tests::submitted_dictation_restore_fence_covers_final_history -- --exact --nocapture
+```
