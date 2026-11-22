@@ -164,6 +164,7 @@ export function useStylePackWorkspace() {
   };
 
   const loadPacks = async (preferredId?: string | null) => {
+    if (preferredId) selectedIdRef.current = preferredId;
     const sequence = ++loadSequence.current;
     const initialLoad = !packsLoaded.current;
     if (initialLoad) setBusy('loading');
@@ -173,12 +174,13 @@ export function useStylePackWorkspace() {
       const next = listed;
       packsLoaded.current = true;
       setPacks(next);
-      const target = preferredId || selectedIdRef.current;
+      const target = selectedIdRef.current;
       const nextSelectedId =
         (target && next.some((pack) => pack.id === target) && target) ||
         next.find((pack) => pack.active)?.id ||
         next[0]?.id ||
         null;
+      selectedIdRef.current = nextSelectedId;
       setSelectedId(nextSelectedId);
     } catch (loadError) {
       if (sequence === loadSequence.current)
@@ -258,6 +260,7 @@ export function useStylePackWorkspace() {
   const dirty = editableFingerprint(selectedPack) !== editableFingerprint(draft);
 
   const focusPack = (packId: string) => {
+    selectedIdRef.current = packId;
     setSelectedId(packId);
   };
 
@@ -496,14 +499,16 @@ export function useStylePackWorkspace() {
       };
       const created = await createStylePackFromTemplate(template);
       showSaveStatus('saved', t('style.pack.createSuccess'), true);
-      await loadPacks(created.id);
-      // Re-fetch list, then open the editor on the new pack
+      // Publish the returned pack before opening. Change events can race with list reads.
+      loadSequence.current++;
+      setPacks((current) => [...current.filter((pack) => pack.id !== created.id), created]);
+      focusPack(created.id);
+      setDraft(clonePack(created));
       if (editorCloseTimer.current !== null) {
         window.clearTimeout(editorCloseTimer.current);
         editorCloseTimer.current = null;
       }
       setEditorClosing(false);
-      setSelectedId(created.id);
       setEditorOpen(true);
     } catch (createError) {
       showSaveStatus('failed', t('style.pack.createFailed', { err: String(createError) }));

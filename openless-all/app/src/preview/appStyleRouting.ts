@@ -23,7 +23,7 @@ const routing: AppStyleRouting = {
     },
     {
       app: { id: 'macos:com.apple.Notes', name: 'Notes' },
-      category: null,
+      category: 'writing',
       seen: true,
       stylePackId: null,
     },

@@ -1,5 +1,7 @@
 .ol-app-style-dialog .ol-dialog-body {
   scrollbar-gutter: stable;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .ol-app-style-dialog .ol-dialog-footer {
@@ -73,4 +75,15 @@
 .ol-app-style-options .ol-select-item > :first-child {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.ol-app-style-group > h3 {
+  margin: 4px 0 8px;
+  font-size: inherit;
+}
+
+.ol-app-style-name small {
+  display: block;
+  font-size: 0.85em;
+  color: var(--ol-ink-3);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   AppCategory,
@@ -12,6 +12,8 @@ import {
   getInputAppIcons,
   setAppStyleAssignment,
 } from '../../api/style-packs';
+import { SnapshotQuery } from '../../data/snapshot-query';
+import { listenHistoryChanges } from '../../runtime/domain-events';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 import { Button } from '../../ui/controls/Button';
 import { Select } from '../../ui/controls/Select';
@@ -19,7 +21,14 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader } from '../../ui/overlay
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import './app-style-routing.css';
 
-const categories: readonly AppCategory[] = ['coding', 'chat', 'email'];
+const categories: readonly AppCategory[] = [
+  'coding',
+  'chat',
+  'email',
+  'writing',
+  'office',
+  'browser',
+];
 
 export function AppStyleRoutingDialog({
   packs,
@@ -31,39 +40,65 @@ export function AppStyleRoutingDialog({
   const { t } = useTranslation();
   const { confirm } = useInteraction('app-style-routing');
   const title = useId();
-  const [routing, setRouting] = useState<AppStyleRouting | null>(null);
+  const [query] = useState(() => new SnapshotQuery(getAppStyleRouting, async () => {}));
+  const { data: routing, error: loadError } = useSyncExternalStore(
+    query.subscribe,
+    query.getSnapshot,
+  );
   const [icons, setIcons] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     let live = true;
-    void getAppStyleRouting().then(
-      (snapshot) => {
-        if (live) setRouting(snapshot);
-        if (snapshot.apps.length && live) {
-          void getInputAppIcons().then(
-            (result) => {
-              if (live) setIcons(result);
-            },
-            () => {},
-          );
-        }
+    let unlisten: (() => void) | undefined;
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void query.refresh();
+    };
+    void listenHistoryChanges(refresh).then(
+      (stop) => {
+        if (live) unlisten = stop;
+        else stop();
       },
       () => {
         if (live) setError(true);
       },
     );
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      live = false;
+      unlisten?.();
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [query]);
+
+  const appIds =
+    routing?.apps
+      .map(({ app }) => app.id)
+      .sort()
+      .join('\n') ?? '';
+  useEffect(() => {
+    if (!appIds) return;
+    let live = true;
+    void getInputAppIcons().then(
+      (result) => {
+        if (live) setIcons(result);
+      },
+      () => {},
+    );
     return () => {
       live = false;
     };
-  }, []);
+  }, [appIds]);
 
   const commit = async (write: () => Promise<AppStyleRouting>) => {
     setBusy(true);
     setError(false);
     try {
-      setRouting(await write());
+      await write();
+      await query.refresh();
     } catch {
       setError(true);
     } finally {
@@ -87,29 +122,18 @@ export function AppStyleRoutingDialog({
 
   const packName = (pack: StylePack) => getStylePackPresentation(pack, t).name;
 
-  function picker(
-    assignment: AppStyleAssignment,
-    label: string,
-    inherit: string,
-    owners: Map<string, string>,
-  ) {
+  function picker(assignment: AppStyleAssignment, label: string, inherit: string) {
     const current = assignment.stylePackId ?? '';
     const options = [
       { value: '', label: inherit },
       ...packs
         .filter((pack) => pack.enabled || pack.id === current)
-        .map((pack) => {
-          const owner = pack.id === current ? undefined : owners.get(pack.id);
-          return {
-            value: pack.id,
-            label: owner
-              ? t('appStyles.assignedTo', { pack: packName(pack), owner })
-              : pack.enabled
-                ? packName(pack)
-                : t('appStyles.unavailablePack', { pack: packName(pack) }),
-            disabled: Boolean(owner),
-          };
-        }),
+        .map((pack) => ({
+          value: pack.id,
+          label: pack.enabled
+            ? packName(pack)
+            : t('appStyles.unavailablePack', { pack: packName(pack) }),
+        })),
     ];
     if (current && !packs.some((pack) => pack.id === current)) {
       options.push({ value: current, label: t('appStyles.missingPack') });
@@ -133,16 +157,6 @@ export function AppStyleRoutingDialog({
         />
       </div>
     );
-  }
-
-  const categoryOwners = new Map<string, string>();
-  const appOwners = new Map<string, string>();
-  for (const category of categories) {
-    const pack = routing?.categories[category];
-    if (pack) categoryOwners.set(pack, t(`appStyles.categories.${category}`));
-  }
-  for (const entry of routing?.apps ?? []) {
-    if (entry.stylePackId) appOwners.set(entry.stylePackId, entry.app.name);
   }
 
   return (
@@ -176,69 +190,72 @@ export function AppStyleRoutingDialog({
         {routing ? (
           <>
             <p className="ol-app-style-hint">{t('appStyles.priority')}</p>
-            {([...categories, null] as const).map((category) => {
-              const label = t(`appStyles.categories.${category ?? 'other'}`);
-              const apps = routing.apps
-                .filter((entry) => entry.category === category)
-                .sort((a, b) => a.app.name.localeCompare(b.app.name));
-              if (!category && !apps.length) return null;
-              const categoryPack = category
-                ? packs.find((pack) => pack.enabled && pack.id === routing.categories[category])
-                : undefined;
-              const defaultLabel = t('appStyles.useCurrent');
-              const inherited = categoryPack
-                ? t('appStyles.inherit', { pack: packName(categoryPack) })
-                : defaultLabel;
-              return (
-                <section className="ol-app-style-group" key={category ?? 'other'}>
-                  <div className="ol-app-style-row">
-                    <h3>{label}</h3>
-                    {category &&
-                      picker(
-                        {
-                          target: 'category',
-                          category,
-                          stylePackId: routing.categories[category] ?? null,
-                        },
-                        label,
-                        defaultLabel,
-                        categoryOwners,
-                      )}
+            <section className="ol-app-style-group">
+              <h3>{t('appStyles.byCategory')}</h3>
+              {categories.map((category) => {
+                const label = t(`appStyles.categories.${category}`);
+                return (
+                  <div className="ol-app-style-row" key={category}>
+                    <span className="ol-app-style-name">{label}</span>
+                    {picker(
+                      {
+                        target: 'category',
+                        category,
+                        stylePackId: routing.categories[category] ?? null,
+                      },
+                      label,
+                      t('appStyles.useCurrent'),
+                    )}
                   </div>
-                  {apps.map(({ app, stylePackId }) => (
-                    <div className="ol-app-style-row ol-app-style-row--app" key={app.id}>
-                      <span className="ol-app-style-name">
-                        <span className="ol-app-style-icon" aria-hidden="true">
-                          {icons[app.id] && (
-                            <img
-                              alt=""
-                              src={icons[app.id]}
-                              onError={(event) => {
-                                event.currentTarget.hidden = true;
-                              }}
-                            />
-                          )}
+                );
+              })}
+            </section>
+            {routing.apps.length > 0 && (
+              <section className="ol-app-style-group">
+                <h3>{t('appStyles.byApp')}</h3>
+                {[...routing.apps]
+                  .sort((a, b) => a.app.name.localeCompare(b.app.name))
+                  .map(({ app, category, stylePackId }) => {
+                    const categoryPack = category
+                      ? packs.find(
+                          (pack) => pack.enabled && pack.id === routing.categories[category],
+                        )
+                      : undefined;
+                    const inherited = categoryPack
+                      ? t('appStyles.inherit', { pack: packName(categoryPack) })
+                      : t('appStyles.useCurrent');
+                    return (
+                      <div className="ol-app-style-row ol-app-style-row--app" key={app.id}>
+                        <span className="ol-app-style-name">
+                          <span className="ol-app-style-icon" aria-hidden="true">
+                            {icons[app.id] && (
+                              <img
+                                alt=""
+                                src={icons[app.id]}
+                                onError={(event) => {
+                                  event.currentTarget.hidden = true;
+                                }}
+                              />
+                            )}
+                          </span>
+                          <span title={app.name}>
+                            {app.name}
+                            {category && <small>{t(`appStyles.categories.${category}`)}</small>}
+                          </span>
                         </span>
-                        <span title={app.name}>{app.name}</span>
-                      </span>
-                      {picker(
-                        { target: 'app', appId: app.id, stylePackId },
-                        app.name,
-                        inherited,
-                        appOwners,
-                      )}
-                    </div>
-                  ))}
-                </section>
-              );
-            })}
+                        {picker({ target: 'app', appId: app.id, stylePackId }, app.name, inherited)}
+                      </div>
+                    );
+                  })}
+              </section>
+            )}
             {!routing.apps.length && <p className="ol-app-style-hint">{t('appStyles.empty')}</p>}
           </>
         ) : (
-          !error && <p role="status">{t('common.loading')}</p>
+          !error && !loadError && <p role="status">{t('common.loading')}</p>
         )}
       </DialogBody>
-      {error && (
+      {(error || Boolean(loadError)) && (
         <p className="ol-dialog-error" role="alert">
           {t('common.operationFailed')}
         </p>

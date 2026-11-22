@@ -15,6 +15,9 @@ pub enum AppCategory {
     Coding,
     Chat,
     Email,
+    Writing,
+    Office,
+    Browser,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,10 +47,44 @@ impl InputApp {
     }
 
     pub fn category(&self) -> Option<AppCategory> {
-        use AppCategory::{Chat, Coding, Email};
+        use AppCategory::{Browser, Chat, Coding, Email, Office, Writing};
         if let Some(bundle) = self.macos_bundle_id() {
-            return match bundle.to_ascii_lowercase().as_str() {
-                "com.microsoft.vscode"
+            let bundle = bundle.to_ascii_lowercase();
+            // Installed web apps have their own stable bundle identity. Browser
+            // tabs retain the browser's category, regardless of their title.
+            let installed_web_app = [
+                "com.google.chrome.app.",
+                "com.microsoft.edgemac.app.",
+                "com.apple.safari.webapp.",
+            ]
+            .iter()
+            .any(|prefix| bundle.starts_with(prefix));
+            if installed_web_app
+                && matches!(
+                    self.name.to_ascii_lowercase().as_str(),
+                    "gemini" | "google gemini" | "chatgpt" | "claude" | "google ai studio"
+                )
+            {
+                return Some(Coding);
+            }
+            return match bundle.as_str() {
+                // Agent clients, IDEs, terminals, and development tools.
+                "com.openai.codex"
+                | "com.openai.chat"
+                | "com.anthropic.claudefordesktop"
+                | "com.stablyai.orca"
+                | "com.google.antigravity"
+                | "ai.opencode.desktop"
+                | "com.t3tools.t3code"
+                | "dev.kiro.desktop"
+                | "com.trae.app"
+                | "com.conductor.app"
+                | "com.superset.desktop"
+                | "com.exafunction.windsurf"
+                | "com.kangfenmao.cherrystudio"
+                | "com.docker.docker"
+                | "com.electron.dockerdesktop"
+                | "com.microsoft.vscode"
                 | "com.microsoft.vscodeinsiders"
                 | "com.apple.dt.xcode"
                 | "com.todesktop.230313mzl4w4u92"
@@ -83,21 +120,41 @@ impl InputApp {
                 | "org.mozilla.thunderbird"
                 | "com.readdle.smartemail-macos"
                 | "com.mimestream.mimestream" => Some(Email),
+                "com.apple.notes" | "md.obsidian" | "notion.id" | "abnerworks.typora"
+                | "net.shinyfrog.bear" | "com.ulyssesapp.mac" => Some(Writing),
+                "com.microsoft.word"
+                | "com.microsoft.excel"
+                | "com.microsoft.powerpoint"
+                | "com.apple.iwork.pages"
+                | "com.apple.iwork.numbers"
+                | "com.apple.iwork.keynote" => Some(Office),
+                "com.apple.safari"
+                | "com.google.chrome"
+                | "com.google.chrome.canary"
+                | "org.mozilla.firefox"
+                | "com.microsoft.edgemac"
+                | "com.brave.browser"
+                | "company.thebrowser.browser"
+                | "com.vivaldi.vivaldi" => Some(Browser),
                 _ => None,
             };
         }
         if self.id.starts_with("windows:") {
             // The host supplies the executable stem, never a window title.
             return match self.name.to_ascii_lowercase().as_str() {
-                "code" | "code - insiders" | "cursor" | "zed" | "devenv" | "idea64"
-                | "pycharm64" | "webstorm64" | "studio64" | "sublime_text" | "windowsterminal" => {
-                    Some(Coding)
-                }
+                "chatgpt" | "codex" | "claude" | "orca" | "antigravity" | "opencode"
+                | "t3 code" | "kiro" | "trae" | "windsurf" | "conductor" | "superset"
+                | "cherry studio" | "docker desktop" | "code" | "code - insiders" | "cursor"
+                | "zed" | "devenv" | "idea64" | "pycharm64" | "webstorm64" | "studio64"
+                | "sublime_text" | "windowsterminal" => Some(Coding),
                 "wechat" | "weixin" | "qq" | "wxwork" | "slack" | "discord" | "ms-teams"
                 | "teams" | "telegram" | "whatsapp" | "lark" | "feishu" | "dingtalk" | "zoom" => {
                     Some(Chat)
                 }
                 "outlook" | "olk" | "thunderbird" => Some(Email),
+                "obsidian" | "notion" | "typora" | "notepad" | "notepad++" => Some(Writing),
+                "winword" | "excel" | "powerpnt" | "wps" | "et" | "wpp" => Some(Office),
+                "chrome" | "msedge" | "firefox" | "brave" | "arc" | "vivaldi" => Some(Browser),
                 _ => None,
             };
         }
@@ -240,13 +297,6 @@ impl AppStyleStore {
                     category,
                     style_pack_id: Some(id),
                 } => {
-                    if state
-                        .categories
-                        .iter()
-                        .any(|(owner, assigned)| *owner != category && *assigned == id)
-                    {
-                        return Err(assignment_conflict());
-                    }
                     state.categories.insert(category, id);
                 }
                 AppStyleAssignment::Category {
@@ -259,13 +309,6 @@ impl AppStyleStore {
                     app_id,
                     style_pack_id,
                 } => {
-                    if let Some(id) = &style_pack_id {
-                        if state.apps.iter().any(|(owner, entry)| {
-                            *owner != app_id && entry.style_pack_id.as_ref() == Some(id)
-                        }) {
-                            return Err(assignment_conflict());
-                        }
-                    }
                     let entry = state.apps.get_mut(&app_id).ok_or_else(|| {
                         BackendError::new(
                             BackendErrorCode::InvalidArgument,
@@ -339,16 +382,71 @@ impl RoutingState {
     }
 }
 
-fn assignment_conflict() -> BackendError {
-    BackendError::new(
-        BackendErrorCode::InvalidArgument,
-        "style pack is already assigned",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_catalog_classifies_agents_and_common_input_apps() {
+        for bundle in [
+            "com.openai.codex",
+            "com.openai.chat",
+            "com.stablyai.orca",
+            "com.google.antigravity",
+            "com.anthropic.claudefordesktop",
+            "ai.opencode.desktop",
+            "com.t3tools.t3code",
+            "dev.kiro.desktop",
+            "com.trae.app",
+            "com.conductor.app",
+            "com.superset.desktop",
+            "com.docker.docker",
+            "com.microsoft.VSCode",
+        ] {
+            assert_eq!(
+                InputApp::macos(bundle, None).unwrap().category(),
+                Some(AppCategory::Coding),
+                "{bundle}"
+            );
+        }
+        for (bundle, category) in [
+            ("com.apple.Notes", AppCategory::Writing),
+            ("com.tencent.xinWeChat", AppCategory::Chat),
+            ("com.apple.mail", AppCategory::Email),
+            ("com.microsoft.Word", AppCategory::Office),
+            ("com.google.Chrome", AppCategory::Browser),
+        ] {
+            assert_eq!(
+                InputApp::macos(bundle, None).unwrap().category(),
+                Some(category)
+            );
+        }
+        assert_eq!(
+            InputApp::macos("com.google.Chrome.app.test-gemini", Some("Gemini"))
+                .unwrap()
+                .category(),
+            Some(AppCategory::Coding)
+        );
+        assert_eq!(
+            InputApp::macos("com.google.Chrome", Some("Gemini"))
+                .unwrap()
+                .category(),
+            Some(AppCategory::Browser)
+        );
+        // A display name cannot turn an unknown app or browser tab into an agent.
+        assert_eq!(
+            InputApp::macos("org.example.unknown", Some("ChatGPT"))
+                .unwrap()
+                .category(),
+            None
+        );
+        assert_eq!(
+            InputApp::macos("com.macpaw.site.Gemini2", Some("Gemini"))
+                .unwrap()
+                .category(),
+            None
+        );
+    }
 
     #[test]
     fn uses_platform_identity_instead_of_a_macos_display_name() {
@@ -373,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn assignments_are_unique_within_each_level_and_persist_independently_of_history() {
+    fn shared_packs_keep_one_assignment_per_target() {
         let dir =
             std::env::temp_dir().join(format!("openless-app-styles-{}", uuid::Uuid::new_v4()));
         let store = AppStyleStore::open(&dir);
@@ -393,29 +491,40 @@ mod tests {
         store
             .set(assign_category(AppCategory::Coding, "shared"))
             .unwrap();
-        assert!(store
+        store
             .set(assign_category(AppCategory::Email, "shared"))
-            .is_err());
+            .unwrap();
         store.set(override_with(&chat, Some("shared"))).unwrap();
-        assert!(store.set(override_with(&editor, Some("shared"))).is_err());
+        store.set(override_with(&editor, Some("shared"))).unwrap();
+        let shared = store.snapshot().unwrap();
+        assert_eq!(shared.categories[&AppCategory::Coding], "shared");
+        assert_eq!(shared.categories[&AppCategory::Email], "shared");
+        assert_eq!(shared.apps.len(), 2);
+        assert!(shared
+            .apps
+            .iter()
+            .all(|entry| entry.style_pack_id.as_deref() == Some("shared")));
+
+        store
+            .set(assign_category(AppCategory::Email, "replacement"))
+            .unwrap();
         store.set(override_with(&editor, Some("override"))).unwrap();
         assert_eq!(store.candidates(&editor), ["override", "shared"]);
-        store
-            .set(override_with(&editor, Some("replacement")))
-            .unwrap();
-        store.set(override_with(&chat, Some("override"))).unwrap();
+        assert_eq!(store.candidates(&chat), ["shared"]);
         store.set(override_with(&editor, None)).unwrap();
 
         store.clear_seen().unwrap();
         drop(store);
         let reopened = AppStyleStore::open(&dir);
         let snapshot = reopened.snapshot().unwrap();
-        assert_eq!(snapshot.categories.len(), 1);
+        assert_eq!(snapshot.categories.len(), 2);
+        assert_eq!(snapshot.categories[&AppCategory::Coding], "shared");
+        assert_eq!(snapshot.categories[&AppCategory::Email], "replacement");
         assert_eq!(snapshot.apps.len(), 1);
         assert_eq!(snapshot.apps[0].app, chat);
         assert!(!snapshot.apps[0].seen);
         assert_eq!(reopened.candidates(&editor), ["shared"]);
-        assert_eq!(reopened.candidates(&chat), ["override"]);
+        assert_eq!(reopened.candidates(&chat), ["shared"]);
         reopened.set(override_with(&chat, None)).unwrap();
         assert!(reopened.snapshot().unwrap().apps.is_empty());
         std::fs::remove_dir_all(dir).unwrap();

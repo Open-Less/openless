@@ -290,7 +290,7 @@ export interface StylePackExample {
   output: string;
 }
 
-export type AppCategory = 'coding' | 'chat' | 'email';
+export type AppCategory = 'coding' | 'chat' | 'email' | 'writing' | 'office' | 'browser';
 
 export interface AppStyleEntry {
   app: { id: string; name: string };

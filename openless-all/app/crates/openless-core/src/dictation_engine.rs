@@ -1078,13 +1078,14 @@ impl DictationEngine for PipelineDictationEngine {
                 && !skips_polish_for_short_text
                 && (!local_fallback_used || translation_active);
             log::info!(
-                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?}",
+                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?} style_pack_id={}",
                 session_id,
                 uses_polisher,
                 skips_polish_for_short_text,
                 context.insertion.composition_input,
                 translation_active,
                 context.polish.mode,
+                context.polish.style_pack_id,
             );
             // Local recognition makes polish optional: when it fails because
             // the network never answered, the raw transcript is the result.

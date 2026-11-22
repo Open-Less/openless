@@ -5,13 +5,19 @@
     "default": false,
     "scope": "device_local",
     "features": ["lessComputer", "claudeConsole"],
-    "disabledBehavior": ["hide_entries_and_windows", "unregister_less_computer_hotkeys", "reject_runtime_admission", "cancel_active_tasks", "preserve_feature_settings"],
+    "disabledBehavior": [
+      "hide_entries_and_windows",
+      "unregister_less_computer_hotkeys",
+      "reject_runtime_admission",
+      "cancel_active_tasks",
+      "preserve_feature_settings"
+    ],
     "disabledErrorCode": "permission_denied",
     "cloudSync": "excluded"
   },
   "appStyleRouting": {
     "hosts": ["macos", "windows"],
-    "categories": ["coding", "chat", "email"],
+    "categories": ["coding", "chat", "email", "writing", "office", "browser"],
     "scope": "device_local",
     "cloudSync": "excluded",
     "snapshot": {
@@ -39,8 +45,16 @@
       "clear_input_app_history": { "result": "AppStyleRouting" },
       "get_input_app_icons": { "result": "map<appId, PNG data URL>" }
     },
-    "precedence": ["explicit_session_pack", "specific_app", "app_category", "current_pack", "enabled_default"],
-    "uniquePackPerLevel": true,
+    "precedence": [
+      "explicit_session_pack",
+      "specific_app",
+      "app_category",
+      "current_pack",
+      "enabled_default"
+    ],
+    "maxPacksPerTarget": 1,
+    "sharedPacksAllowed": true,
+    "applicationListInvalidatedBy": "history_changed",
     "unavailableAssignment": "keep_and_skip"
   },
   "startupSnapshot": {

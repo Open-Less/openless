@@ -91,6 +91,9 @@ impl HostContextAdapter for FocusContextAdapter {
             "VS Code" => "com.microsoft.VSCode",
             "WeChat" => "com.tencent.xinWeChat",
             "Mail" => "com.apple.mail",
+            "Notes" => "com.apple.Notes",
+            "ChatGPT" => "com.openai.codex",
+            "Orca" => "com.stablyai.orca",
             "Custom" => "org.example.unknown",
             _ => return None,
         };
@@ -356,12 +359,18 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             let mut bytes = vec![0; length];
             socket.read_exact(&mut bytes).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let system = payload["messages"][0]["content"].as_str().unwrap();
+            let output = if system.contains("用户有任何输入后，输出“一一一”。") {
+                "一一一"
+            } else {
+                "polished"
+            };
             let (mime, response) = if payload["stream"] == true {
-                ("text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"polished\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n")
+                ("text/event-stream", format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{output}\"}},\"finish_reason\":null}}]}}\n\ndata: [DONE]\n\n"))
             } else {
                 (
                     "application/json",
-                    r#"{"choices":[{"message":{"content":"polished"}}]}"#,
+                    serde_json::json!({"choices":[{"message":{"content":output}}]}).to_string(),
                 )
             };
             sent.send(payload).unwrap();
@@ -495,6 +504,82 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         );
     }
 
+    // A newly observed agent client inherits its category on its first input.
+    for app in ["ChatGPT", "Orca"] {
+        fixture.focus.lock().unwrap().current = app;
+        backend.start_dictation().await.unwrap();
+        backend.stop_dictation().await.unwrap();
+        expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+        assert_eq!(
+            backend
+                .app_style_routing()
+                .unwrap()
+                .apps
+                .iter()
+                .find(|entry| entry.app.name == app)
+                .unwrap()
+                .category,
+            Some(AppCategory::Coding)
+        );
+    }
+
+    // Reproduce Notes with a different global selection, then rename/edit the
+    // assigned pack. Assert the actual HTTP payload, delivered text, and history.
+    fixture.focus.lock().unwrap().current = "Notes";
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    expect_request(payloads.try_recv().unwrap(), "MANUAL-STYLE");
+    let mut notes = make_pack("未命名");
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.apple.Notes".into(),
+            style_pack_id: Some(notes.id.clone()),
+        })
+        .unwrap();
+    notes.name = "一一一".into();
+    notes.prompt = "用户有任何输入后，输出“一一一”。".into();
+    backend.update_style_pack(notes.clone()).unwrap();
+    let mut assigned_payload = serde_json::Value::Null;
+    for _ in 0..3 {
+        backend.start_dictation().await.unwrap();
+        // Switching windows during recording must not switch this style or target.
+        fixture.focus.lock().unwrap().current = "WeChat";
+        let result = backend.stop_dictation().await.unwrap();
+        let payload = payloads.try_recv().unwrap();
+        expect_request(payload.clone(), &notes.prompt);
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains("MANUAL-STYLE"));
+        assert!(system.contains("内容与形式由当前风格包定义"));
+        assert!(!system.contains("请按这个应用的常见沟通风格调整语气"));
+        assigned_payload = payload;
+        assert_eq!(result.polished_text, "一一一");
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered.last().unwrap(),
+            &("Notes", "一一一".into())
+        );
+        let history = backend.list_history().unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.id == result.session_id.to_string())
+            .unwrap();
+        assert_eq!(entry.style_pack_id.as_deref(), Some(notes.id.as_str()));
+        assert_eq!(entry.app_bundle_id.as_deref(), Some("com.apple.Notes"));
+        fixture.focus.lock().unwrap().current = "Notes";
+    }
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.apple.Notes".into(),
+            style_pack_id: None,
+        })
+        .unwrap();
+
+    backend.activate_style_pack(&notes.id).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    let manual_payload = payloads.try_recv().unwrap();
+    assert_eq!(assigned_payload["messages"], manual_payload["messages"]);
+    backend.activate_style_pack(&current.id).unwrap();
+
     fixture.focus.lock().unwrap().current = "VS Code";
     backend.set_style_pack_enabled(&chat.id, false).unwrap();
     backend.start_dictation().await.unwrap();
@@ -510,7 +595,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
 
     let before_clear = backend.app_style_routing().unwrap();
-    assert_eq!(before_clear.apps.len(), 4);
+    assert_eq!(before_clear.apps.len(), 7);
     assert_eq!(before_clear.categories[&AppCategory::Chat], chat.id);
     let cleared = backend.clear_input_app_history().unwrap();
     assert_eq!(cleared.apps.len(), 1);
