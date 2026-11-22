@@ -42,6 +42,7 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
   return (
     <HotkeySettingsProvider>
       <Suspense fallback={<CoreStartupScreen />}>
+        <MainWindowFirstFrame os={os} />
         {panel.kind === 'qa' ? (
           <div key={panel.epoch} className="ol-embedded-panel">
             <QaPanel
