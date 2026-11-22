@@ -101,7 +101,7 @@ mod shortcut_types;
 ///
 /// This is independent from the application release version.  Increment the
 /// major component for a breaking host contract change and document the
-/// migration in `docs/linux-egui-backend-contract.md`.
+/// migration in `docs/development/linux.md`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{
