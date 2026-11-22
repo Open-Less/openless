@@ -894,16 +894,21 @@ function AsrAdvancedOptions({
   const [enableNonstream, setEnableNonstream] = useState(false);
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
   const [error, setError] = useState('');
+  const latestConfigRef = useRef<AdvancedAsrConfig>(parseAdvancedAsrConfig(null));
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSavesRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     setStatus('idle');
     setError('');
+    latestConfigRef.current = parseAdvancedAsrConfig(null);
     void (async () => {
       try {
         const raw = await readCredential('asr.advanced_config', provider);
         if (cancelled) return;
         const config = parseAdvancedAsrConfig(raw);
+        latestConfigRef.current = config;
         setVerboseJson(config.verboseJson);
         setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
         setEnableItn(config.enableItn);
@@ -937,25 +942,40 @@ function AsrAdvancedOptions({
     onUserMutation?.();
     setStatus('saving');
     setError('');
+    const prev = latestConfigRef.current;
     const next: AdvancedAsrConfig = {
-      verboseJson: partial.verboseJson ?? verboseJson,
+      verboseJson: partial.verboseJson ?? prev.verboseJson,
       chunkDurationMs:
         partial.chunkDurationMs !== undefined
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
-      enableItn: partial.enableItn ?? enableItn,
-      enableDdc: partial.enableDdc ?? enableDdc,
-      enableNonstream: partial.enableNonstream ?? enableNonstream,
+      enableItn: partial.enableItn ?? prev.enableItn,
+      enableDdc: partial.enableDdc ?? prev.enableDdc,
+      enableNonstream: partial.enableNonstream ?? prev.enableNonstream,
     };
+    latestConfigRef.current = next;
+    setVerboseJson(next.verboseJson);
+    setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
+    setEnableItn(next.enableItn);
+    setEnableDdc(next.enableDdc);
+    setEnableNonstream(next.enableNonstream);
+
+    pendingSavesRef.current += 1;
+    const queued = saveQueueRef.current
+      .catch(() => {})
+      .then(async () => {
+        await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
+      });
+    saveQueueRef.current = queued;
+
     try {
-      await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
-      setVerboseJson(next.verboseJson);
-      setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
-      setEnableItn(next.enableItn);
-      setEnableDdc(next.enableDdc);
-      setEnableNonstream(next.enableNonstream);
-      setStatus('idle');
+      await queued;
+      pendingSavesRef.current -= 1;
+      if (pendingSavesRef.current === 0) {
+        setStatus('idle');
+      }
     } catch (err) {
+      pendingSavesRef.current -= 1;
       setStatus('error');
       setError(err instanceof Error ? err.message : String(err));
     }
