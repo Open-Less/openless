@@ -51,7 +51,14 @@ OPENLESS_E2E_PREVIEW_PORT=5533 OPENLESS_E2E_FIXTURE_PORT=5534 npx playwright tes
 cargo test --locked -p openless-core --features ask-attachments --lib host_factory -- --include-ignored --nocapture --test-threads=1
 ```
 
-对 `assistant::tests` 的扩展检查结果为 9 通过、1 失败：`repeated_tool_reads_compact_then_resume_the_loop_and_finish` 在 `requests[4].instructions.contains("INTERNAL CONTINUITY COMPACTION TASK")` 断言失败。该测试只调用 voiceHistory、未走搜索，测试主体和预算/压缩实现未改；本任务未调整这条无关压缩策略，也没有将此检查称为通过。已用 `git show d266ea89` 核对该起点的 `assistant/prompt.rs`：实际提示词已经是 `INTERNAL COMPACTION ONLY`，旧断言要求的文字不存在，当前文件与起点一致。协调者应在主线验收时记录和处理这个旧契约不一致；未修改原分支，也未在原分支运行测试。
+搜索兼容提交 `c27d27f7` 当时对 `assistant::tests` 的扩展检查结果为 9 通过、1 失败：`repeated_tool_reads_compact_then_resume_the_loop_and_finish` 在旧提示词断言 `INTERNAL CONTINUITY COMPACTION TASK` 处失败。后续专项已修复该测试契约：当前及 `git show d266ea89` 的 `assistant/prompt.rs` 均使用 `INTERNAL COMPACTION ONLY`，测试现在明确检查其“禁止输出答案、工具、推理和额外格式”的内部任务规则，并断言压缩输出预算为 2,048、搜索/计算/助手工具关闭。保留原有 7 次模型请求、压缩后工具结果续接、用户约束与摘要保留、5 次工具完成、恢复 Thinking、内部摘要不作为 TextDelta 输出，以及最终正确完成的断言。生产提示词、压缩预算和策略没有修改，原分支没有修改。
+
+本次仅运行以下失败测试及相邻的模型窗口压缩回归，各 1 项通过；没有重跑全套、搜索 live 或付费调用，也不把前次 10 项整组检查改写为本次重新全部通过：
+
+```sh
+cargo test --locked -p openless-core --features ask-attachments --lib assistant::tests::repeated_tool_reads_compact_then_resume_the_loop_and_finish -- --exact
+cargo test --locked -p openless-core --features ask-attachments --lib assistant::tests::compaction_at_model_window_preserves_goals_constraints_recent_turns_and_tool_evidence -- --exact
+```
 
 ## 明确限制
 

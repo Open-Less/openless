@@ -547,9 +547,13 @@ async fn repeated_tool_reads_compact_then_resume_the_loop_and_finish() {
     assert_eq!(response.text, "已根据本次对话和相关转写记录回答。");
     let requests = model.requests.lock();
     assert_eq!(requests.len(), 7);
+    // Compaction is a bounded internal JSON task, never a user answer or tool turn.
     assert!(requests[4]
         .instructions
-        .contains("INTERNAL CONTINUITY COMPACTION TASK"));
+        .contains("INTERNAL COMPACTION ONLY: no answer, tools, reasoning or extra format."));
+    assert_eq!(requests[4].output_tokens, 2_048);
+    assert!(!requests[4].tools.available.search);
+    assert!(!requests[4].tools.available.calculator);
     assert!(!requests[4].tools.available.assistant);
     assert_eq!(requests[5].tools.results.len(), 2);
     assert_eq!(requests[6].tools.results.len(), 3);
