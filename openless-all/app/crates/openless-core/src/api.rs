@@ -8747,6 +8747,10 @@ impl OpenLessBackend {
             changed.await;
         };
 
+        // Reset removes the visible job before terminal history is persisted.
+        // Keep restore admission busy until every finalization write has ended.
+        let _finalization_resources = self.voice_sessions.hold_resources(session_id)?;
+
         // Android's undecided capture prepared a non-streaming insertion
         // resource so an ordinary tap can still finish normally. A quick-note
         // gesture changes the target at the stop boundary, so cancel that
@@ -10156,6 +10160,7 @@ fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<
 #[cfg(test)]
 mod tests {
     include!("recording_overlap_tests.rs");
+    include!("sync_dictation_fence_tests.rs");
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;

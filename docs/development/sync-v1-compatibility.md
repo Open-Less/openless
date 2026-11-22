@@ -94,3 +94,18 @@ runner 从固定 Git 对象读取完整的旧 Core、原 workspace manifest / lo
 | 未知种类及协议限制如实报告 | 旧 DocumentSet parser / registry / preflight | 旧版固定源码；本页“合并、删除与边界” | 未知 kind / 严格实体新字段 / 新 builtin 原样发送均有拒绝反例；v2.0.0 另有既有排除项差异，不声称完全向后兼容。 |
 
 该结果不等于已安装旧应用 GUI、真实 OAuth、两台物理设备、系统钥匙串或真实模型输出的验收。包可用的证据是原生仓储实际解析到所选实体及其指令，而非模型效果。
+
+## 与后台录音任务组合时的恢复保护
+
+在集成基线 `504747c8` 上单独核对了录音 A 的 `processingDictations` 拆分。原保护已覆盖后台处理：`api.rs::stop_dictation_session_with_options` 在释放采集后调用 `voice_sessions.submit`；`voice_session.rs::runtime_restore_idle` 同时检查 active 和 submitted，`api.rs` 绑定给 CoreSyncStore 的 probe 使用这个 lease，而非只检查界面采集槽。E2EE 与本地迁移复用同一 Store。
+
+但成功收尾会先 `reset_dictation_session`，再清理语音激活并执行 `persist_completed_dictation`，原 lease 可能在最终历史写入前已经消失。本次只在停止函数封存上下文后增加一个现有 `hold_resources`，将同一 lease 保持到整个收尾函数返回；没有新增状态源，也不改变采集 owner 的释放或后台串行处理规则。
+
+`src/sync_dictation_fence_tests.rs::submitted_dictation_restore_fence_covers_final_history` 使用实际 stop 和 CoreSyncStore 恢复入口，分别验证“采集 Idle、后台任务在途”和“两个界面槽都空、最终历史创建尚未进入仓库写入门”两个时刻均返回 RuntimeBusy，最终历史落盘后 lease 才空闲。第二个窗口通过测试时钟暂停，使用可控引擎，不代表实际麦克风。测试在修复前明确失败，修复后仅运行这一项定向回归；既有 2.0.2 / Beta.1 矩阵不重复运行，也不扩大兼容承诺。
+
+只读 `capture_readonly` 不使用 runtime idle probe，保持原有代次一致性检查；没有把录音处理中一律禁止导出。retained 物化仍由 `export_scope` 调用原 `restore_scope`，因此在同一个 `begin_runtime_restore` 门前被拒绝，不能借“导出”覆盖仍在收尾的数据。selection 与其他组实现未修改。
+
+```sh
+cd openless-all/app
+cargo test --locked -p openless-core --lib api::tests::submitted_dictation_restore_fence_covers_final_history -- --exact --nocapture
+```
