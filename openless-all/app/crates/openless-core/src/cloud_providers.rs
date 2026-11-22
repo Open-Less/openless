@@ -3682,7 +3682,7 @@ mod tests {
             ("long", &structured, false, long.as_str(), "整体官网范围前置；所有独有约束、例外、术语、未决冲突与问句保留，只去重复"),
         ];
         crate::polish::live_acceptance::begin();
-        for (case, pack, translate, input, expectation) in cases {
+        for (case, pack, translate, input, expectation) in cases.into_iter().take(if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() { 1 } else { 8 }) {
             let mut prefs = crate::UserPreferences::default();
             prefs.translation_target_language = "English".into();
             prefs.working_languages = vec!["简体中文".into()];

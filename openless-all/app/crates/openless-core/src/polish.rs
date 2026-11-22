@@ -1168,6 +1168,8 @@ impl OpenAICompatibleLLMProvider {
                     result.map_err(|_| LLMError::Timeout)?.map_err(llm_error_from_reqwest)?
                 }
             };
+            #[cfg(test)]
+            live_acceptance::observe_error_code(&body_text);
             return Err(LLMError::InvalidResponse {
                 status: status.as_u16(),
                 body: safe_str_slice(&body_text, BODY_PREVIEW_LIMIT.min(body_text.len()))
@@ -1848,7 +1850,7 @@ pub(crate) async fn send_with_transient_retry(
     if live_acceptance::active() {
         let attempt = live_acceptance::before_send()?;
         let response = request.send().await.map_err(llm_error_from_reqwest);
-        println!("LIVE_HTTP {}", serde_json::json!({"attempt":attempt, "status":response.as_ref().ok().map(|response| response.status().as_u16())}));
+        println!("LIVE_HTTP {}", serde_json::json!({"attempt":attempt, "status":response.as_ref().ok().map(|response| response.status().as_u16()), "final_url":response.as_ref().ok().map(|response| response.url().as_str())}));
         return response;
     }
     const RETRY_DELAY_MS: u64 = 500;
@@ -5648,7 +5650,7 @@ pub(crate) mod live_acceptance {
     pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
     pub fn before_send() -> Result<usize, super::LLMError> {
         let previous = SENDS.fetch_add(1, Ordering::SeqCst);
-        if previous >= 10 {
+        if previous >= if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() { 1 } else { 10 } {
             return Err(super::LLMError::Network("live acceptance request limit reached".into()));
         }
         Ok(previous + 1)
@@ -5659,6 +5661,17 @@ pub(crate) mod live_acceptance {
                 *RESPONSE_MODEL.lock().unwrap() = crate::usage_ledger::sanitized_identifier(model);
             }
         }
+    }
+    pub fn observe_error_code(body: &str) {
+        if !active() { return; }
+        let value = serde_json::from_str::<serde_json::Value>(body).ok();
+        let code = value.as_ref().and_then(|value| value.pointer("/error/code"));
+        let safe = code.filter(|code| match code {
+            serde_json::Value::Number(_) | serde_json::Value::Null => true,
+            serde_json::Value::String(code) => matches!(code.as_str(), "invalid_api_key" | "authentication_error" | "insufficient_balance" | "model_not_found" | "invalid_request_error" | "invalid_parameter" | "permission_denied" | "rate_limit_exceeded"),
+            _ => false,
+        });
+        println!("LIVE_ERROR {}", serde_json::json!({"error_code":safe}));
     }
     pub fn take_model() -> Option<String> { RESPONSE_MODEL.lock().unwrap().take() }
 }

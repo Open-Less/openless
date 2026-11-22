@@ -21,7 +21,7 @@ on:
       live_acceptance:
         description: Paid official-provider acceptance only (skips ordinary platform checks)
         type: choice
-        options: ['off', style, search]
+        options: ['off', style, style-diagnostic, search]
         default: 'off'
       platform:
         description: Platforms to check (macos runs only macOS gates)
@@ -1241,6 +1241,7 @@ jobs:
           set -euo pipefail
           case "$LIVE_ACCEPTANCE" in
             style) target=style_live_official_deepseek ;;
+            style-diagnostic) target=style_live_official_deepseek; export OPENLESS_LIVE_FIRST_ONLY=1 ;;
             search) target=hybrid_live_official_deepseek ;;
             *) exit 2 ;;
           esac
