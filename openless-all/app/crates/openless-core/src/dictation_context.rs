@@ -125,6 +125,8 @@ pub struct DictationPolishContext {
     pub mode: PolishMode,
     pub style_pack_id: String,
     pub style_system_prompt: String,
+    /// Frozen target metadata, composed only at request time; never part of Raw identity.
+    pub input_scene_prefix: Option<String>,
     pub hotwords: Vec<String>,
     pub working_languages: Vec<String>,
     pub translation_target_language: String,
@@ -397,6 +399,7 @@ impl DictationContext {
             raw_passthrough_prompt: None,
             omni,
             polish: DictationPolishContext {
+                input_scene_prefix: None,
                 mode: style_pack.base_mode,
                 style_pack_id: style_pack.id.clone(),
                 style_system_prompt: crate::style_packs::dictation_style_prompt(style_pack),
@@ -575,7 +578,17 @@ impl DictationContext {
         } else {
             user
         };
-        (system, user)
+        (self.with_input_scene_prefix(system), user)
+    }
+
+    /// Prepend metadata only for actual foreground-app dictation output.
+    pub(crate) fn with_input_scene_prefix(&self, system: String) -> String {
+        if self.output_target == DictationOutputTarget::ForegroundApp && !self.polish.selection_input {
+            if let Some(prefix) = &self.polish.input_scene_prefix {
+                return format!("{prefix}\n\n{system}");
+            }
+        }
+        system
     }
 
     /// Build the exact system prompt captured for this session.
@@ -849,6 +862,23 @@ mod tests {
         let mut asr = ProviderInvocation::new("my-cloud-channel", cloud);
         asr.prompt = Some("OpenLess.".into());
         asr
+    }
+
+    #[test]
+    fn frozen_scene_does_not_change_raw_identity_or_internal_note_prompts() {
+        let mut context = DictationContext::default();
+        context.polish.mode = PolishMode::Raw;
+        context.polish.style_system_prompt = crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
+        let canonical = context.polish.style_system_prompt.clone();
+        context.polish.input_scene_prefix = Some("当前应用：Frozen target".into());
+        assert!(!context.uses_llm_polisher());
+        assert_eq!(context.polish.style_system_prompt, canonical);
+        assert!(context.effective_polish_system_prompt().starts_with("当前应用：Frozen target"));
+        for target in [DictationOutputTarget::QuickNote, DictationOutputTarget::CloudNote, DictationOutputTarget::VoiceEdit] {
+            let internal = context.with_output_target(target);
+            assert!(!internal.effective_polish_system_prompt().contains("Frozen target"));
+            assert_eq!(internal.polish.style_system_prompt, canonical);
+        }
     }
 
     #[test]

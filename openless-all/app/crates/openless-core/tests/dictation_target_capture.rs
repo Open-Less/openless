@@ -105,6 +105,11 @@ impl HostContextAdapter for FocusContextAdapter {
         InputApp::macos(bundle, Some(self.target))
     }
 
+    fn input_location(&self) -> Option<String> {
+        // A host-provided control label, tied to the captured target rather than current focus.
+        (self.target == "VS Code").then(|| "代码编辑区（可信控件标签）".into())
+    }
+
     fn capture(
         &self,
         _include_cursor: bool,
@@ -518,6 +523,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     preferences.active_llm_provider = "ark".into();
     preferences.polish_skip_max_chars = 0;
     preferences.streaming_insert = false;
+    preferences.cursor_context_enabled = true;
     preferences.translation_target_language = "English".into();
     preferences.working_languages = vec!["zh".into()];
     backend
@@ -556,6 +562,11 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     }
     let expect_request = |payload: serde_json::Value, marker: &str| {
         let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(system.starts_with("当前应用："));
+        assert_eq!(system.matches("当前应用：").count(), 1);
+        assert!(!system.contains("# 输入场景参考"));
+        assert!(system.find("本次输入场景：").unwrap() < system.find(marker).unwrap());
+        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
         assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         assert!(system.find(marker).unwrap() < system.find(openless_core::DICTATION_REVISION_RULES).unwrap());
         if marker == "CODING-STYLE" {
@@ -587,7 +598,12 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     starting.await.unwrap().unwrap();
     let result = backend.stop_dictation().await.unwrap();
     assert_eq!(result.polished_text, "polished");
-    expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+    let first_payload = payloads.try_recv().unwrap();
+    let first_system = first_payload["messages"][0]["content"].as_str().unwrap();
+    assert!(first_system.starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
+    assert!(first_system.contains("应用主要用途：fixture editor context"));
+    assert!(first_system.contains("当前输入位置：代码编辑区（可信控件标签）"));
+    expect_request(first_payload, "CODING-STYLE");
     assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "VS Code");
     assert_eq!(
         backend.app_style_routing().unwrap().apps[0].app.name,
@@ -619,12 +635,51 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             backend.stop_dictation().await.unwrap().polished_text,
             "polished"
         );
-        expect_request(payloads.try_recv().unwrap(), marker);
+        let payload = payloads.try_recv().unwrap();
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        if app == "Custom" {
+            assert!(system.starts_with("当前应用：Custom\n应用标识：macos:org.example.unknown\n应用分类：未知\n应用主要用途：未知"));
+        }
+        if app == "No stable identifier" {
+            assert!(system.starts_with("当前应用：未知\n应用标识：未知"));
+        }
+        if app != "VS Code" {
+            assert!(system.contains("当前输入位置：应用内输入，无法正确确定"));
+        }
+        expect_request(payload, marker);
         assert_eq!(
             fixture.focus.lock().unwrap().delivered.last().unwrap().0,
             app
         );
     }
+
+    // User membership changes affect the next capture, not an in-flight snapshot.
+    fixture.focus.lock().unwrap().current = "VS Code";
+    backend.set_app_style_assignment(AppStyleAssignment::Membership {
+        member_id: "catalog:vscode".into(), category: Some("email".into()),
+    }).unwrap();
+    backend.start_dictation_with_options(DictationStartOptions {
+        style_pack_id: Some(current.id.clone()), ..Default::default()
+    }).await.unwrap();
+    backend.set_app_style_assignment(AppStyleAssignment::Membership {
+        member_id: "catalog:vscode".into(), category: Some("coding".into()),
+    }).unwrap();
+    backend.stop_dictation().await.unwrap();
+    let payload = payloads.try_recv().unwrap();
+    assert!(payload["messages"][0]["content"].as_str().unwrap().contains("应用分类：邮件"));
+    expect_request(payload, "MANUAL-STYLE");
+
+    let mut preferences = backend.get_preferences();
+    preferences.cursor_context_enabled = false;
+    backend.update_settings(preferences, openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT, &openless_core::NoopSettingsRuntime).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    let payload = payloads.try_recv().unwrap();
+    let system = payload["messages"][0]["content"].as_str().unwrap();
+    assert!(system.starts_with("当前应用：VS Code"));
+    assert!(system.contains("应用分类：编程"));
+    assert!(system.contains("当前输入位置：应用内输入，无法正确确定"));
+    expect_request(payload, "CHAT-STYLE");
 
     // A newly observed agent client inherits its category on its first input.
     for app in ["ChatGPT", "Orca"] {
@@ -830,6 +885,9 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             backend.stop_dictation().await.unwrap();
             let payload = payloads.try_recv().unwrap();
             let system = payload["messages"][0]["content"].as_str().unwrap();
+            assert!(system.starts_with("当前应用：VS Code"));
+            let pack = backend.get_style_pack(id).unwrap();
+            assert!(system.find("本次输入场景：").unwrap() < system.find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim()).unwrap());
             assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
             assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
             if translation_requested {

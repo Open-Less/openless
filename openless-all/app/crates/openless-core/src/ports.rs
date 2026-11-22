@@ -50,6 +50,12 @@ pub trait HostContextAdapter: Send + Sync {
     fn input_app(&self) -> Option<crate::app_style_routing::InputApp> {
         None
     }
+    /// Reliable semantic location from the same frozen insertion target, never inferred
+    /// from document text or window titles. Called only with cursor context enabled.
+    /// Hosts without a trusted control label/role leave this unavailable.
+    fn input_location(&self) -> Option<String> {
+        None
+    }
     /// Capture foreground application metadata for attribution and input policy.
     /// `include_cursor=false` forbids reading document/AX text, not querying the
     /// application identity. Hosts must honor this before any document access.
