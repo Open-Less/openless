@@ -132,11 +132,13 @@ pub fn dismiss_vocab_suggestions(core: CoreState<'_>, coord: CoordinatorState<'_
 /// `navigator.clipboard.writeText` from an unfocused document throws
 /// `Document is not focused`.
 #[tauri::command]
-pub fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
     }
-    crate::insertion::copy_text_to_clipboard(&text)
+    tauri::async_runtime::spawn_blocking(move || crate::insertion::copy_text_to_clipboard(&text))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// The fallback card closed itself (user clicked close / TTL expired).

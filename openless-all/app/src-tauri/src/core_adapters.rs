@@ -1232,6 +1232,7 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         let preferences = self.preferences()?;
         crate::selection::insert_selection_result(
             target,
+            source_text,
             replacement_text,
             preferences.paste_shortcut,
         )
@@ -5062,7 +5063,7 @@ impl TauriTextInsertionSession {
                             || {
                                 let inserter = crate::insertion::TextInserter::new();
                                 if crate::selection::selection_insertion_target_is_current(&target) {
-                                    inserter.insert_guarded(&text, restore, shortcut, true, || crate::selection::selection_insertion_target_is_current(&target))
+                                    inserter.insert_guarded(&text, restore, shortcut, None, || crate::selection::selection_insertion_target_is_current(&target))
                                 } else if fallback {
                                     inserter.copy_fallback(&text)
                                 } else {
@@ -5114,7 +5115,7 @@ impl TauriTextInsertionSession {
                     return map_insert_status(inserter.copy_fallback(&text));
                 }
                 #[cfg(target_os = "macos")]
-                let status = inserter.insert_guarded(&text, restore, shortcut, true, || crate::selection::selection_insertion_target_is_current(&target));
+                let status = inserter.insert_guarded(&text, restore, shortcut, None, || crate::selection::selection_insertion_target_is_current(&target));
                 #[cfg(not(target_os = "macos"))]
                 let status = inserter.insert(&text, restore, shortcut);
                 #[cfg(target_os = "macos")]

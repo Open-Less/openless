@@ -488,8 +488,10 @@ pub(crate) fn protect_selection_original(
     if target.cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return Err("selection session cancelled".into());
     }
-    crate::insertion::copy_text_to_clipboard(text)?;
-    *target.original_clipboard.lock() = crate::insertion::clipboard_sequence();
+    let revision = crate::insertion::copy_text_to_clipboard_guarded(text, || {
+        !target.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    })?;
+    *target.original_clipboard.lock() = revision;
     if target.original_clipboard.lock().is_none() {
         return Err("selectionOriginalCopyFailed".into());
     }
@@ -507,13 +509,13 @@ pub(crate) fn selection_result_fallback(
         ));
     }
     // A user copy after processing began owns the clipboard, even if its text is identical.
-    if crate::insertion::clipboard_revision_matches(
-        *target.original_clipboard.lock(),
-        crate::insertion::clipboard_sequence(),
-    ) {
-        crate::insertion::copy_text_to_clipboard(text).map_err(|error| {
-            openless_core::BackendError::new(openless_core::BackendErrorCode::Platform, error)
-        })?;
+    let expected = *target.original_clipboard.lock();
+    if crate::insertion::copy_text_to_clipboard_if_current(text, expected, || {
+        !target.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    })
+    .map_err(|error| {
+        openless_core::BackendError::new(openless_core::BackendErrorCode::Platform, error)
+    })? {
         Ok(openless_core::InsertOutcome::CopiedFallback)
     } else {
         Err(openless_core::BackendError::new(
@@ -540,6 +542,7 @@ pub(crate) fn original_recovery_message(locale: &str) -> &'static str {
 /// Final native handoff. Clipboard restore is mandatory for selection workflows.
 pub(crate) fn insert_selection_result(
     target: &SelectionInsertionTarget,
+    source_text: &str,
     text: &str,
     shortcut: crate::types::PasteShortcut,
 ) -> Result<openless_core::InsertOutcome, openless_core::BackendError> {
@@ -551,15 +554,29 @@ pub(crate) fn insert_selection_result(
     if !selection_insertion_target_is_current(target) {
         return selection_result_fallback(target, text);
     }
-    let may_keep_fallback = crate::insertion::clipboard_revision_matches(
-        *target.original_clipboard.lock(),
+    let expected_clipboard = *target.original_clipboard.lock();
+    if !crate::insertion::clipboard_revision_matches(
+        expected_clipboard,
         crate::insertion::clipboard_sequence(),
-    );
-    if !may_keep_fallback {
-        return Err(openless_core::BackendError::new(openless_core::BackendErrorCode::InvalidState, "selectionResultInHistory"));
+    ) {
+        return Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::InvalidState,
+            "selectionResultInHistory",
+        ));
     }
-    let status =
-        crate::insertion::TextInserter::new().insert_guarded(text, true, shortcut, may_keep_fallback, || selection_insertion_target_is_current(target));
+    let status = crate::insertion::TextInserter::new().insert_guarded(
+        text,
+        true,
+        shortcut,
+        expected_clipboard,
+        || {
+            selection_insertion_target_is_current(target)
+                && (source_text.is_empty()
+                    || validate_selection_insertion_target(target, source_text)
+                        .error_code()
+                        .is_none())
+        },
+    );
     match status {
         crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent => {
             #[cfg(target_os = "macos")]
@@ -574,6 +591,13 @@ pub(crate) fn insert_selection_result(
             }
             Ok(openless_core::InsertOutcome::PasteSent)
         }
+        crate::types::InsertStatus::NotRequested => Err(
+            openless_core::BackendError::new(
+                openless_core::BackendErrorCode::InvalidState,
+                "selectionResultInHistory",
+            )
+            .target_unavailable(),
+        ),
         crate::types::InsertStatus::CopiedFallback => {
             Ok(openless_core::InsertOutcome::CopiedFallback)
         }
@@ -713,10 +737,8 @@ fn native_input_target_is_current(target: &SelectionInsertionTarget) -> bool {
 
 /// Revalidate the target and the selected text immediately before insertion.
 ///
-/// The first and final HWND checks fence the temporary Ctrl+C used to read the
-/// current selection.  This keeps the race window down to the direct handoff
-/// to the inserter, while failing closed if the user moved to another app or
-/// another editor/control during the cloud request.
+/// Native text and position reads never borrow the clipboard. This can run inside the
+/// delivery gate immediately before paste, after an earlier caller-side validation.
 pub(crate) fn validate_selection_insertion_target(
     target: &SelectionInsertionTarget,
     expected_selection: &str,
@@ -769,8 +791,7 @@ pub(crate) fn validate_selection_insertion_target(
         {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
-        // Selection text consistency: AX direct read (same path as capture), falling back to
-        // simulated Cmd+C.
+        // Selection text consistency: read AX directly, without simulated Cmd+C.
         let current_selection = read_selection_for_validation();
         if !selection_text_matches(expected_selection, current_selection.as_deref()) {
             return SelectionInsertionTargetValidation::SelectionChanged;
@@ -1060,6 +1081,9 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
 /// and keeps these internal markers out of the user's clipboard history.
 #[cfg(target_os = "windows")]
 fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    let Some(_delivery) = crate::insertion::clipboard_delivery::try_lock() else {
+        return Err(SelectionCaptureMissReason::ClipboardReadFailed);
+    };
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
@@ -1103,7 +1127,7 @@ impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
         }
     }
 
-    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome) {
+    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome, u64) {
         use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 
         let baseline_sequence = unsafe { GetClipboardSequenceNumber() };
@@ -1112,8 +1136,13 @@ impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
         if !post_ok {
             log::warn!("[selection] post_copy_shortcut failed");
         }
-        let outcome = windows_poll_clipboard_after_copy(self, baseline_sequence, &mut post_ok);
-        (post_ok, outcome)
+        let (outcome, sequence) =
+            windows_poll_clipboard_after_copy(self, baseline_sequence, &mut post_ok);
+        (post_ok, outcome, sequence)
+    }
+
+    fn sequence(&self) -> u64 {
+        unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() as u64 }
     }
 
     fn restore_text(&mut self, text: &str) {
@@ -1127,6 +1156,9 @@ impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
 /// selection, then restore the user's clipboard.
 #[cfg(target_os = "macos")]
 fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    let Some(_delivery) = crate::insertion::clipboard_delivery::try_lock() else {
+        return Err(SelectionCaptureMissReason::ClipboardReadFailed);
+    };
     // a) Snapshot the current clipboard (backup used to restore the original state)
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -1137,9 +1169,10 @@ fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissRea
     };
     let original = match clipboard.get_text() {
         Ok(t) => Some(t),
+        Err(arboard::Error::ContentNotAvailable) => None,
         Err(e) => {
-            log::info!("[selection] clipboard get_text returned err (likely empty): {e}");
-            None
+            log::warn!("[selection] clipboard backup failed; skipping simulated copy: {e}");
+            return Err(SelectionCaptureMissReason::ClipboardReadFailed);
         }
     };
 
@@ -1166,8 +1199,16 @@ fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissRea
     }
 
     std::thread::sleep(Duration::from_millis(80));
+    let copied_sequence = crate::insertion::clipboard_sequence();
     let captured = clipboard.get_text().ok();
 
+    // A newer external copy takes priority over this temporary borrow.
+    if !crate::insertion::clipboard_revision_matches(
+        copied_sequence,
+        crate::insertion::clipboard_sequence(),
+    ) {
+        return Err(SelectionCaptureMissReason::ClipboardReadFailed);
+    }
     // d) Restore the original clipboard
     if let Some(ref prev) = original {
         if let Err(e) = clipboard.set_text(prev) {
@@ -1646,7 +1687,7 @@ fn windows_poll_clipboard_after_copy(
     clipboard: &mut arboard::Clipboard,
     baseline_sequence: u32,
     post_ok: &mut bool,
-) -> ClipboardPollOutcome {
+) -> (ClipboardPollOutcome, u64) {
     use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 
     const MAX_MS: u64 = 450;
@@ -1655,10 +1696,12 @@ fn windows_poll_clipboard_after_copy(
     let mut attempts = 0u32;
     let mut resent_ctrl_c = false;
     let mut changed = false;
+    let mut last_sequence;
 
     loop {
         attempts += 1;
-        if unsafe { GetClipboardSequenceNumber() } != baseline_sequence {
+        last_sequence = unsafe { GetClipboardSequenceNumber() };
+        if last_sequence != baseline_sequence {
             changed = true;
             // The clipboard may be transiently held by another process (Clipboard History,
             // cloud clipboard). Keep polling until the deadline instead of failing immediately.
@@ -1669,7 +1712,9 @@ fn windows_poll_clipboard_after_copy(
                     attempts,
                     resent_ctrl_c
                 );
-                return ClipboardPollOutcome::Captured(text);
+                if unsafe { GetClipboardSequenceNumber() } == last_sequence {
+                    return (ClipboardPollOutcome::Captured(text), last_sequence as u64);
+                }
             }
         }
 
@@ -1695,9 +1740,9 @@ fn windows_poll_clipboard_after_copy(
         changed
     );
     if changed {
-        ClipboardPollOutcome::Unreadable
+        (ClipboardPollOutcome::Unreadable, last_sequence as u64)
     } else {
-        ClipboardPollOutcome::Unchanged
+        (ClipboardPollOutcome::Unchanged, last_sequence as u64)
     }
 }
 

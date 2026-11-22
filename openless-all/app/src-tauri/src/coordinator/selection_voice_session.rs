@@ -816,6 +816,7 @@ impl Coordinator {
             } else {
                 crate::selection::insert_selection_result(
                     &insertion_target,
+                    &ticket.source_text,
                     &ticket.replacement_text,
                     prefs.paste_shortcut,
                 )
