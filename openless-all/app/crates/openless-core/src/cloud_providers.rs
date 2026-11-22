@@ -3692,8 +3692,15 @@ mod tests {
                 crate::dictation_context::DictationProviderInvocations::new(crate::ProviderInvocation::for_provider("fixture-asr"), invocation, crate::ProviderInvocation::for_provider("unused")),
                 Vec::new(), Vec::new(), &crate::DictationStartOptions { translation_requested: translate, ..Default::default() });
             let _ = crate::polish::live_acceptance::take_model();
-            let result = polisher.polish(SessionId::new(), Arc::new(context), input.into(), Arc::new(IgnoreTextStreamSink)).await
-                .unwrap_or_else(|error| panic!("{case}: official request failed, code={:?}", error.code));
+            let result = polisher.polish(SessionId::new(), Arc::new(context), input.into(), Arc::new(IgnoreTextStreamSink)).await;
+            if let Err(error) = &result {
+                println!("LIVE_STYLE {}", serde_json::json!({"case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
+                    "channel":"official DeepSeek acceptance (not verified user Ark channel)", "requested_model":crate::deepseek_suite::MODEL,
+                    "response_model":crate::polish::live_acceptance::take_model(), "style_id":pack.id, "translation":translate,
+                    "input":input, "output":null, "error_code":format!("{:?}",error.code), "expected_semantics":expectation,
+                    "semantic_review":"not evaluated: provider request failed; remaining cases not run"}));
+            }
+            let result = result.unwrap_or_else(|error| panic!("{case}: official request failed, code={:?}", error.code));
             println!("LIVE_STYLE {}", serde_json::json!({
                 "case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
                 "channel":"official DeepSeek acceptance (not verified user Ark channel)",

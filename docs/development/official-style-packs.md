@@ -72,3 +72,9 @@ cargo test --locked -p openless-core --lib style_live_official_deepseek -- --ign
 风格测试固定官方 endpoint `https://api.deepseek.com/v1` 和源码配置模型 `deepseek-flash`，不接收任意 endpoint 参数，也不等于核实用户 Ark 渠道型号。复用 SharedCloudTextPolisher、冻结的 DictationContext 和实际提示词合成。八个主请求分别覆盖范围扩大、改口、并列选项、明确撤回、简单日常、问句、未决冲突、长输入；意图包与清晰结构为主，日常例走内置翻译，问句例走非内置翻译。翻译协议缺失触发的已有 fallback 也计入总上限十次；仅在测试构建中启用发送计数并禁用网络重试，接口或凭据错误立即停止。
 
 每例以 LIVE_STYLE JSON 记录公开响应 model、请求模型、渠道、style ID、输入、整理源文（翻译时）和最终输出，附预期语义和 pending review 标记；不记录 SSE 原始数据或隐藏推理。HTTP 成功不代表语义通过，必须阅读输出逐项确认，实际结果单独记录。GitHub 保存公共输出日志 artifact，不包含凭据。常规检查在这类手动运行中被跳过，不能说它们已经通过。
+
+### 本次真实执行结果（2026-11-23）
+
+仅显式手动触发一次：[运行 45056385541](https://github.com/Open-Less/openless/actions/runs/45056385541)，提交 f10c62b6。GitHub 无密钥编译成功，普通平台检查全部跳过；执行步骤获得 Secret，但第一例 scope 返回 Provider 错误后停止，未取得正文或响应模型，其余七例未运行。没有再次触发、重试或扩展付费调用。
+
+[逐例结果证据](evidence/style-live-45056385541.json)记录官方 endpoint、请求模型 deepseek-flash、首例输入和预期，以及所有未执行例。该结果不能证明任何真实语义遵循，也不能核实用户 Ark 下的型号；轻度和正式没有真实模型覆盖。旧入口没有记录 HTTP 状态码，无法据 Provider 分类区分凭据、模型和服务问题。后续仅补充测试入口的安全诊断：打印发送序号/HTTP状态码及失败例元数据，不打印错误响应正文、凭据或隐藏推理；已无密钥编译，未再次运行真实请求。后续排查和重跑须另行协调，不把失败隐藏为语义通过。

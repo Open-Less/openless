@@ -1846,8 +1846,10 @@ pub(crate) async fn send_with_transient_retry(
 ) -> Result<reqwest::Response, LLMError> {
     #[cfg(test)]
     if live_acceptance::active() {
-        live_acceptance::before_send()?;
-        return request.send().await.map_err(llm_error_from_reqwest);
+        let attempt = live_acceptance::before_send()?;
+        let response = request.send().await.map_err(llm_error_from_reqwest);
+        println!("LIVE_HTTP {}", serde_json::json!({"attempt":attempt, "status":response.as_ref().ok().map(|response| response.status().as_u16())}));
+        return response;
     }
     const RETRY_DELAY_MS: u64 = 500;
     let Some(initial) = request.try_clone() else {
@@ -5644,11 +5646,12 @@ pub(crate) mod live_acceptance {
     static RESPONSE_MODEL: Mutex<Option<String>> = Mutex::new(None);
     pub fn begin() { SENDS.store(0, Ordering::SeqCst); ACTIVE.store(true, Ordering::SeqCst); }
     pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
-    pub fn before_send() -> Result<(), super::LLMError> {
-        if SENDS.fetch_add(1, Ordering::SeqCst) >= 10 {
+    pub fn before_send() -> Result<usize, super::LLMError> {
+        let previous = SENDS.fetch_add(1, Ordering::SeqCst);
+        if previous >= 10 {
             return Err(super::LLMError::Network("live acceptance request limit reached".into()));
         }
-        Ok(())
+        Ok(previous + 1)
     }
     pub fn observe_model(value: &serde_json::Value) {
         if active() {
