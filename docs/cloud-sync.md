@@ -1,8 +1,6 @@
-# 官方云同步
+# 旧版手动云快照协议
 
-> 本文描述旧手动快照协议。Beta 3 候选版的新客户端实现及验收边界见 [加密云同步客户端](encrypted-cloud-sync.md)，协议合同在工作区 `5-cloud-sync/docs/`。不得向下述旧 `/me/sync` 上传服务 API 密钥或历史全量明文；已注册加密恢复 gate 的仓库拒绝旧多文件恢复，防止绕过加密恢复事务。
-
-状态：手动快照同步，HTTP 合同版本 1。客户端需要官方服务同时提供 `/me/sync`；旧版服务返回 404/405/501 时显示暂不支持，不能将其当成空备份。生产同步地址为 `https://apic.openless.top:9443`（与市场后端同一服务器、独立端口），服务端连接细节见 [云同步服务端交接](cloud-sync-server-handoff.md)。
+本页维护 `/me/sync` 兼容客户端和服务端的合同。当前加密同步使用[独立的 `/v1/` 协议](encrypted-cloud-sync.md)。已注册加密恢复门的仓库拒绝旧版多文件恢复，以保护恢复事务。
 
 ## 入口与数据边界
 
@@ -31,6 +29,20 @@ Tauri 命令位于 [`commands/cloud_sync.rs`](../openless-all/app/src-tauri/src/
 界面只接收数量和版本，不接收完整私有快照。上传与删除使用上次读取的版本，服务端原子比较版本；HTTP 409 转成 `BackendErrorCode::Busy`，`details.reason=revision_conflict`，同时给出 `currentRevision`。客户端不自动改版本重试。上传或删除发生网络错误且无法确认结果时返回 `OutcomeUnknown`，应先刷新状态再决定下一步。
 
 HTTP 请求和存储内容限 2 MiB；输入有条数、文本、PNG 结构及尺寸限制。服务端返回的所有内容均按同一严格 DTO 与限额校验。`translationTargetLanguage` 的空字符串保留“沿用默认输出语言”语义。
+
+## HTTP 合同
+
+官方旧版入口是 `https://apic.openless.top:9443/me/sync`。正式入口使用 TLS，HTTP 仅用于回环测试。请求以 GitHub OAuth token 作为 Bearer 凭据，账户以 GitHub 数字 ID 隔离。客户端设置 30 秒超时并拒绝重定向。PUT 与 DELETE 使用 `application/json`，响应应禁用缓存。
+
+| 方法 | 请求与结果 |
+| --- | --- |
+| GET | 返回 `schemaVersion: 1`、`revision`、`updatedAt` 和 `payload`。初始状态为 `revision: 0`、`updatedAt: null`、`payload: null`。 |
+| PUT | `{schemaVersion: 1, baseRevision, payload}`。仅在 `baseRevision` 等于当前值时原子替换快照、递增版本，并返回保存的快照。`payload` 必须包含 `dictionary`、`corrections`、`stylePacks`、`preferences`。新增偏好字段应兼容旧客户端的缺省值。 |
+| DELETE | `{baseRevision}`。版本匹配后将云端 `payload` 置空并递增版本，包括从版本 0 删除的情况。本机数据保留。 |
+
+版本不得超过 JavaScript 安全整数上限 9,007,199,254,740,991。正版本需要可解析的 RFC3339 时间戳。响应体最多 2 MiB 加 1 KiB，字段名采用 camelCase，未知快照字段会被拒绝。词典最多 10,000 条、纠正规则最多 2,000 条、风格包最多 200 个。集合内 ID 唯一，允许 1–128 个 ASCII 字母、数字及 `._-:`，单独的 `.` 或 `..` 无效。图标解码后不超过 64 KiB，宽高各为 1–1024 像素。约束以 [`cloud_sync_validation.rs`](../openless-all/app/crates/openless-core/src/cloud_sync_validation.rs) 为准。
+
+401／403 要求重新登录，404／405／501 表示服务不可用，不能按空备份处理。409 响应提供当前 `revision`，不携带私有快照。其他 HTTP 错误保留本机数据。写请求结果未知时，调用方先重新读取状态再决定后续操作。
 
 ## 本地恢复
 

@@ -1,9 +1,10 @@
+import { TextField } from '../../../ui/controls/TextField';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
 import { Button as Btn } from '../../../ui/controls/Button';
 import { Card } from '../../../ui/layout/Card';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
+import { SelectLite } from '../../../ui/controls/SelectLite';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 
@@ -87,46 +88,33 @@ export function WebSearchSection() {
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '划词追问和 FN + 空格随便问可由模型自主搜索。仅在需要时发送搜索词；搜索结果会作为参考资料交给当前模型。',
-          'Selection Q&A and voice Ask can search when the model needs external information. Search queries go to the search provider; results go to your current model.',
-        )}
-      </p>
-      <p>
-        {text(
-          '仅用于传统和多模态管线。默认使用免费 Bing 网页搜索，无需 API Key；可改用自己的搜索服务。DeepSeek 大统一使用独立的原生搜索。免费网页接口可能受网络或限流影响。',
-          'For traditional and multimodal pipelines. Auto uses free Bing web search without an API key, or choose your own search service. DeepSeek suite uses its separate native search. Free search availability depends on connectivity and rate limits.',
+          '为提问提供联网搜索。搜索服务会接收搜索词与 IP。',
+          'Search the web for questions. Providers receive queries and your IP.',
         )}
       </p>
       {config && (
         <>
           <SettingRow label={text('搜索服务', 'Search provider')}>
-            <select
-              aria-label="Web Search"
-              style={inputStyle}
+            <SelectLite
+              ariaLabel={text('搜索服务', 'Search provider')}
               value={config.provider}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  provider: e.target.value as WebSearchConfig['provider'],
-                  apiKey: '',
-                  endpoint: '',
-                })
-              }
-            >
-              <option value="free">{text('Bing 免费网页搜索', 'Bing free web search')}</option>
-              <option value="tavily">Tavily</option>
-              <option value="brave">Brave Search</option>
-              <option value="searxng">SearXNG</option>
-              <option value="off">{text('关闭', 'Off')}</option>
-            </select>
+              onChange={(provider) => setConfig({ ...config, provider: provider as WebSearchConfig['provider'], apiKey: '', endpoint: '' })}
+              options={[
+                { value: 'free', label: text('免费搜索', 'Free Search') },
+                { value: 'tavily', label: 'Tavily' },
+                { value: 'brave', label: 'Brave Search' },
+                { value: 'searxng', label: 'SearXNG' },
+                { value: 'off', label: text('关闭', 'Off') },
+              ]}
+            />
           </SettingRow>
           {['tavily', 'brave'].includes(config.provider) && (
             <SettingRow label="API Key">
-              <input
+              <TextField
                 aria-label="Search API Key"
                 type="password"
                 autoComplete="off"
-                style={inputStyle}
+                style={{ maxWidth: 360 }}
                 value={config.apiKey}
                 onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
               />
@@ -140,11 +128,11 @@ export function WebSearchSection() {
                 'Enter a /search endpoint with JSON output enabled.',
               )}
             >
-              <input
+              <TextField
                 aria-label="SearXNG URL"
                 type="url"
                 placeholder="https://search.example.com/search"
-                style={inputStyle}
+                style={{ maxWidth: 360 }}
                 value={config.endpoint}
                 onChange={(e) => setConfig({ ...config, endpoint: e.target.value })}
               />

@@ -9,7 +9,7 @@
 | 编号 | 可支持的陈述 | 源码/来源定位与边界 |
 | --- | --- | --- |
 | U1 | OpenLess 个人开发者提供、面向全球用户、同步完全免费无费用、开发者及赞助商免费支持；服务器赞助商是 Mivra | 2026-11-18 用户在本任务中直接确认。真实姓名/实体/地址、赞助合同、节点与费用外部边界未核实；赞助关系的依据为用户直接确认 |
-| F01 | 新旧同步合同分离；当前加密 origin 和 `/v1/`；自定义服务器也存在 | `crates/openless-core/src/cloud_sync_e2ee/mod.rs:15`；`cloud_sync_e2ee_protocol/transport.rs:145,385,414,437`；`cloud_sync_e2ee/service.rs:740`。仓库 `docs/cloud-sync.md`、`docs/cloud-sync-server-handoff.md` 描述旧 `/me/sync`，不能用其“密钥不上传”等旧范围代替新实现 |
+| F01 | 新旧同步合同分离；当前加密 origin 和 `/v1/`；自定义服务器也存在 | `crates/openless-core/src/cloud_sync_e2ee/mod.rs:15`；`cloud_sync_e2ee_protocol/transport.rs:145,385,414,437`；`cloud_sync_e2ee/service.rs:740`。旧 `/me/sync` 的数据范围由[兼容合同](../cloud-sync.md)维护。 |
 | F02 | 默认关闭；Core 保存范围确认；准备、启用与上传各有完成状态 | `cloud_sync_e2ee/local.rs::ClientSettings`、`dto.rs::CONSENT_VERSION`；`service.rs::prepare_enable/create/unlock/require_consent/run_once`；`src/lib/ipc/cloud-sync-e2ee.ts::CLOUD_SYNC_E2EE_CONSENT_VERSION`；`src/features/cloud-sync/disclosure.json`。此次基线 Core 与 IPC 版本均为 `encrypted-full-snapshot-v2`；准备在连接/刷新后保存本机范围确认，创建成功后才设置 enabled。独立的正式合同接受时间或服务端回执仍待设计与核实 |
 | F03 | 11 类逻辑文档：偏好、UI偏好、渠道、登记凭据、词典、词汇预设、纠正规则、风格、历史、活动、设备档案；整体快照非分类选择 | `cloud_sync_e2ee_protocol/types.rs:788`；`cloud_sync_e2ee_documents/export.rs:22`、`types.rs:160,228,263,274`；`cloud_sync_e2ee_store/capture.rs:112`；`cloud_sync_e2ee_documents/registry.rs` 的字段分类和 credential account 列表。API Key 在登记凭据；活动按设备/天记录 count/chars/duration_ms；设备ID/OS/arch/app version在加密DocumentSet内 |
 | F04 | 录音不随历史上传，排除本地授权/机密和系统文件，不扫描用户目录 | `cloud_sync_e2ee_documents/export.rs:1,171` 强制 `hasAudioRecording=false`；`registry.rs:86,979` 及 Excluded 字段；`types.rs:274` 明确 coherent capture、非目录/keyring枚举。登记设备路径仅保存路径字段，排除路径所指向的文件内容；`cursorContextEnabled`是开关，实际文本不在此schema |

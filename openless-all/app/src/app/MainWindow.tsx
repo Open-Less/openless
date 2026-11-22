@@ -2,8 +2,9 @@ import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HotkeySettingsProvider } from '../data/preferences';
 import { useReducedMotion } from '../lib/motion';
-import type { OS } from '../runtime/environment';
+import { isTauriHost, type OS } from '../runtime/environment';
 import { CoreStartupScreen } from './CoreStartupScreen';
+import { MainWindowFirstFrame } from './MainWindowFirstFrame';
 import { useAndroidPanels } from './useAndroidPanels';
 import { useMainStartup } from './startup';
 import { useMainWindowHotkeys } from './windowHotkeys';
@@ -28,7 +29,14 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
   );
   const { panel, close, didClose } = useAndroidPanels(caps?.platform === 'android');
   useMainWindowHotkeys(os);
-  if (gate === 'checking' || gate === 'failed') return <CoreStartupScreen error={error} />;
+  if (gate === 'checking' || gate === 'failed') {
+    return (
+      <>
+        <CoreStartupScreen error={error} />
+        {gate === 'failed' && <MainWindowFirstFrame os={os} />}
+      </>
+    );
+  }
 
   return (
     <HotkeySettingsProvider>
@@ -58,7 +66,9 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
         ) : (
           <div style={{ width: '100%', height: '100%', minWidth: 0, position: 'relative' }}>
             {gate === 'ready' && (
-              <div className="ol-main-arrival">
+              <div
+                className={os === 'mac' && isTauriHost() ? 'ol-main-presented' : 'ol-main-arrival'}
+              >
                 <Shell os={os} />
               </div>
             )}

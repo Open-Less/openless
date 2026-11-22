@@ -1,3 +1,4 @@
+import { SelectLite } from '../../ui/controls/SelectLite';
 // Presentational sub-components for the Local ASR page, extracted from
 // LocalAsr/index.tsx. Native state/actions stay in the parent; the catalog owns
 // only its engine filter, narrow-layout navigation and keyboard focus.
@@ -13,6 +14,7 @@ import {
   type LocalAsrTestResult,
 } from '../../api/local-asr';
 import { Button as Btn } from '../../ui/controls/Button';
+import { Segmented } from '../../ui/controls/Segmented';
 import { Card } from '../../ui/layout/Card';
 import { Pill } from '../../ui/controls/Pill';
 import { Icon } from '../../components/Icon';
@@ -467,7 +469,7 @@ export function TestResultBlock({ result }: { result: LocalAsrTestResult | { err
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Local ASR model management refactor (two-pane board + download dialog + top-right download progress overlay).
+// The two-pane model browser and download dialog share these view primitives.
 // Presentational components only; data and actions are assembled by LocalAsr/index.tsx.
 // ─────────────────────────────────────────────────────────────────────
 
@@ -861,21 +863,15 @@ export function DownloadDialog({
             <h2 id={titleId}>{t('localAsr.downloadDialogTitle')}</h2>
             <p id={descriptionId}>{t('localAsr.downloadDialogDesc')}</p>
             {mirror && (
-              // A native select: on Android it opens the system picker, which no
-              // dialog layer or clipping can hide.
               <label className="ol-model-dialog-mirror">
                 <span>{mirror.label}</span>
-                <select
+                <SelectLite
+                  ariaLabel={mirror.label}
                   value={mirror.value}
                   disabled={busy}
-                  onChange={(event) => mirror.onChange(event.target.value)}
-                >
-                  {mirror.options.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={mirror.onChange}
+                  options={mirror.options}
+                />
               </label>
             )}
           </div>
@@ -897,33 +893,26 @@ export function DownloadDialog({
                   <span>{visibleEntries.length}</span>
                 </div>
                 {engines.length > 1 && (
-                  <div
+                  <Segmented
                     className="ol-model-filters"
-                    role="group"
-                    aria-label={t('localAsr.engineLabel')}
-                  >
-                    {(['all', ...engines] as const).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={engine === value}
-                        onClick={() => {
-                          setEngine(value);
-                          const nextEntries =
-                            value === 'all'
-                              ? entries
-                              : entries.filter((entry) => entry.engine === value);
-                          if (!nextEntries.some((entry) => entry.id === selectedId)) {
-                            const next =
-                              nextEntries.find((entry) => !entry.isDownloaded) ?? nextEntries[0];
-                            if (next) onSelect(next.id);
-                          }
-                        }}
-                      >
-                        {value === 'all' ? t('localAsr.allEngines') : ENGINE_LABELS[value]}
-                      </button>
-                    ))}
-                  </div>
+                    label={t('localAsr.engineLabel')}
+                    value={engine}
+                    options={(['all', ...engines] as const).map((value) => ({
+                      value,
+                      label: value === 'all' ? t('localAsr.allEngines') : ENGINE_LABELS[value],
+                    }))}
+                    onChange={(value) => {
+                      setEngine(value);
+                      const nextEntries =
+                        value === 'all'
+                          ? entries
+                          : entries.filter((entry) => entry.engine === value);
+                      if (!nextEntries.some((entry) => entry.id === selectedId)) {
+                        const next = nextEntries.find((entry) => !entry.isDownloaded) ?? nextEntries[0];
+                        if (next) onSelect(next.id);
+                      }
+                    }}
+                  />
                 )}
               </div>
               <div className="ol-model-list ol-model-catalog-list">

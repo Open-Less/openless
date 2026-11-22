@@ -1,6 +1,6 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-10-19。分层与调用链见 [架构](architecture.md)。
+分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
@@ -9,7 +9,7 @@ openless-src/                     Git 仓库、分支与发布边界
 ├── docs/                         架构、合同说明、平台交接、已知缺口与参考样例
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
-├── .github/workflows/            CI、Tauri / Android / Linux / HarmonyOS 发布
+├── .github/workflows/            CI、Tauri / Android / HarmonyOS 发布
 ├── Casks/                        Homebrew 分发定义
 ├── assets/                       产品展示材料
 ├── scripts/                      仓库级辅助脚本（版本号同步等）

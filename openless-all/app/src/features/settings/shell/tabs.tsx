@@ -1,8 +1,9 @@
+import { TextField } from '../../../ui/controls/TextField';
 // Content page for each sidebar tab in the settings dialog. Each tab is a vertical stack of section cards;
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
 import { useTranslation } from 'react-i18next';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../../components/Icon';
 import { isRetiredMacAsrProvider } from '../../../lib/experimentalAsr';
@@ -39,6 +40,7 @@ import { BetaChannelSection } from '../sections/BetaChannelSection';
 import { AutoUpdateSection } from '../sections/AutoUpdateSection';
 import { StartupDiagnostics } from '../sections/StartupDiagnostics';
 import { AboutSection } from '../sections/AboutSection';
+import { PolishStrategySection } from '../sections/PolishStrategySection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
 import type { PipelineMode, PlatformCapabilities, PlatformKind } from '../../../api/contracts';
@@ -47,7 +49,6 @@ import { useHotkeySettings } from '../../../data/preferences';
 import { emitSaved } from '../../../lib/savedEvent';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { ExperimentalSectionTitle } from '../../../ui/layout/ExperimentalSectionTitle';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
 import { Segmented } from '../../../components/ui/Segmented';
 import { Card } from '../../../ui/layout/Card';
 import { TransitionViewport } from '../../../components/ui/TransitionViewport';
@@ -148,10 +149,13 @@ function SettingsCategoryEntry({
   onClick: () => void;
 }) {
   const { t } = useTranslation();
+  const descriptionId = useId();
   return (
     <button
       type="button"
       className="ol-settings-category-entry"
+      aria-label={t(title)}
+      aria-describedby={descriptionId}
       data-ol-general-entry={general ? id : undefined}
       data-ol-advanced-entry={general ? undefined : id}
       onClick={onClick}
@@ -164,7 +168,7 @@ function SettingsCategoryEntry({
           <span>{t(title)}</span>
           {beta && <span className="ol-beta-tag">Beta</span>}
         </strong>
-        <span>{t(description)}</span>
+        <span id={descriptionId}>{t(description)}</span>
       </span>
       <Icon name="chevRight" size={17} />
     </button>
@@ -274,7 +278,8 @@ export function ServicesTab({
       ? 'multimodal'
       : 'traditional';
   const pipelineSwitch = useRef(false);
-  const [switching, setSwitching] = useState(false);
+  const pendingPipeline = useRef<PipelineMode | null>(null);
+  const [requestedPipeline, setRequestedPipeline] = useState<PipelineMode | null>(null);
   const changeService = (action: () => void | Promise<void>) =>
     beforeLeave
       ? beforeLeave(action)
@@ -285,23 +290,30 @@ export function ServicesTab({
     void changeService(() => setView(id));
   };
   const setPipelineMode = (mode: PipelineMode) => {
-    if (!prefs || pipelineMode === mode || pipelineSwitch.current) return;
+    if (!prefs || (!pipelineSwitch.current && pipelineMode === mode)) return;
+    pendingPipeline.current = mode;
+    setRequestedPipeline(mode);
+    if (pipelineSwitch.current) return;
     pipelineSwitch.current = true;
-    setSwitching(true);
-    // Flush the old form before its pipeline disappears. Commit the preference
-    // after the new pipeline has read or initialized its independent credentials.
+    // Keep the outgoing form until its writes finish. Rapid clicks replace only
+    // the queued destination; preference writes remain serialized.
     void changeService(async () => {
-      if (mode === 'deepseek') await ensureDeepSeekSuiteConfig();
-      await updatePrefs((current) => ({
-        ...current,
-        pipelineMode: mode,
-        multimodalPipelineEnabled: true,
-      }));
+      while (pendingPipeline.current !== null) {
+        const next = pendingPipeline.current;
+        pendingPipeline.current = null;
+        if (next === 'deepseek') await ensureDeepSeekSuiteConfig();
+        await updatePrefs((current) => ({
+          ...current,
+          pipelineMode: next,
+          multimodalPipelineEnabled: true,
+        }));
+      }
     })
       .catch(() => emitSaved('failed', t('common.operationFailed')))
       .finally(() => {
+        pendingPipeline.current = null;
         pipelineSwitch.current = false;
-        setSwitching(false);
+        setRequestedPipeline(null);
       });
   };
   const [requiredConfigured, setRequiredConfigured] = useState({ llm: false, asr: false });
@@ -346,7 +358,7 @@ export function ServicesTab({
   return (
     <>
       <div className="ol-services-page">
-        <div className="ol-service-pipeline-mode">
+        <div className="ol-service-pipeline-mode" aria-busy={requestedPipeline !== null || undefined}>
           <SettingRow
             className="ol-service-pipeline-row"
             label={t('settings.providers.pipelineModeLabel')}
@@ -356,8 +368,8 @@ export function ServicesTab({
               className="ol-service-pipeline-track"
               indicatorClassName="ol-service-pipeline-indicator"
               label={t('settings.providers.pipelineModeLabel')}
-              disabled={!prefs || switching}
-              value={pipelineMode}
+              disabled={!prefs}
+              value={requestedPipeline ?? pipelineMode}
               onChange={setPipelineMode}
               options={(['traditional', 'multimodal', 'deepseek'] as const).map((mode) => ({
                 value: mode,
@@ -371,7 +383,11 @@ export function ServicesTab({
             {t('settings.providers.pipelineIsolationNotice')}
           </p>
         </div>
-        {!suiteMode && (
+        <div
+            style={{ visibility: suiteMode ? 'hidden' : undefined }}
+            aria-hidden={suiteMode || undefined}
+            {...(suiteMode ? { inert: '' } : {})}
+          >
           <div
             role="group"
             aria-label={t('modal.serviceViews.label')}
@@ -432,7 +448,7 @@ export function ServicesTab({
               );
             })}
           </div>
-        )}
+        </div>
         <TransitionViewport
           mode="page"
           contentKey={selectedView}
@@ -597,13 +613,13 @@ function CursorContextSection() {
         label={t('settings.recording.polishSkipMaxCharsLabel')}
         desc={t('settings.recording.polishSkipMaxCharsDesc')}
       >
-        <input
+        <TextField
           type="number"
           min={0}
           max={50}
           value={prefs.polishSkipMaxChars}
           onChange={(event) => onPolishSkipMaxCharsChange(event.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+          style={{ width: 80, textAlign: 'right' }}
         />
       </SettingRow>
     </Card>
@@ -637,37 +653,8 @@ function LiveInputSection() {
 
 // Privacy: local-first explanation + permission management · data storage.
 export function PrivacyTab() {
-  const { t } = useTranslation();
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 'var(--ol-r-md)',
-          background: 'var(--ol-blue-soft)',
-          marginBottom: 2,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 11,
-            padding: '3px 8px',
-            borderRadius: 'var(--ol-radius)',
-            background: 'var(--ol-surface)',
-            color: 'var(--ol-blue)',
-            fontWeight: 'var(--ol-font-weight-semibold)',
-            flexShrink: 0,
-          }}
-        >
-          {t('modal.about.localFirst')}
-        </span>
-        <span style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
-          {t('modal.about.privacyDesc')}
-        </span>
-      </div>
       <PermissionsSection />
       <DataStorageSection />
       <LocalMigrationSection />
@@ -740,6 +727,7 @@ export function AdvancedTab({
                   )}
               </div>
             )}
+            {item.id === 'polishStrategy' && <PolishStrategySection />}
             {item.id === 'webSearch' && <WebSearchSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}

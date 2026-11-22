@@ -24,7 +24,8 @@ export interface ModalProps {
   describedBy?: string;
   initialFocus?: RefObject<HTMLElement>;
   focusKey?: number | string;
-  motionVariant?: 'card' | 'pop' | 'sheet';
+  motionVariant?: 'card' | 'pop' | 'sheet' | 'side-panel';
+  backdrop?: 'default' | 'blur-only';
 }
 
 export function Modal({
@@ -41,6 +42,7 @@ export function Modal({
   initialFocus,
   focusKey,
   motionVariant = 'card',
+  backdrop = 'default',
 }: ModalProps) {
   const { boundary, modalStack } = useAppViewport();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -52,7 +54,7 @@ export function Modal({
   const pressedWithPopup = useRef(false);
   const registered = useRef<ModalLayer | null>(null);
 
-  useOverlayMotion(overlayRef, closing, 'backdrop');
+  useOverlayMotion(overlayRef, closing, 'backdrop', backdrop === 'default');
   useOverlayMotion(cardRef, closing, motionVariant);
 
   useLayoutEffect(() => {
@@ -96,6 +98,7 @@ export function Modal({
           .filter(Boolean)
           .join(' ')}
         data-ol-contained={boundary ? '' : undefined}
+        data-backdrop={backdrop === 'blur-only' ? backdrop : undefined}
         onPointerDownCapture={(event) => {
           pressedWithPopup.current =
             event.target === event.currentTarget && !!popupHost?.querySelector(OPEN_POPUP);

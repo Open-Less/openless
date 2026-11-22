@@ -65,7 +65,14 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
   });
   await expect.poll(distance).toBeLessThanOrEqual(1);
   const held = await viewport.evaluate((node) => {
-    node.dispatchEvent(new Event('touchmove'));
+    for (const [type, clientY] of [
+      ['touchstart', 20],
+      ['touchmove', 50],
+    ] as const) {
+      const event = new Event(type);
+      Object.defineProperty(event, 'touches', { value: [{ clientY }] });
+      node.dispatchEvent(event);
+    }
     node.scrollTop -= 30;
     node.dispatchEvent(new Event('scroll'));
     const value = node.scrollTop;

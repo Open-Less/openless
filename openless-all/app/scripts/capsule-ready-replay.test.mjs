@@ -177,6 +177,7 @@ function mount({
   const delays = [];
   const writes = [];
   const warnings = [];
+  const traceCalls = [];
   const values = { setState: 'idle', setLocalAsrText: '' };
   let requests = 0;
   const scope = {
@@ -191,6 +192,9 @@ function mount({
     operatingRef: { current: false },
     transcriptRef: { current: backend.exports.createTranscriptViewState() },
     stateRef: { current: 'idle' },
+    observeCaptionTrace: (payload, before, after) => {
+      traceCalls.push({ sequence: payload.sequence, before: before.text, after: after.text });
+    },
     snapshotRetryDelays: [0, 16, 32, 64, 128, 256],
     capsuleTranscriptFontSize: (value) => value ?? 14,
     getSettings: async () => preferences(),
@@ -270,6 +274,7 @@ function mount({
     delays,
     writes,
     warnings,
+    traceCalls,
     values,
     scope,
     get requests() {
@@ -305,6 +310,9 @@ function transcript(view, sequence, text, sessionId = 'session') {
   assert.equal(view.values.setLocalAsrText, 'existing text');
   transcript(view, 11, 'updated text');
   assert.equal(view.values.setLocalAsrText, 'updated text');
+  assert.deepEqual(view.traceCalls.at(-1), {
+    sequence: 11, before: 'existing text', after: 'updated text',
+  });
   view.emit('capsule:state', { state: 'done', sessionId: 'session' });
   assert.equal(view.values.setLocalAsrText, '');
   release(view);

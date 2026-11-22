@@ -1,27 +1,25 @@
 import { expect, test, type Page } from '@playwright/test';
-import { fixtureOrigin } from './support/server';
+import { fixtureOrigin, previewOrigin } from './support/server';
 import { settleNavigation } from './support/navigation';
+import type { NotificationOptions } from '../src/api/interaction';
 
 test.use({ baseURL: fixtureOrigin });
 
 /** Import the exact module instance the app loaded (Vite appends an HMR query). */
 async function emitNotifications(
   page: Page,
-  items: {
-    state: 'saving' | 'saved' | 'deleted' | 'failed' | 'info';
-    severity?: 'warning' | 'error';
-    message: string;
-    durationMs?: number;
-    progress?: boolean;
-  }[],
+  items: (Omit<NotificationOptions, 'onAction' | 'actionOwner'> & { id?: string })[],
 ) {
   await page.evaluate(async (items) => {
     const url = performance
       .getEntriesByType('resource')
       .map((entry) => entry.name)
       .find((name) => name.includes('/src/lib/notifications.ts'));
-    const { notify } = await import(url || '/src/lib/notifications.ts');
-    for (const item of items) notify(item);
+    const { notify, dismissNotification } = await import(url || '/src/lib/notifications.ts');
+    for (const item of items) {
+      const { id, actionLabel } = item;
+      notify({ ...item, onAction: id && actionLabel ? () => dismissNotification(id) : undefined });
+    }
   }, items);
 }
 
@@ -46,7 +44,7 @@ test('notifications stack above settings, preserve errors and support dismissal'
   await expect(cards).toHaveCount(1);
 });
 
-test('transient confirmations drop from the window top and replace each other', async ({
+test('a new save replaces the previous receipt in place and draws a full success check', async ({
   page,
 }) => {
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'large'));
@@ -54,49 +52,156 @@ test('transient confirmations drop from the window top and replace each other', 
   await expect(page.locator('.ol-notification-center')).toHaveCount(1);
   await emitNotifications(page, [
     { state: 'saved', message: '同步设置已更新。', durationMs: 10000 },
-    { state: 'saved', message: 'DeepSeek 配置已保存', durationMs: 10000 },
   ]);
+  const oldCard = page.locator('.ol-notification-card').filter({ hasText: '同步设置已更新。' });
+  const replacement = page
+    .locator('.ol-notification-card')
+    .filter({ hasText: '正在保存 DeepSeek 配置' });
+  await expect(oldCard).toHaveCSS('transform', 'none');
+  const anchor = (await oldCard.boundingBox())!;
+  await oldCard.evaluate((node) => {
+    const original = node.animate;
+    node.animate = function (keyframes, options) {
+      const animation = original.call(this, keyframes, options);
+      animation.pause();
+      animation.currentTime = 0;
+      return animation;
+    };
+  });
+  await emitNotifications(page, [
+    { id: 'deepseek', state: 'saving', message: '正在保存 DeepSeek 配置' },
+  ]);
+  await expect(oldCard).toHaveAttribute('aria-hidden', 'true');
+  await expect(replacement).toHaveCSS('transform', 'none');
+  const start = (await oldCard.boundingBox())!;
+  expect(start.y).toBeCloseTo(anchor.y, 0);
+  expect(start.x).toBeCloseTo(anchor.x, 0);
+  expect(start.width).toBeCloseTo(anchor.width, 0);
+  expect(start.height).toBeCloseTo(anchor.height, 0);
+  expect((await replacement.boundingBox())!.y).toBeCloseTo(anchor.y, 0);
+  const halfway = await oldCard.evaluate((node) => {
+    const exit = node.getAnimations().find((animation) => animation.id === 'ol-notice-exit')!;
+    exit.currentTime = Number(exit.effect!.getTiming().duration) / 2;
+    const box = node.getBoundingClientRect();
+    const pose = {
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      opacity: Number(getComputedStyle(node).opacity),
+    };
+    exit.play();
+    return pose;
+  });
+  expect(halfway.y).toBeLessThan(anchor.y);
+  expect(halfway.x).toBeCloseTo(anchor.x, 0);
+  expect(halfway.width).toBeCloseTo(anchor.width, 0);
+  expect(halfway.height).toBeCloseTo(anchor.height, 0);
+  expect(halfway.opacity).toBeGreaterThan(0);
+  expect(halfway.opacity).toBeLessThan(1);
   const cards = page.locator('.ol-notification-card');
   await expect(cards).toHaveCount(1);
+  await emitNotifications(page, [
+    { id: 'deepseek', state: 'saved', message: 'DeepSeek 配置已保存', durationMs: 10000 },
+  ]);
   await expect(cards.first()).toContainText('DeepSeek 配置已保存');
   const message = cards.locator('.ol-notification-message');
-  expect(await message.evaluate((node) => node.clientHeight)).toBe(18);
+  expect(await message.evaluate((node) => node.clientHeight)).toBe(20);
   const box = (await cards.first().boundingBox())!;
-  // The host is flush with the window edge; the card itself keeps only the safe-area inset.
   const bounds = (await page.locator('.ol-app-viewport').boundingBox())!;
   expect(box.y - bounds.y).toBeLessThan(12);
+  expect(
+    await cards.first().evaluate((node: HTMLElement) => [node.offsetWidth, node.offsetHeight]),
+  ).toEqual([356, 56]);
+  const savedIcon = cards.locator('[data-slot="toast-icon"]');
+  await expect(savedIcon).toHaveAttribute('data-tone', 'success');
+  expect(await savedIcon.evaluate((node: HTMLElement) => node.offsetWidth)).toBe(36);
 
-  // Success uses the standard theme blue and the same raised surface as content cards.
-  const savedIcon = page.locator('.ol-notification-icon--saved');
-  const savedBg = await savedIcon.evaluate((node) => getComputedStyle(node).backgroundColor);
-  const themeBlue = await page.evaluate(() => {
-    const probe = document.createElement('div');
-    probe.style.background = 'var(--ol-accent-solid-bg)';
-    document.body.appendChild(probe);
-    const value = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    return value;
+  const stroke = await savedIcon.locator('.ol-toast-stroke').evaluate((path: SVGPathElement) => {
+    const draw = path.getAnimations()[0];
+    const timing = draw.effect!.getTiming();
+    draw.pause();
+    draw.currentTime = timing.delay;
+    const initialOffset = parseFloat(getComputedStyle(path).strokeDashoffset);
+    draw.currentTime = timing.delay + Number(timing.duration) / 2;
+    const offset = parseFloat(getComputedStyle(path).strokeDashoffset);
+    draw.finish();
+    return {
+      initialOffset,
+      offset,
+      length: path.getTotalLength(),
+      dash: parseFloat(getComputedStyle(path).strokeDasharray),
+      endOffset: parseFloat(getComputedStyle(path).strokeDashoffset),
+      normalized: path.hasAttribute('pathLength'),
+    };
   });
-  expect(savedBg).toBe(themeBlue);
-  const cardBackground = await cards
-    .first()
-    .evaluate((node) => getComputedStyle(node).backgroundColor);
-  const contentCardBackground = await page
-    .locator('.ol-overview-dashboard .ol-card')
-    .first()
-    .evaluate((node) => getComputedStyle(node).backgroundColor);
-  expect(cardBackground).toBe(contentCardBackground);
+  expect(stroke.normalized).toBe(false);
+  expect(stroke.dash).toBeGreaterThan(stroke.length);
+  expect(stroke.initialOffset).toBeGreaterThan(stroke.length);
+  expect(stroke.offset).toBeGreaterThan(0);
+  expect(stroke.offset).toBeLessThan(stroke.length);
+  expect(stroke.endOffset).toBe(0);
 
   await emitNotifications(page, [{ state: 'deleted', message: '已删除', durationMs: 10000 }]);
   await expect(cards).toHaveCount(1);
   await expect(message).toHaveText('已删除');
-  expect(await message.evaluate((node) => node.clientHeight)).toBe(18);
-  const deletedIcon = page.locator('.ol-notification-icon--deleted');
-  await expect(deletedIcon).toBeVisible();
-  const deletedColor = await deletedIcon.evaluate((node) => getComputedStyle(node).backgroundColor);
-  const [deletedRed, deletedGreen] = deletedColor.match(/\d+/g)!.map(Number);
-  expect(deletedRed).toBeGreaterThan(200);
-  expect(deletedGreen).toBeLessThan(160);
+  expect(await message.evaluate((node) => node.clientHeight)).toBe(20);
+  await expect(savedIcon).toHaveAttribute('data-tone', 'trash');
+});
+
+test('repeated quick-note refresh keeps receipts at the top under desktop CSP', async ({ page }) => {
+  const url = `${previewOrigin}/?os=mac`;
+  await page.route(url, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: {
+        ...response.headers(),
+        'content-security-policy': "style-src 'self' 'unsafe-inline' 'nonce-desktop-test'",
+      },
+      body: (await response.text()).replace('<style>', '<style nonce="desktop-test">'),
+    });
+  });
+  await page.goto(url);
+  const tools = page.getByRole('button', { name: '工具', exact: true });
+  await tools.click();
+  await expect(tools).toHaveAttribute('aria-expanded', 'true');
+  await page.getByRole('button', { name: '速记', exact: true }).click();
+  await settleNavigation(page);
+  const refresh = page.getByRole('button', { name: '刷新', exact: true });
+  const active = page.locator('.ol-notification-slot:not([data-exiting]) .ol-notification-card');
+  const retiring = page.locator('.ol-notification-slot[data-exiting]');
+  await refresh.click();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await expect(active).toHaveText('已刷新');
+    await expect(active).toHaveCSS('transform', 'none');
+    const anchor = (await active.boundingBox())!;
+    await active.evaluate((node) => {
+      const animate = node.animate.bind(node);
+      node.animate = (frames, options) => {
+        const animation = animate(frames, options);
+        animation.pause();
+        animation.currentTime = 0;
+        return animation;
+      };
+    });
+    await refresh.click();
+    await expect(retiring).toHaveCSS('position', 'absolute', { timeout: 2000 });
+    const oldCard = retiring.locator('.ol-notification-card');
+    const leaving = (await oldCard.boundingBox())!;
+    expect(leaving.y).toBeCloseTo(anchor.y, 0);
+    expect(leaving.x).toBeCloseTo(anchor.x, 0);
+    await expect(active).toHaveCSS('transform', 'none');
+    expect((await active.boundingBox())!.y).toBeCloseTo(anchor.y, 0);
+    await oldCard.evaluate((node) => {
+      node
+        .getAnimations()
+        .find((animation) => animation.id === 'ol-notice-exit')
+        ?.play();
+    });
+    await expect(retiring).toHaveCount(0);
+  }
 });
 
 test('save bridge and independent in-flight saves keep their own lifecycle', async ({ page }) => {
@@ -118,7 +223,7 @@ test('save bridge and independent in-flight saves keep their own lifecycle', asy
   await expect(page.getByText('Second saving')).toBeVisible();
 });
 
-for (const kind of ['qa', 'voice-edit', 'selection-voice-intent']) {
+for (const kind of ['voice-edit', 'selection-voice-intent']) {
   test(`auxiliary ${kind} window has its own notification host`, async ({ page }) => {
     await page.goto(`/?window=${kind}&os=mac`);
     await expect(page.locator('.ol-notification-center')).toHaveCount(1);
@@ -154,6 +259,67 @@ test('progress notification paints above a portaled channel editor', async ({ pa
     )
     .toBe(true);
   await expect(page.locator('.ol-channel-dialog')).toBeVisible();
+});
+
+test('compact progress centers its track below status and fades the departing cancel action', async ({
+  page,
+}) => {
+  await page.goto('/e2e/fixtures/notifications.html');
+  await expect(page.locator('.ol-notification-center')).toHaveCount(1);
+  await emitNotifications(page, [
+    {
+      id: 'download',
+      state: 'saving',
+      message: 'Downloading…',
+      progress: true,
+      progressValue: 42,
+      actionLabel: 'Cancel download',
+      actionStyle: 'cancel-icon',
+    },
+  ]);
+  const card = page.locator('.ol-notification-card');
+  const progress = card.getByRole('progressbar', { name: 'Downloading…' });
+  const status = card.getByRole('status');
+  const cancel = card.getByRole('button', { name: 'Cancel download', exact: true });
+  await expect(card).toHaveCSS('transform', 'none');
+  await expect(progress).toHaveAttribute('aria-valuenow', '42');
+  await expect(progress).toHaveCSS('width', '184px');
+  await expect(status.locator('.ol-notification-message')).toHaveCSS('font-size', '12px');
+  await expect(cancel).toHaveAttribute('data-action-style', 'cancel-icon');
+  const [track, text, action] = await Promise.all([
+    progress.boundingBox(),
+    status.boundingBox(),
+    cancel.boundingBox(),
+  ]);
+  expect(text!.y + text!.height).toBeLessThan(track!.y);
+  expect(track!.x + track!.width / 2).toBeCloseTo(text!.x + text!.width / 2, 0);
+  expect(action!.x).toBeGreaterThan(track!.x + track!.width);
+  expect(await card.evaluate((node) => node.clientHeight)).toBe(56);
+
+  const retiring = await cancel.evaluateHandle((button: HTMLButtonElement) => {
+    const frames: { disabled: boolean; opacity: number }[] = [];
+    const observer = new MutationObserver(() => {
+      if (button.getAttribute('aria-hidden') !== 'true') return;
+      observer.disconnect();
+      function sample() {
+        if (!button.isConnected) return;
+        frames.push({
+          disabled: button.disabled,
+          opacity: Number(getComputedStyle(button).opacity),
+        });
+        requestAnimationFrame(sample);
+      }
+      requestAnimationFrame(sample);
+    });
+    observer.observe(button, { attributes: true, attributeFilter: ['aria-hidden'] });
+    return frames;
+  });
+  await emitNotifications(page, [{ id: 'download', state: 'saved', message: 'Download complete' }]);
+  await expect(status).toHaveText('Download complete');
+  await expect(card.locator('[data-slot="toast-action"]')).toHaveCount(0);
+  const frames = await retiring.jsonValue();
+  expect(frames.some(({ opacity }) => opacity > 0 && opacity < 1)).toBe(true);
+  expect(frames.every(({ disabled }) => disabled)).toBe(true);
 });
 
 for (const scale of ['small', 'medium', 'large']) {
@@ -228,6 +394,10 @@ test('long severe notices wrap in a short narrow window and reduced motion dismi
   await expect(notice).toHaveAttribute('data-variant', 'alert');
   await expect(notice).toHaveAttribute('data-severity', 'warning');
   await expect(notice.getByRole('alert')).toHaveText(message);
+  await expect(notice.locator('[data-slot="toast-icon"]')).toHaveCSS(
+    'background-color',
+    'rgb(255, 204, 0)',
+  );
   expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
   await expect(notice).toHaveCSS('transform', 'none');
   await notice.getByRole('button', { name: 'Close', exact: true }).click();
@@ -250,7 +420,7 @@ test('a notice finishes outside the viewport after reflow during exit', async ({
     const original = Element.prototype.animate;
     const motion = {
       latest: undefined as Animation | undefined,
-      attempts: 0,
+      attempts: [] as Animation[],
       finished: [] as { bottom: number; top: number; connected: boolean }[],
     };
     Object.assign(window, { noticeResizeMotion: motion });
@@ -258,7 +428,7 @@ test('a notice finishes outside the viewport after reflow during exit', async ({
       const animation = original.call(this, keyframes, options);
       if (!this.classList.contains('ol-notification-card')) return animation;
       motion.latest = animation;
-      motion.attempts++;
+      motion.attempts.push(animation);
       // Hold each real exit halfway through so the layout changes before it finishes.
       animation.pause();
       animation.currentTime = Number(animation.effect!.getTiming().duration) / 2;
@@ -285,9 +455,19 @@ test('a notice finishes outside the viewport after reflow during exit', async ({
       '更长的说明使退出中的卡片重新排版。'.repeat(3);
   });
   await expect
-    .poll(() => page.evaluate(() => (window as any).noticeResizeMotion.attempts))
+    .poll(() => page.evaluate(() => (window as any).noticeResizeMotion.attempts.length))
     .toBeGreaterThanOrEqual(2);
   await expect(notice).toHaveCount(1);
+  const resized = await notice.evaluate((node) => {
+    const viewport = node.closest('.ol-app-viewport')!.getBoundingClientRect();
+    const card = node.getBoundingClientRect();
+    return {
+      fits: card.width < viewport.width,
+      center: card.x + card.width / 2 - (viewport.x + viewport.width / 2),
+    };
+  });
+  expect(resized.fits).toBe(true);
+  expect(resized.center).toBeCloseTo(0, 0);
   await page.evaluate(() => (window as any).noticeResizeMotion.latest.play());
   await expect(notice).toHaveCount(0);
   const finished = await page.evaluate(
@@ -301,4 +481,11 @@ test('a notice finishes outside the viewport after reflow during exit', async ({
   expect(finished).toHaveLength(1);
   expect(finished[0].connected).toBe(true);
   expect(finished[0].bottom).toBeLessThanOrEqual(finished[0].top);
+  expect(
+    await page.evaluate(() =>
+      (window as any).noticeResizeMotion.attempts.every(
+        (animation: Animation) => animation.playState === 'idle' && animation.onfinish === null,
+      ),
+    ),
+  ).toBe(true);
 });

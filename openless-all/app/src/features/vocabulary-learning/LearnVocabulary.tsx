@@ -1,8 +1,8 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { addLearnedVocab } from '../../api/vocabulary';
 import { Button as Btn } from '../../ui/controls/Button';
-import { inputStyle } from '../../ui/controls/settingsFieldStyles';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 
 /** An explicit, cross-platform alternative when a host editor cannot be read. */
@@ -52,13 +52,13 @@ export function LearnVocabulary() {
         >
           <label style={{ display: 'grid', gap: 8 }}>
             {t('vocabLearning.label', '输入要记住的正确词汇')}
-            <input
+            <TextField
               autoFocus
               value={phrase}
               maxLength={64}
               disabled={busy}
               onChange={(e) => setPhrase(e.target.value)}
-              style={{ ...inputStyle, width: '100%', minWidth: 0 }}
+              style={{ minWidth: 0 }}
             />
           </label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>

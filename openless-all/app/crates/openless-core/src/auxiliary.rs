@@ -262,6 +262,7 @@ impl AuxiliaryApi for AuxiliaryService {
             let fallback_label =
                 AsrCallLabel::new(context.asr.provider_type.clone(), context.asr.model.clone());
             let session_id = SessionId::new();
+            let pace_replay = context.asr.provider_type == "volcengine";
             let session = service
                 .transcription
                 .start(session_id, context, Arc::new(DiscardTextStream))
@@ -276,11 +277,24 @@ impl AuxiliaryApi for AuxiliaryService {
             let attempted_asr = session
                 .asr_call_label()
                 .unwrap_or_else(|| fallback_label.clone());
-            session.consume_pcm_chunk(&pcm);
             let mut guard = RetranscriptionCancelGuard::new(
                 Arc::clone(&session),
                 Arc::clone(&service.task_spawner),
             );
+            if pace_replay {
+                // The realtime endpoint expects audio over time, including when
+                // playback is sourced from an archived recording.
+                let mut chunks = pcm.chunks(crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES);
+                if let Some(first) = chunks.next() {
+                    session.consume_pcm_chunk(first);
+                }
+                for chunk in chunks {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    session.consume_pcm_chunk(chunk);
+                }
+            } else {
+                session.consume_pcm_chunk(&pcm);
+            }
             let result = session.finish().await;
             guard.disarm();
             match result {
@@ -524,13 +538,17 @@ mod tests {
             transcription.clone(),
         );
         let expected_provider = service.preferences.get().active_asr_provider;
+        let pcm = vec![1; 2 * crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES + 2];
+        let started = std::time::Instant::now();
+        let result = service.retranscribe_pcm(pcm.clone()).await.unwrap();
 
-        let result = service.retranscribe_pcm(vec![1, 0, 2, 0]).await.unwrap();
-
+        if expected_provider == "volcengine" {
+            assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+        }
         assert_eq!(result.text, "重转文本");
         assert_eq!(result.duration_ms, 125);
         assert_eq!(result.asr.provider, expected_provider);
-        assert_eq!(transcription.pcm(), vec![1, 0, 2, 0]);
+        assert_eq!(transcription.pcm(), pcm);
         assert_eq!(transcription.cancel_count(), 0);
         let _ = std::fs::remove_file(path);
     }

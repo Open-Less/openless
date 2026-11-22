@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ensureLocaleLoaded, SUPPORTED_LOCALES } from '../../../i18n';
 import type { OS } from '../../../runtime/environment';
 import { getCachedPlatformCapabilities, getPlatformCapabilities } from '../../../runtime/platform';
 import {
+  SETTINGS_SECTIONS,
   searchSettingsSections,
   visibleAdvancedPages,
   visibleGeneralPages,
@@ -28,7 +30,24 @@ export function useSettingsNavigation({
   beforeLeave: (action: () => void | Promise<void>) => Promise<boolean>;
   onClose: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const [searchAliases, setSearchAliases] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let active = true;
+    void Promise.all(SUPPORTED_LOCALES.map(ensureLocaleLoaded)).then(() => {
+      if (!active) return;
+      setSearchAliases(Object.fromEntries(SETTINGS_SECTIONS.map(({ id }) => [
+        id,
+        SUPPORTED_LOCALES.flatMap((locale) => {
+          const translate = i18n.getFixedT(locale);
+          return ['sections', 'descriptions', 'searchKeywords'].map((part) =>
+            translate(`modal.${part}.${id}`),
+          );
+        }).join(' '),
+      ])));
+    });
+    return () => { active = false; };
+  }, [i18n]);
   const [section, setSection] = useState(initialSettingsSection ?? 'general');
   const [generalPage, setGeneralPage] = useState<GeneralPageId | 'root'>('root');
   const [advancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
@@ -50,7 +69,7 @@ export function useSettingsNavigation({
       ...item,
       title: t(`modal.sections.${item.id}`),
       description: t(`modal.descriptions.${item.id}`),
-      keywords: t(`modal.searchKeywords.${item.id}`),
+      keywords: `${t(`modal.searchKeywords.${item.id}`)} ${searchAliases[item.id] ?? ''}`,
     }),
   );
   const searching = query.trim().length > 0;

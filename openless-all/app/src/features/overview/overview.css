@@ -54,11 +54,36 @@
   width: 100%;
   min-width: 0;
 }
+.ol-overview-heatmap[data-waiting] .ol-gha-grid {
+  visibility: hidden;
+}
+.ol-overview-activity :is(.ol-gha-heading-row, .ol-gha-months, .ol-gha-panel-header) {
+  opacity: 1;
+  transition: opacity 160ms ease-out 40ms;
+}
+html[data-ol-main-content-covered]
+  .ol-overview-activity
+  :is(.ol-gha-heading-row, .ol-gha-months, .ol-gha-panel-header),
+.ol-overview-heatmap[data-waiting]
+  .ol-overview-activity
+  :is(.ol-gha-heading-row, .ol-gha-months, .ol-gha-panel-header) {
+  visibility: hidden;
+  opacity: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-overview-activity :is(.ol-gha-heading-row, .ol-gha-months, .ol-gha-panel-header) {
+    transition: none;
+  }
+}
 .ol-overview-activity {
   padding-right: 16px;
 }
 .ol-overview-activity .ol-gha-panel {
   right: 12px;
+}
+.ol-overview-activity .ol-gha-panel-header {
+  min-height: 52px;
 }
 .ol-overview-activity .ol-gha-heading-row {
   display: flex;
@@ -245,6 +270,7 @@
     margin-bottom: 8px;
   }
   .ol-overview-activity .ol-gha-panel-header {
+    min-height: 44px;
     padding-block: 8px;
   }
   .ol-overview-activity.ol-gha--with-panel {

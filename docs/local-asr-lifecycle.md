@@ -2,7 +2,7 @@
 
 Model files, channel selection and a live inference engine are separate states.
 
-**macOS:** the legacy Qwen/Whisper/Apple Speech implementation and model manager are retired. The disabled placeholder redirects users to the three opt-in [experimental models](experimental-local-asr.md). Old IDs are metadata compatibility only; they cannot start an engine or download old models. Windows/cloud routes are not retired.
+**macOS:** the legacy Qwen/Whisper model manager is retired. The disabled placeholder directs users to the three opt-in [experimental models](experimental-local-asr.md). The older local model IDs are retained for metadata compatibility. Apple Speech continues as an independent system framework channel, and Windows and cloud routes remain available.
 
 | Action | Files / metadata | Inference |
 | --- | --- | --- |

@@ -1,4 +1,5 @@
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
+import { DownloadStatusText } from '../../ui/feedback/DownloadStatusText';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PresenceModal } from '../../components/ui/Modal';
@@ -8,6 +9,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { ExperimentalSectionTitle } from '../../ui/layout/ExperimentalSectionTitle';
+import { useExperimentalDownloadOwnerRefs } from '../downloads/experimentalDownloadOwner';
 import {
   downloadPercent,
   EXPERIMENTAL_ASR_MODELS,
@@ -26,8 +28,9 @@ export function ExperimentalAsrSection({
   controller: ExperimentalAsrController;
   onOpenAsr: () => Promise<void>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { confirm, notify } = useInteraction();
+  const downloadOwnerRefs = useExperimentalDownloadOwnerRefs();
   const deleteRequest = useRef(false);
   const { models, error, pending, toggle, remove } = controller;
   const [navigationError, setNavigationError] = useState<string | null>(null);
@@ -62,7 +65,11 @@ export function ExperimentalAsrSection({
         const name = experimentalAsrName(status.model);
         const percent = downloadPercent(status);
         return (
-          <section key={status.model} data-experimental-model={status.model}>
+          <section
+            key={status.model}
+            ref={downloadOwnerRefs[status.model]}
+            data-experimental-model={status.model}
+          >
             <SettingRow
               className="ol-experimental-model-row"
               label={
@@ -104,10 +111,17 @@ export function ExperimentalAsrSection({
                       : 'ol-experimental-model-status'
                   }
                 >
-                  {loading ? t('common.loading') : t(`experimentalAsr.phases.${status.phase}`)}
-                  {status.phase === 'downloading' &&
-                    status.downloadedBytes > 0 &&
-                    ` · ${percent || '<1'}%`}
+                  <DownloadStatusText
+                    status={{
+                      beforeName: loading ? t('common.loading') : t(`experimentalAsr.phases.${status.phase}`),
+                      locale: i18n.resolvedLanguage,
+                      percent: status.phase === 'downloading'
+                        ? status.totalBytes > 0
+                          ? (status.downloadedBytes / status.totalBytes) * 100
+                          : null
+                        : undefined,
+                    }}
+                  />
                 </span>
                 {status.phase === 'downloading' && (
                   <progress

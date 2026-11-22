@@ -31,8 +31,10 @@ test('shortcut search remains visible without focus', async ({ page }) => {
   const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
   await expect(search).toHaveCSS('clip-path', 'none');
   await expect(search).toHaveCSS('appearance', 'none');
-  await expect(search).toHaveCSS('border-radius', '16px');
-  const colors = await search.evaluate((element) => ({
+  await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const frame = search.locator('..');
+  await expect(frame).toHaveCSS('border-radius', '12px');
+  const colors = await frame.evaluate((element) => ({
     search: getComputedStyle(element).backgroundColor,
     page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
       .backgroundColor,
@@ -265,7 +267,7 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const tools = nav.getByRole('button', { name: '工具', exact: true });
       await tools.click();
       await expect(tools).toHaveAttribute('aria-expanded', 'true');
-      await expect(nav.getByRole('button', { name: /^(纠正规则|随便问|翻译|速记)$/ })).toHaveText(
+      await expect(nav.getByRole('button', { name: /^(纠正规则|翻译|速记)$/ })).toHaveText(
         toolDestinations.map(([name]) => name),
       );
       for (const [name, id] of toolDestinations) await visit(nav, name, id);

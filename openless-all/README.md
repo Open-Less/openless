@@ -22,6 +22,8 @@ The runnable sources live in `app/`:
 
 The Tauri manifest includes path dependencies under `app/src-tauri/vendor/` (`cpal`, `tauri-runtime-wry`). These crates are vendored in the repository, so **there are no Git submodules to initialize** — a fresh clone is ready to build. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require them.
 
+Use Node.js 22 and Rust 1.99 or newer. The development command below starts the desktop Tauri host. See the Android section for its generated platform project.
+
 ```bash
 cd app
 npm ci
@@ -54,7 +56,7 @@ INSTALL=0 ./scripts/build-mac.sh
 Generated macOS artifacts:
 
 - `app/src-tauri/target/release/bundle/macos/OpenLess.app`
-- `app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`
+- `app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel)
 
 For local install during development:
 
@@ -81,8 +83,7 @@ Open a Developer PowerShell, or call `vcvars64.bat`, then run:
 
 ```powershell
 cd app
-npm ci
-npm run tauri -- build
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-package-msvc.ps1
 ```
 
 Required Visual Studio Installer components:
@@ -128,6 +129,7 @@ coordinator `handle_pressed` / `handle_released` path, asserts the log contains
 
 ```powershell
 cd app
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-hotkey-injection-smoke.ps1 -ExePath .\.artifacts\windows-gnu\dev\openless.exe
 ```
 
 ### Windows Runtime Notes
@@ -141,31 +143,14 @@ cd app
 
 ## Android Build
 
-A fresh clone has no generated Android project, and the build script stops until `src-tauri/gen/android` exists. Initialize it, copy the Kotlin/XML scaffolding, and merge the manifests the same way CI does:
-
-```bash
-cd app
-npm ci
-npm run tauri:android:init                  # creates src-tauri/gen/android
-npm run copy:android-scaffolding            # Kotlin sources + res/xml
-node scripts/merge-android-v1-manifest.mjs  # microphone permission
-node scripts/merge-android-overlay-manifest.mjs
-node scripts/merge-android-shizuku-manifest.mjs
-node scripts/patch-android-shizuku-deps.mjs
-node scripts/merge-android-updater-manifest.mjs   # release builds: in-app update manifest
-npm run tauri:android:build:release
-```
-
-The same chain, including the local Gradle workflow, is documented in [`app/android/README.md`](app/android/README.md).
-
-APKs are written under `app/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/`. Use `npm run tauri:android:build:debug` for a debug build; the `android-apk.yml` workflow produces debug smoke artifacts for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`. The native keyboard/IME backend lives in `app/android/` and `app/mobile-ime/`.
+See the [Android build guide](app/android/README.md#build-and-ci) for the toolchain, generated scaffolding, APK build commands, ABI selection, and device verification.
 
 ## HarmonyOS Build
 
 The ArkTS/ArkWeb host builds through the frontend script; see [`app/harmony/README.md`](app/harmony/README.md) for the toolchain details.
 
 ```bash
-cd openless-all/app
+cd app
 bash scripts/build-harmony-frontend.sh
 ```
 
@@ -173,42 +158,11 @@ Requirements: HarmonyOS Command Line Tools, Python 3, and `rustup target add aar
 
 ## iOS Build
 
-The native project is independent of the desktop version; see [`ios/README.md`](ios/README.md). Requirements: an Apple Silicon Mac, Xcode with its command-line tools selected, Python 3, CMake, Git, and Rustup.
-
-```bash
-cd openless-all/ios
-./scripts/bootstrap.sh                    # Rust 1.99.0, iOS targets, pinned native deps, XcodeGen
-./scripts/bootstrap-local-speech.sh       # bundled SenseVoice runtime
-./scripts/build-rime.sh                   # Rime data and compiled table
-./scripts/build-core.sh                   # Frameworks/<platform>/libOpenLessCore.a
-python3 scripts/collect-rust-licenses.py
-python3 scripts/validate-project.py
-./scripts/build.sh device Release unsigned
-python3 scripts/package-ipa.py \
-  DerivedData/Build/Products/Release-iphoneos/OpenLess.app \
-  "$HOME/Downloads/OpenLess-0.1.0-16-unsigned.ipa"
-```
-
-`build.sh` takes `<simulator|device> <Debug|Personal|Release> [unsigned|signed]` and defaults to `simulator Debug unsigned`; it refuses to run until `build-core.sh` and `build-rime.sh` have produced `libOpenLessCore.a`, `libOpenLessRime.a`, the Rime table, and the prediction lexicon. `package-ipa.py` needs the built `.app` plus a new output path, never overwrites an existing IPA, and packages only an unsigned device build for personal signing.
+iOS has independent versioning. See the [iOS project guide](ios/README.md#build-from-source) for the toolchain, native build, signing, device installation, and unsigned IPA packaging.
 
 ## Release Signing
 
-Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
-
-Required GitHub secrets:
-
-- `APPLE_CERTIFICATE`
-- `APPLE_CERTIFICATE_PASSWORD`
-- `APPLE_ID`
-- `APPLE_PASSWORD`
-- `APPLE_TEAM_ID`
-
-Optional:
-
-- `APPLE_PROVIDER_SHORT_NAME`
-- `KEYCHAIN_PASSWORD`
-
-Manual workflow runs can still produce ad-hoc signed test builds, but tagged macOS releases fail if signing/notarization secrets are missing.
+Follow the [release policy](../RELEASING.md) for Beta and Stable signing, notarization, and publication checks. Local macOS packaging uses ad-hoc signing when Apple signing material is absent.
 
 ## Third-party components
 

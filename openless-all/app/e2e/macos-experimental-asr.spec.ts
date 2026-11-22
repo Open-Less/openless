@@ -102,8 +102,12 @@ test('Apple system recognition remains selectable without local-model controls',
   await expect(form.getByLabel(/API Key|Base URL/)).toHaveCount(0);
   await form
     .locator('.ol-channel-dialog-footer')
-    .getByRole('button', { name: '关闭', exact: true })
+    .getByRole('button', { name: '保存', exact: true })
     .click();
+  await expect(page.locator('.ol-notification-card[data-state="saved"]')).toContainText(
+    '渠道已保存',
+  );
+  await form.getByRole('button', { name: '关闭', exact: true }).click();
   const retired = page.locator('[data-channel-provider="local-whisper"]');
   await expect(retired).toHaveAttribute('data-retired-local-asr', 'true');
   await expect(retired.getByRole('switch')).toBeDisabled();

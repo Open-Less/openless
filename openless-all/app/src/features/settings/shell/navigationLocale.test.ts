@@ -93,6 +93,8 @@ for (const [locale, translation] of Object.entries({
   }
   if (searchSettingsSections(sections, 'API')[0]?.id !== 'services')
     throw new Error(`${locale}: API search cannot reach service configuration`);
+  if (searchSettingsSections(sections, 'Rhai')[0]?.id !== 'advanced')
+    throw new Error(`${locale}: strategy search must lead to Advanced features`);
   if (!i18n.t('modal.searchCount', { count: 2 }).includes('2'))
     throw new Error(`${locale}: result count is not rendered`);
 }

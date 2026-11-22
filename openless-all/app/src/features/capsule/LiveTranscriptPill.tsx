@@ -28,6 +28,7 @@ import {
   shouldRetryTranscriptSnapshot,
   type TranscriptViewState,
 } from '../../lib/backendEvent';
+import { useMainCaptionTrace } from './useMainCaptionTrace';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getCapsuleTranscriptRailHeight, parseCapsuleStyle } from '../../lib/capsuleLayout';
 import { getSettings } from '../../api/preferences';
@@ -135,6 +136,8 @@ export function CapsuleTranscriptOverlay() {
   const [translation, setTranslation] = useState(false);
   const transcriptRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const stateRef = useRef<CapsuleState>('idle');
+  const liveText = visibleCapsuleTranscript(text, enabled, state, selectionPolish);
+  const observeCaptionTrace = useMainCaptionTrace(transcriptRef, liveText);
   const snapshotRetryDelays = [0, 16, 32, 64, 128, 256] as const;
 
   useEffect(() => {
@@ -196,7 +199,9 @@ export function CapsuleTranscriptOverlay() {
         return;
       if (
         !(await events.transcript((payload) => {
-          const next = applyTranscriptEvent(transcriptRef.current, payload);
+          const previous = transcriptRef.current;
+          const next = applyTranscriptEvent(previous, payload);
+          observeCaptionTrace(payload, previous, next);
           transcriptRef.current = next;
           setText(next.text);
         }))
@@ -278,7 +283,6 @@ export function CapsuleTranscriptOverlay() {
     };
   }, []);
 
-  const liveText = visibleCapsuleTranscript(text, enabled, state, selectionPolish);
   const typeless = style === 'typeless';
   const railHeight = getCapsuleTranscriptRailHeight(style);
   return (

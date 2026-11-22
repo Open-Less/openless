@@ -113,14 +113,14 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
       if (event.key.toLowerCase() === 'k' && searchInputRef.current) {
         event.preventDefault();
         searchInputRef.current.focus();
-      } else if (event.key.toLowerCase() === 'r') {
+      } else if (quickNotesOnly && event.key.toLowerCase() === 'r') {
         event.preventDefault();
         void refresh(true);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [modalActive, refresh, shortKeys.isMac]);
+  }, [modalActive, quickNotesOnly, refresh, shortKeys.isMac]);
 
   const filtered = useMemo(() => {
     const term = debouncedQuery.trim().toLowerCase();
@@ -172,22 +172,17 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         title={quickNotesOnly ? t('quickNote.title', 'Quick notes') : t('history.title')}
         desc={quickNotesOnly ? t('quickNote.desc', 'Permanent audio notes.') : t('history.desc')}
         right={
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
-              {t('common.refresh')}
+          !quickNotesOnly && (
+            <Btn
+              icon="trash"
+              variant="ghost"
+              size="sm"
+              onClick={() => void onClear()}
+              disabled={clearing || clearableCount === 0}
+            >
+              {t('common.clear')}
             </Btn>
-            {!quickNotesOnly && (
-              <Btn
-                icon="trash"
-                variant="ghost"
-                size="sm"
-                onClick={() => void onClear()}
-                disabled={clearing || clearableCount === 0}
-              >
-                {t('common.clear')}
-              </Btn>
-            )}
-          </div>
+          )
         }
       />
       <div ref={grid} className="ol-grid-12 ol-grid-fill" data-columns={mobile ? '1' : undefined}>

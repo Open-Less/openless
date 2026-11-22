@@ -1,15 +1,14 @@
 'use client';
 
 /**
- * Ported from Rare UI "GitHub Activity" (https://rareui.com/components/githubactivity).
- * Copyright (c) 2026 Swami Malode. MIT + Commons Clause; attribution required.
- * The week/month layout, tooltip and expandable panel follow upstream. Callers can fit
- * the calendar to a dashboard or expand the app list in a growing page. Local dictation
- * data and app name/count chips replace the GitHub fetch and repo avatars.
+ * Calendar and expandable-panel code adapted from Rare UI "GitHub Activity"
+ * (https://rareui.com/components/githubactivity). Copyright (c) 2026 Swami Malode.
+ * MIT + Commons Clause + Attribution. App ranking and desktop icons use OpenLess data.
  * See docs/ATTRIBUTION.md.
  */
 
 import * as React from 'react';
+import { AppWindow } from 'lucide-react';
 import { Tooltip as BaseTooltip } from '@base-ui/react/tooltip';
 import { usePopupViewport } from '../layout/AppViewport';
 import { motion, useReducedMotion, type Transition } from 'framer-motion';
@@ -26,6 +25,7 @@ export type Contribution = {
 export type ActivityApp = {
   name: string;
   count: number;
+  icon?: string;
 };
 
 const DEFAULT_ACCENT = '#39d353';
@@ -42,13 +42,14 @@ const gapFor = (cellSize: number) => Math.max(2, Math.round(cellSize / 4));
 // never zero: weeks.slice(-0) would hand back the whole history instead of nothing
 const weeksFor = (months: number) => Math.max(1, Math.ceil(months * WEEKS_PER_MONTH));
 
-const EASE_OUT = [0.22, 1, 0.36, 1] as const;
-const SPRING = { type: 'spring', bounce: 0.2, duration: 0.62 } as const;
-const CELL_FADE = { duration: 0.2, ease: EASE_OUT } as const;
+const PANEL_CURVE = [0.32, 0.72, 0, 1] as const;
+const PANEL_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)';
+const PANEL_DURATION_MS = 360;
+const PANEL_TRANSITION: Transition = {
+  duration: PANEL_DURATION_MS / 1000,
+  ease: PANEL_CURVE,
+};
 const TOOLTIP_EDGE = 8;
-const COLUMN_STAGGER = 0.012;
-const LABEL_BLUR = 6;
-const LABEL_REVEAL = { duration: 0.45, ease: EASE_OUT } as const;
 
 const LEVELS = [0, 1, 2, 3, 4] as const;
 
@@ -165,7 +166,6 @@ const ContributionGrid = ({
   label,
   monthNames,
   formatDay,
-  reduceMotion,
   fitToWidth,
 }: {
   contributions: Contribution[];
@@ -177,7 +177,6 @@ const ContributionGrid = ({
   label: string;
   monthNames: string[];
   formatDay: (day: Contribution) => string;
-  reduceMotion: boolean | null;
   fitToWidth: boolean;
 }) => {
   const weeks = React.useMemo(() => toWeeks(contributions), [contributions]);
@@ -187,7 +186,6 @@ const ContributionGrid = ({
 
   const cap = Math.min(weeks.length, weeksFor(months));
   const visible = weeks.slice(weeks.length - cap);
-  const sweepEnd = (visible.length - 1) * COLUMN_STAGGER + CELL_FADE.duration;
 
   React.useLayoutEffect(() => {
     const scroll = ref.current;
@@ -211,19 +209,13 @@ const ContributionGrid = ({
     >
       <div className="ol-gha-grid-inner">
         {showMonths && (
-          <motion.div
-            className="ol-gha-months"
-            style={{ gap, marginBottom: gap }}
-            initial={reduceMotion ? false : { opacity: 0, filter: `blur(${LABEL_BLUR}px)` }}
-            animate={{ opacity: 1, filter: 'blur(0px)' }}
-            transition={{ ...LABEL_REVEAL, delay: reduceMotion ? 0 : sweepEnd }}
-          >
+          <div className="ol-gha-months" style={{ gap, marginBottom: gap }}>
             {toMonthLabels(visible, monthNames).map((month, index) => (
               <div key={index} className="ol-gha-month" style={{ width: cellSize }}>
                 {month && <span className="ol-gha-month-label">{month}</span>}
               </div>
             ))}
-          </motion.div>
+          </div>
         )}
 
         <div
@@ -236,7 +228,7 @@ const ContributionGrid = ({
           {visible.map((week, weekIndex) => (
             <div key={weekIndex} className="ol-gha-week" style={{ gap }}>
               {week.map((day) => (
-                <motion.div
+                <div
                   key={day.date}
                   onPointerEnter={(event) => {
                     if (event.pointerType !== 'touch') hover(day)(event);
@@ -246,15 +238,9 @@ const ContributionGrid = ({
                   }}
                   className="ol-gha-cell"
                   style={{ width: cellSize, height: cellSize }}
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.4 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{
-                    ...CELL_FADE,
-                    delay: reduceMotion ? 0 : weekIndex * COLUMN_STAGGER,
-                  }}
                 >
                   <div className="ol-gha-cell-fill" style={scale[day.level] ?? scale[0]} />
-                </motion.div>
+                </div>
               ))}
             </div>
           ))}
@@ -271,15 +257,41 @@ const ContributionGrid = ({
   );
 };
 
-const AppChip = ({ app }: { app: ActivityApp }) => (
-  <span className="ol-gha-app-chip" title={app.name}>
-    <span className="ol-gha-app-chip-name">{app.name}</span>
-    <span className="ol-gha-app-chip-count">{app.count}</span>
-  </span>
+function AppArtwork({
+  src,
+  name,
+  className,
+  fallback,
+}: {
+  src?: string;
+  name: string;
+  className?: string;
+  fallback: React.ReactNode;
+}) {
+  const [failed, setFailed] = React.useState<string>();
+  if (typeof src !== 'string' || !src.startsWith('data:image/png;base64,') || failed === src)
+    return fallback;
+  return <img className={className} src={src} alt={name} onError={() => setFailed(src)} />;
+}
+
+const AppPreview = ({ app }: { app: ActivityApp }) => (
+  <AppArtwork
+    src={app.icon}
+    name={app.name}
+    className="ol-gha-app-avatar"
+    fallback={
+      <span className="ol-gha-app-preview-name" title={app.name}>
+        {app.name}
+      </span>
+    }
+  />
 );
 
 const AppRow = ({ app }: { app: ActivityApp }) => (
   <div className="ol-gha-app-row">
+    <span className="ol-gha-app-icon" aria-hidden="true">
+      <AppArtwork src={app.icon} name="" fallback={<AppWindow size={14} />} />
+    </span>
     <span className="ol-gha-app-name">{app.name}</span>
     <span className="ol-gha-app-count">{app.count}</span>
   </div>
@@ -323,6 +335,8 @@ export type GitHubActivityProps = {
   footer?: React.ReactNode;
   /** On growing pages, expand in normal flow and leave vertical scrolling to the page. */
   inFlow?: boolean;
+  /** Keep the collapsed panel's space while the dashboard resolves its ranking. */
+  reservePanel?: boolean;
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -351,6 +365,7 @@ const GitHubActivity = ({
   summary,
   footer,
   inFlow = false,
+  reservePanel = false,
   defaultOpen = false,
   open: openProp,
   onOpenChange,
@@ -374,8 +389,14 @@ const GitHubActivity = ({
   React.useLayoutEffect(() => {
     const card = cardRef.current;
     if (!card || !fitToWidth) return;
-    // ResizeObserver reports fractional design pixels before viewport zoom rounding.
-    const observer = new ResizeObserver(([entry]) => setContentWidth(entry.contentRect.width));
+    // Fit before the first paint; ResizeObserver maintains fractional design pixels on resize.
+    const css = getComputedStyle(card);
+    const initial = card.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
+    setContentWidth(initial);
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      setContentWidth((last) => (last !== null && Math.abs(last - width) < 0.75 ? last : width));
+    });
     observer.observe(card);
     return () => observer.disconnect();
   }, [fitToWidth]);
@@ -430,8 +451,8 @@ const GitHubActivity = ({
         return;
       }
       const animation = panel.animate([{ height: `${from}px` }, { height: `${target}px` }], {
-        duration: 280,
-        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        duration: PANEL_DURATION_MS,
+        easing: PANEL_EASING,
       });
       panelMotion.current = animation;
       animation.onfinish = () => {
@@ -458,8 +479,9 @@ const GitHubActivity = ({
 
   const contributions = contributionsProp;
   const apps = appsProp;
+  const hasPanel = reservePanel || apps.length > 0;
   const scale = React.useMemo(() => toScale(accent), [accent]);
-  const transition = reduceMotion ? { duration: 0 } : SPRING;
+  const transition = reduceMotion ? { duration: 0 } : PANEL_TRANSITION;
 
   const total = React.useMemo(
     () => contributions.reduce((sum, day) => sum + day.count, 0),
@@ -482,9 +504,7 @@ const GitHubActivity = ({
   return (
     <div
       ref={cardRef}
-      className={['ol-gha', apps.length > 0 && 'ol-gha--with-panel', className]
-        .filter(Boolean)
-        .join(' ')}
+      className={['ol-gha', hasPanel && 'ol-gha--with-panel', className].filter(Boolean).join(' ')}
       data-in-flow={inFlow || undefined}
       style={{ width, ...style }}
     >
@@ -503,13 +523,12 @@ const GitHubActivity = ({
         label={typeof headingText === 'string' ? headingText : label}
         monthNames={monthNames}
         formatDay={formatDay ?? ((day) => `${day.count} · ${day.date}`)}
-        reduceMotion={reduceMotion}
         fitToWidth={fitToWidth}
       />
 
-      {footer}
+      {(!hasPanel || apps.length > 0) && footer}
 
-      {apps.length > 0 && (
+      {hasPanel && (
         <div
           ref={panelRef}
           id={`${uid}-panel`}
@@ -518,41 +537,47 @@ const GitHubActivity = ({
           className="ol-gha-panel"
         >
           <div ref={headerRef} className="ol-gha-panel-header">
-            <span className="ol-gha-panel-label">{label}</span>
+            <div className="ol-gha-panel-label">{apps.length === 0 && footer ? footer : label}</div>
 
-            <div className="ol-gha-panel-actions">
-              {!open && (
-                <div className="ol-gha-app-chips">
+            {apps.length > 0 && (
+              <div className="ol-gha-panel-actions">
+                <div
+                  className="ol-gha-app-preview"
+                  data-hidden={open || undefined}
+                  aria-hidden={open || undefined}
+                >
                   {apps.slice(0, STACK_LIMIT).map((app) => (
-                    <AppChip key={app.name} app={app} />
+                    <AppPreview key={app.name} app={app} />
                   ))}
                 </div>
-              )}
 
-              <button
-                type="button"
-                onClick={toggle}
-                aria-expanded={open}
-                aria-controls={`${uid}-panel`}
-                aria-label={open ? hideLabel : showLabel}
-                className="ol-gha-toggle"
-              >
-                <Chevron open={open} transition={transition} />
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={toggle}
+                  aria-expanded={open}
+                  aria-controls={`${uid}-panel`}
+                  aria-label={open ? hideLabel : showLabel}
+                  className="ol-gha-toggle"
+                >
+                  <Chevron open={open} transition={transition} />
+                </button>
+              </div>
+            )}
           </div>
 
-          <ul
-            className="ol-gha-app-list"
-            aria-hidden={open ? undefined : true}
-            tabIndex={open && !inFlow ? 0 : undefined}
-          >
-            {apps.map((app) => (
-              <li key={app.name}>
-                <AppRow app={app} />
-              </li>
-            ))}
-          </ul>
+          <div className="ol-gha-app-list-wrap">
+            <ul
+              className="ol-gha-app-list"
+              aria-hidden={open ? undefined : true}
+              tabIndex={open && !inFlow ? 0 : undefined}
+            >
+              {apps.map((app) => (
+                <li key={app.name}>
+                  <AppRow app={app} />
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
     </div>

@@ -434,6 +434,12 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-model-librar
 .ol-model-catalog {
   grid-column: span 5;
 }
+@media (hover: hover) and (pointer: fine) {
+  .ol-model-filters > .ol-segmented-option:not([aria-pressed='true']):not(:disabled):hover {
+    background: var(--ol-surface);
+    color: var(--ol-ink-3);
+  }
+}
 .ol-model-catalog-detail {
   grid-column: span 7;
 }
@@ -453,12 +459,23 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-model-librar
   overflow-y: auto;
   min-height: 0;
 }
-.ol-model-filters {
+.ol-model-filters.ol-segmented {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
 }
-.ol-model-filters button {
+.ol-model-filters > .ol-segmented-indicator {
+  z-index: 2;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ol-blue);
+}
+.ol-model-filters > :is(.ol-segmented-indicator, .ol-segmented-option) {
+  border-radius: var(--ol-r-sm);
+}
+.ol-model-filters > .ol-segmented-option {
   border: 1px solid var(--ol-line);
   border-radius: var(--ol-r-sm);
   padding: 5px 9px;
@@ -468,9 +485,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-model-librar
   color: var(--ol-ink-3);
   cursor: pointer;
 }
-.ol-model-filters button[aria-pressed='true'] {
-  border-color: var(--ol-blue);
+.ol-model-filters > .ol-segmented-option[aria-pressed='true'] {
+  background: var(--ol-surface);
   color: var(--ol-blue);
+  -webkit-text-fill-color: var(--ol-blue);
   font-weight: var(--ol-font-weight-semibold);
 }
 .ol-model-catalog-detail {

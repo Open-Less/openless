@@ -22,7 +22,12 @@ test('self-hosted sync configuration only appears under experimental and extensi
     'type',
     'password',
   );
-  await expect(detail.getByRole('button', { name: '保存', exact: true })).toBeVisible();
+  const save = detail.getByRole('button', { name: '保存', exact: true });
+  await expect(save).toBeVisible();
+  const form = await detail.locator('.ol-cloud-sync-account').boundingBox();
+  const button = await save.boundingBox();
+  expect(button!.width).toBeLessThan(form!.width / 2);
+  expect(Math.abs(button!.x + button!.width - form!.x - form!.width)).toBeLessThan(1);
   await expect(detail.getByText('启用加密同步', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '云服务', exact: true }).click();
   await expect(page.getByLabel('登录 Token', { exact: true })).toBeHidden();

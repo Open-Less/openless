@@ -1,4 +1,5 @@
-// Chips keep one size in every state: selecting only recolours, so neighbours never shift.
+import { Segmented } from '../../ui/controls/Segmented';
+
 export function ChoiceChips<T extends string>({
   options,
   value,
@@ -10,18 +11,5 @@ export function ChoiceChips<T extends string>({
   onChange: (value: T) => void;
   label: string;
 }) {
-  return (
-    <div className="ol-choice-chips" role="group" aria-label={label}>
-      {options.map((option) => (
-        <button
-          type="button"
-          key={option.value}
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <Segmented className="ol-choice-chips" options={options} value={value} onChange={onChange} label={label} />;
 }

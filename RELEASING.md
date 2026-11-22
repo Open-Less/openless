@@ -158,10 +158,10 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 3. CI is green on the commit being tagged.
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness. Linux acceptance below is required before including Linux assets.
 5. Then, and only then, push the release tag.
-6. Both Beta and Stable tag workflows upload Tauri and Android assets to a shared
-   draft. Wait for **both** workflows to succeed, verify the packages, then publish that
-   draft (Beta as a prerelease; Stable as latest).
-   Do not rerun an asset workflow after publication without first returning the release to draft.
+6. The tag starts the unified release workflow. Its desktop, Android and HarmonyOS jobs
+   attach their assets to a shared draft. Check every required job and verify the expected
+   files, signatures and checksums before publishing the draft as Beta prerelease or Stable latest.
+   Use draft repair only while the target remains a draft. Published assets are immutable.
 
    The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
    `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets —
@@ -364,7 +364,7 @@ change the published channel. The same format applies to subsequent releases.
 1. Land work on `beta` via PRs (open PRs against `beta`, never `main`).
 2. For a Stable release, a maintainer merges `beta → main`.
 3. An **admin** bumps the Tauri version (five-location sync), verifies CI is green,
-   and pushes the release tag, which triggers the macOS/Windows/Android asset
-   workflows and their channel updater manifests.
-4. After both release workflows pass, an admin verifies and publishes the shared
-   draft. Linux packages are attached independently only after exact-tag Linux acceptance.
+   and pushes the release tag, which triggers the desktop, Android and HarmonyOS jobs
+   and their applicable channel manifests.
+4. After the required jobs pass, an admin verifies and publishes the shared draft.
+   Linux packages are attached independently only after exact-tag Linux acceptance.

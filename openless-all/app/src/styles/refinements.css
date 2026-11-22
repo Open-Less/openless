@@ -146,27 +146,6 @@ button:disabled {
   padding: 60px 32px 32px 254px;
 }
 
-/* Search and the command list share the right-hand settings pane. */
-.ol-settings-search-field {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  height: 36px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: var(--ol-control-radius);
-  color: var(--ol-ink);
-  background: var(--ol-surface-2);
-  box-shadow: inset 0 0 0 1px var(--ol-line-strong);
-  font: inherit;
-  font-size: 13px;
-}
-.ol-settings-search-field:focus-visible {
-  outline: 2px solid var(--ol-blue-ring);
-  outline-offset: 1px;
-  box-shadow: inset 0 0 0 1px var(--ol-blue);
-}
 .ol-expression-clear {
   --ol-corner-radius: var(--ol-button-radius);
 }
@@ -176,11 +155,8 @@ button:disabled {
   align-items: center;
   padding-bottom: 16px;
 }
-.ol-shortcuts-toolbar input {
+.ol-shortcuts-toolbar .ol-settings-search-field {
   max-width: 520px;
-}
-.ol-shortcuts .ol-settings-search-field[type='search'] {
-  background-color: var(--ol-surface-2);
 }
 .ol-shortcuts-count {
   white-space: nowrap;
@@ -212,8 +188,20 @@ button:disabled {
 .ol-shortcuts-filters nav + nav {
   margin-top: 24px;
 }
+.ol-shortcut-filter-options.ol-segmented {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.ol-shortcut-filter-options > .ol-segmented-indicator {
+  display: none;
+}
 .ol-shortcuts-filters button {
   display: flex;
+  justify-content: flex-start;
   width: 100%;
   padding: 8px 10px;
   margin: 2px 0;
@@ -456,31 +444,48 @@ button:disabled {
 .ol-switch[data-checked] .ol-switch-thumb {
   transform: translateX(calc(var(--ol-switch-width) - var(--ol-switch-knob) - 4px));
 }
-.ol-choice-chips {
+.ol-choice-chips.ol-segmented {
   display: flex;
-  flex-wrap: wrap;
   gap: 7px;
   align-items: center;
-  padding: 3px;
+  background: transparent;
+  box-shadow: none;
 }
-.ol-choice-chips button {
-  position: relative;
+.ol-choice-chips > .ol-segmented-indicator {
+  background: var(--ol-blue-soft);
+  box-shadow: inset 0 0 0 1px var(--ol-blue-ring);
+}
+.ol-choice-chips > .ol-segmented-option {
+  z-index: auto;
   padding: 7px 12px;
   font-size: 12.5px;
   white-space: nowrap;
   border-radius: var(--ol-control-radius);
   border: 1px solid var(--ol-line);
-  background: var(--ol-surface);
+  background: transparent;
   color: var(--ol-ink-2);
-  transition:
-    color var(--ol-choice-motion),
-    background-color var(--ol-choice-motion),
-    border-color var(--ol-choice-motion);
+  transition: color var(--ol-choice-motion), border-color var(--ol-choice-motion);
 }
-.ol-choice-chips button[aria-pressed='true'] {
+.ol-choice-chips > .ol-segmented-option::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--ol-surface);
+}
+.ol-choice-chips > .ol-segmented-option[aria-pressed='true'] {
   color: var(--ol-blue);
-  background: var(--ol-blue-soft);
-  border-color: var(--ol-blue-ring);
+  -webkit-text-fill-color: var(--ol-blue);
+  border-color: transparent;
+  font-weight: inherit;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ol-choice-chips > .ol-segmented-option:not([aria-pressed='true']):not(:disabled):hover {
+    background: transparent;
+    color: var(--ol-ink-2);
+  }
 }
 
 .ol-advanced-settings-detail > .ol-experimental-models {
@@ -546,61 +551,6 @@ button:disabled {
   border-radius: var(--ol-r-sm);
   color: var(--ol-blue);
 }
-.ol-global-downloads {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.ol-download-card {
-  pointer-events: auto;
-}
-.ol-download-card {
-  isolation: isolate;
-  padding: 10px 12px 12px;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: var(--ol-r-md);
-  background: var(--ol-surface-raised);
-  box-shadow:
-    0 18px 48px -18px rgba(15, 23, 42, 0.32),
-    0 4px 14px -6px rgba(15, 23, 42, 0.16);
-}
-.ol-download-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-}
-.ol-download-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ol-download-status {
-  color: var(--ol-ink-3);
-  font-variant-numeric: tabular-nums;
-}
-.ol-download-heading button {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border-radius: var(--ol-radius);
-}
-.ol-download-card progress {
-  display: block;
-  width: 100%;
-  height: 5px;
-  margin-top: 6px;
-  accent-color: var(--ol-blue);
-}
-.ol-download-card p {
-  color: var(--ol-warn);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
 .ol-experimental-model-status {
   display: block;
   line-height: 18px;
@@ -624,10 +574,8 @@ button:disabled {
   height: 100%;
   min-height: 100%;
   padding: 24px;
-  background: rgb(255 255 255 / 88%);
-  color: #18181b;
-  -webkit-backdrop-filter: blur(28px);
-  backdrop-filter: blur(28px);
+  background: var(--ol-surface);
+  color: var(--ol-ink);
 }
 .ol-startup-content {
   max-width: 420px;
@@ -641,7 +589,7 @@ button:disabled {
 }
 .ol-startup-content > p {
   margin: 8px 0;
-  color: #52525b;
+  color: var(--ol-ink-2);
   font-size: 12px;
 }
 .ol-startup-mark {
@@ -796,9 +744,19 @@ button:disabled {
   .ol-shortcuts-filters h3 {
     margin: 0 6px 0 0;
   }
+  .ol-shortcut-filter-options.ol-segmented {
+    flex-direction: row;
+    gap: 4px;
+  }
+  .ol-shortcut-filter-options > .ol-segmented-indicator {
+    display: block;
+  }
   .ol-shortcuts-filters button {
     width: auto;
     padding: 6px 9px;
+  }
+  .ol-shortcuts-filters button[aria-pressed='true'] {
+    background: transparent;
   }
 }
 @media (max-width: 540px) {
@@ -853,9 +811,6 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   .ol-startup {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-  }
-  .ol-startup {
-    background: #fff;
   }
   .ol-dialog-card {
     background: var(--ol-surface) !important;
@@ -926,11 +881,13 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   height: 0;
 }
 
-/* Password fields live inside rounded dialog inputs: draw an inset ring that follows
-   the control radius instead of an outer outline that can escape the window clip. */
-.ol-sync-password input[type='password']:focus-visible,
-.ol-sync-password input[type='password']:focus {
-  outline: none;
-  border-color: var(--ol-blue);
-  box-shadow: inset 0 0 0 1px var(--ol-blue);
+.ol-intent-routing-options {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ol-intent-routing-options input {
+  margin: 0;
+  accent-color: var(--ol-blue);
 }

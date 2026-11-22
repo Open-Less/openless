@@ -491,11 +491,26 @@ fn shared_backend_from_stores(
         style_packs: style_packs.core(),
     };
     #[cfg(not(mobile))]
-    let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(config.data_dir.join("service-usage.json"))
-        .and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start(Arc::new(ledger)))
-    {
-        Ok(recorder) => Some(Arc::new(recorder)),
-        Err(error) => { log::warn!("service usage unavailable: {error}"); None }
+    let usage_recorder = {
+        let usage_app = Arc::clone(&app);
+        let notify_usage_changed = move || {
+            crate::tauri_coordinator_host::notify_service_usage_changed(&usage_app);
+        };
+        match openless_core::usage_ledger::UsageLedger::open(
+            config.data_dir.join("service-usage.json"),
+        )
+        .and_then(|ledger| {
+            openless_core::usage_ledger::UsageRecorder::start_with_change_listener(
+                Arc::new(ledger),
+                notify_usage_changed,
+            )
+        }) {
+            Ok(recorder) => Some(Arc::new(recorder)),
+            Err(error) => {
+                log::warn!("service usage unavailable: {error}");
+                None
+            }
+        }
     };
     #[cfg(mobile)]
     let usage_recorder = None;
@@ -2067,7 +2082,8 @@ mod core_capsule_tests {
 }
 
 #[cfg(not(mobile))]
-fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: u64, delay_ms: u64) {
+fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: Option<u64>, delay_ms: u64) {
+    let Some(epoch) = epoch else { return };
     let inner = Arc::clone(inner);
     let spawner = inner.host.clone();
     spawner.spawn(async move {

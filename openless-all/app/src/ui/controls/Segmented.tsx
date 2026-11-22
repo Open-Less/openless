@@ -1,10 +1,12 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { useSelectionMotion } from '../../lib/motion';
 
 export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
   title?: string;
+  icon?: ReactNode;
+  description?: string;
 }
 
 /** The selected chip moves under the stable button labels. */
@@ -14,14 +16,18 @@ export function Segmented<T extends string>({
   onChange,
   label,
   disabled = false,
+  compact = false,
+  optionClassName,
   className,
   indicatorClassName,
 }: {
   options: readonly SegmentedOption<T>[];
-  value: T;
+  value: T | null;
   onChange: (value: T) => void;
   label: string;
   disabled?: boolean;
+  compact?: boolean;
+  optionClassName?: string;
   className?: string;
   /** Extra hook for callers whose tests address the sliding chip directly. */
   indicatorClassName?: string;
@@ -35,6 +41,7 @@ export function Segmented<T extends string>({
       role="group"
       aria-label={label}
       className={['ol-segmented', className].filter(Boolean).join(' ')}
+      data-compact={compact || undefined}
     >
       <span
         ref={indicatorRef}
@@ -45,7 +52,7 @@ export function Segmented<T extends string>({
         <button
           key={option.value}
           type="button"
-          className="ol-segmented-option"
+          className={['ol-segmented-option', optionClassName].filter(Boolean).join(' ')}
           aria-pressed={option.value === value}
           disabled={disabled}
           title={option.title}
@@ -53,10 +60,11 @@ export function Segmented<T extends string>({
             if (option.value !== value) onChange(option.value);
           }}
         >
-          {/* data-label reserves the semibold width so selecting never nudges a neighbour. */}
-          <span className="ol-segmented-label" data-label={option.label}>
-            {option.label}
-          </span>
+          {option.icon && <span className="ol-segmented-icon" aria-hidden>{option.icon}</span>}
+          <span className="ol-segmented-label">{option.label}</span>
+          {option.description && (
+            <span className="ol-segmented-description">{option.description}</span>
+          )}
         </button>
       ))}
     </div>

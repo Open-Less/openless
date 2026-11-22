@@ -287,6 +287,8 @@ export function ShortcutRecorder({
     maxWidth: '100%',
   };
   const menuButtonStyle: CSSProperties = {
+    display: 'inline-grid',
+    placeItems: 'center',
     fontSize: 12,
     padding: '5px 12px',
     border: '0.5px solid var(--ol-line-strong)',

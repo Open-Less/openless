@@ -117,7 +117,7 @@ pub(super) fn read_qa_selection() -> Option<String> {
             return Ok(None);
         }
         let text = range
-            .GetText(16000)
+            .GetText(16_000)
             .map_err(|_| "selectionUnavailable".to_string())?
             .to_string();
         Ok((!text.trim().is_empty()).then_some(text))

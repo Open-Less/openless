@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
@@ -37,6 +38,7 @@ export function Marketplace() {
     downloadingPackId,
     installError,
     showUpload,
+    uploading,
     setShowUpload,
     uploadOriginPackId,
     setUploadOriginPackId,
@@ -587,6 +589,7 @@ export function Marketplace() {
         open={Boolean(showUpload)}
         zIndex={mobile || stackLayout ? 70 : 60}
         onClose={() => {
+          if (uploading) return;
           setShowUpload(false);
           setUploadOriginPackId(null);
           setUploadTargetName(null);
@@ -643,15 +646,16 @@ export function Marketplace() {
                       <button
                         key={p.id}
                         type="button"
+                        disabled={uploading}
                         onClick={() =>
                           setSelectedUploadPackId((prev) => (prev === p.id ? null : p.id))
                         }
                         style={{
                           textAlign: 'left',
                           padding: 10,
-                          border: selected
-                            ? '1px solid var(--ol-blue)'
-                            : '0.5px solid var(--ol-line-strong)',
+                          minHeight: uploadOriginPackId ? 44 : undefined,
+                          flexShrink: 0,
+                          border: `1px solid ${selected ? 'var(--ol-blue)' : 'var(--ol-line-strong)'}`,
                           borderRadius: 'var(--ol-control-radius)',
                           background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                           cursor: 'pointer',
@@ -690,20 +694,24 @@ export function Marketplace() {
                               justifyContent: 'space-between',
                             }}
                           >
-                            <div
-                              style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}
-                            >
-                              {p.name}
-                            </div>
+                            {!uploadOriginPackId && <strong style={{ fontSize: 13 }}>{p.name}</strong>}
                             {recommended && (
                               <Pill size="sm" tone="blue">
                                 {t('marketplace.upload.recommendedBadge')}
                               </Pill>
                             )}
+                            {uploadOriginPackId && (
+                              <strong style={{
+                                fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap', marginInlineStart: 'auto',
+                              }} title={p.name}>{p.name}</strong>
+                            )}
                           </div>
-                          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-                            {p.description || t('marketplace.noDescription')}
-                          </div>
+                          {!uploadOriginPackId && (
+                            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
+                              {p.description || t('marketplace.noDescription')}
+                            </div>
+                          )}
                         </div>
                       </button>
                     );
@@ -715,6 +723,7 @@ export function Marketplace() {
                 <Btn
                   variant="ghost"
                   size="sm"
+                  disabled={uploading}
                   onClick={() => {
                     setShowUpload(false);
                     setUploadOriginPackId(null);
@@ -727,7 +736,7 @@ export function Marketplace() {
                 <Btn
                   variant="blue"
                   size="sm"
-                  disabled={!selectedUploadPackId}
+                  disabled={!selectedUploadPackId || uploading}
                   onClick={() => {
                     if (selectedUploadPackId) void onUpload(selectedUploadPackId);
                   }}
@@ -750,36 +759,15 @@ export function Marketplace() {
             <>
               {/* Top row: search (left) + username/login (center) + close × (right) */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                {/* Search box (leftmost) */}
-                <div
-                  style={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '6px 10px',
-                    border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 'var(--ol-r-md)',
-                    background: 'var(--ol-surface)',
-                  }}
-                >
-                  <Icon name="search" size={14} stroke="var(--ol-ink-3)" />
-                  <input
-                    type="search"
-                    placeholder={t('marketplace.myPacks.searchPlaceholder')}
-                    value={myPacksQuery}
-                    onChange={(e) => setMyPacksQuery(e.target.value)}
-                    autoFocus
-                    style={{
-                      flex: 1,
-                      outline: 'none',
-                      border: 0,
-                      background: 'transparent',
-                      fontSize: 13,
-                      color: 'var(--ol-ink-1)',
-                    }}
-                  />
-                </div>
+                <TextField
+                  type="search"
+                  placeholder={t('marketplace.myPacks.searchPlaceholder')}
+                  aria-label={t('marketplace.myPacks.searchPlaceholder')}
+                  value={myPacksQuery}
+                  onChange={(e) => setMyPacksQuery(e.target.value)}
+                  autoFocus
+                  style={{ flex: 1 }}
+                />
                 {/* Username + login chip. Click → GitHub OAuth Device Flow.
                 Clicking again while signed in restarts the flow (account switch). */}
                 <button
@@ -1000,12 +988,7 @@ export function Marketplace() {
                           {statusLabel(pack.state, t)}
                         </Pill>
                       </div>
-                      {pack.description && (
-                        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>
-                          {pack.description}
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 6, overflow: 'hidden', minHeight: 22 }}>
                         <Pill size="sm" tone="outline">
                           {pack.baseMode}
                         </Pill>

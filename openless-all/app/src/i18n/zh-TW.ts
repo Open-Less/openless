@@ -112,6 +112,7 @@ export const zhTW: typeof zhCN = {
     delete: '刪除雲端備份',
     working: '正在處理…',
     cancelTask: '取消目前工作',
+    cancelSync: '取消同步',
     cancelRequested: '已請求取消，正在等待目前工作結束。',
     done: '同步設定已更新。',
     restored: '已還原雲端資料，請核對此裝置的專屬設定。',
@@ -132,7 +133,8 @@ export const zhTW: typeof zhCN = {
     currentPassword: '目前同步密碼',
     confirmPassword: '再次輸入新密碼',
     setSyncPasswordTitle: '設定雲端同步密碼',
-    setSyncPasswordDescription: 'OpenLess 會用此密碼在本機加密資料並建立雲端備份。建立成功後才會開啟同步。',
+    setSyncPasswordDescription:
+      'OpenLess 會用此密碼在本機加密資料並建立雲端備份。建立成功後才會開啟同步。',
     confirmSyncPassword: '再次輸入同步密碼',
     confirmAndContinue: '確認並繼續',
     revealPassword: '顯示密碼（{{field}}）',
@@ -144,7 +146,7 @@ export const zhTW: typeof zhCN = {
     disableDescription:
       '關閉後停止後續同步，雲端備份和本機資料都會保留。刪除雲端備份是另一項獨立操作。',
     confirmDisable: '關閉同步',
-    refreshBackup: '查看或重新整理雲端備份',
+    refreshBackup: '查看雲端備份',
     deleteTitle: '刪除雲端加密備份？',
     deleteDescription:
       '僅刪除目前帳號的雲端備份，本機資料保留。之後在其他裝置還原前，需要重新建立備份。',
@@ -158,6 +160,7 @@ export const zhTW: typeof zhCN = {
     merge: '合併，並逐項處理衝突',
     replace: '使用雲端資料取代本機同步資料',
     replaceWarning: '此操作會取代同步範圍內的本機資料。若要保留本機修改，請選擇合併。',
+    mergeOverwriteDirection: '發生衝突時，選擇本機版本會在合併同步時覆蓋對應的雲端項目，選擇雲端版本會覆蓋對應的本機項目。',
     restoreCheck: '我已檢查還原方式和衝突處理選擇。',
     applyRestore: '確認還原',
     conflictProgress: '已處理 {{selected}} / {{total}} 項衝突',
@@ -222,7 +225,8 @@ export const zhTW: typeof zhCN = {
       cancelled: '工作已取消。',
       network: '暫時無法連線同步服務，請檢查網路後重試。',
       rateLimited: '請求過於頻繁，請稍後重試。',
-      deletePendingOperation: '先前的雲端操作尚未確認，暫不能安全刪除備份。請稍後重新整理狀態並重試。',
+      deletePendingOperation:
+        '先前的雲端操作尚未確認，暫不能安全刪除備份。請稍後重新整理狀態並重試。',
       outcomeUnknown: '雲端結果尚未確認。請先核對待確認結果，不要重複建立備份。',
       recovery: '本機同步狀態需要復原。請保留本機資料，不要覆寫雲端備份。',
       rolledBack: '還原失敗，本機變更已回復。請重新整理狀態後重試。',
@@ -381,6 +385,7 @@ export const zhTW: typeof zhCN = {
     mobileRecordStart: '開始錄音',
     mobileRecordStop: '結束並提交',
     composerPlaceholder: '輸入問題，Enter 傳送',
+    voiceInputPlaceholder: '你正在進行語音輸入',
     composerSend: '傳送',
     statusIdle: '按 {{recordHotkey}} 提問',
     statusRecording: '錄音中',
@@ -468,7 +473,7 @@ export const zhTW: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: '更新風格包',
         withdraw: '下架',
       },
       loadFailed: '我的發布載入失敗：{{err}}',
@@ -809,7 +814,7 @@ export const zhTW: typeof zhCN = {
     dismiss: '關閉',
   },
   vocab: {
-    selectAllVisible: '選取目前結果',
+    selectAllVisible: '選取所有結果',
     selecting: '選取',
     doneSelecting: '完成',
     disabledWord: '已停用',
@@ -1136,7 +1141,7 @@ export const zhTW: typeof zhCN = {
     },
     history: {
       title: '儲存歷史',
-      desc: '開啟後在本地儲存問答記錄，預設關閉。',
+      desc: '開啟後在此裝置上儲存「隨便問」的歷史記錄，預設關閉。',
     },
     howto: {
       title: '使用方法',
@@ -1163,7 +1168,7 @@ export const zhTW: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: '麥克風與錄音',
-      recordingDesc: '麥克風監聽與辨識，以及監聽與提示。',
+      recordingDesc: '選擇麥克風，設定錄音與提示音。',
       capsuleTitle: '膠囊樣式',
       capsuleDesc: '膠囊開關、多螢幕顯示、樣式，以及原文的串流顯示。',
       textInputTitle: '文字插入',
@@ -1172,6 +1177,7 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      polishStrategyTitle: '潤飾策略',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
@@ -1179,7 +1185,7 @@ export const zhTW: typeof zhCN = {
       voiceEnhancementTitle: '語音增強與播放抑制',
       cursorContextTitle: '感知',
       startupDiagnosticsTitle: '啟動診斷',
-      cursorContextHint: '游標上下文預設開啟。如果不希望潤色請求帶上附近文字，可以在這裡關閉。',
+      cursorContextHint: '預設開啟。',
     },
     advancedGroups: {
       recording: '錄音',
@@ -1237,7 +1243,6 @@ export const zhTW: typeof zhCN = {
         '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
     },
     expressionLearning: {
-      clearHint: '清除後，進行中的聽寫可能仍使用開始時已擷取的偏好。',
       lineBreaksMore: '更常分行',
       lineBreaksLess: '減少分行',
       exclamationsMore: '更常使用驚嘆號',
@@ -1248,7 +1253,7 @@ export const zhTW: typeof zhCN = {
       title: '表達習慣',
       enabled: '學習表達習慣',
       description:
-        '僅在本機觀察聽寫後的排版修改；表達習慣資料只儲存抽象統計，不儲存觀察到的文字。歷史記錄另行管理。反覆且一致的分行、驚嘆號及句末標點偏好穩定後，會以簡短形式指令傳給所選文字模型；關閉後立即停止學習，並從下一次聽寫起停止套用；進行中的聽寫可能仍使用已擷取的偏好。',
+        '學習分行和標點習慣，用於後續潤飾。',
       status: '已形成 {{count}} 項穩定偏好',
       clear: '清除表達習慣',
       error: '無法讀取或儲存表達習慣，請重試。',
@@ -1269,19 +1274,17 @@ export const zhTW: typeof zhCN = {
       maxPhraseCharsHint: '自動建議中原詞和替換詞的長度上限，2–32 個字元；不影響手動加詞。',
       seconds: '{{count}} 秒',
       characters: '{{count}} 個字元',
-      changeHint:
-        '變更參數會結束目前觀察並清除待確認建議，下次聽寫生效。恢復參數不會改變啟用開關。',
       reset: '恢復預設參數',
       saveError: '儲存失敗，請重試。',
       description:
-        '插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。',
+        '從聽寫後的手動改詞中學習，確認後加入詞典。',
     },
     dataStorage: {
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
+        '潤飾時將游標附近的文字提供給模型參考。',
     },
     localMigration: {
       title: '本機設定遷移',
@@ -1378,13 +1381,13 @@ export const zhTW: typeof zhCN = {
         systemAgc: '系統自動增益',
         unavailable: '目前裝置不支援',
         androidEffectsHint:
-          'Android 系統音效在軟體處理鏈之前生效。建議避免重複開啟同類效果。啟動不支援時退回一般擷取。',
+          '使用裝置提供的回聲消除、降噪和自動增益。',
         effectsActive: '本次錄音已啟用系統音效。',
         spectrum: '輸入／處理後頻譜',
         spectrumHint:
-          '僅顯示目前增強錄音，不會啟動麥克風、儲存或上傳音訊。關閉面板或進入背景後停止監測。',
+          '比較錄音處理前後的頻譜。',
         spectrumLegend: '灰色：輸入 · 彩色：處理後 · 20 Hz–24 kHz',
-        spectrumWaiting: '開啟語音增強並開始錄音後顯示頻譜。',
+        spectrumWaiting: '等待錄音',
         presets: '均衡器預設',
         choosePreset: '選擇預設',
         preset_normal: '平直',
@@ -1397,11 +1400,11 @@ export const zhTW: typeof zhCN = {
         aecOff: '關閉',
         aecLight: '輕量（省 CPU）',
         aecModel: '模型（更強）',
-        aecModelHint: '模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。',
-        aecHint: '外放時壓掉揚聲器回授；需要揚聲器參考訊號，戴耳機可以關掉。',
+        aecModelHint: '增強回聲抑制，CPU 使用量較高。',
+        aecHint: '抑制揚聲器播放聲音進入麥克風產生的回聲。',
         buffer: '輸出緩衝區',
         title: '語音增強設定',
-        description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
+        description: '調整降噪、回聲抑制、音量與等化器。',
         noise: '降噪演算法',
         dereverb: '梳狀濾波',
         equalizer: '等化器',
@@ -1414,10 +1417,10 @@ export const zhTW: typeof zhCN = {
         target: '目標電平',
         attack: '啟動速度',
         decay: '釋放速度',
-        vadHint: '衰減低音量片段，不會停止錄音。閾值過高可能丟失輕聲。',
+        vadHint: '降低低音量片段的音量。',
         threshold: '語音閾值',
         tone: '音色與房間調整',
-        combHint: '梳狀濾波沿用 MicYou 的簡單延遲相減，可能改變音色，建議從 0% 開始。',
+        combHint: '調整聲音的共鳴與音色。',
         preamp: '等化器前置增益',
         order: '處理順序',
         up: '上移',
@@ -1426,10 +1429,10 @@ export const zhTW: typeof zhCN = {
       },
       echoCancellationLabel: '播放回聲抑制',
       echoCancellationDesc:
-        '保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。',
+        '使用本機播放參考，抑制錄音中的系統聲音回聲。下次錄音生效。',
       audioEnhancementLabel: '語音增強',
       audioEnhancementDesc:
-        '套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。',
+        '降低背景噪音，並自動調整音量。下次錄音生效。',
       muteDuringRecordingLabel: '錄音時靜音',
       muteDuringRecordingDesc: '錄音期間臨時靜音系統輸出，避免揚聲器迴音。',
       audioCueLabel: '錄音提示音',
@@ -1494,14 +1497,16 @@ export const zhTW: typeof zhCN = {
       polishSkipMaxCharsLabel: '短句跳過潤色（最大字數）',
       polishSkipMaxCharsDesc:
         '轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。',
-      polishStrategyEnabledLabel: '使用自訂潤色策略',
+      polishStrategyEnabledLabel: '啟用自訂策略',
       polishStrategyEnabledDesc:
         '在 ASR 後執行受限的本機策略；異常會回退到預設潤色規則，腳本無法存取檔案、網路或憑證。',
-      polishStrategyScriptLabel: '潤色策略腳本',
+      polishStrategyEdit: '修改',
+      polishStrategyEditorTitle: '修改潤飾策略',
+      polishStrategyScriptLabel: '腳本',
       polishStrategyScriptDesc:
         '定義 strategy(input)，回傳 skip、polish 或 request。缺少的語言、信心度和模型值為 ()。',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: '複製 Agent 編寫說明',
       polishStrategySkillCopied: '已複製 Agent 編寫說明',
       polishStrategySkillCopyFailed: '複製失敗，請檢查剪貼簿權限',
@@ -1519,15 +1524,16 @@ export const zhTW: typeof zhCN = {
       voiceActivationLabel: '語音啟用',
       voiceActivationDesc: '在本機等待喚醒詞以開始聽寫。',
       voiceActivationLocalOnly: '辨識只在此裝置上進行；待機音訊不會上傳或封存。',
-      voiceActivationHotkeyLinked: "與錄音快捷鍵聯動",
-      voiceActivationHotkeyLinkedDesc: "單擊錄音快捷鍵開啟或暫停喚醒監聽，取代原錄音手勢。啟動應用程式後先暫停；暫停時關閉背景預熱，其他錄音工作不受影響。等待喚醒僅在本機處理，正式聽寫仍使用目前服務。",
-      voiceActivationDisabled: "語音喚醒已關閉",
-      voiceActivationPaused: "喚醒監聽已暫停",
-      voiceActivationPausing: "正在停止喚醒監聽…",
-      voiceActivationStarting: "正在啟動喚醒監聽…",
-      voiceActivationListening: "正在等待喚醒命令",
-      voiceActivationDictating: "正在聽寫或完成處理",
-      voiceActivationError: "無法啟動喚醒監聽，請檢查模型、麥克風權限與裝置。",
+      voiceActivationHotkeyLinked: '與錄音快捷鍵聯動',
+      voiceActivationHotkeyLinkedDesc:
+        '單擊錄音快捷鍵開啟或暫停喚醒監聽，取代原錄音手勢。啟動應用程式後先暫停；暫停時關閉背景預熱，其他錄音工作不受影響。等待喚醒僅在本機處理，正式聽寫仍使用目前服務。',
+      voiceActivationDisabled: '語音喚醒已關閉',
+      voiceActivationPaused: '喚醒監聽已暫停',
+      voiceActivationPausing: '正在停止喚醒監聽…',
+      voiceActivationStarting: '正在啟動喚醒監聽…',
+      voiceActivationListening: '正在等待喚醒命令',
+      voiceActivationDictating: '正在聽寫或完成處理',
+      voiceActivationError: '無法啟動喚醒監聽，請檢查模型、麥克風權限與裝置。',
       voiceActivationMultimodalModels: '在此準備語音喚醒模型，聽寫仍使用目前的多模態服務。',
       voiceActivationModelMissing: '請先在「AI 與模型」的本機模型頁準備 Zipformer。',
       voiceActivationDownloadZipformer: '前往 AI 與模型下載 Zipformer',
@@ -2307,6 +2313,7 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      polishStrategy: '依辨識結果控制潤飾。',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInput: '設定即時原文在輸入框中的顯示。',
@@ -2317,7 +2324,7 @@ export const zhTW: typeof zhCN = {
       multimodal: '管理多模態辨識的實驗性開關。',
       debug: '保留偵錯錄音、探測游標上下文與匯出日誌。',
       voiceEnhancement: '設定進階音訊處理、降噪與播放回聲抑制。',
-      cursorContext: '設定潤色請求使用的游標附近上下文與短句行為。',
+      cursorContext: '管理游標上下文、手動改詞學習與表達習慣。',
       startupDiagnostics: '查看啟動耗時、後端握手和延遲探測結果。',
     },
     descriptions: {
@@ -2340,7 +2347,7 @@ export const zhTW: typeof zhCN = {
       appearance: '主題 深色 淺色 暗色 語言 字體 排版 版面 熱圖',
       privacy: '權限 麥克風 輔助功能 歷史 錄音 儲存 隱私 匯出',
       advanced:
-        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 進階功能 手改學詞',
+        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 進階功能 手改學詞 潤飾策略 Rhai script',
       about: '版本 Beta 穩定 更新 升級',
     },
     sections: {
@@ -2581,6 +2588,10 @@ export const zhTW: typeof zhCN = {
     activePill: '目前使用',
     setDefault: '設為預設',
     downloading: '下載中',
+    cancelDownload: '取消下載',
+    cancelDownloadTitle: '取消下載 {{name}}',
+    cancellingDownload: '正在取消下載…',
+    downloadFailed: '模型下載失敗',
     startDownload: '開始下載',
     downloadNewModel: '下載新模型',
     activeModelLabel: '使用中的模型',

@@ -7,6 +7,7 @@
 pub mod activity;
 pub mod android_types;
 pub mod api;
+pub mod main_dictation_trace;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;

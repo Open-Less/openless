@@ -1,9 +1,9 @@
+import { TextField } from '../../ui/controls/TextField';
 import { AnimatePresence, motion } from 'framer-motion';
 import { type CSSProperties } from 'react';
 import type { PolishMode } from '../../api/contracts';
 import { Icon } from '../../components/Icon';
 import { StylePackIconPicker } from './StylePackIconPicker';
-import { ChoiceChips } from '../../components/ui/ChoiceChips';
 import { ExpandableText } from '../../components/ui/Disclosure';
 import { DismissibleCard } from '../../components/ui/DismissibleCard';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
@@ -11,6 +11,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Pill } from '../../ui/controls/Pill';
+import { Segmented } from '../../ui/controls/Segmented';
 import { useStylePackWorkspace } from './useStylePackWorkspace';
 
 function modeTone(mode: PolishMode): 'default' | 'blue' | 'ok' | 'outline' | 'dark' {
@@ -170,6 +171,10 @@ export function Style() {
     </label>
   );
 
+  const packLayoutEase = busy === 'deleting'
+    ? ([0.3, 0.72, 0.4, 1] as const)
+    : ([0.22, 1, 0.36, 1] as const);
+
   return (
     <>
       <PageHeader
@@ -302,10 +307,11 @@ export function Style() {
                 width: stackLayout ? '100%' : undefined,
               }}
             >
-              <ChoiceChips
+              <Segmented
                 label={t('style.pack.listTitle')}
                 value={workflowView}
                 onChange={setWorkflowView}
+                compact
                 options={[
                   { value: 'dictation', label: t('style.pack.dictationTab') },
                   { value: 'selection', label: t('style.pack.selectionTab') },
@@ -344,8 +350,11 @@ export function Style() {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{
-                      layout: { duration: reducedMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] },
-                      opacity: { duration: reducedMotion ? 0 : 0.12 },
+                      layout: { duration: reducedMotion ? 0 : 0.22, ease: packLayoutEase },
+                      opacity: {
+                        duration: reducedMotion ? 0 : 0.12,
+                        ease: busy === 'deleting' ? 'easeIn' : undefined,
+                      },
                     }}
                     style={{
                       display: 'flex',
@@ -529,7 +538,7 @@ export function Style() {
                 layout={reducedMotion ? false : 'position'}
                 initial={false}
                 transition={{
-                  layout: { duration: reducedMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] },
+                  layout: { duration: reducedMotion ? 0 : 0.22, ease: packLayoutEase },
                 }}
                 type="button"
                 disabled={busy === 'creating'}
@@ -804,10 +813,9 @@ export function Style() {
                         >
                           {t('style.pack.fieldName')}
                         </span>
-                        <input
+                        <TextField
                           value={draft.name}
                           onChange={(event) => patchDraft({ name: event.target.value })}
-                          style={inputStyle}
                         />
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -820,10 +828,9 @@ export function Style() {
                         >
                           {t('style.pack.fieldAuthor')}
                         </span>
-                        <input
+                        <TextField
                           value={draft.author ?? ''}
                           onChange={(event) => patchDraft({ author: event.target.value || null })}
-                          style={inputStyle}
                           placeholder={t('style.pack.fieldAuthorPlaceholder')}
                         />
                       </label>
@@ -837,10 +844,9 @@ export function Style() {
                         >
                           {t('style.pack.fieldVersion')}
                         </span>
-                        <input
+                        <TextField
                           value={draft.version}
                           onChange={(event) => patchDraft({ version: event.target.value })}
-                          style={inputStyle}
                         />
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -853,7 +859,7 @@ export function Style() {
                         >
                           {t('style.pack.fieldTags')}
                         </span>
-                        <input
+                        <TextField
                           value={draft.tags.join(', ')}
                           onChange={(event) =>
                             patchDraft({
@@ -863,7 +869,6 @@ export function Style() {
                                 .filter(Boolean),
                             })
                           }
-                          style={inputStyle}
                           placeholder={t('style.pack.fieldTagsPlaceholder')}
                         />
                       </label>
@@ -900,12 +905,11 @@ export function Style() {
                         >
                           {t('style.pack.fieldModel')}
                         </span>
-                        <input
+                        <TextField
                           value={draft.recommendedModel ?? ''}
                           onChange={(event) =>
                             patchDraft({ recommendedModel: event.target.value || null })
                           }
-                          style={inputStyle}
                           placeholder={t('style.pack.fieldModelPlaceholder')}
                         />
                         <span
@@ -924,12 +928,11 @@ export function Style() {
                         >
                           {t('style.pack.fieldCompatibility')}
                         </span>
-                        <input
+                        <TextField
                           value={draft.compatibleAppVersion ?? ''}
                           onChange={(event) =>
                             patchDraft({ compatibleAppVersion: event.target.value || null })
                           }
-                          style={inputStyle}
                           placeholder={t('style.pack.fieldCompatibilityPlaceholder')}
                         />
                       </label>
@@ -1176,13 +1179,12 @@ export function Style() {
                               marginBottom: 12,
                             }}
                           >
-                            <input
+                            <TextField
                               value={example.title ?? ''}
                               onChange={(event) =>
                                 patchExample(index, { title: event.target.value })
                               }
                               style={{
-                                ...inputStyle,
                                 fontWeight: 'var(--ol-font-weight-semibold)',
                               }}
                               placeholder={t('style.pack.exampleTitlePlaceholder', {
@@ -1380,19 +1382,6 @@ function DirectiveRow({
     </div>
   );
 }
-
-const inputStyle: CSSProperties = {
-  width: '100%',
-  boxSizing: 'border-box',
-  minHeight: 38,
-  padding: '9px 11px',
-  borderRadius: 'var(--ol-r-md)',
-  border: '0.5px solid var(--ol-line-strong)',
-  background: 'var(--ol-style-input-bg)',
-  color: 'var(--ol-ink)',
-  font: 'inherit',
-  fontSize: 12.5,
-};
 
 const textareaStyle: CSSProperties = {
   width: '100%',

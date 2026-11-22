@@ -1,10 +1,10 @@
 # OpenLess 2.0 架构
 
-状态：canonical，当前实现说明；更新：2026-10-19。平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
 
 ## 1. 分层与工作区
 
-应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 成员为 `crates/openless-core` + `linux-egui` + `harmony/rust`；`src-tauri`（及其 `backend-tests` 测试 crate）被 exclude，独立构建。Core 是与 Host 同进程的业务库。
+应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 包含 Core、MicYou DSP、Linux、Harmony Rust 宿主和原生胶囊。`src-tauri` 及其 `backend-tests` 使用独立 manifest。Core 是与 Host 同进程的业务库。
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
@@ -46,11 +46,17 @@ flowchart TB
 
 Android 悬浮窗在录音中转入追问时，Host 先捕获原选区，Core 的 `stop_dictation_for_qa` 按原会话 ID 完成转写并释放听写资源，跳过听写润色与文字插入，再由 `QaApi::submit_captured_text` 接收已录问题和选区。重复手势由 Host 的异步锁合并；QA 不重新抓取已经变化的前台选区。
 
-Android IME 通过 `InputConnection` 插入文字；笔画、英文候选与轻量拼音由原生 Kotlin 控制器处理。`OpenLessApplication`、`OpenLessRuntimeService` 和 Warmup Activity 管理后台运行与恢复。用户操作与验收入口见 [Android 输入法](android-ime.md)。
+Android IME 通过 `InputConnection` 插入文字。笔画和英文由 Kotlin 控制器处理，拼音经 JNI 接入共享 librime。`OpenLessApplication`、`OpenLessRuntimeService` 和 Warmup Activity 管理后台运行与恢复。用户操作与验收入口见 [Android 输入法](android-ime.md)。
 
 设置保存使用 `get_settings_snapshot` / `update_setting_fields`：前端只提交字段差异，Core 按偏好修订号提交事务并在版本冲突时重试；`prefs:changed` 使前端重新读取快照。`preferencesWriteGate.ts` 将尚未完成的本地编辑叠加到已确认快照，失败时只撤回对应请求。
 
 手改学词由 Core 的 `host_document/observation.rs` 和 `api.rs` 管理插入范围、观察代数、建议有效期与词典写入。独立本机授权默认关闭，配置位于「实验与扩展 → 手改学词」；观察时长 10–60 秒、建议有效期 5–60 秒、最大自动词长 2–32 个字符。设置改变会结束旧观察并清除旧建议，授权与参数不进入云同步。macOS AX、Windows UIA 与 Android 无障碍仅在当前编辑器内进行短时观察，密码框和已知敏感应用被排除；观察文本仅用于本地差分，确认前不写入词典。`PendingCorrection.expiresAtMs` 是 Web 和 Android 确认卡共用的截止时间；历史详情与 Android IME 保留显式确认加词入口，Linux 原生观察仍在独立验收范围。
+
+### React 运行边界
+
+`src/app` 组装宿主、语言和窗口，`src/features` 管理页面选择、草稿、滚动与业务操作。`src/api` 提供分域操作，`src/runtime` 接入原生传输，`src/data` 负责跨页快照及并发读写。历史先订阅变更再读取快照，每个查询键只允许一次在途读取。读取期间发生失效时丢弃过期结果并补读。历史删除、累计活动和服务用量分属不同仓库。
+
+每个 WebView 有自己的 `AppViewport` 和交互控制器。内容与浮层共用可见边界，命中和定位使用未缩放的视口坐标。等待入场的页面及退出中的浮层不能接收交互。确认和持久化完成分别由交互层和业务层结算。浏览器夹具验证渲染、滚动、焦点与降动效，安装版的窗口、系统权限和命中范围由相应 Host 验证。
 
 ## 3. Core 模块地图（按域，见 `src/lib.rs` pub mod 清单）
 

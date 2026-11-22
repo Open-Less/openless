@@ -1,0 +1,47 @@
+.ol-download-phase-text {
+  display: inline-block;
+  white-space: pre-wrap;
+}
+
+.ol-download-progress-text,
+.ol-download-percent {
+  display: inline-flex;
+  align-items: baseline;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+}
+
+.ol-download-progress-text[data-reserved-text]::after {
+  content: attr(data-reserved-text);
+  visibility: hidden;
+}
+
+.ol-download-digits {
+  position: relative;
+  display: inline-block;
+  inline-size: 3ch;
+  block-size: 1lh;
+  text-align: end;
+  overflow: hidden;
+}
+
+.ol-download-digits-track,
+.ol-download-digits-current {
+  display: block;
+  block-size: 1lh;
+  line-height: inherit;
+}
+.ol-download-digits-track {
+  position: relative;
+}
+.ol-download-digits-outgoing {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: -100%;
+  block-size: 1lh;
+  line-height: inherit;
+}
+.ol-download-digits-outgoing::after {
+  content: attr(data-previous);
+}

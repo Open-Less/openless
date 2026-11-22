@@ -244,87 +244,11 @@ Every item below is one more layer sedimented into a default — a capability yo
 
 ## Download & install (end users)
 
-Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
-
-- **macOS** (macOS 14 Sonoma or later): `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel). Open it, drag the app to `/Applications`, **then run the following once in Terminal to bypass the Gatekeeper "damaged" warning** (the build is ad-hoc signed, not Apple-notarized):
-  ```bash
-  xattr -cr /Applications/OpenLess.app
-  ```
-- **Windows**: `OpenLess_<version>_x64-setup.exe` — run the installer.
-- **Android** (release APKs on GitHub Release; debug APKs via Actions artifacts):
-  - **Phones (recommended)**: `OpenLess_<version>_arm64-v8a.apk`
-  - **Older 32-bit ARM**: `OpenLess_<version>_armeabi-v7a.apk`
-  - **64-bit emulator**: `OpenLess_<version>_x86_64.apk`
-  - **32-bit emulator**: `OpenLess_<version>_x86.apk`
-  - In-app updates (Settings → About & updates) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
-  - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
-  - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
-- **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
-- **HarmonyOS** (adapting): download `OpenLess_harmony_arm64.hap` from the same Release. It is unsigned and intended for developer/test installation through DevEco Studio or `hdc`; AppGallery distribution is prepared by the workflow but submitted manually, and no update flow exists yet. Local build and signing steps are in `openless-all/app/harmony/README.md`.
-- **iOS**: there is no downloadable IPA. Build the native app from source and sign it with your own team — see [openless-all/ios/README.md](openless-all/ios/README.md) for bootstrap, build, and keyboard-enable steps.
-- **macOS (Homebrew)**:
-  ```bash
-  brew tap Open-Less/openless https://github.com/Open-Less/openless
-  brew install --cask openless
-  xattr -cr /Applications/OpenLess.app
-
-  # Upgrade to the latest version
-  brew update && brew upgrade openless
-  ```
-
-On first launch, grant the permissions the app requests.
-
-**macOS:**
-1. Grant Microphone access.
-2. Grant Accessibility access.
-3. **Quit and reopen the app** — Accessibility only takes effect after a restart.
-4. Open Settings and fill in your Volcengine ASR + Ark credentials.
-
-**Windows:**
-1. Grant Microphone access when prompted.
-2. Open Settings → Permissions & data to verify the global hotkey listener is active.
-3. Fill in your Volcengine ASR + Ark credentials in Settings.
-
-For the full end-user walkthrough, see [USAGE.md](USAGE.md).
+Download the package for your platform and architecture from [Releases](https://github.com/Open-Less/openless/releases). See the [user guide](USAGE.md) for installation, permissions, Homebrew, keyboards, and first-run setup. For Linux and iOS source builds, follow the platform guides below.
 
 ## Build from source (developers)
 
-The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend; `src-tauri` hosts macOS/Windows/Android, `linux-egui` contains the native Linux UI and its platform adapters, `harmony/` holds the ArkTS/ArkWeb host plus the `harmony/rust` napi crate, and `openless-all/ios/` is the independent native iOS project. Vendored crates (`cpal`, `tauri-runtime-wry`) are checked in under `src-tauri/vendor/`, so **no Git submodule initialization is required**. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
-
-Rust 1.99 is the minimum supported toolchain for every source tree (`openless-core`, `src-tauri`, `linux-egui`); the latest stable Rust is recommended. CI verifies both Rust 1.99 and stable on macOS and Windows, stable for the Linux egui host, and also builds the Android, iOS and HarmonyOS hosts.
-
-```bash
-cd "openless-all/app"
-npm ci
-
-# macOS/Windows/Android: Vite at :1420 + Tauri host
-npm run tauri dev
-
-# Android release APK — run the init/scaffolding/manifest chain first
-# (src-tauri/gen/android is generated); see openless-all/README.md, "Android Build"
-npm run tauri:android:build:release
-
-# macOS release build (signs, installs, resets TCC)
-./scripts/build-mac.sh
-INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
-
-# HarmonyOS HAP (needs the HarmonyOS Command Line Tools; see harmony/README.md)
-bash scripts/build-harmony-frontend.sh
-
-# Shared backend and Linux Host/UI (no Tauri/WebKitGTK)
-cargo check -p openless-core
-cargo check -p openless-linux-egui --all-targets
-
-# Tauri host type-check
-cargo check --manifest-path "src-tauri/Cargo.toml"
-
-# Frontend TS check
-npm run build
-```
-
-Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\Logs\openless.log` (Windows).
-
-**Windows build** — see [`openless-all/README.md`](openless-all/README.md) for the MSVC and GNU/MinGW routes.
+The [cross-platform build guide](openless-all/README.md) maintains the toolchains and commands for each platform. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md) to navigate the code. The Tauri `cpal` and `tauri-runtime-wry` dependencies are checked in, so there are no Git submodules to initialize.
 
 ## Contributing workflow
 
@@ -467,7 +391,7 @@ The diagrams below are generated from the current `beta` client boundaries. Each
 
 [Mermaid source](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg)
 
-The dependency and module review that accompanies these diagrams is in [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md).
+[Client diagram sources and exports](docs/images/client-diagrams/README.md).
 
 See [Contributing workflow](#contributing-workflow) and [Releasing](RELEASING.md) for contribution and release rules, and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 
@@ -497,12 +421,12 @@ This acknowledgement does not imply official endorsement or affiliation.
 
 ## Third-party components
 
-The Overview yearly-activity card is a port of **Rare UI**'s [GitHub Activity](https://rareui.com/components/githubactivity)
-component (Copyright (c) 2026 Swami Malode, MIT + Commons Clause, attribution required).
-The port keeps the upstream layout, week/month maths, tooltip and expandable panel, and
-replaces the GitHub data source with local dictation counts. Source:
-`openless-all/app/src/components/ui/GitHubActivity.tsx` and `github-activity.css`.
-The same credit is shown in Settings → About → Component credits.
+The Overview annual activity card adapts calendar and expandable-panel code from **Rare UI**'s
+[GitHub Activity](https://rareui.com/components/githubactivity) (Copyright (c) 2026 Swami Malode).
+OpenLess supplies its own dictation data, app ranking, and desktop icons. See the
+[component attribution and license](docs/ATTRIBUTION.md). The credit is also shown in Settings → About → Component credits.
+
+The shared password field adapts the animated eye from Rare UI's [Password Input](https://www.rareui.com/components/passwordinput).
 
 ## License
 

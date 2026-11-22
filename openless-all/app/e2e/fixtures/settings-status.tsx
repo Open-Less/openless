@@ -1,9 +1,10 @@
-import { StrictMode, useState } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import { mockSettings } from '../../src/lib/ipc/mock-data';
 import type { LocalAsrDownloadProgress } from '../../src/api/local-asr';
+import type { ExperimentalAsrModel, ExperimentalAsrStatus } from '../../src/lib/experimentalAsr';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION,
   type cloudSyncE2eeDeleteRemote,
@@ -44,7 +45,12 @@ type DeleteRequest = Parameters<typeof cloudSyncE2eeDeleteRemote>[0];
 const calls: string[] = [];
 const deleteRequests: DeleteRequest[] = [];
 const cancelledSyncTasks: string[] = [];
+let syncCommitted = false;
 const cancelledDownloads: string[] = [];
+const experimentalModels = new Map<ExperimentalAsrModel, ExperimentalAsrStatus>();
+const experimentalToggles: Array<{ model: ExperimentalAsrModel; enabled: boolean }> = [];
+let experimentalReads = 0;
+let finishExperimentalToggle: (() => void) | undefined;
 const attempts = { save: 0, sync: 0, delete: 0 };
 const pending = new Map<SettingsOperation, { attempt: number; finish: (error: boolean) => void }>();
 let stored = JSON.stringify({ apiKey: 'fixture-key', voice: 'stella' });
@@ -72,7 +78,18 @@ const fixture = {
   calls,
   deleteRequests,
   cancelledSyncTasks,
+  startSync: () => startSync(),
+  commitSync: () => {
+    syncCommitted = true;
+  },
   cancelledDownloads,
+  experimentalToggles,
+  experimentalReads: () => experimentalReads,
+  refreshExperimental: async () => {},
+  finishExperimentalToggle: () => finishExperimentalToggle?.(),
+  setExperimentalStatus(model: ExperimentalAsrModel, change: Partial<ExperimentalAsrStatus>) {
+    setExperimentalStatus(model, change);
+  },
   hasDownloadListener: () => Boolean(listeners.get('local-asr-download-progress')?.size),
   emitDownload(modelId: string, phase: LocalAsrDownloadProgress['phase']) {
     return emit('local-asr-download-progress', {
@@ -111,6 +128,24 @@ const fixture = {
 };
 export type SettingsStatusFixture = typeof fixture;
 Object.assign(window, { settingsStatusFixture: fixture });
+function setExperimentalStatus(
+  model: ExperimentalAsrModel,
+  change: Partial<ExperimentalAsrStatus>,
+) {
+  const status: ExperimentalAsrStatus = experimentalModels.get(model) ?? {
+    model,
+    enabled: false,
+    available: true,
+    unavailableReason: null,
+    phase: 'disabled',
+    downloadedBytes: 0,
+    totalBytes: 0,
+    error: null,
+    channelId: null,
+    needsGuidance: false,
+  };
+  experimentalModels.set(model, { ...status, ...change });
+}
 const update = (change: Partial<EncryptedSyncStatus>) => {
   status = { ...status, ...change, sequence: String(Number(status.sequence) + 1) };
   return { ...status };
@@ -124,6 +159,11 @@ const publish = () =>
     taskId: status.taskId,
     status: { ...status },
   });
+const startSync = () => {
+  if (!pending.has('sync') || status.taskId !== null) throw new Error('Cannot start sync');
+  update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
+  return publish();
+};
 const listeners = new Map<string, Set<number>>();
 mockWindows('main');
 mockIPC((command, args) => {
@@ -161,7 +201,25 @@ mockIPC((command, args) => {
   if (command === 'set_remote_locale' || command === 'plugin:app|set_app_theme') return undefined;
   if (command === 'marketplace_auth_status') return { signedIn: true };
   if (command === 'cloud_sync_e2ee_status') return { ...status };
-  if (command === 'experimental_asr_status') return [];
+  if (command === 'experimental_asr_status') {
+    experimentalReads++;
+    return [...experimentalModels.values()];
+  }
+  if (command === 'experimental_asr_set_enabled' && params.has('download')) {
+    const request = args as (typeof experimentalToggles)[number];
+    experimentalToggles.push(request);
+    return new Promise<void>((resolve) => {
+      finishExperimentalToggle = () => {
+        finishExperimentalToggle = undefined;
+        setExperimentalStatus(request.model, {
+          enabled: request.enabled,
+          phase: request.enabled ? 'downloading' : 'disabled',
+          channelId: null,
+        });
+        resolve();
+      };
+    });
+  }
   if (command === 'local_asr_cancel_download') {
     cancelledDownloads.push((args as { modelId: string }).modelId);
     return undefined;
@@ -176,8 +234,10 @@ mockIPC((command, args) => {
   }
   if (command === 'cloud_sync_e2ee_sync_now') {
     calls.push(command);
+    syncCommitted = false;
     const result = deferOperation('sync', (error) => {
-      const cancelled = status.taskId !== null && cancelledSyncTasks.includes(status.taskId);
+      const cancelled =
+        !syncCommitted && status.taskId !== null && cancelledSyncTasks.includes(status.taskId);
       const code = cancelled ? 'cancelled' : error ? 'transport_failed' : null;
       const next = update({
         syncState: cancelled ? 'pending' : error ? 'failed' : 'ready',
@@ -189,8 +249,7 @@ mockIPC((command, args) => {
       if (code) throw { code };
       return next;
     });
-    update({ syncState: 'syncing', taskId: `task-${status.sequence}`, lastError: null });
-    void publish();
+    if (!params.has('delaySyncStart') || attempts.sync !== 1) void startSync();
     return result;
   }
   if (command === 'cloud_sync_e2ee_cancel') {
@@ -233,6 +292,8 @@ const { PresenceModal } = await import('../../src/ui/overlays/Modal');
 const { WebSearchSection } = await import('../../src/features/settings/sections/WebSearchSection');
 const { GlobalDownloadProgress } =
   await import('../../src/features/downloads/GlobalDownloadProgress');
+const { ExperimentalAsrSection, useExperimentalAsr } =
+  await import('../../src/features/local-asr/ExperimentalAsrSection');
 
 function Fixture() {
   const [visible, setVisible] = useState(true);
@@ -268,6 +329,23 @@ function WebSearchFixture() {
 
 function DownloadFixture() {
   const [open, setOpen] = useState(false);
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const inline = params.has('inlineDownloadStatus');
+  const experimental = useExperimentalAsr(modelsOpen || inline);
+  useEffect(() => {
+    fixture.refreshExperimental = experimental.refresh;
+    return () => {
+      fixture.refreshExperimental = async () => {};
+    };
+  }, [experimental.refresh]);
+  if (inline) {
+    return (
+      <main style={{ width: '100%', height: '100%', overflow: 'auto', padding: 16 }}>
+        <ExperimentalAsrSection controller={experimental} onOpenAsr={async () => {}} />
+      </main>
+    );
+  }
   return (
     <main style={{ width: '100%', padding: 16 }}>
       <button onClick={() => setOpen(true)}>Open download modal</button>
@@ -275,7 +353,30 @@ function DownloadFixture() {
         open={open}
         labelledBy="download-modal-title"
         onClose={() => setOpen(false)}
-        render={() => <h3 id="download-modal-title">Download modal</h3>}
+        render={() => (
+          <>
+            <h3 id="download-modal-title">Download modal</h3>
+            <button onClick={() => setModelsOpen(!modelsOpen)}>
+              {modelsOpen ? 'Leave local models' : 'Open local models'}
+            </button>
+            <div style={{ position: 'relative', minHeight: 250 }}>
+              <TransitionViewport contentKey={modelsOpen ? 'models' : 'other'} mode="page">
+                {modelsOpen ? (
+                  <ExperimentalAsrSection controller={experimental} onOpenAsr={async () => {}} />
+                ) : (
+                  <p>Other settings</p>
+                )}
+              </TransitionViewport>
+            </div>
+            {modelsOpen && <button onClick={() => setBlocked(true)}>Open unrelated dialog</button>}
+          </>
+        )}
+      />
+      <PresenceModal
+        open={blocked}
+        labelledBy="download-unrelated-title"
+        onClose={() => setBlocked(false)}
+        render={() => <h3 id="download-unrelated-title">Unrelated dialog</h3>}
       />
     </main>
   );
