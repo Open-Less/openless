@@ -2,6 +2,7 @@ import { TextField } from '../../ui/controls/TextField';
 import { Segmented } from '../../ui/controls/Segmented';
 import { useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Icon } from '../../components/Icon';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { Kbd } from '../../components/Kbd';
 import { SelectLite } from '../../components/ui/SelectLite';
@@ -354,7 +355,7 @@ export function ShortcutsSection() {
                   )
                 }
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </div>
           ))}
@@ -385,10 +386,11 @@ export function ShortcutsSection() {
                   />
                   <button
                     type="button"
+                    className="ol-shortcut-remove"
                     onClick={() => setDraftOpen(false)}
                     aria-label={t('common.cancel')}
                   >
-                    ×
+                    <Icon name="close" size={16} />
                   </button>
                 </div>
               ) : (

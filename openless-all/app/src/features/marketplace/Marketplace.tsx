@@ -1,5 +1,6 @@
 import { TextField } from '../../ui/controls/TextField';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useId } from 'react';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
 import { Icon } from '../../components/Icon';
@@ -16,8 +17,10 @@ import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Pill } from '../../ui/controls/Pill';
 import { useMarketplaceWorkspace } from './useMarketplaceWorkspace';
+import './marketplace.css';
 
 export function Marketplace() {
+  const uploadTitleId = useId();
   const {
     t,
     mobile,
@@ -588,6 +591,8 @@ export function Marketplace() {
       <PresenceModal
         open={Boolean(showUpload)}
         zIndex={mobile || stackLayout ? 70 : 60}
+        cardClassName="ol-marketplace-upload-dialog"
+        labelledBy={uploadTitleId}
         onClose={() => {
           if (uploading) return;
           setShowUpload(false);
@@ -599,6 +604,7 @@ export function Marketplace() {
           showUpload && (
             <>
               <h2
+                id={uploadTitleId}
                 style={{
                   margin: '0 0 12px',
                   fontSize: 16,
@@ -616,15 +622,7 @@ export function Marketplace() {
                   ? t('marketplace.upload.updateHint')
                   : t('marketplace.uploadHint', { login: prefs?.marketplaceDevLogin ?? '' })}
               </div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                  maxHeight: 360,
-                  overflow: 'auto',
-                }}
-              >
+              <div className="ol-marketplace-upload-list ol-noscrollbar">
                 {localPacks.length === 0 ? (
                   <div
                     style={{
@@ -646,73 +644,24 @@ export function Marketplace() {
                       <button
                         key={p.id}
                         type="button"
+                        className="ol-marketplace-upload-option"
+                        aria-pressed={selected}
                         disabled={uploading}
                         onClick={() =>
                           setSelectedUploadPackId((prev) => (prev === p.id ? null : p.id))
                         }
-                        style={{
-                          textAlign: 'left',
-                          padding: 10,
-                          minHeight: uploadOriginPackId ? 44 : undefined,
-                          flexShrink: 0,
-                          border: `1px solid ${selected ? 'var(--ol-blue)' : 'var(--ol-line-strong)'}`,
-                          borderRadius: 'var(--ol-control-radius)',
-                          background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                        }}
                       >
-                        {/* Selection circle: empty when unselected; solid blue + white check when selected */}
-                        <span
-                          style={{
-                            flexShrink: 0,
-                            width: 18,
-                            height: 18,
-                            borderRadius: 'var(--ol-radius)',
-                            border: selected
-                              ? '1px solid var(--ol-blue)'
-                              : '1px solid var(--ol-line-strong)',
-                            background: selected ? 'var(--ol-blue)' : 'transparent',
-                            display: 'inline-grid',
-                            placeItems: 'center',
-                            color: '#fff',
-                            fontSize: 11,
-                            fontWeight: 'var(--ol-font-weight-bold)',
-                            transition: 'background 0.12s, border-color 0.12s',
-                          }}
-                        >
-                          {selected && '✓'}
+                        <span className="ol-marketplace-upload-check" aria-hidden="true">
+                          {selected && <Icon name="check" size={12} />}
                         </span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            {!uploadOriginPackId && <strong style={{ fontSize: 13 }}>{p.name}</strong>}
-                            {recommended && (
-                              <Pill size="sm" tone="blue">
-                                {t('marketplace.upload.recommendedBadge')}
-                              </Pill>
-                            )}
-                            {uploadOriginPackId && (
-                              <strong style={{
-                                fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap', marginInlineStart: 'auto',
-                              }} title={p.name}>{p.name}</strong>
-                            )}
-                          </div>
-                          {!uploadOriginPackId && (
-                            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-                              {p.description || t('marketplace.noDescription')}
-                            </div>
-                          )}
-                        </div>
+                        <strong className="ol-marketplace-upload-name" title={p.name}>
+                          {p.name}
+                        </strong>
+                        {recommended && (
+                          <Pill size="sm" tone="blue">
+                            {t('marketplace.upload.recommendedBadge')}
+                          </Pill>
+                        )}
                       </button>
                     );
                   })
@@ -818,8 +767,10 @@ export function Marketplace() {
                   title={t('common.close')}
                   onClick={() => setShowMyPacks(false)}
                   style={{
+                    flex: '0 0 30px',
                     width: 30,
                     height: 30,
+                    padding: 0,
                     borderRadius: 'var(--ol-r-md)',
                     display: 'inline-grid',
                     placeItems: 'center',
@@ -827,12 +778,9 @@ export function Marketplace() {
                     background: 'var(--ol-surface)',
                     color: 'var(--ol-ink-2)',
                     cursor: 'pointer',
-                    fontSize: 18,
-                    lineHeight: 1,
-                    fontWeight: 'var(--ol-font-weight-medium)',
                   }}
                 >
-                  ×
+                  <Icon name="close" size={16} />
                 </button>
               </div>
 

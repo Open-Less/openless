@@ -1,6 +1,7 @@
 import { TextField } from '../../ui/controls/TextField';
 import { useTranslation } from 'react-i18next';
 import type { CorrectionRule } from '../../api/contracts';
+import { Icon } from '../../components/Icon';
 import { useMobileLayout } from '../../lib/useMobileLayout';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
@@ -182,8 +183,12 @@ function CorrectionRuleChip({ rule, onToggle, onRemove }: CorrectionRuleChipProp
         onClick={onRemove}
         aria-label={t('vocab.corrections.removeAria')}
         style={{
+          display: 'inline-grid',
+          placeItems: 'center',
+          flex: '0 0 18px',
           width: 18,
           height: 18,
+          padding: 0,
           borderRadius: 'var(--ol-radius)',
           border: 0,
           background: 'var(--ol-control-muted)',
@@ -191,7 +196,7 @@ function CorrectionRuleChip({ rule, onToggle, onRemove }: CorrectionRuleChipProp
           cursor: 'default',
         }}
       >
-        ×
+        <Icon name="close" size={12} />
       </button>
     </span>
   );

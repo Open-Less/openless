@@ -317,7 +317,9 @@ button:disabled {
   color: var(--ol-ink-3);
 }
 .ol-shortcut-remove {
-  font-size: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
   color: var(--ol-ink-3);
 }
 .ol-shortcut-pack-add {
