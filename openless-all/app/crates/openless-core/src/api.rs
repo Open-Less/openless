@@ -10105,7 +10105,9 @@ impl OpenLessBackend {
         let mut state = self.state.write().expect("backend state lock poisoned");
         let Some(snapshot) = state.session_mut(session_id) else { return; };
         snapshot.phase = DictationPhase::Failed;
-        snapshot.message = Some(format!("{:?}", error.code));
+        snapshot.message = Some(if error.code == BackendErrorCode::InvalidState && error.is_target_unavailable() {
+            "input_target_changed".to_string()
+        } else { format!("{:?}", error.code) });
         self.main_dictation_trace.record(
             session_id,
             format_args!("stage=terminal phase=failed code={:?}", error.code),

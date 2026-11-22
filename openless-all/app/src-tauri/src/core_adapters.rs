@@ -4236,7 +4236,8 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "windows")]
         let ime_target = crate::selection::ime_target_for_selection(&insertion_target);
         #[cfg(target_os = "macos")]
-        // Legacy macOS composition preferences must not start AX range capture.
+        // Position safety uses the shared range reader, never a live composition
+        // or a document-text capture triggered by legacy composition preferences.
         let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
@@ -4270,16 +4271,15 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
-            // Retain the target captured before context/credential awaits in
-            // the insertion resource. Every later write must reactivate it; a
-            // failed restore becomes an explicit error instead of typing into
-            // whichever application happens to be focused at the end.
+            // Retain the destination captured before context/credential awaits.
+            // Every write must still match its original range and capture
+            // generation; never reactivate an app or follow the current caret.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
             #[cfg(not(mobile))]
             if !crate::selection::selection_insertion_target_is_current(&insertion_target) {
                 return Err(BackendError::new(BackendErrorCode::InvalidState,
-                    "original input target changed; no text was inserted"));
+                    "original input target or position changed or is unavailable; no text was inserted").target_unavailable());
             }
             #[cfg(target_os = "windows")]
             if let Some(handle) = app.lock().as_ref() {
@@ -4296,7 +4296,8 @@ impl CoreTextInserter for TauriTextInserter {
                     )
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
-                    context.uses_llm_polisher()
+                    !crate::selection::dictation_target_requires_position(&insertion_target)
+                        && context.uses_llm_polisher()
                         && !context.insertion.composition_input
                         && openless_core::streaming_insert::streaming_insert_eligible(
                         context.insertion.streaming,
@@ -4792,8 +4793,8 @@ impl TauriTextInsertionSession {
             .ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::InvalidState,
-                    "original input target changed; no text was inserted",
-                )
+                    "original input target or position changed or is unavailable; no text was inserted",
+                ).target_unavailable()
             })
     }
 
@@ -5212,6 +5213,10 @@ fn replace_unwritten_target<T>(
 
 impl TextInsertionSession for TauriTextInsertionSession {
     fn supports_streaming(&self) -> bool {
+        // A position-checked destination is one final delivery. Re-reading the
+        // captured range after our own prefix would reject the remaining text;
+        // guessing an updated range would instead admit user caret movement.
+        if crate::selection::dictation_target_requires_position(&self.insertion_target) { return false; }
         #[cfg(target_os = "macos")]
         {
             self.streaming_ready

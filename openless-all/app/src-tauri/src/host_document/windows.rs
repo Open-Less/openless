@@ -85,6 +85,35 @@ pub(crate) fn focused_input_identity() -> Option<Vec<i32>> {
     }).ok().filter(|identity| !identity.is_empty())
 }
 
+/// EM_GETSEL exposes exact UTF-16 coordinates without reading document text.
+/// UIA identity alone cannot establish an insertion position in browser/custom
+/// controls. Those controls deliberately return None instead of a guessed caret.
+pub(crate) fn focused_input_position() -> Option<(u64, u64)> {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetGUIThreadInfo, GetWindowThreadProcessId, SendMessageTimeoutW,
+        GUITHREADINFO, SMTO_ABORTIFHUNG, SMTO_BLOCK,
+    };
+    unsafe {
+        let foreground = GetForegroundWindow();
+        let thread = GetWindowThreadProcessId(foreground, None);
+        let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+        if thread == 0 || GetGUIThreadInfo(thread, &mut info).is_err() || info.hwndFocus.0.is_null() { return None; }
+        let mut class = [0u16; 128];
+        let size = GetClassNameW(info.hwndFocus, &mut class);
+        if size <= 0 { return None; }
+        let class = String::from_utf16_lossy(&class[..size as usize]).to_ascii_lowercase();
+        if class != "edit" && !class.starts_with("richedit") { return None; }
+        let (mut start, mut end) = (u32::MAX, u32::MAX);
+        let mut result = 0usize;
+        const EM_GETSEL: u32 = 0x00b0;
+        if SendMessageTimeoutW(info.hwndFocus, EM_GETSEL, WPARAM(&mut start as *mut u32 as usize),
+            LPARAM(&mut end as *mut u32 as isize), SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, Some(&mut result)).0 == 0
+            || start == u32::MAX || end < start { return None; }
+        Some((start as u64, (end - start) as u64))
+    }
+}
+
 pub(super) fn read_qa_selection() -> Option<String> {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia

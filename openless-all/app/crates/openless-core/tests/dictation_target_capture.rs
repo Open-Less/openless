@@ -17,6 +17,9 @@ use openless_core::{
 };
 use tokio::sync::Notify;
 
+#[path = "../../../src-tauri/src/selection/target_position.rs"]
+mod target_position;
+
 #[derive(Default)]
 struct DelayedCredentials {
     store: InMemoryCredentialStore,
@@ -78,6 +81,8 @@ struct Focus {
     context_captured: Vec<&'static str>,
     prepared: Vec<&'static str>,
     delivered: Vec<(&'static str, String)>,
+    generation: u64,
+    position: Option<(u64, u64)>,
 }
 
 struct FocusContextAdapter {
@@ -122,17 +127,23 @@ impl HostContextAdapter for FocusContextAdapter {
 struct FocusInserter {
     focus: Arc<Mutex<Focus>>,
     target: Option<&'static str>,
+    enforce_position: bool,
+    position: Option<(u64, Option<(u64, u64)>)>,
 }
 
 impl TextInserter for FocusInserter {
+    fn defer_preparation_until_stop(&self) -> bool { self.enforce_position }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let mut focus = self.focus.lock().unwrap();
         let target = focus.current;
         focus.captured.push(target);
+        if self.enforce_position { focus.generation += 1; }
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
                 focus: self.focus.clone(),
                 target: Some(target),
+                enforce_position: self.enforce_position,
+                position: self.enforce_position.then_some((focus.generation, focus.position)),
             }),
             host_context: Arc::new(FocusContextAdapter {
                 focus: self.focus.clone(),
@@ -149,6 +160,11 @@ impl TextInserter for FocusInserter {
         // Like the native adapter, an uncaptured inserter sees the current
         // foreground target. This makes the old late-capture route fail.
         let mut focus = self.focus.lock().unwrap();
+        if self.position.is_some_and(|(generation, position)| !target_position::unchanged(
+            generation, position, focus.generation, focus.position)) {
+            return Box::pin(async { Err(BackendError::new(BackendErrorCode::InvalidState,
+                "original input position changed; no text was inserted").target_unavailable()) });
+        }
         let target = self.target.unwrap_or(focus.current);
         focus.prepared.push(target);
         let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession {
@@ -203,6 +219,13 @@ impl Fixture {
     async fn with_engine(
         build_engine: impl FnOnce(Arc<DelayedCredentials>) -> Arc<dyn openless_core::DictationEngine>,
     ) -> Self {
+        Self::with_position_engine(build_engine, false).await
+    }
+
+    async fn with_position_engine(
+        build_engine: impl FnOnce(Arc<DelayedCredentials>) -> Arc<dyn openless_core::DictationEngine>,
+        enforce_position: bool,
+    ) -> Self {
         let directory = std::env::temp_dir().join(format!("openless-target-{}", SessionId::new()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(
@@ -217,6 +240,8 @@ impl Fixture {
             context_captured: Vec::new(),
             prepared: Vec::new(),
             delivered: Vec::new(),
+            generation: 0,
+            position: Some((4, 0)),
         }));
         let mut dependencies = BackendDependencies::unsupported();
         dependencies.credential_store = credentials.clone();
@@ -225,6 +250,8 @@ impl Fixture {
         dependencies.text_inserter = Arc::new(FocusInserter {
             focus: focus.clone(),
             target: None,
+            enforce_position,
+            position: None,
         });
         let backend = Arc::new(
             OpenLessBackend::new(
@@ -336,6 +363,81 @@ async fn no_insertion_skips_target_capture_and_native_preparation() {
     assert!(focus.captured.is_empty());
     assert!(focus.prepared.is_empty());
     assert!(focus.delivered.is_empty());
+}
+
+#[tokio::test]
+async fn delayed_result_never_uses_a_moved_caret_or_a_successor_capture_in_the_same_control() {
+    use openless_core::{DictationEngine, EngineFailure, EngineProgressSink, EngineResult};
+
+    struct DelayedResult {
+        inner: FixtureDictationEngine,
+        finishing: AtomicBool,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+    impl DictationEngine for DelayedResult {
+        fn start(&self, id: SessionId, context: Arc<DictationContext>, progress: Arc<dyn EngineProgressSink>)
+            -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.start(id, context, progress)
+        }
+        fn stop_recording(&self, _: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+            Box::pin(async { Ok(true) })
+        }
+        fn finish(&self, id: SessionId, progress: Arc<dyn EngineProgressSink>)
+            -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            let first = !self.finishing.swap(true, Ordering::AcqRel);
+            let entered = self.entered.clone();
+            let release = self.release.clone();
+            let finishing = self.inner.finish(id, progress);
+            Box::pin(async move {
+                if first { entered.notify_one(); release.notified().await; }
+                finishing.await
+            })
+        }
+        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> { self.inner.cancel(id) }
+    }
+
+    for (initial, moved, next_capture) in [
+        (Some((4, 0)), Some((12, 0)), false),
+        (Some((4, 0)), Some((12, 0)), true),
+        (Some((4, 0)), Some((4, 0)), true),
+        (None, None, false),
+    ] {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let engine = Arc::new(DelayedResult {
+            inner: FixtureDictationEngine::successful("spoken", "retained result"),
+            finishing: AtomicBool::new(false), entered: entered.clone(), release: release.clone(),
+        });
+        let fixture = Fixture::with_position_engine(|_| engine, true).await;
+        fixture.credentials.waited.store(true, Ordering::Release);
+        fixture.focus.lock().unwrap().position = initial;
+        let mut events = fixture.backend.subscribe();
+        let first = fixture.backend.start_dictation().await.unwrap();
+        let stopping = tokio::spawn({ let backend = fixture.backend.clone(); async move { backend.stop_dictation_session(first).await } });
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
+        fixture.focus.lock().unwrap().position = moved;
+        let second = if next_capture { Some(fixture.backend.start_dictation().await.unwrap()) } else { None };
+        release.notify_one();
+        let error = stopping.await.unwrap().unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidState);
+        assert!(error.is_target_unavailable());
+        assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event|
+            event.session_id == Some(first) && matches!(event.kind,
+                openless_core::BackendEventKind::DictationStateChanged(snapshot)
+                    if snapshot.message.as_deref() == Some("input_target_changed"))));
+        assert!(fixture.focus.lock().unwrap().delivered.is_empty(), "old result reached the new caret");
+        let history = fixture.backend.list_history().unwrap();
+        let first_entry = history.iter().find(|entry| entry.id == first.to_string()).unwrap();
+        assert_eq!(first_entry.final_text, "retained result");
+        assert_eq!(first_entry.error_code.as_deref(), Some("insertTargetChanged"));
+        if let Some(second) = second {
+            assert_eq!(fixture.backend.snapshot().dictation.session_id, Some(second));
+            let result = fixture.backend.stop_dictation_session(second).await.unwrap();
+            assert_eq!(result.session_id, second);
+            assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
+        }
+    }
 }
 
 #[tokio::test]

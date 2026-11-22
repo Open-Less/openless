@@ -41,6 +41,10 @@ mod windows;
 pub(crate) use windows::insert_with_delivery_check;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::focused_input_identity;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::focused_input_position;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::focused_input_position;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome, LiveComposition};

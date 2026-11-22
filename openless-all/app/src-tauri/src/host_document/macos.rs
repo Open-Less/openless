@@ -404,6 +404,20 @@ unsafe fn copy_selected_range(focused: AxUiElementRef) -> Option<CFRange> {
     (ok != 0).then_some(range)
 }
 
+/// Selection coordinates only: reuse the same gated AX reader as delivery
+/// verification without reading AXValue, selected text or surrounding text.
+pub(crate) fn focused_input_position() -> Option<(u64, u64)> {
+    unsafe {
+        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate()) else {
+            return None;
+        };
+        let range = copy_selected_range(element);
+        CFRelease(element as CFTypeRef);
+        let range = range.filter(|range| range.location >= 0 && range.length >= 0)?;
+        Some((range.location as u64, range.length as u64))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct VoiceEditTarget {
     element: SendableElement,

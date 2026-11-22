@@ -23,6 +23,8 @@ use std::time::Duration;
 #[cfg(any(target_os = "windows", test))]
 #[path = "selection/clipboard_capture.rs"]
 mod clipboard_capture;
+#[path = "selection/target_position.rs"]
+mod target_position;
 #[cfg(target_os = "windows")]
 use clipboard_capture::ClipboardPollOutcome;
 
@@ -63,6 +65,8 @@ pub struct SelectionContext {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget {
     strict_input_target: bool,
+    dictation_generation: u64,
+    dictation_position: Option<(u64, u64)>,
     #[cfg(target_os = "windows")]
     dictation_control: Option<Vec<i32>>,
     #[cfg(target_os = "windows")]
@@ -392,6 +396,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 pub(crate) fn capture_dictation_insertion_target() -> SelectionInsertionTarget {
     let mut target = capture_selection_insertion_target();
     target.strict_input_target = true;
+    target.dictation_generation = DICTATION_TARGET_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
     #[cfg(target_os = "windows")]
     { target.dictation_control = crate::host_document::focused_input_identity(); }
     #[cfg(target_os = "macos")]
@@ -401,10 +406,27 @@ pub(crate) fn capture_dictation_insertion_target() -> SelectionInsertionTarget {
             app.dictation_window = app.front_app_pid.and_then(macos_front_window_id);
             app.dictation_element = macos_ax::capture_focused_element();
         }
+        target.dictation_position = crate::host_document::focused_input_position();
         return target;
     }
+    #[cfg(target_os = "windows")]
+    { target.dictation_position = crate::host_document::focused_input_position(); }
     #[cfg(not(target_os = "macos"))]
     target
+}
+
+// A later capture supersedes the pending keyboard destination even when it
+// happens to have the same native control and caret. This is target freshness,
+// not a second recording/session registry.
+static DICTATION_TARGET_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn dictation_target_requires_position(target: &SelectionInsertionTarget) -> bool {
+    target.strict_input_target
+}
+
+fn dictation_position_is_unchanged(target: &SelectionInsertionTarget, generation: u64, position: Option<(u64, u64)>) -> bool {
+    !target.strict_input_target || target_position::unchanged(
+        target.dictation_generation, target.dictation_position, generation, position)
 }
 
 #[cfg(target_os = "macos")]
@@ -473,6 +495,10 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
 /// Check that the foreground/focused target fingerprint has not changed since capture.
 /// Windows callers use this as a document-read fence, before and after synchronous UIA calls.
 pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionTarget) -> bool {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if target.strict_input_target && !dictation_position_is_unchanged(target,
+        DICTATION_TARGET_GENERATION.load(std::sync::atomic::Ordering::Acquire),
+        crate::host_document::focused_input_position()) { return false; }
     #[cfg(target_os = "windows")]
     {
         let Some(captured) = target.windows else {
