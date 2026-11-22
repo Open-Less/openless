@@ -38,7 +38,8 @@ export function RecentHistory({
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        overflow: 'hidden',
+        // Keep the inner list's full wheel hit area in WebKit.
+        overflow: 'visible',
       }}
     >
       <div

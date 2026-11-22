@@ -52,6 +52,7 @@ mod native_audio_cue;
 mod native_capsule;
 mod qa_adapter;
 mod recording_companion;
+pub(crate) use recording_companion::ask_anything_available;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // 仅桌面端。详见 issue #470。
@@ -2118,11 +2119,6 @@ pub fn log_dir_path() -> std::path::PathBuf {
     {
         std::env::temp_dir().join("OpenLess")
     }
-}
-
-// Keep this in sync with the frontend's version-flavor check.
-pub(crate) fn ask_anything_available() -> bool {
-    !env!("CARGO_PKG_VERSION_PRE").starts_with("dev.noask.")
 }
 
 pub(crate) fn require_ask_anything() -> Result<(), String> {

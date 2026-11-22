@@ -118,7 +118,10 @@ for (const zoom of ['0.9', '1', '1.1']) {
     await page
       .getByRole('option', { name: `${Math.round(Number(zoom) * 100)}%`, exact: true })
       .click();
-    await expect(page.locator('.ol-select-popup[data-open]')).toHaveCount(0);
+    await expect(page.locator('html')).toHaveCSS('--ol-interface-scale', zoom);
+    await expect(
+      page.locator('.ol-select-popup:is([data-open], [data-ending-style]):visible'),
+    ).toHaveCount(0);
     const trigger = page.getByRole('combobox', { name: '字体系列', exact: true });
     await trigger.press('Enter');
     const popup = page.locator('.ol-select-popup[data-open]');
