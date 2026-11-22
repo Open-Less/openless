@@ -286,9 +286,8 @@ index 14d0521..dc54279 100644
      async fn capture_dictation_context(
          &self,
          options: &DictationStartOptions,
-@@ -9210,6 +9430,11 @@ impl OpenLessBackend {
-     ) -> Result<DictationContext, BackendError> {
-         let preferences = self.get_preferences();
+@@ -9210,5 +9430,10 @@ impl OpenLessBackend {
+             .get_for_dictation(assigned_ids.iter().map(String::as_str), active_id)?;
          let mut captured_options = options.clone();
 +        if let Some(target) = &options.translation_target_language {
 +            captured_options.translation_target_language = Some(

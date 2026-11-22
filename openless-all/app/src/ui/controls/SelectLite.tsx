@@ -1,3 +1,4 @@
+import { FieldFrame } from './TextField';
 // Compatibility facade: every dropdown uses Base UI rather than maintaining a
 // second positioning, keyboard, focus, scroll and exit-animation implementation.
 import {
@@ -201,14 +202,14 @@ function SearchableSelect({
             initialFocus={inputRef}
             style={popupStyle}
           >
-            <div className="ol-select-search">
-              <Icon name="search" size={13} />
+            <FieldFrame className="ol-select-search" searchIcon>
               <Combobox.Input
                 ref={inputRef}
+                className="ol-field-control"
                 placeholder={searchPlaceholder}
                 aria-label={searchPlaceholder}
               />
-            </div>
+            </FieldFrame>
             <Combobox.Empty className="ol-select-empty">{emptyMessage}</Combobox.Empty>
             <Combobox.List className="ol-select-list">
               {(item: string) => {

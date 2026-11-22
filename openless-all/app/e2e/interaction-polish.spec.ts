@@ -65,7 +65,14 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
   });
   await expect.poll(distance).toBeLessThanOrEqual(1);
   const held = await viewport.evaluate((node) => {
-    node.dispatchEvent(new Event('touchmove'));
+    for (const [type, clientY] of [
+      ['touchstart', 20],
+      ['touchmove', 50],
+    ] as const) {
+      const event = new Event(type);
+      Object.defineProperty(event, 'touches', { value: [{ clientY }] });
+      node.dispatchEvent(event);
+    }
     node.scrollTop -= 30;
     node.dispatchEvent(new Event('scroll'));
     const value = node.scrollTop;
@@ -114,6 +121,11 @@ test('QA jump control appears only more than 120 pixels from the latest message'
     node.scrollTop = node.scrollHeight;
     node.dispatchEvent(new Event('scroll'));
   });
+  // Finish the initial follow-to-bottom animation before simulating a reader scroll.
+  await expect(viewport).not.toHaveAttribute('data-autoscrolling');
+  await expect
+    .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
+    .toBeLessThanOrEqual(1);
   await expect(jump).toHaveAttribute('data-active', 'false');
   await viewport.evaluate((node) => {
     node.dispatchEvent(new Event('touchmove'));
@@ -126,6 +138,7 @@ test('QA jump control appears only more than 120 pixels from the latest message'
     node.dispatchEvent(new Event('scroll'));
   });
   await expect(jump).toHaveAttribute('data-active', 'true');
+  await expect(jump).toHaveCSS('opacity', '1');
   await jump.click();
   await expect
     .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))

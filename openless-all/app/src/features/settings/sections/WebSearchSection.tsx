@@ -1,18 +1,21 @@
+import { TextField } from '../../../ui/controls/TextField';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
 import { Button as Btn } from '../../../ui/controls/Button';
 import { Card } from '../../../ui/layout/Card';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
+import { SelectLite } from '../../../ui/controls/SelectLite';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
+import './web-search.css';
 
 function isInteractive(element: HTMLElement | null) {
   return element?.isConnected && !element.closest('[inert]');
 }
 
 export interface WebSearchConfig {
-  provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';
+  provider:
+    'auto' | 'free' | 'hybrid' | 'free_serp' | 'bing' | 'tavily' | 'brave' | 'searxng' | 'off';
   apiKey: string;
   endpoint: string;
 }
@@ -83,50 +86,40 @@ export function WebSearchSection() {
     };
   }, [i18n, notify]);
   return (
-    <Card>
+    <Card className="ol-web-search-settings">
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '划词追问和 FN + 空格随便问可由模型自主搜索。仅在需要时发送搜索词；搜索结果会作为参考资料交给当前模型。',
-          'Selection Q&A and voice Ask can search when the model needs external information. Search queries go to the search provider; results go to your current model.',
-        )}
-      </p>
-      <p>
-        {text(
-          '仅用于传统和多模态管线。默认使用免费 Bing 网页搜索，无需 API Key；可改用自己的搜索服务。DeepSeek 大统一使用独立的原生搜索。免费网页接口可能受网络或限流影响。',
-          'For traditional and multimodal pipelines. Auto uses free Bing web search without an API key, or choose your own search service. DeepSeek suite uses its separate native search. Free search availability depends on connectivity and rate limits.',
+          '为提问提供联网搜索。搜索服务会接收搜索词与 IP；混合搜索使用你的 DeepSeek API Key，按官方标准计费。',
+          'Search the web for questions. Providers receive queries and your IP; Hybrid Search uses your DeepSeek API key and is billed by DeepSeek.',
         )}
       </p>
       {config && (
         <>
           <SettingRow label={text('搜索服务', 'Search provider')}>
-            <select
-              aria-label="Web Search"
-              style={inputStyle}
+            <SelectLite
+              ariaLabel={text('搜索服务', 'Search provider')}
+              popupClassName="ol-web-search-options"
               value={config.provider}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  provider: e.target.value as WebSearchConfig['provider'],
-                  apiKey: '',
-                  endpoint: '',
-                })
-              }
-            >
-              <option value="free">{text('Bing 免费网页搜索', 'Bing free web search')}</option>
-              <option value="tavily">Tavily</option>
-              <option value="brave">Brave Search</option>
-              <option value="searxng">SearXNG</option>
-              <option value="off">{text('关闭', 'Off')}</option>
-            </select>
+              onChange={(provider) => setConfig({ ...config, provider: provider as WebSearchConfig['provider'], apiKey: '', endpoint: '' })}
+              options={[
+                { value: 'free', label: text('免费搜索', 'Free Search') },
+                { value: 'hybrid', label: text('混合搜索（免费 + DeepSeek）', 'Hybrid Search (Free + DeepSeek)') },
+                { value: 'free_serp', label: 'FreeSerp' },
+                { value: 'bing', label: 'Bing (RSS)' },
+                { value: 'tavily', label: 'Tavily' },
+                { value: 'brave', label: 'Brave Search' },
+                { value: 'searxng', label: 'SearXNG' },
+                { value: 'off', label: text('关闭', 'Off') },
+              ]}
+            />
           </SettingRow>
-          {['tavily', 'brave'].includes(config.provider) && (
-            <SettingRow label="API Key">
-              <input
+          {['tavily', 'brave', 'hybrid'].includes(config.provider) && (
+            <SettingRow label={config.provider === 'hybrid' ? 'DeepSeek API Key' : 'API Key'}>
+              <TextField
                 aria-label="Search API Key"
                 type="password"
                 autoComplete="off"
-                style={inputStyle}
                 value={config.apiKey}
                 onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
               />
@@ -136,15 +129,14 @@ export function WebSearchSection() {
             <SettingRow
               label="SearXNG URL"
               desc={text(
-                '填写已启用 JSON 输出的 /search 地址。',
-                'Enter a /search endpoint with JSON output enabled.',
+                '可填写允许自动查询且已启用 JSON 的公开 /search 地址，不要求自建。',
+                'You can use a public /search endpoint that permits automated queries and enables JSON. Self-hosting is not required.',
               )}
             >
-              <input
+              <TextField
                 aria-label="SearXNG URL"
                 type="url"
                 placeholder="https://search.example.com/search"
-                style={inputStyle}
                 value={config.endpoint}
                 onChange={(e) => setConfig({ ...config, endpoint: e.target.value })}
               />
@@ -154,7 +146,7 @@ export function WebSearchSection() {
             variant="primary"
             disabled={
               busy ||
-              (['tavily', 'brave'].includes(config.provider) && !config.apiKey.trim()) ||
+              (['tavily', 'brave', 'hybrid'].includes(config.provider) && !config.apiKey.trim()) ||
               (config.provider === 'searxng' && !/^https?:\/\//.test(config.endpoint))
             }
             onClick={async () => {

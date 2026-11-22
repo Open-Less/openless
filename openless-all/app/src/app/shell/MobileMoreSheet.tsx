@@ -4,7 +4,7 @@ import {
   MobileNavigationSheet,
   type MobileTabSelect,
 } from './MobileNavigationSheet';
-import { MORE_TABS, type AppTab } from './navigation';
+import { MORE_TABS, isTabAvailable, type AppTab } from './navigation';
 
 export function MobileMoreSheet({
   open,
@@ -26,6 +26,7 @@ export function MobileMoreSheet({
         <MobileNavigationItem
           key={id}
           active={currentTab === id}
+          disabled={!isTabAvailable(id)}
           icon={icon}
           label={t(`nav.${id}`)}
           onClick={() => {

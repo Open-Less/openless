@@ -1,5 +1,8 @@
+import { TextField } from '../../ui/controls/TextField';
+import { Segmented } from '../../ui/controls/Segmented';
 import { useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Icon } from '../../components/Icon';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { Kbd } from '../../components/Kbd';
 import { SelectLite } from '../../components/ui/SelectLite';
@@ -28,6 +31,7 @@ import { setQaHotkey } from '../../api/qa';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 import type { ShortcutBinding, StylePack, StylePackHotkey } from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
+import { ASK_ANYTHING_AVAILABLE } from '../../lib/appVersion';
 
 export function ShortcutsSection() {
   const { t } = useTranslation();
@@ -61,6 +65,7 @@ export function ShortcutsSection() {
     desc?: string;
     group: string;
     binding: ShortcutBinding | null;
+    unavailable?: boolean;
     save: (binding: ShortcutBinding) => Promise<void>;
     disable?: () => Promise<void>;
     reset?: () => Promise<void>;
@@ -102,6 +107,7 @@ export function ShortcutsSection() {
     {
       id: 'qa',
       label: t('selectionAsk.title'),
+      unavailable: !ASK_ANYTHING_AVAILABLE,
       group: 'recording',
       desc: t('askAnything.auxiliaryHint', { key: formatComboLabel(prefs.dictationHotkey) }),
       binding: prefs.qaCompanionKey ? { primary: prefs.qaCompanionKey, modifiers: [] } : null,
@@ -241,7 +247,7 @@ export function ShortcutsSection() {
   return (
     <section className="ol-shortcuts" aria-label={t('settings.shortcuts.title')}>
       <div className="ol-shortcuts-toolbar">
-        <input
+        <TextField
           type="search"
           className="ol-settings-search-field"
           value={query}
@@ -257,29 +263,29 @@ export function ShortcutsSection() {
         <aside className="ol-shortcuts-filters">
           <nav aria-label={tr('category')}>
             <h3>{tr('category')}</h3>
-            {['all', 'recording', 'styles', 'system'].map((id) => (
-              <button
-                type="button"
-                key={id}
-                aria-pressed={category === id}
-                onClick={() => setCategory(id)}
-              >
-                {tr(id)}
-              </button>
-            ))}
+            <Segmented
+              className="ol-shortcut-filter-options"
+              label={tr('category')}
+              value={category}
+              onChange={setCategory}
+              options={['all', 'recording', 'styles', 'system'].map((value) => ({
+                value,
+                label: tr(value),
+              }))}
+            />
           </nav>
           <nav aria-label={tr('status')}>
             <h3>{tr('status')}</h3>
-            {['all', 'assigned', 'unassigned'].map((id) => (
-              <button
-                type="button"
-                key={id}
-                aria-pressed={status === id}
-                onClick={() => setStatus(id)}
-              >
-                {tr(id)}
-              </button>
-            ))}
+            <Segmented
+              className="ol-shortcut-filter-options"
+              label={tr('status')}
+              value={status}
+              onChange={setStatus}
+              options={['all', 'assigned', 'unassigned'].map((value) => ({
+                value,
+                label: tr(value),
+              }))}
+            />
           </nav>
         </aside>
         <div className="ol-shortcut-results">
@@ -289,6 +295,7 @@ export function ShortcutsSection() {
               className="ol-shortcut-row"
               role="group"
               aria-label={command.label}
+              aria-disabled={command.unavailable}
               key={command.id}
             >
               <div>
@@ -297,6 +304,7 @@ export function ShortcutsSection() {
               </div>
               <ShortcutRecorder
                 value={command.binding}
+                disabled={command.unavailable}
                 onSave={command.save}
                 onDisable={command.disable}
                 onReset={command.reset}
@@ -347,7 +355,7 @@ export function ShortcutsSection() {
                   )
                 }
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </div>
           ))}
@@ -378,10 +386,11 @@ export function ShortcutsSection() {
                   />
                   <button
                     type="button"
+                    className="ol-shortcut-remove"
                     onClick={() => setDraftOpen(false)}
                     aria-label={t('common.cancel')}
                   >
-                    ×
+                    <Icon name="close" size={16} />
                   </button>
                 </div>
               ) : (

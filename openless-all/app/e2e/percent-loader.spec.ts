@@ -26,7 +26,7 @@ test('the counting percent loader covers startup and stays off settled pages', a
 
   const cover = page.locator('.ol-startup');
   await expect(cover).toHaveCSS('position', 'fixed');
-  await expect(cover).toHaveCSS('backdrop-filter', /blur/);
+  await expect(cover).toHaveCSS('backdrop-filter', 'none');
   await page.getByRole('button', { name: 'Switch page' }).click();
   await expect(page.locator('.ol-transition-viewport .ol-percent-loader')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Arrived' })).toBeVisible();

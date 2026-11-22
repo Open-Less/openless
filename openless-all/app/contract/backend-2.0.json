@@ -5,9 +5,72 @@
     "default": false,
     "scope": "device_local",
     "features": ["lessComputer", "claudeConsole"],
-    "disabledBehavior": ["hide_entries_and_windows", "unregister_less_computer_hotkeys", "reject_runtime_admission", "cancel_active_tasks", "preserve_feature_settings"],
+    "disabledBehavior": [
+      "hide_entries_and_windows",
+      "unregister_less_computer_hotkeys",
+      "reject_runtime_admission",
+      "cancel_active_tasks",
+      "preserve_feature_settings"
+    ],
     "disabledErrorCode": "permission_denied",
     "cloudSync": "excluded"
+  },
+  "appStyleRouting": {
+    "hosts": ["macos", "windows"],
+    "categories": "catalog.categories[].id",
+    "catalogApi": {
+      "baseUrl": "MarketplaceConfig.base_url",
+      "path": "/v1/app-catalog",
+      "cacheFile": "input-app-catalog-cache.json",
+      "refresh": "background_at_startup_and_on_page_request",
+      "offline": "last_good_cache_then_manual_style",
+      "embeddedApplicationTable": false
+    },
+    "scope": "device_local",
+    "cloudSync": "excluded",
+    "snapshot": {
+      "catalog": { "schemaVersion": 1, "reviewedAt": "", "categories": [], "clients": [] },
+      "memberships": {},
+      "categories": { "coding": "builtin.structured" },
+      "apps": [
+        {
+          "app": { "id": "macos:com.microsoft.VSCode", "name": "Visual Studio Code" },
+          "memberId": "catalog:vscode",
+          "category": "coding",
+          "seen": true,
+          "stylePackId": null
+        }
+      ]
+    },
+    "commands": {
+      "get_app_style_routing": { "result": "AppStyleRouting" },
+      "refresh_app_style_catalog": { "result": "AppStyleRouting" },
+      "set_app_style_assignment": {
+        "args": {
+          "assignment": [
+            { "target": "category", "category": "coding", "stylePackId": "builtin.structured" },
+            { "target": "app", "appId": "macos:com.microsoft.VSCode", "stylePackId": null },
+            { "target": "membership", "memberId": "catalog:vscode", "category": "coding" }
+          ]
+        },
+        "result": "AppStyleRouting"
+      },
+      "clear_input_app_history": { "result": "AppStyleRouting" },
+      "get_input_app_icons": { "result": "map<appId, PNG data URL>" }
+    },
+    "precedence": [
+      "explicit_session_pack",
+      "specific_app",
+      "app_category",
+      "current_pack",
+      "enabled_default"
+    ],
+    "maxPacksPerTarget": 1,
+    "sharedPacksAllowed": true,
+    "maxCategoriesPerMember": 1,
+    "membershipOverrides": "device_local_replace_or_explicitly_unclassify",
+    "applicationListInvalidatedBy": "history_changed",
+    "unavailableAssignment": "keep_and_skip"
   },
   "startupSnapshot": {
     "fields": ["contractVersion", "backend"],

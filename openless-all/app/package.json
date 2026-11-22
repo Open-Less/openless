@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.3-Beta.1",
+  "version": "2.0.3-dev.noask.20261122.5",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
@@ -46,6 +46,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.8",
+    "figma-squircle": "^1.1.0",
     "framer-motion": "^12.39.0",
     "i18next": "^26.0.8",
     "lucide-react": "^1.23.0",

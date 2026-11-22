@@ -4,6 +4,10 @@ import { Overview } from '../../features/overview/Overview';
 import type { AppTab } from './navigation';
 
 const loaders = {
+  appStyles: () =>
+    import('../../features/style-packs/AppStyleRouting').then((module) => ({
+      default: module.AppStyleRouting,
+    })),
   usage: () => import('../../features/usage/Usage').then((module) => ({ default: module.Usage })),
   vocab: () =>
     import('../../features/vocabulary/Vocab').then((module) => ({ default: module.Vocab })),
@@ -38,6 +42,7 @@ const pages: Partial<Record<AppTab, ComponentType>> = {
   usage: lazy(loaders.usage),
   vocab: lazy(loaders.vocab),
   style: lazy(loaders.style),
+  appStyles: lazy(loaders.appStyles),
   marketplace: lazy(loaders.marketplace),
   translation: lazy(loaders.translation),
   selectionAsk: SelectionAsk,

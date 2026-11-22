@@ -122,6 +122,7 @@ export const ja: typeof zhCN = {
     delete: 'クラウドバックアップを削除',
     working: '処理中…',
     cancelTask: '現在の処理をキャンセル',
+    cancelSync: '同期をキャンセル',
     cancelRequested: 'キャンセルを要求しました。処理の終了を待っています。',
     done: '同期設定を更新しました。',
     restored: 'クラウドのデータを復元しました。この端末固有の設定を確認してください。',
@@ -149,7 +150,8 @@ export const ja: typeof zhCN = {
     confirmAndContinue: '確認して続行',
     revealPassword: 'パスワードを表示（{{field}}）',
     concealPassword: 'パスワードを非表示（{{field}}）',
-    previewNotice: 'クラウド同期のプレビューです。サンプルのパスワードを使用してください。サーバーへの接続や認証情報の保存は行いません。',
+    previewNotice:
+      'クラウド同期のプレビューです。サンプルのパスワードを使用してください。サーバーへの接続や認証情報の保存は行いません。',
     passwordPolicy:
       '12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。',
     rememberKey: 'この端末の安全なストレージに解除キーを記憶する',
@@ -157,7 +159,7 @@ export const ja: typeof zhCN = {
     disableDescription:
       '以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。',
     confirmDisable: '同期をオフにする',
-    refreshBackup: 'クラウドバックアップを表示・更新',
+    refreshBackup: 'クラウドバックアップを表示',
     deleteTitle: '暗号化クラウドバックアップを削除しますか？',
     deleteDescription:
       'このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。',
@@ -175,6 +177,7 @@ export const ja: typeof zhCN = {
     replace: '同期対象のローカルデータをクラウドの内容で置換',
     replaceWarning:
       '同期範囲のローカルデータを置き換えます。ローカルの変更を残すにはマージを選んでください。',
+    mergeOverwriteDirection: '競合時に端末の項目を選ぶと、同期時にクラウドの項目を上書きします。クラウドを選ぶと端末の項目を上書きします。',
     restoreCheck: '復元方法と競合の選択を確認しました。',
     applyRestore: '復元を確認',
     conflictProgress: '競合を {{selected}} / {{total}} 件解決済み',
@@ -243,7 +246,8 @@ export const ja: typeof zhCN = {
       cancelled: '処理をキャンセルしました。',
       network: '同期サービスに接続できません。ネットワークを確認して再試行してください。',
       rateLimited: 'リクエストが多すぎます。しばらく待ってから再試行してください。',
-      deletePendingOperation: '以前のクラウド操作が確認できていません。しばらくしてから状態を更新し、削除を再試行してください。',
+      deletePendingOperation:
+        '以前のクラウド操作が確認できていません。しばらくしてから状態を更新し、削除を再試行してください。',
       outcomeUnknown:
         'クラウドの結果が未確定です。新しいバックアップを作る前に未確定の結果を確認してください。',
       recovery:
@@ -401,6 +405,7 @@ export const ja: typeof zhCN = {
     mobileRecordStart: '録音を開始',
     mobileRecordStop: '終了して送信',
     composerPlaceholder: '質問を入力。Enter で送信',
+    voiceInputPlaceholder: '音声入力中です',
     composerSend: '送信',
     statusIdle: '{{recordHotkey}} で質問',
     statusRecording: '録音中',
@@ -489,7 +494,7 @@ export const ja: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: 'パックを更新',
         withdraw: '取り下げ',
       },
       loadFailed: '自分の公開の読み込みに失敗：{{err}}',
@@ -839,7 +844,7 @@ export const ja: typeof zhCN = {
     dismiss: '閉じる',
   },
   vocab: {
-    selectAllVisible: '現在の結果を選択',
+    selectAllVisible: 'すべての結果を選択',
     selecting: '選択',
     doneSelecting: '完了',
     disabledWord: '停止中',
@@ -1174,7 +1179,7 @@ export const ja: typeof zhCN = {
     },
     history: {
       title: '履歴を保存',
-      desc: '有効時、Q&A 記録をローカルに保存。デフォルト OFF。',
+      desc: '「何でも質問」の履歴をこの端末に保存します。既定ではオフです。',
     },
     howto: {
       title: '使い方',
@@ -1201,7 +1206,7 @@ export const ja: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'マイクと録音',
-      recordingDesc: 'マイクの監視と認識、および監視と通知です。',
+      recordingDesc: 'マイクを選び、録音と通知音を設定します。',
       capsuleTitle: 'カプセルのスタイル',
       capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
       textInputTitle: '文字の挿入',
@@ -1210,6 +1215,7 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      polishStrategyTitle: '推敲ルール',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInputTitle: '文字入力',
@@ -1218,7 +1224,7 @@ export const ja: typeof zhCN = {
       cursorContextTitle: '認識',
       startupDiagnosticsTitle: '起動診断',
       cursorContextHint:
-        'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',
+        '初期設定で有効です。',
     },
     advancedGroups: {
       recording: '録音',
@@ -1281,7 +1287,6 @@ export const ja: typeof zhCN = {
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
     expressionLearning: {
-      clearHint: '消去後も、進行中の音声入力には開始時の好みが使われる場合があります。',
       lineBreaksMore: '改行を増やす',
       lineBreaksLess: '改行を減らす',
       exclamationsMore: '感嘆符を増やす',
@@ -1292,7 +1297,7 @@ export const ja: typeof zhCN = {
       title: '表現の習慣',
       enabled: '表現の習慣を学習',
       description:
-        '音声入力後の書式変更を端末内で観察し、表現の習慣には抽象的な統計のみを保存します。履歴は別に管理されます。繰り返し確認された改行や句読点の傾向を、選択した文字モデルへの短い指示として利用します。オフにすると学習は直ちに停止し、次の音声入力から適用されません。進行中の入力には取得済みの好みが使われる場合があります。',
+        '改行や句読点の好みを学習し、次回以降の文章調整に使います。',
       status: '安定した好み {{count}} 件',
       clear: '表現の習慣を消去',
       error: '表現の習慣を読み書きできませんでした。',
@@ -1314,19 +1319,17 @@ export const ja: typeof zhCN = {
         '自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。',
       seconds: '{{count}} 秒',
       characters: '{{count}} 文字',
-      changeHint:
-        '設定を変更すると現在の監視を終了し、未確認の候補を消去します。次の音声入力から適用されます。リセットしても有効化スイッチは変わりません。',
       reset: '設定値をリセット',
       saveError: '保存できませんでした。再試行してください。',
       description:
-        '挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。',
+        '音声入力後の手動修正を学習し、確認した単語を辞書に追加します。',
     },
     dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
+        '文章調整の際に、カーソル付近のテキストを参考としてモデルに送信します。',
     },
     localMigration: {
       title: 'ローカル設定の移行',
@@ -1426,13 +1429,13 @@ export const ja: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          '端末のエコー除去、ノイズ抑制、自動ゲインを使います。',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          '処理前後の録音スペクトルを比較します。',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
-        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        spectrumWaiting: '録音待ち',
         presets: 'Equalizer presets',
         choosePreset: 'Choose a preset',
         preset_normal: 'Flat',
@@ -1446,9 +1449,9 @@ export const ja: typeof zhCN = {
         aecLight: '軽量（低 CPU）',
         aecModel: 'モデル（高精度）',
         aecModelHint:
-          'モデル版はより強く抑圧しますが CPU は約 3 倍です。古い端末では軽量版を推奨します。',
+          'エコー抑制を強化し、CPU 使用量が増えます。',
         aecHint:
-          'スピーカー使用時の回り込みを抑えます。参照信号が必要なので、ヘッドホンならオフで構いません。',
+          'スピーカーの再生音がマイクに入ることで生じるエコーを抑えます。',
         buffer: '出力バッファ',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1458,7 +1461,7 @@ export const ja: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          'ノイズ除去、エコー抑制、音量、イコライザーを調整します。',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1466,11 +1469,11 @@ export const ja: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          '小さい音の区間の音量を下げます。',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          '声の響きと音色を調整します。',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1479,10 +1482,10 @@ export const ja: typeof zhCN = {
       },
       echoCancellationLabel: '再生エコーキャンセル',
       echoCancellationDesc:
-        '再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。',
+        '本機の再生音を参照して録音のエコーを抑えます。次の録音から適用します。',
       audioEnhancementLabel: '音声強調',
       audioEnhancementDesc:
-        'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
+        '背景ノイズを減らし、音量を自動調整します。次の録音から適用します。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1553,14 +1556,16 @@ export const ja: typeof zhCN = {
       polishSkipMaxCharsLabel: '短い入力は整形をスキップ（最大文字数）',
       polishSkipMaxCharsDesc:
         '空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。',
-      polishStrategyEnabledLabel: 'カスタム整形戦略を使う',
+      polishStrategyEnabledLabel: 'カスタムルールを使用',
       polishStrategyEnabledDesc:
         'ASR 後に制限付きのローカル戦略を実行します。エラー時は通常の整形に戻り、ファイル・ネットワーク・認証情報にはアクセスできません。',
-      polishStrategyScriptLabel: '整形戦略スクリプト',
+      polishStrategyEdit: '変更',
+      polishStrategyEditorTitle: '推敲ルールを編集',
+      polishStrategyScriptLabel: 'スクリプト',
       polishStrategyScriptDesc:
         'strategy(input) を定義し、skip、polish、request のいずれかを返します。不明な言語・信頼度・モデルは () です。',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: 'Agent 用スキルをコピー',
       polishStrategySkillCopied: 'Agent 用スキルをコピーしました',
       polishStrategySkillCopyFailed: 'コピーに失敗しました。クリップボードの権限を確認してください',
@@ -1581,15 +1586,17 @@ export const ja: typeof zhCN = {
       voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
       voiceActivationLocalOnly:
         '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
-      voiceActivationHotkeyLinked: "録音ショートカットと連動",
-      voiceActivationHotkeyLinkedDesc: "録音操作の代わりに、1回押すとウェイク監視を開始・一時停止します。起動直後は一時停止します。停止中はマイクの待機予熱を無効にしますが、他の録音は中断しません。監視はローカルで、音声入力は現在のサービスを使用します。",
-      voiceActivationDisabled: "音声起動は無効です",
-      voiceActivationPaused: "ウェイク監視を一時停止中",
-      voiceActivationPausing: "ウェイク監視を停止しています…",
-      voiceActivationStarting: "ウェイク監視を開始しています…",
-      voiceActivationListening: "開始フレーズを待機中",
-      voiceActivationDictating: "音声入力または終了処理中",
-      voiceActivationError: "監視を開始できません。モデル、マイク権限、デバイスを確認してください。",
+      voiceActivationHotkeyLinked: '録音ショートカットと連動',
+      voiceActivationHotkeyLinkedDesc:
+        '録音操作の代わりに、1回押すとウェイク監視を開始・一時停止します。起動直後は一時停止します。停止中はマイクの待機予熱を無効にしますが、他の録音は中断しません。監視はローカルで、音声入力は現在のサービスを使用します。',
+      voiceActivationDisabled: '音声起動は無効です',
+      voiceActivationPaused: 'ウェイク監視を一時停止中',
+      voiceActivationPausing: 'ウェイク監視を停止しています…',
+      voiceActivationStarting: 'ウェイク監視を開始しています…',
+      voiceActivationListening: '開始フレーズを待機中',
+      voiceActivationDictating: '音声入力または終了処理中',
+      voiceActivationError:
+        '監視を開始できません。モデル、マイク権限、デバイスを確認してください。',
       voiceActivationMultimodalModels:
         'ここで音声起動用モデルを準備します。音声入力には引き続き現在のマルチモーダルサービスを使用します。',
       voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',
@@ -1645,7 +1652,8 @@ export const ja: typeof zhCN = {
       validationTitle: '接続の確認',
       validationHint:
         '実際にリクエストを送信して設定を確認します。サービスの利用枠を消費する場合があります。設定の保存だけでは確認を実行しません。',
-      validationHintOmni: 'テキストによる接続確認を手動で送信します。サーバーの利用枠を消費する場合があります。',
+      validationHintOmni:
+        'テキストによる接続確認を手動で送信します。サーバーの利用枠を消費する場合があります。',
       autoSaveHint: '変更は自動保存されます。設定が終わったら、手動で接続を確認できます。',
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
@@ -2409,6 +2417,7 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      polishStrategy: '認識結果に応じて推敲を制御します。',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInput: '入力欄に表示するリアルタイム原文を設定します。',
@@ -2420,7 +2429,7 @@ export const ja: typeof zhCN = {
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
       debug: 'デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。',
       voiceEnhancement: '高度な音声処理、ノイズ低減、再生エコーの抑制を設定します。',
-      cursorContext: '推敲リクエストに使うカーソル付近の文脈と、短い入力の扱いを設定します。',
+      cursorContext: 'カーソルの文脈、修正学習、表現の好みを管理します。',
       startupDiagnostics: '起動時間、バックエンドの接続、遅延プローブを確認します。',
     },
     descriptions: {
@@ -2444,7 +2453,7 @@ export const ja: typeof zhCN = {
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
       advanced:
-        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning manual edits vocabulary learning Beta ',
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning manual edits vocabulary learning Beta 推敲ルール Rhai script',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 
@@ -2701,6 +2710,10 @@ export const ja: typeof zhCN = {
     activePill: '使用中',
     setDefault: 'デフォルトに設定',
     downloading: 'ダウンロード中',
+    cancelDownload: 'ダウンロードをキャンセル',
+    cancelDownloadTitle: '{{name}} のダウンロードをキャンセル',
+    cancellingDownload: 'ダウンロードをキャンセルしています…',
+    downloadFailed: 'モデルをダウンロードできませんでした',
     startDownload: 'ダウンロード開始',
     downloadNewModel: '新しいモデルをダウンロード',
     activeModelLabel: '使用中のモデル',

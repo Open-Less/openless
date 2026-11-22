@@ -8,6 +8,7 @@ import { useReducedMotion } from '../../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
+import { useMainCaptionTrace } from './useMainCaptionTrace';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getSettings } from '../../api/preferences';
 import { qaCancelTurn, qaStopRecording } from '../../api/qa';
@@ -543,7 +544,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         return;
       if (
         !(await events.transcript((payload) => {
-          const next = applyTranscriptEvent(transcriptViewRef.current, payload);
+          const previous = transcriptViewRef.current;
+          const next = applyTranscriptEvent(previous, payload);
+          observeCaptionTrace(payload, previous, next);
           transcriptViewRef.current = next;
           setLocalAsrText(next.text);
         }))
@@ -750,6 +753,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   );
   const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
   const transcriptVisible = showLiveTranscript && !insertFallback && suggestions.length === 0;
+  const observeCaptionTrace = useMainCaptionTrace(
+    transcriptViewRef,
+    transcriptVisible && !splitTranscriptRail ? liveTranscript : '',
+  );
 
   useEffect(() => {
     if (!isTauri) return;

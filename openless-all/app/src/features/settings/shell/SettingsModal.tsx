@@ -1,5 +1,7 @@
+import { officialLinks } from '../../../lib/officialLinks';
+import { TextField } from '../../../ui/controls/TextField';
 // Settings categories reuse the existing consumers; complex experiments open in the right pane.
-import { useRef, useState, type CSSProperties } from 'react';
+import { useId, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { openExternal } from '../../../api/files';
@@ -44,7 +46,7 @@ interface SettingsModalProps {
 }
 
 const LINKS = [
-  { id: 'helpCenter', icon: 'help', href: 'https://github.com/Open-Less/openless#readme' },
+  { id: 'helpCenter', icon: 'help', href: 'docs' },
   { id: 'releaseNotes', icon: 'doc', href: 'https://github.com/Open-Less/openless/releases' },
 ];
 
@@ -57,6 +59,7 @@ export function SettingsModal({
   onPaintedChange,
 }: SettingsModalProps) {
   const { t } = useTranslation();
+  const resultDescriptionId = useId();
   // The provider form's writes settle before close/section switch (async saves don't
   // lose drafts); the revision counter excludes credential content.
   const providerForm = useProviderForm();
@@ -131,53 +134,32 @@ export function SettingsModal({
   // Settings' "search above the nav" layout); mobile keeps it full-width under the
   // title bar.
   const searchBox = (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '7px 10px',
-        borderRadius: 'var(--ol-control-radius)',
-        border: '0.5px solid var(--ol-line-strong)',
-        background: 'var(--ol-surface)',
-        minWidth: 0,
+    <TextField
+      ref={searchRef}
+      type="search"
+      value={query}
+      onChange={(event) => {
+        nav.changeQuery(event.target.value);
       }}
-    >
-      <Icon name="search" size={15} />
-      <input
-        ref={searchRef}
-        type="search"
-        value={query}
-        onChange={(event) => {
-          nav.changeQuery(event.target.value);
-        }}
-        placeholder={t('modal.searchPlaceholder')}
-        aria-label={t('modal.searchPlaceholder')}
-        style={{
-          width: '100%',
-          minWidth: 0,
-          border: 0,
-          outline: 'none',
-          background: 'transparent',
-          color: 'var(--ol-ink)',
-          font: 'inherit',
-          fontSize: 14,
-        }}
-      />
-      {query && (
-        <button
-          type="button"
-          aria-label={t('modal.clearSearch')}
-          onClick={() => {
-            setQuery('');
-            searchRef.current?.focus();
-          }}
-          style={{ ...iconButtonStyle, width: 22, height: 22 }}
-        >
-          <Icon name="close" size={12} />
-        </button>
-      )}
-    </div>
+      placeholder={t('modal.searchPlaceholder')}
+      aria-label={t('modal.searchPlaceholder')}
+      className="ol-settings-search-field"
+      searchAction={
+        query && (
+          <button
+            type="button"
+            aria-label={t('modal.clearSearch')}
+            onClick={() => {
+              setQuery('');
+              searchRef.current?.focus();
+            }}
+            style={{ ...iconButtonStyle, width: 22, height: 22, flexShrink: 0 }}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        )
+      }
+    />
   );
 
   return (
@@ -397,7 +379,9 @@ export function SettingsModal({
                                   </h2>
                                 </div>
                                 {!mobile && (
-                                  <span className="ol-settings-auto-save">{t('modal.autoSaveHint')}</span>
+                                  <span className="ol-settings-auto-save">
+                                    {t('modal.autoSaveHint')}
+                                  </span>
                                 )}
                               </div>
                             )}
@@ -461,6 +445,8 @@ export function SettingsModal({
                                 <button
                                   key={item.id}
                                   type="button"
+                                  aria-label={item.title}
+                                  aria-describedby={`${resultDescriptionId}-${item.id}`}
                                   onClick={() => selectSection(item.id, true)}
                                   style={{
                                     ...navButtonStyle,
@@ -482,6 +468,7 @@ export function SettingsModal({
                                       {item.title}
                                     </span>
                                     <span
+                                      id={`${resultDescriptionId}-${item.id}`}
                                       style={{
                                         fontSize: 12,
                                         color: 'var(--ol-ink-3)',
@@ -588,7 +575,8 @@ export function SettingsModal({
 }
 
 function HelpLinks() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const links = officialLinks(i18n.language);
   return (
     <div
       style={{
@@ -604,7 +592,7 @@ function HelpLinks() {
         <button
           key={link.id}
           type="button"
-          onClick={() => void openExternal(link.href)}
+          onClick={() => void openExternal(link.href === 'docs' ? links.docs : link.href)}
           className="ol-settings-rail-link"
           style={{ ...railButtonStyle, padding: '8px 10px' }}
         >

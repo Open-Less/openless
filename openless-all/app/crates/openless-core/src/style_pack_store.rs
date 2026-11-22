@@ -293,10 +293,19 @@ impl StylePackStore {
     }
 
     pub fn get_or_default_active(&self, active_id: &str) -> Result<StylePack, BackendError> {
+        self.get_for_dictation([], active_id)
+    }
+
+    pub(crate) fn get_for_dictation<'a>(
+        &self,
+        assigned_ids: impl IntoIterator<Item = &'a str>,
+        active_id: &'a str,
+    ) -> Result<StylePack, BackendError> {
         let packs = self.lock()?;
-        packs
-            .iter()
-            .find(|pack| pack.id == active_id && pack.enabled)
+        assigned_ids
+            .into_iter()
+            .chain([active_id])
+            .find_map(|id| packs.iter().find(|pack| pack.id == id && pack.enabled))
             .or_else(|| {
                 packs
                     .iter()

@@ -2,14 +2,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use openless_core::testing::{FixtureDictationEngine, RecordingHostActions};
+use openless_core::app_style_routing::{AppStyleAssignment, InputApp};
+use openless_core::testing::{
+    FixtureAudioRecorder, FixtureDictationEngine, FixtureTranscriptionEngine, RecordingHostActions,
+};
 use openless_core::{
     BackendConfig, BackendDependencies, BackendError, BackendErrorCode, CapturedTextTarget,
-    CliDispatchOutcome, CliIntent, CredentialKey, CredentialStore, CredentialsStatus,
-    DictationContext, DictationHotkeyEdge, DictationInsertStatus, DictationStartOptions,
-    HostContextAdapter, HostContextCapture, InMemoryCredentialStore, InsertOutcome,
-    InsertWriteResult, OpenLessBackend, ProviderSlot, SecretValue, SessionId, TextInserter,
-    TextInsertionSession, UserPreferences,
+    CliDispatchOutcome, CliIntent, CredentialKey, CredentialNamespace, CredentialStore,
+    CredentialsStatus, DictationContext, DictationHotkeyEdge, DictationInsertStatus,
+    DictationStartOptions, HostContextAdapter, HostContextCapture, InMemoryCredentialStore,
+    InsertOutcome, InsertWriteResult, OpenLessBackend, PipelineDictationEngine, ProviderSlot,
+    SecretValue, SessionId, SharedCloudTextPolisher, StylePack, TextInserter, TextInsertionSession,
+    UserPreferences,
 };
 use tokio::sync::Notify;
 
@@ -82,6 +86,20 @@ struct FocusContextAdapter {
 }
 
 impl HostContextAdapter for FocusContextAdapter {
+    fn input_app(&self) -> Option<InputApp> {
+        let bundle = match self.target {
+            "VS Code" => "com.microsoft.VSCode",
+            "WeChat" => "com.tencent.xinWeChat",
+            "Mail" => "com.apple.mail",
+            "Notes" => "com.apple.Notes",
+            "ChatGPT" => "com.openai.codex",
+            "Orca" => "com.stablyai.orca",
+            "Custom" => "org.example.unknown",
+            _ => return None,
+        };
+        InputApp::macos(bundle, Some(self.target))
+    }
+
     fn capture(
         &self,
         _include_cursor: bool,
@@ -178,7 +196,20 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_engine(|_| Arc::new(FixtureDictationEngine::successful("spoken", "spoken")))
+            .await
+    }
+
+    async fn with_engine(
+        build_engine: impl FnOnce(Arc<DelayedCredentials>) -> Arc<dyn openless_core::DictationEngine>,
+    ) -> Self {
         let directory = std::env::temp_dir().join(format!("openless-target-{}", SessionId::new()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("input-app-catalog-cache.json"),
+            include_str!("fixtures/app-catalog.json"),
+        )
+        .unwrap();
         let credentials = Arc::new(DelayedCredentials::default());
         let focus = Arc::new(Mutex::new(Focus {
             current: "A",
@@ -190,8 +221,7 @@ impl Fixture {
         let mut dependencies = BackendDependencies::unsupported();
         dependencies.credential_store = credentials.clone();
         dependencies.host_actions = Arc::new(RecordingHostActions::default());
-        dependencies.dictation_engine =
-            Arc::new(FixtureDictationEngine::successful("spoken", "spoken"));
+        dependencies.dictation_engine = build_engine(credentials.clone());
         dependencies.text_inserter = Arc::new(FocusInserter {
             focus: focus.clone(),
             target: None,
@@ -306,4 +336,380 @@ async fn no_insertion_skips_target_capture_and_native_preparation() {
     assert!(focus.captured.is_empty());
     assert!(focus.prepared.is_empty());
     assert!(focus.delivered.is_empty());
+}
+
+#[tokio::test]
+async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (sent, mut payloads) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+            }
+            let mut bytes = vec![0; length];
+            socket.read_exact(&mut bytes).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let system = payload["messages"][0]["content"].as_str().unwrap();
+            let output = if system.contains("用户有任何输入后，输出“一一一”。") {
+                "一一一"
+            } else {
+                "polished"
+            };
+            let (mime, response) = if payload["stream"] == true {
+                ("text/event-stream", format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{output}\"}},\"finish_reason\":null}}]}}\n\ndata: [DONE]\n\n"))
+            } else {
+                (
+                    "application/json",
+                    serde_json::json!({"choices":[{"message":{"content":output}}]}).to_string(),
+                )
+            };
+            sent.send(payload).unwrap();
+            let reply = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\r\n{response}", response.len());
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
+    });
+
+    let fixture = Fixture::with_engine(|credentials| {
+        Arc::new(PipelineDictationEngine::new(
+            Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
+            Arc::new(FixtureTranscriptionEngine::successful(
+                "spoken test transcript",
+                500,
+            )),
+            Arc::new(SharedCloudTextPolisher::new(credentials)),
+        ))
+    })
+    .await;
+    let backend = &fixture.backend;
+    for (account, secret) in [("ark.api_key", "fixture-key"), ("ark.endpoint", &endpoint)] {
+        fixture
+            .credentials
+            .write(
+                CredentialKey::new(CredentialNamespace::Llm, Some("ark".into()), account).unwrap(),
+                SecretValue::new(secret),
+            )
+            .await
+            .unwrap();
+    }
+    let mut preferences = backend.get_preferences();
+    preferences.multimodal_pipeline_enabled = false;
+    preferences.active_llm_provider = "ark".into();
+    preferences.polish_skip_max_chars = 0;
+    preferences.streaming_insert = false;
+    preferences.translation_target_language = "English".into();
+    preferences.working_languages = vec!["zh".into()];
+    backend
+        .update_settings(
+            preferences,
+            openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+            &openless_core::NoopSettingsRuntime,
+        )
+        .unwrap();
+
+    let make_pack = |name: &str| {
+        backend
+            .create_style_pack(StylePack {
+                name: name.into(),
+                prompt: format!("Apply the unique {name} marker."),
+                ..StylePack::default()
+            })
+            .unwrap()
+    };
+    let current = make_pack("MANUAL-STYLE");
+    backend.activate_style_pack(&current.id).unwrap();
+    let coding = make_pack("CODING-STYLE");
+    let chat = make_pack("CHAT-STYLE");
+    let mail = make_pack("MAIL-STYLE");
+    for (category, pack) in [
+        ("coding".to_owned(), &coding),
+        ("chat".to_owned(), &chat),
+        ("email".to_owned(), &mail),
+    ] {
+        backend
+            .set_app_style_assignment(AppStyleAssignment::Category {
+                category,
+                style_pack_id: Some(pack.id.clone()),
+            })
+            .unwrap();
+    }
+    let expect_request = |payload: serde_json::Value, marker: &str| {
+        if marker == "CODING-STYLE" {
+            assert!(payload["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("fixture coding context"));
+        }
+        assert!(
+            payload["messages"][0]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(marker),
+            "{payload}"
+        );
+    };
+
+    fixture.focus.lock().unwrap().current = "VS Code";
+    let starting = tokio::spawn(start(backend.clone(), 2));
+    fixture.credentials.entered.notified().await;
+    fixture.focus.lock().unwrap().current = "WeChat";
+    backend
+        .set_app_style_assignment(AppStyleAssignment::Category {
+            category: "coding".to_owned(),
+            style_pack_id: None,
+        })
+        .unwrap();
+    fixture.credentials.release.notify_one();
+    starting.await.unwrap().unwrap();
+    let result = backend.stop_dictation().await.unwrap();
+    assert_eq!(result.polished_text, "polished");
+    expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+    assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "VS Code");
+    assert_eq!(
+        backend.app_style_routing().unwrap().apps[0].app.name,
+        "VS Code"
+    );
+
+    let override_app = AppStyleAssignment::App {
+        app_id: "macos:com.microsoft.VSCode".into(),
+        style_pack_id: Some(chat.id.clone()),
+    };
+    backend.set_app_style_assignment(override_app).unwrap();
+    backend
+        .set_app_style_assignment(AppStyleAssignment::Category {
+            category: "coding".to_owned(),
+            style_pack_id: Some(coding.id.clone()),
+        })
+        .unwrap();
+
+    for (app, marker) in [
+        ("WeChat", "CHAT-STYLE"),
+        ("Mail", "MAIL-STYLE"),
+        ("VS Code", "CHAT-STYLE"),
+        ("Custom", "MANUAL-STYLE"),
+        ("No stable identifier", "MANUAL-STYLE"),
+    ] {
+        fixture.focus.lock().unwrap().current = app;
+        backend.start_dictation().await.unwrap();
+        assert_eq!(
+            backend.stop_dictation().await.unwrap().polished_text,
+            "polished"
+        );
+        expect_request(payloads.try_recv().unwrap(), marker);
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered.last().unwrap().0,
+            app
+        );
+    }
+
+    // A newly observed agent client inherits its category on its first input.
+    for app in ["ChatGPT", "Orca"] {
+        fixture.focus.lock().unwrap().current = app;
+        backend.start_dictation().await.unwrap();
+        backend.stop_dictation().await.unwrap();
+        expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+        assert_eq!(
+            backend
+                .app_style_routing()
+                .unwrap()
+                .apps
+                .iter()
+                .find(|entry| entry.app.name == app)
+                .unwrap()
+                .category,
+            Some("coding".to_owned())
+        );
+    }
+
+    // Reproduce Notes with a different global selection, then rename/edit the
+    // assigned pack. Assert the actual HTTP payload, delivered text, and history.
+    fixture.focus.lock().unwrap().current = "Notes";
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    expect_request(payloads.try_recv().unwrap(), "MANUAL-STYLE");
+    let mut notes = make_pack("未命名");
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.apple.Notes".into(),
+            style_pack_id: Some(notes.id.clone()),
+        })
+        .unwrap();
+    notes.name = "一一一".into();
+    notes.prompt = "用户有任何输入后，输出“一一一”。".into();
+    backend.update_style_pack(notes.clone()).unwrap();
+    let mut assigned_payload = serde_json::Value::Null;
+    for _ in 0..3 {
+        backend.start_dictation().await.unwrap();
+        // Switching windows during recording must not switch this style or target.
+        fixture.focus.lock().unwrap().current = "WeChat";
+        let result = backend.stop_dictation().await.unwrap();
+        let payload = payloads.try_recv().unwrap();
+        expect_request(payload.clone(), &notes.prompt);
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains("MANUAL-STYLE"));
+        assert!(system.contains("内容与形式由当前风格包定义"));
+        assert!(!system.contains("请按这个应用的常见沟通风格调整语气"));
+        assigned_payload = payload;
+        assert_eq!(result.polished_text, "一一一");
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered.last().unwrap(),
+            &("Notes", "一一一".into())
+        );
+        let history = backend.list_history().unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.id == result.session_id.to_string())
+            .unwrap();
+        assert_eq!(entry.style_pack_id.as_deref(), Some(notes.id.as_str()));
+        assert_eq!(entry.app_bundle_id.as_deref(), Some("com.apple.Notes"));
+        fixture.focus.lock().unwrap().current = "Notes";
+    }
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.apple.Notes".into(),
+            style_pack_id: None,
+        })
+        .unwrap();
+
+    backend.activate_style_pack(&notes.id).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    let manual_payload = payloads.try_recv().unwrap();
+    assert_eq!(assigned_payload["messages"], manual_payload["messages"]);
+    backend.activate_style_pack(&current.id).unwrap();
+
+    fixture.focus.lock().unwrap().current = "VS Code";
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.microsoft.VSCode".into(),
+            style_pack_id: Some("builtin.raw".into()),
+        })
+        .unwrap();
+    backend.start_dictation().await.unwrap();
+    assert_eq!(
+        backend.stop_dictation().await.unwrap().polished_text,
+        "spoken test transcript"
+    );
+    assert!(
+        payloads.try_recv().is_err(),
+        "catalog context must preserve Raw passthrough"
+    );
+    backend
+        .start_dictation_with_options(DictationStartOptions {
+            translation_requested: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    backend.stop_dictation().await.unwrap();
+    assert!(payloads.try_recv().unwrap()["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("fixture coding context"));
+    while payloads.try_recv().is_ok() {}
+    for live in [true, false] {
+        backend
+            .start_dictation_with_options(DictationStartOptions {
+                translation_requested: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let result = if live {
+            backend
+                .update_dictation_translation_requested(false)
+                .await
+                .unwrap();
+            backend.stop_dictation().await.unwrap()
+        } else {
+            backend
+                .stop_dictation_with_options(openless_core::DictationStopOptions {
+                    translation_requested: Some(false),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+        };
+        assert_eq!(result.polished_text, "spoken test transcript");
+        assert!(
+            payloads.try_recv().is_err(),
+            "unexpected request after cancellation, live={live}"
+        );
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered.last().unwrap(),
+            &("VS Code", "spoken test transcript".into())
+        );
+    }
+    let custom_raw = backend
+        .create_style_pack(StylePack {
+            name: "CUSTOM-RAW".into(),
+            base_mode: openless_core::PolishMode::Raw,
+            prompt: "Apply CUSTOM-RAW.".into(),
+            ..StylePack::default()
+        })
+        .unwrap();
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.microsoft.VSCode".into(),
+            style_pack_id: Some(custom_raw.id),
+        })
+        .unwrap();
+    backend.start_dictation().await.unwrap();
+    assert_eq!(
+        backend.stop_dictation().await.unwrap().polished_text,
+        "polished"
+    );
+    expect_request(payloads.try_recv().unwrap(), "CUSTOM-RAW");
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.microsoft.VSCode".into(),
+            style_pack_id: Some(chat.id.clone()),
+        })
+        .unwrap();
+    backend.set_style_pack_enabled(&chat.id, false).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+    backend.set_style_pack_enabled(&chat.id, true).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    expect_request(payloads.try_recv().unwrap(), "CHAT-STYLE");
+    backend.remove_style_pack(&chat.id).unwrap();
+    backend.start_dictation().await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    expect_request(payloads.try_recv().unwrap(), "CODING-STYLE");
+
+    let before_clear = backend.app_style_routing().unwrap();
+    assert_eq!(before_clear.apps.len(), 7);
+    assert_eq!(before_clear.categories[&"chat".to_owned()], chat.id);
+    let cleared = backend.clear_input_app_history().unwrap();
+    assert_eq!(cleared.apps.len(), 1);
+    assert!(!cleared.apps[0].seen);
+    assert_eq!(
+        cleared.apps[0].style_pack_id.as_deref(),
+        Some(chat.id.as_str())
+    );
+    assert_eq!(backend.get_preferences().active_style_pack_id, current.id);
+    let local_file =
+        std::fs::read_to_string(fixture.directory.join("app-style-routing.json")).unwrap();
+    assert!(!local_file.contains("spoken test transcript"));
+    assert!(!local_file.contains("polished"));
+    backend.shutdown().await.unwrap();
+    server.abort();
 }

@@ -10,7 +10,7 @@ import { initTypography } from '../lib/typography';
 import { getPreviewProfile } from '../preview/profiles';
 import { getRuntimeEnvironment } from '../runtime/environment';
 import { App } from './App';
-import { resolveWindowKind } from './windowRoutes';
+import { preloadMainWindow, resolveWindowKind } from './windowRoutes';
 import '../styles/tokens.css';
 import '../styles/global.css';
 import '../styles/overlays.css';
@@ -21,6 +21,10 @@ export function bootstrap() {
   const kind = resolveWindowKind(params);
   const environment = getRuntimeEnvironment();
   const rootElement = document.documentElement;
+  if (kind === 'main' && environment.host === 'tauri' && environment.os === 'mac') {
+    rootElement.setAttribute('data-ol-main-content-covered', '');
+    void preloadMainWindow();
+  }
   rootElement.dataset.olPlatform = environment.os;
   rootElement.toggleAttribute('data-ol-aux', kind !== 'main');
 

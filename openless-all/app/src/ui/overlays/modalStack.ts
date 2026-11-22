@@ -32,6 +32,7 @@ export function createModalStack() {
   let active = false;
   let restoreToPage: HTMLElement | null = null;
   let clickTarget: HTMLElement | null = null;
+  let popupEscape: KeyboardEvent | undefined;
 
   function focusLayer(layer: ModalLayer) {
     const preferred = layer.focus();
@@ -74,24 +75,31 @@ export function createModalStack() {
     if (active !== !!top) {
       active = !!top;
       if (active) {
+        window.addEventListener('keydown', rememberPopupEscape, true);
         document.addEventListener('keydown', onKeydown);
         document.addEventListener('focusin', onFocusIn);
       } else {
+        window.removeEventListener('keydown', rememberPopupEscape, true);
         document.removeEventListener('keydown', onKeydown);
         document.removeEventListener('focusin', onFocusIn);
       }
-      listeners.forEach((listener) => listener());
     }
+    if (before !== top) listeners.forEach((listener) => listener());
   }
 
   function onFocusIn(event: FocusEvent) {
     if (top && event.target instanceof Node && !top.overlay.contains(event.target)) focusLayer(top);
   }
 
+  function rememberPopupEscape(event: KeyboardEvent) {
+    // Remember ownership before the popup library handles Escape on the document.
+    popupEscape = event.key === 'Escape' && top?.overlay.querySelector(OPEN_POPUP) ? event : undefined;
+  }
+
   function onKeydown(event: KeyboardEvent) {
     if (!top || event.defaultPrevented || event.isComposing) return;
     if (event.key === 'Escape') {
-      if (top.overlay.querySelector(OPEN_POPUP)) return;
+      if (popupEscape === event || top.overlay.querySelector(OPEN_POPUP)) return;
       event.preventDefault();
       event.stopPropagation();
       top.close();
@@ -128,6 +136,7 @@ export function createModalStack() {
     captureKey() {
       clickTarget = null;
     },
+    getTopOverlay: () => top?.overlay ?? null,
     getReturnFocus() {
       // Safari mouse clicks do not focus buttons. Keep the initiating control
       // for the current surface so dismissal can return to it in that engine.

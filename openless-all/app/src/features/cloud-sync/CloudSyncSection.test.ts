@@ -198,6 +198,7 @@ const dependencies: Record<string, any> = {
   }),
   Icon: 'icon',
   SyncPasswordField: 'sync-password-field',
+  TextField: 'input',
   GithubLoginModal: 'login',
   StructuredDialog: 'modal',
   DialogHeader: 'header',
@@ -275,11 +276,10 @@ const jsx = (type: unknown, props: Record<string, any>) => {
     return props.open ? { type: 'fragment', props: { children: props.children } } : null;
   return { type, props };
 };
-const components = factory(
-  ...imports.map((name) => dependencies[name]),
-  {},
-  () => ({ jsx, jsxs: jsx }),
-);
+const components = factory(...imports.map((name) => dependencies[name]), {}, () => ({
+  jsx,
+  jsxs: jsx,
+}));
 assert.equal(
   components.normalizeCustomServerOrigin(' https://sync.example.com/ '),
   'https://sync.example.com',
@@ -470,7 +470,16 @@ try {
   deferredStatus = new Promise((resolve) => {
     resolveStatus = resolve;
   });
-  find(tree, (node) => node.props['aria-label'] === 'cloudSyncE2ee.refresh').props.onClick();
+  const restored = update({});
+  events.get('cloud-sync-e2ee:restored')!({
+    payload: {
+      sequence: restored.sequence,
+      accountId: restored.account?.githubId ?? null,
+      serviceOrigin: restored.serviceOrigin,
+      vaultId: restored.vaultId,
+      taskId: null,
+    },
+  });
   const old = { ...server };
   const newer = update({ enabled: true });
   events.get('cloud-sync-e2ee:state')!({

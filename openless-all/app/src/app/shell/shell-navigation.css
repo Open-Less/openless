@@ -76,7 +76,11 @@
   background-color: var(--ol-sidebar-active-bg);
   font-weight: var(--ol-font-weight-semibold);
 }
-.ol-sidebar-nav-btn:not(.ol-nav-btn-active):hover {
+.ol-nav-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ol-sidebar-nav-btn:not(.ol-nav-btn-active):enabled:hover {
   --ol-sidebar-item-ink: var(--ol-choice-hover-ink);
   background-color: var(--ol-sidebar-hover-bg);
 }

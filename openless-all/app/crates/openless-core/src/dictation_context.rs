@@ -203,6 +203,9 @@ pub struct RecordingPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationContext {
+    pub(crate) input_app: Option<crate::app_style_routing::InputApp>,
+    /// Annotated built-in Raw prompt, captured before any later prompt changes.
+    pub(crate) raw_passthrough_prompt: Option<String>,
     pub audio_source: DictationAudioSource,
     pub output_target: DictationOutputTarget,
     pub(crate) normal_archive_successful_recording: bool,
@@ -249,6 +252,16 @@ impl Default for DictationContext {
 }
 
 impl DictationContext {
+    pub(crate) fn captured_front_app(&self) -> crate::shared_types::FrontApp {
+        if let Some(app) = &self.input_app {
+            return crate::shared_types::FrontApp {
+                name: Some(app.name.clone()),
+                bundle_id: app.macos_bundle_id().map(str::to_owned),
+            };
+        }
+        crate::shared_types::split_front_app_opt(self.polish.front_app.as_deref())
+    }
+
     pub(crate) fn capture(
         preferences: &UserPreferences,
         style_pack: &StylePack,
@@ -325,6 +338,7 @@ impl DictationContext {
             preferences.record_audio_for_debug && (preferences.debug_archive_processed || debug_both_off);
         let debug_keep_raw = preferences.record_audio_for_debug && preferences.debug_archive_raw;
         Self {
+            input_app: None,
             audio_source: options.audio_source,
             output_target: options.output_target,
             normal_archive_successful_recording: preferences.record_audio_for_debug,
@@ -378,6 +392,7 @@ impl DictationContext {
             llm,
             deferred_llm_error: None,
             unconfigured_llm_raw: None,
+            raw_passthrough_prompt: None,
             omni,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
@@ -574,8 +589,9 @@ impl DictationContext {
         self.output_target != DictationOutputTarget::Qa
             && (self.polish.translation_active
                 || self.polish.mode != PolishMode::Raw
-                || self.polish.style_system_prompt
-                    != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw))
+                || (self.polish.style_system_prompt
+                    != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw)
+                    && self.raw_passthrough_prompt.as_ref() != Some(&self.polish.style_system_prompt)))
     }
 
     /// Plain dictation whose polished text is simply inserted or saved. Voice Edit

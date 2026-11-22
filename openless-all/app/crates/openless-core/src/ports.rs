@@ -46,6 +46,10 @@ pub struct CapturedTextTarget {
 }
 
 pub trait HostContextAdapter: Send + Sync {
+    /// Stable identity, when this adapter is attached to a frozen insertion target.
+    fn input_app(&self) -> Option<crate::app_style_routing::InputApp> {
+        None
+    }
     /// Capture foreground application metadata for attribution and input policy.
     /// `include_cursor=false` forbids reading document/AX text, not querying the
     /// application identity. Hosts must honor this before any document access.

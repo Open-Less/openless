@@ -6,6 +6,10 @@ const adapters = await readFile(
   'utf8',
 );
 const events = await readFile(new URL('../src-tauri/src/tauri_events.rs', import.meta.url), 'utf8');
+const capsuleFeedback = await readFile(
+  new URL('../src-tauri/src/capsule_feedback.rs', import.meta.url),
+  'utf8',
+);
 const capsule = await readFile(
   new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
   'utf8',
@@ -47,6 +51,15 @@ assert.match(
 );
 assert.match(
   events,
+  /BackendEventKind::DictationCompleted\(result\) => \{[\s\S]*?dictation_completion_payload\(\s*&result,[\s\S]*?present_core_capsule\(payload\)/,
+  'the completion event must present the payload produced by the capsule feedback policy',
+);
+const completionPayload = capsuleFeedback.match(
+  /fn dictation_completion_payload\([\s\S]*?(?=\n#\[derive)/,
+)?.[0];
+assert.ok(completionPayload, 'the capsule feedback policy must build a completion payload');
+assert.match(
+  completionPayload,
   /DictationInsertStatus::CopiedFallback => "已复制，请手动粘贴"/,
   'copied output must not be reported as an insertion failure',
 );

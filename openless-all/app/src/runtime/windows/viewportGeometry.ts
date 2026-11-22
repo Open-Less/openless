@@ -17,6 +17,7 @@ export function waitForViewportGeometry(
     const aborted = () =>
       settle(undefined, new DOMException('Window layout superseded', 'AbortError'));
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let remeasure: ReturnType<typeof setInterval> | undefined;
     let observer: ResizeObserver | undefined;
     const host = viewport.ownerDocument.defaultView;
     const check = () => {
@@ -30,6 +31,7 @@ export function waitForViewportGeometry(
       host?.visualViewport?.removeEventListener('resize', check);
       observer?.disconnect();
       clearTimeout(timer);
+      clearInterval(remeasure);
       if (size) resolve(size);
       else reject(error);
     }
@@ -41,6 +43,9 @@ export function waitForViewportGeometry(
     signal.addEventListener('abort', aborted, { once: true });
     host?.addEventListener('resize', check);
     host?.visualViewport?.addEventListener('resize', check);
+    // A WebView resize may settle without a ResizeObserver delivery. Poll only
+    // while this geometry request is pending; the observed size remains authoritative.
+    remeasure = setInterval(check, 64);
     timer = setTimeout(
       () => settle(undefined, new Error('The requested WebView size was not observed')),
       timeoutMs,

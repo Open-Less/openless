@@ -1,3 +1,4 @@
+import { TextField } from '../../ui/controls/TextField';
 import { formatComboLabel } from '../../api/hotkeys';
 import { Icon } from '../../components/Icon';
 import { nativeLanguageName } from '../../lib/languageCatalog';
@@ -144,16 +145,14 @@ export function Translation() {
         )}
 
         <div className="ol-translation-toolbar">
-          <label className="ol-language-search">
-            <Icon name="search" size={15} />
-            <input
-              type="search"
-              value={languageQuery}
-              onChange={(event) => setLanguageQuery(event.target.value)}
-              placeholder={t('translation.searchLanguages')}
-              aria-label={t('translation.searchLanguages')}
-            />
-          </label>
+          <TextField
+            className="ol-language-search"
+            type="search"
+            value={languageQuery}
+            onChange={(event) => setLanguageQuery(event.target.value)}
+            placeholder={t('translation.searchLanguages')}
+            aria-label={t('translation.searchLanguages')}
+          />
           <span className="ol-translation-count">
             {t('translation.selectedLanguages', { count: prefs.workingLanguages.length })}
           </span>

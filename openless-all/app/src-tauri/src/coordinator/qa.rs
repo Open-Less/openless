@@ -2,6 +2,9 @@ use super::Inner;
 use std::sync::Arc;
 
 pub(super) fn install_recording_companion(inner: &Arc<Inner>) {
+    if !crate::ask_anything_available() {
+        return;
+    }
     let target = inner.hotkey_runtime_target.lock().clone();
     crate::recording_companion::configure(target.dictation, target.qa_companion_key);
     let weak = Arc::downgrade(inner);
@@ -25,6 +28,9 @@ pub(super) fn install_recording_companion(inner: &Arc<Inner>) {
 /// One chord owns the complete question: start → record → finish. Processing
 /// never queues another question. Later turns retain the conversation until dismissal.
 pub(super) async fn handle_qa_hotkey_pressed(inner: &Arc<Inner>) {
+    if !crate::ask_anything_available() {
+        return;
+    }
     let Ok(_handoff) = inner.overlay_qa_handoff.try_lock() else {
         return;
     };

@@ -296,9 +296,15 @@ impl TranscriptionSession for CloudTranscriptionSession {
         Box::pin(async move {
             let transcript = match kind {
                 CloudTranscriptionSessionKind::Volcengine(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sender_result = provider.send_last_frame().await;
+                    if sender_result.is_err() {
+                        // Stop the transport. A result already handed off by the
+                        // receiver remains available through its oneshot channel.
+                        provider.cancel();
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                        .await
+                        .map_err(|error| sender_result.err().map(map_asr_error).unwrap_or(error))?
                 }
                 CloudTranscriptionSessionKind::Whisper(provider) => {
                     let timeout = crate::provider_rules::whisper_transcribe_timeout(
@@ -3099,7 +3105,7 @@ mod tests {
             PipelineMode::Traditional
         ));
         let search = crate::web_search::WebSearchConfig::default();
-        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, false).contains("FreeSerp"));
         assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
     }
 

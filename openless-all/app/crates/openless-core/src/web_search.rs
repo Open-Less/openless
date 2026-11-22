@@ -3,6 +3,8 @@ use crate::{CredentialKey, CredentialNamespace, CredentialStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod public_sources;
+
 pub const CONFIG_ACCOUNT: &str = "web_search.config";
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -10,6 +12,9 @@ pub enum SearchProvider {
     Auto,
     #[default]
     Free,
+    FreeSerp,
+    Hybrid,
+    Bing,
     Tavily,
     Brave,
     Searxng,
@@ -95,9 +100,10 @@ pub fn backend_prompt(config: &WebSearchConfig, suite: bool) -> String {
         "DeepSeek 原生联网搜索（deepseek_web_search）与网页读取"
     } else {
         match config.provider {
-            SearchProvider::Auto | SearchProvider::Free => {
-                "Bing 免费网页搜索（RSS 与公开网页读取）"
-            }
+            SearchProvider::Auto | SearchProvider::Free => "免费聚合搜索（FreeSerp 与 Keenable）",
+            SearchProvider::FreeSerp => "FreeSerp 免费网页搜索",
+            SearchProvider::Hybrid => "混合搜索（免费聚合与 DeepSeek 搜索 API）",
+            SearchProvider::Bing => "Bing 网页搜索（RSS）",
             SearchProvider::Tavily => "Tavily Search",
             SearchProvider::Brave => "Brave Search",
             SearchProvider::Searxng => "用户配置的 SearXNG",
@@ -125,9 +131,51 @@ pub async fn search(config: &WebSearchConfig, query: &str) -> Result<Vec<SearchR
     .map_err(|_| "Web Search timed out".to_string())?
 }
 async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<SearchResult>, String> {
+    let mut results = query_sources(config, query).await?;
+    if matches!(
+        config.provider,
+        SearchProvider::Auto
+            | SearchProvider::Free
+            | SearchProvider::FreeSerp
+            | SearchProvider::Hybrid
+            | SearchProvider::Bing
+    ) {
+        let pages = futures_util::future::join_all(
+            results
+                .iter()
+                .take(3)
+                .map(|item| fetch_public_page(&item.url)),
+        )
+        .await;
+        for (item, page) in results.iter_mut().zip(pages) {
+            if let Some(page) = page {
+                item.snippet.push_str("\nPage excerpt: ");
+                item.snippet.push_str(&page);
+            }
+        }
+    }
+    Ok(results)
+}
+
+async fn query_sources(
+    config: &WebSearchConfig,
+    query: &str,
+) -> Result<Vec<SearchResult>, String> {
+    if matches!(
+        config.provider,
+        SearchProvider::Auto
+            | SearchProvider::Free
+            | SearchProvider::FreeSerp
+            | SearchProvider::Hybrid
+    ) {
+        if config.provider == SearchProvider::Hybrid && config.api_key.trim().is_empty() {
+            return Err("Mixed Search needs a DeepSeek Search API key".into());
+        }
+        return public_sources::query(config, query).await;
+    }
     let client = crate::net::http();
     let request = match config.provider {
-        SearchProvider::Auto | SearchProvider::Free => client
+        SearchProvider::Bing => client
             .get("https://www.bing.com/search")
             .query(&[("q", query), ("format", "rss")]),
         SearchProvider::Tavily => client
@@ -154,13 +202,72 @@ async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<Searc
                 .query(&[("q", query), ("format", "json")])
         }
         SearchProvider::Off => return Ok(vec![]),
+        SearchProvider::Auto
+        | SearchProvider::Free
+        | SearchProvider::FreeSerp
+        | SearchProvider::Hybrid => unreachable!("aggregated search dispatched above"),
     };
-    let mut response = request
-        .send()
+    let request = request
+        .build()
+        .map_err(|_| "Web Search connection failed")?;
+    let bytes = response_bytes(&client, request).await?;
+    if config.provider == SearchProvider::Bing {
+        return parse_rss(
+            std::str::from_utf8(&bytes).map_err(|_| "Invalid search response")?,
+        );
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid search response")?;
+    let rows = if config.provider == SearchProvider::Brave {
+        &value["web"]["results"]
+    } else {
+        &value["results"]
+    };
+    parse_results(rows, &["content", "description"])
+}
+
+struct RequestError {
+    message: String,
+    retry_after: Option<std::time::Duration>,
+}
+
+impl From<&str> for RequestError {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.into(),
+            retry_after: None,
+        }
+    }
+}
+
+impl From<RequestError> for String {
+    fn from(error: RequestError) -> Self {
+        error.message
+    }
+}
+
+async fn response_bytes(
+    client: &reqwest::Client,
+    request: reqwest::Request,
+) -> Result<Vec<u8>, RequestError> {
+    let mut response = client
+        .execute(request)
         .await
         .map_err(|_| "Web Search connection failed")?;
     if !response.status().is_success() {
-        return Err(format!("Web Search HTTP {}", response.status().as_u16()));
+        let retry_after =
+            (response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS).then(|| {
+                let seconds = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(60);
+                std::time::Duration::from_secs(seconds.clamp(1, 86_400))
+            });
+        return Err(RequestError {
+            message: format!("Web Search HTTP {}", response.status().as_u16()),
+            retry_after,
+        });
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -173,27 +280,12 @@ async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<Searc
         }
         bytes.extend_from_slice(&chunk);
     }
-    if matches!(config.provider, SearchProvider::Auto | SearchProvider::Free) {
-        let mut results =
-            parse_rss(std::str::from_utf8(&bytes).map_err(|_| "Invalid search response")?)?;
-        let pages = futures_util::future::join_all(
-            results.iter().take(3).map(|r| fetch_public_page(&r.url)),
-        )
-        .await;
-        for (item, page) in results.iter_mut().zip(pages) {
-            if let Some(page) = page {
-                item.snippet.push_str("\nPage excerpt: ");
-                item.snippet.push_str(&page);
-            }
-        }
-        return Ok(results);
-    }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid search response")?;
-    let rows = if config.provider == SearchProvider::Brave {
-        &value["web"]["results"]
-    } else {
-        &value["results"]
-    };
+    Ok(bytes)
+}
+
+const MAX_RESULTS: usize = 5;
+
+fn parse_results(rows: &Value, snippet_fields: &[&str]) -> Result<Vec<SearchResult>, String> {
     let rows = rows.as_array().ok_or("Invalid search results")?;
     Ok(rows
         .iter()
@@ -201,13 +293,13 @@ async fn search_inner(config: &WebSearchConfig, query: &str) -> Result<Vec<Searc
             result(
                 r["title"].as_str().unwrap_or(""),
                 r["url"].as_str()?,
-                r["content"]
-                    .as_str()
-                    .or(r["description"].as_str())
+                snippet_fields
+                    .iter()
+                    .find_map(|field| r[*field].as_str().filter(|text| !text.trim().is_empty()))
                     .unwrap_or(""),
             )
         })
-        .take(5)
+        .take(MAX_RESULTS)
         .collect())
 }
 fn public_address(ip: std::net::IpAddr) -> bool {

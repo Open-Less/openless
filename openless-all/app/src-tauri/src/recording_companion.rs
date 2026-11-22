@@ -99,7 +99,15 @@ impl ChordState {
         (complete, complete)
     }
 }
+// Keep this in sync with the frontend's version-flavor check.
+pub(crate) fn ask_anything_available() -> bool {
+    !env!("CARGO_PKG_VERSION_PRE").starts_with("dev.noask.")
+}
+
 pub(crate) fn configure(recording: ShortcutBinding, auxiliary: String) {
+    if !ask_anything_available() {
+        return;
+    }
     let mut route = route().lock().unwrap();
     route.state = ChordState {
         recording: Some(recording),
