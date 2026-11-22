@@ -230,12 +230,29 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
 /// Window width of the insert-fallback card (logical points). Slightly wider
 /// than the vocab card — this one holds a full passage.
 const FALLBACK_CARD_WIDTH: f64 = 360.0;
-/// Safe height before the webview's first render. The real height is measured
-/// from the card DOM and reported back over IPC.
+/// Height used before the webview reports the card's measured height.
+///
+/// On Windows the window is parked off-screen at this size and only revealed
+/// after the measured height arrives, so this value is never composited; the
+/// minimum keeps the staging surface small. Other platforms still show the
+/// window immediately, so they keep a height that can hold a full passage
+/// until the first measurement arrives.
+#[cfg(target_os = "windows")]
+const FALLBACK_CARD_INITIAL_HEIGHT: f64 = 96.0;
+#[cfg(not(target_os = "windows"))]
 const FALLBACK_CARD_INITIAL_HEIGHT: f64 = 260.0;
 /// Native safety bounds for the size IPC; not a CSS layout rule.
 const FALLBACK_CARD_MIN_HEIGHT: f64 = 96.0;
 const FALLBACK_CARD_MAX_HEIGHT: f64 = 320.0;
+/// If a Windows renderer never reports a height, reveal at the latest known
+/// size rather than leaving the user with no visible result at all.
+#[cfg(target_os = "windows")]
+const FALLBACK_CARD_REVEAL_TIMEOUT_MS: u64 = 1200;
+/// Let WebView2 apply the final window size and paint one settled frame before
+/// the off-screen window is shown. Without this, a reveal can display an empty
+/// compositor surface for one frame.
+#[cfg(target_os = "windows")]
+const FALLBACK_CARD_SETTLE_MS: u64 = 500;
 
 fn validated_fallback_card_height(
     active_presentation_id: Option<u64>,
@@ -298,9 +315,15 @@ fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static 
         if let Err(e) = capsule.set_card_hit_test_mode() {
             log::warn!("[fallback-card] enabling card hit testing failed: {e}");
         }
+        // Enter card mode before showing anything: `show_for_recording` syncs the
+        // multi-monitor capsule mirrors, and they must see card mode or they will
+        // paint the capsule on the other screens while this card is up.
+        #[cfg(target_os = "windows")]
+        capsule.prepare_fallback_card_window();
         if let Err(e) = capsule.set_size(FALLBACK_CARD_WIDTH, FALLBACK_CARD_INITIAL_HEIGHT) {
             log::warn!("[fallback-card] resize failed: {e}");
         }
+        #[cfg(not(target_os = "windows"))]
         if let Err(e) =
             capsule.position_fallback_card(FALLBACK_CARD_WIDTH, FALLBACK_CARD_INITIAL_HEIGHT)
         {
@@ -316,13 +339,102 @@ fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static 
         // bottom-right corner.
         capsule.invalidate_layout();
         inner.host.emit_insert_fallback(&payload);
-        capsule.show_for_recording(true);
-        #[cfg(target_os = "macos")]
-        capsule.restore_main_window_key_if_active();
-        log::info!(
-            "[fallback-card] shown: reason={reason} chars={}",
-            payload.text.chars().count()
-        );
+        #[cfg(target_os = "windows")]
+        {
+            // Hide the placeholder surface until the card reports the height it
+            // actually needs. Showing first is what produced the large-then-small
+            // flash.
+            schedule_insert_fallback_reveal(&inner, presentation_id);
+            log::info!(
+                "[fallback-card] prepared off-screen: reason={reason} chars={}",
+                payload.text.chars().count()
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            capsule.show_for_recording(true);
+            #[cfg(target_os = "macos")]
+            capsule.restore_main_window_key_if_active();
+            log::info!(
+                "[fallback-card] shown: reason={reason} chars={}",
+                payload.text.chars().count()
+            );
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+/// Safety net for a renderer that never reports its measured height. The normal
+/// path reveals from [`report_insert_fallback_card_height`].
+fn schedule_insert_fallback_reveal(inner: &Arc<Inner>, presentation_id: u64) {
+    let inner = Arc::clone(inner);
+    let spawner = inner.host.clone();
+    spawner.spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            FALLBACK_CARD_REVEAL_TIMEOUT_MS,
+        ))
+        .await;
+        let Some(capsule) = inner.host.capsule_window() else {
+            return;
+        };
+        let _ = capsule.run_on_main_thread(move |capsule| {
+            if inner
+                .host
+                .insert_fallback_presentation_is_current(presentation_id)
+                && !capsule.fallback_card_already_revealed()
+            {
+                let height = capsule
+                    .fallback_card_latest_height()
+                    .unwrap_or(FALLBACK_CARD_INITIAL_HEIGHT);
+                if let Err(e) = capsule.position_fallback_card(FALLBACK_CARD_WIDTH, height) {
+                    log::warn!("[fallback-card] timeout position failed: {e}");
+                }
+                if capsule.reveal_fallback_card() {
+                    log::warn!(
+                        "[fallback-card] no height report within {FALLBACK_CARD_REVEAL_TIMEOUT_MS}ms; revealed at {height}pt"
+                    );
+                }
+            } else {
+                log::debug!(
+                    "[fallback-card] timeout skipped: presentation is stale or already revealed"
+                );
+            }
+        });
+    });
+}
+
+#[cfg(target_os = "windows")]
+/// Shows a measured card only after WebView2 has had time to apply the final
+/// size and paint while the HWND is still off-screen.
+fn reveal_insert_fallback_after_settle(inner: &Arc<Inner>, presentation_id: u64) {
+    let inner = Arc::clone(inner);
+    let spawner = inner.host.clone();
+    spawner.spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(FALLBACK_CARD_SETTLE_MS)).await;
+        let Some(capsule) = inner.host.capsule_window() else {
+            return;
+        };
+        let _ = capsule.run_on_main_thread(move |capsule| {
+            if !inner
+                .host
+                .insert_fallback_presentation_is_current(presentation_id)
+                || capsule.fallback_card_already_revealed()
+            {
+                return;
+            }
+            // Read the latest height here rather than taking the value captured
+            // when this task was scheduled: a second ResizeObserver report may
+            // have corrected it during the settle window.
+            let height = capsule
+                .fallback_card_latest_height()
+                .unwrap_or(FALLBACK_CARD_INITIAL_HEIGHT);
+            if let Err(e) = capsule.position_fallback_card(FALLBACK_CARD_WIDTH, height) {
+                log::warn!("[fallback-card] measured position failed: {e}");
+            }
+            if capsule.reveal_fallback_card() {
+                log::info!("[fallback-card] revealed after settled paint at {height}pt");
+            }
+        });
     });
 }
 
@@ -342,15 +454,30 @@ fn report_insert_fallback_card_height(
     };
     let inner_for_main = Arc::clone(inner);
     capsule.run_on_main_thread(move |capsule| {
+        // Re-check on the main thread: another card may have replaced this
+        // presentation between validation and this closure running.
         if !inner_for_main
             .host
             .insert_fallback_presentation_is_current(presentation_id)
         {
             return;
         }
+        #[cfg(target_os = "windows")]
+        capsule.remember_fallback_card_height(height);
         if let Err(e) = capsule.set_size(FALLBACK_CARD_WIDTH, height) {
             log::warn!("[fallback-card] measured resize failed: {e}");
         }
+        #[cfg(target_os = "windows")]
+        if capsule.fallback_card_already_revealed() {
+            // The card is already on screen. Keep its bottom edge anchored when a
+            // late report changes the height; resizing alone would move it.
+            if let Err(e) = capsule.position_fallback_card(FALLBACK_CARD_WIDTH, height) {
+                log::warn!("[fallback-card] late measured position failed: {e}");
+            }
+        } else {
+            reveal_insert_fallback_after_settle(&inner_for_main, presentation_id);
+        }
+        #[cfg(not(target_os = "windows"))]
         if let Err(e) = capsule.position_fallback_card(FALLBACK_CARD_WIDTH, height) {
             log::warn!("[fallback-card] measured position failed: {e}");
         }

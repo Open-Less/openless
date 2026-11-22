@@ -170,11 +170,15 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
         style={{
           borderRadius: 'var(--ol-r-xl)',
           padding: 12,
+          // Opaque by design. A backdrop filter here has no visual effect but
+          // makes WebView2 composite an extra transparent surface, which can
+          // leak a pale rectangle around the card on Windows.
           background: 'var(--ol-capsule-pill-bg)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
           border: '1px solid var(--ol-capsule-pill-border)',
-          boxShadow: 'var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset)',
+          // The native window leaves only 12px around the card. The shared 50px
+          // drop shadow is clipped there and reads as a rectangular pale wash,
+          // so keep only the inset highlight for this card.
+          boxShadow: 'var(--ol-capsule-pill-inset)',
           color: 'var(--ol-capsule-btn-ink)',
           fontFamily: 'var(--ol-font-sans)',
           overflow: 'hidden',

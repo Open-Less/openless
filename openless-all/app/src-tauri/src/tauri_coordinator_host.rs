@@ -771,6 +771,17 @@ struct CapsuleWindowState {
     foreground_session_id: Mutex<Option<String>>,
     foreground_target_captured: AtomicBool,
     fallback_card_visible: AtomicBool,
+    /// Whether the active card has already left its off-screen staging area.
+    /// The window stays hidden between `begin_fallback_card` and this flag, so
+    /// the placeholder height is never composited.
+    fallback_card_shown: AtomicBool,
+    /// Latest measured logical height reported for the active card. The height
+    /// is read again at reveal time because a second ResizeObserver report can
+    /// arrive while the window is settling.
+    fallback_card_height: Mutex<Option<f64>>,
+    /// Monitor that owned the card before it was parked off-screen; moving the
+    /// window to -30000 makes `current_monitor()` lose the user's screen.
+    fallback_card_monitor: Mutex<Option<tauri::Monitor>>,
     fallback_presentation_id: AtomicU64,
     fallback_payload: Mutex<Option<crate::types::InsertFallbackCardPayload>>,
     deferred_payload: Mutex<Option<CapsulePayload>>,
@@ -799,6 +810,9 @@ impl Default for CapsuleWindowState {
             foreground_session_id: Mutex::new(None),
             foreground_target_captured: AtomicBool::new(false),
             fallback_card_visible: AtomicBool::new(false),
+            fallback_card_shown: AtomicBool::new(false),
+            fallback_card_height: Mutex::new(None),
+            fallback_card_monitor: Mutex::new(None),
             fallback_presentation_id: AtomicU64::new(0),
             fallback_payload: Mutex::new(None),
             deferred_payload: Mutex::new(None),
@@ -915,6 +929,9 @@ impl CapsuleWindowState {
     fn begin_fallback_card(&self) -> u64 {
         self.deferred_payload.lock().take();
         self.fallback_card_visible.store(true, Ordering::SeqCst);
+        self.fallback_card_shown.store(false, Ordering::SeqCst);
+        *self.fallback_card_height.lock() = None;
+        *self.fallback_card_monitor.lock() = None;
         self.fallback_presentation_id
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1)
@@ -922,10 +939,34 @@ impl CapsuleWindowState {
 
     fn dismiss_fallback_card(&self) -> (bool, Option<CapsulePayload>) {
         let was_visible = self.fallback_card_visible.swap(false, Ordering::SeqCst);
+        self.fallback_card_shown.store(false, Ordering::SeqCst);
+        *self.fallback_card_height.lock() = None;
+        *self.fallback_card_monitor.lock() = None;
         let deferred = was_visible
             .then(|| self.deferred_payload.lock().take())
             .flatten();
         (was_visible, deferred)
+    }
+
+    /// Whether the active card already left its off-screen staging area.
+    fn fallback_card_already_revealed(&self) -> bool {
+        self.fallback_card_shown.load(Ordering::SeqCst)
+    }
+
+    /// Claims the one allowed reveal for the active card. A later height report
+    /// still resizes the visible card, but cannot show it a second time.
+    fn mark_fallback_card_shown(&self) -> bool {
+        self.fallback_card_visible.load(Ordering::SeqCst)
+            && !self.fallback_card_shown.swap(true, Ordering::SeqCst)
+    }
+
+    /// Remembers the newest measurement for the active card.
+    fn remember_fallback_card_height(&self, height: f64) {
+        *self.fallback_card_height.lock() = Some(height);
+    }
+
+    fn fallback_card_latest_height(&self) -> Option<f64> {
+        *self.fallback_card_height.lock()
     }
 
     fn defer_if_fallback_active(&self, payload: &CapsulePayload) -> bool {
@@ -1695,12 +1736,100 @@ impl TauriCapsuleWindow {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    /// Parks the capsule window outside the desktop and shows it there.
+    ///
+    /// A hidden WebView2 suspends painting, so measuring while hidden and
+    /// revealing afterwards produces a blank first frame. Keeping the window
+    /// _visible but off-screen_ lets Chromium lay out, resize and paint the
+    /// card; only a settled frame is then moved on-screen.
+    pub(crate) fn prepare_fallback_card_window(&self) {
+        self.stop_layout_watch();
+        self.hide_transcript_overlay();
+        let Some(window) = self.window() else {
+            return;
+        };
+        if let Ok(Some(monitor)) = window.current_monitor() {
+            *self.state.fallback_card_monitor.lock() = Some(monitor);
+        }
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+            };
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(raw) = handle.as_raw() {
+                    let _ = unsafe {
+                        SetWindowPos(
+                            HWND(raw.hwnd.get() as *mut _),
+                            HWND_TOPMOST,
+                            -30_000,
+                            -30_000,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOACTIVATE,
+                        )
+                    };
+                }
+            }
+        }
+        // Off-screen visibility is also what makes WebView2 keep painting.
+        self.show_for_recording(true);
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                IsWindowVisible, ShowWindow, SW_SHOWNOACTIVATE,
+            };
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(raw) = handle.as_raw() {
+                    let hwnd = HWND(raw.hwnd.get() as *mut _);
+                    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+                        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn fallback_card_already_revealed(&self) -> bool {
+        self.state.fallback_card_already_revealed()
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn remember_fallback_card_height(&self, height: f64) {
+        self.state.remember_fallback_card_height(height);
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn fallback_card_latest_height(&self) -> Option<f64> {
+        self.state.fallback_card_latest_height()
+    }
+
+    #[cfg(target_os = "windows")]
+    /// Shows the result card once, at the size the frontend measured.
+    ///
+    /// Returns false when this presentation was already revealed or dismissed.
+    pub(crate) fn reveal_fallback_card(&self) -> bool {
+        if !self.state.mark_fallback_card_shown() {
+            return false;
+        }
+        self.show_for_recording(true);
+        true
+    }
+
     pub(crate) fn position_fallback_card(&self, width: f64, height: f64) -> tauri::Result<()> {
         let Some(window) = self.window() else {
             return Ok(());
         };
-        let Some(monitor) = window.current_monitor()? else {
-            return Ok(());
+        let monitor = match self.state.fallback_card_monitor.lock().clone() {
+            Some(monitor) => monitor,
+            None => match window.current_monitor()? {
+                Some(monitor) => monitor,
+                None => return Ok(()),
+            },
         };
         let scale = monitor.scale_factor();
         let size = monitor.size();
@@ -2894,6 +3023,36 @@ mod tests {
             assert_eq!(expanded_y + expanded_height as i32, y + height as i32);
             assert!(expanded_height >= height);
         }
+    }
+
+    #[test]
+    fn fallback_card_reveals_once_and_resets_for_the_next_card() {
+        let state = CapsuleWindowState::default();
+        state.begin_fallback_card();
+        assert!(!state.fallback_card_already_revealed());
+        assert!(state.mark_fallback_card_shown());
+        assert!(state.fallback_card_already_revealed());
+        assert!(!state.mark_fallback_card_shown());
+        state.dismiss_fallback_card();
+        state.begin_fallback_card();
+        assert!(!state.fallback_card_already_revealed());
+        assert!(state.mark_fallback_card_shown());
+    }
+
+    #[test]
+    fn fallback_card_height_tracks_the_newest_report_and_survives_reveal() {
+        let state = CapsuleWindowState::default();
+        state.begin_fallback_card();
+        assert_eq!(state.fallback_card_latest_height(), None);
+        state.remember_fallback_card_height(104.0);
+        state.remember_fallback_card_height(106.0);
+        assert_eq!(state.fallback_card_latest_height(), Some(106.0));
+        assert!(state.mark_fallback_card_shown());
+        // A late report must still be visible to the reposition path.
+        state.remember_fallback_card_height(118.0);
+        assert_eq!(state.fallback_card_latest_height(), Some(118.0));
+        state.dismiss_fallback_card();
+        assert_eq!(state.fallback_card_latest_height(), None);
     }
 
     #[test]
