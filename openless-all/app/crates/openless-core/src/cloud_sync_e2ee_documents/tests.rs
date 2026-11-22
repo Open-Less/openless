@@ -120,6 +120,41 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 }
 
 #[test]
+fn legacy_ask_shortcut_survives_encrypted_device_profile_validation() {
+    for behavior in ["open", "record"] {
+        let mut legacy = sample().documents().clone();
+        let profile = legacy
+            .documents
+            .iter_mut()
+            .find(|doc| doc.kind == DocumentKind::DeviceProfile)
+            .unwrap();
+        profile.value["preferences"]["qaShortcutBehavior"] = json!(behavior);
+        let legacy = validate_sync_documents(legacy, Revision::new(3)).unwrap();
+        let profile = legacy
+            .documents()
+            .documents
+            .iter()
+            .find(|doc| doc.kind == DocumentKind::DeviceProfile)
+            .unwrap();
+        let prefs: crate::UserPreferences =
+            serde_json::from_value(profile.value["preferences"].clone()).unwrap();
+        let mut local = snapshot();
+        local.preferences = SecretJson::new(serde_json::to_value(prefs).unwrap());
+        let exported = export_snapshot(local).unwrap();
+        let profile = exported
+            .documents
+            .documents()
+            .documents
+            .iter()
+            .find(|doc| doc.kind == DocumentKind::DeviceProfile)
+            .unwrap();
+        assert_eq!(profile.value["preferences"]["qaShortcutBehavior"], behavior);
+    }
+    let fresh = serde_json::to_value(crate::UserPreferences::default()).unwrap();
+    assert!(fresh.get("qaShortcutBehavior").is_none());
+}
+
+#[test]
 fn public_endpoint_rejects_credential_like_hostnames() {
     assert!(!registry::public_credential_value_safe(
         "ark.endpoint",

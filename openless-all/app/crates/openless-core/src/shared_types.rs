@@ -596,6 +596,9 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
+    /// Kept in the device profile for compatibility with older Ask builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_shortcut_behavior: Option<QaShortcutBehavior>,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -1143,6 +1146,7 @@ struct UserPreferencesWire {
     qa_hotkey: Option<ShortcutBinding>,
     #[serde(default = "default_qa_companion_key")]
     qa_companion_key: String,
+    qa_shortcut_behavior: Option<QaShortcutBehavior>,
     #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
@@ -1409,6 +1413,7 @@ impl Default for UserPreferencesWire {
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
             qa_companion_key: prefs.qa_companion_key,
+            qa_shortcut_behavior: prefs.qa_shortcut_behavior,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1647,6 +1652,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             output_language_preference: wire.output_language_preference,
             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
+            qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1875,6 +1881,13 @@ fn default_qa_hotkey() -> Option<ShortcutBinding> {
     if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QaShortcutBehavior {
+    Record,
+    Open,
+}
+
 fn default_qa_companion_key() -> String { "Space".into() }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
@@ -2045,6 +2058,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
+            qa_shortcut_behavior: None,
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
