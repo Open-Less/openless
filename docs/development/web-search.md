@@ -106,15 +106,43 @@ cargo test --locked -p openless-core --test qa_web_search_contract qa_selected_h
 | `src-tauri/src/commands/qa.rs:210` 与 `src-tauri/src/lib.rs` 的命令注册 | 保留 `less_computer_submit_text` 函数，但当前注册表未发现此命令；前端文件清单也未发现 LessComputerPanel/CodingAgent 设置面板。Core 的门控仍要求 `testing_features_enabled && coding_agent_enabled`（`shared_types.rs:975`）。未恢复这些入口 |
 | `coding_agent.rs:1793` 的 MCP 探测 | 只对 Claude 执行 `mcp list` 解析用户已有 MCP 健康状态；MCP 是外部模型连接工具的协议，此处没有创建 OpenLess 搜索工具或按会话注入配置。不能从这个探测推断所有 CLI 的接入能力均已实现 |
 
-因此，当前 **没有已证明会消费本设置的生产 Agent 入口**；Ask 与 Agent 共同使用所选服务这一整体验收尚不成立。本次没有修改这些运行路径或偷偷替换其默认搜索工具，也没有为补足验收而恢复 Agent 或 Ask。
+因此，当前 `51b65224` 搜索开发基线 **没有已证明会消费本设置的生产 Agent 入口**；Ask 与 Agent 共同使用所选服务这一整体验收尚不成立。本次没有修改这些运行路径或偷偷替换其默认搜索工具，也没有为补足验收而恢复 Agent 或 Ask。
 
-最小兼容选择供协调者决定：
-
-1. **维持本批范围为已有 Ask 搜索，Agent 明确列为未接入。** 无需恢复任何已移除入口；已完成的搜索改动可独立验收。这是当前最小充分交付，但不应将 Agent 子要求标为完成。
-2. **若必须让 Agent 的每次搜索都走所选服务，先明确恢复哪一个已有 CLI/宿主入口。** 在既有 runner 上增加本次会话的本地工具桥，工具处理仍调用 `WebSearchConfig::load` 和 `web_search::search`，由原 `sessionId` 绑定设置快照与取消；只给经核实支持的 CLI 按次注入本地工具配置，key 留在宿主，不写入 argv/CLI 全局配置。可优先评估已有 MCP 接缝，但本仓库没有现成可复用的搜索服务端/请求回调，具体 CLI 版本及注册能力需要单独核实；此方案需要宿主和 runner 的接口实现及验收，不能包装成几个选项或事件解析的小修复，不需要线上代理或新 Agent 平台。
-
-仅在启动前把检索结果附加到原 prompt，是更小的可选辅助方案，但它只能提供首次材料，**不能控制 CLI 后续自行搜索使用哪个服务**，因此不满足“Agent 搜索统一受本选择控制”的完整要求。没有自动实施该方案，也没有把整段可能含隐私的 Agent 任务直接当公开查询发送。
+上述结论仅限本次 `51b65224` 开发基线与搜索分支，不能扩大为全项目无 Agent 能力。后续已只读核对指定的独立 Ask 分支，找到了可复用的 `PersonalAssistant`；应优先按下文审查该既有入口，不应据此要求用户选择全新 Agent 产品，也不应优先新建 CLI/MCP 桥。当前 Beta 的启用和集成仍须协调者明确验收。
 
 ## 共用受控 CI
 
 已与风格负责人 `dispatch:ctx_445fa40c603a` 共享原 ignored `hybrid_live_official_deepseek` 入口和安全约定，复用其 `f10c62b6` 的单一 `ci.yml` 手动 `live_acceptance=off/style/search` 方案，默认关闭，不另建框架。本分支没有合入或修改其 CI；协调者须在包含两组已验收依赖的基线上运行一次 `live_acceptance=search`，仅该执行步骤通过环境注入官方 Secret，不导出 key，不在普通 PR 自动付费。搜索测试一次中性查询、不重试，必须实际包含 DeepSeek 提供方才通过；该受控检查结果当前仍待回传。
+
+## 指定 Ask 分支的只读复核：已有共享搜索的 Agent
+
+按协调者要求，另用 `git show`、`git grep`、`git log` 和 Git 差异只读核对以下引用，没有切换或修改这些分支，没有合入未验收 Ask 代码，没有启动其宿主或开启 Beta 灰色功能。
+
+| 分支与检查时的 commit | 发现 | 集成含义 |
+| --- | --- | --- |
+| `local/ask-anything` — `d266ea890f54b290a413c559dfb85de12e6c0d02` | 已集成独立 Ask、`PersonalAssistant` 及 Compact；有真实宿主注册和共享搜索工具装配 | 这是本地 Beta 上的 Ask 专项候选基线，不是当前 `51b65224` 的后继；与本搜索分支共同祖先为 `33f15149`，不可直接覆盖或当作无冲突快进 |
+| `deferred/ask-anything-20261122` — `ba3fc60462d20c749c42b2669f0198795b279fba` | 同样有 Agent 工具循环、共享搜索和宿主接入；其历史还含 `661685ee` 冻结及 `ba3fc604` Compact 调整 | 协调者可将其作为专项验收依据；不能因找到源码就解冻、发布或恢复入口 |
+| `review/main-ask-beta-20261121` — `955870409438c6f792c0a951b60af0e9f142a3f1` | 同样有共享搜索的 `PersonalAssistant`，包含 `07353f9c5d542915ef8cec137f105e9d90ca878b` 的助手与原生上下文集成 | 比 deferred 版本少后续 Compact 调整；这里的已有 Agent 是只读个人助手，不是旧 Less Computer 的外部 CLI |
+
+三处分支都没有发现生产 `CodingAgentProcessAdapter` 实现/配置调用，旧 CLI 路径的限制仍成立；但这**不能排除另一条已经存在的 PersonalAssistant 路径**。以下位置在三处分支的关键装配处一致，路径相对 `openless-all/app/`：
+
+1. `src-tauri/src/lib.rs:91` 声明桌面 `ask_window`，`:896–897` 实际装配 `AskHost` 和 `Desktop`，`:371–378` 注册 `ask_window_open`、`ask_submit`、快照与取消等宿主命令。`src-tauri/src/ask_window/chat.rs:46–84` 的 `AskHost::new` 调用 `backend.create_standalone_ask`，`:694` 的 `ask_submit` 处理真实提交及会话授权。因此不只是孤立 Core 类型。
+2. `crates/openless-core/src/api.rs:4381–4420` 的 `create_standalone_ask` 从原 credential store 创建 **同一个** `Arc<WebSearchTool>`，同时交给 `PersonalAssistant::new(AssistantDependencies { search: search.clone(), … })` 和 `StandaloneQaService`。同一个已配置模型工厂、usage recorder 也继续复用，无需建立第二套 Agent 或搜索设置。
+3. `qa_service/standalone.rs:1757–1772` 的普通问答分支构造 `AssistantRequest` 并调用 `deps.assistant.run`。`assistant.rs:59–135` 是有限、可取消的模型 → 工具 → 结果 → 模型循环，支持多次工具调用；不是预检索一次后让外部 CLI 自行搜索。
+4. `assistant/tools.rs:163–210` 处理 `AskToolCall::WebSearch { public_query }`：调用 `deps.search.enabled()`、`deps.search.search(AskSearchRequest { key, public_query, … })`，保留 `conversation_id/turn_id/tool_call_id`，转发真实来源事件并把工具结果送回循环。这里的现成工具接口已经满足“指定 Agent 可复用搜索入口”的结构前提，不需要新建 MCP 服务。
+5. `ask_search.rs:451–545` 将该工具接口适配到同一个 `WebSearchTool`；`:262–312` 的 `SearchRun::execute` 读取原 `WebSearchConfig::load(credentials)`，按所选 provider 调用 `web_search::query_sources(config, query, RequestPolicy::Ask, on_request)`；`web_search/public_sources.rs:122–154` 仍是原免费两源或混合三源并发。因此 **源码已证明这些专项分支中的 Ask 与 PersonalAssistant 会消费同一份服务选择**，但本次未运行这些分支，不能宣称其真实安装版行为或模型答案验收通过。
+
+### 在已验收 Ask 基线上移植本批搜索改动的最小范围
+
+建议协调者先指定并验收上述一个现成 Ask 基线，再安排搜索改动移植；不要将整个 `07353f9c` 或 `d266ea89` 当作小工具桥提交合入当前发布基线。这些引用包含独立 Ask 框架、附件、上下文权限、原生目标及 Compact 等跨模块依赖，Core `create_standalone_ask` 还受 `ask-attachments` feature 控制，桌面 `src-tauri/Cargo.toml:88` 已启用此 feature。
+
+在协调者指定的含依赖基线上，搜索侧应仅适配以下现有接口：
+
+- 移植 `2870ab58` 的设置配置恢复、原 secret account、服务 ID、费用文案、聚合降级与来源去重规则；不要覆盖 Ask 分支已有 `RequestPolicy::Ask`、`on_request` 回调、页面读取权限与取消策略。`query_sources` 和 `public_sources::query` 的签名与当前搜索基线不同，需要按函数手工适配，不能整体替换文件。
+- **额外删除 `ask_search.rs:280–285` 的 Hybrid 缺 key 提前返回**：该分支在 `web_search::query_sources` 外还有一层检查，单移植当前公共搜索模块的修复仍会让助手丢掉免费降级。需保留 Tavily/Brave/SearXNG 的原验证规则，不改变其他服务行为。
+- 将新的 `SearchResult.providers` 保留到 `ask_search.rs:320` 的 `SearchSource` 和 `SearchEvidence`，必要时扩展 `qa_service/standalone.rs:284` 的 `AskSource` 及其事件映射、宿主 wire/前端类型；这些现有结构当前仅保留 URL/标题/摘要/读取状态，直接投影会丢提供方。来源链接当前已有，不要另造。
+- 保留该 Ask 分支的证据边界：`ask_search.rs:562` 的 `usable_evidence` 要求页面已读且 excerpt 非空；若仅有搜索摘要、网页全被拒绝/读失败，返回 `SnippetOnly`，`assistant/tools.rs` 只向模型报告“摘要未核实”的状态。这与当前 legacy Ask 直接注入搜索摘要不同，不能把两条真实验收混记；在专项集成时需验证实际来源事件、摘要可用性和失败语义，不能把页面被拒绝伪装成读取成功。
+
+可优先复用该分支已有测试：`ask_search::tests::{global_off_does_not_start_search,source_discovery_does_not_claim_blocked_reads_or_expose_page_bodies,cancellation_drops_a_request_waiting_for_its_response}`、`assistant::tests::{consecutive_tools_use_live_time_and_preserve_search_sources,cancellation_drops_tool_and_never_emits_completed}`，以及 `qa_service/standalone/model/tests.rs:149` 的本地 HTTP 工具循环。后者当前覆盖时间和计算，不证明免费/混合搜索的真实成功；应在相同模型/工具接口中补所选免费与 Hybrid 的来源回传、DeepSeek 失败降级、全空、取消及恢复配置检查。
+
+这些测试本次仅核对源码，**未跨工作区重跑**。本分支 `c216c479` 的 legacy Ask Core fixture/live 证据仍仅适用于本分支；官方 DeepSeek 成功仍等待共用受控 CI。本次复核交付文档，不修改任何产品源码或其他分支。
