@@ -516,27 +516,35 @@ unsafe fn set_voice_edit_selection(element: AxUiElementRef, range: CFRange) -> R
     Ok(())
 }
 
+unsafe fn validate_voice_edit_target(
+    target: &VoiceEditTarget,
+    selection: CFRange,
+) -> Result<SendableElement, String> {
+    let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate()) else {
+        return Err("voiceEditTargetUnavailable".into());
+    };
+    let retained = SendableElement::retained(element);
+    CFRelease(element as CFTypeRef);
+    let element = retained.as_ref();
+    if CFEqual(element as CFTypeRef, target.element.as_ref() as CFTypeRef) == 0 {
+        return Err("voiceEditTargetChanged".into());
+    }
+    if voice_edit_text(element).as_deref() != Some(target.text.as_str())
+        || copy_selected_range(element) != Some(selection)
+    {
+        return Err("voiceEditFieldChanged".into());
+    }
+    Ok(retained)
+}
+
 pub(super) fn apply_voice_edit_target(
     target: &VoiceEditTarget,
     text: &str,
-    insert: impl FnOnce(&str) -> Result<(), String>,
+    insert: impl FnOnce(&str, &mut dyn FnMut() -> bool) -> Result<(), String>,
 ) -> Result<(), String> {
     unsafe {
-        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate())
-        else {
-            return Err("voiceEditTargetUnavailable".into());
-        };
-        let retained = SendableElement::retained(element);
-        CFRelease(element as CFTypeRef);
+        let retained = validate_voice_edit_target(target, target.selection_utf16)?;
         let element = retained.as_ref();
-        if CFEqual(element as CFTypeRef, target.element.as_ref() as CFTypeRef) == 0 {
-            return Err("voiceEditTargetChanged".into());
-        }
-        if voice_edit_text(element).as_deref() != Some(target.text.as_str())
-            || copy_selected_range(element) != Some(target.selection_utf16)
-        {
-            return Err("voiceEditFieldChanged".into());
-        }
         let range = if target.selection_utf16.length > 0 {
             target.selection_utf16
         } else {
@@ -548,33 +556,14 @@ pub(super) fn apply_voice_edit_target(
         super::write_with_selection_recovery(
             || {
                 set_voice_edit_selection(element, range)?;
-                let GatedElement::Ready(current) =
-                    focused_element_passing_the_gate(voice_edit_gate())
-                else {
-                    return Err("voiceEditTargetChanged".into());
-                };
-                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
-                CFRelease(current as CFTypeRef);
-                if !same {
-                    return Err("voiceEditTargetChanged".into());
-                }
-                if voice_edit_text(element).as_deref() != Some(target.text.as_str()) {
-                    return Err("voiceEditFieldChanged".into());
-                }
-                insert(text)
+                validate_voice_edit_target(target, range)?;
+                // The predicate only reads the prepared range; never reselect after waiting.
+                insert(text, &mut || {
+                    validate_voice_edit_target(target, range).is_ok()
+                })
             },
             || {
-                let GatedElement::Ready(current) =
-                    focused_element_passing_the_gate(voice_edit_gate())
-                else {
-                    return;
-                };
-                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
-                CFRelease(current as CFTypeRef);
-                if same
-                    && voice_edit_text(element).as_deref() == Some(target.text.as_str())
-                    && copy_selected_range(element) == Some(range)
-                {
+                if validate_voice_edit_target(target, range).is_ok() {
                     let _ = set_voice_edit_selection(element, target.selection_utf16);
                 }
             },
