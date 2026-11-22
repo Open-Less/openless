@@ -56,6 +56,37 @@ async function revealField(page: Page, label: string) {
   return field;
 }
 
+test('keeps app-style navigation in place when focused during group expansion', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 980, height: 640 });
+  await page.goto(`${fixtureOrigin}/?os=mac`);
+  await page.getByRole('button', { name: '风格', exact: true }).click();
+  const group = page.locator('.ol-sidebar-nav-group[aria-hidden="false"]');
+  const scrolled = await group.evaluate((node) => {
+    // Reproduce the partly clipped expansion frame from the CI trace without
+    // racing the animation clock.
+    const group = node as HTMLElement;
+    group.style.transition = 'none';
+    group.style.gridTemplateRows = '20px';
+    const clip = node.querySelector<HTMLElement>('.ol-sidebar-nav-clip')!;
+    const destination = node.querySelectorAll<HTMLButtonElement>('button')[2];
+    const before = destination.getBoundingClientRect().top;
+    destination.focus();
+    destination.scrollIntoView({ block: 'nearest' });
+    const measurement = {
+      scrollTop: clip.scrollTop,
+      shift: destination.getBoundingClientRect().top - before,
+    };
+    group.style.removeProperty('grid-template-rows');
+    return measurement;
+  });
+  expect(scrolled.scrollTop).toBe(0);
+  expect(scrolled.shift).toBe(0);
+  await page.getByRole('button', { name: '自动风格', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '编程的风格包' })).toBeVisible();
+});
+
 test('shares packs across categories and apps from the third Styles page', async ({ page }) => {
   const surface = await openPage(page);
   await expect(surface.getByRole('heading', { name: '自动风格', exact: true })).toBeVisible();

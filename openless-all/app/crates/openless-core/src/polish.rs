@@ -3839,13 +3839,10 @@ mod tests {
     }
 
     // ──────────────── Conversation-aware polish chat message construction ────────────────
-    // Core concern: give the LLM context but keep it from echoing that context back.
-    // "Do not repeat" is enforced by two defenses:
-    //   1. role=assistant marks historical polished output, so the LLM treats it as
-    //      already-said
-    //   2. polish_context_instruction appended to the system prompt explicitly forbids
-    //      repeating
-    // The 3 tests below lock the construction path; any regression fails immediately.
+    // Keep historical input/output separate from the current user message. The
+    // system instruction limits history to understanding the current input; it
+    // must still allow the current style to produce the same result again.
+    // The tests below lock message construction and that instruction contract.
 
     #[test]
     fn build_polish_history_messages_empty_prior_falls_back_to_two_messages() {
@@ -3909,7 +3906,7 @@ mod tests {
         // Key invariant: historical polish must sit on the assistant role, never merged
         // into the current user message. If polish ends up in the user role (e.g. a
         // refactoring typo), the LLM takes it as new user input and may polish it again
-        // — repeating prior text and violating the "no repetition" goal.
+        // — treating historical text as the current task.
         let prior = vec![("我说点什么".into(), "我说点什么。".into())];
         let msgs = build_polish_history_messages("SYS", &prior, "现在说的话");
 
@@ -3960,24 +3957,27 @@ mod tests {
     }
 
     #[test]
-    fn polish_context_instruction_explicitly_forbids_repeating_prior_assistant_output() {
-        // Second defense: the system prompt must contain an explicit "do not repeat
-        // prior assistant output" instruction. Chat structure alone is not enough —
-        // some models still echo prior turns in long contexts. The wording may change;
-        // these keywords must not.
+    fn polish_context_instruction_limits_history_without_overriding_current_style() {
+        // History must not become the current task or extra output. This is not a
+        // blanket ban on repeated text: a fixed-output style (e.g. "一一一") must
+        // still produce its required result even when history contains that result.
         let s = prompts::polish_context_instruction();
-        assert!(s.contains("不要"), "需要中文显式禁止指令");
         assert!(
-            s.contains("复读") || s.contains("重复") || s.contains("不要把上文带进来"),
-            "需要明确禁止复读语义"
+            s.contains("历史只用于理解当前输入"),
+            "历史只能提供理解当前输入所需的语境，不能成为本轮任务或答案"
         );
         assert!(
-            s.contains("assistant") || s.contains("已经整理"),
-            "需要点名是 assistant role 的历史输出 / 整理后内容"
+            s.contains("不得覆盖当前风格包的任务或输出要求"),
+            "历史不能覆盖当前风格包要求"
         );
         assert!(
-            s.contains("当前") && s.contains("最新"),
-            "需要明确：只输出当前最新一条"
+            s.contains("每次只处理**当前最新一条** user message"),
+            "只能处理当前最新用户消息"
+        );
+        assert!(s.contains("不要附带历史消息"), "输出不能夹带历史消息");
+        assert!(
+            s.contains("当前风格包要求的结果即使与历史输出相同，也应照常输出"),
+            "当前风格要求的相同结果必须仍可输出，不能笼统禁止重复"
         );
     }
 

@@ -706,12 +706,12 @@ jobs:
           if-no-files-found: error
 
       - name: Launch the packaged Apple Silicon app
-        if: inputs.macos_smoke_sha != '' && matrix.updater-arch == 'aarch64'
+        if: (inputs.macos_smoke_sha != '' || (github.event_name == 'push' && contains(github.ref_name, '-Beta.'))) && matrix.updater-arch == 'aarch64'
         timeout-minutes: 2
         shell: bash
         working-directory: openless-all/app
         env:
-          SMOKE_SHA: ${{ inputs.macos_smoke_sha }}
+          SMOKE_SHA: ${{ inputs.macos_smoke_sha || env.OPENLESS_BUILD_ID }}
         run: |
           set -euo pipefail
           app=src-tauri/target/release/bundle/macos/OpenLess.app
@@ -734,7 +734,7 @@ jobs:
           exit "$status"
 
       - name: Upload macOS launch evidence
-        if: ${{ !cancelled() && inputs.macos_smoke_sha != '' && matrix.updater-arch == 'aarch64' }}
+        if: ${{ !cancelled() && (inputs.macos_smoke_sha != '' || (github.event_name == 'push' && contains(github.ref_name, '-Beta.'))) && matrix.updater-arch == 'aarch64' }}
         uses: actions/upload-artifact@v4
         with:
           name: openless-macos-launch-smoke-aarch64
