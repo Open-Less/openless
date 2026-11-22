@@ -42,8 +42,8 @@
   gap: 8px;
   flex-wrap: wrap;
   padding: 16px 24px;
-  border-top: 1px solid var(--ol-line);
-  background: var(--ol-surface-2);
+  border: 0;
+  background: transparent;
 }
 .ol-dialog-action {
   min-height: 36px;
@@ -182,7 +182,8 @@
 }
 .ol-structured-dialog--terms :is(.ol-dialog-footer, .ol-channel-dialog-footer) {
   padding: 16px 24px;
-  background: transparent;
+  border-top: 1px solid var(--ol-line);
+  background: var(--ol-surface-raised);
 }
 .ol-structured-dialog--terms :is(.ol-dialog-header, .ol-channel-dialog-header) :is(h2, h3) {
   font-size: 16px;
@@ -207,7 +208,7 @@
   min-height: 0;
 }
 
-/* Compact destructive decisions use a centered alert and equal action columns. */
+/* Destructive decisions share the card surface and keep actions at its lower right. */
 .ol-dialog-overlay > .ol-dialog-card.ol-structured-dialog--decision {
   overflow: hidden;
   padding: 24px;
@@ -241,9 +242,9 @@
   text-align: center;
 }
 .ol-structured-dialog--decision .ol-dialog-footer {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
   padding: 0;
   border: 0;
   background: transparent;

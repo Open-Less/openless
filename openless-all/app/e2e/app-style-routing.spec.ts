@@ -105,10 +105,17 @@ test('preselects official apps, moves a conflicting app, and assigns a newly obs
   await expect(wechat).toHaveAttribute('data-conflict', 'true');
   await wechat.click();
   const move = page.getByRole('dialog', { name: '移动应用' });
+  await expect(move.locator('.ol-dialog-footer')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(move.locator('.ol-dialog-footer')).toHaveCSS('border-top-width', '0px');
   await expect(move).toContainText('聊天');
   await expect(move).toContainText('正式表达');
   await move.getByRole('button', { name: '移到此分类' }).click();
   const appDialog = page.getByRole('dialog', { name: '选择应用', exact: true });
+  await expect(appDialog.locator('.ol-dialog-footer')).toHaveCSS(
+    'background-color',
+    'rgba(0, 0, 0, 0)',
+  );
+  await expect(appDialog.locator('.ol-dialog-footer')).toHaveCSS('border-top-width', '0px');
   await expect(appDialog.getByRole('checkbox', { name: 'WeChat', exact: true })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Custom Editor', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Visual Studio Code', exact: true }).click();

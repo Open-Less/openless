@@ -228,7 +228,12 @@ test('cloud deletion focuses cancel and keeps a failed confirmation open', async
       }),
     );
   expect(cancelBox.x).toBeLessThan(removeBox.x);
-  expect(Math.abs(cancelBox.width - removeBox.width)).toBeLessThan(1);
+  await expect(dialog.locator('.ol-dialog-footer')).toHaveCSS('justify-content', 'flex-end');
+  await expect(dialog.locator('.ol-dialog-footer')).toHaveCSS(
+    'background-color',
+    'rgba(0, 0, 0, 0)',
+  );
+  await expect(dialog.locator('.ol-dialog-footer')).toHaveCSS('border-top-width', '0px');
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
   await expect(dialog).toContainText('Local data is kept.');
   await expect(dialog).toContainText('up to 7 days');
