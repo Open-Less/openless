@@ -120,6 +120,36 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 }
 
 #[test]
+fn new_optional_preference_distinguishes_untouched_from_explicit_default() {
+    let untouched = crate::shared_types::UserPreferences::default();
+    assert_eq!(untouched.translation_shift_tap_count(), 1);
+    assert!(serde_json::to_value(&untouched)
+        .unwrap()
+        .get("translationShiftTapCount")
+        .is_none());
+    for value in [1, 2, 255] {
+        let prefs: crate::shared_types::UserPreferences =
+            serde_json::from_value(json!({"translationShiftTapCount":value})).unwrap();
+        assert_eq!(prefs.translation_shift_tap_count(), value as u8);
+        assert_eq!(
+            serde_json::to_value(prefs).unwrap()["translationShiftTapCount"],
+            value
+        );
+    }
+    for value in [json!(0), json!(-1), json!(256), json!(1.5), json!("2")] {
+        let mut data = snapshot();
+        data.preferences.expose_mut()["translationShiftTapCount"] = value.clone();
+        assert!(export_snapshot(data).is_err());
+        assert!(
+            serde_json::from_value::<crate::shared_types::UserPreferences>(
+                json!({"translationShiftTapCount":value})
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn legacy_ask_shortcut_survives_encrypted_device_profile_validation() {
     for behavior in ["open", "record"] {
         let mut legacy = sample().documents().clone();

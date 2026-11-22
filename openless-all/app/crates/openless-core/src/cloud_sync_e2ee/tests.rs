@@ -139,6 +139,7 @@ struct Data {
     generation: AtomicU64,
     changes: tokio::sync::watch::Sender<SyncChange>,
     fail_restore: AtomicBool,
+    materialized_next_export: AtomicBool,
     capture_gate: Mutex<Option<Arc<crate::cloud_sync_e2ee_store::gate::SyncWriteGate>>>,
     export_attempts: AtomicU64,
     custom_origin: Mutex<Option<String>>,
@@ -190,6 +191,7 @@ impl Data {
             generation: AtomicU64::new(1),
             changes,
             fail_restore: AtomicBool::new(false),
+            materialized_next_export: AtomicBool::new(false),
             capture_gate: Mutex::new(None),
             export_attempts: AtomicU64::new(0),
             custom_origin: Mutex::new(None),
@@ -237,6 +239,7 @@ impl SyncServiceData for Data {
             Ok(ExportedDocuments {
                 generation: Revision::new(self.generation.load(Ordering::Acquire)),
                 documents,
+                materialized_preferences: self.materialized_next_export.swap(false, Ordering::AcqRel),
             })
         })
     }
@@ -261,6 +264,7 @@ impl SyncServiceData for Data {
             Ok(ExportedDocuments {
                 generation: Revision::new(generation),
                 documents: desired,
+                materialized_preferences: false,
             })
         })
     }
@@ -562,11 +566,39 @@ impl Server {
 
 struct Fixture {
     service: EncryptedSyncService,
+    events: crate::events::BackendEventPublisher,
     marketplace: Arc<crate::marketplace::MarketplaceService>,
     data: Arc<Data>,
     vault: Arc<Vault>,
     root: std::path::PathBuf,
 }
+
+#[tokio::test]
+async fn materialized_preference_receipt_invalidates_ui_once() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture
+        .data
+        .materialized_next_export
+        .store(true, Ordering::Release);
+    fixture.create(false).await.unwrap();
+    fixture.service.sync_now().await.unwrap();
+    let events = fixture.events.replay_after(0);
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event.kind,
+                crate::events::BackendEventKind::CloudSyncRestoreCompleted(_)
+            ))
+            .count(),
+        1
+    );
+    fixture.service.shutdown().await;
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -617,10 +649,11 @@ impl Fixture {
             local,
             data.clone(),
             vault.clone(),
-            events,
+            events.clone(),
         );
         Self {
             service,
+            events,
             marketplace,
             data,
             vault,
