@@ -627,3 +627,37 @@ test('Select keeps a newer open intent after revoking its accepted predecessor',
   await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
   await expect(mirror).toBeFocused();
 });
+
+test('Select keeps the WebKit composition-end guard across tasks before queued open', async ({ page, browserName }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.goto(`${fixture}?handoff=queued-ime`);
+  await page.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.evaluate((trigger) => {
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    trigger.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    trigger.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    window.addEventListener('keydown', (event) => {
+      (window as Window & { imeEscapePrevented?: boolean }).imeEscapePrevented = event.defaultPrevented;
+    }, { capture: true, once: true });
+  });
+  // The 0ms task has run, but neither the WebKit 5ms guard nor the queued
+  // animation frame has elapsed. This clock controls only this IME boundary.
+  await page.clock.runFor(1);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as Window & { imeEscapePrevented?: boolean }).imeEscapePrevented))
+    .toBe(browserName !== 'webkit');
+  await page.clock.runFor(32);
+  const dialog = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+  await expect(dialog).toBeVisible();
+  if (browserName === 'webkit') {
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(250);
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+    await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false]');
+    await expect(dialog).toBeVisible();
+  } else {
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+  }
+});

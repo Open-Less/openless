@@ -165,6 +165,8 @@ Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为�
 
 固定 Base UI 先调用应用 `onOpenChange`、后提交自己的 open 状态。一次本机原入口观测确认应用清 pending 至 DOM 更新之间存在交接空档；它没有证明 Linux CI 的唯一失败分支。按协调者确认的内部契约，Select wrapper 现在以标准受控 Root 使用唯一有效开关值（外部 `open` 始终优先），精确作废旧 native 请求；modalStack 只保留当前表面的唯一过渡所有者和同一次 Escape 的父层归属。queued 与 accepted 未提交均连续负责，匹配请求的受控提交与子层 effects 完成后交给库的普通 Escape、焦点和键盘策略。没有每个 Select 的常驻 document 监听，也不修改 DOM/data-open 伪造关闭。
 
-禁用、卸载、表面／顶层变化及新意图会撤销旧记录；旧 native 回调不能重新打开后继意图。accepted 打开被撤销后，只在该关闭请求已经提交且有效 open=false 时，通过库的公开 unmount 动作结算尚未完成挂载的 popup，保留外部控制器坚持 open=true 的行为。IME 的 compositionend 零任务保护沿 Base UI 的 WebKit 语义，仅让组合输入保留自己的按键，不用于延迟关闭或重试断言。
+禁用、卸载、表面／顶层变化及新意图会撤销旧记录；旧 native 回调不能重新打开后继意图。accepted 打开被撤销后，只在该关闭请求已经提交且有效 open=false 时，通过库的公开 unmount 动作结算尚未完成挂载的 popup，保留外部控制器坚持 open=true 的行为。IME 的 compositionend 保护直接复用固定 Base UI 的引擎判断：WebKit 为 5ms、其他引擎为 0ms；固定库明确指出 Safari 的 0/1ms 不足。它仅让组合输入保留自己的按键，不用于延迟关闭或重试断言。
 
 新增真实 Select 回调边界回归在 Root 已接受 click 而 DOM 仍 false 时同步触发 Escape，旧实现错误关闭父 dialog，修复后保留父层、关闭当前意图并返回焦点。原目录真实 click → 立即 Escape 和已打开 Escape 断言均保留。两浏览器定向共 22 项及 TypeScript 通过，包含 queued／旧 popup、accepted、受控 open 接受／拒绝、IME、禁用／卸载、新顶层和后继意图。最终资格仍以新增提交的正常 PR CI 和独立增量审查为准；不重跑音频、同步矩阵或收费模型，不合 beta、不改版本和安装。
+
+该增量复审只余 IME 时长差异。补充一条受控时钟回归：0ms 任务已执行而 WebKit 5ms 窗口尚未结束时发出真实键盘 Escape，旧 0ms 实现错误 preventDefault；对齐后该按键不被过渡层抢走，后续正常 Escape 仍可关闭菜单。时钟仅用于这条 IME 边界，原真实 click → 立即 Escape 用例没有增加等待或重试。直接声明已锁定的 `@base-ui/utils@0.5.0` 来复用与库相同的 `platform.engine.webkit`，不升级依赖。

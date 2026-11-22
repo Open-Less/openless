@@ -1,3 +1,5 @@
+import { platform } from '@base-ui/utils/platform';
+
 const FOCUSABLE =
   'a[href], button, textarea, select, input:not([type="hidden"]), [contenteditable="true"], [tabindex]';
 
@@ -85,9 +87,9 @@ export function createModalStack() {
     if (!owner) return;
     window.clearTimeout(owner.compositionEnd);
     owner.composing = true;
-    // Match Base UI's WebKit compositionend -> keydown protection. This does
-    // not defer dismissal; it leaves that IME keystroke to the native input.
-    owner.compositionEnd = window.setTimeout(() => { owner.composing = false; }, 0);
+    // Match useDismiss: 0/1ms do not protect Safari's next-task IME keydown.
+    // This guards composition only; it does not defer or retry dismissal.
+    owner.compositionEnd = window.setTimeout(() => { owner.composing = false; }, platform.engine.webkit ? 5 : 0);
   }
 
   function onMouseDown(event: MouseEvent) {
