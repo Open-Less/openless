@@ -210,7 +210,7 @@ function mount({
     getCapsuleSnapshot: async () => {
       assert.equal(
         listeners.size,
-        overlay ? 3 : 4,
+        overlay ? 3 : 5,
         'all event subscriptions must precede snapshot reads',
       );
       requests += 1;
@@ -223,7 +223,7 @@ function mount({
         return {
           invoke: async (command) => {
             assert.equal(command, 'get_capsule_auxiliary_snapshot');
-            assert.equal(listeners.size, 4);
+            assert.equal(listeners.size, 5);
             return auxiliary();
           },
         };
@@ -244,6 +244,8 @@ function mount({
   };
   for (const name of [
     'setState',
+    'setDisplayedSession',
+    'setProcessingJobs',
     'setLevel',
     'setMessage',
     'setLocalAsrText',
@@ -410,7 +412,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
     },
   });
   await until(() => view.warnings.length === 1);
-  assert.equal(view.listeners.size, 4);
+  assert.equal(view.listeners.size, 5);
   view.emit('capsule:state', { state: 'recording', sessionId: 'session' });
   transcript(view, 11, 'live after failure');
   assert.equal(view.values.setLocalAsrText, 'live after failure');
@@ -436,12 +438,12 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
   const view = mount({
     beforeListen: (name) => (name === 'vocab:suggested' ? pending.promise : undefined),
   });
-  await until(() => view.listeners.size === 2);
+  await until(() => view.listeners.size === 3);
   release(view);
   pending.resolve();
   await tick();
   assert.equal(view.listeners.size, 0);
-  assert.equal(view.stopped.length, 3);
+  assert.equal(view.stopped.length, 4);
   assert.equal(view.requests, 0);
 }
 
@@ -454,7 +456,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
   });
   await until(() => view.warnings.length === 1);
   assert.equal(view.listeners.size, 0);
-  assert.equal(view.stopped.length, 2);
+  assert.equal(view.stopped.length, 3);
   assert.equal(view.requests, 0);
   release(view);
 }
@@ -463,7 +465,19 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
 {
   const pending = deferred();
   const view = mount({ auxiliary: () => pending.promise });
-  await until(() => view.listeners.size === 4);
+  await until(() => view.listeners.size === 5);
+  await tick();
+  const processing = [{ sessionId: 'live-processing' }];
+  view.emit('dictation:jobs', processing);
+  pending.resolve({ suggestions: [], fallback: null, processing: [{ sessionId: 'stale' }] });
+  await until(() => view.values.setInsertFallback === null);
+  assert.equal(view.values.setProcessingJobs, processing);
+  release(view);
+}
+{
+  const pending = deferred();
+  const view = mount({ auxiliary: () => pending.promise });
+  await until(() => view.listeners.size === 5);
   await tick();
   const live = [{ id: 'live', pattern: 'old', replacement: 'new' }];
   const fallback = { text: 'not inserted', reason: 'missing target' };
@@ -476,7 +490,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
 {
   const pending = deferred();
   const view = mount({ auxiliary: () => pending.promise });
-  await until(() => view.listeners.size === 4);
+  await until(() => view.listeners.size === 5);
   await tick();
   view.emit('insert:fallback', null);
   const suggestions = [{ id: 'pending', pattern: 'a', replacement: 'b' }];
@@ -488,7 +502,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
 {
   const pending = deferred();
   const view = mount({ auxiliary: () => pending.promise });
-  await until(() => view.listeners.size === 4);
+  await until(() => view.listeners.size === 5);
   release(view);
   const writes = view.writes.length;
   pending.resolve({ suggestions: [], fallback: null });

@@ -4802,6 +4802,12 @@ impl TauriTextInsertionSession {
     }
 
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
+        // Mobile insertion is validated by its own IME/accessibility strategy;
+        // the desktop AX/UIA position capability is not available there.
+        #[cfg(mobile)]
+        { Ok(()) }
+        #[cfg(not(mobile))]
+        {
         crate::selection::selection_insertion_target_is_current(&self.insertion_target)
             .then_some(())
             .ok_or_else(|| {
@@ -4810,6 +4816,7 @@ impl TauriTextInsertionSession {
                     "original input target or position changed or is unavailable; no text was inserted",
                 ).target_unavailable()
             })
+        }
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
@@ -5266,6 +5273,7 @@ impl TextInsertionSession for TauriTextInsertionSession {
         // A position-checked destination is one final delivery. Re-reading the
         // captured range after our own prefix would reject the remaining text;
         // guessing an updated range would instead admit user caret movement.
+        #[cfg(not(mobile))]
         if crate::selection::dictation_target_requires_position(&self.insertion_target) { return false; }
         #[cfg(target_os = "macos")]
         {

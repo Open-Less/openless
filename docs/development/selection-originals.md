@@ -109,3 +109,14 @@ Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为�
 - 为匹配共享 Core 的严格检查，仅把联合测试读取 PCM 时的互斥锁在异步 shutdown 前显式释放；不改变断言、音频、模式或目标生产逻辑。
 
 随后只向自己的开发分支推送并创建指向 beta 的 Draft PR，使用仓库正常 PR CI 按真实影响决定门禁，不添加跳过共享 Core 的标签，不手动重复触发 workflow 或发布构建。CI 链接、终态与具体失败由本轮交接和 PR 记录承接；即使 CI 通过，也不代表 Windows 真机、系统剪贴板/焦点、物理音频、安装 GUI 或真实 DeepSeek 已验收。此组合不可直接合并 beta 或公开发布，仍由主协调者最终验收。
+
+### 首次正常 PR CI 的具体发现
+
+组合 `c3c7e298` 推送到自己的开发分支后创建 [Draft PR #1487](https://github.com/Open-Less/openless/pull/1487)，触发唯一一次正常 [CI 45064779185](https://github.com/Open-Less/openless/actions/runs/45064779185)，未加标签、未手动 dispatch/rerun、未触发发布流水线。该记录不能写成全部通过：
+
+- Windows Rust 1.99 MSRV 已通过后端检查和测试编译；原生胶囊的 macOS/Windows 门禁通过。它们是 CI 编译/测试证据，不是用户输入框或硬件验收。
+- macOS 前端门禁在 `capsule-ready-replay.test.mjs` 失败：生产效果已新增 `dictation:jobs` 订阅及两个状态 setter，而旧夹具仍期待四个主窗口订阅且没有这些 setter。已同步夹具到五个订阅，保留原有有界等待和清理断言，新增“迟到快照不覆盖实时后台任务”断言；本地该定向脚本通过。
+- Windows stable 在 `windows-ui-config.test.mjs` 失败：脚本只查找旧的 `if (insertFallback)` 字面量，录音组已经把它扩为条件表达式，导致脚本找不到位置而误报 hook 排序。更新为匹配该条件的开头，仍要求可见性 hook 在返回分支之前、后面不再调用 hook；本地通过，没有改 UI 行为。
+- Android 编译揭示三个条件编译遗漏：移动端没有桌面位置核验函数，也没有桌面原生胶囊字段。桌面 AX/UIA 检查和原生后台球体更新已限于桌面编译，移动端继续使用原 IME/无障碍插入策略，不新增返回“目标可信”的假能力。修复后的 macOS 编译通过；Android 必须由后续真实目标编译确认。
+
+其他首轮门禁仍需以该次运行最终记录为准。上述修复先形成独立本地提交；由于任务明确只触发一次正常 CI，是否推送修复而自动产生后继 PR CI，先由协调者明确收敛，不用手动重跑或标签绕过失败。

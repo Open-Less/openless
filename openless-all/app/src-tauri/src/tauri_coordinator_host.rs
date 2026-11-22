@@ -2446,6 +2446,7 @@ impl TauriCoordinatorHost {
 
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        #[cfg(not(mobile))]
         if let openless_core::BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
             if let Some(native) = self.native.lock().as_ref() {
                 native.update_processing_count(jobs.len(), jobs.first().and_then(|task| task.session_id).map(|id| id.to_string()));
