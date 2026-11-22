@@ -93,3 +93,19 @@ npx tsc --noEmit
 ```
 
 第一条为合并后的既有 6 项目标集成 + 21 项选区回归；第二条为新增联合测试的两个子场景；第三条为单项恢复 fence 回归。macOS 编译保留现有告警，未开展 Windows 编译、真实系统剪贴板/焦点竞态、真实模型或物理硬件验收，也未重跑所有旧套件。组合达到开发集成检查标准后停止，发布资格仍由后续平台验收决定。
+
+## Beta.2 准备基线与 Beta 搜索的有限整合
+
+在 `b3f74d41` 之后，先保留祖先合入 `beta@670a44a03fc1415629553ccc3de9a02bf8205919`，再合入搜索主 tip `740f59e4ecac8d9e43dc641d1422675acfd3be53`（含 `2870ab58`、`c216c479`）。Beta.2 的 `2.0.3-Beta.2+build.noask.20261123` 和前后端 Ask 关闭标记原样继承，没有回退版本，也没有修改原 beta 分支、标签或安装应用。
+
+Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为同时保留 v1 同步兼容文档和新增的联网搜索文档入口。搜索三条提交相对其 `51b65224` 基线只涉及九个搜索源码、设置和文档文件；没有合入 `d266ea89`、`c27d27f7`、`8d93c065` 的 Ask 兼容工作，没有引入 PersonalAssistant 产品，也没有合入付费 live CI tooling 或更改 `ci.yml`。
+
+本轮直接交叉检查：
+
+- 搜索 `web_search` 单测：9 项通过，3 项 live 默认忽略；旧 QA 生产公共入口的搜索配置与 Off 回归：2 项通过，2 项 live 默认忽略。没有调用付费 DeepSeek，也没有重试官方 key；已知官方 401 仍阻塞真实 DeepSeek 成功验收。
+- 长选区实际 HTTP 序列化回归 `normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams` 通过：首尾空白、超过 16000 字正文、翻译、历史及不完整响应拒写仍保留。
+- 搜索服务配置来回切换、保存重开、Beta.2 Ask 关闭版本判断、TypeScript 和 macOS 宿主编译通过。搜索设置保留原 ID 和各服务配置、`providers` 溯源；`web_search.config` 仍在原本机 secret，没有扩大到 Portable/preferences 或云凭据白名单。
+- 原始搜索 UI codec 的跨旧版扩展丢失边界脚本通过，仍明确旧版编辑会删除扩展配置；没有重复 211 项旧版同步矩阵。已通过的录音音频/目标联合回归直接复用，没有再次运行。
+- 为匹配共享 Core 的严格检查，仅把联合测试读取 PCM 时的互斥锁在异步 shutdown 前显式释放；不改变断言、音频、模式或目标生产逻辑。
+
+随后只向自己的开发分支推送并创建指向 beta 的 Draft PR，使用仓库正常 PR CI 按真实影响决定门禁，不添加跳过共享 Core 的标签，不手动重复触发 workflow 或发布构建。CI 链接、终态与具体失败由本轮交接和 PR 记录承接；即使 CI 通过，也不代表 Windows 真机、系统剪贴板/焦点、物理音频、安装 GUI 或真实 DeepSeek 已验收。此组合不可直接合并 beta 或公开发布，仍由主协调者最终验收。

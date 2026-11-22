@@ -810,6 +810,7 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
         );
         assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
         assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
+        drop(sessions);
         assert_eq!(
             *calls.lock().unwrap(),
             [
