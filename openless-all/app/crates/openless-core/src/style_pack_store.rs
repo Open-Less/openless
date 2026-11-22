@@ -15,8 +15,8 @@ use crate::style_pack_archive::{
     StylePackArchiveManifest, MAX_ICON_BYTES,
 };
 use crate::style_packs::{
-    builtin_style_pack_for_mode, builtin_style_pack_id, builtin_style_packs,
-    default_active_style_pack_id, CustomStylePrompts, StylePack, StylePackExample, StylePackKind,
+    builtin_style_pack_id, builtin_style_packs, default_active_style_pack_id, CustomStylePrompts,
+    StylePack, StylePackExample, StylePackKind,
 };
 use crate::types::PolishMode;
 
@@ -586,12 +586,6 @@ impl StylePackStore {
             self.path.as_deref(),
             crate::cloud_sync_e2ee_store::gate::ChangeOrigin::User,
             || {
-                let mode = builtin_mode(id).ok_or_else(|| {
-                    BackendError::new(
-                        BackendErrorCode::InvalidArgument,
-                        "style pack is not builtin",
-                    )
-                })?;
                 let mut live = self.lock_for_mutation()?;
                 let mut packs = live.clone();
                 let index = packs
@@ -599,7 +593,21 @@ impl StylePackStore {
                     .position(|pack| pack.id == id)
                     .ok_or_else(|| not_found(id))?;
                 let existing = &packs[index];
-                let mut reset = builtin_style_pack_for_mode(mode);
+                let mut reset = builtin_style_packs()
+                    .into_iter()
+                    .find(|pack| {
+                        pack.id == id
+                            || (existing.kind == StylePackKind::Builtin
+                                && crate::style_packs::same_style_origin(existing, pack))
+                    })
+                    .ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidArgument,
+                            "style pack is not builtin",
+                        )
+                    })?;
+                reset.id = existing.id.clone();
+                reset.active = existing.active;
                 reset.enabled = existing.enabled;
                 reset.created_at = existing.created_at.clone();
                 reset.updated_at = Some(chrono::Utc::now().to_rfc3339());
@@ -850,7 +858,10 @@ pub fn migrate_style_packs_from_preferences(
 ) -> bool {
     let mut changed = false;
     let legacy_prompts = preferences.style_system_prompts.clone();
-    for builtin in builtin_style_packs() {
+    for builtin in builtin_style_packs()
+        .into_iter()
+        .filter(|pack| builtin_mode(&pack.id).is_some())
+    {
         if let Some(index) = packs.iter().position(|pack| pack.id == builtin.id) {
             let pack = &mut packs[index];
             if pack.kind != StylePackKind::Builtin {
@@ -904,6 +915,9 @@ pub fn migrate_style_packs_from_preferences(
         } else {
             let mut pack = builtin;
             pack.prompt = legacy_prompts.for_mode(pack.base_mode).to_string();
+            if let Some(version) = crate::style_packs::released_dictation_version(&pack) {
+                pack.version = version.into();
+            }
             pack.enabled = preferences.enabled_modes.contains(&pack.base_mode);
             let now = chrono::Utc::now().to_rfc3339();
             pack.created_at = Some(now.clone());
@@ -923,12 +937,42 @@ fn write_packs(path: &Path, packs: &[StylePack]) -> Result<(), BackendError> {
 }
 
 fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
+    use crate::style_packs::{
+        equivalent_style_payload, normalize_synced_builtin_pack, original_intent_pack,
+        released_dictation_version, same_style_origin, BUILTIN_INTENT_ID,
+    };
     let mut changed = false;
     for builtin in builtin_style_packs() {
-        if let Some(local) = packs.iter_mut().find(|pack| pack.id == builtin.id) {
-            if version_newer(&builtin.version, &local.version) {
+        let index = packs
+            .iter()
+            .position(|pack| pack.id == builtin.id)
+            .or_else(|| {
+                packs.iter().position(|pack| {
+                    same_style_origin(pack, &builtin)
+                        && (equivalent_style_payload(pack, &original_intent_pack())
+                            || equivalent_style_payload(pack, &builtin))
+                })
+            });
+        if let Some(index) = index {
+            let local = &mut packs[index];
+            let intent = builtin.id == BUILTIN_INTENT_ID;
+            let released = if intent {
+                same_style_origin(local, &builtin)
+                    && local.version == original_intent_pack().version
+                    && equivalent_style_payload(local, &original_intent_pack())
+            } else {
+                local.kind == StylePackKind::Builtin && released_dictation_version(local).is_some()
+            };
+            let before_kind = local.kind;
+            normalize_synced_builtin_pack(local);
+            changed |= before_kind != local.kind;
+            if version_newer(&builtin.version, &local.version) && released {
                 local.version = builtin.version;
                 local.prompt = builtin.prompt;
+                if intent {
+                    local.selection_prompt = builtin.selection_prompt;
+                    local.kind = StylePackKind::Builtin;
+                }
                 local.updated_at = Some(chrono::Utc::now().to_rfc3339());
                 changed = true;
             }
@@ -1057,10 +1101,9 @@ fn sync_builtin_style_prompt_preferences(
         PolishMode::Structured,
         PolishMode::Formal,
     ] {
-        let Some(pack) = packs
-            .iter()
-            .find(|pack| pack.kind == StylePackKind::Builtin && pack.base_mode == mode)
-        else {
+        let Some(pack) = packs.iter().find(|pack| {
+            pack.kind == StylePackKind::Builtin && pack.id == builtin_style_pack_id(mode)
+        }) else {
             continue;
         };
         saw_builtin = true;
@@ -1212,7 +1255,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let store = StylePackStore::at_path(path.clone()).unwrap();
-        assert_eq!(store.list().unwrap().len(), 4);
+        assert_eq!(store.list().unwrap().len(), 5);
         let mut imported = StylePack {
             id: "Builtin.Custom Pack".to_string(),
             name: "  My Pack  ".to_string(),

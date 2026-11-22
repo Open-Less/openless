@@ -399,7 +399,7 @@ impl DictationContext {
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
                 style_pack_id: style_pack.id.clone(),
-                style_system_prompt: style_pack.prompt.clone(),
+                style_system_prompt: crate::style_packs::dictation_style_prompt(style_pack),
                 hotwords,
                 working_languages: preferences.working_languages.clone(),
                 translation_target_language,

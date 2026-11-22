@@ -371,8 +371,11 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             } else {
                 "polished"
             };
+            let output = if system.contains(openless_core::POLISH_TRANSLATE_TGT_MARKER) {
+                format!("{}\n{output}\n{}\n{output}", openless_core::POLISH_TRANSLATE_SRC_MARKER, openless_core::POLISH_TRANSLATE_TGT_MARKER)
+            } else { output.to_owned() };
             let (mime, response) = if payload["stream"] == true {
-                ("text/event-stream", format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{output}\"}},\"finish_reason\":null}}]}}\n\ndata: [DONE]\n\n"))
+                ("text/event-stream", format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":output},"finish_reason":null}]})))
             } else {
                 (
                     "application/json",
@@ -450,6 +453,9 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             .unwrap();
     }
     let expect_request = |payload: serde_json::Value, marker: &str| {
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
+        assert!(system.find(marker).unwrap() < system.find(openless_core::DICTATION_REVISION_RULES).unwrap());
         if marker == "CODING-STYLE" {
             assert!(payload["messages"][0]["content"]
                 .as_str()
@@ -710,6 +716,25 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         std::fs::read_to_string(fixture.directory.join("app-style-routing.json")).unwrap();
     assert!(!local_file.contains("spoken test transcript"));
     assert!(!local_file.contains("polished"));
+    // Exercise the production start -> ASR -> request serialization path.
+    // Fixture outputs only prove routing/serialization, never model semantics.
+    for id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID, &current.id] {
+        for translation_requested in [false, true] {
+            backend.start_dictation_with_options(DictationStartOptions {
+                style_pack_id: Some(id.into()),
+                translation_requested,
+                ..Default::default()
+            }).await.unwrap();
+            backend.stop_dictation().await.unwrap();
+            let payload = payloads.try_recv().unwrap();
+            let system = payload["messages"][0]["content"].as_str().unwrap();
+            assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
+            assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
+            if translation_requested {
+                assert!(system.contains("[[OPENLESS_TRANSLATION]]"));
+            }
+        }
+    }
     backend.shutdown().await.unwrap();
     server.abort();
 }
