@@ -18,6 +18,8 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/Open-Less/openless/releases/latest"><strong>Download</strong></a>
   &nbsp;·&nbsp;
+  <a href="docs/index.md"><strong>Documentation</strong></a>
+  &nbsp;·&nbsp;
   <a href="README.md">English</a>
   &nbsp;/&nbsp;
   <a href="README.zh.md">中文</a>
@@ -25,8 +27,8 @@
 
 <p align="center">
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
-  <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
-  <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
+  <a href="https://github.com/Open-Less/openless"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
 </p>
 
 <p align="center">
@@ -80,7 +82,7 @@
     </td>
     <td align="center" width="170">
       <img src="https://image.bigsong.site/file/1787214963742_b40cd86b033a60bcc8562f7f053c4900.jpg" width="80" height="80" alt="bigsong" /><br/>
-      <strong><a href="https://bigsong.site" target="_blank" rel="noopener">bigsong</a></strong><br/>
+      <strong>bigsong</strong><br/>
       <sub>Contributor / Tester</sub>
     </td>
   </tr>
@@ -103,7 +105,7 @@
   </tr>
 </table>
 
-OpenLess is a cross-platform (macOS, Windows, Linux, Android, iOS, and HarmonyOS) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
+OpenLess is a cross-platform (macOS, Windows, Linux, Android, iOS, and HarmonyOS) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), Lazy, and Superwhisper. Official site: [openless.top](https://openless.top).
 
 The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing. The HarmonyOS host lives in `openless-all/app/harmony/` and is still being adapted: the HAP builds and the input method extension is wired to the shared ASR/polish pipeline, while real-network recognition and store distribution still need device acceptance.
 
@@ -212,7 +214,7 @@ OpenLess is currently in a stability phase. The project is not accepting pull re
 | --- | --- | --- |
 | [Typeless](https://www.typeless.com/) | Closed-source macOS / Windows / iOS, subscription | Open source; explicit AI-prompt mode; bring-your-own ASR + LLM; data and dictionary stay on your machine — including what the dictionary learns from your corrections, which is never uploaded and never added without your confirmation |
 | [Wispr Flow](https://wisprflow.ai) | Closed-source macOS / Windows, subscription | Open source; bring-your-own ASR + LLM; transparent prompt-handling rules |
-| [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
+| Lazy | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
 | [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR by default, with experimental on-device ASR on macOS and Windows |
 
 ## Status
@@ -244,7 +246,7 @@ Download the package for your platform and architecture from [Releases](https://
 
 ## Build from source (developers)
 
-The [cross-platform build guide](openless-all/README.md) maintains the toolchains and commands for each platform. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md) to navigate the code. The Tauri `cpal` and `tauri-runtime-wry` dependencies are checked in, so there are no Git submodules to initialize.
+The [cross-platform build guide](openless-all/README.md) maintains the toolchains and commands for each platform. Start with the [documentation index](docs/index.md) and [architecture and API map](docs/architecture.md) to navigate the code. The Tauri `cpal` and `tauri-runtime-wry` dependencies are checked in, so there are no Git submodules to initialize.
 
 ## Contributing workflow
 
@@ -300,7 +302,7 @@ New credential writes do not persist plaintext secrets. The repository contains 
 You will need:
 
 - **Volcengine streaming ASR**: APP ID, Access Token, Resource ID.
-- **iFlytek realtime ASR (RTASR)**: AppID, API Key. See [docs/xfyun-asr.md](docs/xfyun-asr.md).
+- **iFlytek realtime ASR (RTASR)**: AppID, API Key. See [speech setup](docs/guides/speech-services.md).
 - **Ark polish**: API Key, Model ID, Endpoint. The Ark default endpoint is `https://ark.cn-beijing.volces.com/api/v3/chat/completions`.
 
 ## Prompt-handling principles
@@ -359,7 +361,7 @@ SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── open
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
+`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [the Linux host interface](docs/development/linux.md).
 
 The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux egui packaging is a separate, manual workflow that stays paused until device acceptance; after acceptance an admin attaches the verified deb/rpm packages to the shared Release. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
@@ -418,11 +420,11 @@ This acknowledgement does not imply official endorsement or affiliation.
 ## Third-party components
 
 The Overview annual activity card adapts calendar and expandable-panel code from **Rare UI**'s
-[GitHub Activity](https://rareui.com/components/githubactivity) (Copyright (c) 2026 Swami Malode).
+[GitHub Activity](docs/ATTRIBUTION.md#rare-ui-github-activity) (Copyright (c) 2026 Swami Malode).
 OpenLess supplies its own dictation data, app ranking, and desktop icons. See the
 [component attribution and license](docs/ATTRIBUTION.md). The credit is also shown in Settings → About → Component credits.
 
-The shared password field adapts the animated eye from Rare UI's [Password Input](https://www.rareui.com/components/passwordinput).
+The shared password field adapts the animated eye from Rare UI's [Password Input](docs/ATTRIBUTION.md#rare-ui-password-input).
 
 ## License
 

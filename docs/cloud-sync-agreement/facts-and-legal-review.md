@@ -9,7 +9,7 @@
 | 编号 | 可支持的陈述 | 源码/来源定位与边界 |
 | --- | --- | --- |
 | U1 | OpenLess 个人开发者提供、面向全球用户、同步完全免费无费用、开发者及赞助商免费支持；服务器赞助商是 Mivra | 2026-11-18 用户在本任务中直接确认。真实姓名/实体/地址、赞助合同、节点与费用外部边界未核实；赞助关系的依据为用户直接确认 |
-| F01 | 新旧同步合同分离；当前加密 origin 和 `/v1/`；自定义服务器也存在 | `crates/openless-core/src/cloud_sync_e2ee/mod.rs:15`；`cloud_sync_e2ee_protocol/transport.rs:145,385,414,437`；`cloud_sync_e2ee/service.rs:740`。旧 `/me/sync` 的数据范围由[兼容合同](../cloud-sync.md)维护。 |
+| F01 | 新旧同步合同分离；当前加密 origin 和 `/v1/`；自定义服务器也存在 | `crates/openless-core/src/cloud_sync_e2ee/mod.rs:15`；`cloud_sync_e2ee_protocol/transport.rs:145,385,414,437`；`cloud_sync_e2ee/service.rs:740`。旧 `/me/sync` 的数据范围由[兼容合同](../development/cloud-sync.md#旧版手动快照)维护。 |
 | F02 | 默认关闭；Core 保存范围确认；准备、启用与上传各有完成状态 | `cloud_sync_e2ee/local.rs::ClientSettings`、`dto.rs::CONSENT_VERSION`；`service.rs::prepare_enable/create/unlock/require_consent/run_once`；`src/lib/ipc/cloud-sync-e2ee.ts::CLOUD_SYNC_E2EE_CONSENT_VERSION`；`src/features/cloud-sync/disclosure.json`。此次基线 Core 与 IPC 版本均为 `encrypted-full-snapshot-v2`；准备在连接/刷新后保存本机范围确认，创建成功后才设置 enabled。独立的正式合同接受时间或服务端回执仍待设计与核实 |
 | F03 | 11 类逻辑文档：偏好、UI偏好、渠道、登记凭据、词典、词汇预设、纠正规则、风格、历史、活动、设备档案；整体快照非分类选择 | `cloud_sync_e2ee_protocol/types.rs:788`；`cloud_sync_e2ee_documents/export.rs:22`、`types.rs:160,228,263,274`；`cloud_sync_e2ee_store/capture.rs:112`；`cloud_sync_e2ee_documents/registry.rs` 的字段分类和 credential account 列表。API Key 在登记凭据；活动按设备/天记录 count/chars/duration_ms；设备ID/OS/arch/app version在加密DocumentSet内 |
 | F04 | 录音不随历史上传，排除本地授权/机密和系统文件，不扫描用户目录 | `cloud_sync_e2ee_documents/export.rs:1,171` 强制 `hasAudioRecording=false`；`registry.rs:86,979` 及 Excluded 字段；`types.rs:274` 明确 coherent capture、非目录/keyring枚举。登记设备路径仅保存路径字段，排除路径所指向的文件内容；`cursorContextEnabled`是开关，实际文本不在此schema |
@@ -22,7 +22,7 @@
 | F11 | 自动同步的时序与普通合并 | `cloud_sync_e2ee/service.rs:1912,2366,2410`：启动一次、变更防抖750ms最长5秒；自动路径需启用和密钥，认证由connect检查；本机竞争最多4次有界延后，不做无限网络重试/周期轮询。普通同步可应用无冲突远端变更，冲突须预览选择 |
 | F12 | CAS/幂等/收据；超时或404后先核实原操作；已发操作可能继续完成 | `cloud_sync_e2ee_protocol/transport.rs:195,636,684`；`cloud_sync_e2ee/service.rs:1304,1393,1450,1566,1912,2083,2489`。此次复核 `service.rs::run_once/reconcile/require_consent`：新版先检查范围确认，再连接与核对 pending，然后检查 enabled；已发请求可能在关闭后被确认。取消task请求停止；恢复持久化后须完成提交/回滚 |
 | F13 | 关闭/锁定/退出/删除不同；删除本地不清空、停用自动上传 | `cloud_sync_e2ee/service.rs:973,1458,1577,1606,2083,2160`。删除要confirmed和vault/版本；退出清认证/密钥，远端注销为有界尽力且可离线；删除状态旧设备须先看见，离线本机不被远程擦除 |
-| F14 | 7天是公开声明；备份、收据、删除元数据各自不同 | 2026-11-18只读 `https://apic.openless.top:9443/v1/capabilities` 返回 `protocolVersion=1`、`cryptoProfile=argon2id-xchacha20poly1305-v1`、`maxBackupRetentionDays=7`、`idempotencyRetentionSeconds=604800`。`cloud_sync_e2ee_protocol/types.rs:522`只要求backup天数≤30、幂等保留≥604800秒，`service.rs:860,909`把backup值交UI。协议没有面向用户的历史备份版本选择端点；实操删除与备份恢复策略未知。仓库 `docs/encrypted-cloud-sync.md` 的2026-09-26检查仅历史旁证 |
+| F14 | 7天是公开声明；备份、收据、删除元数据各自不同 | 2026-11-18只读 `https://apic.openless.top:9443/v1/capabilities` 返回 `protocolVersion=1`、`cryptoProfile=argon2id-xchacha20poly1305-v1`、`maxBackupRetentionDays=7`、`idempotencyRetentionSeconds=604800`。`cloud_sync_e2ee_protocol/types.rs:522`只要求backup天数≤30、幂等保留≥604800秒，`service.rs:860,909`把backup值交UI。协议没有面向用户的历史备份版本选择端点；实操删除与备份恢复策略未知。2026-09-26 的公开接口检查仅为历史旁证 |
 | F15 | 两类删除标记不能混同，文档墓碑当前不回收 | `cloud_sync_e2ee_protocol/types.rs:584,843`；`cloud_sync_e2ee_documents/merge.rs:214`；`service.rs:973`。文档墓碑在加密DocumentSet内，保存记录身份、时间、基线版本用于防复活；整个vault删除控制元数据在服务器明文层，实际清理期限未核实。7天声明的范围仅涉及服务备份副本；墓碑和其他metadata期限须分别确认 |
 | F16 | 服务密钥在客户端服务调用链中使用；同步链路导出登记凭据后加密上传 | 此次复核 `cloud_sync_e2ee_documents/export.rs::export_provider_credentials_for_sync`、`cloud_sync_e2ee_store/capture.rs::capture_native_inner`、`cloud_sync_e2ee/service.rs::create/run_once`；服务调用参考 `cloud_providers.rs::prepare_cloud_transcription/build_cloud_polisher_provider/build_omni_provider`。同步上传结构仅含密文与控制字段，无服务 API 密钥明文或解密密钥；服务 API 密钥与发送到同步认证端点的 GitHub token 分属不同流程。同步服务仅存储传递密文、不使用登记服务密钥调用模型或转写，是须由服务端与运营持续遵守并独立核实的用途限制；本仓客户端源码不覆盖实际服务器的全部行为 |
 
@@ -48,23 +48,6 @@
 
 另外需要当地律师确认：免费服务的合同成立、格式条款提示与说明、责任限制、故意/重大过失和消费者强制性保护；自然人提供者的登记和披露要求；未成年人年龄与监护机制；不同地区监管及请求渠道；服务停用和资料取回的合理通知。**没有在主体和地区未知时断言某国法律已适用，也没有设定零元赔偿上限。** 不因 Mivra 品牌语言、官网备案链接或服务器域名推断 OpenLess 开发者住所或法院管辖。
 
-## 4. 必须确认的事实与法律问题
+## 审查进度
 
-| 问题 | 当前知道什么 | 发布前应取得的结论/证据 |
-| --- | --- | --- |
-| 谁对用户负责 | 用户确认个人开发者提供 | 姓名/实体、联系地址、请求与安全渠道；如何在保护个人隐私同时满足披露义务 |
-| 全球中的实际地域 | 用户希望面向全球 | 开发者所在地、重点市场、实际受众/未成年人、是否需地域补充、合法可供范围；适用法与争议机制 |
-| 资金和赞助 | 免费，开发者与赞助商支持，Mivra是服务器赞助商 | 无费用范围、赞助协议和真实合同方、退出后迁移/关停能力；不许把免费当全免责 |
-| 服务器与供应商 | 客户端默认origin；Mivra品牌官网有基础设施服务 | 实际部署/备份位置、上游/CDN、管理权限、处理角色和约束；服务端事实不能由本仓源码替代 |
-| 服务端存什么 | wire DTO明确，可见账号/控制资料与密文 | 实际数据库、日志/遥测字段、认证token处理、目的、接收者、期限及清理；现有代码注释不证明运营没有额外数据 |
-| 删除7天 | 公开能力声明7天；收据保留至少7天是另一字段 | 备份起算点、清理证据、不可变备份/复制、删除恢复抑制、法律保留；metadata与单文档墓碑的独立安排 |
-| 用户请求与离开 | 关闭、锁定、退出、删除快照接口可见 | 账号整体请求、可提供资料、身份核验、处理期限、法定例外、投诉；是否需新增导出/迁移以及安全实现 |
-| 安全与事件 | 客户端有密码学、日志脱敏和恢复机制 | 真实运行验证、服务端隔离/最小权限、供应商约束、事件联系人、通知流程及风险处理；不虚称独立审计 |
-| 法律接受的证据 | 只有本地同步范围版本字段 | 正式文案版本、语言/可保存性、何时确认、记录主体/位置/期限及最小必要字段；是否另需可撤回的法定同意，不能靠回填版本解决 |
-| 责任与中断 | 用户希望尽最大努力保障安全 | 合理注意和具体可履行的措施、双方过错与法定责任、维修/停止通知和取回窗口；避免永久可用/绝对安全或全部损失转嫁 |
-
-## 5. 审查与发布边界
-
-四份 Markdown 文档构成候选正文、用户摘要、开发运营计划及本证据清单，保留用于后续审查。另有 JSON 候选文案供开发告知同步；开发版范围确认版本为 v2，最终法律文本和生效日期待定。运行时文案整合、真实执行验证与 required CI 由各自负责者提供证据。律师批准、服务端部署与删除机制、供应商安排及跨境程序仍待确认。
-
-本次未读取 peer 仓库 `openless-cloud-sync` 的工作树或私有配置。若需继续服务端核实，按项目 cross-project 规则用 Orca 定位和建立独立工作树/责任人，移交精确 `/v1/` DTO、7天backup与≥7天receipt区别、墓碑/删除保留、认证token/日志、供应商地区及所需测试/PR/CI，不假设任何 peer 的状态已绿。服务端和法律待办不得由 UI 的兼容内容加载完成来代替。
+本页提供事实与法律资料。待确认事项、客户端验收及服务端证据统一见[未完成开发需求](../requirements.md#加密云同步正式发布)。[协议草案](agreement-draft.zh-CN.md)和[用户摘要](user-summary.zh-CN.md)均处于审查期。

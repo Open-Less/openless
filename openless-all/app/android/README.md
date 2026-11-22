@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-The Android app uses a Tauri WebView for settings and native Kotlin services for the keyboard, overlay, and Accessibility integration. The [Android architecture and device checklist](../../../docs/android-ime.md) describes the runtime behavior.
+The Android app uses a Tauri WebView for settings and native Kotlin services for the keyboard, overlay, and Accessibility integration. The [Android runtime flow](../../../docs/architecture.md#移动端输入法) describes the runtime behavior.
 
 ## Source map
 
@@ -34,4 +34,4 @@ The copy script stages the Kotlin, AIDL and resources into the generated `src-ta
 
 Use `npm run tauri:android:build:release` for a release-profile build. The [APK workflow](../../../.github/workflows/android-apk.yml) collects the per-ABI packages and handles release signing. For a local test install, select the ABI reported by `adb shell getprop ro.product.cpu.abi` and use `adb install -r <apk>` with compatible signing. Debug and official packages may use different signatures.
 
-`npm test` from the app directory covers contract checks for IPC, manifests, permissions, and insertion. Use the [on-device checklist](../../../docs/android-ime.md#设备验收) for keyboard gestures, cold starts, overlay access, Accessibility and Shizuku. The published app uses the [release policy](../../../RELEASING.md).
+`npm test` from the app directory covers contract checks for IPC, manifests, permissions, and insertion. On a matching device, verify keyboard gestures, cold starts, overlays, Accessibility and Shizuku before publishing under the [release policy](../../../RELEASING.md).

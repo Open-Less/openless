@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-本目录包含跨平台的 OpenLess 应用。建议先阅读仓库的[文档索引](../docs/index.md)、[架构说明](../docs/architecture.md)和[源码结构](../docs/structure.md)。
+本目录包含跨平台的 OpenLess 应用。建议先阅读仓库的[文档入口](../docs/index.md)与[架构和接口调用](../docs/architecture.md)。
 
 ## 原生 iOS 应用与键盘
 
@@ -32,7 +32,7 @@ npm run tauri dev
 
 ## 共享后端与 Linux 宿主
 
-本仓库提供共享的类型化 Rust 接口、语义事件、fixtures 以及 Linux 适配器。`linux-egui/src/main.rs` 现已实现 egui/eframe 应用，由 `LinuxHost` 和 `LinuxBackendBuilder` 将其接入 Core。剩余的宿主/界面工作与产品验收记录在 [Linux 交接文档](../docs/linux-egui-handoff/README.md) 中。
+本仓库提供共享的类型化 Rust 接口、语义事件、fixtures 以及 Linux 适配器。`linux-egui/src/main.rs` 现已实现 egui/eframe 应用，由 `LinuxHost` 和 `LinuxBackendBuilder` 将其接入 Core。接入方式见 [Linux 宿主接口](../docs/development/linux.md)，剩余工作见 [Linux 开发需求](../docs/requirements.md#linux)。
 
 ```bash
 cd app
@@ -42,7 +42,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-在 L01–L12 设备验收尚未完成期间，Linux 打包为手动进行：专用 CI 工作流（`check-linux-egui.yml`、`release-linux-egui.yml`）已移除，桌面版发布也不再分发 Linux。本地脚本仍可在不依赖 WebKitGTK 的情况下构建 deb/rpm 与 fcitx5 插件（AppImage 已弃用）。恢复自动化 Linux 发布需要 [`RELEASING.md`](../RELEASING.md) 和 [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md) 中所述的验收证据。
+真机和安装验证完成前，Linux 打包为手动进行：专用 CI 工作流（`check-linux-egui.yml`、`release-linux-egui.yml`）已移除，桌面版发布也不再分发 Linux。本地脚本仍可在不依赖 WebKitGTK 的情况下构建 deb/rpm 与 fcitx5 插件（AppImage 已弃用）。恢复自动化 Linux 发布需要 [`RELEASING.md`](../RELEASING.md) 和 [Linux 开发需求](../docs/requirements.md#linux) 中所述的验收证据。
 
 ## macOS 构建
 
@@ -154,7 +154,7 @@ Beta 和稳定版的签名、公证与发布验收见[发布规范](../RELEASING
 
 ## 第三方组件
 
-概览页的年度活动卡片移植自 [Rare UI GitHub Activity](https://rareui.com/components/githubactivity)（Copyright (c) 2026 Swami Malode）。许可是 MIT 加 Commons Clause。格子尺寸、间距、圆角、内边距、月份标签、悬浮提示和可展开面板保持上游组件；本地听写次数替换 GitHub 提交，语音输入最多的软件替换仓库。应用内署名在「设置 → 关于与更新 → 组件来源」。详见 [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md)。
+概览页的年度活动卡片移植自 [Rare UI GitHub Activity](../docs/ATTRIBUTION.md#rare-ui-github-activity)（Copyright (c) 2026 Swami Malode）。许可是 MIT 加 Commons Clause。格子尺寸、间距、圆角、内边距、月份标签、悬浮提示和可展开面板保持上游组件；本地听写次数替换 GitHub 提交，语音输入最多的软件替换仓库。应用内署名在「设置 → 关于与更新 → 组件来源」。详见 [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md)。
 
 ## 忽略的本地输出
 

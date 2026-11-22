@@ -8,7 +8,7 @@
 
 **只有仓库管理员可以创建版本标签并发布版本。**
 
-- 只有管理员可以创建发布标签（`v*-tauri`）或发布 GitHub Release。只有在针对该发布候选版本完成 L01-L12 设备验收之后，Linux 产物才可以搭乘同一个标签。桌面/Android 标签可以在不发布 Linux 软件包的情况下切出。
+- 只有管理员可以创建发布标签（`v*-tauri`）或发布 GitHub Release。只有在针对该发布候选版本完成 Linux 真机和安装验证之后，Linux 产物才可以搭乘同一个标签。桌面/Android 标签可以在不发布 Linux 软件包的情况下切出。
 - 贡献者（包括 AI agent）**不得**创建发布标签、发布版本或触发发布自动化。如果需要发布，**请请求管理员切出**——提交 issue 或联系维护者，说明目标版本和渠道（Beta 或 Stable）。
 - 发布自动化（构建、签名并发布产物的 CI 工作流，以及自动更新器 feed）必须**仅由管理员触发**。由标签触发的流水线视为由管理员触发，因为只有管理员可以推送触发用的标签。
 
@@ -28,9 +28,9 @@ Tauri 宿主发布标签（仅由管理员创建）：
 
 这些标签只有一个入口，`.github/workflows/release-tauri.yml`（`Release (all platforms)`）。一个简短的前置检查会创建或校验共享的**草稿**；随后 macOS/Windows、全部四个 Android ABI 以及 HarmonyOS 在同一次 Actions 运行中并行构建。Android 和 HarmonyOS 是可复用的工作流，从调用方不可变的提交解析，而不是在桌面发布之后延迟派发。Android 不再有自己的标签推送触发器，因此 APK 不会被构建两次。
 
-独立的 Android 每周/调试/手动构建以及 HarmonyOS 手动修复仍然可用。桌面分支/手动构建和 Windows 草稿修复保持现有范围。依赖关系图见[发布分发](docs/release-distribution.md)。
+独立的 Android 每周/调试/手动构建以及 HarmonyOS 手动修复仍然可用。桌面分支/手动构建和 Windows 草稿修复保持现有范围。依赖关系图见[发布分发](docs/development/delivery.md#签名与分发)。
 
-Linux 专用的 CI 和发布自动化已暂停：可复用的 Linux 检查与发布入口已被移除，桌面发布也不再派发 Linux。Linux 源码、本地构建/打包/验证脚本以及设备验收要求仍然可用。不会自动构建或附加任何 Linux 产物或别名。在手动分发软件包之前，请针对该确切候选版本完成 [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md) 中的 L01-L12 验收。仅编译通过不等于设备验收。桌面与 Android 交付仍然相互独立；Linux 没有应用内更新器，也没有 AppImage。
+Linux 专用的 CI 和发布自动化已暂停：可复用的 Linux 检查与发布入口已被移除，桌面发布也不再派发 Linux。Linux 源码、本地构建/打包/验证脚本以及设备验收要求仍然可用。不会自动构建或附加任何 Linux 产物或别名。在手动分发软件包之前，请针对该确切候选版本完成 [Linux 真机与安装验证](docs/requirements.md#linux)。仅编译通过不等于设备验收。桌面与 Android 交付仍然相互独立；Linux 没有应用内更新器，也没有 AppImage。
 
 HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并且可以把已签名的软件包（App Pack）上传到 HUAWEI AppGallery Connect。自动的可复用调用使用 `channel: none`，即仓库路径：HAP 以未签名形式附加到 GitHub Release，任何东西都不会到达应用商店。将仓库变量 `HARMONY_AUTO_CHANNEL` 设为 `release`（生产）或 `test`（测试渠道），即可让已签名的软件包自动作为 AGC 候选包上传；该上传绝不会提交审核，因此无论哪种方式，上架提交仍然是人工决定。
 
@@ -57,13 +57,13 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 
 ## 下载资产：新发布中不再有重复别名
 
-未来的发布运行只发布原始带版本号的 macOS DMG、Windows 安装程序和 Android APK。更新器签名会合并为每次发布一个 `updater-signatures.json`，而不是单独的 `.sig` 附件。临时 `.sig` 文件仍保留在构建产物中，用于生成索引和 CDN 清单。HarmonyOS 只发布 `OpenLess_harmony_arm64.hap` 及其校验和。它们不再生成或附加重复名称 `OpenLess_macos_*`、`OpenLess_windows_*`、`OpenLess_android_*` 或 `OpenLess_harmony.hap`。macOS `.app.tar.gz` 更新器归档仍然发布，签名包含在索引中。Linux 自动化仍然暂停。格式、兼容性限制和切换方式见[发布分发](docs/release-distribution.md)。
+未来的发布运行只发布原始带版本号的 macOS DMG、Windows 安装程序和 Android APK。更新器签名会合并为每次发布一个 `updater-signatures.json`，而不是单独的 `.sig` 附件。临时 `.sig` 文件仍保留在构建产物中，用于生成索引和 CDN 清单。HarmonyOS 只发布 `OpenLess_harmony_arm64.hap` 及其校验和。它们不再生成或附加重复名称 `OpenLess_macos_*`、`OpenLess_windows_*`、`OpenLess_android_*` 或 `OpenLess_harmony.hap`。macOS `.app.tar.gz` 更新器归档仍然发布，签名包含在索引中。Linux 自动化仍然暂停。格式、兼容性限制和切换方式见[发布分发](docs/development/delivery.md#签名与分发)。
 
 已有的发布及其下载别名不会被迁移或删除。别名辅助脚本仍可供遗留/手动使用，但没有自动发布工作流会调用它。桌面部分重跑也会过滤掉旧的别名产物，而不是再次发布它们；它们不会删除已附加到现有发布的资产。
 
 网站/CDN 的下载解析必须使用所选发布 API 中的实际资产名称（或指向这些资产的外部重定向），而不是假设旧的固定别名存在于新发布中。此变更不实现网站重定向。Stable 选择可以使用最新的 stable 发布；beta 选择必须显式选择其预发布标签，因为 GitHub 的 `latest` 不包含预发布。历史固定名称链接对历史发布仍然有效。更新器清单生成及其 CDN 产物交接保持不变。
 
-根据 [2026-09-06 2.0 需求](docs/2.0-requirements.md)，Windows 和 macOS 必须完整保留各自 Tauri 1.x 的功能。egui 团队负责 Linux Host/UI 工作和 Linux 产品验收。Linux 应用的缺口不会阻塞 Windows/macOS 交付，但共享 Core 的缺陷会。Linux 软件包在自身产品验收通过之前不得附加。现有的 Android 构建不会把该范围扩大为新的完全支持承诺。
+Windows 和 macOS 发布须保留各自已支持的操作、数据、快捷键与恢复路径。egui 团队负责 Linux 宿主、界面和独立的发布验收。共享 Core 的缺陷影响使用该路径的平台。
 
 ## 版本同步闸门
 
@@ -88,7 +88,7 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 1. 分支是目标渠道（Beta 用 `beta`，Stable 用 `main`）。
 2. 五个版本文件全部一致（版本同步闸门通过）。
 3. 被打标签的提交上 CI 通过。
-4. 满足适用的[桌面功能与设备验收](docs/2.0-desktop-acceptance.md)、签名和分发要求；仅构建通过并不能证明产品就绪。在包含 Linux 资产之前，必须完成后文的 Linux 验收。
+4. 在受影响平台安装候选包，验证启动、权限、录音、取消、落字、升级和本版涉及的用户流程。另行核验签名与分发。发布 Linux 产物前完成下文的 Linux 验收。
 5. 然后——且仅在那时——推送发布标签。
 6. 标签启动统一发布工作流。桌面、Android 和 HarmonyOS 作业把资产上传到同一个草稿。确认所有必需作业通过并核对文件、签名与校验和，再发布为 Beta 预发布或 Stable latest。草稿修复只适用于仍为草稿的发布，已发布资产保持不变。
 
@@ -129,7 +129,7 @@ HarmonyOS 会构建、签名并附加单个 `OpenLess_harmony_arm64.hap`，并�
 
 Linux 工作流派发已暂停。在手动分发 Linux 软件包（或恢复自动化）之前，必须满足以下全部条件：
 
-1. egui 团队已完成 [Linux Host/UI 缺口与验收](docs/linux-egui-handoff/07-acceptance.md)。现有的 `eframe::App` 只是一个起步实现；它的存在以及打包成功本身并不能证明产品完整。
+1. egui 团队已完成 [Linux Host/UI 缺口与验收](docs/requirements.md#linux)。现有的 `eframe::App` 只是一个起步实现；它的存在以及打包成功本身并不能证明产品完整。
 2. Linux core/host 测试、依赖闸门和密钥暴露面闸门在 Ubuntu 上通过。
 3. 为 ELF 依赖、deb/rpm 内容、桌面元数据、fcitx5 插件路径和软件包 SHA-256 校验和运行本地打包验证器。没有 AppImage、minisign 密钥或 Linux 更新器清单。
 4. 检出已审阅的不可变标签，并验证软件包版本与 `package.json` 匹配，从而可证明这些软件包来自已审阅的提交。
@@ -230,7 +230,7 @@ base64 -w0 release.p12       # → HARMONY_RELEASE_KEYSTORE_BASE64
 
 对于通过 squash、cherry-pick 或集成分支纳入的工作，请同时注明**原始贡献 PR** 和**实际集成 PR/提交**。对已关闭但已集成的来源 PR 要准确标注；不要称其为独立合并。请从祖先关系、文件历史和集成记录来核实纳入情况，而不是仅凭 PR 标题或日期。如果某个 PR 不可用，请引用已核实的提交并记录署名的局限性。链接完整对比，并保留平台排除项（例如，Linux 源码工作并不意味着交付了 Linux 软件包）。
 
-将发布页面的 Markdown 保存在 `docs/releases/<version>-release-notes.md`。在编辑已有的公开发布之前，先保存其当前正文和资产元数据；编辑之后，读回并校验正文、渠道/发布标志以及资产名称/摘要/大小。仅修改说明的变更不得重建软件包、移动标签或更改已发布的渠道。同样的格式适用于后续发布。
+将每个版本的变更说明写在对应的 [GitHub Release](https://github.com/Open-Less/openless/releases) 页面。在编辑已有的公开发布之前，先保存其当前正文和资产元数据；编辑之后，读回并校验正文、渠道/发布标志以及资产名称/摘要/大小。仅修改说明的变更不得重建软件包、移动标签或更改已发布的渠道。同样的格式适用于后续发布。
 
 ## 流程摘要
 

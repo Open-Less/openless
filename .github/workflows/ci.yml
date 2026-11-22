@@ -777,7 +777,7 @@ jobs:
           workspaces: openless-all/app -> target
           # Pull requests restore the beta tree and never write their own copy:
           # `refs/pull/<n>/merge` scopes are never restored again and only evict
-          # the branch caches (see docs/ci-trigger-and-cache-policy.md).
+          # the branch caches (see docs/development/delivery.md).
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
       - run: cargo check --locked -p openless-native-capsule
       - run: cargo test --locked -p openless-capsule --features ui,host

@@ -18,6 +18,8 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/Open-Less/openless/releases/latest"><strong>下载</strong></a>
   &nbsp;·&nbsp;
+  <a href="docs/index.md"><strong>文档</strong></a>
+  &nbsp;·&nbsp;
   <a href="README.md">English</a>
   &nbsp;/&nbsp;
   <a href="README.zh.md">中文</a>
@@ -25,8 +27,8 @@
 
 <p align="center">
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
-  <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
-  <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
+  <a href="https://github.com/Open-Less/openless"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
 </p>
 
 <p align="center">
@@ -80,7 +82,7 @@
     </td>
     <td align="center" width="170">
       <img src="https://image.bigsong.site/file/1787214963742_b40cd86b033a60bcc8562f7f053c4900.jpg" width="80" height="80" alt="bigsong" /><br/>
-      <strong><a href="https://bigsong.site" target="_blank" rel="noopener">bigsong</a></strong><br/>
+      <strong>bigsong</strong><br/>
       <sub>贡献者 / 测试</sub>
     </td>
   </tr>
@@ -103,7 +105,7 @@
   </tr>
 </table>
 
-OpenLess 是一个跨平台（macOS、Windows、Linux、Android、iOS 与 HarmonyOS）语音输入应用，是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的全开源替代方案。官网：[openless.top](https://openless.top)。
+OpenLess 是一个跨平台（macOS、Windows、Linux、Android、iOS 与 HarmonyOS）语音输入应用，是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、Lazy、Superwhisper 等商业工具的全开源替代方案。官网：[openless.top](https://openless.top)。
 
 原生 [iOS 应用与键盘](openless-all/ios/README.zh.md) 位于 `openless-all/ios/`，支持中英文输入、语音优先与按住空格两种模式，以及语音翻译；源码构建与个人签名步骤见 iOS 指南。鸿蒙宿主位于 `openless-all/app/harmony/`，仍在适配中：HAP 已可构建，输入法扩展也已接入共享的 ASR/润色管线，但真实联网识别与商店分发仍需真机验收。
 
@@ -212,7 +214,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 | --- | --- | --- |
 | [Typeless](https://www.typeless.com/) | 闭源 macOS / Windows / iOS，订阅制 | 开源；显式 AI 提示词模式；自带 ASR + LLM；数据与词典留在你的机器上——包括词典从你的纠正中学到的东西，它从不上传，也未经你确认绝不会被加入 |
 | [Wispr Flow](https://wisprflow.ai) | 闭源 macOS / Windows，订阅制 | 开源；自带 ASR + LLM；透明的提示词处理规则 |
-| [Lazy](https://heylazy.com) | 闭源笔记 / 捕获工具 | 不是笔记容器——直接插入到任意输入框 |
+| Lazy | 闭源笔记 / 捕获工具 | 不是笔记容器——直接插入到任意输入框 |
 | [Superwhisper](https://superwhisper.com) | 闭源 macOS，订阅制 | 开源；默认云端 ASR，macOS 与 Windows 上另有实验性的端侧 ASR |
 
 ## 功能现状
@@ -244,7 +246,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 
 ## 从源码构建（开发者）
 
-[全平台构建指南](openless-all/README.zh.md)维护各平台的工具链和完整命令。[文档索引](docs/index.md)、[架构](docs/architecture.md)和[源码结构](docs/structure.md)提供开发入口。Tauri 的 `cpal`、`tauri-runtime-wry` 已随仓库签入，无需初始化子模块。
+[全平台构建指南](openless-all/README.zh.md)维护各平台的工具链和完整命令。[文档入口](docs/index.md)和[架构与接口调用](docs/architecture.md)提供开发入口。Tauri 的 `cpal`、`tauri-runtime-wry` 已随仓库签入，无需初始化子模块。
 
 ## 贡献流程
 
@@ -300,7 +302,7 @@ Windows:       %APPDATA%\OpenLess\credentials.json
 你需要准备：
 
 - **火山引擎流式 ASR**：APP ID、Access Token、Resource ID。
-- **讯飞实时 ASR（RTASR）**：AppID、API Key。见 [docs/xfyun-asr.md](docs/xfyun-asr.md)。
+- **讯飞实时 ASR（RTASR）**：AppID、API Key。见 [语音服务设置](docs/guides/speech-services.md)。
 - **Ark 润色**：API Key、Model ID、Endpoint。Ark 默认端点为 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。
 
 ## 提示词处理原则
@@ -359,7 +361,7 @@ SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── open
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
+`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。见 [Linux 宿主接口](docs/development/linux.md)。
 
 `v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流在一次 Actions run 中构建 macOS、Windows、Android 与 HarmonyOS 宿主；HarmonyOS 附上未签名 HAP，Android 不再有独立的 tag 触发。Linux egui 打包是独立的手动工作流，在真机验收前保持暂停；验收通过后由管理员把验证过的 deb/rpm 包附到共享 Release。Beta 产物保持 draft 直到管理员发布。Linux 没有 AppImage，也没有应用内更新清单。
 
@@ -417,11 +419,11 @@ OpenLess 同样认可并感谢 LinuxDo 社区开放、务实、对开发者友�
 
 ## 第三方组件
 
-概览页的年度活动卡片改编了 **Rare UI** 的 [GitHub Activity](https://rareui.com/components/githubactivity)
+概览页的年度活动卡片改编了 **Rare UI** 的 [GitHub Activity](docs/ATTRIBUTION.md#rare-ui-github-activity)
 日历和可展开面板代码（Copyright (c) 2026 Swami Malode）。听写数据、应用排名与桌面图标由 OpenLess 提供。
 详情见[组件署名与许可](docs/ATTRIBUTION.md)；署名也可在「设置 → 关于与更新 → 组件来源」中查看。
 
-共用密码输入框的眼睛动效改编自 Rare UI 的 [Password Input](https://www.rareui.com/components/passwordinput)。
+共用密码输入框的眼睛动效改编自 Rare UI 的 [Password Input](docs/ATTRIBUTION.md#rare-ui-password-input)。
 
 ## 许可证
 
