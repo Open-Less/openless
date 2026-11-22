@@ -26,9 +26,41 @@ const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 /// throws `Document is not focused`.
 pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     if copy_to_clipboard(text) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            PENDING_CLIPBOARD_RESTORE.lock().take();
+        }
         Ok(())
     } else {
         Err("clipboard write failed".to_string())
+    }
+}
+
+/// Native ownership token; unlike text equality this detects a later identical user copy.
+pub(crate) fn clipboard_sequence() -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() } as u64)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        unsafe {
+            use objc2::{
+                msg_send,
+                runtime::{AnyClass, AnyObject},
+            };
+            let cls = AnyClass::get("NSPasteboard")?;
+            let board: *mut AnyObject = msg_send![cls, generalPasteboard];
+            if board.is_null() {
+                return None;
+            }
+            let count: isize = msg_send![board, changeCount];
+            u64::try_from(count).ok()
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        None
     }
 }
 
@@ -37,6 +69,55 @@ pub struct TextInserter;
 impl TextInserter {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Selection output borrows the clipboard only for paste. A failed dispatch
+    /// may retain the result only while this workflow still owns the clipboard.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) fn insert_guarded(
+        &self,
+        text: &str,
+        restore: bool,
+        shortcut: PasteShortcut,
+        may_keep_fallback: bool,
+        still_current: impl FnOnce() -> bool,
+    ) -> InsertStatus {
+        let plan = match copy_to_clipboard_with_restore_plan(text) {
+            Ok(plan) => plan,
+            Err(error) => {
+                log::warn!("selection clipboard preparation failed: {error}");
+                return InsertStatus::Failed;
+            }
+        };
+        if !still_current() {
+            if may_keep_fallback && clipboard_revision_matches(plan.sequence, clipboard_sequence()) { return InsertStatus::CopiedFallback; }
+            restore_selection_clipboard(plan);
+            return InsertStatus::NotRequested;
+        }
+        #[cfg(target_os = "macos")]
+        let pasted = {
+            let _ = shortcut;
+            simulate_paste()
+        };
+        #[cfg(not(target_os = "macos"))]
+        let pasted = simulate_paste(shortcut);
+        if pasted.is_err() {
+            #[cfg(target_os = "macos")]
+            if may_keep_fallback && clipboard_revision_matches(plan.sequence, clipboard_sequence()) {
+                return InsertStatus::CopiedFallback;
+            }
+            restore_selection_clipboard(plan);
+            // Windows may already have dispatched Ctrl+V before a key-up error.
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = may_keep_fallback;
+                return InsertStatus::PasteSent;
+            }
+            #[cfg(target_os = "macos")]
+            return InsertStatus::Failed;
+        }
+        if restore { restore_selection_clipboard(plan); }
+        insertion_success_status()
     }
 
     /// Windows 路径：写剪贴板 + 模拟 `paste_shortcut`。
@@ -176,11 +257,11 @@ fn map_sendinput_type_result(
         Ok(typed_chars) if typed_chars == expected => InsertStatus::Inserted,
         Ok(typed_chars) => {
             log::warn!("[insertion] Unicode SendInput typed only {typed_chars}/{expected} chars");
-            InsertStatus::CopiedFallback
+            InsertStatus::PasteSent
         }
         Err(err) => {
             log::warn!("[insertion] Unicode SendInput failed: {err}");
-            InsertStatus::CopiedFallback
+            InsertStatus::PasteSent
         }
     }
 }
@@ -190,6 +271,8 @@ fn map_sendinput_type_result(
 struct ClipboardRestorePlan {
     inserted_text: String,
     previous_text: Option<String>,
+    previous_sequence: Option<u64>,
+    sequence: Option<u64>,
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -197,6 +280,7 @@ struct ClipboardRestorePlan {
 struct PendingClipboardRestore {
     latest_restore_id: u64,
     original_text: Option<String>,
+    sequence: Option<u64>,
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -246,15 +330,11 @@ fn copy_to_clipboard(text: &str) -> bool {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePlan, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let previous_sequence = clipboard_sequence();
     let previous_text = match clipboard.get_text() {
         Ok(existing) => Some(existing),
-        Err(err) => {
-            log::warn!(
-                "[insertion] clipboard get_text failed before overwrite: {}",
-                err
-            );
-            None
-        }
+        Err(arboard::Error::ContentNotAvailable) => None,
+        Err(err) => return Err(err.to_string()),
     };
     clipboard
         .set_text(text.to_string())
@@ -262,6 +342,8 @@ fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePla
     Ok(ClipboardRestorePlan {
         inserted_text: text.to_string(),
         previous_text,
+        previous_sequence,
+        sequence: clipboard_sequence(),
     })
 }
 
@@ -291,26 +373,49 @@ fn insert_with_clipboard_restore(
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn restore_selection_clipboard(plan: ClipboardRestorePlan) {
+    let (id, original) = remember_pending_clipboard_restore(
+        plan.previous_text.clone(),
+        plan.previous_sequence,
+        plan.sequence,
+    );
+    restore_clipboard_after_delay(plan, original, id, CLIPBOARD_RESTORE_DELAY);
+}
+
+pub(crate) fn clipboard_revision_matches(expected: Option<u64>, current: Option<u64>) -> bool {
+    expected.is_some() && expected == current
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
-    let (restore_id, original_text) =
-        remember_pending_clipboard_restore(plan.previous_text.clone());
+    let (restore_id, original_text) = remember_pending_clipboard_restore(
+        plan.previous_text.clone(),
+        plan.previous_sequence,
+        plan.sequence,
+    );
     std::thread::spawn(move || {
         restore_clipboard_after_delay(plan, original_text, restore_id, CLIPBOARD_RESTORE_DELAY)
     });
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn remember_pending_clipboard_restore(previous_text: Option<String>) -> (u64, Option<String>) {
+fn remember_pending_clipboard_restore(
+    previous_text: Option<String>,
+    previous_sequence: Option<u64>,
+    sequence: Option<u64>,
+) -> (u64, Option<String>) {
     let restore_id = NEXT_CLIPBOARD_RESTORE_ID.fetch_add(1, Ordering::SeqCst);
     let original_text = {
         let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
         let original = pending
             .as_ref()
+            .filter(|batch| clipboard_revision_matches(batch.sequence, previous_sequence))
             .map(|batch| batch.original_text.clone())
             .unwrap_or(previous_text);
         *pending = Some(PendingClipboardRestore {
             latest_restore_id: restore_id,
             original_text: original.clone(),
+            sequence,
         });
         original
     };
@@ -353,7 +458,11 @@ fn restore_clipboard_after_delay(
         }
     };
 
-    if should_restore_clipboard(current_text.as_deref(), &plan.inserted_text) {
+    if plan
+        .sequence
+        .is_none_or(|sequence| clipboard_sequence() == Some(sequence))
+        && should_restore_clipboard(current_text.as_deref(), &plan.inserted_text)
+    {
         if let Some(previous_text) = original_text {
             if let Err(err) = clipboard.set_text(previous_text) {
                 log::warn!("[insertion] clipboard restore failed: {}", err);
@@ -621,7 +730,7 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "windows")]
-    fn crlf_sendinput_partial_mismatch_falls_back_to_clipboard() {
+    fn crlf_sendinput_partial_mismatch_remains_uncertain() {
         // Only a + CR + LF were consumed; the trailing b was not, so the partial-failure
         // semantics must hold.
         let text = "a\r\nb";
@@ -629,7 +738,7 @@ mod tests {
         let mismatched = 3;
         assert_ne!(mismatched, expected);
         let status = map_sendinput_type_result(text, Ok(mismatched));
-        assert_eq!(status, InsertStatus::CopiedFallback);
+        assert_eq!(status, InsertStatus::PasteSent);
     }
 
     #[test]
@@ -651,14 +760,27 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_ownership_rejects_a_new_copy_even_when_text_is_identical() {
+        assert!(clipboard_revision_matches(Some(11), Some(11)));
+        assert!(!clipboard_revision_matches(Some(11), Some(12)));
+        assert!(!clipboard_revision_matches(None, None));
+    }
+
+    #[test]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn pending_clipboard_restore_keeps_first_original_until_latest_restore() {
         *PENDING_CLIPBOARD_RESTORE.lock() = None;
 
-        let (first_id, first_original) =
-            remember_pending_clipboard_restore(Some("user clipboard".to_string()));
-        let (second_id, second_original) =
-            remember_pending_clipboard_restore(Some("first dictated text".to_string()));
+        let (first_id, first_original) = remember_pending_clipboard_restore(
+            Some("user clipboard".to_string()),
+            Some(1),
+            Some(2),
+        );
+        let (second_id, second_original) = remember_pending_clipboard_restore(
+            Some("first dictated text".to_string()),
+            Some(2),
+            Some(3),
+        );
 
         assert_ne!(first_id, second_id);
         assert_eq!(first_original.as_deref(), Some("user clipboard"));

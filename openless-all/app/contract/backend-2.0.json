@@ -15,6 +15,24 @@
     "disabledErrorCode": "permission_denied",
     "cloudSync": "excluded"
   },
+  "selectionOriginalProtection": {
+    "input": "complete explicit selection, including boundary whitespace; no application character cap",
+    "history": {
+      "store": "history.json",
+      "identity": "existing sessionId",
+      "original": "rawTranscript",
+      "result": "finalText",
+      "order": ["persist_original", "protect_original_clipboard", "model_request", "validate_original_target", "replace_once"],
+      "provisionalStatus": "selectionProcessing",
+      "failure": "retain_original_and_any_complete_result"
+    },
+    "hostPort": "SelectionRuntimeAdapter.protect_original(sessionId, completeOriginal) -> Result<Option<opaque clipboard revision>>",
+    "voiceApplyTicket": "optional originalClipboardRevision binds the original clipboard transaction to the existing sessionId",
+    "successfulWrite": "do not copy result; restore protected original unless a later user copy owns clipboard",
+    "definiteNoWrite": "copy complete result only while original clipboard transaction still owns clipboard",
+    "uncertainWrite": "PasteSent or OutcomeUnknown; never retry or copy as if definitely not inserted",
+    "previewOnlyHosts": "supplied-text iOS preview never writes an external selection or automatically accesses clipboard"
+  },
   "appStyleRouting": {
     "hosts": ["macos", "windows"],
     "categories": "catalog.categories[].id",

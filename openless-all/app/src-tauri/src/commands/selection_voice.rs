@@ -154,7 +154,7 @@ pub async fn confirm_selection_voice_preview(
         .begin_edit_preview_apply(qa_turn, text)
         .await
         .map_err(selection_voice_error)?;
-    let outcome = match coord.apply_selection_voice_preview_ticket(&ticket) {
+    let outcome = match coord.apply_selection_voice_preview_ticket(&ticket).await {
         Ok(outcome) => outcome,
         Err(error) => {
             let _ = core
@@ -173,7 +173,7 @@ pub async fn confirm_selection_voice_preview(
         .finish_preview_apply(ticket.ticket_id, outcome)
         .await
         .map_err(selection_voice_error)?;
-    coord.finish_selection_voice_preview_host(ticket.session_id);
+    coord.finish_selection_voice_preview_host(ticket.session_id, outcome);
     if let Err(error) = core.services().qa.dismiss_session(qa_turn).await {
         // Native delivery has already finished. A reopened panel belongs to
         // another turn and cannot revoke this Inserted/PasteSent/copy receipt.

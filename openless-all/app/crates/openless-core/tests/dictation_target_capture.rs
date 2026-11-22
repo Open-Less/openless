@@ -81,7 +81,8 @@ struct Focus {
     context_captured: Vec<&'static str>,
     prepared: Vec<&'static str>,
     delivered: Vec<(&'static str, String)>,
-    generation: u64,
+    last_anchor: Option<Arc<Mutex<Option<(u64, u64)>>>>,
+    delivered_positions: Vec<(u64, u64)>,
     position: Option<(u64, u64)>,
 }
 
@@ -128,7 +129,7 @@ struct FocusInserter {
     focus: Arc<Mutex<Focus>>,
     target: Option<&'static str>,
     enforce_position: bool,
-    position: Option<(u64, Option<(u64, u64)>)>,
+    position: Option<Arc<Mutex<Option<(u64, u64)>>>>,
 }
 
 impl TextInserter for FocusInserter {
@@ -137,13 +138,26 @@ impl TextInserter for FocusInserter {
         let mut focus = self.focus.lock().unwrap();
         let target = focus.current;
         focus.captured.push(target);
-        if self.enforce_position { focus.generation += 1; }
+        let position = if self.enforce_position {
+            let anchor = focus
+                .last_anchor
+                .as_ref()
+                .filter(|anchor| {
+                    target_position::unchanged(*anchor.lock().unwrap(), focus.position)
+                })
+                .cloned()
+                .unwrap_or_else(|| Arc::new(Mutex::new(focus.position)));
+            focus.last_anchor = Some(anchor.clone());
+            Some(anchor)
+        } else {
+            None
+        };
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
                 focus: self.focus.clone(),
                 target: Some(target),
                 enforce_position: self.enforce_position,
-                position: self.enforce_position.then_some((focus.generation, focus.position)),
+                position,
             }),
             host_context: Arc::new(FocusContextAdapter {
                 focus: self.focus.clone(),
@@ -160,16 +174,23 @@ impl TextInserter for FocusInserter {
         // Like the native adapter, an uncaptured inserter sees the current
         // foreground target. This makes the old late-capture route fail.
         let mut focus = self.focus.lock().unwrap();
-        if self.position.is_some_and(|(generation, position)| !target_position::unchanged(
-            generation, position, focus.generation, focus.position)) {
-            return Box::pin(async { Err(BackendError::new(BackendErrorCode::InvalidState,
-                "original input position changed; no text was inserted").target_unavailable()) });
+        if self.position.as_ref().is_some_and(|position| {
+            !target_position::unchanged(*position.lock().unwrap(), focus.position)
+        }) {
+            return Box::pin(async {
+                Err(BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "original input position changed; no text was inserted",
+                )
+                .target_unavailable())
+            });
         }
         let target = self.target.unwrap_or(focus.current);
         focus.prepared.push(target);
         let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession {
             focus: self.focus.clone(),
             target,
+            position: self.position.clone(),
         });
         Box::pin(async move { Ok(session) })
     }
@@ -178,6 +199,7 @@ impl TextInserter for FocusInserter {
 struct FocusSession {
     focus: Arc<Mutex<Focus>>,
     target: &'static str,
+    position: Option<Arc<Mutex<Option<(u64, u64)>>>>,
 }
 
 impl TextInsertionSession for FocusSession {
@@ -190,11 +212,28 @@ impl TextInsertionSession for FocusSession {
     }
 
     fn finish(&self, text: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
-        self.focus
-            .lock()
-            .unwrap()
-            .delivered
-            .push((self.target, text));
+        let mut focus = self.focus.lock().unwrap();
+        if let Some(position) = &self.position {
+            let mut anchor = position.lock().unwrap();
+            if !target_position::unchanged(*anchor, focus.position) {
+                return Box::pin(async {
+                    Err(BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "target changed before delivery",
+                    )
+                    .target_unavailable())
+                });
+            }
+            let original = focus.position.unwrap();
+            focus.delivered_positions.push(original);
+            focus.position = Some((original.0 + text.encode_utf16().count() as u64, 0));
+            *anchor = target_position::advanced(
+                *anchor,
+                text.encode_utf16().count() as u64,
+                focus.position,
+            );
+        }
+        focus.delivered.push((self.target, text));
         Box::pin(async { Ok(InsertOutcome::Inserted) })
     }
 
@@ -240,7 +279,8 @@ impl Fixture {
             context_captured: Vec::new(),
             prepared: Vec::new(),
             delivered: Vec::new(),
-            generation: 0,
+            last_anchor: None,
+            delivered_positions: Vec::new(),
             position: Some((4, 0)),
         }));
         let mut dependencies = BackendDependencies::unsupported();
@@ -417,8 +457,37 @@ async fn delayed_result_never_uses_a_moved_caret_or_a_successor_capture_in_the_s
         let stopping = tokio::spawn({ let backend = fixture.backend.clone(); async move { backend.stop_dictation_session(first).await } });
         tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
         fixture.focus.lock().unwrap().position = moved;
-        let second = if next_capture { Some(fixture.backend.start_dictation().await.unwrap()) } else { None };
+        let second = if next_capture {
+            Some(fixture.backend.start_dictation().await.unwrap())
+        } else {
+            None
+        };
         release.notify_one();
+        if next_capture && initial == moved {
+            let first_result = stopping.await.unwrap().unwrap();
+            assert_eq!(first_result.session_id, first);
+            assert_eq!(
+                fixture.focus.lock().unwrap().delivered,
+                [("A", "retained result".into())]
+            );
+            let second = second.unwrap();
+            assert_eq!(
+                fixture.backend.snapshot().dictation.session_id,
+                Some(second)
+            );
+            fixture
+                .backend
+                .stop_dictation_session(second)
+                .await
+                .unwrap();
+            let focus = fixture.focus.lock().unwrap();
+            assert_eq!(focus.delivered.len(), 2);
+            assert_eq!(
+                focus.delivered_positions,
+                [(4, 0), (4 + "retained result".len() as u64, 0)]
+            );
+            continue;
+        }
         let error = stopping.await.unwrap().unwrap_err();
         assert_eq!(error.code, BackendErrorCode::InvalidState);
         assert!(error.is_target_unavailable());

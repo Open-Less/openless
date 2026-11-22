@@ -38,6 +38,7 @@ pub async fn get_selection_polish_preview(
 
 #[tauri::command]
 pub async fn confirm_selection_polish_preview(
+    coord: CoordinatorState<'_>,
     core: CoreState<'_>,
     text: String,
 ) -> Result<(), String> {
@@ -55,7 +56,20 @@ pub async fn confirm_selection_polish_preview(
         .selection
         .confirm(session_id, Some(text))
         .await
-        .map_err(|error| error.message)
+        .map_err(|error| error.message)?;
+    #[cfg(not(mobile))]
+    if core
+        .services()
+        .selection
+        .snapshot()
+        .await
+        .map_err(|error| error.message)?
+        .insert_outcome
+        == Some(openless_core::InsertOutcome::Inserted)
+    {
+        coord.show_selection_recovery_notice();
+    }
+    Ok(())
 }
 
 #[tauri::command]

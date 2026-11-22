@@ -11,6 +11,12 @@ const params = new URLSearchParams(location.search);
 const mode = params.get('credentials');
 const android = params.get('os') === 'android';
 const exerciseClipboard = params.has('clipboard');
+const exerciseOriginals = params.has('historyOriginals');
+const originals = [
+  ` \t${'长'.repeat(9000)}UNIQUE_MIDDLE_全文${'尾'.repeat(9000)}\n `,
+  ' \nsecond original\t ',
+];
+const copiedTexts: string[] = [];
 const nativeTheme = params.get('nativeTheme') === 'light' ? 'light' : 'dark';
 const exerciseTheme = params.has('nativeTheme');
 let releaseTheme!: () => void;
@@ -52,6 +58,8 @@ Object.assign(window, {
     calls,
     openedUrls,
     presentations,
+    originals,
+    copiedTexts,
     releaseTheme,
     allowClipboard: (allowed: boolean) => {
       clipboardAllowed = allowed;
@@ -94,7 +102,7 @@ Object.assign(window, {
     },
     invoke: async (
       command: string,
-      args?: { event?: string; handler?: number; sessionId?: string; path?: string },
+      args?: { event?: string; handler?: number; sessionId?: string; path?: string; text?: string },
     ) => {
       calls.push(command);
       if (command === 'get_startup_snapshot')
@@ -158,6 +166,7 @@ Object.assign(window, {
         };
       if (exerciseClipboard && command === 'copy_text_to_clipboard') {
         if (!clipboardAllowed) throw new Error('Clipboard write rejected');
+        copiedTexts.push(args!.text!);
         return;
       }
       if (command === 'plugin:shell|open') {
@@ -166,6 +175,17 @@ Object.assign(window, {
       }
       if (command === 'get_hotkey_capability') return mocks.mockHotkeyCapability;
       if (command === 'get_hotkey_status') return { state: 'ready' };
+      if (exerciseOriginals && command === 'list_history')
+        return originals.map((rawTranscript, index) => ({
+          id: `original-${index}`,
+          createdAt: '2026-11-23T00:00:00Z',
+          source: 'selection_polish',
+          mode: 'light',
+          rawTranscript,
+          finalText: index === 0 ? 'processed 0' : '',
+          errorCode: index === 0 ? null : 'selectionFailed',
+          insertStatus: 'inserted',
+        }));
       if (['get_activity_apps', 'get_activity_stats', 'list_history'].includes(command)) return [];
       if (command === 'check_microphone_permission' || command === 'check_accessibility_permission')
         return 'granted';

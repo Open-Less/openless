@@ -472,9 +472,28 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                             Some(openless_core::InsertOutcome::CopiedFallback) => {
                                 "已复制结果，请手动粘贴"
                             }
+                            Some(openless_core::InsertOutcome::PasteSent) => {
+                                "已发送粘贴，尚未确认输入；原文保留在历史记录"
+                            }
                             _ => "已替换",
                         },
                         _ => return,
+                    };
+                    let message = if snapshot.insert_outcome
+                        == Some(openless_core::InsertOutcome::Inserted)
+                    {
+                        crate::selection::original_recovery_message(
+                            &inner
+                                .backend
+                                .services()
+                                .remote_input
+                                .status()
+                                .map(|status| status.locale)
+                                .unwrap_or_else(|_| inner.backend.config().locale.clone()),
+                        )
+                        .to_string()
+                    } else {
+                        message.to_string()
                     };
                     let epoch = emit_selection_polish_capsule(&inner, CapsuleState::Done, message);
                     schedule_selection_polish_capsule_idle(
@@ -504,7 +523,20 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                     "selectionPolishTargetChanged" | "selectionPolishSelectionChanged" => {
                         "选区已变化，未替换"
                     }
-                    _ => "润色失败，请重试",
+                    _ if error.message.contains("llmResponseIncomplete")
+                        || error.message.contains("context_length")
+                        || error.message.contains("maximum context")
+                        || error.message.contains("413") =>
+                    {
+                        "服务无法完整处理全文，未替换；原文已保存在 App 的历史记录"
+                    }
+                    "selectionOriginalCopyFailed" | "selectionOriginalUnavailable" => {
+                        "无法保护原文，已停止，未替换"
+                    }
+                    _ if error.code == openless_core::BackendErrorCode::Persistence => {
+                        "无法保存原文，已停止，未替换"
+                    }
+                    _ => "润色失败，未替换；原文已保存在 App 的历史记录",
                 };
                 let state = if matches!(
                     error.code,

@@ -291,6 +291,37 @@ impl ActiveLLMProvider {
         matches!(self, Self::OpenAI(_) | Self::Codex(_))
     }
 
+    pub(crate) async fn selection_streaming<F, C>(
+        &self,
+        system: String,
+        user: String,
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let input_chars = user.chars().count();
+        let messages = vec![
+            json!({"role":"system", "content":system}),
+            json!({"role":"user", "content":user}),
+        ];
+        match self {
+            Self::OpenAI(p) => {
+                p.chat_completion_messages_streaming_checked(
+                    messages,
+                    StreamingTimeouts::for_input(input_chars),
+                    on_delta,
+                    should_cancel,
+                    true,
+                )
+                .await
+            }
+            Self::Codex(p) => p.codex_responses(messages, on_delta, should_cancel).await,
+        }
+    }
+
     pub async fn polish_streaming<F, C>(
         &self,
         raw_text: &str,
@@ -1106,6 +1137,21 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
+        self.chat_completion_messages_streaming_checked(messages, timeouts, on_delta, should_cancel, false).await
+    }
+
+    async fn chat_completion_messages_streaming_checked<F, C>(
+        &self,
+        messages: Vec<Value>,
+        timeouts: StreamingTimeouts,
+        on_delta: F,
+        should_cancel: C,
+        require_complete: bool,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
         if let Some(access) = &self.siwc_access {
             return access
                 .infer(
@@ -1174,7 +1220,7 @@ impl OpenAICompatibleLLMProvider {
                     .to_string(),
             });
         }
-        let mut events = TextEventStream::new(self.config.protocol.format);
+        let mut events = TextEventStream::new(self.config.protocol.format).require_complete(require_complete);
         let mut full_text = String::new();
         let mut delta_count = 0usize;
         let mut cancelled = false;
@@ -1649,6 +1695,7 @@ impl CodexOAuthLLMProvider {
         let mut utf8_pending: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         let mut final_text = String::new();
+        let mut completed = false;
         let mut cancelled = false;
         loop {
             if should_cancel() {
@@ -1663,6 +1710,7 @@ impl CodexOAuthLLMProvider {
             while let Some(idx) = buffer.find("\n\n") {
                 let event = buffer[..idx].to_string();
                 buffer.drain(..idx + 2);
+                validate_codex_completion(&event, &mut completed)?;
                 handle_codex_sse_event(&event, &mut full_text, &mut final_text, &on_delta);
             }
         }
@@ -1670,9 +1718,13 @@ impl CodexOAuthLLMProvider {
             finish_utf8_sse_chunks(&mut buffer, &mut utf8_pending)?;
         }
         if !buffer.trim().is_empty() {
+            validate_codex_completion(&buffer, &mut completed)?;
             handle_codex_sse_event(&buffer, &mut full_text, &mut final_text, &on_delta);
         }
 
+        if !completed || cancelled {
+            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+        }
         if full_text.is_empty() && !final_text.is_empty() {
             full_text = final_text;
         }
@@ -1945,6 +1997,29 @@ fn codex_input_from_chat_messages(messages: &[Value]) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+fn validate_codex_completion(event: &str, completed: &mut bool) -> Result<(), LLMError> {
+    for data in event.lines().filter_map(|line| line.strip_prefix("data:")) {
+        if let Ok(value) = serde_json::from_str::<Value>(data.trim()) {
+            match value["type"].as_str().unwrap_or_default() {
+                "response.failed" | "response.incomplete" | "error" => {
+                    return Err(LLMError::ParseError("llmResponseIncomplete".into()))
+                }
+                "response.completed" => {
+                    if value["response"]["status"]
+                        .as_str()
+                        .is_some_and(|status| status != "completed")
+                    {
+                        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+                    }
+                    *completed = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_codex_sse_event<F>(
@@ -2443,6 +2518,12 @@ pub(crate) fn extract_assistant_content_raw(body: &str) -> Result<String, LLMErr
     let first = choices
         .first()
         .ok_or_else(|| LLMError::ParseError("choices array is empty".into()))?;
+    if first["finish_reason"]
+        .as_str()
+        .is_some_and(|reason| reason != "stop")
+    {
+        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+    }
     let content = first
         .get("message")
         .and_then(|m| m.get("content"))

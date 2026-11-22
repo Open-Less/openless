@@ -726,6 +726,8 @@ export const zhTW: typeof zhCN = {
     },
   },
   history: {
+    copyOriginals: '複製所選原文',
+    selectOriginal: '選擇原文：{{title}}',
     exportError: '匯出錄音失敗，請重試。',
     kicker: 'HISTORY',
     title: '歷史記錄',

@@ -779,6 +779,8 @@ export const de: typeof zhCN = {
     },
   },
   history: {
+    copyOriginals: 'Ausgewählte Originale kopieren',
+    selectOriginal: 'Original auswählen: {{title}}',
     exportError: 'Die Aufnahme konnte nicht exportiert werden. Versuche es erneut.',
     kicker: 'VERLAUF',
     title: 'Verlauf',

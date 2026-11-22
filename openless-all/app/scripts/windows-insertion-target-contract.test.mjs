@@ -19,6 +19,14 @@ const finalInsert = adapters.match(
   /async fn insert_final\([\s\S]*?(?=\n    async fn copy_fallback)/,
 )?.[0];
 assert.ok(finalInsert, 'the production final insertion path must exist');
+const unicodeFallback = adapters.match(
+  /fn windows_unicode_fallback\([\s\S]*?(?=\nfn map_insert_status)/,
+)?.[0];
+assert.match(
+  unicodeFallback ?? '',
+  /matches!\(status, crate::types::InsertStatus::Inserted \| crate::types::InsertStatus::PasteSent\)/,
+  'partially dispatched Unicode input must remain uncertain instead of becoming copy-only fallback',
+);
 
 // Native wiring contract: do not touch the system clipboard or steal focus; real window effects
 // still require on-device acceptance.

@@ -1046,6 +1046,24 @@ impl Coordinator {
         show_insert_fallback_card(&self.inner, text, reason);
     }
 
+    #[cfg(not(mobile))]
+    pub(crate) fn show_selection_recovery_notice(&self) {
+        let locale = self
+            .inner
+            .backend
+            .services()
+            .remote_input
+            .status()
+            .map(|status| status.locale)
+            .unwrap_or_else(|_| self.inner.backend.config().locale.clone());
+        let epoch = emit_selection_polish_capsule(
+            &self.inner,
+            CapsuleState::Done,
+            crate::selection::original_recovery_message(&locale),
+        );
+        schedule_selection_polish_capsule_idle(&self.inner, epoch, CAPSULE_AUTO_HIDE_DELAY_MS);
+    }
+
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
         let captured_revision = self.inner.host.capsule_revision();
         let _ = self.present_core_capsule_at_revision(payload, None, captured_revision);

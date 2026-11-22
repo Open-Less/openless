@@ -3206,6 +3206,7 @@ impl OpenLessBackend {
                 Arc::clone(&repositories.style_packs),
                 deps.selection_polisher.clone(),
                 Arc::clone(&voice_sessions),
+                deps.selection_runtime.clone(),
             ));
         if let Some(process) = deps.services.take_coding_agent_process() {
             let runner = Arc::new(crate::coding_agent::CodingAgentRunner::new(Arc::clone(
@@ -8443,7 +8444,7 @@ impl OpenLessBackend {
                         session_id,
                         if error.code == BackendErrorCode::OutcomeUnknown {
                             "insertOutcomeUnknown"
-                        } else if error.code == BackendErrorCode::InvalidState {
+                        } else if error.is_target_unavailable() {
                             "insertTargetChanged"
                         } else { "insertFailed" },
                         String::new(),
@@ -9018,7 +9019,7 @@ impl OpenLessBackend {
                         session_id,
                         if error.code == BackendErrorCode::OutcomeUnknown {
                             "insertOutcomeUnknown"
-                        } else if error.code == BackendErrorCode::InvalidState {
+                        } else if error.is_target_unavailable() {
                             "insertTargetChanged"
                         } else { "insertFailed" },
                         engine_result.raw_text.clone(),
@@ -12233,6 +12234,11 @@ mod tests {
                 ..BackendConfig::default()
             },
             BackendDependencies {
+                selection_polisher: Some(Arc::new(crate::testing::FixtureTextPolisher::successful("unused"))),
+                selection_runtime: Some(Arc::new(crate::testing::FixtureSelectionRuntime::successful(
+                    crate::SelectionCapture { text: "fixture".into(), source_app: None },
+                    InsertOutcome::Inserted,
+                ))),
                 voice_activation_runtime: None,
                 dictation_engine: Arc::new(engine),
                 ..BackendDependencies::unsupported()
@@ -12713,6 +12719,11 @@ mod tests {
                 ..BackendConfig::default()
             },
             BackendDependencies {
+                selection_polisher: Some(Arc::new(crate::testing::FixtureTextPolisher::successful("unused"))),
+                selection_runtime: Some(Arc::new(crate::testing::FixtureSelectionRuntime::successful(
+                    crate::SelectionCapture { text: "fixture".into(), source_app: None },
+                    InsertOutcome::Inserted,
+                ))),
                 voice_activation_runtime: None,
                 dictation_engine: Arc::new(engine),
                 ..BackendDependencies::unsupported()
