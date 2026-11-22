@@ -89,10 +89,7 @@ After the first launch, grant the following in System Settings → Privacy & Sec
 
 ### Entering credentials
 
-If you are new to Volcengine ASR, start with the illustrated walkthrough:  
-[OpenLess Volcengine ASR setup](docs/volcengine-setup.md)
-
-For iFlytek real-time transcription, see [OpenLess iFlytek ASR setup](docs/xfyun-asr.md) (AppID + API Key, Settings → AI & models → Speech recognition channels → iFlytek real-time transcription).
+See the [speech services guide (Chinese)](docs/guides/speech-services.md) for Volcengine, iFlytek, and other providers. iFlytek real-time transcription uses an AppID and API Key from the same iFlytek application.
 
 Open OpenLess → **Settings** and fill in:
 
@@ -160,6 +157,14 @@ The dictionary improves recognition of specific words (product names, people, ja
 Main window → **History** lists every recording, including the raw transcript and the polished result.
 
 ---
+
+## Phone remote input
+
+Enable remote input on your computer, then open the address it displays on your phone. Verify the computer certificate, enter the pairing code and allow microphone access. The [phone remote input guide (Chinese)](docs/guides/remote-input.md) covers certificate setup and recording recovery.
+
+## Encrypted cloud sync
+
+Open Cloud Services in Settings and sign in with GitHub. Review the data categories before turning on encrypted sync. Your settings, registered provider API keys and text history are encrypted on your device before upload. Keep the sync password, and preview any existing cloud snapshot before restoring it on a new device.
 
 ## Changing the hotkey
 

@@ -89,10 +89,7 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 
 ### 填入凭据
 
-不会配火山 ASR 的话，先看这篇图文引导：  
-[OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
-
-用讯飞实时语音转写的话，看 [OpenLess 讯飞 ASR 配置](docs/xfyun-asr.md)（AppID + API Key，设置 → AI 与模型 → 语音识别渠道 → 讯飞实时语音转写）。
+火山、讯飞、百炼和其他供应商的配置集中在[语音与模型服务设置](docs/guides/speech-services.md)。讯飞实时转写使用同一个讯飞应用提供的 AppID 和 API Key。
 
 打开 OpenLess → **设置**，填入以下字段：
 
@@ -160,6 +157,14 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 主窗口 → **历史**，可查看所有录音记录，包括原始转写和润色结果。
 
 ---
+
+## 手机远程输入
+
+在电脑开启远程输入，用手机打开电脑显示的地址。按[手机远程输入指南](docs/guides/remote-input.md)核对证书，再输入配对码、授权麦克风并录音。
+
+## 加密云同步
+
+在「设置 → 云服务」登录 GitHub，阅读加密云同步的范围告知后再开启。设置、已登记的服务 API 密钥和历史文本先在本机加密再上传。请保存同步密码。新设备已有云端快照时，先预览恢复内容，再确认导入。
 
 ## 更换快捷键
 

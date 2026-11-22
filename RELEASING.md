@@ -9,7 +9,7 @@ day-to-day development.
 
 **Only repository administrators may create version tags and publish releases.**
 
-- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets may ride the same tag only after the L01-L12 device acceptance is finished for that release candidate. A desktop/Android tag may be cut without publishing Linux packages.
+- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets may ride the same tag only after device and installation acceptance is finished for that release candidate. A desktop/Android tag may be cut without publishing Linux packages.
 - Contributors (including AI agents) **must not** create release tags, publish
   releases, or trigger release automation. If a release is needed, **request an admin
   to cut it** — open an issue or ping a maintainer with the target version and the
@@ -54,14 +54,13 @@ its own tag-push trigger, so the APKs are not built twice.
 
 Standalone Android weekly/debug/manual builds and HarmonyOS manual repairs remain
 available. Desktop branch/manual builds and Windows draft repairs keep their existing
-scope. See [release distribution](docs/release-distribution.md) for the dependency graph.
+scope. See [release distribution](docs/development/delivery.md#签名与分发) for the dependency graph.
 
 Linux-specific CI and release automation is paused: the reusable Linux check and
 release entry point have been removed, and desktop releases no longer dispatch Linux.
 Linux source, local build/package/verification scripts, and device acceptance
 requirements remain available. No Linux artifacts or aliases are automatically
-built or attached. Before manually distributing packages, complete the L01-L12
-acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
+built or attached. Before manually distributing packages, complete [Linux device and installation acceptance](docs/requirements.md#linux)
 for that exact candidate. Compilation alone is not device acceptance. Desktop and
 Android delivery remain independent; Linux has no in-app updater or AppImage.
 
@@ -121,13 +120,13 @@ it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
 ## Download assets: no duplicate aliases in new releases
 
-Future release runs publish only the original versioned macOS DMGs, Windows installers and Android APKs. Updater signatures are consolidated into one `updater-signatures.json` per release, not separate `.sig` attachments. Temporary `.sig` files remain in build artifacts to generate the index and CDN manifests. HarmonyOS publishes only `OpenLess_harmony_arm64.hap` and its checksum. They no longer generate or attach the duplicate names `OpenLess_macos_*`, `OpenLess_windows_*`, `OpenLess_android_*` or `OpenLess_harmony.hap`. macOS `.app.tar.gz` updater archives remain published, with signatures in the index. Linux automation remains paused. See [release distribution](docs/release-distribution.md) for format, compatibility limits and cutover.
+Future release runs publish only the original versioned macOS DMGs, Windows installers and Android APKs. Updater signatures are consolidated into one `updater-signatures.json` per release, not separate `.sig` attachments. Temporary `.sig` files remain in build artifacts to generate the index and CDN manifests. HarmonyOS publishes only `OpenLess_harmony_arm64.hap` and its checksum. They no longer generate or attach the duplicate names `OpenLess_macos_*`, `OpenLess_windows_*`, `OpenLess_android_*` or `OpenLess_harmony.hap`. macOS `.app.tar.gz` updater archives remain published, with signatures in the index. Linux automation remains paused. See [release distribution](docs/development/delivery.md#签名与分发) for format, compatibility limits and cutover.
 
 Existing releases and their download aliases are not migrated or deleted. The alias helper remains available for legacy/manual use, but no automatic release workflow invokes it. Partial desktop reruns also filter out old alias artifacts instead of publishing them again; they do not delete assets already attached to an existing release.
 
 Website/CDN download resolution must use the actual asset names from the selected release API (or an external redirect to those assets), rather than assume the old fixed alias exists in a new release. This change does not implement a website redirect. Stable selection may use the latest stable release; beta selection must explicitly select its prerelease tag because GitHub `latest` excludes prereleases. Historical fixed-name links remain valid for historical releases. Updater manifest generation and its CDN artifact handoff are unchanged.
 
-Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
+Windows and macOS releases preserve their supported workflows, existing data, shortcuts and recovery paths. The egui team owns Linux Host/UI work and its own release acceptance. Shared Core defects affect every platform using the failing path.
 
 ## Version-sync gate
 
@@ -156,7 +155,7 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 1. Branch is the intended channel (`beta` for Beta, `main` for Stable).
 2. All five version files match (version-sync gate green).
 3. CI is green on the commit being tagged.
-4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness. Linux acceptance below is required before including Linux assets.
+4. Test the installed candidate on the affected platform for launch, permissions, recording, cancellation, text insertion and upgrade, including the user workflows changed in the release. Verify signing and distribution separately. Complete Linux acceptance before including its assets.
 5. Then, and only then, push the release tag.
 6. The tag starts the unified release workflow. Its desktop, Android and HarmonyOS jobs
    attach their assets to a shared draft. Check every required job and verify the expected
@@ -203,7 +202,7 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 
 Linux workflow dispatch is paused. Before manually distributing Linux packages (or restoring automation), require all of the following:
 
-1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
+1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/requirements.md#linux). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
 3. Run the local package verifier for ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
 4. Check out the reviewed immutable tag and verify the package version matches `package.json`, so the packages provably come from the reviewed commit.
@@ -353,7 +352,7 @@ from PR titles or dates alone. If a PR is unavailable, cite the verified commit 
 record the attribution limitation. Link the full comparison and retain platform
 exclusions (for example, Linux source work does not imply Linux packages shipped).
 
-Keep the release-page Markdown in `docs/releases/<version>-release-notes.md`.
+Publish each version's notes on its [GitHub Release](https://github.com/Open-Less/openless/releases) page.
 Before editing an existing public release, save its current body and asset metadata;
 after editing, read it back and verify the body, channel/publication flags and asset
 names/digests/sizes. A notes-only change must not rebuild packages, move tags or

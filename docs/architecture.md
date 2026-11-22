@@ -1,152 +1,77 @@
-# OpenLess 2.0 架构
+# OpenLess 架构与接口调用
 
-平台范围见 [2.0 需求](2.0-requirements.md)，文件定位见 [目录结构](structure.md)。
+OpenLess 由界面、宿主和共享 Core 三层组成。界面接收输入并展示状态。宿主连接各个平台的窗口、热键、麦克风、编辑器和凭据库。Core 在宿主进程内管理会话、业务规则、服务调用和数据。本文路径相对于仓库根目录。
 
-## 1. 分层与工作区
+## 模块职责
 
-应用开发与构建源在 `openless-all/app/`。下文源码路径以该目录为基准。根 [Cargo workspace](../openless-all/app/Cargo.toml) 包含 Core、MicYou DSP、Linux、Harmony Rust 宿主和原生胶囊。`src-tauri` 及其 `backend-tests` 使用独立 manifest。Core 是与 Host 同进程的业务库。
-
-| 层 | 位置 | 职责 |
-| --- | --- | --- |
-| 界面（Win/mac/Android） | `src/`（React/TypeScript/i18next，八种界面语言） | 页面、设置、窗口分支；调用 typed IPC，展示快照与事件 |
-| Host（Win/mac/Android） | `src-tauri/`（crate `openless`） | `src/lib.rs` 注册命令；适配窗口、热键、音频、凭据、插入、IME 和生命周期 |
-| 共享 Core | `crates/openless-core/` | 业务规则、会话、服务调用和数据仓储；通过 trait 接入 Host 能力 |
-| Linux Host + UI | `linux-egui/`（crate `openless-linux-egui`） | `backend.rs` 组装 `OpenLessBackend`，`main.rs` 实现 egui/eframe UI，不依赖 Tauri/WebKitGTK |
-| HarmonyOS Host + UI | `harmony/`（ArkTS + ArkWeb）与 `harmony/rust`（crate `openless-harmony-host`） | ArkTS 提供输入法/窗口/剪贴板能力，Web 界面复用 `src/` 的 harmony 构建，Rust 侧经 napi 暴露同一套 IPC |
-
-Android 侧：`src-tauri/src/android/`（JNI/桥接）+ `android/`（aidl、kotlin、manifests、frontend）；`android/frontend` 经 Vite 别名 `@android` 被 `src/` 引用；manifest 由 `scripts/merge-android-*.mjs` 合成。Android 与 HarmonyOS 共用的输入法 native 后端在 `mobile-ime/`；HarmonyOS 的构建与分发见 [发布规范](../RELEASING.md)。Linux 已有可复用 Host/UI 起点，剩余能力与产品验收见 [交接目录](linux-egui-handoff/README.md)。
-
-## 2. 数据流
-
-```mermaid
-flowchart TB
-    React["React 页面 / 窗口"] --> IPC["src/api + src/runtime · typed commands"]
-    IPC --> Tauri["Tauri commands / coordinator / core_adapters"]
-    Egui["egui UI"] --> Linux["LinuxHost / LinuxBackendBuilder"]
-    Tauri --> Core["OpenLessBackend · Core"]
-    Linux --> Core
-    Core --> Stores["历史 / 设置 / 词库 / 风格包仓储"]
-    Core --> Network["云端 provider / 风格包 API"]
-    Core --> Ports["录音 / 插入 / 凭据 / 本地模型等接口"]
-    Ports --> Native["Host 原生实现"]
-    Core --> Events["BackendEvent · 语义事件"]
-    Events --> Tauri
-    Events --> Linux
-```
-
-- 桌面：React → 分域 API（`src/api/`）与宿主传输（`src/runtime/`）→ Tauri command → Core；Core 事件由 Host 转发回界面。
-- Linux：egui UI → `LinuxHost`（`lib.rs`：`snapshot` / `subscribe` / `save_settings` / `drain_events` 等）→ `OpenLessBackend` → Core，类型化 Rust 接口，不经 IPC。
-- 浏览器预览：provider 公开目录由 Core 生成到 `src/lib/ipc/provider-descriptors.generated.json`（`cargo run --locked -p openless-core --example export_provider_descriptors` 重新生成；只含公开元数据，无凭据）；原生端走同一受启动合同保护的 IPC。
-- 语言目录：`contract/language-catalog.json` 是工作语言原生名、识别代码与 Apple locale 的单一来源；React `languageCatalog.ts` 和 Core `language_catalog.rs` 读取同一份数据，识别服务仍在运行时判断具体语种是否可用。界面语言独立保存在 `ol.locale`，启动和切换经既有 `set_remote_locale` 将解析后的语言同步给原生托盘与手机远程输入页。
-- 旧 React command/event 名称只保留在 Tauri 兼容 Adapter；跨平台合同以 `contract/backend-2.0.json` 为准。
-
-启动时，`src/app/App.tsx` 由 `src/runtime/transport.ts` 等待原生桥，调用 `get_startup_snapshot` 校验合同版本和后台运行状态后进入业务界面。浏览器预览由 `src/preview/` 提供独立适配。Core 事件定义在 `events.rs`，Tauri 的转译入口为 `src-tauri/src/tauri_events.rs`，Linux 直接订阅类型化事件。
-
-听写主链由 `dictation_engine.rs` 管理：触发会话 → 录音/ASR → 清理与润色 → Host 插入 → 历史与事件。Host 音频处理 worker 在原生采样停止后通过 FIFO Shutdown 排空并退出，不能依赖 CPAL 回调中所有 sender 都析构才结束，否则指定麦克风时可能堵住停止与后续多模态请求。Tauri 在 `coordinator/dictation_core.rs` 接入该链路；本地 ASR 的模型管理归 Core，原生执行实现分别位于 Host。取消、失败和旧会话事件处理也属于该业务链，而不是页面各自实现。
-
-Android 悬浮窗在录音中转入追问时，Host 先捕获原选区，Core 的 `stop_dictation_for_qa` 按原会话 ID 完成转写并释放听写资源，跳过听写润色与文字插入，再由 `QaApi::submit_captured_text` 接收已录问题和选区。重复手势由 Host 的异步锁合并；QA 不重新抓取已经变化的前台选区。
-
-Android IME 通过 `InputConnection` 插入文字。笔画和英文由 Kotlin 控制器处理，拼音经 JNI 接入共享 librime。`OpenLessApplication`、`OpenLessRuntimeService` 和 Warmup Activity 管理后台运行与恢复。用户操作与验收入口见 [Android 输入法](android-ime.md)。
-
-设置保存使用 `get_settings_snapshot` / `update_setting_fields`：前端只提交字段差异，Core 按偏好修订号提交事务并在版本冲突时重试；`prefs:changed` 使前端重新读取快照。`preferencesWriteGate.ts` 将尚未完成的本地编辑叠加到已确认快照，失败时只撤回对应请求。
-
-手改学词由 Core 的 `host_document/observation.rs` 和 `api.rs` 管理插入范围、观察代数、建议有效期与词典写入。独立本机授权默认关闭，配置位于「实验与扩展 → 手改学词」；观察时长 10–60 秒、建议有效期 5–60 秒、最大自动词长 2–32 个字符。设置改变会结束旧观察并清除旧建议，授权与参数不进入云同步。macOS AX、Windows UIA 与 Android 无障碍仅在当前编辑器内进行短时观察，密码框和已知敏感应用被排除；观察文本仅用于本地差分，确认前不写入词典。`PendingCorrection.expiresAtMs` 是 Web 和 Android 确认卡共用的截止时间；历史详情与 Android IME 保留显式确认加词入口，Linux 原生观察仍在独立验收范围。
-
-### React 运行边界
-
-`src/app` 组装宿主、语言和窗口，`src/features` 管理页面选择、草稿、滚动与业务操作。`src/api` 提供分域操作，`src/runtime` 接入原生传输，`src/data` 负责跨页快照及并发读写。历史先订阅变更再读取快照，每个查询键只允许一次在途读取。读取期间发生失效时丢弃过期结果并补读。历史删除、累计活动和服务用量分属不同仓库。
-
-每个 WebView 有自己的 `AppViewport` 和交互控制器。内容与浮层共用可见边界，命中和定位使用未缩放的视口坐标。等待入场的页面及退出中的浮层不能接收交互。确认和持久化完成分别由交互层和业务层结算。浏览器夹具验证渲染、滚动、焦点与降动效，安装版的窗口、系统权限和命中范围由相应 Host 验证。
-
-## 3. Core 模块地图（按域，见 `src/lib.rs` pub mod 清单）
-
-- 听写链路：`dictation_engine` / `dictation_context` / `audio` / `external_audio` / `silence_auto_stop` / `streaming_insert` / `hotkey_interpreter` / `voice_session`
-- 服务与凭据：`provider_rules` / `provider_registry` / `provider_resolution` / `provider_service` / `provider_transport` / `cloud_providers` / `providers` / `omni` / `llm_gemini` / `credentials`(+`credentials_legacy`) / `endpoint_security` / `net`
-- 本地模型：`model_store` / `local_asr_service` / `local_asr_catalog` / `asr/`（云与本地 provider 实现）
-- 文本加工：`polish` / `prompt_compose`(+`prompts/`，`include_str!` 编译进二进制) / `output_cleaning` / `correction` / `vocabulary`
-- 知识与历史：`history` / `activity` / `style_packs` / `style_pack_store`(+`style_pack_archive`) / `marketplace`
-- 交互域：`qa_service` / `selection_service` / `selection_voice_service`(+`selection_voice_intent`) / `edit_plan` / `less_computer` / `coding_agent`(+`coding_agent_guard`) / `remote_input_service` / `auxiliary` / `cli`
-- 基座：`api` / `events` / `ports` / `settings` / `preferences` / `persistence` / `config` / `errors` / `types` / `shared_types` / `shortcut_types` / `domains` / `android_types` / `host_document/` / `testing` / `vendor/`
-
-## 4. Host 注入点
-
-操作系统集成由 Host 提供。Core 的 `ports.rs`、`config.rs`、`domains.rs` 和 `credentials.rs` 定义录音、插入、任务执行、系统动作、领域运行时及凭据接口；Core 自身仍包含 HTTP 调用和框架无关的文件仓储。
-
-Tauri 在 `src-tauri/src/coordinator.rs` 构造 Core，`core_adapters.rs` 组装原生依赖并对接已有 persistence。Linux 在 `linux-egui/src/backend.rs` 使用 `LinuxBackendBuilder`，注入音频、凭据、服务、设置、本地 ASR 和平台动作。`BackendConfig` 由 Host 提供数据、缓存、资源路径与平台能力。
-
-业务规则缺失时应修复 Core；平台能力缺失时修复对应 Host。设置值、测试 fixture 或 `Unsupported` 实现不能代表原生能力已就绪。
-
-## 5. 窗口体系
-
-`src-tauri/tauri.conf.json` 声明 `main`、`capsule` 两个窗口。`src/app/bootstrap.tsx` 读取 `?window=`，`src/app/windowRoutes.tsx` 分派胶囊、Windows 转写轨、`qa`（含复用它的「润色结果」模式）、语音编辑和选区意图。Less Computer 的兼容路由保持空界面；无辅助类型时进入主界面。各 WebView 共用前端入口，重页面按需加载；移动端再依据平台能力选择布局。Linux 单实例由 `linux-egui/src/single_instance.rs` 守护并转发启动意图。
-
-主窗口默认逻辑尺寸为 1300×835，允许用户调整；macOS 原生窗口按钮左侧和顶部均留出 16px，前端保留 44px 拖动区。桌面侧栏宽 226px，主内容从版本行下方开始，设置面板单独限制高度并在内部滚动。
-
-macOS 全局热键在后台 CGEventTap 线程读取按键与修饰键边沿。只有配置的 Fn 正处于按住状态时，监听器才解析系统功能键负载；`NSEvent eventWithCGEvent:` 的转换同步交给主线程，完成分类后再处理 Fn 松键。此转换会进入 HIToolbox 的输入源逻辑，不能在热键线程执行；普通 Caps Lock 中英文切换不需要该转换。Esc 与组合键取消仍由原有独立通道处理。
-
-Linux 主窗口和 QA 面板由常驻宿主拉起的独立进程承载。QA 空态没有 Core 会话，宿主与面板统一使用空态标识校验操作；文字发送通过 `submit_text_in_context` 在 Core 中检查当前上下文并创建新轮次。早期调用失败回传到对应面板，迟到的失败不能覆盖新轮次。弹窗消息使用宿主递增的序号，不依赖 Core 是否发布了新事件；显式收起 QA 结束窗口进程，隐藏时的 QA 快照只更新宿主状态，下一次打开再创建窗口。没有托盘时，正常关闭主窗口仍会退出应用，托盘注册失败的原因写入启动日志。
-
-Linux 的 Siri 波形包络在分数次幂运算前限制为非负值，避免浮点端点误差生成 NaN。设置和胶囊绘制回归须经过 egui tessellation 并检查生成顶点的有限性，文字快照不能单独证明绘制成功。
-
-QA 与润色预览共用浮窗时，宿主记录实际发送的上下文，只允许当前上下文的隐藏请求结束窗口；切回 QA 会创建新的窗口协议状态，后台 QA 更新不能覆盖正在显示的润色预览。异步 QA 调用结果还绑定窗口代次，空态关闭后重新打开仍没有 Core 会话 ID，旧代次的结果也不能显示到新面板。
-
-Siri、Classic、Typeless 三种胶囊共用 Core 的 `CapsuleStyle`，窗口尺寸与点击范围在保存偏好时同步。胶囊按显示器工作区底部定位，避开未自动隐藏的 Dock/任务栏；可见期间重新检查工作区。带正文的浮窗使用不透明底色，聊天面板另叠加细噪点纹理，圆角外部仍保留透明区域。 默认胶囊及翻译条按应用主题使用浅色或深色半透明材质，状态文字在明暗桌面背景上保持可读对比度。 所有 WebView 在启动读取前订阅设置变更，已打开或隐藏的胶囊、字幕条及镜像即时更新亮暗主题；迟到的启动读取不能覆盖新主题。原生辅助进程在偏好变化时只更新当前帧的主题，保留录音会话、操作权限和退出进度，无需重启。网页胶囊的磨砂底层使用背景模糊，入场在 240ms 内淡入并由轻微模糊变清晰，180ms 退出；打断后从当前画面恢复，结束后释放模糊合成层。原生辅助进程复用配色和淡入节奏，macOS 使用位于 OpenGL 视图下方、只覆盖药丸轮廓的系统磨砂层，Windows 保留半透明材质。系统减少动态效果时直接到达稳定状态。
-
-思考动画覆盖转写、润色和原生文字写入，输入完成后才收尾。macOS 流式键盘输入由会话内串行 worker 维护原控件和累计 UTF-16 终点；每批发送后不再等待 AX 长确认，finish/cancel 在已接收写入之后等待最终屏障，再恢复输入源。AX 仅读选区范围，不读正文；采用 250 ms 无进展预算和 10 秒总预算。不可读、提交型 Return 或预算耗尽时明确降级到按键已发送语义，不重新粘贴已发送文字。目标应用的实际输入表现仍需设备验收。
-
-桌面端已移除 Less Computer 与 Claude 控制台：不再打包页面、着色器、IPC 客户端或 CLI 进程适配器，不注册相关 IPC 命令及热键。Core 中的旧偏好字段与历史 DTO 仅保留兼容既有配置；它们不能在桌面端重新开启测试功能。
-
-
-
-选区直接润色在捕获文字和原输入目标后显示处理中提示，重复快捷键的 Busy 返回不覆盖该提示。已有语音选区入口在松开快捷键后继续显示思考动画，直到处理/替换完成，或交给确认和预览面板。录音提示音的 Web Audio context 在恢复超时或音频时钟冻结时丢弃并最多重试一次，重试沿用原请求的取消和迟到边界。
-
-Selection Voice 在有效输入目标中允许空选区：Core 将无草稿编辑转换为 Compose，生成正文后沿用预览/直接插入路径；已有选区仍按编辑或问答处理。Host 的胶囊所有权与会话 ID 绑定，结束录音后停止接收音量帧，终态通过 Done/Idle 收尾。Selection Voice 的辅助录音遵循当前多模态偏好；Omni 将音频转换为指令文字，后续意图与编辑处理仍由各自模型完成。
-
-AI 服务设置在顶部选择传统或多模态模式，各配置入口等宽排布并完整显示，不依赖横向滑动。传统模式禁用多模态模型入口；多模态模式禁用语言模型、语音识别和本地模型入口。禁用入口名称置灰，名称下方附醒目的黄/琥珀色“当前模式未使用”提示，鼠标和键盘均不可进入；连接与扩展保持可用。多模态表单将供应商/模型及自定义高级字段并排，拉取模型与验证集中在页尾；桌面常用窗口内单页显示完整表单，窄屏或放大字体时保留内容的可访问性。切换模式时若当前页面已禁用，则转到当前模式可用的配置页；本地模型的内部跳转入口受相同限制。切换模式保留两组渠道和凭据。Omni 连接测试只验证文本请求，实际音频可用性需录音验证；DashScope 音频使用 `data:;base64,` 和独立 `format` 字段。API Route 作为可手动添加的 OpenAI 兼容润色渠道，不改变默认提供方。
-
-界面动效由 `src/lib/motion.ts` 与 `src/components/ui/TransitionViewport.tsx` 管理。设置工作区以 280ms 的缩放和透明度进入，180ms 退出；结束后释放临时合成层。主页面、设置分类及服务分类使用固定视口保留旧页面，在目标模块和首个可用内容准备好后，旧页面上移、缩小、模糊并淡出，新页面从略小、模糊的位置进入，常规交接约 250ms；目标首次准备超过 160ms 时，交接约 380ms。模块未加载时继续显示旧页面；模块已加载但网络数据仍在读取时，最多保留旧页面 1.2 秒后展示目标页面自身的加载状态。最新导航覆盖待切换目标，退出和待入场内容不可交互。系统减少动态效果时跳过缩放、模糊和等待。鼠标滚轮的离散刻度通过单个可取消的动画帧循环平滑移动；触控板惯性、触摸、水平滚动、缩放手势及内部滚动控件保留原生行为；滚动条隐藏但键盘、触摸与滚轮仍可操作。Select、Combobox、Popover、Tooltip、Switch 和 Collapsible 复用 Base UI。模型列表与拉取结果占用预留位置：下拉框在拉取按钮右侧，结果紧跟按钮，加载与验证不再新增表单行。实验模型状态由 Settings 与全局下载指示器共享，取消与模型开关使用同一路径。
-
-主窗口无显式偏好时统一默认 110% 界面大小，首帧 bootstrap 与 React 使用同一默认，保留已有主动选择。快捷键直接点击按键进入右侧录制弹层，不另设重复录制菜单。macOS 主窗口使用原生窗口红绿灯；设置顶部拖动条独立于被遮盖的应用内容并按 zoom 换算原生高度。
-
-桌面首次配置采用逐步展开的引导：欢迎、麦克风、macOS 辅助功能、识别模式、语音服务、文字润色、快捷键和完成页；音频模型模式跳过独立文字润色配置。当前步骤和操作按钮位于同一个居中布局，步骤在固定区域内向上淡出后交接；上方显示前一步的选择；引导步骤交接约 300ms，逐字模糊显现为 340ms，预留完整文字布局以免推动控件；配置服务在独立弹窗中完成，长表单在弹窗内滚动，完成后回到原引导步骤。每一步可稍后配置，也可直接进入应用；完成或明确跳过后不再以权限为启动阻挡，缺失能力仍由业务入口和权限设置处理。未完成进度只保存在本设备，不包含密钥；已配置的旧安装保留原有正常启动。 后端协议握手成功后，用于判断首次引导的凭据探测最多等待 1.5 秒；报错或超时按现有兜底进入主界面，不标记引导完成、不把未知凭据当作空配置。启动 effect 取消时清理计时器，迟到的探测结果不再改变页面。权限页可重新打开引导。Windows 跳过辅助功能步骤及其权限查询，麦克风受限时打开系统麦克风设置并说明桌面应用访问开关，返回应用后刷新状态但不自动前进；未检测到设备时仍可稍后配置。Windows 快捷键支持左右修饰键及鼠标侧键（Mouse4 / Mouse5）。浏览器 `?onboarding=1&os=mac` 或 `?onboarding=1&os=win` 预览使用模拟权限和既有模拟设置，不写入桌面引导进度；原生端复用同一配置表单、权限 IPC 和凭据保存边界。
-
-界面启动等待所选语言资源就绪；语言选择持久化到 `ol.locale`，其他 WebView 通过存储事件同步，日期、数字和默认风格展示随语言变化。用户修改的风格名称、说明和内容保持原文。旧版两种强制排版字段只保留数据兼容，界面清除其布局效果，窄屏改由响应式布局处理。
-
-## 6. 存储与外部服务
-
-| 数据或连接 | 所有者与源码入口 |
+| 模块 | 职责与源码入口 |
 | --- | --- |
-| 历史、活动、偏好、词库、纠错、风格包 | Core 对应仓储模块；Tauri `src-tauri/src/persistence/` 提供平台路径及兼容存储适配 |
-| 模型与录音文件 | Core `model_store.rs`、Host 本地运行时和 `persistence/paths.rs`；录音归档受设置控制 |
-| 服务凭据 | Core `CredentialStore` 合同，Tauri keyring/Android Keystore 或 Linux `credentials.rs` 适配 |
-| 云端 ASR / LLM | Core provider 目录、选择与传输模块；平台本地引擎位于 `src-tauri/src/asr/local/` 或 Linux Host |
-| 风格包市场 | Core `marketplace.rs` 管理 HTTP、GitHub device flow 与本地安装；地址由 `MarketplaceConfig` 注入，内置默认值在该模块 |
-| 加密云同步 | Core `cloud_sync_e2ee` 复用 GitHub 登录并交换独立同步会话，通过 `/v1/...` 保存客户端加密快照；protocol/documents/store 分别负责加密协议、登记与合并、仓库及系统凭据的受控恢复。默认关闭，凭据、本地基线和回滚日志不交给 UI。详情与验证边界见 [加密云同步客户端](encrypted-cloud-sync.md) |
-| 旧手动同步 | `cloud_sync.rs` 和 `/me/sync` 保留有限明文快照合同；旧入口不上传新加密文档中的服务密钥。已注册加密恢复 gate 的仓库拒绝旧多文件恢复，防止绕过受控恢复；未注册的旧 Host 保留原合同。见 [旧同步合同](cloud-sync.md) |
-| 风格图标 | React `src/lib/stylePackIcon.ts` 清理上传的 SVG 并转成 PNG；`set_style_pack_icon` / `read_style_pack_icon` 经 Core `style_pack_store.rs` 保存资源、校验读取范围并返回图片 data URL。图标沿用 ZIP 的 64 KiB 限制，与风格包一起导出 |
-| 局域网手机输入 | Core `remote_input_service.rs` 定义共享业务，Tauri `remote_server/` 提供本机网络入口和网页资源 |
+| React 界面 | [src/app](../openless-all/app/src/app/) 负责启动与窗口路由，[src/features](../openless-all/app/src/features/) 负责业务页面，[src/data](../openless-all/app/src/data/) 管理快照、失效和写入，[src/api](../openless-all/app/src/api/) 提供分域调用。 |
+| 宿主传输 | [src/runtime/transport.ts](../openless-all/app/src/runtime/transport.ts) 验证启动快照并发送进程间调用（IPC）。[src/preview](../openless-all/app/src/preview/) 实现浏览器预览，提供夹具数据及模拟事件。 |
+| 共享 Core | [api.rs](../openless-all/app/crates/openless-core/src/api.rs) 定义 `OpenLessBackend` 和业务入口，[ports.rs](../openless-all/app/crates/openless-core/src/ports.rs) 定义麦克风、插入等宿主接口，[events.rs](../openless-all/app/crates/openless-core/src/events.rs) 定义语义事件。 |
+| macOS、Windows 与 Android 宿主 | [src-tauri/src/lib.rs](../openless-all/app/src-tauri/src/lib.rs) 注册 IPC，[coordinator.rs](../openless-all/app/src-tauri/src/coordinator.rs) 组装 Core 和会话，[core_adapters.rs](../openless-all/app/src-tauri/src/core_adapters.rs) 对接宿主能力，[tauri_events.rs](../openless-all/app/src-tauri/src/tauri_events.rs) 将 Core 事件交给界面。 |
+| Linux | [linux-egui](../openless-all/app/linux-egui/) 使用 egui 界面和常驻宿主。`LinuxHost` 直接调用 Rust 类型化接口，宿主与界面子进程经 Unix socket 交换请求和快照。见 [Linux 接口](development/linux.md)。 |
+| HarmonyOS | [harmony](../openless-all/app/harmony/) 的 ArkTS 管理系统和输入法，ArkWeb 复用 React 界面，`harmony/rust` 经 Node-API 连接 Core。 |
+| iOS | [ios](../openless-all/ios/) 的 Swift 应用、键盘扩展和录制小组件分别运行。`CoreHost` 是原生 Rust 桥，应用负责录音和 Keychain，扩展经 App Group 交换有限的命令与结果。 |
 
-应用不会把普通听写交给风格包市场后端。市场安装完成后使用本地风格包；官网也不参与应用的业务调用。
+[backend-2.0.json](../openless-all/app/contract/backend-2.0.json) 记录启动快照、事件、枚举和宿主接口。改动跨层命令时同时核对 Rust、TypeScript、宿主注册和事件接收端。
 
-模型远程元数据只在下载详情选择模型时读取，界面按模型与镜像合并请求并缓存五分钟。Sherpa 离线解码通过 `src-tauri/src/asr/local/blocking_decode.rs` 串行运行；超时或取消不会提前释放原生任务持有的模型和许可，任务结束后才允许下一次解码。长期参考数据、训练准备和历史快照不是 Core 的在线训练服务。
+## 请求怎样经过各层
 
-macOS 凭据通过 `persistence/credentials/macos_vault.rs` 共用 `credentials.v2` 钥匙串项目与进程内缓存：服务凭据、云同步本地包装密钥和记住的同步密钥在同一次受保护读取中加载。同步密钥位于 `_macosLocalSyncKeys` 本机扩展，Core 的提供方快照、UI IPC 与云端导出均不包含该字段。提供方保存/恢复保留扩展；新增密钥经原生存储读回验证，遗忘以持久化空值阻止旧项复活并删除旧独立项。
+~~~mermaid
+flowchart LR
+  UI["React 界面"] --> API["分域 API / 宿主传输"]
+  API --> Host["Tauri commands / HarmonyOS bridge"]
+  Native["Linux 或 iOS 原生界面"] --> Adapter["各自的宿主接口"]
+  Host --> Core["OpenLessBackend"]
+  Adapter --> Core
+  Core --> Store["本地仓储"]
+  Core --> Providers["服务商接口"]
+  Core --> Ports["宿主接口：录音、凭据、落字"]
+  Core --> Events["BackendEvent"]
+  Events --> Host
+  Events --> Adapter
+~~~
 
-第一次迁移仍须分别获得旧独立钥匙串项目的系统授权，不能取消或扩大它们的 ACL；成功读取后把本机密钥合入同一项目，后续启动只读取该项目。旧分块和迁移来源保留供旧版本使用，读失败不缓存为空、不扫描其他旧项目；可重试授权或读取。Keychain 外部修改在下一次进程启动生效。ASR 配置状态从同一次成功读取的快照生成。其他平台保留各自存储限制与适配。系统对独立项目的授权边界见 [Apple ACL 文档](https://developer.apple.com/documentation/security/access-control-lists)。
+### 启动与设置
 
-## 7. 验证入口
+1. [bootstrap.tsx](../openless-all/app/src/app/bootstrap.tsx) 选择窗口入口。传输层等待宿主就绪并读取 `get_startup_snapshot`，验证接口版本后再初始化业务界面。
+2. React 通过分域 API 读取快照并订阅事件。设置保存由 `update_setting_fields` 提交字段差异，Core 按修订号持久化。`prefs:changed` 使界面重新读取；写入失败只撤回对应的未确认编辑。
+3. 同一窗口内的快照查询由 `src/data` 处理重叠请求和失效。历史、活动统计、服务用量分开保存，保留和删除规则各自生效。
 
-以下命令均在 `openless-all/app/` 执行，按变更范围选择：
+### 听写
 
-| 范围 | 命令与依据 |
+热键或原生按钮 → 宿主录音会话 → [dictation_engine.rs](../openless-all/app/crates/openless-core/src/dictation_engine.rs) → 转写及可选润色 → 宿主落字 → 历史与终态事件。宿主提供麦克风、目标编辑器和实际写入结果。录音取消、错误和超时沿原会话清理资源，迟到结果按会话身份丢弃。
+
+云识别和润色由 Core 选择渠道并发送请求。本地模型的下载和激活按模型家族由 Core 与宿主共同负责。点击胶囊、流式原文与写入目标编辑器分别走各自的界面和宿主路径。见[语音链路](development/speech.md)、[本地模型](development/local-models.md)和[自定义润色策略](development/polish-strategy.md)。
+
+### 问答与选区
+
+桌面问答窗口由 [windowRoutes.tsx](../openless-all/app/src/app/windowRoutes.tsx) 分派。界面发送 `qa_submit_text` 等命令给 [Tauri 问答适配](../openless-all/app/src-tauri/src/commands/qa.rs)，由 [Core 问答服务](../openless-all/app/crates/openless-core/src/qa_service.rs) 管理会话、请求和结果事件。[选区语音服务](../openless-all/app/crates/openless-core/src/selection_voice_service.rs) 根据语音意图生成编辑预览或问答，确认写回时由宿主复核原输入目标。Linux 的问答界面经 Linux 宿主调用同一业务层。
+
+Android 浮窗从听写转到追问时，宿主先保存选区，再用 `stop_dictation_for_qa` 结束原录音取得转写，由 `QaApi::submit_captured_text` 提交问题。这个路径跳过原听写的润色和落字。
+
+### 移动端输入法
+
+Android 的 [OpenLessImeService](../openless-all/app/android/kotlin/OpenLessImeService.kt) 持有当前编辑器的 `InputConnection` 并提交文字。[native_bridge.rs](../openless-all/app/src-tauri/src/android/native_bridge.rs) 通过 JNI 调用 Rust；Runtime Service 与 Warmup Activity 负责后台服务和 WebView 的启动或恢复。HarmonyOS 由 ArkTS 输入法扩展调用系统 `InputClient`。两端共用 [Rime 引擎](../openless-all/app/mobile-ime/README.zh.md)，负责拼音候选与词库。切换编辑器使旧候选和异步识别结果失效，只有宿主确认文字已提交后才向引擎确认候选。
+
+语音与词汇规则走 Core。密码框、禁止学习的输入框和敏感应用受宿主隐私策略约束；手改学词的观察和建议由 [Core 观察模块](../openless-all/app/crates/openless-core/src/host_document/) 管理，确认后才写入词典。Android 跨应用写入的无障碍、Shizuku 和剪贴板路径各自返回结果。
+
+## 按功能定位代码
+
+| 功能 | 改动入口 |
 | --- | --- |
-| 前端与合同 | `npm test`；`pretest` 先构建，`scripts/frontend-test-runner.mjs` 发现前端测试和脚本合同检查，含 Core 快捷键回归 |
-| Core/Linux 格式 | `cargo fmt --all --check`，仅根 workspace |
-| Core | `cargo test -p openless-core --locked` |
-| Linux Host | `cargo test -p openless-linux-egui --locked`；原生能力在 Linux 目标环境验证 |
-| Tauri 格式与编译 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check`、`cargo check --locked --manifest-path src-tauri/Cargo.toml` |
-| Tauri 库与独立回归 crate | 依平台选 `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib`、`cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml`；适用矩阵见 [CI](../.github/workflows/ci.yml) |
+| 热键、权限、窗口、胶囊、目标插入 | [Tauri coordinator](../openless-all/app/src-tauri/src/coordinator/) · [界面窗口路由](../openless-all/app/src/app/windowRoutes.tsx) · [Windows TSF/IME](../openless-all/app/windows-ime/) |
+| 服务渠道、凭据、语音识别与润色 | [Core 模块声明](../openless-all/app/crates/openless-core/src/lib.rs) 中的 `provider_*`、`asr`、`polish`、`omni`、`credentials`。服务密钥通过宿主系统库保存。 |
+| 历史、词汇、纠错、风格和市场 | [Core 源码](../openless-all/app/crates/openless-core/src/) 中的 `history`、`vocabulary`、`correction`、`style_pack_store`、`marketplace`，配合对应的 `src/features` 页面。 |
+| 加密云同步 | [Tauri 云同步命令](../openless-all/app/src-tauri/src/commands/cloud_sync_e2ee.rs) → Core `cloud_sync_e2ee` → protocol、documents 和 store 模块。加密、身份、合并和恢复在原生层完成。见[数据与协议](development/cloud-sync.md)。 |
+| 远程输入 | [Tauri remote_server](../openless-all/app/src-tauri/src/remote_server/) 或 Linux 宿主 → Core 远程输入服务 → 外部音频会话。见[远程输入协议](development/remote-input.md)。 |
+| UI、主题、语言、浏览器夹具 | [src/ui](../openless-all/app/src/ui/) · [src/styles](../openless-all/app/src/styles/) · [src/i18n](../openless-all/app/src/i18n/) · [src/preview](../openless-all/app/src/preview/) |
 
-Tauri manifest 的本地 path 依赖位于 `src-tauri/vendor/`（`cpal`、`tauri-runtime-wry`），这些 crate 已随仓库签入，**无需 `git submodule update` 初始化**，克隆后即可构建；部分 CI 作业通过专用脚本去除非目标依赖。Core/Linux workspace 排除 Tauri，其独立检查不解析 Tauri manifest，也不依赖 vendor 目录。
+## 构建和验证从哪开始
 
-仅 Markdown 变动检查相对链接、源码路径与描述一致性。平台交付按 [桌面验收](2.0-desktop-acceptance.md)、[Linux 验收](linux-egui-handoff/07-acceptance.md)和 [发布规范](../RELEASING.md)完成。
+[openless-all/app](../openless-all/app/) 是 npm、共享 Core 与 Linux 的 Cargo 工作目录。`src-tauri` 与 `src-tauri/backend-tests` 使用各自的 Rust 清单；原生 iOS 工程有独立版本和签名。依赖、工具链与命令见[全平台构建](../openless-all/README.zh.md)。
+
+- 界面与接口变动从应用目录运行 `npm test`。修改生成的服务目录时，从 Core 运行 `cargo run --locked -p openless-core --example export_provider_descriptors`。
+- Core 和 Linux 分别运行 `cargo test --locked -p openless-core` 和 `cargo test --locked -p openless-linux-egui`。Tauri 与所涉及平台的检查由 [CI 工作流](../.github/workflows/ci.yml) 定义。
+- 自动检查、已安装应用与设备交互分别取证。打包和发布门槛见[发布规范](../RELEASING.zh.md)，仍缺的实现与验证见[开发需求](requirements.md)。
