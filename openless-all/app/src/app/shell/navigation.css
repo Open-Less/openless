@@ -1,0 +1,52 @@
+.ol-dialog-overlay.ol-mobile-navigation-sheet {
+  align-items: end;
+  padding: 0;
+}
+.ol-mobile-navigation-sheet > .ol-dialog-card {
+  background: var(--ol-surface);
+  border: 0.5px solid var(--ol-line);
+  border-radius: var(--ol-radius) var(--ol-radius) 0 0;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -8px 32px -8px rgba(15, 17, 22, 0.18);
+}
+.ol-mobile-navigation-sheet-header,
+.ol-mobile-navigation-sheet-items > button {
+  display: flex;
+  align-items: center;
+}
+.ol-mobile-navigation-sheet-header {
+  justify-content: space-between;
+  padding: 4px 8px 12px;
+  font-size: 14px;
+  font-weight: var(--ol-font-weight-semibold);
+  color: var(--ol-ink);
+}
+.ol-mobile-navigation-sheet-header > button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ol-radius);
+  color: var(--ol-ink-3);
+}
+.ol-mobile-navigation-sheet-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ol-mobile-navigation-sheet-items > button {
+  width: 100%;
+  min-width: 0;
+  gap: 12px;
+  border-radius: var(--ol-r-md);
+  padding: 12px 14px;
+  font-size: 14px;
+  text-align: left;
+}
+.ol-mobile-navigation-sheet-items > button > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

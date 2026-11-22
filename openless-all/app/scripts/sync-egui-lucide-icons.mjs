@@ -20,6 +20,7 @@ export const icons = {
   Settings: 'Settings',
   Mic: 'Mic',
   Sparkle: 'Sparkles',
+  Flask: 'FlaskConical',
   Hash: 'Hash',
   Clock: 'Clock3',
   Bolt: 'Zap',

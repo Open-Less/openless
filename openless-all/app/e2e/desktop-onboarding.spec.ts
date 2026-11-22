@@ -1,3 +1,4 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
 
 const active = (page: Page) =>
@@ -109,7 +110,7 @@ test('a narrow reduced-motion guide preserves controls, answers, and keyboard fo
   await expect(active(page).getByRole('textbox')).toBeVisible();
 });
 
-const fixtureUrl = 'http://127.0.0.1:5326/e2e/fixtures/desktop-onboarding.html?os=mac';
+const fixtureUrl = `${fixtureOrigin}/e2e/fixtures/desktop-onboarding.html?os=mac`;
 test('Windows opens microphone settings, refreshes on return, and permits deferral without a device', async ({
   page,
 }) => {

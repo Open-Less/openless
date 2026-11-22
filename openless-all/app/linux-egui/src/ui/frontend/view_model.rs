@@ -552,6 +552,8 @@ pub enum SettingsField {
     /// 使用桌面播放参考进行回声抑制。
     EchoCancellation,
     RecordAudioForDebug,
+    /// Enable the bounded post-ASR polish strategy.
+    PolishStrategyEnabled,
     /// 调试录音：保留处理后的音频（主档案）。
     DebugArchiveProcessed,
     /// 调试录音：额外保留处理前的原始音频。
@@ -600,6 +602,8 @@ pub enum SettingsTextField {
     PolishContextWindow,
     /// 短句跳过润色的最大字数（0 = 关闭，issue #1032）。
     PolishSkipMaxChars,
+    /// Rhai source for the bounded post-ASR polish strategy.
+    PolishStrategyScript,
     /// 调试录音最多保留条数。
     AudioRecordingMaxEntries,
     /// 选区助手：额外问句线索（每行一个）。
@@ -1217,6 +1221,10 @@ pub struct SettingsFields {
     pub polish_context_window: String,
     /// 短句跳过润色的最大字数（0 = 关闭，issue #1032）。
     pub polish_skip_max_chars: String,
+    /// 是否启用受限的 ASR 后润色策略。
+    pub polish_strategy_enabled: bool,
+    /// 受限润色策略 Rhai 源码。
+    pub polish_strategy_script: String,
     /// 调试录音最多保留条数。
     pub audio_recording_max_entries: String,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
@@ -1279,6 +1287,8 @@ impl Default for SettingsFields {
             style_pack_hotkeys: Vec::new(),
             polish_context_window: String::new(),
             polish_skip_max_chars: String::new(),
+            polish_strategy_enabled: false,
+            polish_strategy_script: String::new(),
             audio_recording_max_entries: String::new(),
             selection_polish_delivery: 0,
             selection_voice_enabled: false,

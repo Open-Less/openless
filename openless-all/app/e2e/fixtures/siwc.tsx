@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { i18nReady } from '../../src/i18n';
-import { SiwcChannelFields } from '../../src/pages/settings/SiwcChannelFields';
+import { SiwcChannelFields } from '../../src/features/providers/SiwcChannelFields';
 import type { SiwcStatus } from '../../src/lib/ipc/siwc';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';

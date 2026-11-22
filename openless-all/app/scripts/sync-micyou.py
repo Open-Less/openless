@@ -4,6 +4,7 @@ import argparse
 import difflib
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -49,7 +50,13 @@ def revision(value):
 
 
 def download(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "OpenLess-MicYou-Sync"})
+    headers = {"User-Agent": "OpenLess-MicYou-Sync"}
+    # Authenticate API lookups to avoid the shared runner IP's anonymous limit.
+    # Never send the token to raw.githubusercontent.com or another download host.
+    token = os.environ.get("GH_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=60) as response:
         data = response.read(16 * 1024 * 1024 + 1)
     if len(data) > 16 * 1024 * 1024:

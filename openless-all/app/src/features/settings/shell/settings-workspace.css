@@ -1,0 +1,106 @@
+.ol-viewport-portals > .ol-settings-workspace {
+  pointer-events: auto;
+}
+.ol-viewport-portals > .ol-settings-workspace[inert] {
+  pointer-events: none;
+}
+.ol-viewport-portals > .ol-settings-workspace > .ol-settings-surface {
+  zoom: var(--ol-interface-scale, 1);
+}
+
+.ol-omni-settings {
+  container-type: inline-size;
+}
+
+@container (min-width: 650px) {
+  .ol-omni-connection-fields .ol-channel-form-row:not([data-stacked='true']) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 12px;
+  }
+  .ol-omni-connection-fields .ol-channel-form-row:not([data-stacked='true']) > label {
+    grid-column: 1;
+    padding-top: 9px;
+  }
+  .ol-omni-connection-fields .ol-channel-form-row:not([data-stacked='true']) > :not(label) {
+    grid-column: 2;
+  }
+}
+
+/* Narrow settings panes retain full-width key and address fields. */
+@container (max-width: 500px) {
+  .ol-omni-primary-fields.ol-omni-connection-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .ol-omni-primary-fields.ol-omni-connection-fields > * {
+    grid-column: 1 / -1;
+  }
+}
+
+.ol-settings-rail {
+  width: clamp(226px, 28%, 248px);
+}
+.ol-settings-surface[data-ol-mobile='true'] .ol-settings-rail {
+  width: auto;
+}
+.ol-settings-rail-label {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.ol-settings-surface[data-ol-mobile='true'] .ol-settings-rail-btn {
+  white-space: nowrap;
+}
+.ol-settings-page-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.ol-settings-page-title-group {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ol-settings-page-title {
+  min-width: 0;
+  margin: 0;
+  color: var(--ol-ink);
+  font-size: 21px;
+  font-weight: var(--ol-font-weight-demibold);
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+  outline: none;
+}
+.ol-settings-page-title--compact {
+  font-size: 20px;
+}
+.ol-settings-auto-save {
+  max-width: 100%;
+  margin-inline-start: auto;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+.ol-settings-sections[data-section='appearance'] {
+  container: settings-appearance / inline-size;
+  --ol-appearance-control-width: 280px;
+}
+.ol-settings-sections[data-section='appearance'] .ol-setting-row-control > .ol-select-trigger {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--ol-appearance-control-width);
+  background: var(--ol-surface-2);
+}
+
+/* A row needs room for the label column, gutter, and full-width control. */
+@container settings-appearance (max-width: 496px) {
+  .ol-setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}

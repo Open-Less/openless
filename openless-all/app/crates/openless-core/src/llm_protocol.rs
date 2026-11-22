@@ -255,6 +255,11 @@ pub(crate) fn request_body(
     if config.provider_id == crate::siwc::PROVIDER_ID {
         return crate::siwc::inference::request_body(&config.model, messages);
     }
+    let messages_thinking_enabled = config.protocol.format == LlmRequestFormat::Messages
+        && config
+            .reasoning_effort
+            .as_deref()
+            .map_or(config.thinking_enabled, |effort| effort != "none");
     let mut body = match config.protocol.format {
         LlmRequestFormat::ChatCompletions => {
             unreachable!("Chat Completions retains its provider rules")
@@ -262,6 +267,9 @@ pub(crate) fn request_body(
         LlmRequestFormat::Responses => {
             let mut body =
                 json!({"model": config.model, "stream": stream, "store": false, "input": messages});
+            if let Some(max_tokens) = config.max_tokens_override {
+                body["max_output_tokens"] = json!(max_tokens);
+            }
             let model = config
                 .model
                 .trim()
@@ -273,16 +281,27 @@ pub(crate) fn request_body(
                 || model.starts_with("gpt-3.5")
                 || model.starts_with("chatgpt-4"))
             {
-                let effort = if model.starts_with("gpt-5-pro")
-                    || model.contains("-pro") && model.starts_with("gpt-5.")
-                {
-                    "high"
-                } else if config.thinking_enabled {
-                    "medium"
+                let effort = if crate::polish::openai_model_is_gpt5_pro(&model) {
+                    // gpt-5-pro only supports the high tier; a strategy must not
+                    // override this model capability with low/medium/none.
+                    Some("high")
                 } else {
-                    "low"
+                    config.reasoning_effort.as_deref().or({
+                        if config.thinking_enabled {
+                            Some("medium")
+                        } else {
+                            Some("low")
+                        }
+                    })
                 };
-                body["reasoning"] = json!({"effort": effort});
+                // `none` is the portable way for a strategy to disable reasoning.
+                // Responses does not accept it as an effort value, so omit the
+                // reasoning object rather than sending an invalid request.
+                if !matches!(effort, Some("none")) {
+                    if let Some(effort) = effort {
+                        body["reasoning"] = json!({"effort": effort});
+                    }
+                }
             }
             body
         }
@@ -298,11 +317,23 @@ pub(crate) fn request_body(
                     turns.push(message);
                 }
             }
-            let mut body = json!({"model": config.model, "stream": stream, "messages": turns, "max_tokens": config.protocol.max_tokens});
+            let max_tokens = config.max_tokens_override.filter(|max_tokens| {
+                let conflicts_with_thinking_budget = messages_thinking_enabled
+                    && config.protocol.messages_thinking == MessagesThinking::Budget
+                    && config.protocol.thinking_budget >= *max_tokens;
+                if conflicts_with_thinking_budget {
+                    log::debug!(
+                        "[llm] omitting strategy maxTokens={} because it is not greater than the configured Messages thinking budget",
+                        max_tokens
+                    );
+                }
+                !conflicts_with_thinking_budget
+            });
+            let mut body = json!({"model": config.model, "stream": stream, "messages": turns, "max_tokens": max_tokens.unwrap_or(config.protocol.max_tokens)});
             if !system.is_empty() {
                 body["system"] = json!(system.join("\n\n"));
             }
-            if config.thinking_enabled {
+            if messages_thinking_enabled {
                 body["thinking"] =
                     if config.protocol.messages_thinking == MessagesThinking::Adaptive {
                         json!({"type": "adaptive"})
@@ -313,8 +344,14 @@ pub(crate) fn request_body(
             body
         }
     };
+    let official_openai_reasoning_model_without_reasoning = config.protocol.format
+        == LlmRequestFormat::Responses
+        && config.provider_id.trim() == "openai"
+        && crate::polish::openai_model_uses_max_completion_tokens(&config.model)
+        && body.get("reasoning").is_none();
     if body.get("reasoning").is_none()
-        && !(config.protocol.format == LlmRequestFormat::Messages && config.thinking_enabled)
+        && !messages_thinking_enabled
+        && !official_openai_reasoning_model_without_reasoning
     {
         if let Some(temperature) = config.temperature {
             body["temperature"] = crate::polish::temperature_json(temperature);
@@ -410,6 +447,7 @@ pub(crate) struct TextEventStream {
     pub done: bool,
     siwc: bool,
     request_id: Option<String>,
+    reported_tokens: crate::usage_ledger::ReportedTokens,
 }
 
 impl TextEventStream {
@@ -422,6 +460,7 @@ impl TextEventStream {
             done: false,
             siwc: false,
             request_id: None,
+            reported_tokens: crate::usage_ledger::ReportedTokens::default(),
         }
     }
 
@@ -433,6 +472,10 @@ impl TextEventStream {
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), LLMError> {
         crate::polish::append_utf8_sse_chunk(&mut self.buffer, &mut self.pending, chunk)
+    }
+
+    pub fn reported_tokens(&self) -> crate::usage_ledger::ReportedTokens {
+        self.reported_tokens
     }
 
     pub fn next(&mut self) -> Result<Option<StreamEvent>, LLMError> {
@@ -463,6 +506,9 @@ impl TextEventStream {
             }
             Err(_) => return Err(response_error("invalid LLM SSE JSON")),
         };
+        if let Some(reported) = crate::usage_ledger::ReportedTokens::from_response(&value) {
+            self.reported_tokens.merge_report(reported);
+        }
         let kind = value["type"]
             .as_str()
             .or_else(|| {
@@ -487,6 +533,40 @@ impl TextEventStream {
         if kind == "error" || !value["error"].is_null() {
             return Err(response_error("llmStreamError"));
         }
+        if self.format == LlmRequestFormat::ChatCompletions {
+            if value["choices"][0]["finish_reason"] == "content_filter" {
+                return Err(response_error("llmContentFiltered"));
+            }
+            if let Some(annotations) = value["choices"][0]["delta"]["annotations"].as_array() {
+                let mut urls = std::collections::BTreeSet::new();
+                for annotation in annotations {
+                    if let Some(raw) = annotation["url_citation"]["url"].as_str() {
+                        if let Ok(url) = url::Url::parse(raw) {
+                            if matches!(url.scheme(), "https" | "http") {
+                                urls.insert(
+                                    url.to_string()
+                                        .replace(')', "%29")
+                                        .replace('(', "%28")
+                                        .replace('>', "%3E")
+                                        .replace('<', "%3C"),
+                                );
+                            }
+                        }
+                    }
+                }
+                if !urls.is_empty() {
+                    let mut text = value["choices"][0]["delta"]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    text.push_str("\n\n");
+                    for (i, url) in urls.iter().enumerate() {
+                        text.push_str(&format!("[{}](<{}>) ", i + 1, url));
+                    }
+                    return Ok(Some(StreamEvent::Text(text)));
+                }
+            }
+        }
         let text = match self.format {
             LlmRequestFormat::ChatCompletions => value["choices"][0]["delta"]["content"].as_str(),
             LlmRequestFormat::Responses => match kind {
@@ -502,8 +582,10 @@ impl TextEventStream {
                     None
                 }
                 "response.failed" | "response.incomplete" => {
-                    if self.siwc { return Err(LLMError::Siwc(crate::siwc::error("response_incomplete"))); }
-                    return Err(response_error("llmResponseIncomplete"))
+                    if self.siwc {
+                        return Err(LLMError::Siwc(crate::siwc::error("response_incomplete")));
+                    }
+                    return Err(response_error("llmResponseIncomplete"));
                 }
                 _ => None,
             },
@@ -554,6 +636,44 @@ impl TextEventStream {
 mod tests {
     use super::*;
     use crate::credentials::{InMemoryCredentialStore, SecretValue};
+
+    #[test]
+    fn deepseek_final_chunk_citations_and_refusals() {
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream.push(b"data: {\"choices\":[{\"delta\":{\"annotations\":[{\"type\":\"url_citation\",\"url_citation\":{\"url\":\"https://example.com/weather\"}}]},\"finish_reason\":\"stop\"}]}\n\n").unwrap();
+        assert!(
+            matches!(stream.next().unwrap(), Some(StreamEvent::Text(text)) if text.contains("https://example.com/weather"))
+        );
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream
+            .push(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n")
+            .unwrap();
+        assert!(stream.next().is_err());
+    }
+
+    #[test]
+    fn streaming_usage_is_collected_without_discarding_text_or_guessing_counts() {
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n").unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().unwrap() {
+            if let StreamEvent::Text(delta) = event {
+                text.push_str(&delta);
+            }
+        }
+        assert_eq!(text, "hello");
+        assert_eq!(stream.reported_tokens.input, Some(42));
+        assert_eq!(stream.reported_tokens.output, Some(5));
+        assert_eq!(stream.reported_tokens.cached_input, None);
+
+        let mut no_usage = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        no_usage.push(b"data: [DONE]\n\n").unwrap();
+        assert!(matches!(no_usage.next().unwrap(), Some(StreamEvent::Done)));
+        assert_eq!(
+            no_usage.reported_tokens,
+            crate::usage_ledger::ReportedTokens::default()
+        );
+    }
 
     #[tokio::test]
     async fn protocol_defaults_overrides_and_channels_are_independent() {
@@ -782,6 +902,126 @@ mod tests {
                 for absent in ["input", "reasoning", "reasoning_effort", "enable_thinking"] {
                     assert!(body.get(absent).is_none());
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn strategy_request_overrides_map_to_each_protocol() {
+        let messages = vec![json!({"role":"user","content":"hello"})];
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "test",
+            "https://example.com/v1",
+            "key",
+            "custom-model",
+        )
+        .with_max_tokens_override(Some(321))
+        .with_temperature(Some(0.4));
+
+        // Chat Completions is built by OpenAICompatibleLLMProvider::chat_body;
+        // request_body intentionally handles only the other protocol shapes.
+        config.protocol.format = LlmRequestFormat::Responses;
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["max_output_tokens"], 321);
+        assert_eq!(responses["reasoning"]["effort"], "low");
+        assert!(responses.get("temperature").is_none());
+
+        config.provider_id = "openai".into();
+        config.model = "gpt-5-mini".into();
+        config.reasoning_effort = Some("low".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["max_output_tokens"], 321);
+        assert_eq!(responses["reasoning"]["effort"], "low");
+
+        config.reasoning_effort = Some("high".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["reasoning"]["effort"], "high");
+
+        config.model = "gpt-5-pro".into();
+        config.reasoning_effort = Some("low".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["reasoning"]["effort"], "high");
+
+        config.model = "gpt-5-mini".into();
+        config.reasoning_effort = Some("none".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert!(responses.get("reasoning").is_none());
+        assert!(responses.get("temperature").is_none());
+
+        config.model = "gpt-5-pro".into();
+        config.reasoning_effort = Some("none".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["reasoning"]["effort"], "high");
+
+        config.model = "gpt-5-mini".into();
+        config.protocol.format = LlmRequestFormat::Messages;
+        let messages_body = request_body(&config, false, messages);
+        assert_eq!(messages_body["max_tokens"], 321);
+        assert!(messages_body.get("reasoning_effort").is_none());
+
+        config.reasoning_effort = None;
+        config.thinking_enabled = true;
+        config.protocol.messages_thinking = MessagesThinking::Budget;
+        config.protocol.thinking_budget = 1024;
+        let messages_body = request_body(
+            &config,
+            false,
+            vec![json!({"role":"user","content":"hello"})],
+        );
+        assert_eq!(messages_body["max_tokens"], config.protocol.max_tokens);
+        assert_eq!(messages_body["thinking"]["budget_tokens"], 1024);
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_messages_thinking_and_token_budget() {
+        for (configured_thinking, effort, thinking_enabled) in [
+            (false, None, false),
+            (true, None, true),
+            (false, Some("none"), false),
+            (true, Some("none"), false),
+            (false, Some("low"), true),
+            (true, Some("low"), true),
+            (false, Some("medium"), true),
+            (true, Some("medium"), true),
+            (false, Some("high"), true),
+            (true, Some("high"), true),
+        ] {
+            for mode in [MessagesThinking::Adaptive, MessagesThinking::Budget] {
+                let mut config = OpenAICompatibleConfig::new(
+                    "custom_messages",
+                    "test",
+                    "https://example.com/v1",
+                    "key",
+                    "claude-sonnet-4-5",
+                )
+                .with_thinking_enabled(configured_thinking)
+                .with_reasoning_effort(effort.map(str::to_owned))
+                .with_max_tokens_override(Some(400))
+                .with_temperature(Some(0.4));
+                config.protocol.format = LlmRequestFormat::Messages;
+                config.protocol.messages_thinking = mode;
+                let body = request_body(
+                    &config,
+                    false,
+                    vec![json!({"role":"user","content":"hello"})],
+                );
+
+                assert_eq!(body.get("thinking").is_some(), thinking_enabled);
+                assert_eq!(body.get("temperature").is_none(), thinking_enabled);
+                if thinking_enabled && mode == MessagesThinking::Budget {
+                    assert_eq!(body["thinking"]["budget_tokens"], 1024);
+                    assert_eq!(body["max_tokens"], config.protocol.max_tokens);
+                } else {
+                    assert_eq!(body["max_tokens"], 400);
+                }
+                if thinking_enabled && mode == MessagesThinking::Adaptive {
+                    assert_eq!(body["thinking"]["type"], "adaptive");
+                }
+                if !thinking_enabled {
+                    assert_eq!(body["temperature"], 0.4);
+                }
+                assert_eq!(config.thinking_enabled, configured_thinking);
             }
         }
     }

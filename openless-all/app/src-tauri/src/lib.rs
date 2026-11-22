@@ -23,14 +23,12 @@ compile_error!(
      打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
 );
 
-mod recording_companion;
 mod android;
 mod asr;
 mod audio_mute;
 #[cfg(test)]
 mod build_target;
 mod cli;
-mod coding_agent;
 #[cfg(not(mobile))]
 mod combo_hotkey;
 #[cfg(mobile)]
@@ -51,6 +49,7 @@ mod native_audio_cue;
 #[cfg(not(mobile))]
 mod native_capsule;
 mod qa_adapter;
+mod recording_companion;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // 仅桌面端。详见 issue #470。
@@ -72,9 +71,9 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
-#[cfg(target_os = "android")]
-mod style_zip_transfer;
 mod llm_gemini;
+#[cfg(target_os = "macos")]
+mod macos_capsule_input;
 #[cfg(mobile)]
 mod mobile_runtime;
 #[cfg(not(mobile))]
@@ -111,6 +110,8 @@ mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
+#[cfg(target_os = "android")]
+mod style_zip_transfer;
 mod tauri_events;
 mod tls_crypto;
 mod types;
@@ -170,6 +171,15 @@ static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static QA_WINDOW_CREATE_LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn qa_window_create_lock() -> &'static parking_lot::Mutex<()> {
+    QA_WINDOW_CREATE_LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
+
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
@@ -265,6 +275,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_capsule_language_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
+            commands::get_voice_activation_state,
             commands::update_setting_fields,
             commands::get_default_style_system_prompts,
             commands::set_settings,
@@ -276,6 +287,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_update_channel,
             commands::fetch_latest_beta_release,
             commands::app_check_update_with_channel,
+            commands::app_update_github_fallback,
             commands::check_network,
             commands::take_splash_playback,
             commands::get_desktop_onboarding_state,
@@ -305,6 +317,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::delete_history_entry,
             commands::clear_history,
             commands::get_activity_stats,
+            commands::get_activity_apps,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -327,6 +340,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::cloud_sync_restore,
             commands::cloud_sync_delete,
             commands::cloud_sync_e2ee_status,
+            commands::cloud_sync_e2ee_refresh_backup_metadata,
             commands::cloud_sync_e2ee_claim_setup_prompt,
             commands::cloud_sync_e2ee_prepare_enable,
             commands::cloud_sync_e2ee_create,
@@ -355,6 +369,10 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_vocab_enabled,
             commands::update_vocab,
             commands::list_correction_rules,
+            commands::get_expression_profile,
+            commands::clear_expression_profile,
+            commands::get_service_usage,
+            commands::clear_service_usage,
             commands::add_correction_rule,
             commands::remove_correction_rule,
             commands::set_correction_rule_enabled,
@@ -375,13 +393,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::voice_edit_window_open,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
-            coding_agent::commands::coding_agent_detect,
-            coding_agent::commands::coding_agent_detect_opencode,
-            coding_agent::commands::coding_agent_detect_cli,
-            coding_agent::commands::coding_agent_list_opencode_models,
-            coding_agent::commands::coding_agent_run_test,
-            coding_agent::commands::coding_agent_cancel_test,
-            coding_agent::commands::coding_agent_command_risk,
+            #[cfg(target_os = "macos")]
+            macos_capsule_input::set_capsule_interactive_regions,
             commands::handle_window_hotkey_event,
             #[cfg(debug_assertions)]
             commands::inject_hotkey_click_for_dev,
@@ -451,21 +464,16 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_quick_note_hotkey,
             commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
+            commands::qa_cancel_turn,
+            commands::qa_stop_recording,
             commands::qa_window_set_expanded,
             commands::qa_get_snapshot,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
+            commands::deepseek_tts_start,
+            commands::deepseek_tts_stop,
             commands::qa_set_edit_instruction_mode,
-            commands::less_computer_window_dismiss,
-            commands::less_computer_window_open,
             commands::chat_panel_focus_keyboard,
-            commands::less_computer_submit_text,
-            commands::less_computer_sync,
-            commands::less_computer_approve,
-            commands::less_computer_voice_start,
-            commands::less_computer_voice_stop,
-            commands::less_computer_voice_cancel,
-            commands::less_computer_task_cancel,
             commands::validate_combo_hotkey,
             commands::set_combo_hotkey,
             commands::list_provider_descriptors,
@@ -569,6 +577,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_audio_effects_status,
             $crate::commands::set_android_audio_monitoring,
             $crate::commands::get_settings_snapshot,
+            $crate::commands::get_voice_activation_state,
             $crate::commands::update_setting_fields,
             $crate::commands::get_default_style_system_prompts,
             $crate::commands::set_settings,
@@ -617,6 +626,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::delete_history_entry,
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
+            $crate::commands::get_activity_apps,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -639,6 +649,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::cloud_sync_restore,
             $crate::commands::cloud_sync_delete,
             $crate::commands::cloud_sync_e2ee_status,
+            $crate::commands::cloud_sync_e2ee_refresh_backup_metadata,
             $crate::commands::cloud_sync_e2ee_claim_setup_prompt,
             $crate::commands::cloud_sync_e2ee_prepare_enable,
             $crate::commands::cloud_sync_e2ee_create,
@@ -668,6 +679,10 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_vocab_enabled,
             $crate::commands::update_vocab,
             $crate::commands::list_correction_rules,
+            $crate::commands::get_expression_profile,
+            $crate::commands::clear_expression_profile,
+            $crate::commands::get_service_usage,
+            $crate::commands::clear_service_usage,
             $crate::commands::add_correction_rule,
             $crate::commands::remove_correction_rule,
             $crate::commands::set_correction_rule_enabled,
@@ -688,10 +703,14 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::voice_edit_window_open,
             $crate::commands::voice_edit_window_close,
             $crate::commands::qa_window_dismiss,
+            $crate::commands::qa_cancel_turn,
+            $crate::commands::qa_stop_recording,
             $crate::commands::qa_window_set_expanded,
             $crate::commands::qa_get_snapshot,
             $crate::commands::qa_toggle_recording,
             $crate::commands::qa_submit_text,
+            $crate::commands::deepseek_tts_start,
+            $crate::commands::deepseek_tts_stop,
             $crate::commands::qa_set_edit_instruction_mode,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
@@ -721,6 +740,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_update_channel,
             $crate::commands::fetch_latest_beta_release,
             $crate::commands::app_check_update_with_channel,
+            $crate::commands::app_update_github_fallback,
             $crate::commands::app_download_and_install_android_update,
             $crate::restart_app,
             $crate::reset_accessibility_permission_and_restart_app,
@@ -864,10 +884,7 @@ fn run_desktop() {
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
     let mut context = tauri::generate_context!();
-    desktop_resources::configure(
-        &mut context,
-        false,
-    );
+    desktop_resources::configure(&mut context, false);
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
     // non-activating NSPanel (a plain NSWindow cannot do this even with collectionBehavior —
@@ -1042,7 +1059,7 @@ fn run_desktop() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
-                        "quit" => app.exit(0),
+                        "quit" => request_quit(app),
                         id => {
                             if handle_style_tray_menu_event(app, id) {
                                 return;
@@ -1182,7 +1199,14 @@ fn observe_issue1266_lifecycle(event: &RunEvent) {
         }
         _ => return,
     };
-    Operation::new(Probe::P6).record(event, Outcome::Observed, Facts { kind, ..Facts::default() });
+    Operation::new(Probe::P6).record(
+        event,
+        Outcome::Observed,
+        Facts {
+            kind,
+            ..Facts::default()
+        },
+    );
 }
 
 #[cfg(not(mobile))]
@@ -1856,6 +1880,24 @@ fn restart_on_main_thread(app: AppHandle) {
     let _ = app.run_on_main_thread(move || handle.restart());
 }
 
+/// How long a tray-initiated quit may take before the process is forced down.
+/// Once the tray callback runs, the watchdog bounds a stalled exit (#1337).
+/// The callback itself still needs a responsive event loop to arm the watchdog.
+const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Arm the fallback before requesting graceful exit on explicit user intent.
+fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    std::thread::spawn(|| {
+        std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
+        // Keep the deadline path independent of application locks: synchronous
+        // logging can block on I/O, and AppHandle::exit can enter synchronous
+        // cleanup if sending the exit request fails. A healthy exit never
+        // reaches here.
+        std::process::exit(0);
+    });
+    app.exit(0);
+}
+
 #[tauri::command]
 fn reset_accessibility_permission_and_restart_app(app: AppHandle) {
     prepare_for_restart();
@@ -1919,7 +1961,13 @@ fn reset_tcc_for_beta_restart() {
     // Beta builds are currently ad-hoc signed. Their code hash changes across builds, so
     // old TCC rows can leave System Settings checked while AXIsProcessTrusted() is false.
     reset_tcc_service_for_restart("Accessibility", "beta ad-hoc identity refresh");
-    reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    // A granted microphone must survive the restart. Resetting it marks that grant missing.
+    let microphone = permissions::check_microphone();
+    if permissions::should_reset_microphone_tcc(microphone) {
+        reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    } else {
+        log::info!("[tcc] microphone already granted; skipping TCC reset");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -2268,13 +2316,15 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
-/// QA records in a compact bottom-anchored capsule, then reveals a wide result card.
+/// QA records through the shared capsule and keeps its separate answer card open.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_WIDTH: f64 = 760.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 416.0;
-/// Gap between the capsule and the QA window; matches the design spec.
-const QA_WINDOW_BOTTOM_INSET: f64 = 8.0;
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 720.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 380.0;
+/// Reserve room for the independent recording capsule and its context badge.
+const QA_WINDOW_BOTTOM_INSET: f64 = 96.0;
+/// Expanded answers sit higher so the lower composer does not crowd the recording capsule.
+const QA_WINDOW_EXPANDED_BOTTOM_INSET: f64 = 132.0;
 const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
@@ -2821,11 +2871,26 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 }
 
 // Preserve a dragged window's centre and baseline; repeated result events must not drift.
-fn qa_resize_origin(x: f64, y: f64, old_width: f64, old_height: f64,
-    width: f64, height: f64, was_expanded: bool, expanded: bool) -> (f64, f64) {
+fn qa_resize_origin(
+    x: f64,
+    y: f64,
+    old_width: f64,
+    old_height: f64,
+    width: f64,
+    height: f64,
+    was_expanded: bool,
+    expanded: bool,
+) -> (f64, f64) {
     let lift = if expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 }
-        - if was_expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 };
-    (x + (old_width - width) / 2.0, y + old_height - height - lift)
+        - if was_expanded {
+            QA_RESULT_BOTTOM_LIFT
+        } else {
+            0.0
+        };
+    (
+        x + (old_width - width) / 2.0,
+        y + old_height - height - lift,
+    )
 }
 
 /// Called on the native main thread by the restricted QA command. The compact
@@ -2847,10 +2912,16 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .inner_position()
         .map_err(|_| "qa_geometry_unavailable")?
         .to_logical::<f64>(scale);
-    let current_size = window.inner_size()
-        .map_err(|_| "qa_geometry_unavailable")?.to_logical::<f64>(scale);
+    let current_size = window
+        .inner_size()
+        .map_err(|_| "qa_geometry_unavailable")?
+        .to_logical::<f64>(scale);
     let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
-    let mut width = if expanded { QA_WINDOW_EXPANDED_WIDTH } else { QA_WINDOW_WIDTH };
+    let mut width = if expanded {
+        QA_WINDOW_EXPANDED_WIDTH
+    } else {
+        QA_WINDOW_WIDTH
+    };
     let mut height = if expanded {
         QA_WINDOW_EXPANDED_HEIGHT
     } else {
@@ -2861,17 +2932,28 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
     }
     let (mut x, mut y) = qa_resize_origin(
-        position.x, position.y, current_size.width, current_size.height,
-        width, height, was_expanded, expanded,
+        position.x,
+        position.y,
+        current_size.width,
+        current_size.height,
+        width,
+        height,
+        was_expanded,
+        expanded,
     );
     if let Some((frame, _)) = area {
         x = x.clamp(
             frame.x + 16.0,
             (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
         );
+        let bottom_inset = if expanded {
+            QA_WINDOW_EXPANDED_BOTTOM_INSET
+        } else {
+            QA_WINDOW_BOTTOM_INSET
+        };
         y = y.clamp(
             frame.y + 32.0,
-            (frame.y + frame.height - height - QA_WINDOW_BOTTOM_INSET).max(frame.y + 32.0),
+            (frame.y + frame.height - height - bottom_inset).max(frame.y + 32.0),
         );
     }
     window
@@ -3012,6 +3094,9 @@ fn make_chat_window_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow
             // Floating level (NSFloatingWindowLevel): above normal windows, below the
             // menu bar / capsule (25).
             panel.set_level(3);
+            if tag == "qa" {
+                panel.set_hides_on_deactivate(false);
+            }
             panel.set_collection_behaviour(
                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
@@ -3077,6 +3162,9 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
 /// at creation time here, otherwise the lazily created QA window can't be dragged on macOS.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    // ShowQa can arrive concurrently from independent Core workflows. Keep the existing-window
+    // lookup and first build in one critical section so two callers cannot create two qa HWNDs.
+    let _creation_guard = qa_window_create_lock().lock();
     if let Some(w) = app.get_webview_window("qa") {
         return Some(w);
     }
@@ -3590,7 +3678,9 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
         let _ = result_tx.send(result);
     })
     .map_err(|error| format!("Less Computer window show dispatch failed: {error}"))?;
-    result_rx.recv().map_err(|error| format!("Less Computer window show task failed: {error}"))?
+    result_rx
+        .recv()
+        .map_err(|error| format!("Less Computer window show task failed: {error}"))?
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -3672,6 +3762,8 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 /// Pure multi-monitor capsule helpers (tests run on every CI host). Window creation
 /// inside the module stays `cfg(windows)`.
 mod capsule_mirrors;
+mod capsule_feedback;
+mod vocab_card_placement;
 
 /// Init and card-return paths use the default stage; the recording display path passes the
 /// current style explicitly.
@@ -3891,19 +3983,17 @@ fn capsule_visual_height(_translation_active: bool) -> f64 {
     140.0
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_center_position, capsule_visual_height,
-        capsule_window_bounds, capsule_window_bounds_for_style,
-        capsule_window_bounds_for_style_with_transcript,
+        bottom_center_position, capsule_visual_height, capsule_window_bounds,
+        capsule_window_bounds_for_style, capsule_window_bounds_for_style_with_transcript,
         capsule_window_bounds_for_style_with_transcript_and_translation, clamp_to_monitor,
         frame_contains_point, frame_distance_to_point_squared, logical_monitor_frame,
-        parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
-        tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
-        LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
-        permission_requires_visible_start,
+        parse_tray_style_pack_menu_id, permission_requires_visible_start,
+        resolve_tray_style_pack_id, rotate_log_if_too_large, tray_style_menu_enabled,
+        tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame, TrayLabels,
+        LOG_ROTATE_LIMIT_BYTES,
     };
     #[cfg(target_os = "macos")]
     use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
@@ -4198,10 +4288,17 @@ mod tests {
 
     #[test]
     fn qa_resize_preserves_centre_baseline_and_user_position() {
-        let expanded = super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
-        assert_eq!(expanded, (-840.0, 324.0));
-        assert_eq!(super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true), expanded);
-        assert_eq!(super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false), (-700.0, 700.0));
+        let expanded =
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 720.0, 380.0, false, true);
+        assert_eq!(expanded, (-820.0, 360.0));
+        assert_eq!(
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 720.0, 380.0, true, true),
+            expanded
+        );
+        assert_eq!(
+            super::qa_resize_origin(expanded.0, expanded.1, 720.0, 380.0, 480.0, 80.0, true, false),
+            (-700.0, 700.0)
+        );
     }
 
     #[test]

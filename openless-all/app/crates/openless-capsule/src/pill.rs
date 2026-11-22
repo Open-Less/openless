@@ -469,6 +469,22 @@ fn status_label(frame: &Frame) -> String {
 
 impl DefaultCapsule {
     /// The platform material follows the painted pill, never the transparent host rectangle.
+    /// Only real controls own input; the transcript and central label are visual surfaces.
+    pub fn input_regions(&self, frame: &Frame) -> Vec<Rect> {
+        if !frame.interactive || frame.leaving || frame.state.selection_polish || frame.state.style == "siri"
+            || !matches!(frame.state.phase.as_str(), "recording" | "transcribing" | "polishing") { return Vec::new(); }
+        let Some((shell, opacity)) = self.glass else { return Vec::new(); };
+        if opacity <= 0.001 { return Vec::new(); }
+        let center = shell.center();
+        let mut regions = vec![Rect::from_center_size(
+            pos2(if frame.state.phase == "recording" { center.x - BUTTON_OFFSET } else { shell.left() + 16.0 }, center.y), egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0))];
+        if frame.state.phase == "recording" {
+            regions.push(Rect::from_center_size(pos2(center.x + BUTTON_OFFSET, center.y),
+                egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0)));
+        }
+        regions
+    }
+
     pub fn glass_surface(&self) -> Option<(Rect, f32)> {
         self.glass
     }
@@ -507,7 +523,7 @@ impl DefaultCapsule {
             .size()
             .x;
         // `scrollWidth + 28`, rounded up so a label that fits is never ellipsized.
-        let status_width = (label_width.ceil() + 2.0 * STATUS_PADDING).clamp(80.0, 300.0);
+        let status_width = (label_width.ceil() + 2.0 * STATUS_PADDING + if processing { 28.0 } else { 0.0 }).clamp(80.0, 300.0);
         let time = |seconds: f64| if reduced { 0.0 } else { seconds };
 
         if !self.started {
@@ -563,7 +579,13 @@ impl DefaultCapsule {
             time(if layer_visible { 0.0 } else { 0.12 }),
             LINEAR,
         );
-        let badge_visible = state.translation_active && recording && !leaving;
+        let badge_visible = (state.translation_active && recording
+            || state.qa
+                && matches!(
+                    state.phase.as_str(),
+                    "recording" | "transcribing" | "polishing"
+                ))
+            && !leaving;
         let (badge_duration, badge_delay) = if badge_visible { (0.2, 0.04) } else { (0.12, 0.0) };
         for (tween, target) in [
             (&mut self.badge_opacity, if badge_visible { 1.0 } else { 0.0 }),
@@ -591,10 +613,10 @@ impl DefaultCapsule {
         );
         self.glass = Some((shell, opacity));
         let outline = shapes::stadium(shell);
-        let cancel_center = pos2(center_x - BUTTON_OFFSET, shell.center().y);
+        let cancel_center = pos2(if processing { shell.left() + 16.0 } else { center_x - BUTTON_OFFSET }, shell.center().y);
         let confirm_center = pos2(center_x + BUTTON_OFFSET, shell.center().y);
 
-        // Pointer: the buttons while recording, the whole pill while processing.
+        // Pointer ownership is restricted to the end controls, including cancellation while processing.
         let (pointer, pressed, released, down) = ui.input(|input| {
             (
                 input.pointer.hover_pos(),
@@ -618,7 +640,7 @@ impl DefaultCapsule {
                     } else {
                         None
                     }
-                } else if processing {
+                } else if processing && point.distance(cancel_center) <= BUTTON_RADIUS {
                     Some(Target::Processing)
                 } else {
                     None
@@ -682,7 +704,7 @@ impl DefaultCapsule {
         }
         let badge_bottom = body_top
             - STACK_GAP
-            - if rail_visible && state.translation_active {
+            - if rail_visible && (state.translation_active || state.qa) {
                 RAIL_HEIGHT + STACK_GAP
             } else {
                 0.0
@@ -809,6 +831,14 @@ impl DefaultCapsule {
             }
         }
 
+        if processing && !leaving {
+            let fill = if hovered == Some(Target::Processing) { tokens.pill.cancel_hover } else { tokens.pill.cancel };
+            painter.add(shapes::fill_clipped(&shapes::circle(cancel_center, BUTTON_RADIUS), &outline, fade(fill)));
+            if let Some(texture) = icons::texture(ui.ctx(), icons::IconName::Close, 15.0, 1.8) {
+                painter.add(shapes::image_clipped(texture.id(), snapped_square(cancel_center, 15.0, pixels_per_point), &outline, fade(tokens.pill.cancel_ink)));
+            }
+        }
+
         // Status: one centred, ellipsized line inside 14px padding.
         let status = self.status.value(now) * opacity;
         if status > 0.0 {
@@ -816,9 +846,9 @@ impl DefaultCapsule {
                 &painter,
                 &label,
                 label_format,
-                width - 2.0 * STATUS_PADDING,
+                width - 2.0 * STATUS_PADDING - if processing { 28.0 } else { 0.0 },
             );
-            let pos = shell.center() - galley.size() * 0.5;
+            let pos = shell.center() + vec2(if processing { 14.0 } else { 0.0 }, 0.0) - galley.size() * 0.5;
             painter.add(text(pos, galley, status));
         }
 
@@ -860,6 +890,29 @@ fn badge(
     opacity: f32,
     pixels_per_point: f32,
 ) -> Vec<Shape> {
+    if frame.state.qa {
+        let label = painter.layout_job(LayoutJob::single_section(
+            frame.labels.asking.clone(),
+            format(11.0, 500.0, 16.5, tokens.pill.ink),
+        ));
+        let size = label.size();
+        let rect = Rect::from_min_size(
+            pos2(
+                bottom_center.x - size.x / 2.0 - 10.0,
+                bottom_center.y - 26.0,
+            ),
+            vec2(size.x + 20.0, 26.0),
+        );
+        return vec![
+            egui::epaint::RectShape::filled(rect, 8, tokens.pill.fill.gamma_multiply(opacity))
+                .into(),
+            text(
+                pos2(rect.left() + 10.0, rect.center().y - size.y / 2.0),
+                label,
+                opacity,
+            ),
+        ];
+    }
     let fade = |color: Color32| color.gamma_multiply(opacity);
     let label = painter.layout_job(LayoutJob::single_section(
         frame.labels.translate_to.clone(),
@@ -1115,6 +1168,21 @@ mod tests {
             bounds: None,
             interactive: true,
         }
+    }
+
+    #[test]
+    fn input_ownership_is_limited_to_visible_controls() {
+        let mut capsule = DefaultCapsule::default();
+        capsule.glass = Some((Rect::from_min_size(pos2(0.0, 0.0), vec2(116.0,32.0)), 1.0));
+        let recording = frame("recording");
+        let regions = capsule.input_regions(&recording);
+        assert_eq!(regions.len(), 2);
+        assert!(!regions.iter().any(|r| r.contains(pos2(58.0,16.0))));
+        assert!(regions.iter().any(|r| r.contains(pos2(16.0,16.0))));
+        assert_eq!(capsule.input_regions(&frame("polishing")).len(), 1);
+        assert!(capsule.input_regions(&frame("completed")).is_empty());
+        let mut siri=recording.clone();siri.state.style="siri".into();
+        assert!(capsule.input_regions(&siri).is_empty());
     }
 
     #[test]

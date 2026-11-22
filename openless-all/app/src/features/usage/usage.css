@@ -1,0 +1,68 @@
+.ol-usage-tabs {
+  margin: 0 0 20px;
+}
+.ol-usage-tabs > .ol-segmented {
+  width: fit-content;
+  max-width: 100%;
+}
+.ol-usage-page .ol-card {
+  border-radius: 28px !important;
+  clip-path: none !important;
+}
+.ol-usage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+.ol-usage-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: clamp(120px, calc(100dvh - 650px), 240px);
+}
+.ol-usage-chart-dates {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+}
+.ol-usage-history-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
+}
+.ol-usage-history-grid > * {
+  grid-column: span 6;
+}
+.ol-usage-record-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: clamp(260px, calc(100dvh - 320px), 650px);
+  overflow: hidden;
+}
+.ol-usage-record-card > h2,
+.ol-usage-record-card > p {
+  flex-shrink: 0;
+}
+.ol-usage-record-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1000px) {
+  .ol-usage-history-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ol-usage-history-grid > * {
+    grid-column: 1 / -1;
+  }
+  .ol-usage-record-card {
+    height: clamp(240px, 55dvh, 480px);
+  }
+}

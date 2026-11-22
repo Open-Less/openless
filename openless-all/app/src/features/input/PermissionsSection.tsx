@@ -1,0 +1,387 @@
+// Permissions / connectivity panel: microphone / accessibility / global hotkey / Windows IME / network.
+// Normal states use localized labels; failed native checks retain their diagnostic details.
+
+import { useEffect, useState, type CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
+import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
+import { Icon } from '../../components/Icon';
+import {
+  checkAccessibilityPermission,
+  checkMicrophonePermission,
+  openSystemSettings,
+  requestAccessibilityPermission,
+  requestMicrophonePermission,
+  resetAccessibilityPermissionAndRestartApp,
+} from '../../api/permissions';
+import { checkNetwork } from '../../api/input';
+import { getHotkeyStatus, getWindowsImeStatus } from '../../api/hotkeys';
+import type { NetworkCheckResult } from '../../api/input';
+import { emitSaved } from '../../lib/savedEvent';
+import { getPlatformCapabilities } from '../../runtime/platform';
+import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
+import {
+  checkAndroidMicrophoneAccess,
+  requestAndroidMicrophoneAccess,
+} from '@android/lib/androidMicrophonePermission';
+import type {
+  HotkeyStatus,
+  PermissionStatus,
+  PlatformCapabilities,
+  WindowsImeStatus,
+} from '../../api/contracts';
+import { useHotkeySettings } from '../../data/preferences';
+import { REOPEN_ONBOARDING_EVENT } from '../../lib/desktopOnboarding';
+import { Button as Btn } from '../../ui/controls/Button';
+import { Card } from '../../ui/layout/Card';
+import { Pill } from '../../ui/controls/Pill';
+import { SettingRow } from '../../ui/controls/SettingRow';
+
+const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
+
+export function PermissionsSection() {
+  const { t } = useTranslation();
+  const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
+  const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
+  const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
+  const [windowsIme, setWindowsIme] = useState<WindowsImeStatus | null>(null);
+  const [network, setNetwork] = useState<NetworkCheckResult | null>(null);
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const { capability } = useHotkeySettings();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const stackLayout = baseLayoutStack || conservative;
+  const permissionActionsStyle: CSSProperties = {
+    display: 'flex',
+    flexDirection: conservative ? 'column' : 'row',
+    alignItems: conservative ? 'flex-start' : 'center',
+    justifyContent: stackLayout ? 'flex-start' : 'flex-end',
+    width: '100%',
+    flexWrap: conservative ? 'nowrap' : 'wrap',
+    minWidth: 0,
+    gap: 8,
+  };
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  const refreshPermissions = async () => {
+    const [a, m] = await Promise.all([
+      checkAccessibilityPermission(),
+      platformCaps?.platform === 'android'
+        ? checkAndroidMicrophoneAccess()
+        : checkMicrophonePermission(),
+    ]);
+    setAccessibility(a);
+    setMicrophone(m);
+  };
+
+  const refreshHotkey = async () => {
+    setHotkey(await getHotkeyStatus());
+  };
+
+  const refreshWindowsIme = async () => {
+    setWindowsIme(await getWindowsImeStatus());
+  };
+
+  const refreshNetwork = async () => {
+    try {
+      setNetwork(await checkNetwork());
+    } catch {
+      setNetwork({ online: false, latencyMs: null });
+    }
+  };
+
+  useEffect(() => {
+    refreshPermissions();
+    if (platformCaps?.supportsDesktopHotkey === true) {
+      refreshHotkey();
+    }
+    if (platformCaps?.platform !== 'android') {
+      refreshWindowsIme();
+    }
+    refreshNetwork();
+    // issue #470: hotkey status became purely event-driven, removing the per-second poll and
+    // relying on the focus/visibilitychange refreshes below. The microphone check briefly opens
+    // an input stream, so per-second probing would flicker the privacy indicator.
+    const permissionId = window.setInterval(() => {
+      if (!document.hidden) refreshPermissions();
+    }, 10000);
+    const networkId = window.setInterval(() => {
+      if (!document.hidden) refreshNetwork();
+    }, 30000);
+    const refreshAll = () => {
+      refreshPermissions();
+      if (platformCaps?.supportsDesktopHotkey === true) {
+        refreshHotkey();
+      }
+      if (platformCaps?.platform !== 'android') {
+        refreshWindowsIme();
+      }
+      refreshNetwork();
+    };
+    const onFocus = () => refreshAll();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshAll();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(permissionId);
+      window.clearInterval(networkId);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [platformCaps?.platform, platformCaps?.supportsDesktopHotkey]);
+
+  const reRequestAccessibility = async () => {
+    const result = await requestAccessibilityPermission();
+    // If the TCC prompt was denied (or previously denied and no longer shown), guide the user to system settings.
+    if (result !== 'granted') {
+      await openSystemSettings('accessibility');
+    }
+    refreshPermissions();
+  };
+
+  const reRequestMicrophone = async () => {
+    const isAndroid = platformCaps?.platform === 'android';
+    if (isAndroid && (microphone === 'denied' || microphone === 'restricted')) {
+      await openSystemSettings('microphone');
+      await refreshPermissions();
+      return;
+    }
+    const status = isAndroid
+      ? await requestAndroidMicrophoneAccess()
+      : await requestMicrophonePermission();
+    setMicrophone(status);
+    if (!isAndroid && (status === 'denied' || status === 'restricted')) {
+      await openSystemSettings('microphone');
+    }
+    await refreshPermissions();
+  };
+
+  return (
+    <Card>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          marginBottom: 6,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}>
+          {t('settings.permissions.title')}
+        </div>
+        {platformCaps?.platform === 'desktop' && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => window.dispatchEvent(new Event(REOPEN_ONBOARDING_EVENT))}
+          >
+            {t('desktopGuide.reopen')}
+          </Btn>
+        )}
+        {platformCaps?.platform === 'android' && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              localStorage.removeItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY);
+              window.location.reload();
+            }}
+          >
+            {t('settings.permissions.rerunAndroidSetup')}
+          </Btn>
+        )}
+      </div>
+      <SettingRow label={t('settings.permissions.micLabel')}>
+        <div style={permissionActionsStyle}>
+          <PermissionPill status={microphone} />
+          {microphone === 'noDevice' ? (
+            <Btn variant="ghost" size="sm" onClick={refreshPermissions}>
+              {t('common.retry')}
+            </Btn>
+          ) : (
+            microphone !== 'granted' &&
+            microphone !== 'notApplicable' &&
+            microphone !== 'loading' && (
+              <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
+                {microphone === 'denied' || microphone === 'restricted'
+                  ? t('settings.permissions.openSystem')
+                  : t('settings.permissions.grant')}
+              </Btn>
+            )
+          )}
+        </div>
+      </SettingRow>
+      {capability?.requiresAccessibilityPermission && platformCaps?.platform !== 'android' && (
+        <SettingRow label={t('settings.permissions.accLabel')}>
+          <div style={permissionActionsStyle}>
+            <PermissionPill status={accessibility} />
+            {accessibility !== 'granted' &&
+              accessibility !== 'notApplicable' &&
+              accessibility !== 'loading' && (
+                <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
+                  {accessibility === 'denied'
+                    ? t('settings.permissions.openSystem')
+                    : t('settings.permissions.grant')}
+                </Btn>
+              )}
+            {accessibility === 'denied' && (
+              <Btn
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  resetAccessibilityPermissionAndRestartApp().catch((error) => {
+                    console.error('[settings] reset accessibility permission failed', error);
+                    emitSaved('failed', t('common.operationFailed'));
+                  });
+                }}
+              >
+                {t('settings.permissions.restart')}
+              </Btn>
+            )}
+          </div>
+        </SettingRow>
+      )}
+      {platformCaps?.supportsDesktopHotkey === true && (
+        <SettingRow label={t('settings.permissions.hotkeyLabel')}>
+          <div style={permissionActionsStyle}>
+            {hotkey?.state === 'failed' && hotkey.message && (
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--ol-ink-4)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  minWidth: 0,
+                  flex: '0 1 auto',
+                }}
+              >
+                {hotkey.message}
+              </span>
+            )}
+            <HotkeyStatusPill status={hotkey} />
+          </div>
+        </SettingRow>
+      )}
+      {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
+        <AndroidPermissionsPanel mode="permissionsOnly" />
+      )}
+      {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
+        <SettingRow label={t('settings.permissions.windowsImeLabel')}>
+          <div style={permissionActionsStyle}>
+            {windowsIme && (
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--ol-ink-4)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  minWidth: 0,
+                  flex: '0 1 auto',
+                }}
+              >
+                {t(`settings.permissions.windowsIme.${windowsIme.state}`)}
+              </span>
+            )}
+            <WindowsImeStatusPill status={windowsIme} />
+          </div>
+        </SettingRow>
+      )}
+      <SettingRow label={t('settings.permissions.networkLabel')}>
+        <div style={permissionActionsStyle}>
+          {network && network.latencyMs != null && (
+            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{network.latencyMs}ms</span>
+          )}
+          <NetworkStatusPill status={network} />
+          {network && !network.online && (
+            <Btn variant="ghost" size="sm" onClick={refreshNetwork}>
+              {t('common.retry') ?? '重试'}
+            </Btn>
+          )}
+        </div>
+      </SettingRow>
+    </Card>
+  );
+}
+
+function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {
+  const { t } = useTranslation();
+  if (status === 'loading') {
+    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  }
+  if (status === 'granted') {
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.granted')}
+      </Pill>
+    );
+  }
+  if (status === 'notApplicable') {
+    return <Pill tone="default">{t('settings.permissions.notApplicable')}</Pill>;
+  }
+  if (status === 'noDevice') {
+    return <Pill tone="outline">{t('settings.permissions.micNoDevice')}</Pill>;
+  }
+  if (status === 'denied' || status === 'restricted') {
+    return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
+  }
+  return <Pill tone="outline">{t('settings.permissions.indeterminate')}</Pill>;
+}
+
+function HotkeyStatusPill({ status }: { status: HotkeyStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) {
+    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  }
+  if (status.state === 'installed') {
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.hotkeyInstalled')}
+      </Pill>
+    );
+  }
+  if (status.state === 'starting') {
+    return <Pill tone="default">{t('settings.permissions.hotkeyStarting')}</Pill>;
+  }
+  return <Pill tone="outline">{t('settings.permissions.hotkeyFailed')}</Pill>;
+}
+
+function WindowsImeStatusPill({ status }: { status: WindowsImeStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) {
+    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  }
+  if (status.state === 'installed') {
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.windowsImeInstalled')}
+      </Pill>
+    );
+  }
+  return <Pill tone="outline">{t('settings.permissions.windowsImeUnavailable')}</Pill>;
+}
+
+function NetworkStatusPill({ status }: { status: NetworkCheckResult | null }) {
+  const { t } = useTranslation();
+  if (!status) {
+    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  }
+  if (status.online) {
+    return (
+      <Pill tone="ok">
+        <Icon name="check" size={11} />
+        {t('settings.permissions.networkOk')}
+      </Pill>
+    );
+  }
+  return <Pill tone="outline">{t('settings.permissions.networkOffline') ?? '不可用'}</Pill>;
+}

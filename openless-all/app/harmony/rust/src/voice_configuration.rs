@@ -17,6 +17,8 @@ const FIELDS: &[&str] = &[
     "outputLanguagePreference",
     "llmThinkingEnabled",
     "polishSkipMaxChars",
+    "polishStrategyEnabled",
+    "polishStrategyScript",
     "stableTranscriptionEnabled",
     "audioEnhancementEnabled",
     "audioDsp",
@@ -109,6 +111,55 @@ pub(super) fn import(host: &Host, snapshot: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polish_strategy_crosses_independent_sandboxes_and_survives_reload() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-polish-strategy-sandboxes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let main = build_host(root.join("main"), root.join("main-cache"), runtime.clone()).unwrap();
+        let ime = build_host(root.join("ime"), root.join("ime-cache"), runtime.clone()).unwrap();
+        let script = "fn strategy(input) { #{ action: \"skip\" } }";
+        let mut prefs = json!(main.backend.get_preferences());
+        prefs["polishStrategyEnabled"] = json!(true);
+        prefs["polishStrategyScript"] = json!(script);
+        dispatch(&main, "set_settings", json!({"prefs":prefs})).unwrap();
+
+        let snapshot = export(&main).unwrap();
+        assert_eq!(snapshot["preferences"]["polishStrategyEnabled"], true);
+        assert_eq!(snapshot["preferences"]["polishStrategyScript"], script);
+        assert_eq!(import(&ime, snapshot.clone()).unwrap(), true);
+        assert_eq!(import(&ime, snapshot).unwrap(), false);
+        let preferences = ime.backend.get_preferences();
+        assert!(preferences.polish_strategy_enabled);
+        assert_eq!(preferences.polish_strategy_script, script);
+
+        let restored = build_host(root.join("ime"), root.join("ime-cache"), runtime).unwrap();
+        let preferences = restored.backend.get_preferences();
+        assert!(preferences.polish_strategy_enabled);
+        assert_eq!(preferences.polish_strategy_script, script);
+
+        let next_script = "fn strategy(input) { #{ action: \"polish\" } }";
+        let mut prefs = json!(main.backend.get_preferences());
+        prefs["polishStrategyEnabled"] = json!(false);
+        prefs["polishStrategyScript"] = json!(next_script);
+        dispatch(&main, "set_settings", json!({"prefs":prefs})).unwrap();
+        assert_eq!(import(&restored, export(&main).unwrap()).unwrap(), true);
+        let preferences = restored.backend.get_preferences();
+        assert!(!preferences.polish_strategy_enabled);
+        assert_eq!(preferences.polish_strategy_script, next_script);
+
+        for host in [main, ime, restored] {
+            host.runtime.block_on(host.backend.shutdown()).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn voice_configuration_crosses_independent_sandboxes_before_recording() {

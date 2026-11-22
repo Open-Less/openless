@@ -118,6 +118,9 @@ pub struct VoiceDictationHandoff {
 /// decides lifecycle and stale-event policy; the host decides how local ASR and
 /// the native capture stream are implemented.
 pub trait VoiceActivationRuntime: Send + Sync + 'static {
+    /// Apply runtime-only standby intent even before a recognizer exists.
+    fn set_capture_paused(&self, _revision: u64, _paused: bool) {}
+
     fn configure(
         &self,
         config: VoiceActivationConfig,
@@ -697,10 +700,22 @@ pub struct TranscriptOutput {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TranscriptMetadata {
+    /// Detected language, when the ASR provider reports one.
+    pub language: Option<String>,
+    /// Provider confidence in the final transcript, when available.
+    pub confidence: Option<f32>,
+}
+
 /// One provider transcription session that receives PCM while recording.
 pub trait TranscriptionSession: AudioConsumer {
     fn asr_call_label(&self) -> Option<crate::auxiliary::AsrCallLabel> {
         None
+    }
+
+    fn transcript_metadata(&self) -> TranscriptMetadata {
+        TranscriptMetadata::default()
     }
 
     /// Drain provider notices discovered during finalization. This lets a
@@ -841,6 +856,14 @@ pub trait TextInsertionSession: Send + Sync {
 /// document baseline. Keeping that decision here prevents macOS AX code from
 /// owning vocabulary policy or accepting a report from a stale generation.
 pub trait EditObservationSink: Send + Sync {
+    fn observation_id(&self) -> Option<u64> {
+        None
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        None
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }

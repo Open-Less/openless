@@ -4,10 +4,11 @@ import { AnimatePresence } from 'framer-motion';
 import { i18nReady } from '../../src/i18n';
 import { useSpringReorder } from '../../src/lib/useSpringReorder';
 import { initInteractionMode } from '../../src/lib/interactionMode';
-import { Toggle } from '../../src/pages/settings/shared';
+import { Toggle } from '../../src/ui/controls/SettingRow';
 import { Collapse, ExpandableText } from '../../src/components/ui/Disclosure';
-import { SelectLite } from '../../src/components/ui/SelectLite';
-import { PresenceModal } from '../../src/components/ui/Modal';
+import { SelectLite } from '../../src/ui/controls/SelectLite';
+import { AppViewport } from '../../src/ui/layout/AppViewport';
+import { PresenceModal } from '../../src/ui/overlays/Modal';
 import { ChoiceChips } from '../../src/components/ui/ChoiceChips';
 import { DismissibleCard } from '../../src/components/ui/DismissibleCard';
 import { cardDeparture } from '../../src/lib/cardDeparture';
@@ -188,7 +189,9 @@ initInteractionMode();
 void i18nReady.then(() =>
   createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <Fixture />
+      <AppViewport>
+        <Fixture />
+      </AppViewport>
     </React.StrictMode>,
   ),
 );

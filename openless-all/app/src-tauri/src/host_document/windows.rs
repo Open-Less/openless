@@ -1,6 +1,7 @@
 //! Short-lived UIA observation. All registration and COM objects belong to one
 //! MTA worker; callbacks only mark text dirty and never read document contents.
 use super::EditPair;
+use crate::vocab_card_placement::{AnchorSnapshot, Rect};
 use openless_core::host_document::ObservedInsertion;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,7 +24,10 @@ use windows::Win32::{
     UI::{Accessibility::*, WindowsAndMessaging::GetForegroundWindow},
 };
 
-type Callback = Box<dyn Fn(EditPair) -> bool + Send + Sync>;
+type Callback = Box<dyn Fn(EditPair, Option<AnchorSnapshot>) -> bool + Send + Sync>;
+
+mod edit_settle;
+use edit_settle::{can_publish, has_edit_events, EditSettle};
 
 #[derive(Debug, Clone)]
 pub(super) struct VoiceEditTarget {
@@ -71,6 +75,55 @@ fn with_voice_edit_uia<T>(
             .map_err(|_| "voiceEditTargetUnavailable".to_string())?;
         read(&uia)
     }
+}
+
+pub(super) fn read_qa_selection() -> Option<String> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if element
+            .CurrentIsPassword()
+            .map_err(|_| "selectionUnavailable".to_string())?
+            .as_bool()
+        {
+            return Ok(None);
+        }
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionUnavailable".to_string())?
+            != 1
+        {
+            return Ok(None);
+        }
+        let range = ranges
+            .GetElement(0)
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if range
+            .CompareEndpoints(
+                TextPatternRangeEndpoint_Start,
+                &range,
+                TextPatternRangeEndpoint_End,
+            )
+            .map_err(|_| "selectionUnavailable".to_string())?
+            == 0
+        {
+            return Ok(None);
+        }
+        let text = range
+            .GetText(16000)
+            .map_err(|_| "selectionUnavailable".to_string())?
+            .to_string();
+        Ok((!text.trim().is_empty()).then_some(text))
+    })
+    .ok()
+    .flatten()
 }
 
 unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
@@ -377,13 +430,20 @@ pub(crate) fn insert_with_delivery_check(
 }
 struct Request {
     text: String,
+    target: crate::selection::SelectionInsertionTarget,
+    on_end: Box<dyn Fn() + Send + Sync>,
     window: isize,
     lifetime: Duration,
     stop: Arc<AtomicBool>,
     callback: Callback,
 }
 
-#[implement(IUIAutomationEventHandler, IUIAutomationPropertyChangedEventHandler)]
+#[implement(
+    IUIAutomationEventHandler,
+    IUIAutomationPropertyChangedEventHandler,
+    IUIAutomationFocusChangedEventHandler,
+    IUIAutomationTextEditTextChangedEventHandler
+)]
 struct Changed {
     dirty: Arc<AtomicBool>,
 }
@@ -409,10 +469,31 @@ impl IUIAutomationPropertyChangedEventHandler_Impl for Changed_Impl {
     }
 }
 
+impl IUIAutomationFocusChangedEventHandler_Impl for Changed_Impl {
+    fn HandleFocusChangedEvent(&self, _: Option<&IUIAutomationElement>) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+impl IUIAutomationTextEditTextChangedEventHandler_Impl for Changed_Impl {
+    fn HandleTextEditTextChangedEvent(
+        &self,
+        _: Option<&IUIAutomationElement>,
+        _: TextEditChangeType,
+        _: *const windows::Win32::System::Com::SAFEARRAY,
+    ) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
 pub(super) fn spawn_edit_watcher(
     text: String,
     lifetime: Duration,
+    target: crate::selection::SelectionInsertionTarget,
     callback: Callback,
+    on_end: Box<dyn Fn() + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
     if text.trim().is_empty() {
         return None;
@@ -431,6 +512,7 @@ pub(super) fn spawn_edit_watcher(
                         if !request.stop.load(Ordering::Acquire) {
                             let _ = observe(&request);
                         }
+                        (request.on_end)();
                     }
                     CoUninitialize();
                 })
@@ -443,6 +525,8 @@ pub(super) fn spawn_edit_watcher(
         .send(Request {
             text,
             lifetime,
+            target,
+            on_end,
             window: unsafe { GetForegroundWindow().0 as isize },
             stop: stop.clone(),
             callback,
@@ -526,7 +610,116 @@ unsafe fn read_text(element: &IUIAutomationElement) -> Result<String> {
     Ok(text)
 }
 
+fn physical_rect(rect: windows::Win32::Foundation::RECT) -> Option<Rect> {
+    let rect = Rect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    };
+    rect.valid().then_some(rect)
+}
+
+unsafe fn caret_screen_rect(element: &IUIAutomationElement) -> Option<Rect> {
+    use windows::Win32::System::Ole::{
+        SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+    };
+    let CaretLookup::Found(range, _) = find_caret_range(element) else {
+        return None;
+    };
+    let array = range.GetBoundingRectangles().ok()?;
+    if array.is_null() {
+        return None;
+    }
+    // A collapsed range can legitimately have no rectangles. Never expand it into
+    // unrelated text merely to manufacture a precise-looking caret position.
+    let rect = (|| {
+        let first = SafeArrayGetLBound(array, 1).ok()?;
+        let last = SafeArrayGetUBound(array, 1).ok()?;
+        if last.checked_sub(first)? != 3 {
+            return None;
+        }
+        let mut values = [0.0f64; 4];
+        for (offset, value) in values.iter_mut().enumerate() {
+            let index = first + offset as i32;
+            SafeArrayGetElement(array, &index, value as *mut f64 as *mut _).ok()?;
+        }
+        Rect::from_xywh(values[0], values[1], values[2], values[3])
+    })();
+    let _ = SafeArrayDestroy(array);
+    rect
+}
+
+unsafe fn capture_placement(
+    element: &IUIAutomationElement,
+    window: HWND,
+) -> Option<AnchorSnapshot> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, GetWindowThreadProcessId};
+    let mut window_rect = RECT::default();
+    GetWindowRect(window, &mut window_rect).ok()?;
+    let window_rect = physical_rect(window_rect)?;
+    let mut process_id = 0;
+    GetWindowThreadProcessId(window, Some(&mut process_id));
+    if process_id == 0 {
+        return None;
+    }
+    let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let screen_rect = GetMonitorInfoW(monitor, &mut info)
+        .as_bool()
+        .then(|| physical_rect(info.rcMonitor))
+        .flatten();
+    let anchor = if element
+        .CurrentIsOffscreen()
+        .map(|value| value.as_bool())
+        .unwrap_or(true)
+    {
+        None
+    } else {
+        caret_screen_rect(element).or_else(|| {
+            let rect = physical_rect(element.CurrentBoundingRectangle().ok()?)?;
+            // A whole document is not an insertion point. Large controls use the
+            // original monitor's corner instead of covering the editor itself.
+            let screen = screen_rect?;
+            let width = i64::from(rect.right) - i64::from(rect.left);
+            let height = i64::from(rect.bottom) - i64::from(rect.top);
+            (width > 0 && height * 2 < i64::from(screen.bottom) - i64::from(screen.top))
+                .then_some(rect)
+        })
+    };
+    Some(AnchorSnapshot {
+        window: window.0 as usize,
+        process_id,
+        window_rect,
+        anchor,
+        screen_rect,
+        captured_at: Instant::now(),
+    })
+}
+
+unsafe fn composition_blocks(element: &IUIAutomationElement) -> bool {
+    // windows-rs 0.58 maps a successful null interface to Error::empty()
+    // (HRESULT 0). Actual provider failures are not evidence of an idle IME.
+    match element.GetCurrentPatternAs::<IUIAutomationTextEditPattern>(UIA_TextEditPatternId) {
+        Ok(pattern) => match pattern.GetActiveComposition() {
+            Ok(_) => true,
+            Err(error) => error.code().0 != 0,
+        },
+        Err(error) => error.code().0 != 0 && error.code().0 as u32 != UIA_E_NOTSUPPORTED,
+    }
+}
+
 unsafe fn observe(request: &Request) -> Result<()> {
+    if !crate::selection::selection_insertion_target_is_current(&request.target) {
+        return Ok(());
+    }
     let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
     let timeouts: IUIAutomation2 = uia.cast()?;
     timeouts.SetConnectionTimeout(200)?;
@@ -535,9 +728,13 @@ unsafe fn observe(request: &Request) -> Result<()> {
     if element.CurrentIsPassword()?.as_bool() || !allowed_process(&element)? {
         return Ok(());
     }
-    let active = || -> Result<bool> {
-        Ok(!request.stop.load(Ordering::Acquire)
+    let target_is_current = || {
+        !request.stop.load(Ordering::Acquire)
+            && crate::selection::selection_insertion_target_is_current(&request.target)
             && GetForegroundWindow() == HWND(request.window as *mut _)
+    };
+    let active = || -> Result<bool> {
+        Ok(target_is_current()
             && !element.CurrentIsPassword()?.as_bool()
             && uia
                 .CompareElements(&element, &uia.GetFocusedElement()?)?
@@ -559,6 +756,11 @@ unsafe fn observe(request: &Request) -> Result<()> {
     }
     .into();
     let property: IUIAutomationPropertyChangedEventHandler = handler.cast()?;
+    let focus: IUIAutomationFocusChangedEventHandler = handler.cast()?;
+    let finalized: IUIAutomationTextEditTextChangedEventHandler = handler.cast()?;
+    let text_edit_uia: IUIAutomation3 = uia.cast()?;
+    // Guard the last COM query against a focus switch inside the same HWND.
+    uia.AddFocusChangedEventHandler(None, &focus)?;
     let text_registered = uia
         .AddAutomationEventHandler(
             UIA_Text_TextChangedEventId,
@@ -577,26 +779,63 @@ unsafe fn observe(request: &Request) -> Result<()> {
             &[UIA_ValueValuePropertyId],
         )
         .is_ok();
-    if !text_registered && !value_registered {
-        return Ok(());
-    }
+    let finalized_registered = text_edit_uia
+        .AddTextEditTextChangedEventHandler(
+            &element,
+            TreeScope_Element,
+            TextEditChangeType_CompositionFinalized,
+            None,
+            &finalized,
+        )
+        .is_ok();
     // Always unregister, including provider errors and opt-out. Late callbacks
     // only retain their own dirty flag; no host text or Core sink is accessible.
     let result = (|| -> Result<()> {
-        let mut changed_at = Some(Instant::now());
+        if !has_edit_events(text_registered, value_registered, finalized_registered) {
+            return Ok(());
+        }
+        let mut settle = EditSettle::new(Instant::now());
         while started.elapsed() < request.lifetime && active()? {
             if dirty.swap(false, Ordering::AcqRel) {
-                changed_at = Some(Instant::now());
+                settle.mark_changed(Instant::now());
             }
-            if changed_at.is_some_and(|at| at.elapsed() >= Duration::from_millis(700)) {
-                changed_at = None;
+            if settle.should_probe() {
+                let composing = composition_blocks(&element);
+                settle.observe_composition(composing, Instant::now());
+            }
+            if settle.ready(Instant::now()) && !dirty.load(Ordering::Acquire) && active()? {
                 let current = read_text(&element)?;
-                if !active()?
-                    || !anchor.observe(&current, |edit| {
-                        !request.stop.load(Ordering::Acquire) && (request.callback)(edit)
-                    })
-                {
+                let composing = composition_blocks(&element);
+                settle.observe_composition(composing, Instant::now());
+                if started.elapsed() >= request.lifetime || !active()? {
                     break;
+                }
+                // An IME can commit between the text read and the composition
+                // check, with its finalization event still in flight.
+                if settle.ready(Instant::now())
+                    && !dirty.load(Ordering::Acquire)
+                    && settle.confirm_snapshot(&current, &read_text(&element)?, Instant::now())
+                    && !dirty.load(Ordering::Acquire)
+                {
+                    settle.clear();
+                    if !anchor.observe(&current, |edit| {
+                        let snapshot = capture_placement(&element, HWND(request.window as *mut _));
+                        can_publish(
+                            || active().unwrap_or(false),
+                            || {
+                                let composing = composition_blocks(&element);
+                                settle.observe_composition(composing, Instant::now());
+                                composing
+                            },
+                            || {
+                                target_is_current()
+                                    && started.elapsed() < request.lifetime
+                                    && !dirty.load(Ordering::Acquire)
+                            },
+                        ) && (request.callback)(edit, snapshot)
+                    }) {
+                        break;
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -609,6 +848,10 @@ unsafe fn observe(request: &Request) -> Result<()> {
     if value_registered {
         let _ = uia.RemovePropertyChangedEventHandler(&element, &property);
     }
+    if finalized_registered {
+        let _ = text_edit_uia.RemoveTextEditTextChangedEventHandler(&element, &finalized);
+    }
+    let _ = uia.RemoveFocusChangedEventHandler(&focus);
     result
 }
 

@@ -116,6 +116,10 @@ pub struct OpenAICompatibleConfig {
     /// allowlist checks, but the official OpenAI channel skips ordinary chat models known
     /// not to support reasoning_effort.
     pub thinking_enabled: bool,
+    /// One-call normalized effort selected by the post-ASR strategy, if any.
+    pub reasoning_effort: Option<String>,
+    /// One-call token cap selected by the post-ASR strategy.
+    pub max_tokens_override: Option<u32>,
 }
 
 impl OpenAICompatibleConfig {
@@ -143,11 +147,23 @@ impl OpenAICompatibleConfig {
             temperature,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
+            reasoning_effort: None,
+            max_tokens_override: None,
         }
     }
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.thinking_enabled = enabled;
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_max_tokens_override(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_tokens_override = max_tokens;
         self
     }
 
@@ -518,7 +534,11 @@ impl ActiveLLMProvider {
     }
 }
 
+pub type LlmUsageObserver =
+    std::sync::Arc<dyn Fn(uuid::Uuid, crate::usage_ledger::ReportedTokens) + Send + Sync>;
+
 pub struct OpenAICompatibleLLMProvider {
+    qa_web_search: bool,
     config: OpenAICompatibleConfig,
     siwc_access: Option<std::sync::Arc<crate::siwc::SiwcAccess>>,
     dictation_session_id: Option<crate::types::SessionId>,
@@ -531,6 +551,7 @@ pub struct OpenAICompatibleLLMProvider {
     /// connection pool — a fresh TLS handshake on every polish, exactly the cost that
     /// cache exists to avoid. A constant cap keeps the cache key single.
     polish_client: reqwest::Client,
+    usage_observer: Option<LlmUsageObserver>,
 }
 
 impl OpenAICompatibleLLMProvider {
@@ -550,9 +571,54 @@ impl OpenAICompatibleLLMProvider {
             });
         Self {
             config,
+            qa_web_search: false,
             dictation_session_id: None,
             siwc_access: None,
             polish_client,
+            usage_observer: None,
+        }
+    }
+
+    pub(crate) fn configure_qa_web_search(&mut self, enabled: bool) -> bool {
+        self.qa_web_search = enabled
+            && self.config.protocol.format == LlmRequestFormat::ChatCompletions
+            && crate::web_search::native_deepseek(&self.config.base_url, &self.config.model);
+        self.qa_web_search
+    }
+
+    /// The observer must return promptly and receives no request text.
+    pub fn with_usage_observer(mut self, observer: LlmUsageObserver) -> Self {
+        self.usage_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn set_usage_observer(&mut self, observer: LlmUsageObserver) {
+        self.usage_observer = Some(observer);
+    }
+
+    pub(crate) fn usage_metadata(&self) -> (String, String) {
+        let protocol = match self.config.protocol.format {
+            LlmRequestFormat::ChatCompletions => "chat_completions",
+            LlmRequestFormat::Responses => "responses",
+            LlmRequestFormat::Messages => "messages",
+        };
+        (
+            crate::prompt_cache::service_id(&self.config.base_url).into(),
+            protocol.into(),
+        )
+    }
+
+    fn report_usage(&self, request_id: uuid::Uuid, usage: crate::usage_ledger::ReportedTokens) {
+        if usage != crate::usage_ledger::ReportedTokens::default() {
+            if let Some(observer) = &self.usage_observer {
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    observer(request_id, usage)
+                }))
+                .is_err()
+                {
+                    log::warn!("usage observer panicked");
+                }
+            }
         }
     }
 
@@ -826,13 +892,25 @@ impl OpenAICompatibleLLMProvider {
 
     fn chat_body(&self, stream: bool, messages: Vec<Value>) -> Value {
         if self.config.protocol.format != LlmRequestFormat::ChatCompletions {
-            return crate::llm_protocol::request_body(&self.config, stream, messages);
+            let mut body = crate::llm_protocol::request_body(&self.config, stream, messages);
+            crate::prompt_cache::apply(&self.config, &mut body);
+            return body;
         }
         let mut body = json!({
             "model": self.config.model,
             "stream": stream,
             "messages": messages,
         });
+        if self.qa_web_search {
+            body["tools"] = json!([{"type":"deepseek_web_search"}, {"type":"deepseek_read_url"}]);
+            body["safety_check"] = json!({"level":"high"});
+        }
+        if stream
+            && self.usage_observer.is_some()
+            && crate::prompt_cache::supports_usage(&self.config)
+        {
+            body["stream_options"] = json!({"include_usage": true});
+        }
         if let Some(temperature) = self.config.temperature {
             // OpenAI 官方 gpt-5 / gpt-6 系列在 Chat Completions 只接受默认 temperature=1，
             // 传 0.3 会被 400 拒绝（issue #857 / #1101）。官方渠道的这些模型不下发该字段，
@@ -843,16 +921,28 @@ impl OpenAICompatibleLLMProvider {
                 body["temperature"] = temperature_json(temperature);
             }
         }
-        apply_openai_compatible_thinking_control(
+        if let Some(max_tokens) = self.config.max_tokens_override {
+            let field = if self.config.provider_id.trim() == "openai"
+                && openai_model_uses_max_completion_tokens(&self.config.model)
+            {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[field] = json!(max_tokens);
+        }
+        apply_openai_compatible_thinking_control_with_effort(
             &mut body,
             &self.config.provider_id,
             &self.config.base_url,
             &self.config.model,
             self.config.thinking_enabled,
+            self.config.reasoning_effort.as_deref(),
         );
         self.config
             .protocol
             .apply_service_tier(&self.config.provider_id, &mut body);
+        crate::prompt_cache::apply(&self.config, &mut body);
         body
     }
 
@@ -919,7 +1009,7 @@ impl OpenAICompatibleLLMProvider {
             })
             .map_err(|error| LLMError::ParseError(error.message))?;
         let request = self
-            .authorize(self.polish_client.post(url))
+            .authorize(self.polish_client.post(url), body)
             .header("Content-Type", "application/json")
             .json(body);
 
@@ -942,6 +1032,14 @@ impl OpenAICompatibleLLMProvider {
                 status: status.as_u16(),
                 body: preview.to_string(),
             });
+        }
+
+        if self.usage_observer.is_some() {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                if let Some(usage) = crate::usage_ledger::ReportedTokens::from_response(&value) {
+                    self.report_usage(request_id, usage);
+                }
+            }
         }
 
         let extracted =
@@ -1043,7 +1141,7 @@ impl OpenAICompatibleLLMProvider {
             self.config.protocol.format
         );
         let request = self
-            .authorize(self.polish_client.post(&url))
+            .authorize(self.polish_client.post(&url), &body)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&body);
@@ -1128,6 +1226,7 @@ impl OpenAICompatibleLLMProvider {
         if !cancelled {
             events.finish()?;
         }
+        self.report_usage(request_id, events.reported_tokens());
         let cleaned = clean_polish_output(&full_text);
         log::info!(
             "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
@@ -1150,12 +1249,26 @@ impl OpenAICompatibleLLMProvider {
         Ok(full_text)
     }
 
-    fn authorize(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn authorize(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        body: &Value,
+    ) -> reqwest::RequestBuilder {
         for (name, value) in self.config.protocol.format.headers(&self.config.api_key) {
             request = request.header(name, value);
         }
         for (name, value) in &self.config.extra_headers {
             request = request.header(name, value);
+        }
+        if let Some((name, value)) = crate::prompt_cache::routing_header(&self.config, body) {
+            if !self
+                .config
+                .extra_headers
+                .keys()
+                .any(|configured| configured.eq_ignore_ascii_case(name))
+            {
+                request = request.header(name, value);
+            }
         }
         request
     }
@@ -1167,6 +1280,8 @@ pub struct CodexOAuthConfig {
     pub model: String,
     pub auth_path: Option<PathBuf>,
     pub reasoning_effort: Option<String>,
+    /// Requested strategy limit; omitted because the Codex endpoint rejects it.
+    pub max_output_tokens: Option<u32>,
     pub text_verbosity: Option<String>,
     pub request_timeout_secs: u64,
 }
@@ -1178,6 +1293,7 @@ impl CodexOAuthConfig {
             model: normalize_codex_model(model.into().as_str()),
             auth_path: None,
             reasoning_effort: Some("medium".to_string()),
+            max_output_tokens: None,
             text_verbosity: Some("medium".to_string()),
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         }
@@ -1195,6 +1311,16 @@ impl CodexOAuthConfig {
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.reasoning_effort = Some(if enabled { "medium" } else { "low" }.to_string());
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_tokens;
         self
     }
 }
@@ -1352,15 +1478,12 @@ impl CodexOAuthLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let mut system_prompt = prompts::qa_system_prompt();
-        if let Some(premise) = context_premise(
+        let system_prompt = compose_qa_system_prompt(
             working_languages,
             chinese_script_preference,
             output_language_preference,
             front_app,
-        ) {
-            system_prompt = format!("{}\n\n{}", premise, system_prompt);
-        }
+        );
 
         let mut request_messages = Vec::with_capacity(messages.len() + 1);
         request_messages.push(json!({ "role": "system", "content": system_prompt }));
@@ -1469,6 +1592,14 @@ impl CodexOAuthLLMProvider {
         });
         if let Some(effort) = self.config.reasoning_effort.as_deref() {
             body["reasoning"] = json!({ "effort": effort });
+        }
+        if let Some(max_tokens) = self.config.max_output_tokens {
+            // The subscription endpoint accepts a subset of Responses fields;
+            // unlike the public API, it rejects max_output_tokens with HTTP 400.
+            log::debug!(
+                "[llm] omitting unsupported Codex strategy maxTokens={}",
+                max_tokens
+            );
         }
         if let Some(verbosity) = self.config.text_verbosity.as_deref() {
             body["text"] = json!({ "verbosity": verbosity });
@@ -1947,13 +2078,23 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn apply_openai_compatible_thinking_control(
+pub(crate) fn apply_openai_compatible_thinking_control_with_effort(
     body: &mut Value,
     provider_id: &str,
     base_url: &str,
     model: &str,
     thinking_enabled: bool,
+    override_effort: Option<&str>,
 ) {
+    // Providers with boolean thinking controls cannot represent four effort
+    // levels, but the strategy still needs to be able to enable or disable
+    // thinking for this request. Preserve the exact effort only in the
+    // provider-specific fields that support it; map low/medium/high to enabled
+    // for boolean controls.
+    let base_thinking_enabled = thinking_enabled;
+    let thinking_enabled = override_effort
+        .map(|effort| effort != "none")
+        .unwrap_or(thinking_enabled);
     if provider_id.trim() == "tencentTokenHub" {
         apply_tokenhub_chat_thinking_control(body, model, thinking_enabled);
         return;
@@ -1983,10 +2124,51 @@ pub(crate) fn apply_openai_compatible_thinking_control(
             // Official OpenAI Chat Completions only accepts reasoning_effort on the
             // reasoning model families; ordinary chat models get a plain 400. Other
             // compatible channels keep sending it as declared per channel.
-            let effort = if provider_id.trim() == "openai" {
-                openai_chat_reasoning_effort(model, thinking_enabled)
+            let effort = if let Some(override_effort) = override_effort {
+                if provider_id.trim() == "openai" {
+                    if openai_model_is_gpt5_pro(model) {
+                        if override_effort != "high" {
+                            log::debug!(
+                                "[llm] preserving gpt-5-pro high reasoning effort instead of unsupported strategy effort={}",
+                                override_effort
+                            );
+                        }
+                        Some("high")
+                    } else if openai_model_supports_reasoning_effort(model, override_effort) {
+                        Some(override_effort)
+                    } else {
+                        log::debug!(
+                            "[llm] omitting unsupported strategy reasoning_effort provider={} model={} effort={}",
+                            provider_id,
+                            model,
+                            override_effort
+                        );
+                        openai_chat_reasoning_effort(model, base_thinking_enabled)
+                    }
+                } else if override_effort == "none" {
+                    // StepFun and other compatible reasoning-effort providers do
+                    // not accept `none`; preserve the channel's existing tier.
+                    log::debug!(
+                        "[llm] preserving configured reasoning effort for unsupported strategy effort=none provider={} model={}",
+                        provider_id,
+                        model
+                    );
+                    Some(if base_thinking_enabled {
+                        "medium"
+                    } else {
+                        "low"
+                    })
+                } else {
+                    Some(override_effort)
+                }
+            } else if provider_id.trim() == "openai" {
+                openai_chat_reasoning_effort(model, base_thinking_enabled)
             } else {
-                Some(if thinking_enabled { "medium" } else { "low" })
+                Some(if base_thinking_enabled {
+                    "medium"
+                } else {
+                    "low"
+                })
             };
             if let Some(effort) = effort {
                 body["reasoning_effort"] = json!(effort);
@@ -1997,7 +2179,7 @@ pub(crate) fn apply_openai_compatible_thinking_control(
         }
         Some(ThinkingControl::OpenRouterReasoning) => {
             body["reasoning"] = json!({
-                "effort": if thinking_enabled { "medium" } else { "none" },
+                "effort": override_effort.unwrap_or(if thinking_enabled { "medium" } else { "none" }),
                 // OpenLess QA/polish output only shows the final answer; reasoning
                 // content, even if generated, must not reach the UI.
                 "exclude": true,
@@ -2194,6 +2376,33 @@ fn openai_model_supports_none_reasoning_effort(model: &str) -> bool {
     ]
     .iter()
     .any(|family| openai_model_matches_family(model, family))
+}
+
+pub(crate) fn openai_model_is_gpt5_pro(model: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    normalized.starts_with("gpt-5-pro")
+        || normalized.starts_with("gpt-5.") && normalized.contains("-pro")
+}
+
+pub(crate) fn openai_model_uses_max_completion_tokens(model: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
+}
+
+fn openai_model_supports_reasoning_effort(model: &str, effort: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    if effort == "none" {
+        return openai_model_supports_none_reasoning_effort(&normalized);
+    }
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
 }
 
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
@@ -2506,6 +2715,221 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_reports_explicit_streaming_usage_without_changing_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let events = b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":21,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n";
+            write_chunked_sse_response(&mut stream, &[events]);
+        });
+        let observed = std::sync::Arc::new(StdMutex::new(Vec::new()));
+        let output = observed.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{address}"),
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |id, usage| {
+            output.lock().unwrap().push((id, usage))
+        }));
+        let text = provider
+            .chat_completion_messages_streaming(
+                vec![serde_json::json!({"role":"user","content":"private text"})],
+                StreamingTimeouts {
+                    first_token: Duration::from_secs(2),
+                    idle: Duration::from_secs(2),
+                },
+                |_| {},
+                || false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(text, "hello");
+        let observations = observed.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1.input, Some(21));
+        assert_eq!(observations[0].1.output, Some(4));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_reports_explicit_non_streaming_usage() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let body = r#"{"choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":33,"completion_tokens":6}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let observed = std::sync::Arc::new(StdMutex::new(Vec::new()));
+        let output = observed.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{address}"),
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |id, usage| {
+            output.lock().unwrap().push((id, usage))
+        }));
+        assert_eq!(
+            provider
+                .chat_completion("system", "private text", Duration::from_secs(2))
+                .await
+                .unwrap(),
+            "hello"
+        );
+        let observations = observed.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1.input, Some(33));
+        assert_eq!(observations[0].1.output, Some(6));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn usage_observer_panic_does_not_escape_provider() {
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "http://127.0.0.1:1",
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(|_, _| panic!("fixture observer")));
+        provider.report_usage(
+            uuid::Uuid::new_v4(),
+            crate::usage_ledger::ReportedTokens {
+                input: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn missing_provider_usage_does_not_emit_zero_counts() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let captured = calls.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "http://127.0.0.1:1",
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |_, _| {
+            captured.fetch_add(1, Ordering::Relaxed);
+        }));
+        provider.report_usage(uuid::Uuid::new_v4(), Default::default());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn usage_stream_option_is_limited_to_verified_chat_services() {
+        let observer: LlmUsageObserver = std::sync::Arc::new(|_, _| {});
+        let official = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1",
+            "",
+            "gpt-4o-mini",
+        ))
+        .with_usage_observer(observer.clone());
+        assert_eq!(
+            official.chat_body(true, vec![])["stream_options"]["include_usage"],
+            true
+        );
+        assert!(official
+            .chat_body(false, vec![])
+            .get("stream_options")
+            .is_none());
+        let proxy = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "openai",
+            "Proxy",
+            "https://proxy.example/v1",
+            "",
+            "gpt-4o-mini",
+        ))
+        .with_usage_observer(observer);
+        assert!(proxy
+            .chat_body(true, vec![])
+            .get("stream_options")
+            .is_none());
+    }
+
+    #[test]
+    fn cache_policy_survives_protocol_conversion_and_header_authorization() {
+        let messages = vec![
+            json!({"role": "system", "content": "fixed rules\n\n# 上下文\nApp A"}),
+            json!({"role": "user", "content": "unique input"}),
+        ];
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "Official",
+            "https://api.anthropic.com/v1",
+            "test",
+            "claude-sonnet-4-6",
+        );
+        config.protocol.format = LlmRequestFormat::Messages;
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages.clone());
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["system"][1]["text"], "\n\n# 上下文\nApp A");
+        assert_eq!(body["messages"][0]["content"], "unique input");
+
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "Official",
+            "https://api.openai.com/v1",
+            "test",
+            "gpt-6.1",
+        );
+        config.protocol.format = LlmRequestFormat::Responses;
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages.clone());
+        assert_eq!(body["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert_eq!(body["store"], false);
+        assert_eq!(body["input"][1]["content"], "unique input");
+
+        let mut config = OpenAICompatibleConfig::new(
+            "ark",
+            "Ark",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "test",
+            "doubao-seed-2-1-pro-260628",
+        );
+        config
+            .extra_headers
+            .insert("x-prompt-cache-id".into(), "user-affinity".into());
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages);
+        let request = provider
+            .authorize(
+                provider
+                    .polish_client
+                    .post("https://ark.cn-beijing.volces.com/api/v3/chat/completions"),
+                &body,
+            )
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()["x-prompt-cache-id"], "user-affinity");
+        assert_eq!(
+            request
+                .headers()
+                .get_all("x-prompt-cache-id")
+                .iter()
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn polish_streaming_handles_multibyte_split_in_http_chunk() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2552,6 +2976,25 @@ mod tests {
         assert_eq!(output, "你🙂好");
         assert_eq!(*deltas.lock().unwrap(), "你🙂好");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn deepseek_search_is_scoped_to_qa_and_supported_endpoints() {
+        let mut provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek",
+            "https://api.deepseek.com/v1",
+            "key",
+            "deepseek-flash",
+        ));
+        assert!(provider.chat_body(true, vec![]).get("tools").is_none());
+        assert!(provider.configure_qa_web_search(true));
+        let body = provider.chat_body(true, vec![]);
+        assert_eq!(body["tools"][0]["type"], "deepseek_web_search");
+        assert_eq!(body["safety_check"]["level"], "high");
+        provider.config.model = "deepseek-v4-flash".into();
+        assert!(!provider.configure_qa_web_search(true));
+        assert!(provider.chat_body(true, vec![]).get("tools").is_none());
     }
 
     #[tokio::test]
@@ -3921,6 +4364,57 @@ mod tests {
     }
 
     #[test]
+    fn strategy_max_tokens_uses_completion_field_for_openai_reasoning_models() {
+        for model in ["o1", "o3-mini", "o4-mini", "gpt-5-mini", "gpt-6"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    model,
+                )
+                .with_max_tokens_override(Some(321)),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["max_completion_tokens"], 321, "{model}");
+            assert!(body.get("max_tokens").is_none(), "{model}");
+        }
+
+        let custom = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://example.test/v1",
+                "k",
+                "o3-mini",
+            )
+            .with_max_tokens_override(Some(321)),
+        );
+        let body = custom.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+        assert_eq!(body["max_tokens"], 321);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_preserves_gpt5_pro_high_capability() {
+        for effort in ["none", "low", "medium", "high"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    "gpt-5-pro",
+                )
+                .with_reasoning_effort(Some(effort.to_string())),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["reasoning_effort"], "high", "{effort}");
+        }
+    }
+
+    #[test]
     fn openai_chat_body_lowers_reasoning_when_disabled_for_channel() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "codingPlanX",
@@ -3970,6 +4464,25 @@ mod tests {
     }
 
     #[test]
+    fn strategy_reasoning_effort_overrides_openrouter_default() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "openrouterFree",
+                "OpenRouter",
+                "https://openrouter.ai/api/v1",
+                "k",
+                "openai/gpt-5-mini",
+            )
+            .with_reasoning_effort(Some("high".into())),
+        );
+
+        let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["reasoning"]["exclude"], true);
+    }
+
+    #[test]
     fn openai_chat_body_adds_openrouter_reasoning_by_channel_not_model() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "openrouterFree",
@@ -3998,6 +4511,111 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_boolean_thinking_presets() {
+        let body = |provider_id: &str, endpoint: &str, model: &str, effort: &str| -> Value {
+            OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(provider_id, provider_id, endpoint, "k", model)
+                    .with_reasoning_effort(Some(effort.to_string())),
+            )
+            .chat_body(false, vec![json!({ "role": "user", "content": "hi" })])
+        };
+
+        assert_eq!(
+            body(
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                "deepseek-chat",
+                "high"
+            )["thinking"]["type"],
+            "enabled"
+        );
+        assert_eq!(
+            body(
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                "deepseek-chat",
+                "none"
+            )["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(
+            body(
+                "alibabaCoding",
+                "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "qwen3-coder",
+                "medium",
+            )["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            body(
+                "alibabaCoding",
+                "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "qwen3-coder",
+                "none",
+            )["enable_thinking"],
+            false
+        );
+        assert_eq!(
+            body(
+                "minimax",
+                "https://api.minimaxi.com/v1",
+                "MiniMax-M3",
+                "low"
+            )["thinking"]["type"],
+            "adaptive"
+        );
+        assert_eq!(
+            body(
+                "minimax",
+                "https://api.minimaxi.com/v1",
+                "MiniMax-M3",
+                "none"
+            )["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(
+            body("lmstudio", "http://localhost:1234/v1", "model", "high")["chat_template_kwargs"]
+                ["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            body("lmstudio", "http://localhost:1234/v1", "model", "none")["chat_template_kwargs"]
+                ["enable_thinking"],
+            false
+        );
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_tokenhub_thinking() {
+        let body = |model: &str, effort: &str| {
+            OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "tencentTokenHub",
+                    "Tencent TokenHub",
+                    "https://tokenhub.tencentmaas.com/v1",
+                    "k",
+                    model,
+                )
+                .with_reasoning_effort(Some(effort.to_string())),
+            )
+            .chat_body(false, vec![json!({ "role": "user", "content": "hi" })])
+        };
+
+        assert_eq!(
+            body("deepseek-v4-pro", "high")["thinking"]["type"],
+            "enabled"
+        );
+        assert_eq!(
+            body("deepseek-v4-pro", "none")["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(body("qwen3.5-plus", "low")["enable_thinking"], true);
+        assert_eq!(body("qwen3.5-plus", "none")["enable_thinking"], false);
+        assert_eq!(body("kimi-k3", "none").get("reasoning_effort"), None);
     }
 
     #[test]
@@ -4187,6 +4805,25 @@ mod tests {
 
             assert_eq!(body["reasoning_effort"], expected);
         }
+    }
+
+    #[test]
+    fn strategy_none_preserves_stepfun_reasoning_capability() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "stepfun",
+                "StepFun",
+                "https://api.stepfun.com/v1",
+                "k",
+                "step-3.7-flash",
+            )
+            .with_thinking_enabled(true)
+            .with_reasoning_effort(Some("none".into())),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning_effort"], "medium");
     }
 
     #[test]
@@ -4515,14 +5152,14 @@ mod tests {
         let mut expected = compose_system_prompt(&prompts::system_prompt(PolishMode::Light), &[]);
         expected = format!(
             "{}\n\n{}",
+            expected,
             context_premise(
                 &["中文".to_string()],
                 ChineseScriptPreference::Auto,
                 OutputLanguagePreference::Auto,
                 Some("Notes (com.apple.Notes)"),
             )
-            .unwrap(),
-            expected
+            .unwrap()
         );
         expected = format!("{}\n\n{}", expected, prompts::polish_injection_defense());
         assert_eq!(without, expected);
@@ -4849,6 +5486,13 @@ mod tests {
     }
 
     #[test]
+    fn codex_oauth_config_omits_unsupported_none_reasoning() {
+        let config = CodexOAuthConfig::new("gpt-5.5").with_reasoning_effort(None);
+
+        assert_eq!(config.reasoning_effort, None);
+    }
+
+    #[test]
     fn codex_oauth_config_lowers_reasoning_when_thinking_disabled() {
         let config = CodexOAuthConfig::new("gpt-5.5").with_thinking_enabled(false);
 
@@ -4856,7 +5500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_oauth_provider_streams_text_from_codex_responses() {
+    async fn codex_oauth_provider_omits_unsupported_token_limit_and_streams_text() {
         let auth_path = write_codex_auth_fixture("acct-openless", unix_now_secs() + 3600);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -4876,6 +5520,7 @@ mod tests {
             assert!(request_text.contains(r#""role":"developer"#));
             assert!(request_text.contains(r#""type":"input_text"#));
             assert!(request_text.contains(r#""reasoning":{"effort":"medium"}"#));
+            assert!(!request_text.contains(r#""max_output_tokens":"#));
             assert!(!request_text.contains(r#""temperature":"#));
 
             let body = concat!(
@@ -4893,7 +5538,8 @@ mod tests {
         let provider = CodexOAuthLLMProvider::new(
             CodexOAuthConfig::new("gpt-5.5")
                 .with_base_url(format!("http://{}", addr))
-                .with_auth_path(auth_path.clone()),
+                .with_auth_path(auth_path.clone())
+                .with_max_output_tokens(Some(321)),
         );
         let deltas = StdMutex::new(String::new());
         let output = provider

@@ -1,0 +1,163 @@
+/* The unscaled viewport anchors the stack; each card is painted at the interface scale. */
+.ol-notification-center {
+  position: absolute;
+  inset: 0 0 0;
+  z-index: var(--ol-layer-notification, 1400);
+  display: flex;
+  justify-content: center;
+  overflow: clip;
+  pointer-events: none;
+}
+.ol-notification-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: max(8px, env(safe-area-inset-top, 0px)) 14px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  zoom: var(--ol-interface-scale, 1);
+}
+.ol-notification-stack > * {
+  flex-shrink: 0;
+}
+.ol-notification-card {
+  display: grid;
+  /* Count the icon and control widths in the intrinsic size, even under zoom. */
+  grid-template-columns: 16px minmax(0, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, auto);
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 8px;
+  background: var(--ol-surface-raised);
+  color: var(--ol-ink);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 5%);
+}
+.ol-notification-card[data-variant='alert'] {
+  --ol-notice-alert: var(--ol-err);
+  border-color: color-mix(in srgb, var(--ol-notice-alert) 50%, transparent);
+  color: var(--ol-notice-alert);
+}
+.ol-notification-card[data-severity='warning'] {
+  --ol-notice-alert: var(--ol-warn);
+}
+.ol-notification-card[data-severity='error'] .ol-notification-icon {
+  background: #e00000;
+  color: #ffffff;
+}
+.ol-notification-card[data-severity='warning'] .ol-notification-icon {
+  background: var(--ol-warn);
+  color: var(--ol-surface);
+}
+
+.ol-notification-card--progress {
+  width: min(320px, 100%);
+}
+.ol-notification-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+.ol-notification-progress {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ol-line);
+}
+.ol-notification-progress-value {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ol-accent-solid-bg);
+  animation: ol-notification-indeterminate 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes ol-notification-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+.ol-notification-icon {
+  display: grid;
+  place-items: center;
+  height: 16px;
+  border-radius: 5px;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+}
+.ol-notification-icon--saved {
+  background: var(--ol-accent-solid-bg);
+  color: var(--ol-accent-solid-ink);
+}
+.ol-notification-icon--failed,
+.ol-notification-icon--deleted {
+  /* Pure red reads as a destructive result; the theme's soft error tint looked
+     pink/orange on the raised toast surface. */
+  background: #e00000;
+}
+.ol-notification-icon--saving {
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-3);
+}
+.ol-notification-icon--info {
+  background: var(--ol-blue-soft);
+  color: var(--ol-blue);
+}
+.ol-notification-message,
+.ol-notification-description {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.ol-notification-description {
+  margin-top: 2px;
+  color: inherit;
+}
+.ol-notification-action {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 12px;
+  color: var(--ol-blue);
+  font-weight: 600;
+}
+.ol-notification-close {
+  align-self: flex-start;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ol-ink-3);
+}
+
+.ol-notification-card:not([aria-hidden]) {
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-notification-progress-value {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
+}

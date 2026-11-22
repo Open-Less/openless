@@ -1,0 +1,177 @@
+/* Compact geometry with a theme-aware frosted surface and readable blue controls. */
+.ol-default-capsule {
+  position: relative;
+  height: 32px;
+  flex: 0 0 auto;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 999px;
+  color-scheme: var(--ol-pill-scheme);
+  color: var(--ol-pill-ink);
+  font-family: var(--ol-font-sans);
+  box-shadow: 0 3px 10px var(--ol-pill-shadow);
+  transform-origin: center bottom;
+}
+.ol-default-capsule::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--ol-pill-fill);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 var(--ol-pill-highlight);
+  border: 1px solid var(--ol-pill-border);
+  border-radius: inherit;
+}
+.ol-default-capsule::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--ol-pill-sweep);
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+.ol-default-capsule[data-processing='true']::after {
+  animation: ol-capsule-sweep 2.4s linear infinite;
+}
+/* Reference processing fill travels left→right; it is not a pulsing spinner. */
+@keyframes ol-capsule-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  85%,
+  100% {
+    transform: translateX(0);
+  }
+}
+.ol-default-capsule[data-translation='true']::before {
+  box-shadow: inset 0 4px 7px -3px rgb(37 99 235 / 65%);
+}
+.ol-default-recording {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 116px;
+  height: 32px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 90ms linear 60ms;
+}
+.ol-default-recording[aria-hidden='true'] {
+  opacity: 0;
+  pointer-events: none;
+}
+.ol-default-action {
+  position: absolute;
+  top: 4px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ol-pill-cancel);
+  color: var(--ol-pill-cancel-ink);
+  cursor: pointer;
+  transition:
+    opacity 80ms linear,
+    background-color 100ms ease;
+}
+.ol-default-cancel {
+  left: 4px;
+}
+.ol-default-confirm {
+  right: 4px;
+  color: #fff;
+  background: var(--ol-pill-confirm);
+}
+.ol-default-action[aria-hidden='true'] {
+  opacity: 0;
+  pointer-events: none;
+}
+.ol-default-capsule[data-processing='true'] .ol-default-action {
+  transition-delay: 50ms;
+}
+.ol-default-action:focus-visible,
+.ol-default-processing-cancel:focus-visible {
+  outline: 2px solid var(--ol-pill-ink);
+  outline-offset: -2px;
+}
+.ol-default-action:active:not(:disabled) {
+  scale: 0.92;
+}
+@media (hover: hover) and (pointer: fine) {
+  .ol-default-cancel:hover:not(:disabled) {
+    background: var(--ol-pill-cancel-hover);
+  }
+  .ol-default-confirm:hover:not(:disabled) {
+    background: var(--ol-pill-confirm-hover);
+  }
+}
+.ol-default-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  pointer-events: none;
+  font-size: 12px;
+  font-weight: calc(500 + var(--ol-font-weight-offset));
+  opacity: 1;
+  transition: opacity 80ms linear 120ms;
+}
+.ol-default-status[aria-hidden='true'] {
+  opacity: 0;
+  transition-delay: 0ms;
+}
+.ol-default-status > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ol-default-capsule[data-error='true'] .ol-default-status {
+  color: var(--ol-pill-error);
+}
+.ol-default-processing-cancel {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.ol-default-waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 40px;
+  height: 18px;
+}
+.ol-default-waveform > span {
+  width: 1.5px;
+  height: 1.5px;
+  flex: 0 0 1.5px;
+  border-radius: 999px;
+  background: var(--ol-pill-ink);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-default-capsule::after {
+    animation: none !important;
+  }
+  .ol-default-recording,
+  .ol-default-action,
+  .ol-default-status {
+    transition: none;
+  }
+}

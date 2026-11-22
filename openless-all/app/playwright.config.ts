@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { fixtureOrigin, fixturePort, previewOrigin, previewPort } from './e2e/support/server';
 
 export default defineConfig({
   testDir: './e2e',
@@ -9,7 +10,7 @@ export default defineConfig({
   timeout: 30_000,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://127.0.0.1:5325',
+    baseURL: previewOrigin,
     viewport: { width: 1300, height: 835 },
     locale: 'zh-CN',
     colorScheme: 'dark',
@@ -23,15 +24,15 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'npm run preview -- --host 127.0.0.1 --port 5325 --strictPort',
-      url: 'http://127.0.0.1:5325',
-      reuseExistingServer: !process.env.CI,
+      command: `npm run preview -- --host 127.0.0.1 --port ${previewPort} --strictPort`,
+      url: previewOrigin,
+      reuseExistingServer: !process.env.CI && !process.env.OPENLESS_E2E_PREVIEW_PORT,
     },
     // Isolated React fixtures use real source modules, without shipping test routes/hooks.
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 5326 --strictPort',
-      url: 'http://127.0.0.1:5326',
-      reuseExistingServer: !process.env.CI,
+      command: `npm run dev -- --host 127.0.0.1 --port ${fixturePort} --strictPort`,
+      url: fixtureOrigin,
+      reuseExistingServer: !process.env.CI && !process.env.OPENLESS_E2E_FIXTURE_PORT,
     },
   ],
 });

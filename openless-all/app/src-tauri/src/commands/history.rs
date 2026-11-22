@@ -50,6 +50,11 @@ pub fn get_activity_stats(core: CoreState<'_>) -> Vec<ActivityDay> {
         .expect("activity snapshot should only fail after a poisoned lock")
 }
 
+#[tauri::command]
+pub fn get_activity_apps(core: CoreState<'_>, year: u32) -> Result<Vec<(String, u32)>, String> {
+    core.list_activity_apps(year).map_err(|error| error.to_string())
+}
+
 fn recording_path_candidates(session_id: &str) -> Result<[std::path::PathBuf; 2], String> {
     if !is_valid_session_id(session_id) {
         return Err("invalid session id".into());

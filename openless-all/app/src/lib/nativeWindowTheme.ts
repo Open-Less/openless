@@ -1,4 +1,4 @@
-import { detectOS } from '../components/WindowChrome';
+import { getRuntimeOS } from '../runtime/environment';
 import type { ThemeMode } from './types';
 
 let revision = 0;
@@ -7,7 +7,7 @@ let pending: Promise<boolean> = Promise.resolve(false);
 /** macOS appearance is application-wide. Only the main window may change it. */
 export function syncMacOSWindowTheme(preference: ThemeMode): Promise<boolean> {
   if (
-    detectOS() !== 'mac' ||
+    getRuntimeOS() !== 'mac' ||
     (typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent)) ||
     typeof window === 'undefined' ||
     !('__TAURI_INTERNALS__' in window)

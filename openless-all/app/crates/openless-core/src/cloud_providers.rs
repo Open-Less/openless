@@ -58,6 +58,7 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "zhipu",
     "groq",
     "whisper",
+    "deepseek",
     "openrouter",
     "orcarouter",
     "zenmux",
@@ -181,6 +182,7 @@ impl PreparedTranscription for PreparedCloudTranscription {
             Ok(Arc::new(CloudTranscriptionSession {
                 kind,
                 asr_call_label,
+                language: preparation.context.asr.language.clone(),
                 finished: AtomicBool::new(false),
                 task_spawner,
             }) as Arc<dyn TranscriptionSession>)
@@ -207,6 +209,7 @@ enum CloudTranscriptionSessionKind {
 struct CloudTranscriptionSession {
     kind: CloudTranscriptionSessionKind,
     asr_call_label: crate::AsrCallLabel,
+    language: Option<String>,
     finished: AtomicBool,
     task_spawner: Arc<dyn TaskSpawner>,
 }
@@ -270,6 +273,13 @@ impl AudioConsumer for CloudTranscriptionSession {
 impl TranscriptionSession for CloudTranscriptionSession {
     fn asr_call_label(&self) -> Option<crate::AsrCallLabel> {
         Some(self.asr_call_label.clone())
+    }
+
+    fn transcript_metadata(&self) -> crate::ports::TranscriptMetadata {
+        crate::ports::TranscriptMetadata {
+            language: self.language.clone(),
+            confidence: None,
+        }
     }
 
     fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
@@ -422,6 +432,17 @@ async fn read_asr_channel_credentials(
     credentials: &dyn CredentialStore,
     channel_id: &str,
 ) -> Result<HashMap<&'static str, Option<String>>, BackendError> {
+    if channel_id == crate::deepseek_suite::CHANNEL_ID {
+        let config = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        return Ok(HashMap::from([
+            (ASR_API_KEY_ACCOUNT, Some(config.api_key)),
+            (
+                ASR_ENDPOINT_ACCOUNT,
+                Some(crate::deepseek_suite::ENDPOINT.into()),
+            ),
+            (ASR_MODEL_ACCOUNT, Some("deepseek-asr".into())),
+        ]));
+    }
     let mut values = HashMap::new();
     for account in ASR_SNAPSHOT_ACCOUNTS {
         values.insert(
@@ -814,6 +835,9 @@ async fn build_cloud_transcription_session(
                 ),
             )
             .with_request_format(crate::provider_rules::whisper_request_format(provider_type));
+            if provider_type == "deepseek" {
+                provider = provider.with_endpoint_path("/tools/asr");
+            }
             if provider_type == "minimax" {
                 provider = provider.with_endpoint_path("/speech_to_text");
             }
@@ -995,6 +1019,7 @@ fn map_tencent_asr_error(error: TencentCloudASRError) -> BackendError {
 pub struct SharedCloudTextPolisher {
     credentials: Arc<dyn CredentialStore>,
     active: Arc<Mutex<HashMap<SessionId, Arc<ProviderCancellation>>>>,
+    usage_recorder: Option<Arc<crate::usage_ledger::UsageRecorder>>,
 }
 
 impl SharedCloudTextPolisher {
@@ -1002,7 +1027,16 @@ impl SharedCloudTextPolisher {
         Self {
             credentials,
             active: Arc::new(Mutex::new(HashMap::new())),
+            usage_recorder: None,
         }
+    }
+
+    pub fn with_usage_recorder(
+        mut self,
+        recorder: Arc<crate::usage_ledger::UsageRecorder>,
+    ) -> Self {
+        self.usage_recorder = Some(recorder);
+        self
     }
 }
 
@@ -1056,6 +1090,24 @@ enum CloudPolisherProvider {
     Gemini(crate::llm_gemini::GeminiProvider),
 }
 
+fn usage_purpose(context: &DictationContext) -> crate::usage_ledger::ServicePurpose {
+    use crate::dictation_context::DictationOutputTarget;
+    use crate::usage_ledger::ServicePurpose;
+    if context.polish.selection_input {
+        ServicePurpose::Selection
+    } else if context.polish.translation_active {
+        ServicePurpose::Translation
+    } else {
+        match context.output_target {
+            DictationOutputTarget::Qa => ServicePurpose::Question,
+            DictationOutputTarget::QuickNote => ServicePurpose::QuickNote,
+            DictationOutputTarget::VoiceEdit => ServicePurpose::VoiceEdit,
+            DictationOutputTarget::CloudNote => ServicePurpose::CloudNote,
+            _ => ServicePurpose::DictationPostprocess,
+        }
+    }
+}
+
 impl TextPolisher for SharedCloudTextPolisher {
     fn polish(
         &self,
@@ -1087,6 +1139,10 @@ impl TextPolisher for SharedCloudTextPolisher {
             active: Arc::clone(&self.active),
         };
         let credentials = Arc::clone(&self.credentials);
+        let usage_recorder = self.usage_recorder.clone();
+        let usage_generation = usage_recorder
+            .as_ref()
+            .map(|recorder| recorder.generation());
         Box::pin(async move {
             let _registration = registration;
             if raw_text.trim().is_empty() {
@@ -1097,11 +1153,46 @@ impl TextPolisher for SharedCloudTextPolisher {
             }
             let mut provider =
                 build_cloud_polisher_provider(credentials.as_ref(), context.as_ref()).await?;
+            let usage_label = match &provider {
+                CloudPolisherProvider::OpenAi(provider) => Some(provider.call_label()),
+                CloudPolisherProvider::Gemini(_) => None,
+            };
             if let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
                 provider,
             )) = &mut provider
             {
                 provider.set_dictation_session(session_id);
+                if let (Some(recorder), Some(generation), Some(label)) =
+                    (usage_recorder, usage_generation, usage_label)
+                {
+                    let purpose = usage_purpose(&context);
+                    let (service, protocol) = provider.usage_metadata();
+                    let channel =
+                        crate::usage_ledger::sanitized_identifier(&context.llm.provider_id);
+                    provider.set_usage_observer(Arc::new(move |id, usage| {
+                        let record = crate::usage_ledger::UsageRecord {
+                            id,
+                            occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                            kind: crate::usage_ledger::ServiceKind::Llm,
+                            purpose,
+                            outcome: crate::usage_ledger::ServiceOutcome::Unknown,
+                            provider: crate::usage_ledger::sanitized_identifier(&label.provider),
+                            service: crate::usage_ledger::sanitized_identifier(&service),
+                            protocol: crate::usage_ledger::sanitized_identifier(&protocol),
+                            input_accounting: usage.input_accounting,
+                            channel: channel.clone(),
+                            model: crate::usage_ledger::sanitized_identifier(&label.model),
+                            audio_ms: None,
+                            input_tokens: usage.input,
+                            output_tokens: usage.output,
+                            cached_input_tokens: usage.cached_input,
+                            cache_write_input_tokens: usage.cache_write_input,
+                            reasoning_tokens: usage.reasoning,
+                            synthesized_characters: None,
+                        };
+                        let _ = recorder.submit(generation, record);
+                    }));
+                }
             }
             tokio::select! {
                 _ = cancellation.cancelled() => Err(cancelled_provider_error()),
@@ -1396,6 +1487,11 @@ pub(crate) async fn llm_channel_configured(
     provider_type: &str,
     model: Option<&str>,
 ) -> bool {
+    if channel_id == crate::deepseek_suite::CHANNEL_ID {
+        return crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials)
+            .await
+            .is_ok_and(|config| config.configured());
+    }
     let channel_id = channel_id.trim();
     let provider_type = provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
@@ -1452,6 +1548,23 @@ async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<CloudPolisherProvider, BackendError> {
+    if context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+        let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        require_configured(&suite.api_key, "DeepSeek suite API key")?;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek suite",
+            crate::deepseek_suite::ENDPOINT,
+            suite.api_key,
+            crate::deepseek_suite::MODEL,
+        )
+        .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::OpenAI(
+                crate::polish::OpenAICompatibleLLMProvider::new(config),
+            ),
+        ));
+    }
     let channel_id = context.llm.provider_id.trim();
     let provider_type = context.llm.provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
@@ -1492,10 +1605,17 @@ async fn build_cloud_polisher_provider(
         ));
     }
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
-        let provider = crate::polish::CodexOAuthLLMProvider::new(
-            crate::polish::CodexOAuthConfig::new(model)
-                .with_thinking_enabled(context.polish.llm_thinking_enabled),
-        );
+        let mut config = crate::polish::CodexOAuthConfig::new(model)
+            .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        if let Some(effort) = strategy_reasoning_effort(context) {
+            // Codex uses the Responses API, whose effort enum does not accept
+            // `none`; omit that unsupported override rather than sending a
+            // request that the endpoint rejects.
+            let effort = (effort != "none").then_some(effort);
+            config = config.with_reasoning_effort(effort);
+        }
+        config = config.with_max_output_tokens(strategy_max_tokens(context));
+        let provider = crate::polish::CodexOAuthLLMProvider::new(config);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::Codex(provider),
         ));
@@ -1532,17 +1652,22 @@ async fn build_cloud_polisher_provider(
     crate::endpoint_security::validate_http_endpoint(&endpoint)
         .map_err(|error| map_llm_error(error.to_string()))?;
     if provider_type == "gemini" {
-        let provider = crate::llm_gemini::GeminiProvider::new(
+        let thinking_enabled = strategy_thinking_enabled(context);
+        let mut config =
             crate::llm_gemini::GeminiConfig::new(api_key, model, endpoint.trim_end_matches('/'))
-                .with_thinking_enabled(context.polish.llm_thinking_enabled),
-        );
+                .with_thinking_enabled(thinking_enabled)
+                .with_max_output_tokens(strategy_max_tokens(context));
+        if let Some(temperature) = strategy_temperature(context) {
+            config = config.with_temperature(temperature);
+        }
+        let provider = crate::llm_gemini::GeminiProvider::new(config);
         return Ok(CloudPolisherProvider::Gemini(provider));
     }
 
     let protocol =
         crate::llm_protocol::LlmProtocolConfig::load(credentials, channel_id, provider_type)
             .await?;
-    let temperature = read_channel_credential(
+    let configured_temperature = read_channel_credential(
         credentials,
         CredentialNamespace::Llm,
         channel_id,
@@ -1553,6 +1678,17 @@ async fn build_cloud_polisher_provider(
     .map(parse_temperature)
     .transpose()?
     .flatten();
+    let strategy_temperature = context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.temperature());
+    let temperature = strategy_temperature.or_else(|| {
+        crate::polish::openai_compatible_temperature_for_provider(
+            provider_type,
+            configured_temperature,
+        )
+    });
     let extra_headers = read_channel_credential(
         credentials,
         CredentialNamespace::Llm,
@@ -1573,16 +1709,69 @@ async fn build_cloud_polisher_provider(
     )
     .with_protocol(protocol)
     .with_thinking_enabled(context.polish.llm_thinking_enabled)
-    .with_temperature(crate::polish::openai_compatible_temperature_for_provider(
-        provider_type,
-        temperature,
-    ))
+    .with_reasoning_effort(strategy_reasoning_effort(context))
+    .with_max_tokens_override(strategy_max_tokens(context))
+    .with_temperature(temperature)
     .with_extra_headers(extra_headers);
     Ok(CloudPolisherProvider::OpenAi(
         crate::polish::ActiveLLMProvider::OpenAI(crate::polish::OpenAICompatibleLLMProvider::new(
             config,
         )),
     ))
+}
+
+fn strategy_temperature(context: &DictationContext) -> Option<f32> {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.temperature())
+}
+
+fn omni_temperature(
+    context: &DictationContext,
+    provider_type: &str,
+    configured_temperature: Option<f32>,
+) -> Option<f32> {
+    strategy_temperature(context).or_else(|| {
+        crate::polish::openai_compatible_temperature_for_provider(
+            provider_type,
+            configured_temperature,
+        )
+    })
+}
+
+fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.reasoning_effort)
+        .map(|effort| match effort {
+            crate::polish_strategy::ReasoningEffort::None => "none",
+            crate::polish_strategy::ReasoningEffort::Low => "low",
+            crate::polish_strategy::ReasoningEffort::Medium => "medium",
+            crate::polish_strategy::ReasoningEffort::High => "high",
+        })
+        .map(str::to_string)
+}
+
+fn strategy_thinking_enabled(context: &DictationContext) -> bool {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.reasoning_effort)
+        .map(|effort| !matches!(effort, crate::polish_strategy::ReasoningEffort::None))
+        .unwrap_or(context.polish.llm_thinking_enabled)
+}
+
+fn strategy_max_tokens(context: &DictationContext) -> Option<u32> {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.max_tokens)
 }
 
 pub fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
@@ -1743,7 +1932,7 @@ pub async fn answer_qa_with_context(
     progress: Arc<dyn crate::QaProgressSink>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<String, BackendError> {
-    let messages = messages
+    let mut messages = messages
         .into_iter()
         .map(|message| crate::shared_types::QaChatMessage {
             role: message.role,
@@ -1769,21 +1958,52 @@ pub async fn answer_qa_with_context(
     let should_cancel =
         move || cancelled.load(Ordering::Acquire) || publish_error_for_cancel.lock().is_some();
 
-    let result = if audio_wav.is_some()
+    let suite_mode = context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek;
+    let search_config = if suite_mode {
+        crate::web_search::WebSearchConfig::default()
+    } else {
+        crate::web_search::WebSearchConfig::load(credentials.as_ref()).await?
+    };
+    messages.insert(
+        0,
+        crate::shared_types::QaChatMessage {
+            role: "system".into(),
+            content: crate::web_search::backend_prompt(&search_config, suite_mode),
+            selection_text: None,
+        },
+    );
+    let result = if (audio_wav.is_some() && !suite_mode)
         || context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal
     {
         let provider = build_omni_provider(credentials.as_ref(), &context).await?;
-        let system_prompt = crate::compose_qa_system_prompt(
+        let mut system_prompt = crate::compose_qa_system_prompt(
             &context.polish.working_languages,
             context.polish.chinese_script_preference,
             context.polish.output_language_preference,
             context.polish.front_app.as_deref(),
         );
-        let user_text = messages
+        system_prompt.push_str(&crate::web_search::backend_prompt(&search_config, false));
+        let mut user_text = messages
             .iter()
             .map(|message| format!("{}: {}", message.role, message.content))
             .collect::<Vec<_>>()
             .join("\n\n");
+        if search_config.provider != crate::web_search::SearchProvider::Off {
+            let plan = provider
+                .complete_streaming(
+                    &crate::web_search::planner_prompt(),
+                    &user_text,
+                    audio_wav.as_deref(),
+                    |_| {},
+                    &should_cancel,
+                )
+                .await
+                .map_err(map_omni_error)?;
+            if let Some(query) = crate::web_search::planned_query(&plan) {
+                user_text
+                    .push_str(&qa_search_context(&search_config, &query, &should_cancel).await?);
+            }
+        }
         provider
             .complete_streaming(
                 &system_prompt,
@@ -1795,37 +2015,113 @@ pub async fn answer_qa_with_context(
             .await
             .map_err(map_omni_error)
     } else {
-        match build_cloud_polisher_provider(credentials.as_ref(), &context).await? {
-            CloudPolisherProvider::OpenAi(provider) => provider
-                .answer_chat_streaming(
-                    &messages,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    on_delta,
-                    should_cancel,
-                )
-                .await
-                .map_err(map_llm_error),
-            CloudPolisherProvider::Gemini(provider) => provider
-                .answer_chat_streaming(
-                    &messages,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    on_delta,
-                    should_cancel,
-                )
-                .await
-                .map_err(map_llm_error),
+        let mut provider = build_cloud_polisher_provider(credentials.as_ref(), &context).await?;
+        let native = configure_qa_search(&mut provider, context.pipeline_mode);
+        if suite_mode && !native {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "DeepSeek native search is unavailable",
+            ));
         }
+        let mut messages = messages;
+        if !suite_mode && search_config.provider != crate::web_search::SearchProvider::Off {
+            let mut planning = messages.clone();
+            planning.push(crate::shared_types::QaChatMessage {
+                role: "user".into(),
+                content: crate::web_search::planner_prompt(),
+                selection_text: None,
+            });
+            let plan =
+                answer_cloud_qa(&provider, &context, &planning, |_| {}, &should_cancel).await?;
+            if let Some(query) = crate::web_search::planned_query(&plan) {
+                let search_context =
+                    qa_search_context(&search_config, &query, &should_cancel).await?;
+                if let Some(last) = messages.last_mut() {
+                    last.content.push_str(&search_context);
+                }
+            }
+        }
+        answer_cloud_qa(&provider, &context, &messages, on_delta, should_cancel).await
     };
     if let Some(error) = publish_error.lock().take() {
         return Err(error);
     }
     result
+}
+
+fn configure_qa_search(
+    provider: &mut CloudPolisherProvider,
+    mode: crate::shared_types::PipelineMode,
+) -> bool {
+    match provider {
+        CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(provider)) => {
+            provider.configure_qa_web_search(mode == crate::shared_types::PipelineMode::Deepseek)
+        }
+        _ => false,
+    }
+}
+
+async fn qa_search_context<C>(
+    config: &crate::web_search::WebSearchConfig,
+    query: &str,
+    should_cancel: C,
+) -> Result<String, BackendError>
+where
+    C: Fn() -> bool + Send + Sync,
+{
+    let cancelled = || BackendError::new(BackendErrorCode::Cancelled, "cancelled");
+    if should_cancel() {
+        return Err(cancelled());
+    }
+    let cancellation = async {
+        while !should_cancel() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancellation => Err(cancelled()),
+        result = crate::web_search::search(config, query) => Ok(crate::web_search::context(result)),
+    }
+}
+
+async fn answer_cloud_qa<F, C>(
+    provider: &CloudPolisherProvider,
+    context: &DictationContext,
+    messages: &[crate::shared_types::QaChatMessage],
+    on_delta: F,
+    should_cancel: C,
+) -> Result<String, BackendError>
+where
+    F: Fn(&str) + Send + Sync,
+    C: Fn() -> bool + Send + Sync,
+{
+    match provider {
+        CloudPolisherProvider::OpenAi(provider) => provider
+            .answer_chat_streaming(
+                messages,
+                &context.polish.working_languages,
+                context.polish.chinese_script_preference,
+                context.polish.output_language_preference,
+                context.polish.front_app.as_deref(),
+                on_delta,
+                should_cancel,
+            )
+            .await
+            .map_err(map_llm_error),
+        CloudPolisherProvider::Gemini(provider) => provider
+            .answer_chat_streaming(
+                messages,
+                &context.polish.working_languages,
+                context.polish.chinese_script_preference,
+                context.polish.output_language_preference,
+                context.polish.front_app.as_deref(),
+                on_delta,
+                should_cancel,
+            )
+            .await
+            .map_err(map_llm_error),
+    }
 }
 
 async fn build_omni_provider(
@@ -1907,7 +2203,7 @@ async fn build_omni_provider_with_task_spawner(
     .map(parse_extra_headers)
     .transpose()?
     .unwrap_or_default();
-    let temperature = read_channel_credential(
+    let configured_temperature = read_channel_credential(
         credentials,
         CredentialNamespace::Omni,
         provider_id,
@@ -1918,17 +2214,17 @@ async fn build_omni_provider_with_task_spawner(
     .map(parse_temperature)
     .transpose()?
     .flatten();
+    let temperature = omni_temperature(context, provider_type, configured_temperature);
     let config = crate::omni::OmniConfig {
         provider_id: provider_type.to_string(),
         base_url,
         api_key,
         model,
         extra_headers,
-        temperature: crate::polish::openai_compatible_temperature_for_provider(
-            provider_type,
-            temperature,
-        ),
-        thinking_enabled: context.polish.llm_thinking_enabled,
+        temperature,
+        thinking_enabled: strategy_thinking_enabled(context),
+        max_tokens_override: strategy_max_tokens(context),
+        reasoning_effort: strategy_reasoning_effort(context),
     };
     let provider = crate::omni::OmniProvider::with_task_spawner(config, task_spawner)
         .with_transcription_hints(&context.polish.working_languages, &context.polish.hotwords);
@@ -1948,6 +2244,42 @@ fn validate_omni_context(
         ));
     }
     Ok(())
+}
+
+/// Plain-text completion on the Omni channel. Selection helpers use this when
+/// the active pipeline is multimodal, so a traditional LLM is not required.
+pub(crate) async fn polish_with_omni_text(
+    credentials: &dyn CredentialStore,
+    context: &DictationContext,
+    raw_text: &str,
+) -> Result<PolishOutput, BackendError> {
+    if raw_text.trim().is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidArgument,
+            "polish input must not be empty",
+        ));
+    }
+    let (system_prompt, user_prompt) = context.effective_polish_prompts(raw_text);
+    let provider = build_omni_provider(credentials, context).await?;
+    let polished = provider
+        .complete(&system_prompt, &user_prompt, None)
+        .await
+        .map_err(map_omni_error)?;
+    let cleaned = crate::output_cleaning::clean_polish_output(&polished);
+    let text = if context.polish.translation_active {
+        crate::split_polish_translate_output(&cleaned)
+            .map(|(_, translation)| translation)
+            .unwrap_or(cleaned)
+    } else {
+        cleaned
+    };
+    if text.trim().is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::Provider,
+            "Omni provider returned empty polish output",
+        ));
+    }
+    Ok(PolishOutput::text(text))
 }
 
 /// Validate an Omni provider using the same construction and request path as
@@ -1985,9 +2317,9 @@ pub async fn validate_shared_omni_provider(
     Ok(())
 }
 
-/// First-stage Omni for Selection Voice / Less Computer (#1119 product B):
-/// audio + prompt → instruction/command text. Downstream intent / EditPlan /
-/// Agent submit still use their existing LLM (or Agent) paths.
+/// First-stage Omni audio for Selection Voice / Less Computer (#1119):
+/// audio + prompt → instruction text. Later selection text tasks follow the
+/// active pipeline; Agent submit keeps its own path.
 ///
 /// Empty Omni output is returned as `Ok("")` so callers can apply product
 /// policy (e.g. Less Computer Dictate → `Empty` outcome without a chat error;
@@ -2739,6 +3071,73 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_search_is_exclusive_to_the_deepseek_pipeline() {
+        use super::*;
+        use crate::shared_types::PipelineMode;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek",
+            crate::deepseek_suite::ENDPOINT,
+            "key",
+            crate::deepseek_suite::MODEL,
+        );
+        let mut provider = CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
+            crate::polish::OpenAICompatibleLLMProvider::new(config),
+        ));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Traditional
+        ));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Multimodal
+        ));
+        assert!(configure_qa_search(&mut provider, PipelineMode::Deepseek));
+        assert!(!configure_qa_search(
+            &mut provider,
+            PipelineMode::Traditional
+        ));
+        let search = crate::web_search::WebSearchConfig::default();
+        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
+    }
+
+    #[tokio::test]
+    async fn qa_search_cancels_while_waiting_for_a_response() {
+        use super::*;
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = crate::web_search::WebSearchConfig {
+            provider: crate::web_search::SearchProvider::Searxng,
+            endpoint: format!("http://{}/search", listener.local_addr().unwrap()),
+            ..Default::default()
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancelled);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            signal.store(true, Ordering::Release);
+            // Keep the response pending until the client drops its cancelled request.
+            loop {
+                if socket.read(&mut bytes).await.unwrap_or(0) == 0 {
+                    break;
+                }
+            }
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(3),
+            qa_search_context(&config, "weather", || cancelled.load(Ordering::Acquire)),
+        )
+        .await
+        .expect("cancellation must not wait for the 15-second search timeout")
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        server.abort();
+    }
+
     #[tokio::test]
     async fn manual_bailian_protocol_is_snapshotted_for_recording() {
         use super::*;
@@ -2799,6 +3198,23 @@ mod tests {
     }
     use super::*;
     use crate::{InMemoryCredentialStore, ProviderInvocation, SecretValue};
+
+    #[test]
+    fn strategy_temperature_overrides_configured_omni_temperature() {
+        let mut context = DictationContext::default();
+        context.polish.polish_request_overrides =
+            Some(crate::polish_strategy::PolishRequestOverrides {
+                temperature_milli: Some(400),
+                max_tokens: None,
+                reasoning_effort: None,
+            });
+
+        assert_eq!(omni_temperature(&context, "openai", Some(1.2)), Some(0.4));
+        assert_eq!(
+            omni_temperature(&DictationContext::default(), "custom", Some(1.2)),
+            Some(1.2)
+        );
+    }
 
     struct ObservedTranslationStream {
         chunks: Mutex<Vec<TextStreamChunk>>,
@@ -3622,6 +4038,129 @@ mod tests {
 
         assert_eq!(error.code, BackendErrorCode::Provider);
         assert_eq!(error.message, "LLM API key is not configured");
+    }
+
+    #[tokio::test]
+    async fn cloud_polisher_records_only_provider_reported_tokens() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+                {
+                    let header_end = header_end + 4;
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= header_end + length {
+                        break;
+                    }
+                }
+            }
+            let events = b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n";
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", events.len()).unwrap();
+            socket.write_all(events).unwrap();
+        });
+        let directory =
+            std::env::temp_dir().join(format!("openless-polish-usage-{}", uuid::Uuid::new_v4()));
+        let ledger =
+            Arc::new(crate::usage_ledger::UsageLedger::open(directory.join("usage.json")).unwrap());
+        let recorder = Arc::new(crate::usage_ledger::UsageRecorder::start(ledger).unwrap());
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        write_channel_secret(
+            &credentials,
+            CredentialNamespace::Llm,
+            "llm-channel",
+            LLM_API_KEY_ACCOUNT,
+            "fixture-key",
+        )
+        .await;
+        write_channel_secret(
+            &credentials,
+            CredentialNamespace::Llm,
+            "llm-channel",
+            LLM_ENDPOINT_ACCOUNT,
+            &format!("http://{address}"),
+        )
+        .await;
+        let mut llm = ProviderInvocation::new("llm-channel", "deepseek");
+        llm.model = Some("fixture-model".into());
+        let context = Arc::new(DictationContext {
+            llm,
+            ..DictationContext::default()
+        });
+        let polisher =
+            SharedCloudTextPolisher::new(credentials).with_usage_recorder(recorder.clone());
+        let result = polisher
+            .polish(
+                SessionId::new(),
+                context,
+                "private text".into(),
+                Arc::new(IgnoreTextStreamSink),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.text, "hello");
+        let (records, failures) = recorder.snapshot().unwrap();
+        assert_eq!(failures, 0);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].input_tokens, Some(30));
+        assert_eq!(records[0].output_tokens, Some(4));
+        assert_eq!(records[0].channel.as_deref(), Some("llm-channel"));
+        assert_eq!(records[0].protocol.as_deref(), Some("chat_completions"));
+        assert_eq!(
+            records[0].input_accounting,
+            Some(crate::usage_ledger::CacheInputAccounting::Inclusive)
+        );
+        assert!(records[0].service.is_some());
+        assert!(!records[0]
+            .service
+            .as_deref()
+            .unwrap()
+            .contains(&address.to_string()));
+        assert_eq!(
+            records[0].purpose,
+            crate::usage_ledger::ServicePurpose::DictationPostprocess
+        );
+        let stored = std::fs::read_to_string(directory.join("usage.json")).unwrap();
+        assert!(!stored.contains("private text"));
+        assert!(!stored.contains("fixture-key"));
+        server.join().unwrap();
+        drop(polisher);
+        drop(recorder);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn usage_purpose_distinguishes_selection_translation_and_tools() {
+        use crate::dictation_context::DictationOutputTarget;
+        use crate::usage_ledger::ServicePurpose;
+        let mut context = DictationContext::default();
+        assert_eq!(
+            usage_purpose(&context),
+            ServicePurpose::DictationPostprocess
+        );
+        context.polish.translation_active = true;
+        assert_eq!(usage_purpose(&context), ServicePurpose::Translation);
+        context.polish.selection_input = true;
+        assert_eq!(usage_purpose(&context), ServicePurpose::Selection);
+        context.polish.selection_input = false;
+        context.polish.translation_active = false;
+        context.output_target = DictationOutputTarget::QuickNote;
+        assert_eq!(usage_purpose(&context), ServicePurpose::QuickNote);
     }
 
     #[tokio::test]

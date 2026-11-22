@@ -63,3 +63,11 @@ export function qaGetSnapshot(): Promise<QaStatePayload> {
 export function qaSetEditInstructionMode(enabled: boolean): Promise<void> {
   return invokeOrMock('qa_set_edit_instruction_mode', { enabled }, () => undefined);
 }
+
+export function qaCancelTurn(): Promise<void> {
+  return invokeOrMock('qa_cancel_turn', undefined, () => undefined);
+}
+
+export function qaStopRecording(): Promise<void> {
+  return invokeOrMock('qa_stop_recording', undefined, () => undefined);
+}

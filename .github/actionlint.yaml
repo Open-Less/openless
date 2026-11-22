@@ -1,0 +1,4 @@
+# Repository-specific runner label used by the iOS checks.
+self-hosted-runner:
+  labels:
+    - xcode-27

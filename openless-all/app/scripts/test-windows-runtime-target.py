@@ -11,6 +11,9 @@ import tempfile
 app = Path(__file__).resolve().parents[1]
 vendor = app / 'src-tauri/vendor/tauri-runtime-wry'
 helper = vendor / 'src/owner_thread.rs'
+# CI reuses the already-restored host target. Local runs retain the isolated
+# default; never hardcode an executable path separate from Cargo's target.
+target = Path(os.environ.get('CARGO_TARGET_DIR') or app / 'src-tauri/target/ownership-harness').resolve()
 parser = argparse.ArgumentParser()
 parser.add_argument('--runtime', action='store_true')
 args = parser.parse_args()
@@ -18,7 +21,7 @@ args = parser.parse_args()
 
 def cargo(root, *arguments, capture=False):
     env = os.environ.copy()
-    env['CARGO_TARGET_DIR'] = str(app / 'src-tauri/target/ownership-harness')
+    env['CARGO_TARGET_DIR'] = str(target)
     return subprocess.run(
         ['cargo', *arguments, '--manifest-path', str(root / 'Cargo.toml')],
         check=True, text=True, encoding='utf-8', capture_output=capture, env=env,
@@ -51,7 +54,7 @@ edition = "2024"
             result = subprocess.run(
                 ['cargo', 'check', '--manifest-path', str(root / 'Cargo.toml'), '--bin', name],
                 text=True, encoding='utf-8', capture_output=True,
-                env={**os.environ, 'CARGO_TARGET_DIR': str(app / 'src-tauri/target/ownership-harness')},
+                env={**os.environ, 'CARGO_TARGET_DIR': str(target)},
             )
             if result.returncode == 0 or diagnostic not in result.stderr:
                 raise RuntimeError(name + ' did not fail for the expected ownership reason:\n' + result.stderr)
@@ -92,7 +95,7 @@ edition = "2024"
         patched = [p for p in isolated['packages'] if p['name'] == 'tauri-runtime-wry']
         assert len(patched) == 1 and Path(patched[0]['manifest_path']).resolve() == (vendor / 'Cargo.toml').resolve()
         cargo(root, 'build', '--locked')
-        exe = app / 'src-tauri/target/ownership-harness/debug/openless-runtime-ownership-tests.exe'
+        exe = target / 'debug/openless-runtime-ownership-tests.exe'
         for mode in ['unstarted', 'iterations', 'return', 'run']:
             result = subprocess.run([str(exe), mode], timeout=120)
             expected_code = 23 if mode == 'run' else 0

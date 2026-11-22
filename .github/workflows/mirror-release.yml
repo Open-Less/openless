@@ -1,0 +1,61 @@
+name: Mirror release assets to OSS
+
+on:
+  release:
+    types: [published, edited]
+  schedule:
+    # Repair missed events without the website's old 15-minute full downloads.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [mirror-release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openless-oss-release-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'Open-Less/openless'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      # Published tags are data, never executable code in this credentialed job.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Install distribution tools
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rclone minisign
+      - name: Abort incomplete OSS multipart uploads
+        timeout-minutes: 10
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_AK: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_SK: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT || 'oss-cn-zhangjiakou.aliyuncs.com' }}
+        run: |
+          set -euo pipefail
+          export RCLONE_CONFIG_OSS_TYPE=s3
+          export RCLONE_CONFIG_OSS_PROVIDER=Alibaba
+          export RCLONE_CONFIG_OSS_ACCESS_KEY_ID="$OSS_AK"
+          export RCLONE_CONFIG_OSS_SECRET_ACCESS_KEY="$OSS_SK"
+          export RCLONE_CONFIG_OSS_ENDPOINT="$OSS_ENDPOINT"
+          # A killed mirror leaves unfinished multipart uploads. Those are not
+          # visible objects, and the next copy can sit on them until timeout.
+          rclone backend cleanup "oss:${OSS_BUCKET}" -o max-age=1m --stats 30s --stats-one-line
+      - name: Mirror verified packages then update channels
+        timeout-minutes: 70
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_AK: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_SK: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT || 'oss-cn-zhangjiakou.aliyuncs.com' }}
+        run: python3 openless-all/app/scripts/mirror-release.py

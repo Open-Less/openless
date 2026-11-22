@@ -26,7 +26,7 @@ pub const LOCAL_ASR_KEEP_LOADED_FOREVER_SECS: u32 = 86_400;
 
 /// Recognition pipeline mode (issue #902): `traditional` = two-stage ASR +
 /// LLM polish; `multimodal` = one multimodal model turns audio + prompt
-/// into final text in a single step. The two configs live in fully isolated
+/// into final text in a single step; `deepseek` uses the dedicated suite. All configs use isolated
 /// credential namespaces; the runtime reads only the active mode and
 /// switching never deletes the other config.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -35,13 +35,14 @@ pub enum PipelineMode {
     #[default]
     Traditional,
     Multimodal,
+    Deepseek,
 }
 
 pub fn effective_pipeline_mode(enabled: bool, configured: PipelineMode) -> PipelineMode {
-    if enabled {
-        configured
-    } else {
+    if !enabled && configured == PipelineMode::Multimodal {
         PipelineMode::Traditional
+    } else {
+        configured
     }
 }
 
@@ -266,6 +267,9 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Host presentation correlation only; absent for manually queued suggestions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<u64>,
     /// Absolute deadline shared by native and web confirmation surfaces.
     pub expires_at_ms: i64,
     /// The (wrong) pre-correction spelling. Only shown on the card so the
@@ -320,6 +324,15 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
+/// Windows suggestion-card placement; other platforms retain their native presentation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VocabularySuggestionPosition {
+    #[default]
+    NearInput,
+    BottomRight,
+}
+
 /// Local-only tuning. Consent and sensitive-field protections remain separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -327,6 +340,7 @@ pub struct VocabularyLearningSettings {
     pub observation_seconds: u32,
     pub suggestion_seconds: u32,
     pub max_phrase_chars: u32,
+    pub suggestion_position: VocabularySuggestionPosition,
 }
 
 impl Default for VocabularyLearningSettings {
@@ -335,6 +349,7 @@ impl Default for VocabularyLearningSettings {
             observation_seconds: 60,
             suggestion_seconds: 10,
             max_phrase_chars: 12,
+            suggestion_position: VocabularySuggestionPosition::default(),
         }
     }
 }
@@ -345,6 +360,7 @@ impl VocabularyLearningSettings {
             observation_seconds: self.observation_seconds.clamp(10, 60),
             suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
             max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+            suggestion_position: self.suggestion_position,
         }
     }
 }
@@ -463,6 +479,8 @@ pub struct UserPreferences {
     /// Opt-in local voice command listener. Standby audio is never sent to a cloud provider.
     #[serde(default)]
     pub voice_activation_enabled: bool,
+    #[serde(default)]
+    pub voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     pub voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -540,11 +558,8 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows: whether the OpenLess TSF IME shows in the system keyboard
-    /// list (Win+Space) under non-TSF insertion (SendInput / clipboard
-    /// paste). Default true keeps current behavior; when off, the language
-    /// profile is disabled per-user without admin rights. TSF mode still
-    /// force-enables the profile but never rewrites this pref.
+    /// Legacy wire compatibility only. The Windows speech TIP does not appear
+    /// in the keyboard list and stays enabled regardless of this preference.
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// User's working languages (multi-select, native names). Injected as
@@ -770,6 +785,12 @@ pub struct UserPreferences {
     /// always polish regardless of this value.
     #[serde(default = "default_polish_skip_max_chars")]
     pub polish_skip_max_chars: u32,
+    /// Enables the bounded post-ASR polish strategy hook. Disabled by default.
+    #[serde(default)]
+    pub polish_strategy_enabled: bool,
+    /// Rhai source for the bounded post-ASR polish strategy.
+    #[serde(default)]
+    pub polish_strategy_script: String,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -823,6 +844,9 @@ pub struct UserPreferences {
     /// Off by default; with it off, the target only receives the final text.
     #[serde(default)]
     pub windows_composition_input: bool,
+    /// macOS AX live transcript replacement in the captured editor; opt-in.
+    #[serde(default)]
+    pub macos_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -840,6 +864,9 @@ pub struct UserPreferences {
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
     pub vocabulary_learning_enabled: bool,
+    /// Local consent for observing formatting edits as abstract expression evidence.
+    #[serde(default)]
+    pub expression_learning_enabled: bool,
     #[serde(default)]
     pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// Whether the Overview shows the "yearly activity" heatmap card.
@@ -1060,6 +1087,8 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     #[serde(default)]
     voice_activation_enabled: bool,
+    #[serde(default)]
+    voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1211,6 +1240,10 @@ struct UserPreferencesWire {
     #[serde(default = "default_polish_skip_max_chars")]
     polish_skip_max_chars: u32,
     #[serde(default)]
+    polish_strategy_enabled: bool,
+    #[serde(default)]
+    polish_strategy_script: String,
+    #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
     theme_mode: ThemeMode,
@@ -1222,10 +1255,14 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
+    #[serde(default)]
+    macos_composition_input: bool,
     #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    expression_learning_enabled: bool,
     vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
@@ -1344,6 +1381,7 @@ impl Default for UserPreferencesWire {
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
             voice_activation_enabled: prefs.voice_activation_enabled,
+            voice_activation_hotkey_linked: prefs.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: prefs.voice_activation_wake_enabled,
             voice_activation_finish_enabled: prefs.voice_activation_finish_enabled,
             voice_activation_wake_phrase: prefs.voice_activation_wake_phrase,
@@ -1423,14 +1461,18 @@ impl Default for UserPreferencesWire {
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             polish_skip_max_chars: prefs.polish_skip_max_chars,
+            polish_strategy_enabled: prefs.polish_strategy_enabled,
+            polish_strategy_script: prefs.polish_strategy_script,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             windows_composition_input: prefs.windows_composition_input,
+            macos_composition_input: prefs.macos_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            expression_learning_enabled: prefs.expression_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
@@ -1568,6 +1610,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
             voice_activation_enabled: wire.voice_activation_enabled,
+            voice_activation_hotkey_linked: wire.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: wire.voice_activation_wake_enabled,
             voice_activation_finish_enabled: wire.voice_activation_finish_enabled,
             voice_activation_wake_phrase: wire.voice_activation_wake_phrase,
@@ -1663,14 +1706,18 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             polish_skip_max_chars: wire.polish_skip_max_chars,
+            polish_strategy_enabled: wire.polish_strategy_enabled,
+            polish_strategy_script: wire.polish_strategy_script,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             windows_composition_input: wire.windows_composition_input,
+            macos_composition_input: wire.macos_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            expression_learning_enabled: wire.expression_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
@@ -1970,6 +2017,7 @@ impl Default for UserPreferences {
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
             voice_activation_enabled: false,
+            voice_activation_hotkey_linked: false,
             voice_activation_wake_enabled: true,
             voice_activation_finish_enabled: true,
             voice_activation_wake_phrase: default_voice_activation_wake_phrase(),
@@ -2046,14 +2094,18 @@ impl Default for UserPreferences {
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
             polish_skip_max_chars: default_polish_skip_max_chars(),
+            polish_strategy_enabled: false,
+            polish_strategy_script: String::new(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
+            macos_composition_input: false,
             cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
+            expression_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
@@ -2869,6 +2921,8 @@ pub struct CapsulePayload {
     /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub qa: bool,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -2878,7 +2932,7 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
-    /// Current recognition pipeline mode ("traditional" | "multimodal"); the
+    /// Current recognition pipeline mode ("traditional" | "multimodal" | "deepseek"); the
     /// frontend uses it to pick which config cards to render and which set
     /// the Overview treats as "configured".
     pub pipeline_mode: PipelineMode,
@@ -3730,6 +3784,28 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_strategy_defaults_disabled_and_round_trips() {
+        assert!(!UserPreferences::default().polish_strategy_enabled);
+        assert!(UserPreferences::default().polish_strategy_script.is_empty());
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!from_empty.polish_strategy_enabled);
+        assert!(from_empty.polish_strategy_script.is_empty());
+
+        let configured: UserPreferences = serde_json::from_str(
+            r#"{"polishStrategyEnabled":true,"polishStrategyScript":"fn strategy(input) { #{ action: \"polish\" } }"}"#,
+        )
+        .unwrap();
+        assert!(configured.polish_strategy_enabled);
+        assert!(configured.polish_strategy_script.contains("strategy"));
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishStrategyEnabled"], true);
+        assert!(saved["polishStrategyScript"]
+            .as_str()
+            .unwrap()
+            .contains("strategy"));
     }
 
     #[test]

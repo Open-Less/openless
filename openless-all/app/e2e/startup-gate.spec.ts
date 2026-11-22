@@ -1,11 +1,12 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
-const origin = 'http://127.0.0.1:5326';
+const origin = fixtureOrigin;
 const fixture = `${origin}/e2e/fixtures/startup-gate.html`;
 
 test.beforeEach(async ({ page }) => {
   await page.route(
-    /\/src\/components\/(FloatingShell|Onboarding|GlobalDownloadProgress)\.tsx(?:\?.*)?$/,
+    /\/src\/(?:app\/shell\/FloatingShell|features\/(?:onboarding\/Onboarding|downloads\/GlobalDownloadProgress))\.tsx(?:\?.*)?$/,
     async (route) => {
       const response = await page.request.get(`${origin}/e2e/fixtures/startup-destinations.tsx`);
       await route.fulfill({ response });
@@ -70,4 +71,47 @@ test('the optional-probe fallback never bypasses a failed backend contract hands
     'get_credentials',
   );
   await expect(page.getByRole('heading')).toHaveCount(0);
+});
+
+test('Android keeps one panel through failed and superseded dismissals, then Back closes it', async ({
+  page,
+}) => {
+  await page.goto(`${fixture}?os=android`);
+  const app = page.getByRole('heading', { name: 'Startup reached the app' });
+  const voice = page.locator('.ol-voice-edit-window');
+  await expect(app).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).startupFixture.listening('qa:state')))
+    .toBe(true);
+  await page.evaluate(() => (window as any).startupFixture.showVoice('old-draft'));
+  await expect(voice).toBeVisible();
+  await page.evaluate(() => (window as any).startupFixture.emit('qa:state', { kind: 'idle' }));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).startupFixture.pendingCancels()))
+    .toEqual(['old-draft']);
+  await page.evaluate(() => (window as any).startupFixture.showVoice('new-draft'));
+  await expect(voice.getByText('new-draft').first()).toBeVisible();
+  await page.evaluate(() => (window as any).startupFixture.finishCancel(true));
+  await expect(voice.getByText('new-draft').first()).toBeVisible();
+
+  for (const succeed of [false, true]) {
+    await page.evaluate(() => (window as any).startupFixture.emit('qa:state', { kind: 'idle' }));
+    await expect
+      .poll(() => page.evaluate(() => (window as any).startupFixture.pendingCancels()))
+      .toEqual(['new-draft']);
+    await expect(voice).toBeVisible();
+    await page.evaluate((result) => (window as any).startupFixture.finishCancel(result), succeed);
+    if (!succeed) {
+      await expect(voice.getByRole('alert')).toHaveText('Microphone is still busy');
+    }
+  }
+  await expect(voice).toHaveCount(0);
+  await expect(app).toHaveCount(0);
+  await expect(page.locator('.ol-embedded-panel')).toBeVisible();
+  await page.evaluate(() => history.back());
+  await expect(app).toBeVisible();
+  await page.evaluate(() =>
+    (window as any).startupFixture.emit('qa:state', { kind: 'answer', sessionId: 'closed' }),
+  );
+  await expect(app).toBeVisible();
 });

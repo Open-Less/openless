@@ -45,6 +45,8 @@ pub struct CapsulePopupState {
     /// Selection polish shares the capsule window but shows a one-line notice.
     #[serde(default)]
     pub selection_polish: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub qa: bool,
     /// Display name of the translation target, already localized by the host.
     #[serde(default)]
     pub translation_target: Option<String>,
@@ -62,6 +64,7 @@ pub struct CapsuleLabels {
     pub inserted: String,
     pub translate_to: String,
     pub translating: String,
+    pub asking: String,
     pub polishing: String,
     pub replaced: String,
     pub no_selection: String,
@@ -199,6 +202,12 @@ impl CapsuleLabels {
             inserted,
             translate_to,
             translating,
+            asking: if locale.starts_with("zh") {
+                "随便问"
+            } else {
+                "Ask anything"
+            }
+            .into(),
             polishing,
             replaced,
             no_selection,

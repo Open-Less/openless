@@ -1,6 +1,7 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
 
-test.use({ baseURL: 'http://127.0.0.1:5326' });
+test.use({ baseURL: fixtureOrigin });
 const errors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
   const messages: string[] = [];

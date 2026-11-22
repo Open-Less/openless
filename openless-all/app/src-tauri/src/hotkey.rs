@@ -46,6 +46,8 @@ pub enum HotkeyEvent {
     Released {
         at: Instant,
         press_id: u64,
+        /// Native per-press verdict, independent of the asynchronous abort bridge.
+        combined: bool,
     },
     // Combo abort is not in this enum: it goes through the separate `combo_abort` channel to avoid
     // being queued behind the Pressed → begin_session synchronous mic-open flow (see module docs).
@@ -777,7 +779,13 @@ mod platform {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
                 if !ctx.shared.recording_active.load(Ordering::SeqCst)
-                    && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {
+                    && crate::side_aware_combo::platform::dispatch_keycode(
+                        keycode,
+                        false,
+                        unsafe { CGEventGetFlags(event) },
+                        true,
+                    )
+                {
                     crate::side_aware_combo::handle_companion_key_down();
                     note_companion_key_down(ctx);
                     return std::ptr::null_mut();
@@ -792,7 +800,12 @@ mod platform {
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false) {
+                if crate::side_aware_combo::platform::dispatch_keycode(
+                    keycode,
+                    false,
+                    unsafe { CGEventGetFlags(event) },
+                    false,
+                ) {
                     return std::ptr::null_mut();
                 }
             }
@@ -929,7 +942,8 @@ mod platform {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
             let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
             if !tap_only_fn {
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
                 return;
             }
 
@@ -946,7 +960,8 @@ mod platform {
                         press_id,
                     },
                 );
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
             } else {
                 log::info!(
                     "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
@@ -1476,8 +1491,8 @@ mod platform {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
-        WH_KEYBOARD_LL, WM_QUIT,
+        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+        MSG, WH_KEYBOARD_LL, WM_QUIT,
     };
 
     use super::{
@@ -1675,7 +1690,12 @@ mod platform {
                 // dispatch path. As long as the event's virtual key matches the current
                 // configuration, the existing edge dedup and combo-abort logic still decide
                 // whether OpenLess fires; no filtering by synthetic-input source here.
-                if dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0) {
+                let vk_code = crate::side_aware_combo::normalize_windows_vk(
+                    keyboard.vkCode,
+                    keyboard.scanCode,
+                    keyboard.flags.0 & LLKHF_EXTENDED.0 != 0,
+                );
+                if dispatch_keyboard_event(ctx, vk_code, wparam.0) {
                     return LRESULT(1);
                 }
             }
@@ -1814,6 +1834,7 @@ mod platform {
                         HotkeyEvent::Released {
                             at: std::time::Instant::now(),
                             press_id,
+                            combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id,
                         },
                     );
                 }
@@ -2128,6 +2149,23 @@ mod platform {
                 replacement_rx.recv_timeout(std::time::Duration::from_secs(2)),
                 Err(mpsc::RecvTimeoutError::Disconnected)
             );
+        }
+
+        #[test]
+        fn windows_release_carries_combo_verdict_even_when_abort_bridge_has_not_drained() {
+            let (ctx, rx, abort_rx) = callback_context_with_combo(shared(HotkeyTrigger::RightControl));
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            let press_id = match rx.recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                other => panic!("expected press, got {other:?}"),
+            };
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP);
+            // Intentionally read Released before the independently queued Combined.
+            assert!(matches!(rx.recv().unwrap(), HotkeyEvent::Released {
+                press_id: released_id, combined: true, ..
+            } if released_id == press_id));
+            assert_eq!(abort_rx.recv().unwrap().press_id, press_id);
         }
 
         #[test]

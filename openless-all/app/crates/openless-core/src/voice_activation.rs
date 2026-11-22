@@ -344,6 +344,8 @@ pub enum VoiceActivationSignal {
 #[serde(rename_all = "snake_case")]
 pub enum VoiceActivationPhase {
     Disabled,
+    Paused,
+    Pausing,
     Starting,
     ListeningForWake,
     WakeDetected,

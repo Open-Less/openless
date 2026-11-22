@@ -208,6 +208,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_only_microphone_capture",
     },
     PreferenceField {
+        rust_name: "voice_activation_hotkey_linked",
+        key: "voiceActivationHotkeyLinked",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "voice_activation_wake_enabled",
         key: "voiceActivationWakeEnabled",
         class: PreferenceClass::Excluded,
@@ -747,6 +754,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "polish_strategy_enabled",
+        key: "polishStrategyEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_strategy_script",
+        key: "polishStrategyScript",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "start_minimized",
         key: "startMinimized",
         class: PreferenceClass::Portable,
@@ -782,6 +803,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "macos_composition_input",
+        key: "macosCompositionInput",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "windows_composition_input",
         key: "windowsCompositionInput",
         class: PreferenceClass::Portable,
@@ -798,6 +826,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "vocabulary_learning_enabled",
         key: "vocabularyLearningEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
+        rust_name: "expression_learning_enabled",
+        key: "expressionLearningEnabled",
         class: PreferenceClass::Excluded,
         shape: PreferenceShape::Boolean,
         reason: "local_consent_or_secret",
@@ -1025,7 +1060,7 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
             "foregroundWindowScreen",
             "allScreens",
         ],
-        "pipelineMode" => &["traditional", "multimodal"],
+        "pipelineMode" => &["traditional", "multimodal", "deepseek"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],
         "selectionPolishOutputMode" => &["directReplace", "previewConfirm"],

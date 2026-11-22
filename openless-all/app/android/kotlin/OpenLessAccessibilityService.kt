@@ -206,7 +206,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
                         }) { ok, _ ->
                             isEnabled = true
                             if (ok) refreshVocabularyCard()
-                            else android.widget.Toast.makeText(this@OpenLessAccessibilityService, "保存失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                            else OpenLessNativeNotice.makeText(this@OpenLessAccessibilityService, "保存失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
                 }, android.widget.LinearLayout.LayoutParams((56 * resources.displayMetrics.density).toInt(), -2))

@@ -53,11 +53,14 @@ assert.match(service, /saved\.download_pending/);
 const native = read('src-tauri/src/asr/local/experimental.rs');
 assert.match(native, /models\.lease\(model\)[^]*?runtime\.prepare\(model[^]*?models\.check_lease/);
 
-const channels = read('src/pages/settings/ChannelList.tsx');
+const channels = read('src/features/providers/ChannelList.tsx');
 assert.match(channels, /data-retired-local-asr=/);
 assert.match(channels, /disabled=\{retired\}/);
-assert.match(channels, /os === 'mac' && isRetiredMacAsrProvider/);
-const page = read('src/pages/settings/ExperimentalAsrSection.tsx');
+assert.match(
+  read('src/features/providers/channelCatalog.ts'),
+  /os === 'mac' && isRetiredMacAsrProvider/,
+);
+const page = read('src/features/local-asr/ExperimentalAsrSection.tsx');
 assert.match(page, /experimentalAsr\.memoryHint/);
 assert.match(page, /controller/);
 const controller = read('src/lib/useExperimentalAsr.ts');

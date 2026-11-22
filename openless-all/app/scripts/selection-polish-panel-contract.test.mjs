@@ -20,9 +20,10 @@ const violations = [];
 const lib = await read('src-tauri/src/lib.rs');
 const capabilities = await read('src-tauri/capabilities/default.json');
 const commands = await read('src-tauri/src/commands/selection_polish_preview.rs');
-const qaPanel = await read('src/pages/QaPanel.tsx');
-const appTsx = await read('src/App.tsx');
-const mainTsx = await read('src/main.tsx');
+const qaPanel = await read('src/features/qa/QaPanel.tsx');
+const selectionApi = await read('src/api/selection.ts');
+const appTsx = await read('src/app/windowRoutes.tsx');
+const mainTsx = await read('src/app/bootstrap.tsx');
 
 // 1. 独立窗口彻底下线：能力表、前端路由、页面文件都不再有它。
 const windowCapabilities = JSON.parse(capabilities).windows;
@@ -33,8 +34,8 @@ if (!windowCapabilities.includes('qa')) {
   violations.push('capabilities/default.json dropped the qa window (the merged panel needs it)');
 }
 for (const [name, source] of [
-  ['src/App.tsx', appTsx],
-  ['src/main.tsx', mainTsx],
+  ['src/app/windowRoutes.tsx', appTsx],
+  ['src/app/bootstrap.tsx', mainTsx],
 ]) {
   if (source.includes('selection-polish-preview')) {
     violations.push(`${name}: still routes the deleted selection-polish-preview window`);
@@ -43,12 +44,17 @@ for (const [name, source] of [
     violations.push(`${name}: still imports the deleted SelectionPolishPreview page`);
   }
 }
-const previewPageExists = await stat(`${appRoot}/src/pages/SelectionPolishPreview.tsx`).then(
-  () => true,
-  () => false,
-);
-if (previewPageExists) {
-  violations.push('src/pages/SelectionPolishPreview.tsx still exists');
+for (const source of [
+  'src/pages/SelectionPolishPreview.tsx',
+  'src/features/qa/SelectionPolishPreview.tsx',
+]) {
+  const previewPageExists = await stat(`${appRoot}/${source}`).then(
+    () => true,
+    () => false,
+  );
+  if (previewPageExists) {
+    violations.push(`${source} still exists`);
+  }
 }
 
 // 2. 后端把「润色结果」交给 qa 面板，而不是新窗口。
@@ -100,9 +106,12 @@ if (
 }
 
 // 5. 面板侧：认事件、编辑结果、提供「确认并替换」。
-for (const eventName of ['selection-polish-preview:shown', 'selection-polish-preview:hide']) {
-  if (!qaPanel.includes(`'${eventName}'`)) {
-    violations.push(`QaPanel.tsx does not listen for ${eventName}`);
+for (const [eventName, listen] of [
+  ['selection-polish-preview:shown', 'listenSelectionPolishPreviewShown'],
+  ['selection-polish-preview:hide', 'listenSelectionPolishPreviewHidden'],
+]) {
+  if (!selectionApi.includes(`'${eventName}'`) || !qaPanel.includes(`${listen}(`)) {
+    violations.push(`QaPanel.tsx does not subscribe to ${eventName} through the selection API`);
   }
 }
 if (!qaPanel.includes('selectionPolishPreview.confirmReplace')) {
