@@ -121,7 +121,7 @@ try {
   Press (Find-Button $nodes @('Settings','设置')) 'Settings'
   $nodes = Wait-Content 'settings' { param($n) $null -ne (Find-Button $n @('About & updates','关于与更新')) }
   Press (Find-Button $nodes @('About & updates','关于与更新')) 'About & updates'
-  $nodes = Wait-Content 'about-version' { param($n) @($n | Where-Object { $_.Current.Name.Contains($expectedVersion) }).Count -gt 0 }
+  $nodes = Wait-Content 'about-version' { param($n) @($n | Where-Object { ([string]$_.Current.Name).Contains($expectedVersion) }).Count -gt 0 }
   Capture 'about-version'
   $result.ui_version = $expectedVersion
   $result.navigation = 'onboarding_to_main_to_settings_about'
