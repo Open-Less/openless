@@ -560,12 +560,14 @@ fn apply_native_target(
         }
         #[cfg(not(target_os = "android"))]
         VoiceEditNativeTarget::Desktop { target } => {
-            crate::host_document::apply_voice_edit_target(target, text, |text| {
+            crate::host_document::apply_voice_edit_target(target, text, |text, still_current| {
                 let preferences = inner.backend.get_preferences();
-                match inner.inserter.insert(
+                match inner.inserter.insert_guarded(
                     text,
                     preferences.restore_clipboard_after_paste,
                     preferences.paste_shortcut,
+                    None,
+                    still_current,
                 ) {
                     InsertStatus::Inserted | InsertStatus::PasteSent => Ok(()),
                     InsertStatus::CopiedFallback => Err("voiceEditInsertFallback".into()),

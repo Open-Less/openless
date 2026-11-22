@@ -329,7 +329,7 @@ pub(super) fn capture_voice_edit_target() -> std::result::Result<
 pub(super) fn apply_voice_edit_target(
     target: &VoiceEditTarget,
     text: &str,
-    insert: impl FnOnce(&str) -> std::result::Result<(), String>,
+    insert: impl FnOnce(&str, &mut dyn FnMut() -> bool) -> std::result::Result<(), String>,
 ) -> std::result::Result<(), String> {
     with_voice_edit_uia(|uia| unsafe {
         let unavailable = |_| "voiceEditTargetUnavailable".to_string();
@@ -359,6 +359,19 @@ pub(super) fn apply_voice_edit_target(
                 .selection_utf16
                 .filter(|(start, end)| start != end)
                 .unwrap_or((0, target.text.encode_utf16().count()));
+            let mut selected_target = target.clone();
+            selected_target.selection_utf16 = Some(expected);
+            let still_current = || {
+                uia.GetFocusedElement()
+                    .and_then(|focused| voice_edit_snapshot(&focused))
+                    .is_ok_and(|mut current| {
+                        // UIA may omit the selection of an empty field, as allowed above.
+                        if current.text.is_empty() && current.selection_utf16.is_none() {
+                            current.selection_utf16 = Some((0, 0));
+                        }
+                        voice_edit_target_matches(&selected_target, &current).is_ok()
+                    })
+            };
             super::write_with_selection_recovery(
                 || {
                     range.Select().map_err(unavailable)?;
@@ -378,17 +391,11 @@ pub(super) fn apply_voice_edit_target(
                     {
                         return Err("voiceEditTargetUnavailable".into());
                     }
-                    insert(text)
+                    // Recheck without selecting again after the delivery gate has been acquired.
+                    insert(text, &mut || still_current())
                 },
                 || {
-                    let current = uia
-                        .GetFocusedElement()
-                        .and_then(|focused| voice_edit_snapshot(&focused));
-                    let mut selected_target = target.clone();
-                    selected_target.selection_utf16 = Some(expected);
-                    if current.is_ok_and(|current| {
-                        voice_edit_target_matches(&selected_target, &current).is_ok()
-                    }) {
+                    if still_current() {
                         let _ = original_selection.Select();
                     }
                 },
