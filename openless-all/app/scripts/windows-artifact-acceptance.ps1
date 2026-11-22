@@ -70,9 +70,15 @@ function Wait-Content([string]$Name, [scriptblock]$Predicate) {
 function Press($Node, [string]$Name) {
   if ($null -eq $Node) { throw "Button missing: $Name" }
   if (-not $Node.Current.IsEnabled) { throw "Button disabled: $Name" }
-  $pattern = $Node.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-  $pattern.Invoke()
-  Record "InvokePattern=$Name"
+  $pattern = $null
+  if ($Node.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+    $pattern.Invoke()
+    Record "InvokePattern=$Name"
+  } elseif ($Node.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+    # WebView2 exposes aria-expanded navigation groups as ExpandCollapse, not Invoke.
+    $pattern.Expand()
+    Record "ExpandCollapsePattern=$Name"
+  } else { throw "No supported Invoke/ExpandCollapse pattern: $Name" }
 }
 try {
   # Reuse the release's existing install/registration verifier; no custom install procedure.
