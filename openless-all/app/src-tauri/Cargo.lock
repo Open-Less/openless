@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "openless"
-version = "2.0.3-dev.noask.20261122"
+version = "2.0.3-dev.noask.20261122.2"
 dependencies = [
  "anyhow",
  "arboard",
