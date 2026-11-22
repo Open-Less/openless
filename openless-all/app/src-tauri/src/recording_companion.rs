@@ -101,7 +101,16 @@ impl ChordState {
 }
 // Keep this in sync with the frontend's version-flavor check.
 pub(crate) fn ask_anything_available() -> bool {
-    !env!("CARGO_PKG_VERSION_PRE").starts_with("dev.noask.")
+    ask_anything_available_for_version(
+        env!("CARGO_PKG_VERSION_PRE"),
+        env!("CARGO_PKG_VERSION")
+            .split_once('+')
+            .map_or("", |(_, build)| build),
+    )
+}
+
+fn ask_anything_available_for_version(prerelease: &str, build: &str) -> bool {
+    !prerelease.starts_with("dev.noask.") && !build.starts_with("build.noask.")
 }
 
 pub(crate) fn configure(recording: ShortcutBinding, auxiliary: String) {
@@ -155,6 +164,22 @@ pub(crate) fn event(physical: &str, pressed: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ask_anything_release_variants_preserve_the_noask_gate() {
+        for (prerelease, build, available) in [
+            ("dev.noask.1", "", false),
+            ("Beta.2", "build.noask.20261123", false),
+            ("", "", true),
+            ("dev.1", "", true),
+            ("Beta.2", "build.20261123", true),
+        ] {
+            assert_eq!(
+                super::ask_anything_available_for_version(prerelease, build),
+                available
+            );
+        }
+    }
+
     use super::*;
     fn state(primary: &str, modifiers: &[&str]) -> ChordState {
         ChordState {
