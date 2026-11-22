@@ -2127,7 +2127,7 @@ pub(crate) fn require_ask_anything() -> Result<(), String> {
     if ask_anything_available() {
         Ok(())
     } else {
-        Err("Ask Anything is disabled in this Dev build".into())
+        Err("Ask Anything is disabled in this build".into())
     }
 }
 

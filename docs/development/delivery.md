@@ -2,6 +2,10 @@
 
 发布权限与候选交付条件见[发布规范](../../RELEASING.zh.md)。版本说明随各版本发布。[GitHub Releases](https://github.com/Open-Less/openless/releases)
 
+需要在公开 Beta 中继续关闭 Ask Anything 时，应用版本保留 `+build.noask.YYYYMMDD` 构建标记，例如 `2.0.3-Beta.2+build.noask.20261123`。发布标签仍使用 `v2.0.3-Beta.2-tauri`。前端入口和桌面宿主均读取这一标记；普通 Beta、Stable 和未标记的 Dev 保持各自原有行为。
+
+Beta 标签构建会在 Apple Silicon CI 主机启动本次生成的应用，检查主界面并保存启动证据。分支调试仍可通过 `macos_smoke_sha` 指定候选提交；启动检查使用生成的应用包，不从磁盘镜像运行，也不操作开发者已安装的客户端。
+
 ## 自动检查与缓存
 
 [CI 工作流](../../.github/workflows/ci.yml)定义运行条件、runner 与命令。[发布规范](../../RELEASING.zh.md)定义打包、签名与发布门槛。
