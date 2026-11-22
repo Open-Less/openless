@@ -1,6 +1,6 @@
 import { fixtureOrigin } from './support/server';
 import { openExperiments } from './support/experiments';
-import { openMicrophoneSettings, settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation, settleSelectDismissal } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
@@ -210,11 +210,17 @@ for (const scale of [1, 1.1]) {
     );
     await page.getByRole('option', { name: /^Option 59/ }).click();
     await expect(trigger).toContainText('Option 59');
+    await settleSelectDismissal(page);
     const searchable = page.getByRole('combobox', { name: 'Searchable menu', exact: true });
     await searchable.click();
-    await page.getByRole('combobox', { name: 'Search options', exact: true }).fill('Option 58');
-    await expect(page.getByRole('option')).toHaveCount(1);
-    await page.getByRole('option', { name: /^Option 58/ }).click();
+    const searchPopup = page.locator('.ol-select-popup[data-open]');
+    const search = searchPopup.getByRole('combobox', { name: 'Search options', exact: true });
+    await expect(search).toBeFocused();
+    await expect(searchPopup).toHaveCSS('opacity', '1');
+    await search.pressSequentially('Option 58');
+    await expect(search).toHaveValue('Option 58');
+    await expect(searchPopup.getByRole('option')).toHaveCount(1);
+    await searchPopup.getByRole('option', { name: /^Option 58/ }).click();
     await expect(searchable).toContainText('Option 58');
   });
 }
