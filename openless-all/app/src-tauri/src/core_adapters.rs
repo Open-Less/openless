@@ -4228,7 +4228,10 @@ where
 
 impl CoreTextInserter for TauriTextInserter {
     fn capture_target(&self) -> Option<CapturedTextTarget> {
+        #[cfg(not(mobile))]
         let insertion_target = crate::selection::capture_dictation_insertion_target();
+        #[cfg(mobile)]
+        let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
         let ime_target = crate::selection::ime_target_for_selection(&insertion_target);
         #[cfg(target_os = "macos")]
@@ -5629,6 +5632,7 @@ impl TauriHostContextAdapter {
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    #[cfg(not(mobile))]
     fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
         crate::selection::input_app_for_target(self.target.as_ref()?)
     }

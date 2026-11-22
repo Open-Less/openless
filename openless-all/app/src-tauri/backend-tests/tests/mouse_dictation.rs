@@ -19,3 +19,8 @@ mod recording_companion;
 #[allow(dead_code)]
 #[path = "../../src/mouse_dictation.rs"]
 mod mouse_dictation;
+
+// This standalone fixture exercises the companion routes in an Ask-enabled build.
+fn ask_anything_available() -> bool {
+    true
+}
