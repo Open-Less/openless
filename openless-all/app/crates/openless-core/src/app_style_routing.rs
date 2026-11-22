@@ -107,6 +107,34 @@ impl AppStyleAssignment {
     }
 }
 
+/// Request-only metadata; no application history, window title or document text is used.
+pub(crate) fn input_scene_prefix(
+    app: Option<&InputApp>,
+    category: Option<&str>,
+    purpose: Option<&str>,
+    guidance: Option<&str>,
+    location: Option<&str>,
+) -> String {
+    let known = |value: Option<&str>| {
+        value
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or("未知")
+            .to_owned()
+    };
+    let name = known(app.map(|app| app.name.as_str()));
+    let id = known(app.map(|app| app.id.as_str()));
+    let category = known(category);
+    let purpose = known(purpose);
+    let location = location
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or("应用内输入，无法正确确定");
+    let reference = guidance
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| format!("分类用途参考：{text}。"))
+        .unwrap_or_default();
+    format!("当前应用：{name}\n应用标识：{id}\n应用分类：{category}\n应用主要用途：{purpose}\n当前输入位置：{location}\n本次输入场景：在上述目标应用内输入。{reference}具体输入用途以本次语音为准，仅按已知信息理解术语与对象，按用户所选风格组织内容；不据此增加开发任务、技术方案或回答问题。\n请结合上述信息理解用户的输入场景，再按照后续提供的用户风格要求处理本次语音内容。保持用户的原意，不自行增加需求或推断无法确定的信息。")
+}
+
 pub(crate) struct AppStyleStore {
     pub(crate) catalog: Arc<AppCatalogStore>,
     path: PathBuf,
@@ -139,10 +167,17 @@ impl AppStyleStore {
             .map_err(Clone::clone)
     }
 
-    pub(crate) fn selection(&self, app: &InputApp) -> (Vec<String>, Option<String>) {
+    pub(crate) fn selection(
+        &self,
+        app: &InputApp,
+        location: Option<&str>,
+    ) -> (Vec<String>, String) {
         let state = self.state.lock().unwrap();
         let Ok(state) = state.as_ref() else {
-            return (Vec::new(), None);
+            return (
+                Vec::new(),
+                input_scene_prefix(Some(app), None, None, None, location),
+            );
         };
         let catalog = self.catalog.snapshot();
         let category = state.category_for(app, &catalog);
@@ -159,24 +194,21 @@ impl AppStyleStore {
         .flatten()
         .cloned()
         .collect();
-        let category_guidance = category
-            .and_then(|category| catalog.categories.iter().find(|item| item.id == category))
-            .map(|category| category.prompt_guidance.as_str());
-        let client_guidance = catalog
-            .client_for(app)
-            .map(|client| client.prompt_guidance.as_str());
-        let guidance = [category_guidance, client_guidance]
-            .into_iter()
-            .flatten()
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        (ids, (!guidance.is_empty()).then_some(guidance))
+        let category = category.and_then(|id| catalog.categories.iter().find(|item| item.id == id));
+        let client = catalog.client_for(app);
+        let prefix = input_scene_prefix(
+            Some(app),
+            category.map(|category| category.name.as_str()),
+            client.map(|client| client.prompt_guidance.as_str()),
+            category.map(|category| category.prompt_guidance.as_str()),
+            location,
+        );
+        (ids, prefix)
     }
 
     #[cfg(test)]
     fn candidates(&self, app: &InputApp) -> Vec<String> {
-        self.selection(app).0
+        self.selection(app, None).0
     }
 
     pub(crate) fn observe(&self, app: &InputApp) -> Result<(), BackendError> {
@@ -355,6 +387,19 @@ impl RoutingState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_unknowns_do_not_infer_purpose_or_location() {
+        let unknown = input_scene_prefix(None, None, None, None, None);
+        assert!(unknown
+            .starts_with("当前应用：未知\n应用标识：未知\n应用分类：未知\n应用主要用途：未知"));
+        assert!(unknown.contains("当前输入位置：应用内输入，无法正确确定"));
+        let app = InputApp::macos("org.example.unknown", Some("Search Chat IDE")).unwrap();
+        let prefix = input_scene_prefix(Some(&app), Some("编程"), Some(""), None, Some(""));
+        assert!(prefix.contains("应用主要用途：未知"));
+        assert!(prefix.contains("当前输入位置：应用内输入，无法正确确定"));
+        assert!(!prefix.contains("搜索框"));
+    }
 
     #[test]
     fn membership_moves_replace_the_category_and_preserve_specific_styles() {

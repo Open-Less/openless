@@ -9889,11 +9889,10 @@ impl OpenLessBackend {
         host_context: &dyn HostContextAdapter,
     ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
-        let input_app = if purpose == DictationContextPurpose::Dictation
+        let foreground_output = purpose == DictationContextPurpose::Dictation
             && options.insert_text
-            && options.output_target == DictationOutputTarget::ForegroundApp
-            && options.front_app.is_none()
-        {
+            && options.output_target == DictationOutputTarget::ForegroundApp;
+        let input_app = if foreground_output {
             host_context.input_app()
         } else {
             None
@@ -9902,11 +9901,24 @@ impl OpenLessBackend {
             .style_pack_id
             .as_deref()
             .filter(|id| !id.trim().is_empty());
-        let (mut assigned_ids, input_guidance) = input_app
+        // Capture target metadata before any asynchronous host or credential access.
+        let input_location = (foreground_output && preferences.cursor_context_enabled)
+            .then(|| host_context.input_location())
+            .flatten();
+        let (mut assigned_ids, input_scene_prefix) = input_app
             .as_ref()
-            .map(|app| self.app_styles.selection(app))
-            .unwrap_or_default();
-        if explicit_style.is_some() {
+            .map(|app| self.app_styles.selection(app, input_location.as_deref()))
+            .unwrap_or_else(|| {
+                (
+                    Vec::new(),
+                    crate::app_style_routing::input_scene_prefix(
+                        None, None, None, None, input_location.as_deref(),
+                    ),
+                )
+            });
+        // Caller-supplied app context preserves the existing manual-style fallback.
+        // The actual target still supplies scene metadata independently of style routing.
+        if explicit_style.is_some() || options.front_app.is_some() {
             assigned_ids.clear();
         }
         let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);
@@ -10019,17 +10031,8 @@ impl OpenLessBackend {
             recent_history,
             options,
         );
-        if let Some(guidance) = input_guidance.filter(|_| context.uses_llm_polisher()) {
-            let raw_passthrough = context.polish.mode == crate::types::PolishMode::Raw
-                && context.polish.style_system_prompt
-                    == crate::style_packs::default_style_system_prompt_for_mode(
-                        crate::types::PolishMode::Raw,
-                    );
-            context.polish.style_system_prompt.push_str("\n\n# 输入场景参考\n以下场景信息辅助理解术语与对象，具体输出遵循当前风格包。\n");
-            context.polish.style_system_prompt.push_str(&guidance);
-            if raw_passthrough {
-                context.raw_passthrough_prompt = Some(context.polish.style_system_prompt.clone());
-            }
+        if foreground_output {
+            context.polish.input_scene_prefix = Some(input_scene_prefix);
         }
         context.input_app = input_app;
         context.pipeline_mode = pipeline_mode;
