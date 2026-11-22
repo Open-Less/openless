@@ -520,3 +520,28 @@ test('the download mirror uses the shared popup above the actual narrow catalog 
   await expect(dialog).toBeVisible();
   await expect(mirror).toBeFocused();
 });
+
+test('Escape from an exiting mirror popup cancels its queued reopening', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixture}?catalog`);
+  const dialog = page.getByRole('dialog');
+  const mirror = page.getByRole('combobox', { name: 'Download mirror', exact: true });
+  await mirror.click();
+  const option = page.getByRole('option', { name: 'Mirror', exact: true });
+  await expect(option).toBeVisible();
+  // Keep the previous popup mounted, as it was during the WebKit failure.
+  await page.addStyleTag({ content: '.ol-select-popup[data-ending-style] { transition-duration: 1s !important; }' });
+  await option.click();
+  await expect(mirror).toContainText('Mirror');
+  await page.locator('.ol-select-popup .ol-select-item[data-selected]').evaluate((node) => {
+    const trigger = document.querySelector('[aria-label="Download mirror"]')!;
+    // Both events precede Base UI's next animation frame. Escape still targets
+    // the old popup while its focus handoff is pending.
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    node.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
+});

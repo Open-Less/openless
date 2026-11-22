@@ -1,5 +1,5 @@
 import { Select as BaseSelect } from '@base-ui/react/select';
-import { useRef, type CSSProperties, type ReactNode } from 'react';
+import { useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { usePopupViewport } from '../layout/AppViewport';
 
 import { Icon } from '../../components/Icon';
@@ -42,6 +42,13 @@ export function Select({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const pendingOpen = useRef<Event | null>(null);
   const cancelledOpen = useRef<Event | null>(null);
+  const cancelPendingOpen = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || event.nativeEvent.isComposing || !pendingOpen.current) return;
+    cancelledOpen.current = pendingOpen.current;
+    pendingOpen.current = null;
+    event.preventDefault();
+    event.stopPropagation();
+  };
   return (
     <BaseSelect.Root
       open={open}
@@ -76,13 +83,7 @@ export function Select({
             pendingOpen.current = event.nativeEvent;
           }
         }}
-        onKeyDownCapture={(event) => {
-          if (event.key !== 'Escape' || event.nativeEvent.isComposing || !pendingOpen.current) return;
-          cancelledOpen.current = pendingOpen.current;
-          pendingOpen.current = null;
-          event.preventDefault();
-          event.stopPropagation();
-        }}
+        onKeyDownCapture={cancelPendingOpen}
       >
         <BaseSelect.Value className="ol-select-value" placeholder={placeholder} />
         <BaseSelect.Icon>
@@ -102,6 +103,8 @@ export function Select({
           alignItemWithTrigger={false}
         >
           <BaseSelect.Popup
+            // Focus can still be inside the exiting popup when a new mouse opening is queued.
+            onKeyDownCapture={cancelPendingOpen}
             finalFocus={(interaction) => interaction === 'keyboard' ? triggerRef.current : true}
             className={['ol-select-popup', popupClassName].filter(Boolean).join(' ')}
             style={popupStyle}
