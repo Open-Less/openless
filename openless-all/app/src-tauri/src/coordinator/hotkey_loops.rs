@@ -686,6 +686,11 @@ pub(super) fn less_computer_modifier_bridge_loop(
                     handle_less_computer_released(&inner_cloned, session_id, press_id, at).await
                 });
             }
+            HotkeyEvent::StopRequested { session_id } => {
+                inner.host.block_on(async {
+                    super::dictation::handle_enter_stop(&inner_cloned, session_id).await;
+                });
+            }
             // Esc cancel and combo abort are not in this enum: they go through
             // esc_cancel_bridge_loop / combo_abort_bridge_loop (see those
             // functions).
@@ -2212,6 +2217,11 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                         );
                     });
                 }
+            }
+            HotkeyEvent::StopRequested { session_id } => {
+                inner.host.block_on(async {
+                    super::dictation::handle_enter_stop(&inner_cloned, session_id).await;
+                });
             }
             // Esc cancel and combo abort are not in this enum: they go through
             // esc_cancel_bridge_loop / combo_abort_bridge_loop so they are not

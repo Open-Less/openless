@@ -3990,6 +3990,7 @@ mod tests {
         }
         for key in [
             "settings.recording.hotkey_label",
+            "settings.recording.enter_stop_label",
             "settings.recording.microphone_label",
             "settings.recording.capsule_label",
             "settings.recording.capsule_style_label",

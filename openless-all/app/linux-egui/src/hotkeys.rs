@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use openless_core::{BackendError, BackendErrorCode};
+use openless_core::{BackendError, BackendErrorCode, SessionId};
 
 #[cfg(any(target_os = "linux", test))]
 static NEXT_PRESS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -14,6 +14,35 @@ static NEXT_PRESS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 #[derive(Default)]
 struct HotkeyPressIds {
     dictation: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(any(target_os = "linux", test))]
+static LISTENER_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(any(target_os = "linux", test))]
+static LISTENER_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn listener_active() -> bool {
+    #[cfg(any(target_os = "linux", test))]
+    {
+        LISTENER_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(any(target_os = "linux", test)))]
+    {
+        false
+    }
+}
+
+pub(crate) fn listener_generation() -> u64 {
+    #[cfg(any(target_os = "linux", test))]
+    {
+        LISTENER_GENERATION.load(std::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(any(target_os = "linux", test)))]
+    {
+        0
+    }
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -36,6 +65,7 @@ pub enum LinuxHotkeyEvent {
         press_id: u64,
         at: std::time::Instant,
     },
+    DictationEnterStopRequested { session_id: SessionId },
     DictationCombined {
         symbol: u32,
         states: u32,
@@ -71,6 +101,9 @@ impl Fcitx5HotkeyListener {
     pub fn start() -> Result<Self, BackendError> {
         #[cfg(target_os = "linux")]
         {
+            // Reset a gate left by an earlier host even if listener setup later
+            // fails; a stale plugin gate must not steal ordinary Enter input.
+            let _ = crate::fcitx5::set_dictation_enter_stop_session("");
             start_linux_listener()
         }
         #[cfg(not(target_os = "linux"))]
@@ -110,7 +143,11 @@ impl Fcitx5HotkeyListener {
 #[cfg(target_os = "linux")]
 impl Drop for Fcitx5HotkeyListener {
     fn drop(&mut self) {
+        let _ = crate::fcitx5::set_dictation_enter_stop_session("");
+        LISTENER_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
         self.stop.store(true, std::sync::atomic::Ordering::Release);
+        // The listener thread owns the DBus connection; tokens are removed there
+        // after process() exits.
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -147,13 +184,17 @@ fn start_linux_listener() -> Result<Fcitx5HotkeyListener, BackendError> {
             )
         })?;
     match startup_rx.recv() {
-        Ok(Ok(())) => Ok(Fcitx5HotkeyListener {
-            receiver: Mutex::new(event_rx),
-            error,
-            waker,
-            stop,
-            thread: Some(thread),
-        }),
+        Ok(Ok(())) => {
+            LISTENER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            LISTENER_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+            Ok(Fcitx5HotkeyListener {
+                receiver: Mutex::new(event_rx),
+                error,
+                waker,
+                stop,
+                thread: Some(thread),
+            })
+        }
         Ok(Err(error)) => {
             let _ = thread.join();
             Err(error)
@@ -183,12 +224,51 @@ fn run_listener(
             return;
         }
     };
+    let stop_events = events.clone();
+    let stop_rule = match dbus::message::MatchRule::parse(&format!(
+        "type='signal',interface='{}',member='DictationEnterStopRequested'",
+        crate::fcitx5::INTERFACE
+    )) {
+        Ok(rule) => rule.static_clone(),
+        Err(parse_error) => {
+            let _ = startup.send(Err(BackendError::new(
+                BackendErrorCode::Internal,
+                format!("invalid fcitx5 Enter-stop signal rule: {parse_error}"),
+            )));
+            return;
+        }
+    };
+    let stop_for_enter_match = Arc::clone(&stop);
+    let enter_waker = Arc::clone(&waker);
+    let stop_signal_match = match connection.add_match(
+        stop_rule,
+        move |(session_id,): (String,), _, _| {
+            let Some(event) = stop_event_from_signal(&session_id) else {
+                return true;
+            };
+            if stop_events.send(event).is_err() {
+                stop_for_enter_match.store(true, std::sync::atomic::Ordering::Release);
+                return false;
+            }
+            if let Some(thread) = enter_waker.lock().expect("hotkey waker lock poisoned").as_ref() {
+                thread.unpark();
+            }
+            true
+        },
+    ) {
+        Ok(signal_match) => signal_match,
+        Err(dbus_error) => {
+            let _ = startup.send(Err(dbus_backend_error(dbus_error)));
+            return;
+        }
+    };
     let rule = match dbus::message::MatchRule::parse(&format!(
         "type='signal',interface='{}'",
         crate::fcitx5::INTERFACE
     )) {
         Ok(rule) => rule.static_clone(),
         Err(parse_error) => {
+            let _ = connection.remove_match(stop_signal_match);
             let _ = startup.send(Err(BackendError::new(
                 BackendErrorCode::Internal,
                 format!("invalid fcitx5 hotkey signal rule: {parse_error}"),
@@ -225,6 +305,7 @@ fn run_listener(
         }) {
             Ok(signal_match) => signal_match,
             Err(dbus_error) => {
+                let _ = connection.remove_match(stop_signal_match);
                 let _ = startup.send(Err(dbus_backend_error(dbus_error)));
                 return;
             }
@@ -237,10 +318,22 @@ fn run_listener(
         if let Err(dbus_error) = connection.process(std::time::Duration::from_millis(250)) {
             *error.lock().expect("fcitx5 hotkey error lock poisoned") =
                 Some(dbus_backend_error(dbus_error));
+            LISTENER_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+            let _ = crate::fcitx5::set_dictation_enter_stop_session("");
             break;
         }
     }
     let _ = connection.remove_match(signal_match);
+    let _ = connection.remove_match(stop_signal_match);
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn stop_event_from_signal(session_id: &str) -> Option<LinuxHotkeyEvent> {
+    uuid::Uuid::parse_str(session_id)
+        .ok()
+        .map(|uuid| LinuxHotkeyEvent::DictationEnterStopRequested {
+            session_id: SessionId::from_uuid(uuid),
+        })
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -354,6 +447,12 @@ mod tests {
             event_from_signal("DictationKeyCombined", 1, 2, true, at, &press_ids),
             Some(LinuxHotkeyEvent::DictationCombined { press_id: 0, .. })
         ));
+        let session_id = SessionId::new();
+        assert_eq!(
+            stop_event_from_signal(&session_id.to_string()),
+            Some(LinuxHotkeyEvent::DictationEnterStopRequested { session_id })
+        );
+        assert!(stop_event_from_signal("not-a-session").is_none());
         assert_eq!(
             event_from_signal("QaShortcutEvent", 0, 0, true, at, &press_ids),
             Some(LinuxHotkeyEvent::QaPressed)

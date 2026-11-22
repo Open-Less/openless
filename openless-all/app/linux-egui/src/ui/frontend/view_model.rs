@@ -547,7 +547,8 @@ pub enum SettingsField {
     CapsuleTranscript,
     LlmThinking,
     MuteWhileRecording,
-    /// 轻量本机麦克风增益与软限幅。
+    /// 录音时是否允许裸 Enter 结束切换式听写。
+    EnterStopEnabled,
     AudioEnhancement,
     /// 使用桌面播放参考进行回声抑制。
     EchoCancellation,
@@ -1178,6 +1179,8 @@ pub struct SettingsFields {
     pub streaming_insert: bool,
     /// 稳定模式（先录音后识别）：上游 #1082 新增的偏好，录音期间不连接 ASR。
     pub stable_transcription: bool,
+    /// 裸 Enter 结束切换式听写（默认关闭）。
+    pub enter_stop_enabled: bool,
     pub streaming_save_clipboard: bool,
     pub restore_clipboard: bool,
     pub start_minimized: bool,
@@ -1255,6 +1258,7 @@ impl Default for SettingsFields {
             recording_mode: 0,
             streaming_insert: false,
             stable_transcription: false,
+            enter_stop_enabled: false,
             streaming_save_clipboard: false,
             restore_clipboard: false,
             start_minimized: false,

@@ -226,7 +226,7 @@ OpenLess 现阶段优先修复语音输入的稳定性与体验。录音、转�
 - 共享的 Rust 后端位于 `openless-core`。macOS、Windows 与 Android 使用轻薄的 Tauri 2 宿主加 React/TypeScript 前端；Android 另有原生键盘，Windows 另有 TSF 输入法。Linux 使用独立的原生 egui 宿主，从不编译 Tauri 或 WebKitGTK。iOS 运行原生 SwiftUI/UIKit 应用并带键盘扩展，HarmonyOS 运行 ArkTS/ArkWeb 宿主，通过同一套 napi 暴露的 Core 工作。
 - 🎨 **风格包 Marketplace**——在应用内 Marketplace 浏览、安装、点赞社区的**风格包**，也可以发布自己的（每个包一份自定义系统提示词，快捷键切换）。后端经过审核，上传内容公开前会先审核。
 - ⚡ **流式插入**——润色文本逐字写入光标以降低感知延迟，并有自动回退到一次性粘贴的机制。在 设置 → 录音 中开关。
-- **切换式与按住说话式**两种录音模式，另支持 **MediaPlayPause 触发**，让有线耳机线控也能开始/结束录音。任意阶段按 `Esc` 都可以取消，包括润色与插入阶段。
+- **切换式与按住说话式**两种录音模式，另支持 **MediaPlayPause 触发**，让有线耳机线控也能开始/结束录音。桌面端可在「设置 → 录音」开启 **按 Enter 结束录音**（默认关闭，仅切换式生效）。开启后，按不带修饰键的 `Enter`（含小键盘回车）或再次按录音快捷键，都可结束录音并开始转写。任意阶段按 `Esc` 都可以取消，包括润色与插入阶段。
 - **云端 ASR**：火山引擎流式 ASR（bigasr）、腾讯云混元实时 ASR（Hy-ASR）、讯飞实时 ASR（RTASR）、阿里云百炼（经典实时 / Qwen3 实时 / Fun-ASR-Flash 文件转写）、阶跃星辰 StepAudio（批量 + 实时）、智谱 GLM-ASR、小米 MiMo ASR、OrcaRouter 音频输入 Gemini、ElevenLabs Scribe、OpenAI 兼容批量转写（OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux），以及 Apple Speech（macOS）。
 - **本地 ASR**：Windows 上的 Foundry Local Whisper 与 sherpa-onnx（实验性）。macOS 上旧的本地模型管理已下架，改为 设置 → 实验与扩展 中的三个实验：TextStream（Qwen3-ASR on MLX，约 1.9 GB，Apple Silicon，macOS 14+）、SenseVoice Small（约 240 MB）、Embedding Gemma（约 715 MB，Apple Silicon，macOS 15+）。模型按需下载，不随安装包分发。
 - **润色渠道**：Ark（火山引擎）、DeepSeek、OpenAI、Google Gemini、Codex OAuth、SiliconFlow、Atlas Cloud、小米 MiMo、腾讯云 TokenHub、CometAPI、OpenRouter、Requesty、API Route、OrcaRouter、阿里云 Coding Plan、CodingPlanX、MiniMax、阶跃星辰，以及 OpenCode Zen——外加上你自带的任意 OpenAI 兼容端点。

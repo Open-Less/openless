@@ -15,6 +15,103 @@ use openless_linux_egui::local_hotkeys::{
 
 use crate::ui::frontend::settings::{bare_modifier_name, captured_binding};
 
+#[derive(Default)]
+pub struct EnterStopMatcher {
+    held: bool,
+    consumed: bool,
+}
+
+impl EnterStopMatcher {
+    pub fn poll(&mut self, ctx: &egui::Context, eligible_session: Option<&str>) -> Option<String> {
+        let mut requested = None;
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                let egui::Event::Key {
+                    key: egui::Key::Enter,
+                    pressed,
+                    repeat,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    return true;
+                };
+                if *pressed {
+                    if !self.held {
+                        self.held = true;
+                        self.consumed = !*repeat
+                            && *modifiers == egui::Modifiers::NONE
+                            && eligible_session.is_some();
+                        if self.consumed {
+                            requested = eligible_session.map(str::to_owned);
+                        }
+                    }
+                    !self.consumed
+                } else {
+                    let consumed = self.consumed;
+                    self.held = false;
+                    self.consumed = false;
+                    !consumed
+                }
+            });
+        });
+        requested
+    }
+}
+
+#[cfg(test)]
+mod enter_stop_tests {
+    use super::*;
+
+    fn key(pressed: bool, repeat: bool, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed,
+            repeat,
+            modifiers,
+        }
+    }
+
+    fn frame(
+        ctx: &egui::Context,
+        matcher: &mut EnterStopMatcher,
+        events: Vec<egui::Event>,
+        eligible: Option<&str>,
+    ) -> (Option<String>, usize) {
+        ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+        let result = (matcher.poll(ctx, eligible), ctx.input(|input| input.events.len()));
+        let _ = crate::ui::frontend::end_pass(ctx);
+        result
+    }
+
+    #[test]
+    fn enter_tracks_ineligible_holds_and_drains_accepted_gestures() {
+        let ctx = egui::Context::default();
+        let mut matcher = EnterStopMatcher::default();
+        let plain = egui::Modifiers::NONE;
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, false, plain)], None), (None, 1));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, true, plain)], Some("a")), (None, 1));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(false, false, plain)], None), (None, 1));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, false, egui::Modifiers::CTRL)], Some("a")), (None, 1));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, true, plain)], Some("a")), (None, 1));
+        let _ = frame(&ctx, &mut matcher, vec![key(false, false, plain)], None);
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, false, plain)], Some("a")), (Some("a".into()), 0));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, true, egui::Modifiers::SHIFT)], None), (None, 0));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(false, false, egui::Modifiers::SHIFT)], None), (None, 0));
+        assert_eq!(frame(&ctx, &mut matcher, vec![key(true, false, plain)], None), (None, 1));
+    }
+
+    #[test]
+    fn enter_press_and_release_in_one_frame_do_not_leave_a_latch() {
+        let ctx = egui::Context::default();
+        let mut matcher = EnterStopMatcher::default();
+        let tap = || vec![key(true, false, egui::Modifiers::NONE), key(false, false, egui::Modifiers::NONE)];
+        assert_eq!(frame(&ctx, &mut matcher, tap(), Some("a")), (Some("a".into()), 0));
+        assert_eq!(frame(&ctx, &mut matcher, tap(), None), (None, 2));
+    }
+}
+
 /// 一次按键的本地匹配器（每个窗口进程一份）。
 #[derive(Default)]
 pub struct LocalHotkeyMatcher {

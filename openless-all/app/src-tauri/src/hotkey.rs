@@ -19,7 +19,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -61,6 +61,119 @@ pub enum HotkeyEvent {
     /// web layer, so the recorder cannot capture it; CGEventTap detects it in recording mode and
     /// reports it so the frontend ShortcutRecorder can commit an Fn binding).
     FnRecordingPressed,
+    /// A fresh, unmodified physical Enter gesture requested stopping the live dictation session.
+    StopRequested {
+        session_id: openless_core::SessionId,
+    },
+}
+
+type EnterStopProvider = Arc<dyn Fn() -> Option<openless_core::SessionId> + Send + Sync>;
+
+/// Installs the authoritative live-session lookup used by native Enter interception. The callback
+/// runs synchronously on the native listener thread and must not perform I/O or await anything.
+pub fn set_enter_stop_provider(
+    provider: Arc<dyn Fn() -> Option<openless_core::SessionId> + Send + Sync>,
+) {
+    let slot = ENTER_STOP_PROVIDER.get_or_init(|| parking_lot::RwLock::new(None));
+    *slot.write() = Some(provider);
+}
+
+static ENTER_STOP_PROVIDER: OnceLock<parking_lot::RwLock<Option<EnterStopProvider>>> = OnceLock::new();
+
+fn enter_stop_session() -> Option<openless_core::SessionId> {
+    let provider = ENTER_STOP_PROVIDER
+        .get()
+        .and_then(|slot| slot.read().as_ref().cloned());
+    provider.and_then(|provider| provider())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnterKey {
+    Main,
+    Keypad,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EnterGesture {
+    held: bool,
+    consumed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EnterStopDecision {
+    stop: Option<openless_core::SessionId>,
+    consume: bool,
+}
+
+#[derive(Debug, Default)]
+struct EnterStopState {
+    main: EnterGesture,
+    keypad: EnterGesture,
+}
+
+impl EnterStopState {
+    fn gesture_mut(&mut self, key: EnterKey) -> &mut EnterGesture {
+        match key {
+            EnterKey::Main => &mut self.main,
+            EnterKey::Keypad => &mut self.keypad,
+        }
+    }
+
+    fn key_down(
+        &mut self,
+        key: EnterKey,
+        eligible: bool,
+        provider: impl FnOnce() -> Option<openless_core::SessionId>,
+    ) -> EnterStopDecision {
+        let gesture = self.gesture_mut(key);
+        if gesture.held {
+            return EnterStopDecision {
+                stop: None,
+                consume: gesture.consumed,
+            };
+        }
+        gesture.held = true;
+        gesture.consumed = false;
+        if eligible {
+            if let Some(session_id) = provider() {
+                gesture.consumed = true;
+                return EnterStopDecision {
+                    stop: Some(session_id),
+                    consume: true,
+                };
+            }
+        }
+        EnterStopDecision::default()
+    }
+
+    fn key_up(&mut self, key: EnterKey) -> EnterStopDecision {
+        let gesture = self.gesture_mut(key);
+        let consume = gesture.held && gesture.consumed;
+        gesture.held = false;
+        gesture.consumed = false;
+        EnterStopDecision {
+            stop: None,
+            consume,
+        }
+    }
+}
+
+fn enter_stop_event(
+    state: &mut EnterStopState,
+    key: EnterKey,
+    down: bool,
+    synthetic: bool,
+    eligible: bool,
+    provider: impl FnOnce() -> Option<openless_core::SessionId>,
+) -> EnterStopDecision {
+    if synthetic {
+        return EnterStopDecision::default();
+    }
+    if down {
+        state.key_down(key, eligible, provider)
+    } else {
+        state.key_up(key)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +203,138 @@ mod tests {
             recording_active: AtomicBool::new(false),
             recording_fn_held: AtomicBool::new(false),
         }
+    }
+
+    #[test]
+    fn enter_stop_tracks_unconsumed_hold_until_matching_release() {
+        let mut state = EnterStopState::default();
+        assert_eq!(
+            state.key_down(EnterKey::Main, false, || Some(openless_core::SessionId::new())),
+            EnterStopDecision::default()
+        );
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || Some(openless_core::SessionId::new())),
+            EnterStopDecision::default(),
+            "a hold that began before eligibility must not stop on repeat"
+        );
+        assert_eq!(state.key_up(EnterKey::Main), EnterStopDecision::default());
+    }
+
+    #[test]
+    fn enter_stop_consumes_one_eligible_gesture_and_its_repeat_and_release() {
+        let mut state = EnterStopState::default();
+        let session_id = openless_core::SessionId::new();
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || Some(session_id)),
+            EnterStopDecision {
+                stop: Some(session_id),
+                consume: true,
+            }
+        );
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || panic!("repeat must not query provider")),
+            EnterStopDecision {
+                stop: None,
+                consume: true,
+            }
+        );
+        assert_eq!(
+            state.key_up(EnterKey::Main),
+            EnterStopDecision {
+                stop: None,
+                consume: true,
+            }
+        );
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || None),
+            EnterStopDecision::default()
+        );
+    }
+
+    #[test]
+    fn enter_stop_keeps_main_and_keypad_gestures_independent() {
+        let mut state = EnterStopState::default();
+        let main_id = openless_core::SessionId::new();
+        let keypad_id = openless_core::SessionId::new();
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || Some(main_id)).stop,
+            Some(main_id)
+        );
+        assert_eq!(
+            state.key_down(EnterKey::Keypad, true, || Some(keypad_id)).stop,
+            Some(keypad_id)
+        );
+        assert!(state.key_up(EnterKey::Main).consume);
+        assert!(state.key_up(EnterKey::Keypad).consume);
+    }
+
+    #[test]
+    fn enter_stop_modified_and_ineligible_presses_pass_through() {
+        let mut state = EnterStopState::default();
+        assert!(!state
+            .key_down(EnterKey::Main, false, || Some(openless_core::SessionId::new()))
+            .consume);
+        assert!(!state.key_up(EnterKey::Main).consume);
+        assert!(!state.key_down(EnterKey::Keypad, true, || None).consume);
+        assert!(!state.key_up(EnterKey::Keypad).consume);
+    }
+
+    #[test]
+    fn enter_stop_injected_press_is_tracked_but_never_stops_on_repeat() {
+        let mut state = EnterStopState::default();
+        assert_eq!(
+            state.key_down(EnterKey::Main, false, || Some(openless_core::SessionId::new())),
+            EnterStopDecision::default()
+        );
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || panic!("injected hold must not query provider")),
+            EnterStopDecision::default()
+        );
+        assert_eq!(state.key_up(EnterKey::Main), EnterStopDecision::default());
+    }
+
+    #[test]
+    fn enter_stop_ignoring_synthetic_interleaving_preserves_physical_gesture() {
+        let mut state = EnterStopState::default();
+        let session_id = openless_core::SessionId::new();
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || Some(session_id)),
+            EnterStopDecision {
+                stop: Some(session_id),
+                consume: true,
+            }
+        );
+        // Synthetic down/up pairs bypass EnterStopState entirely.
+        assert_eq!(
+            enter_stop_event(
+                &mut state,
+                EnterKey::Main,
+                true,
+                true,
+                true,
+                || panic!("synthetic down must not query provider"),
+            ),
+            EnterStopDecision::default()
+        );
+        assert_eq!(
+            enter_stop_event(
+                &mut state,
+                EnterKey::Main,
+                false,
+                true,
+                true,
+                || panic!("synthetic up must not query provider"),
+            ),
+            EnterStopDecision::default()
+        );
+        assert_eq!(
+            state.key_down(EnterKey::Main, true, || panic!("physical repeat must not re-query")),
+            EnterStopDecision {
+                stop: None,
+                consume: true,
+            }
+        );
+        assert!(state.key_up(EnterKey::Main).consume);
     }
 
     #[test]
@@ -620,6 +865,12 @@ mod platform {
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
 
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
+    /// CGEvent fields documented by CoreGraphics. Events created by this process carry its PID;
+    /// those posted by unicode insertion must not become a new stop gesture.
+    const EVENT_SOURCE_UNIX_PROCESS_ID: CgEventField = 41;
+
+    const MAIN_ENTER_KEYCODE: i64 = 36;
+    const KEYPAD_ENTER_KEYCODE: i64 = 76;
 
     const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
@@ -685,6 +936,9 @@ mod platform {
         /// Under Auto / Toggle, Fn dispatch is deferred until release: short press dispatches,
         /// long press or function-layer combos are dropped.
         fn_pressed_at: parking_lot::Mutex<Option<std::time::Instant>>,
+        /// Per-key Enter gesture state. Kept in the listener so accepted key-up events remain
+        /// consumed even if the coordinator changes phase or shortcut-recording mode meanwhile.
+        enter_stop: parking_lot::Mutex<super::EnterStopState>,
         /// (tap, runloop) refs shared with MacHotkeyAdapter. Tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT goes through handles.tap; adapter shutdown uses both locks.
         handles: Arc<MacShutdownHandles>,
@@ -714,6 +968,7 @@ mod platform {
             cancel_tx,
             combo_tx,
             fn_pressed_at: parking_lot::Mutex::new(None),
+            enter_stop: parking_lot::Mutex::new(super::EnterStopState::default()),
             handles: Arc::clone(&handles),
         }));
 
@@ -778,14 +1033,23 @@ mod platform {
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
-                if !ctx.shared.recording_active.load(Ordering::SeqCst)
+                let flags = unsafe { CGEventGetFlags(event) };
+                let shortcut_consumed = !ctx.shared.recording_active.load(Ordering::SeqCst)
                     && crate::side_aware_combo::platform::dispatch_keycode(
                         keycode,
                         false,
-                        unsafe { CGEventGetFlags(event) },
+                        flags,
                         true,
-                    )
-                {
+                    );
+                let consumed = handle_enter_key(
+                    ctx,
+                    keycode,
+                    true,
+                    flags,
+                    event_is_synthetic(event),
+                    shortcut_consumed,
+                );
+                if shortcut_consumed {
                     crate::side_aware_combo::handle_companion_key_down();
                     note_companion_key_down(ctx);
                     return std::ptr::null_mut();
@@ -797,15 +1061,18 @@ mod platform {
                 if keycode == ESC_KEYCODE && esc_exclusive() {
                     return std::ptr::null_mut();
                 }
+                if consumed {
+                    return std::ptr::null_mut();
+                }
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if crate::side_aware_combo::platform::dispatch_keycode(
-                    keycode,
-                    false,
-                    unsafe { CGEventGetFlags(event) },
-                    false,
-                ) {
+                let flags = unsafe { CGEventGetFlags(event) };
+                let consumed =
+                    handle_enter_key(ctx, keycode, false, flags, event_is_synthetic(event), false);
+                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, flags, false)
+                    || consumed
+                {
                     return std::ptr::null_mut();
                 }
             }
@@ -818,6 +1085,56 @@ mod platform {
             _ => {}
         }
         event
+    }
+
+    fn enter_key(keycode: i64) -> Option<super::EnterKey> {
+        match keycode {
+            MAIN_ENTER_KEYCODE => Some(super::EnterKey::Main),
+            KEYPAD_ENTER_KEYCODE => Some(super::EnterKey::Keypad),
+            _ => None,
+        }
+    }
+
+    fn event_is_synthetic(event: CgEventRef) -> bool {
+        unsafe {
+            CGEventGetIntegerValueField(event, EVENT_SOURCE_UNIX_PROCESS_ID)
+                == std::process::id() as i64
+        }
+    }
+
+    fn handle_enter_key(
+        ctx: &CallbackContext,
+        keycode: i64,
+        down: bool,
+        flags: CgEventFlags,
+        synthetic: bool,
+        shortcut_consumed: bool,
+    ) -> bool {
+        let Some(key) = enter_key(keycode) else {
+            return false;
+        };
+        let modifier_mask = FLAG_MASK_SHIFT
+            | FLAG_MASK_CONTROL
+            | FLAG_MASK_ALTERNATE
+            | FLAG_MASK_COMMAND
+            | FLAG_MASK_SECONDARY_FN;
+        let eligible = down
+            && !shortcut_consumed
+            && !ctx.shared.recording_active.load(Ordering::SeqCst)
+            && ctx.shared.binding.read().mode == HotkeyMode::Toggle
+            && (flags & modifier_mask) == 0;
+        let decision = super::enter_stop_event(
+            &mut *ctx.enter_stop.lock(),
+            key,
+            down,
+            synthetic,
+            eligible,
+            super::enter_stop_session,
+        );
+        if let Some(session_id) = decision.stop {
+            send_or_log(&ctx.tx, HotkeyEvent::StopRequested { session_id });
+        }
+        decision.consume
     }
 
     fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
@@ -1204,6 +1521,7 @@ mod platform {
                     cancel_tx,
                     combo_tx,
                     fn_pressed_at: parking_lot::Mutex::new(None),
+                    enter_stop: parking_lot::Mutex::new(super::super::EnterStopState::default()),
                     handles: Arc::new(MacShutdownHandles {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
@@ -1489,6 +1807,8 @@ mod platform {
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
+    #[cfg(not(test))]
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
         TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
@@ -1501,13 +1821,16 @@ mod platform {
         update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyCombinedEdge, HotkeyEvent, Shared,
         StartupTx,
     };
-    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
+    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyMode, HotkeyTrigger};
 
     const WM_KEYDOWN: usize = 0x0100;
     const WM_KEYUP: usize = 0x0101;
     const WM_SYSKEYDOWN: usize = 0x0104;
     const WM_SYSKEYUP: usize = 0x0105;
 
+    const LLKHF_LOWER_IL_INJECTED: u32 = 0x02;
+    const LLKHF_INJECTED: u32 = 0x10;
+    const VK_RETURN: u32 = 0x0D;
     const VK_ESCAPE: u32 = 0x1B;
     const VK_SHIFT: u32 = 0x10;
     const VK_CONTROL: u32 = 0x11;
@@ -1605,6 +1928,7 @@ mod platform {
         /// Combo-abort-only channel, see module docs — must not share tx's serial bridge.
         combo_tx: Sender<HotkeyCombinedEdge>,
         hook: std::sync::Mutex<Option<HHOOK>>,
+        enter_stop: parking_lot::Mutex<super::EnterStopState>,
     }
 
     fn run_listen_loop(
@@ -1621,6 +1945,7 @@ mod platform {
             cancel_tx,
             combo_tx,
             hook: std::sync::Mutex::new(None),
+            enter_stop: parking_lot::Mutex::new(super::EnterStopState::default()),
         }));
         HOOK_CONTEXT.set(context);
 
@@ -1686,16 +2011,22 @@ mod platform {
         if code == HC_ACTION as i32 && lparam.0 != 0 {
             if let Some(ctx) = callback_context() {
                 let keyboard = *(lparam.0 as *const KBDLLHOOKSTRUCT);
-                // Synthetic input (SendInput/keybd_event) and real keyboards share the same
-                // dispatch path. As long as the event's virtual key matches the current
-                // configuration, the existing edge dedup and combo-abort logic still decide
-                // whether OpenLess fires; no filtering by synthetic-input source here.
+                let keyboard_flags = keyboard.flags.0;
+                let injected =
+                    (keyboard_flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)) != 0;
                 let vk_code = crate::side_aware_combo::normalize_windows_vk(
                     keyboard.vkCode,
                     keyboard.scanCode,
-                    keyboard.flags.0 & LLKHF_EXTENDED.0 != 0,
+                    keyboard_flags & LLKHF_EXTENDED.0 != 0,
                 );
-                if dispatch_keyboard_event(ctx, vk_code, wparam.0) {
+                if dispatch_keyboard_event_with_details(
+                    ctx,
+                    vk_code,
+                    keyboard.scanCode,
+                    keyboard_flags,
+                    wparam.0,
+                    injected,
+                ) {
                     return LRESULT(1);
                 }
             }
@@ -1713,13 +2044,59 @@ mod platform {
         }
     }
 
+    #[cfg(test)]
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
-        // Shortcut recording receives real keyboard events in the frontend; the main
-        // dictation/Agent hooks must not swallow keys.
-        if ctx.shared.recording_active.load(Ordering::SeqCst) {
-            return false;
-        }
+        dispatch_keyboard_event_with_details(ctx, vk_code, 0, 0, message, false)
+    }
+
+    fn dispatch_keyboard_event_with_details(
+        ctx: &CallbackContext,
+        vk_code: u32,
+        scan_code: u32,
+        flags: u32,
+        message: usize,
+        injected: bool,
+    ) -> bool {
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+        let recording_shortcut = ctx.shared.recording_active.load(Ordering::SeqCst);
+        // Keep configured shortcuts and QA companion chords ahead of bare Enter.
+        let enter_shortcut_consumed = vk_code == VK_RETURN
+            && !recording_shortcut
+            && crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
+        let enter_consume = if vk_code == VK_RETURN {
+            let key = if flags & LLKHF_EXTENDED.0 != 0 || scan_code == 0xE01C {
+                super::EnterKey::Keypad
+            } else {
+                super::EnterKey::Main
+            };
+            let modifier_down = windows_modifiers_down();
+            let eligible = pressed
+                && !recording_shortcut
+                && !enter_shortcut_consumed
+                && ctx.shared.binding.read().mode == HotkeyMode::Toggle
+                && !modifier_down;
+            let decision = super::enter_stop_event(
+                &mut *ctx.enter_stop.lock(),
+                key,
+                pressed,
+                injected,
+                eligible,
+                super::enter_stop_session,
+            );
+            if let Some(session_id) = decision.stop {
+                send_or_log(&ctx.tx, HotkeyEvent::StopRequested { session_id });
+            }
+            decision.consume
+        } else {
+            false
+        };
+
+        // Shortcut recording receives real keyboard events in the frontend; the main
+        // dictation/Agent hooks must not swallow keys. A previously accepted Enter gesture is
+        // still drained above so its matching repeat/up cannot leak after the phase changes.
+        if recording_shortcut {
+            return enter_consume;
+        }
         if vk_code == VK_ESCAPE && super::capsule_menu_open() { return false; }
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             crate::side_aware_combo::handle_companion_key_down();
@@ -1731,7 +2108,10 @@ mod platform {
             return esc_exclusive();
         }
 
-        if crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed) {
+        if enter_shortcut_consumed
+            || (vk_code != VK_RETURN
+                && crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed))
+        {
             if pressed {
                 crate::side_aware_combo::handle_companion_key_down();
                 note_companion_key_down(ctx);
@@ -1742,6 +2122,10 @@ mod platform {
         if pressed && !is_modifier_vk(vk_code) {
             crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
+        }
+
+        if enter_consume {
+            return true;
         }
 
         // Shift (either side) = translation-mode modifier. A press takes effect at any time during
@@ -1842,6 +2226,21 @@ mod platform {
             _ => {}
         }
         true
+    }
+
+    fn windows_modifiers_down() -> bool {
+        #[cfg(test)]
+        {
+            false
+        }
+        #[cfg(not(test))]
+        unsafe {
+            GetAsyncKeyState(VK_CONTROL as i32) < 0
+                || GetAsyncKeyState(VK_MENU as i32) < 0
+                || GetAsyncKeyState(VK_SHIFT as i32) < 0
+                || GetAsyncKeyState(VK_LWIN as i32) < 0
+                || GetAsyncKeyState(VK_RWIN as i32) < 0
+        }
     }
 
     /// A non-modifier key pressed while the trigger is held = the user is typing a combo
@@ -1989,6 +2388,7 @@ mod platform {
                     cancel_tx,
                     combo_tx: combo_abort_tx,
                     hook: std::sync::Mutex::new(None),
+                    enter_stop: parking_lot::Mutex::new(super::super::EnterStopState::default()),
                 },
                 rx,
                 combo_abort_rx,
