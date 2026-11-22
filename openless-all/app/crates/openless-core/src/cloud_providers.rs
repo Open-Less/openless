@@ -3649,6 +3649,64 @@ mod tests {
         }
     }
 
+    /// Explicit, neutral, bounded official-provider acceptance; never a normal CI gate.
+    #[tokio::test]
+    #[ignore = "paid official DeepSeek calls; manual opt-in and DEEPSEEK_API_KEY required"]
+    async fn style_live_official_deepseek() {
+        use crate::style_packs::{builtin_intent_pack, builtin_style_pack_for_mode, StylePack};
+        let key = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY is required");
+        assert!(!key.trim().is_empty(), "DEEPSEEK_API_KEY is required");
+        let credentials = Arc::new(crate::InMemoryCredentialStore::default());
+        for (account, value) in [(LLM_API_KEY_ACCOUNT, key.as_str()), (LLM_ENDPOINT_ACCOUNT, crate::deepseek_suite::ENDPOINT)] {
+            credentials.write(CredentialKey::new(CredentialNamespace::Llm, Some("deepseek".into()), account).unwrap(), crate::SecretValue::new(value)).await.unwrap();
+        }
+        drop(key);
+        let polisher = SharedCloudTextPolisher::new(credentials);
+        let intent = builtin_intent_pack();
+        let structured = builtin_style_pack_for_mode(crate::PolishMode::Structured);
+        let custom = StylePack {
+            id: "live.custom-question".into(),
+            prompt: "整理本轮口述，保留原意、问句、未决事项和语气，只输出整理正文；不回答问题、不补事实或方案。".into(),
+            ..StylePack::default()
+        };
+        let long = "请整理图书馆网站的改版需求，先讨论，不要直接实施。文档页需要清楚的目录和保留原来的链接。首页视频和介绍文字也都要整理，所以范围是整个官网。页面内查看，不跳转，保持当前内容展示。".repeat(12)
+            + "最后补充：保留 English API、OpenLess 和 v2.0.2 的原写法，移动端与大字号也要可读；离线与实时更新还没决定，两种要求先保留。这样安排合适吗？";
+        let cases = [
+            ("scope", &intent, false, "我想优化官网文档。后来想了想，首页视频和文字也都要一起整理，范围应该是整个官网内容。不要跳转，保持在当前页面展示。这样可以吗？", "整体范围应为官网内容，保留页面内展示/不跳转，末尾仍是问题"),
+            ("replace", &structured, false, "约周三，不对，改周四下午", "只留周四下午，不保留周三"),
+            ("alternatives", &intent, false, "周三或周四都可以", "保留周三和周四两个选项"),
+            ("retract", &structured, false, "请增加导出按钮，算了，撤回导出按钮。搜索框和原来的深色主题都要保留。", "不增加导出按钮；保留搜索框与深色主题"),
+            ("simple_builtin_translation", &intent, true, "今晚吃面条，饭后去散步。", "英语自然表达两个日常事项，不加模板与事实"),
+            ("question_custom_translation", &custom, true, "这个方案可以吗？我只是想讨论，暂时不要实施。", "英语问句仍为问句，保留讨论/暂不实施，不替用户回答"),
+            ("unresolved", &intent, false, "必须离线使用，但也必须实时从服务器获取更新，我还没有决定怎么取舍。", "保留两项冲突要求和未决状态，不给折中方案"),
+            ("long", &structured, false, long.as_str(), "整体官网范围前置；所有独有约束、例外、术语、未决冲突与问句保留，只去重复"),
+        ];
+        crate::polish::live_acceptance::begin();
+        for (case, pack, translate, input, expectation) in cases {
+            let mut prefs = crate::UserPreferences::default();
+            prefs.translation_target_language = "English".into();
+            prefs.working_languages = vec!["简体中文".into()];
+            let mut invocation = crate::ProviderInvocation::for_provider("deepseek");
+            invocation.model = Some(crate::deepseek_suite::MODEL.into());
+            let context = DictationContext::capture(&prefs, pack,
+                crate::dictation_context::DictationProviderInvocations::new(crate::ProviderInvocation::for_provider("fixture-asr"), invocation, crate::ProviderInvocation::for_provider("unused")),
+                Vec::new(), Vec::new(), &crate::DictationStartOptions { translation_requested: translate, ..Default::default() });
+            let _ = crate::polish::live_acceptance::take_model();
+            let result = polisher.polish(SessionId::new(), Arc::new(context), input.into(), Arc::new(IgnoreTextStreamSink)).await
+                .unwrap_or_else(|error| panic!("{case}: official request failed, code={:?}", error.code));
+            println!("LIVE_STYLE {}", serde_json::json!({
+                "case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
+                "channel":"official DeepSeek acceptance (not verified user Ark channel)",
+                "requested_model":crate::deepseek_suite::MODEL,
+                "response_model":crate::polish::live_acceptance::take_model(),
+                "style_id":pack.id,"translation":translate,"input":input,
+                "source_output":result.source_text,"output":result.text,
+                "expected_semantics":expectation,"semantic_review":"pending human/agent review; transport success is not semantic pass"
+            }));
+            assert!(!result.text.trim().is_empty(), "{case}: empty output");
+        }
+    }
+
     struct IgnoreTextStreamSink;
 
     impl TextStreamSink for IgnoreTextStreamSink {

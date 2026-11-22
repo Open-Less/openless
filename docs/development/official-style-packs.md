@@ -58,3 +58,17 @@
 ## 跨版本补充验收
 
 `tests/fixtures/intent-reconstruction-v1-projection.json` 是当前 1.1.0 完整提示词的最小 StylePackRecord 序列化样本（pack + icon），去掉设备字段 iconPath 和 active、kind 投影 imported。对应测试逐字段对比当前 Rust 内置包的实际序列化，验证来源/版本/听写指令/选区指令/语音编辑指令/基础模式/示例/推荐模型任一行为配置变更都保持 imported，且 Store 后续初始化不覆盖。
+
+## 可选真实模型验收入口
+
+复用搜索组的 cargo ignored 测试约定，在应用目录运行：
+
+```sh
+cargo test --locked -p openless-core --lib style_live_official_deepseek -- --ignored --nocapture --test-threads=1
+```
+
+普通测试会忽略此入口。`.github/workflows/ci.yml` 的手动参数 `live_acceptance` 默认 off；只有显式选择 style/search 才运行官方模型验收并跳过普通多平台检查。先无凭据构建，只有执行步骤从仓库 Secret 注入 DEEPSEEK_API_KEY，凭据不出现在文件、argv 或日志。搜索选项需要对应搜索提交已在所选基线上，测试不存在会失败而非空跑成功。不要为获取 Secret 合并到 beta。
+
+风格测试固定官方 endpoint `https://api.deepseek.com/v1` 和源码配置模型 `deepseek-flash`，不接收任意 endpoint 参数，也不等于核实用户 Ark 渠道型号。复用 SharedCloudTextPolisher、冻结的 DictationContext 和实际提示词合成。八个主请求分别覆盖范围扩大、改口、并列选项、明确撤回、简单日常、问句、未决冲突、长输入；意图包与清晰结构为主，日常例走内置翻译，问句例走非内置翻译。翻译协议缺失触发的已有 fallback 也计入总上限十次；仅在测试构建中启用发送计数并禁用网络重试，接口或凭据错误立即停止。
+
+每例以 LIVE_STYLE JSON 记录公开响应 model、请求模型、渠道、style ID、输入、整理源文（翻译时）和最终输出，附预期语义和 pending review 标记；不记录 SSE 原始数据或隐藏推理。HTTP 成功不代表语义通过，必须阅读输出逐项确认，实际结果单独记录。GitHub 保存公共输出日志 artifact，不包含凭据。常规检查在这类手动运行中被跳过，不能说它们已经通过。

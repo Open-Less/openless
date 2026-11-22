@@ -1844,6 +1844,11 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
+    #[cfg(test)]
+    if live_acceptance::active() {
+        live_acceptance::before_send()?;
+        return request.send().await.map_err(llm_error_from_reqwest);
+    }
     const RETRY_DELAY_MS: u64 = 500;
     let Some(initial) = request.try_clone() else {
         // try_clone failed (e.g. stream body is not cloneable) -> skip retry, send once.
@@ -5626,4 +5631,31 @@ mod tests {
 
         server.join().unwrap();
     }
+}
+
+// Only the explicitly selected ignored live test enables this probe. It bounds
+// actual HTTP sends (including translation fallback), disables network retries,
+// and observes the public response model without retaining raw SSE or reasoning.
+#[cfg(test)]
+pub(crate) mod live_acceptance {
+    use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Mutex};
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static SENDS: AtomicUsize = AtomicUsize::new(0);
+    static RESPONSE_MODEL: Mutex<Option<String>> = Mutex::new(None);
+    pub fn begin() { SENDS.store(0, Ordering::SeqCst); ACTIVE.store(true, Ordering::SeqCst); }
+    pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
+    pub fn before_send() -> Result<(), super::LLMError> {
+        if SENDS.fetch_add(1, Ordering::SeqCst) >= 10 {
+            return Err(super::LLMError::Network("live acceptance request limit reached".into()));
+        }
+        Ok(())
+    }
+    pub fn observe_model(value: &serde_json::Value) {
+        if active() {
+            if let Some(model) = value["model"].as_str() {
+                *RESPONSE_MODEL.lock().unwrap() = crate::usage_ledger::sanitized_identifier(model);
+            }
+        }
+    }
+    pub fn take_model() -> Option<String> { RESPONSE_MODEL.lock().unwrap().take() }
 }
