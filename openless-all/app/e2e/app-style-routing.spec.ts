@@ -52,13 +52,7 @@ async function choose(page: Page, target: string, name: string) {
 
 async function revealField(page: Page, label: string) {
   const field = page.getByRole('combobox', { name: label, exact: true });
-  if (await field.count()) return field;
-  const right = page.locator('.ol-app-style-panel').nth(1);
-  const previous = right.locator('.ol-app-style-pagination button').first();
-  while ((await previous.count()) && (await previous.isEnabled())) await previous.click();
-  const next = right.locator('.ol-app-style-pagination button').last();
-  while ((await field.count()) === 0 && (await next.count()) && (await next.isEnabled()))
-    await next.click();
+  await field.scrollIntoViewIfNeeded();
   return field;
 }
 
@@ -101,6 +95,16 @@ test('preselects official apps, moves a conflicting app, and assigns a newly obs
   await page.getByRole('button', { name: '编程的应用', exact: true }).click();
   const chatgpt = page.getByRole('checkbox', { name: 'ChatGPT', exact: true });
   await expect(chatgpt).toBeChecked();
+  const appDialog = page.getByRole('dialog', { name: '选择应用', exact: true });
+  await expect(appDialog.getByRole('checkbox')).toHaveText([
+    'ChatGPT',
+    'Orca',
+    'Visual Studio Code',
+    'Custom Editor',
+    'Mail',
+    'Notes',
+    'WeChat',
+  ]);
   const wechat = page.getByRole('checkbox', { name: 'WeChat', exact: true });
   await expect(wechat).toHaveAttribute('data-conflict', 'true');
   await wechat.click();
@@ -110,7 +114,6 @@ test('preselects official apps, moves a conflicting app, and assigns a newly obs
   await expect(move).toContainText('聊天');
   await expect(move).toContainText('正式表达');
   await move.getByRole('button', { name: '移到此分类' }).click();
-  const appDialog = page.getByRole('dialog', { name: '选择应用', exact: true });
   await expect(appDialog.locator('.ol-dialog-footer')).toHaveCSS(
     'background-color',
     'rgba(0, 0, 0, 0)',
@@ -118,6 +121,15 @@ test('preselects official apps, moves a conflicting app, and assigns a newly obs
   await expect(appDialog.locator('.ol-dialog-footer')).toHaveCSS('border-top-width', '0px');
   await expect(appDialog.getByRole('checkbox', { name: 'WeChat', exact: true })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Custom Editor', exact: true }).click();
+  await expect(appDialog.getByRole('checkbox')).toHaveText([
+    'ChatGPT',
+    'Custom Editor',
+    'Orca',
+    'Visual Studio Code',
+    'WeChat',
+    'Mail',
+    'Notes',
+  ]);
   await page.getByRole('checkbox', { name: 'Visual Studio Code', exact: true }).click();
   await appDialog.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(await revealField(page, 'WeChat的风格包')).toHaveText('跟随分类（清晰结构）');
@@ -127,7 +139,7 @@ test('preselects official apps, moves a conflicting app, and assigns a newly obs
   );
 });
 
-test('refreshes inherited styles and paginates records on a non-scrolling board', async ({
+test('searches and scrolls compact app cards and category choices on the fixed board', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 980, height: 640 });
@@ -140,22 +152,37 @@ test('refreshes inherited styles and paginates records on a non-scrolling board'
     '跟随分类（清晰结构）',
   );
   const body = surface.locator('.ol-app-style-panel-body').nth(1);
-  expect(await body.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
   const right = surface.locator('.ol-app-style-panel').nth(1);
-  const seen = new Set<string>();
-  while (true) {
-    for (const name of await right
-      .getByRole('combobox')
-      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')!)))
-      seen.add(name);
-    const next = right.getByRole('button', { name: '下一页', exact: true });
-    if (await next.isDisabled()) break;
-    await next.click();
-  }
-  expect(seen.size).toBe(41);
-  await expect(
-    right.getByRole('combobox', { name: 'Writing app 9的风格包', exact: true }),
-  ).toBeVisible();
+  await expect(right.getByRole('combobox')).toHaveCount(41);
+  expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+  await body.hover();
+  await page.mouse.wheel(0, 500);
+  await expect.poll(() => body.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  const last = right.getByRole('combobox', { name: 'Writing app 34的风格包', exact: true });
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toBeInViewport();
+  const search = right.getByRole('textbox', { name: '搜索应用' });
+  await search.fill('  nOtEs  ');
+  await expect(right.getByRole('combobox')).toHaveCount(1);
+  await choose(page, 'Notes', '正式表达');
+  const row = right.locator('.ol-app-style-row');
+  const name = await row.locator('.ol-app-style-name').boundingBox();
+  const field = await row.getByRole('combobox').boundingBox();
+  expect(field!.x).toBeGreaterThanOrEqual(name!.x + name!.width);
+  expect(field!.y + field!.height / 2).toBeCloseTo(name!.y + name!.height / 2, 0);
+  await search.fill('no matching application');
+  await expect(right.getByRole('combobox')).toHaveCount(0);
+  await expect(right).toContainText('没有匹配的应用');
+  await search.fill('');
+  await expect(right.getByRole('combobox', { name: 'Notes的风格包', exact: true })).toHaveText(
+    '正式表达',
+  );
+  const firstRows = right.locator('.ol-app-style-row');
+  await firstRows.first().scrollIntoViewIfNeeded();
+  const firstRow = await firstRows.nth(0).boundingBox();
+  const nextRow = await firstRows.nth(1).boundingBox();
+  expect(nextRow!.y - firstRow!.y - firstRow!.height).toBeLessThanOrEqual(12);
+  await expect(right.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0);
   const after = await clear.boundingBox();
   expect(after!.y).toBeCloseTo(before!.y, 0);
   expect(await surface.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
@@ -167,14 +194,26 @@ test('refreshes inherited styles and paginates records on a non-scrolling board'
   const dialog = page.getByRole('dialog', { name: '选择应用', exact: true });
   await expect(dialog.locator('.ol-app-members-heading')).toContainText('编程');
   await dialog.getByRole('textbox', { name: '搜索应用' }).fill('Writing app');
-  await expect(dialog.getByRole('checkbox')).toHaveCount(9);
-  await dialog.getByRole('button', { name: '下一页', exact: true }).click();
-  await expect(dialog.getByRole('checkbox')).toHaveCount(9);
+  await expect(dialog.getByRole('checkbox')).toHaveCount(35);
   expect(
     await dialog
       .locator('.ol-dialog-body')
-      .evaluate((node) => node.scrollHeight <= node.clientHeight + 1),
+      .evaluate((node) => node.scrollHeight > node.clientHeight),
   ).toBe(true);
+  const dialogBody = dialog.locator('.ol-dialog-body');
+  await dialogBody.hover();
+  await page.mouse.wheel(0, 500);
+  await expect.poll(() => dialogBody.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  const lastApp = dialog.getByRole('checkbox', { name: 'Writing app 34', exact: true });
+  await lastApp.scrollIntoViewIfNeeded();
+  await expect(lastApp).toBeInViewport();
+  await lastApp.click();
+  await expect(dialog.getByRole('checkbox').first()).toHaveAttribute(
+    'aria-label',
+    'Writing app 34',
+  );
+  await expect(dialog.getByRole('checkbox').first()).toBeChecked();
+  await expect(dialog.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0);
 });
 
 test('keeps the new page usable with longer translated labels and larger text', async ({

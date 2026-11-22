@@ -13,41 +13,6 @@ const iconButtonStyle: CSSProperties = {
   height: 30,
 };
 
-export function AppStylePagination({
-  page,
-  pages,
-  onChange,
-  disabled = false,
-}: {
-  page: number;
-  pages: number;
-  onChange: (page: number) => void;
-  disabled?: boolean;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="ol-app-style-pagination">
-      <Button
-        icon="chevLeft"
-        style={iconButtonStyle}
-        ariaLabel={t('appStyles.previousPage')}
-        disabled={disabled || page === 0}
-        onClick={() => onChange(page - 1)}
-      />
-      <span aria-live="polite">
-        {page + 1} / {pages}
-      </span>
-      <Button
-        icon="chevRight"
-        style={iconButtonStyle}
-        ariaLabel={t('appStyles.nextPage')}
-        disabled={disabled || page + 1 >= pages}
-        onClick={() => onChange(page + 1)}
-      />
-    </div>
-  );
-}
-
 export interface AppMemberOption {
   id: string;
   name: string;
@@ -67,17 +32,21 @@ export function AppMembershipPicker({
   busy: boolean;
   onToggle: (app: AppMemberOption) => Promise<void>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const title = useId();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(0);
   const selected = options.filter((app) => app.category === category).length;
-  const visible = options.filter((app) =>
-    app.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-  );
-  const pages = Math.max(1, Math.ceil(visible.length / 9));
-  const currentPage = Math.min(page, pages - 1);
+  const visible = options
+    .filter((app) => app.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
+    .sort(
+      (a, b) =>
+        Number(b.category === category) - Number(a.category === category) ||
+        a.name.localeCompare(b.name, i18n.resolvedLanguage ?? i18n.language, {
+          sensitivity: 'base',
+          numeric: true,
+        }),
+    );
   return (
     <>
       <Button
@@ -92,7 +61,6 @@ export function AppMembershipPicker({
         ariaLabel={t('appStyles.appsFor', { name: categoryName })}
         onClick={() => {
           setSearch('');
-          setPage(0);
           setOpen(true);
         }}
       >
@@ -126,15 +94,12 @@ export function AppMembershipPicker({
               aria-label={t('appStyles.searchApps')}
               placeholder={t('appStyles.searchApps')}
               value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setPage(0);
-              }}
+              onChange={(event) => setSearch(event.target.value)}
             />
           </div>
           <DialogBody>
             <div className="ol-app-members-grid" role="group" aria-label={categoryName}>
-              {visible.slice(currentPage * 9, (currentPage + 1) * 9).map((app) => {
+              {visible.map((app) => {
                 const checked = app.category === category;
                 const conflict = app.category !== null && !checked;
                 return (
@@ -163,12 +128,6 @@ export function AppMembershipPicker({
           </DialogBody>
           <DialogFooter>
             <span>{t('appStyles.selectedApps', { count: selected })}</span>
-            <AppStylePagination
-              page={currentPage}
-              pages={pages}
-              onChange={setPage}
-              disabled={busy}
-            />
           </DialogFooter>
         </Dialog>
       )}

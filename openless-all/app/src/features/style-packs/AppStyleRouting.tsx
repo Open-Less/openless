@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   AppStyleAssignment,
@@ -29,14 +22,11 @@ import { getShortcutPlatform } from '../../runtime/environment';
 import { listenMainWindowFocus } from '../../runtime/windows/mainWindowFocus';
 import { Button } from '../../ui/controls/Button';
 import { Select } from '../../ui/controls/Select';
+import { TextField } from '../../ui/controls/TextField';
 import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
-import {
-  AppMembershipPicker,
-  AppStylePagination,
-  type AppMemberOption,
-} from './AppMembershipPicker';
+import { AppMembershipPicker, type AppMemberOption } from './AppMembershipPicker';
 import './app-style-routing.css';
 
 export function AppStyleRouting() {
@@ -55,9 +45,7 @@ export function AppStyleRouting() {
   const [refreshing, setRefreshing] = useState(false);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const catalogRequest = useRef<Promise<void> | null>(null);
-  const appList = useRef<HTMLDivElement>(null);
-  const [appPage, setAppPage] = useState(0);
-  const [pageSize, setPageSize] = useState(3);
+  const [appSearch, setAppSearch] = useState('');
 
   const refreshCatalog = useCallback(() => {
     if (catalogRequest.current) return catalogRequest.current;
@@ -107,23 +95,16 @@ export function AppStyleRouting() {
     };
   }, [query, packQuery, refreshCatalog]);
 
-  useLayoutEffect(() => {
-    const list = appList.current;
-    if (!list) return;
-    const measure = () => {
-      const rowHeight = Number.parseFloat(getComputedStyle(list).fontSize) * 6 + 24;
-      setPageSize(Math.max(1, Math.floor(list.clientHeight / rowHeight)));
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(list);
-    measure();
-    return () => observer.disconnect();
-  }, []);
-
-  const apps = [...(routing?.apps ?? [])].sort((a, b) => a.app.name.localeCompare(b.app.name));
-  const pages = Math.max(1, Math.ceil(apps.length / pageSize));
-  const currentPage = Math.min(appPage, pages - 1);
-  useEffect(() => setAppPage((current) => Math.min(current, pages - 1)), [pages]);
+  const apps = (routing?.apps ?? [])
+    .filter(({ app }) =>
+      app.name.toLocaleLowerCase().includes(appSearch.trim().toLocaleLowerCase()),
+    )
+    .sort((a, b) =>
+      a.app.name.localeCompare(b.app.name, i18n.resolvedLanguage ?? i18n.language, {
+        sensitivity: 'base',
+        numeric: true,
+      }),
+    );
 
   const appIds =
     routing?.apps
@@ -220,7 +201,7 @@ export function AppStyleRouting() {
       name: entry.app.name,
       category: entry.category,
     });
-  const memberOptions = [...members.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const memberOptions = [...members.values()];
 
   const toggleMember = async (app: AppMemberOption, category: string) => {
     if (app.category && app.category !== category) {
@@ -260,7 +241,6 @@ export function AppStyleRouting() {
       })
     ) {
       await commit(clearInputAppHistory);
-      setAppPage(0);
     }
   };
 
@@ -330,52 +310,48 @@ export function AppStyleRouting() {
         </Card>
         <Card className="ol-app-style-panel">
           <h2>{t('appStyles.byApp')}</h2>
-          <div
-            ref={appList}
-            className="ol-app-style-panel-body ol-app-style-apps"
-            style={{ gridTemplateRows: `repeat(${pageSize}, minmax(0, 1fr))` }}
-          >
-            {apps
-              .slice(currentPage * pageSize, (currentPage + 1) * pageSize)
-              .map(({ app, category, stylePackId }) => {
-                const categoryPack = category
-                  ? packs?.find((pack) => pack.enabled && pack.id === routing?.categories[category])
-                  : undefined;
-                const inherited = categoryPack
-                  ? t('appStyles.inherit', { pack: packName(categoryPack) })
-                  : t('appStyles.useCurrent');
-                return (
-                  <div className="ol-app-style-row ol-app-style-row--app" key={app.id}>
-                    <span className="ol-app-style-name">
-                      {icons[app.id] && (
-                        <img
-                          className="ol-app-style-icon"
-                          alt=""
-                          src={icons[app.id]}
-                          onError={(event) => {
-                            event.currentTarget.hidden = true;
-                          }}
-                        />
-                      )}
-                      <span title={app.name}>
-                        {app.name}
-                        {category && <small>{categoryLabel(category)}</small>}
-                      </span>
-                    </span>
-                    {picker({ target: 'app', appId: app.id, stylePackId }, app.name, inherited)}
-                  </div>
-                );
-              })}
-            {!routing?.apps.length && <p className="ol-app-style-hint">{t('appStyles.empty')}</p>}
+          <div className="ol-app-style-app-search">
+            <TextField
+              aria-label={t('appStyles.searchApps')}
+              placeholder={t('appStyles.searchApps')}
+              value={appSearch}
+              onChange={(event) => setAppSearch(event.target.value)}
+            />
           </div>
-          <div className="ol-app-style-pager-slot">
-            {pages > 1 && (
-              <AppStylePagination
-                page={currentPage}
-                pages={pages}
-                onChange={setAppPage}
-                disabled={busy}
-              />
+          <div className="ol-app-style-panel-body ol-app-style-apps">
+            {apps.map(({ app, category, stylePackId }) => {
+              const categoryPack = category
+                ? packs?.find((pack) => pack.enabled && pack.id === routing?.categories[category])
+                : undefined;
+              const inherited = categoryPack
+                ? t('appStyles.inherit', { pack: packName(categoryPack) })
+                : t('appStyles.useCurrent');
+              return (
+                <div className="ol-app-style-row ol-app-style-row--app" key={app.id}>
+                  <span className="ol-app-style-name">
+                    {icons[app.id] && (
+                      <img
+                        className="ol-app-style-icon"
+                        alt=""
+                        src={icons[app.id]}
+                        onError={(event) => {
+                          event.currentTarget.hidden = true;
+                        }}
+                      />
+                    )}
+                    <span title={app.name}>
+                      {app.name}
+                      {category && <small>{categoryLabel(category)}</small>}
+                    </span>
+                  </span>
+                  {picker({ target: 'app', appId: app.id, stylePackId }, app.name, inherited)}
+                </div>
+              );
+            })}
+            {!apps.length && (
+              <p className="ol-app-style-hint">
+                {t(appSearch.trim() ? 'appStyles.noApps' : 'appStyles.empty')}
+              </p>
             )}
           </div>
         </Card>

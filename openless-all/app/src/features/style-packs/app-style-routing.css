@@ -35,10 +35,20 @@
 .ol-app-style-page ::-webkit-scrollbar {
   display: none;
 }
-.ol-app-style-categories,
-.ol-app-style-apps {
+.ol-app-style-categories {
   display: grid;
   min-height: 0;
+}
+.ol-app-style-app-search {
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.ol-app-style-apps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .ol-app-style-status {
   height: 3em;
@@ -80,13 +90,16 @@
   line-height: 1.3;
 }
 .ol-app-style-row {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 0;
-  gap: 8px;
-  padding: 6px 4px;
-  border-bottom: 1px solid var(--ol-line);
+  display: grid;
+  grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr);
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 64px;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
 }
 .ol-app-style-name {
   position: relative;
@@ -120,7 +133,12 @@
 }
 .ol-app-members-dialog .ol-dialog-body {
   flex: 1 1 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.ol-app-members-dialog .ol-dialog-body::-webkit-scrollbar {
+  display: none;
 }
 .ol-app-members-dialog .ol-dialog-footer {
   justify-content: space-between;
@@ -137,9 +155,9 @@
 .ol-app-members-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(64px, auto);
+  align-content: start;
   gap: 10px;
-  height: 100%;
   min-height: 0;
 }
 .ol-app-member-option {
@@ -179,20 +197,4 @@
 }
 .ol-app-member-option[data-conflict] .ol-app-member-check {
   color: var(--ol-ink-3);
-}
-.ol-app-style-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-}
-.ol-app-style-pagination > span {
-  min-width: 3.5em;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.ol-app-style-pager-slot {
-  height: 32px;
-  flex: 0 0 32px;
-  margin-top: 10px;
 }

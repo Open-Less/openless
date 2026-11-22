@@ -1,8 +1,6 @@
 export const appStyleMessages = {
   'zh-CN': {
     chooseApps: '选择应用',
-    previousPage: '上一页',
-    nextPage: '下一页',
     appsFor: '{{name}}的应用',
     selectedApps: '已选 {{count}} 个应用',
     searchApps: '搜索应用',
@@ -27,8 +25,6 @@ export const appStyleMessages = {
   },
   'zh-TW': {
     chooseApps: '選擇應用程式',
-    previousPage: '上一頁',
-    nextPage: '下一頁',
     appsFor: '{{name}}的應用程式',
     selectedApps: '已選 {{count}} 個應用程式',
     searchApps: '搜尋應用程式',
@@ -53,8 +49,6 @@ export const appStyleMessages = {
   },
   en: {
     chooseApps: 'Choose apps',
-    previousPage: 'Previous page',
-    nextPage: 'Next page',
     appsFor: 'Apps for {{name}}',
     selectedApps: '{{count}} apps selected',
     searchApps: 'Search apps',
@@ -81,8 +75,6 @@ export const appStyleMessages = {
   },
   ja: {
     chooseApps: 'アプリを選択',
-    previousPage: '前のページ',
-    nextPage: '次のページ',
     appsFor: '{{name}}のアプリ',
     selectedApps: '{{count}} 個のアプリを選択',
     searchApps: 'アプリを検索',
@@ -110,8 +102,6 @@ export const appStyleMessages = {
   },
   ko: {
     chooseApps: '앱 선택',
-    previousPage: '이전 페이지',
-    nextPage: '다음 페이지',
     appsFor: '{{name}} 앱',
     selectedApps: '앱 {{count}}개 선택됨',
     searchApps: '앱 검색',
@@ -137,8 +127,6 @@ export const appStyleMessages = {
   },
   es: {
     chooseApps: 'Elegir aplicaciones',
-    previousPage: 'Página anterior',
-    nextPage: 'Página siguiente',
     appsFor: 'Aplicaciones de {{name}}',
     selectedApps: '{{count}} aplicaciones seleccionadas',
     searchApps: 'Buscar aplicaciones',
@@ -165,8 +153,6 @@ export const appStyleMessages = {
   },
   fr: {
     chooseApps: 'Choisir les applications',
-    previousPage: 'Page précédente',
-    nextPage: 'Page suivante',
     appsFor: 'Applications de {{name}}',
     selectedApps: '{{count}} applications sélectionnées',
     searchApps: 'Rechercher une application',
@@ -194,8 +180,6 @@ export const appStyleMessages = {
   },
   de: {
     chooseApps: 'Apps auswählen',
-    previousPage: 'Vorherige Seite',
-    nextPage: 'Nächste Seite',
     appsFor: 'Apps für {{name}}',
     selectedApps: '{{count}} Apps ausgewählt',
     searchApps: 'Apps suchen',
