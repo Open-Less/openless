@@ -413,6 +413,8 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     preferences.active_llm_provider = "ark".into();
     preferences.polish_skip_max_chars = 0;
     preferences.streaming_insert = false;
+    preferences.translation_target_language = "English".into();
+    preferences.working_languages = vec!["zh".into()];
     backend
         .update_settings(
             preferences,
@@ -608,6 +610,72 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         payloads.try_recv().is_err(),
         "catalog context must preserve Raw passthrough"
     );
+    backend
+        .start_dictation_with_options(DictationStartOptions {
+            translation_requested: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    backend.stop_dictation().await.unwrap();
+    assert!(payloads.try_recv().unwrap()["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("fixture coding context"));
+    while payloads.try_recv().is_ok() {}
+    for live in [true, false] {
+        backend
+            .start_dictation_with_options(DictationStartOptions {
+                translation_requested: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let result = if live {
+            backend
+                .update_dictation_translation_requested(false)
+                .await
+                .unwrap();
+            backend.stop_dictation().await.unwrap()
+        } else {
+            backend
+                .stop_dictation_with_options(openless_core::DictationStopOptions {
+                    translation_requested: Some(false),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+        };
+        assert_eq!(result.polished_text, "spoken test transcript");
+        assert!(
+            payloads.try_recv().is_err(),
+            "unexpected request after cancellation, live={live}"
+        );
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered.last().unwrap(),
+            &("VS Code", "spoken test transcript".into())
+        );
+    }
+    let custom_raw = backend
+        .create_style_pack(StylePack {
+            name: "CUSTOM-RAW".into(),
+            base_mode: openless_core::PolishMode::Raw,
+            prompt: "Apply CUSTOM-RAW.".into(),
+            ..StylePack::default()
+        })
+        .unwrap();
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.microsoft.VSCode".into(),
+            style_pack_id: Some(custom_raw.id),
+        })
+        .unwrap();
+    backend.start_dictation().await.unwrap();
+    assert_eq!(
+        backend.stop_dictation().await.unwrap().polished_text,
+        "polished"
+    );
+    expect_request(payloads.try_recv().unwrap(), "CUSTOM-RAW");
     backend
         .set_app_style_assignment(AppStyleAssignment::App {
             app_id: "macos:com.microsoft.VSCode".into(),

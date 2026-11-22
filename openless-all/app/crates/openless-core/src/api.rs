@@ -9840,8 +9840,16 @@ impl OpenLessBackend {
             options,
         );
         if let Some(guidance) = input_guidance.filter(|_| context.uses_llm_polisher()) {
+            let raw_passthrough = context.polish.mode == crate::types::PolishMode::Raw
+                && context.polish.style_system_prompt
+                    == crate::style_packs::default_style_system_prompt_for_mode(
+                        crate::types::PolishMode::Raw,
+                    );
             context.polish.style_system_prompt.push_str("\n\n# 输入场景参考\n以下场景信息辅助理解术语与对象，具体输出遵循当前风格包。\n");
             context.polish.style_system_prompt.push_str(&guidance);
+            if raw_passthrough {
+                context.raw_passthrough_prompt = Some(context.polish.style_system_prompt.clone());
+            }
         }
         context.input_app = input_app;
         context.pipeline_mode = pipeline_mode;

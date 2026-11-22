@@ -204,6 +204,8 @@ pub struct RecordingPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationContext {
     pub(crate) input_app: Option<crate::app_style_routing::InputApp>,
+    /// Annotated built-in Raw prompt, captured before any later prompt changes.
+    pub(crate) raw_passthrough_prompt: Option<String>,
     pub audio_source: DictationAudioSource,
     pub output_target: DictationOutputTarget,
     pub(crate) normal_archive_successful_recording: bool,
@@ -390,6 +392,7 @@ impl DictationContext {
             llm,
             deferred_llm_error: None,
             unconfigured_llm_raw: None,
+            raw_passthrough_prompt: None,
             omni,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
@@ -586,8 +589,9 @@ impl DictationContext {
         self.output_target != DictationOutputTarget::Qa
             && (self.polish.translation_active
                 || self.polish.mode != PolishMode::Raw
-                || self.polish.style_system_prompt
-                    != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw))
+                || (self.polish.style_system_prompt
+                    != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw)
+                    && self.raw_passthrough_prompt.as_ref() != Some(&self.polish.style_system_prompt)))
     }
 
     /// Plain dictation whose polished text is simply inserted or saved. Voice Edit

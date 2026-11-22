@@ -268,6 +268,47 @@ test('renews the catalog automatically on page entry and restored focus', async 
   await expect.poll(() => requests).toBeGreaterThan(before);
 });
 
+test('refreshes observed apps when catalog renewal fails', async ({ page }) => {
+  await openPage(page);
+  await choose(page, '编程', '清晰结构');
+  let release!: () => void;
+  let requested!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requestStarted = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  await page.route('https://apic.openless.top/v1/app-catalog', async (route) => {
+    requested();
+    await pending;
+    await route.abort();
+  });
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    window.dispatchEvent(new Event('fixture:dictation-completed'));
+  });
+  await expect(page.getByRole('combobox', { name: 'ChatGPT的风格包', exact: true })).toHaveCount(0);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await requestStarted;
+  await expect(page.getByRole('combobox', { name: 'ChatGPT的风格包', exact: true })).toHaveText(
+    '跟随分类（清晰结构）',
+  );
+  const failed = page.waitForEvent('requestfailed', (request) =>
+    request.url().includes('/v1/app-catalog'),
+  );
+  release();
+  await failed;
+  await expect(page.getByRole('combobox', { name: 'ChatGPT的风格包', exact: true })).toHaveText(
+    '跟随分类（清晰结构）',
+  );
+  await page.getByRole('textbox', { name: '搜索应用' }).fill('ChatGPT');
+  await expect(page.getByRole('combobox', { name: 'ChatGPT的风格包', exact: true })).toBeVisible();
+});
+
 test('opens and saves the newly created pack despite overlapping change events', async ({
   page,
 }) => {

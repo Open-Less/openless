@@ -72,7 +72,10 @@ export function AppStyleRouting() {
       if (document.visibilityState === 'visible') void query.refresh();
     };
     const renewCatalog = () => {
-      if (document.visibilityState === 'visible') void refreshCatalog();
+      if (document.visibilityState === 'visible') {
+        refresh();
+        void refreshCatalog();
+      }
     };
     const keep = async (source: Promise<() => void>) => {
       const stop = await source;
