@@ -450,6 +450,21 @@ fn reset_shared_held_state(shared: &Shared) {
     shared.shift_gesture.lock().reset();
 }
 
+fn held_recording_trigger(shared: &Shared) -> Option<HotkeyTrigger> {
+    if !shared
+        .trigger_held
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return None;
+    }
+    let trigger = shared.binding.read().trigger;
+    (!matches!(
+        trigger,
+        HotkeyTrigger::Custom | HotkeyTrigger::LeftShift | HotkeyTrigger::RightShift
+    ))
+    .then_some(trigger)
+}
+
 fn observe_shift(
     shared: &Shared,
     tx: &Sender<HotkeyEvent>,
@@ -470,6 +485,11 @@ fn observe_shift(
             .as_ref()
             .and_then(|source| source())
     };
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let context = context.map(|mut context| {
+        context.held_recording_key = platform::held_recording_key(shared);
+        context
+    });
     if let Some(context) =
         shared
             .shift_gesture
@@ -879,6 +899,10 @@ mod platform {
         event
     }
 
+    pub(super) fn held_recording_key(shared: &Shared) -> Option<u16> {
+        super::held_recording_trigger(shared).map(|trigger| trigger_to_keycode(trigger) as u16)
+    }
+
     fn observe_shift_event(ctx: &CallbackContext, kind: CgEventType, event: CgEventRef) {
         let flags = unsafe { CGEventGetFlags(event) };
         let field = if matches!(kind, 25 | 26) {
@@ -896,12 +920,28 @@ mod platform {
         key: i64,
         flags: CgEventFlags,
     ) {
-        let other = flags
+        let mut other_flags = flags
             & (FLAG_MASK_CONTROL
                 | FLAG_MASK_ALTERNATE
                 | FLAG_MASK_COMMAND
-                | FLAG_MASK_SECONDARY_FN)
-            != 0;
+                | FLAG_MASK_SECONDARY_FN);
+        let controller = match held_recording_key(&ctx.shared) {
+            Some(59) => Some((FLAG_MASK_CONTROL, 0x1, 0x2000)),
+            Some(62) => Some((FLAG_MASK_CONTROL, 0x2000, 0x1)),
+            Some(58) => Some((FLAG_MASK_ALTERNATE, 0x20, 0x40)),
+            Some(61) => Some((FLAG_MASK_ALTERNATE, 0x40, 0x20)),
+            Some(55) => Some((FLAG_MASK_COMMAND, 0x8, 0x10)),
+            Some(54) => Some((FLAG_MASK_COMMAND, 0x10, 0x8)),
+            Some(63) => Some((FLAG_MASK_SECONDARY_FN, FLAG_MASK_SECONDARY_FN, 0)),
+            _ => None,
+        };
+        // Only the held controller is exempt; its opposite-side modifier is still a chord.
+        if let Some((class, own, opposite)) = controller {
+            if flags & own != 0 && flags & opposite == 0 {
+                other_flags &= !class;
+            }
+        }
+        let other = other_flags != 0;
         let (key, shift, down) = match kind {
             KEY_DOWN | KEY_UP => (key as u16, false, kind == KEY_DOWN),
             FLAGS_CHANGED => {
@@ -1320,6 +1360,7 @@ mod platform {
                 session_id: openless_core::SessionId::new(),
                 preferences_revision: 1,
                 tap_count: 1,
+                held_recording_key: None,
             };
             *shared.shift_source.write() = Some(Arc::new(move || Some(context)));
             let (ctx, rx, _) = callback_context_with_combo(shared);
@@ -1351,6 +1392,174 @@ mod platform {
                 }
                 observe_shift_fields(&ctx, FLAGS_CHANGED, 56, 0);
                 assert!(rx.try_recv().is_err());
+            }
+        }
+
+        #[tokio::test]
+        async fn mac_held_recording_fn_allows_both_shift_toggles_before_recording_release() {
+            use openless_core::testing::{
+                FixtureDictationEngine, FixtureEngineAction, RecordingHostActions,
+            };
+            use openless_core::{
+                BackendConfig, BackendDependencies, CliDispatchOutcome, DictationHotkeyEdge,
+                DictationStartOptions, OpenLessBackend,
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let engine = FixtureDictationEngine::successful("spoken", "polished");
+            let mut dependencies = BackendDependencies::unsupported();
+            dependencies.dictation_engine = Arc::new(engine.clone());
+            dependencies.host_actions = Arc::new(RecordingHostActions::default());
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            let backend = Arc::new(
+                OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: directory.path().into(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let mut prefs = backend.get_preferences();
+            prefs.hotkey.mode = crate::types::HotkeyMode::Hold;
+            prefs.dictation_hotkey = crate::types::ShortcutBinding {
+                primary: "Fn".into(),
+                modifiers: vec![],
+            };
+            prefs.translation_target_language = "English".into();
+            prefs.working_languages = vec!["简体中文".into()];
+            backend
+                .update_settings(
+                    prefs,
+                    openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+                    &openless_core::NoopSettingsRuntime,
+                )
+                .unwrap();
+            backend.start().await.unwrap();
+
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = crate::types::HotkeyMode::Hold;
+            let source_backend = backend.clone();
+            *shared.shift_source.write() = Some(Arc::new(move || {
+                let snapshot = source_backend.snapshot();
+                Some(super::super::ShiftTranslationContext {
+                    session_id: snapshot.dictation.session_id?,
+                    preferences_revision: snapshot.preferences_revision,
+                    tap_count: 1,
+                    held_recording_key: None,
+                })
+            }));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            let now = std::time::Instant::now();
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 63, FLAG_MASK_SECONDARY_FN);
+            handle_dictation_trigger_flags_changed(&ctx, 63, FLAG_MASK_SECONDARY_FN, now);
+            let press_id = match rx.try_recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                event => panic!("recording did not start: {event:?}"),
+            };
+            let started = backend
+                .dispatch_dictation_hotkey_edge_with_options(
+                    DictationHotkeyEdge::Pressed { at: now, press_id },
+                    DictationStartOptions {
+                        insert_text: false,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let id = match started {
+                CliDispatchOutcome::DictationStarted(id) => id,
+                other => panic!("unexpected native press outcome: {other:?}"),
+            };
+            for (key, bit, effective) in [(56, 2, true), (60, 4, false)] {
+                observe_shift_fields(
+                    &ctx,
+                    FLAGS_CHANGED,
+                    key,
+                    FLAG_MASK_SECONDARY_FN | FLAG_MASK_SHIFT | bit,
+                );
+                assert!(rx.try_recv().is_err(), "translation fired on key down");
+                observe_shift_fields(&ctx, FLAGS_CHANGED, key, FLAG_MASK_SECONDARY_FN);
+                let owned = match rx.try_recv().unwrap() {
+                    HotkeyEvent::TranslationShiftTapped(value) => value,
+                    event => panic!("unexpected shift outcome: {event:?}"),
+                };
+                assert_eq!(owned.session_id, id);
+                backend
+                    .toggle_dictation_translation_for_session(owned.session_id)
+                    .unwrap();
+                let capture = backend.snapshot().dictation;
+                assert_eq!(capture.session_id, Some(id));
+                assert_eq!(capture.phase, openless_core::DictationPhase::Recording);
+                assert_eq!(capture.translation_active, effective);
+            }
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 63, 0);
+            let released_at = now + std::time::Duration::from_secs(1);
+            handle_dictation_trigger_flags_changed(&ctx, 63, 0, released_at);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::Released {
+                press_id: owned, combined: false, .. } if owned == press_id));
+            assert!(matches!(
+                backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                        at: released_at,
+                        press_id
+                    })
+                    .await
+                    .unwrap(),
+                CliDispatchOutcome::DictationCompleted(_)
+            ));
+            assert_eq!(
+                engine.actions(),
+                vec![
+                    FixtureEngineAction::Start(id),
+                    FixtureEngineAction::UpdateContext(id),
+                    FixtureEngineAction::Finish(id)
+                ]
+            );
+            assert!(!backend.list_history().unwrap()[0].translation_active);
+            assert!(rx.try_recv().is_err());
+            backend.shutdown().await.unwrap();
+        }
+
+        #[test]
+        fn mac_default_recording_controller_does_not_exempt_the_other_option_key() {
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(),
+                preferences_revision: 1,
+                tap_count: 1,
+                held_recording_key: None,
+            };
+            *shared.shift_source.write() = Some(Arc::new(move || Some(context)));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_ALTERNATE | 0x40);
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                61,
+                FLAG_MASK_ALTERNATE | 0x40,
+                std::time::Instant::now(),
+            );
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                HotkeyEvent::Pressed { .. }
+            ));
+            for extra in [true, false] {
+                let flags = FLAG_MASK_ALTERNATE | 0x40 | if extra { 0x20 } else { 0 };
+                if extra {
+                    observe_shift_fields(&ctx, FLAGS_CHANGED, 58, flags);
+                }
+                observe_shift_fields(&ctx, FLAGS_CHANGED, 56, flags | FLAG_MASK_SHIFT | 2);
+                observe_shift_fields(&ctx, FLAGS_CHANGED, 56, flags);
+                if extra {
+                    assert!(rx.try_recv().is_err());
+                    observe_shift_fields(&ctx, FLAGS_CHANGED, 58, FLAG_MASK_ALTERNATE | 0x40);
+                } else {
+                    assert!(matches!(
+                        rx.try_recv().unwrap(),
+                        HotkeyEvent::TranslationShiftTapped(_)
+                    ));
+                }
             }
         }
 
@@ -1933,6 +2142,10 @@ mod platform {
         }
     }
 
+    pub(super) fn held_recording_key(shared: &Shared) -> Option<u16> {
+        super::held_recording_trigger(shared).map(|trigger| trigger_to_vk_code(trigger) as u16)
+    }
+
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
         // Shortcut recording receives real keyboard events in the frontend; the main
         // dictation/Agent hooks must not swallow keys.
@@ -1942,9 +2155,22 @@ mod platform {
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
         let other = unsafe {
             use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-            [VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN, 1, 2, 4, 5, 6]
-                .into_iter()
-                .any(|key| GetAsyncKeyState(key as i32) < 0)
+            let controller = held_recording_key(&ctx.shared);
+            [
+                VK_LCONTROL,
+                VK_RCONTROL,
+                VK_LMENU,
+                VK_RMENU,
+                VK_LWIN,
+                VK_RWIN,
+                1,
+                2,
+                4,
+                5,
+                6,
+            ]
+            .into_iter()
+            .any(|key| Some(key as u16) != controller && GetAsyncKeyState(key as i32) < 0)
         };
         super::observe_shift(
             &ctx.shared,

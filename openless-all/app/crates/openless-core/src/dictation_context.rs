@@ -564,7 +564,11 @@ impl DictationContext {
                 if let Some(base) = self.polish.style_system_prompt.strip_suffix(instructions) {
                     self.polish.style_system_prompt = base.to_owned();
                 }
-            } else if !unconfigured_raw && !self.polish.style_system_prompt.ends_with(instructions) {
+            } else if !unconfigured_raw
+                // Guidance may refine an existing polish task, never create one for canonical Raw.
+                && self.uses_llm_polisher()
+                && !self.polish.style_system_prompt.ends_with(instructions)
+            {
                 self.polish.style_system_prompt.push_str(instructions);
             }
         }

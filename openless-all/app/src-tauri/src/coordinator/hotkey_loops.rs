@@ -2036,6 +2036,7 @@ pub(super) fn configure_shift_translation(inner: &Arc<Inner>, monitor: &HotkeyMo
             session_id: snapshot.dictation.session_id?,
             preferences_revision: snapshot.preferences_revision,
             tap_count: inner.backend.get_preferences().translation_shift_tap_count(),
+            held_recording_key: None,
         })
     }));
 }

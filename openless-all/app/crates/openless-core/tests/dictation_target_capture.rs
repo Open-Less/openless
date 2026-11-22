@@ -810,6 +810,30 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         .unwrap()
         .contains("fixture coding context"));
     while payloads.try_recv().is_ok() {}
+    // A real opted-in profile must not turn canonical Raw into a polish request.
+    let profile = backend.repositories().expression_profile.lock().unwrap().as_ref().unwrap().clone();
+    for index in 0..10 {
+        profile.record(uuid::Uuid::new_v4(), 100 + index % 4,
+            openless_core::expression_observation::ExpressionSignal {
+                line_breaks: 1, exclamations: 0, terminal_punctuation: 0,
+            }).unwrap();
+    }
+    let frozen_expression = openless_core::expression_observation::prompt_instructions(
+        &profile.stable_directions().unwrap()).unwrap();
+    let mut preferences = backend.get_preferences();
+    preferences.expression_learning_enabled = true;
+    backend.update_settings(preferences, openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+        &openless_core::NoopSettingsRuntime).unwrap();
+    backend.start_dictation_with_options(DictationStartOptions {
+        translation_requested: true, ..Default::default()
+    }).await.unwrap();
+    backend.stop_dictation().await.unwrap();
+    let translated = payloads.try_recv().unwrap();
+    let translated_system = translated["messages"][0]["content"].as_str().unwrap();
+    assert!(translated_system.starts_with("当前应用："));
+    assert!(translated_system.contains(openless_core::POLISH_TRANSLATE_TGT_MARKER));
+    assert!(!translated_system.contains(&frozen_expression));
+    assert!(payloads.try_recv().is_err(), "translation must issue exactly one request");
     for live in [true, false] {
         backend
             .start_dictation_with_options(DictationStartOptions {
@@ -819,10 +843,8 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             .await
             .unwrap();
         let result = if live {
-            backend
-                .update_dictation_translation_requested(false)
-                .await
-                .unwrap();
+            let id = backend.snapshot().dictation.session_id.unwrap();
+            backend.toggle_dictation_translation_for_session(id).unwrap();
             backend.stop_dictation().await.unwrap()
         } else {
             backend
@@ -842,7 +864,15 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             fixture.focus.lock().unwrap().delivered.last().unwrap(),
             &("VS Code", "spoken test transcript".into())
         );
+        let history = backend.list_history().unwrap();
+        let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
+        assert!(!entry.translation_active);
+        assert_eq!(entry.style_pack_id.as_deref(), Some("builtin.raw"));
+        assert_eq!(entry.final_text, "spoken test transcript");
     }
+    backend.start_dictation().await.unwrap();
+    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, "spoken test transcript");
+    assert!(payloads.try_recv().is_err(), "profile must not turn canonical Raw into a request");
     let custom_raw = backend
         .create_style_pack(StylePack {
             name: "CUSTOM-RAW".into(),
@@ -857,12 +887,33 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             style_pack_id: Some(custom_raw.id),
         })
         .unwrap();
-    backend.start_dictation().await.unwrap();
+    let id = backend.start_dictation_with_options(DictationStartOptions {
+        translation_requested: true, ..Default::default()
+    }).await.unwrap();
+    backend.toggle_dictation_translation_for_session(id).unwrap();
     assert_eq!(
         backend.stop_dictation().await.unwrap().polished_text,
         "polished"
     );
-    expect_request(payloads.try_recv().unwrap(), "CUSTOM-RAW");
+    let custom_payload = payloads.try_recv().unwrap();
+    assert!(custom_payload["messages"][0]["content"].as_str().unwrap().contains(&frozen_expression));
+    expect_request(custom_payload, "CUSTOM-RAW");
+    assert!(payloads.try_recv().is_err(), "custom Raw must issue exactly one request");
+
+    // Translation suppresses expression guidance; cancelling restores this capture's profile.
+    let id = backend.start_dictation_with_options(DictationStartOptions {
+        style_pack_id: Some(coding.id.clone()), translation_requested: true,
+        ..Default::default()
+    }).await.unwrap();
+    backend.clear_expression_profile().unwrap();
+    backend.toggle_dictation_translation_for_session(id).unwrap();
+    backend.stop_dictation().await.unwrap();
+    let restored = payloads.try_recv().unwrap();
+    assert!(restored["messages"][0]["content"].as_str().unwrap().contains(&frozen_expression));
+    assert_eq!(restored["messages"][0]["content"].as_str().unwrap().matches(&frozen_expression).count(), 1);
+    expect_request(restored, "CODING-STYLE");
+    assert!(payloads.try_recv().is_err(), "restored ordinary polish must issue exactly one request");
+
     backend
         .set_app_style_assignment(AppStyleAssignment::App {
             app_id: "macos:com.microsoft.VSCode".into(),

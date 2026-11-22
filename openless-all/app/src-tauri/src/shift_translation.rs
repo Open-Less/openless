@@ -7,6 +7,8 @@ pub struct ShiftTranslationContext {
     pub session_id: openless_core::SessionId,
     pub preferences_revision: u64,
     pub tap_count: u8,
+    /// The native recording controller may stay held while Shift is tapped.
+    pub held_recording_key: Option<u16>,
 }
 
 #[cfg(test)]
@@ -17,6 +19,7 @@ mod tests {
             session_id: openless_core::SessionId::new(),
             preferences_revision: 1,
             tap_count: count,
+            held_recording_key: None,
         }
     }
     fn edge(
@@ -78,6 +81,20 @@ mod tests {
         assert_eq!(g.observe(c, 56, true, true, true, epoch), None);
         assert_eq!(edge(&mut g, c, 56, false, 100, epoch), None);
     }
+    #[test]
+    fn releasing_the_recording_controller_discards_a_partial_shift_tap() {
+        let epoch = Instant::now();
+        let c = Some(ShiftTranslationContext {
+            held_recording_key: Some(63),
+            ..context(1)
+        });
+        let mut gesture = ShiftTranslationGesture::default();
+        edge(&mut gesture, None, 63, true, 0, epoch);
+        edge(&mut gesture, c, 56, true, 10, epoch);
+        assert_eq!(edge(&mut gesture, c, 63, false, 20, epoch), None);
+        assert_eq!(edge(&mut gesture, c, 56, false, 30, epoch), None);
+    }
+
     #[test]
     fn expired_sequences_settings_changes_and_session_changes_discard_partial_input() {
         let epoch = Instant::now();
@@ -142,8 +159,9 @@ impl ShiftTranslationGesture {
             self.context = context;
             self.invalidate();
         }
+        let controller = context.and_then(|value| value.held_recording_key);
         if down {
-            let alone = self.held.is_empty();
+            let alone = self.held.iter().all(|held| Some(*held) == controller);
             let fresh = self.held.insert(key);
             if !shift || !alone || !fresh || other_modifiers || context.is_none() {
                 self.invalidate();
@@ -159,6 +177,10 @@ impl ShiftTranslationGesture {
             return None;
         }
         self.held.remove(&key);
+        if Some(key) == controller {
+            self.invalidate();
+            return None;
+        }
         let Some((pressed_key, at)) = self.press else {
             return None;
         };
@@ -168,7 +190,7 @@ impl ShiftTranslationGesture {
         self.press = None;
         if !shift
             || other_modifiers
-            || !self.held.is_empty()
+            || self.held.iter().any(|held| Some(*held) != controller)
             || now.saturating_duration_since(at) > TAP_MAX
         {
             self.invalidate();
