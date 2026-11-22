@@ -3105,7 +3105,7 @@ mod tests {
             PipelineMode::Traditional
         ));
         let search = crate::web_search::WebSearchConfig::default();
-        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, false).contains("FreeSerp"));
         assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
     }
 

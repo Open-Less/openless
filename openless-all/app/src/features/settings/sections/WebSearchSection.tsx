@@ -13,7 +13,8 @@ function isInteractive(element: HTMLElement | null) {
 }
 
 export interface WebSearchConfig {
-  provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';
+  provider:
+    'auto' | 'free' | 'hybrid' | 'free_serp' | 'bing' | 'tavily' | 'brave' | 'searxng' | 'off';
   apiKey: string;
   endpoint: string;
 }
@@ -88,8 +89,8 @@ export function WebSearchSection() {
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '为提问提供联网搜索。搜索服务会接收搜索词与 IP。',
-          'Search the web for questions. Providers receive queries and your IP.',
+          '为提问提供联网搜索。搜索服务会接收搜索词与 IP；混合搜索使用你的 DeepSeek API Key，按官方标准计费。',
+          'Search the web for questions. Providers receive queries and your IP; Hybrid Search uses your DeepSeek API key and is billed by DeepSeek.',
         )}
       </p>
       {config && (
@@ -101,6 +102,9 @@ export function WebSearchSection() {
               onChange={(provider) => setConfig({ ...config, provider: provider as WebSearchConfig['provider'], apiKey: '', endpoint: '' })}
               options={[
                 { value: 'free', label: text('免费搜索', 'Free Search') },
+                { value: 'hybrid', label: text('混合搜索（免费 + DeepSeek）', 'Hybrid Search (Free + DeepSeek)') },
+                { value: 'free_serp', label: 'FreeSerp' },
+                { value: 'bing', label: 'Bing (RSS)' },
                 { value: 'tavily', label: 'Tavily' },
                 { value: 'brave', label: 'Brave Search' },
                 { value: 'searxng', label: 'SearXNG' },
@@ -108,8 +112,8 @@ export function WebSearchSection() {
               ]}
             />
           </SettingRow>
-          {['tavily', 'brave'].includes(config.provider) && (
-            <SettingRow label="API Key">
+          {['tavily', 'brave', 'hybrid'].includes(config.provider) && (
+            <SettingRow label={config.provider === 'hybrid' ? 'DeepSeek API Key' : 'API Key'}>
               <TextField
                 aria-label="Search API Key"
                 type="password"
@@ -124,8 +128,8 @@ export function WebSearchSection() {
             <SettingRow
               label="SearXNG URL"
               desc={text(
-                '填写已启用 JSON 输出的 /search 地址。',
-                'Enter a /search endpoint with JSON output enabled.',
+                '可填写允许自动查询且已启用 JSON 的公开 /search 地址，不要求自建。',
+                'You can use a public /search endpoint that permits automated queries and enables JSON. Self-hosting is not required.',
               )}
             >
               <TextField
@@ -142,7 +146,7 @@ export function WebSearchSection() {
             variant="primary"
             disabled={
               busy ||
-              (['tavily', 'brave'].includes(config.provider) && !config.apiKey.trim()) ||
+              (['tavily', 'brave', 'hybrid'].includes(config.provider) && !config.apiKey.trim()) ||
               (config.provider === 'searxng' && !/^https?:\/\//.test(config.endpoint))
             }
             onClick={async () => {
