@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-Android 应用通过 Tauri WebView 提供设置，键盘、悬浮球和无障碍集成由原生 Kotlin 服务提供。运行行为见 [Android 架构与真机清单](../../../docs/android-ime.md)。
+Android 应用通过 Tauri WebView 提供设置，键盘、悬浮球和无障碍集成由原生 Kotlin 服务提供。运行行为见 [移动端输入法调用链](../../../docs/architecture.md#移动端输入法)。
 
 ## 源码定位
 
@@ -34,4 +34,4 @@ npm run tauri:android:build:debug
 
 使用 `npm run tauri:android:build:release` 构建 release 配置。[APK 工作流](../../../.github/workflows/android-apk.yml)按 ABI 收集成品并处理发布签名。本机安装测试时用 `adb shell getprop ro.product.cpu.abi` 选择匹配的 APK。签名兼容时可用 `adb install -r <apk>` 升级，调试包和正式包的签名可能不同。
 
-应用目录中的 `npm test` 覆盖 IPC、清单、权限和插入契约。键盘手势、冷启动、悬浮球权限、无障碍和 Shizuku 按[设备清单](../../../docs/android-ime.md#设备验收)另行验证。正式出包遵循[发布规范](../../../RELEASING.zh.md)。
+应用目录中的 `npm test` 覆盖 IPC、清单、权限和插入契约。在匹配架构的真机上验证键盘手势、冷启动、悬浮球权限、无障碍和 Shizuku。正式出包遵循[发布规范](../../../RELEASING.zh.md)。

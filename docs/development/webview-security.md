@@ -1,15 +1,13 @@
-# Tauri CSP 边界
+# Tauri WebView 内容安全策略
 
-状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
-
-桌面 WebView 的 CSP 定义在 `openless-all/app/src-tauri/tauri.conf.json`（`app.security.csp`），当前值为：
+桌面 WebView 的内容安全策略（CSP）定义在 [tauri.conf.json](../../openless-all/app/src-tauri/tauri.conf.json) 的 `app.security.csp`。下面是配置中的来源与限制。
 
 ```
 default-src 'self' customprotocol: asset:
 script-src 'self'
 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com
 font-src 'self' https://fonts.gstatic.com
-img-src 'self' asset: http://asset.localhost blob: data: https://github.com https://avatars.githubusercontent.com
+img-src 'self' asset: http://asset.localhost blob: data: https://github.com https://avatars.githubusercontent.com https://icons.duckduckgo.com
 connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420
 media-src 'self' data: asset: http://asset.localhost blob:
 object-src 'none'

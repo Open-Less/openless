@@ -1,10 +1,50 @@
-# macOS 实验性本地语音模型
+# 本地语音模型的安装与生命周期
+
+## 通用模型生命周期
+
+Model files, channel selection and a live inference engine are separate states.
+
+**macOS:** the legacy Qwen/Whisper model manager is retired. The disabled placeholder directs users to the three opt-in [experimental models](local-models.md#macos-实验模型). The older local model IDs are retained for metadata compatibility. Apple Speech continues as an independent system framework channel, and Windows and cloud routes remain available.
+
+| Action | Files / metadata | Inference |
+| --- | --- | --- |
+| Start/restart or open settings | Inspect files; migrate retired metadata; restore saved channel state | Unloaded, even when an experimental model was selected |
+| Explicitly enable an experiment | Download and validate; install optional runtime components; register a channel | Not loaded; no inference-library imports during setup |
+| Select/enable a downloaded channel | Metadata only; existing channel priorities are not overwritten by downloads | Deferred |
+| Record or permitted explicit test | Require enabled/selected channel, installed files and current generation | Load only on this explicit action |
+| Disable/delete a channel or switch away | Persist the choice; keep files | Release the corresponding engine/worker |
+| Turn off an experiment | Cancel pending work; remove only its owned channel; keep files | Release |
+| Explicitly delete its package | Require disabled experiment; remove its managed files after release | Never load merely to delete |
+
+Persisted interrupted `downloadPending`/`installPending`/`deletePending` operations may resume because they represent a prior explicit action. `enabled=true` alone is not permission to download or reinstall missing files. Downloads/status/settings never invoke inference preparation.
+
+TextStream's worker exists only during recording and receives PCM from OpenLess. Its independent Python/MLX environment is optional, hash locked and kept below the managed package. Finalized text, not the most recent draft, is committed. Cancellation, EOF, disabled leases and timeout cannot promote a draft. SenseVoice/Gemma are offline adapters and do not claim native streaming.
+
+`LocalAsrActivationResult.preparedModel` remains for wire compatibility: it identifies a selected model, not a successful native load.
+
+### Windows native setup exception: Foundry
+
+The Foundry SDK's explicit download/setup path can initialize native components. It therefore sets a process-local restart-required flag, acquires/verifies the package without enabling a channel, writes a filesystem-only receipt, attempts unloading on success or failure, and blocks activation/inference until OpenLess restarts. UI restart guidance remains visible if deferred.
+
+Catalog/status/cold deletion use receipts rather than starting the SDK manager. Existing installations without a receipt require one explicit Download/verify and restart; settings must not silently initialize the SDK for migration.
+
+### Retirement safety
+
+macOS startup removes only catalog-known legacy Qwen/Whisper installation/staging paths in configured/default managed roots. It keeps renamed channel identities as disabled entries. Root/model/parent symlinks must not grant deletion authority outside the managed tree. No macOS system speech assets, recordings, experimental packages or another application's files are removed.
+
+### Verification
+
+Run the Core, native, backend, frontend and browser checks documented in [the macOS experimental models section](#macos-实验模型). Native acceptance has an explicit isolated debug-bundle entry point; it never uses the installed application's data, OS credential vault or microphone.
+
+Checks govern OpenLess's own engine handles and child processes. They do not promise unrelated macOS/Windows system services disappear. Browser mocks and a debug bundle are not evidence of signed/notarized release acceptance or Windows hardware behavior.
+
+## macOS 实验模型
 
 macOS 的旧本地模型管理功能已下架。「设置 → AI 服务与模型 → 本地模型」保留灰色、不可点击的占位入口；鼠标悬浮或键盘聚焦时显示 **「该功能已下架，请去实验性与扩展里面」**。旧本地渠道也停用并置灰。Windows 原有模型管理入口和云服务渠道不受这次下架影响。
 
 新功能位于 **设置 → 实验与扩展 → 实验性本地语音模型**，排在扩展列表第一位。三个实验单独开启，不会自动替换已有首选渠道。
 
-## 三种方案
+### 三种方案
 
 | 模型 | 下载与平台 | 运行方式 |
 | --- | --- | --- |
@@ -16,7 +56,7 @@ TextStream 使用 Qwen3-ASR／MLX，依赖安装在所选模型目录的 `.runti
 
 每个模型都有独立开关、下载/安装状态、错误与重试入口，以及明确的内存占用警告。网络失败不会初始化推理，也不会把失败的模型标成可用。
 
-## 开关、渠道与生命周期
+### 开关、渠道与生命周期
 
 1. 开启开关：显式下载固定版本的文件并校验大小/SHA-256；TextStream 还安装固定版本、哈希锁定的运行组件。此阶段不导入 MLX 或加载模型。
 2. 完成后注册独立语音渠道并提示用户选择。下载不会启用一个原本没有启用渠道的语音流程，也不会替换已有首选渠道。
@@ -27,7 +67,7 @@ TextStream 使用 Qwen3-ASR／MLX，依赖安装在所选模型目录的 `.runti
 
 状态文件：`experimental-asr.json`。旧的两模型状态按原有 SenseVoice/Gemma 索引迁移，TextStream 默认关闭，不会错位。文件目录分别为 `experimental-textstream-qwen3`、`experimental-sensevoice-small`、`experimental-embedding-gemma-en`。
 
-## TextStream 的流式约定
+### TextStream 的流式约定
 
 - OpenLess 始终拥有录音；worker 只接收 16 kHz、单声道、16-bit PCM，不调用录音设备。
 - 草稿是整体替换快照，可缩短、修订；不能按追加字符串处理。
@@ -37,13 +77,13 @@ TextStream 使用 Qwen3-ASR／MLX，依赖安装在所选模型目录的 `.runti
 - worker 有加载/完成超时、父进程死亡监控、进程组清理和十分钟音频上限。端口占用会在推理导入前失败。
 - TextStream 强制实时送入音频，但不修改用户保存的“录音后识别”偏好；其他渠道仍遵循该偏好。
 
-## 旧版升级清理
+### 旧版升级清理
 
 macOS 启动时，在配置的模型根目录和默认根目录中清除已知旧 Qwen/Whisper 安装与中断下载目录，并退休旧渠道。操作幂等；失败记日志，下次启动重试。旧同步设置也不能绕过后端重新下载、启用或推理。
 
 不删除根目录、实验包、Windows 模型、录音、无关文件、其他应用数据或 macOS 系统语音资源；不沿模型路径、父目录或模型根目录的符号链接删除外部文件。**只有运行新版应用才执行真实升级清理，编译/测试不清理当前安装应用的数据。**
 
-## 模块与来源
+### 模块与来源
 
 - Core：`crates/openless-core/src/experimental_asr.rs` 管理状态、文件、渠道和租约，不依赖 Tauri 或原生推理库。
 - 原生：`src-tauri/src/asr/local/experimental/` 中分别实现 Gemma FFI 和 TextStream 的安装、协议、worker；共享适配器只负责选择模块和会话生命周期。
@@ -51,7 +91,7 @@ macOS 启动时，在配置的模型根目录和默认根目录中清除已知�
 - SenseVoice：固定仓库 revision 和两个文件的 SHA-256。
 - Gemma：固定发布文件、大小和 SHA-256，保留 NOTICE、Apache-2.0 许可；部署还需遵守 NOTICE 指向的 Gemma 使用政策。适配器不调用其他应用的可执行文件或私有 Swift ABI。
 
-## 测试与隔离验收
+### 测试与隔离验收
 
 ```sh
 cd openless-all/app
@@ -76,5 +116,3 @@ src-tauri/target/debug/bundle/macos/OpenLess.app/Contents/MacOS/openless \
 目录必须是显式指定的 `openless-asr-acceptance*` 隔离目录，不能是符号链接。验收使用真实权重/原生引擎和包含 hello、test、system 的固定 WAV，不用麦克风，不访问系统凭据库。覆盖三模型推理、TextStream SSE/最终文本一致性、取消不提交、停用保留文件、禁用后重启不加载、已启用重启/设置查询不加载，以及隔离旧模型的升级清理。通过后写入该目录的 `passed.json`。
 
 浏览器回归使用 IPC mock，只证明界面行为，不能替代真实原生推理或签名发布验收。debug bundle 也不能替代 notarization 或真实 Windows 设备测试。
-
-真实模型、进程生命周期与 Release 打包的验收记录只保留在 git 历史里；当前边界见 [本地 ASR 生命周期](local-asr-lifecycle.md)。

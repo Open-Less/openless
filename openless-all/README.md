@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
+This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md) and [architecture and API map](../docs/architecture.md).
 
 ## Native iOS app and keyboard
 
@@ -32,7 +32,7 @@ npm run tauri dev
 
 ## Shared backend and Linux host
 
-This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. Remaining Host/UI work and product acceptance are tracked in the [Linux handoff](../docs/linux-egui-handoff/README.md).
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. See the [Linux host interface](../docs/development/linux.md) for integration and the [Linux requirements](../docs/requirements.md#linux) for remaining work.
 
 ```bash
 cd app
@@ -42,7 +42,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-Linux packaging is manual while the L01–L12 device acceptance is open: the dedicated CI workflows (`check-linux-egui.yml`, `release-linux-egui.yml`) were removed and desktop releases no longer dispatch Linux. The local scripts still build deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). Restoring automated Linux releases requires the acceptance evidence described in [`RELEASING.md`](../RELEASING.md) and [`docs/ci-trigger-and-cache-policy.md`](../docs/ci-trigger-and-cache-policy.md).
+Linux packaging is manual while device and packaging acceptance is pending: the dedicated CI workflows (`check-linux-egui.yml`, `release-linux-egui.yml`) were removed and desktop releases no longer dispatch Linux. The local scripts still build deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). Restoring automated Linux releases requires the acceptance evidence described in [`RELEASING.md`](../RELEASING.md) and [Linux requirements](../docs/requirements.md#linux).
 
 ## macOS Build
 
@@ -166,7 +166,7 @@ Follow the [release policy](../RELEASING.md) for Beta and Stable signing, notari
 
 ## Third-party components
 
-The overview yearly activity card ports [Rare UI GitHub Activity](https://rareui.com/components/githubactivity) (Copyright (c) 2026 Swami Malode). The license is MIT plus the Commons Clause. Cell size, gap, radius, padding, month labels, tooltip, and the expandable panel stay with the upstream component; local dictation counts replace GitHub contributions, and the apps with the most voice input replace repositories. The same credit is in the app under Settings → About and updates → Component credits. See [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md).
+The overview yearly activity card ports [Rare UI GitHub Activity](../docs/ATTRIBUTION.md#rare-ui-github-activity) (Copyright (c) 2026 Swami Malode). The license is MIT plus the Commons Clause. Cell size, gap, radius, padding, month labels, tooltip, and the expandable panel stay with the upstream component; local dictation counts replace GitHub contributions, and the apps with the most voice input replace repositories. The same credit is in the app under Settings → About and updates → Component credits. See [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md).
 
 ## Ignored Local Output
 
