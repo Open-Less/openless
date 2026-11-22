@@ -30,27 +30,31 @@ artifact_id = artifact["id"]
 assert artifact["name"] == artifact_name and not artifact["expired"]
 assert artifact["workflow_run"]["id"] == run_id
 assert artifact["workflow_run"]["head_sha"] == source_sha
-release = api("releases/454700643")
-assert release["tag_name"] == "v2.0.3-Beta.2-tauri"
-assert release["draft"] and release["prerelease"]
-asset = next(asset for asset in release["assets"] if asset["name"] == filename)
+# A contents:read integration cannot read a draft release (403). These exact
+# attachment metadata were read by the release operator from releases/454700643
+# before dispatch; keep the validation token read-only, without a PAT or secrets.
+asset_id, asset_bytes, asset_digest = {
+    "macos": (780325593, 37264489, "sha256:f1d984da30e91fdb5fc23d459c0ef76777b116633f570b67c6b8dae02ac13398"),
+    "windows": (780325597, 26123955, "sha256:7bf05a38b277f621fc9b16ec0a30788cef983c15cd1f0fbcd6ee22e893704263"),
+}[platform]
 payload = root / "payload"
 subprocess.run(["gh", "run", "download", str(run_id), "--repo", repo,
                 "--name", artifact_name, "--dir", str(payload)], check=True)
 files = list(payload.rglob(filename))
 assert len(files) == 1, files
 archive = files[0]
-assert archive.stat().st_size == asset["size"]
+assert archive.stat().st_size == asset_bytes
 # This single payload digest is needed to prove equivalence to the final attachment.
 digest = "sha256:" + hashlib.file_digest(archive.open("rb"), "sha256").hexdigest()
-assert digest == asset["digest"], (digest, asset["digest"])
+assert digest == asset_digest, (digest, asset_digest)
 provenance = {
     "release_run": run_id, "release_source_sha": source_sha,
     "version_expected": version, "artifact_id": artifact_id,
     "artifact_name": artifact_name, "artifact_zip_bytes": artifact["size_in_bytes"],
-    "release_id": release["id"], "release_draft": release["draft"],
-    "release_prerelease": release["prerelease"], "asset_id": asset["id"],
-    "asset_name": filename, "asset_bytes": asset["size"], "asset_digest": digest,
+    "release_id": 454700643, "metadata_source": "GET repos/Open-Less/openless/releases/454700643",
+    "release_draft_at_operator_metadata_read": True,
+    "release_prerelease_at_operator_metadata_read": True, "asset_id": asset_id,
+    "asset_name": filename, "asset_bytes": asset_bytes, "asset_digest": digest,
     "same_final_attachment": True,
     "source_note": "SHA from immutable release run metadata, not a runtime binary SHA probe",
 }
