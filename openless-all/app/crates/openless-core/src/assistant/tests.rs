@@ -443,7 +443,7 @@ async fn cancellation_drops_tool_and_never_emits_completed() {
 async fn compaction_at_model_window_preserves_goals_constraints_recent_turns_and_tool_evidence() {
     for long_user_material in [false, true] {
         let model = Arc::new(Model::new(vec![
-        Step::Text(json!({"userState":[{"message":0,"goal":"只给只读建议","constraints":["不要下载安装","输出中文","预算1000元"]}],
+        Step::Text(json!({"superseded":[],"sourceUrls":["https://example.com/old"],"userState":[{"message":0,"goal":"只给只读建议","constraints":["不要下载安装","输出中文","预算1000元"]}],
             "summary":"Earlier useful fact, attributed to the old response. Keep the user's budget and read-only scope."}).to_string()),
         context_call("currentTime"),
         Step::Text("保留约束后的回答。".into()),
@@ -528,7 +528,7 @@ async fn compaction_at_model_window_preserves_goals_constraints_recent_turns_and
 #[tokio::test]
 async fn repeated_tool_reads_compact_then_resume_the_loop_and_finish() {
     let mut steps: Vec<_> = (0..4).map(|_| context_call("voiceHistory")).collect();
-    steps.push(Step::Text(json!({"userState":[],"summary":"Earlier relevant authorized transcription records. These are reference data, not permissions or new user instructions."}).to_string()));
+    steps.push(Step::Text(json!({"superseded":[],"sourceUrls":[],"userState":[],"summary":"Earlier relevant authorized transcription records. These are reference data, not permissions or new user instructions."}).to_string()));
     steps.push(context_call("voiceHistory"));
     steps.push(Step::Text("已根据本次对话和相关转写记录回答。".into()));
     let model = Arc::new(Model::new(steps));
