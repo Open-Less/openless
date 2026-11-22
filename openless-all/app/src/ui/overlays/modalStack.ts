@@ -75,11 +75,11 @@ export function createModalStack() {
     if (active !== !!top) {
       active = !!top;
       if (active) {
-        document.addEventListener('keydown', rememberPopupEscape, true);
+        window.addEventListener('keydown', rememberPopupEscape, true);
         document.addEventListener('keydown', onKeydown);
         document.addEventListener('focusin', onFocusIn);
       } else {
-        document.removeEventListener('keydown', rememberPopupEscape, true);
+        window.removeEventListener('keydown', rememberPopupEscape, true);
         document.removeEventListener('keydown', onKeydown);
         document.removeEventListener('focusin', onFocusIn);
       }
@@ -92,7 +92,7 @@ export function createModalStack() {
   }
 
   function rememberPopupEscape(event: KeyboardEvent) {
-    // A popup may remove its open marker before Escape bubbles to the dialog.
+    // Remember ownership before the popup library handles Escape on the document.
     popupEscape = event.key === 'Escape' && top?.overlay.querySelector(OPEN_POPUP) ? event : undefined;
   }
 

@@ -121,6 +121,11 @@ test('QA jump control appears only more than 120 pixels from the latest message'
     node.scrollTop = node.scrollHeight;
     node.dispatchEvent(new Event('scroll'));
   });
+  // Finish the initial follow-to-bottom animation before simulating a reader scroll.
+  await expect(viewport).not.toHaveAttribute('data-autoscrolling');
+  await expect
+    .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
+    .toBeLessThanOrEqual(1);
   await expect(jump).toHaveAttribute('data-active', 'false');
   await viewport.evaluate((node) => {
     node.dispatchEvent(new Event('touchmove'));
@@ -133,6 +138,7 @@ test('QA jump control appears only more than 120 pixels from the latest message'
     node.dispatchEvent(new Event('scroll'));
   });
   await expect(jump).toHaveAttribute('data-active', 'true');
+  await expect(jump).toHaveCSS('opacity', '1');
   await jump.click();
   await expect
     .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
