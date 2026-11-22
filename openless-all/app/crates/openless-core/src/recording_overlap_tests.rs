@@ -216,6 +216,12 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 primary: "F11".into(),
                 modifiers: vec![],
             };
+            let profile = backend.expression_profile.lock().unwrap().as_ref().unwrap().clone();
+            for index in 0..10 {
+                profile.record(uuid::Uuid::new_v4(), 100 + index % 4,
+                    crate::expression_observation::ExpressionSignal { line_breaks: 1, exclamations: 0, terminal_punctuation: 0 }).unwrap();
+            }
+            prefs.expression_learning_enabled = true;
             prefs.cursor_context_enabled = true;
             prefs.stable_transcription_enabled = true;
             prefs.translation_target_language = "English".into();
@@ -256,6 +262,14 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                     .unwrap()
             };
             assert_eq!(owner.load(Ordering::SeqCst), 1);
+            // Turn translation on and off in the same uninterrupted capture.
+            assert!(!backend.snapshot().dictation.translation_active);
+            backend.toggle_dictation_translation_for_session(first).unwrap();
+            assert!(backend.snapshot().dictation.translation_active);
+            backend.toggle_dictation_translation_for_session(first).unwrap();
+            assert!(!backend.snapshot().dictation.translation_active);
+            assert_eq!(owner.load(Ordering::SeqCst), 1);
+
             let stopping = tokio::spawn({
                 let backend = backend.clone();
                 async move {
@@ -303,6 +317,11 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             } else {
                 backend.start_dictation_with_options(options).await.unwrap()
             };
+            assert!(!backend.snapshot().dictation.translation_active);
+            assert!(backend.toggle_dictation_translation_for_session(first).is_err());
+            backend.toggle_dictation_translation_for_session(second).unwrap();
+            assert!(backend.snapshot().dictation.translation_active);
+            assert!(!backend.submitted_dictation_context(first).unwrap().polish.translation_active);
             let second_frozen = backend
                 .state
                 .read()
@@ -378,11 +397,14 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             let history = backend.list_history().unwrap();
             assert!(history
                 .iter()
-                .any(|entry| entry.id == second.to_string() && entry.raw_transcript == "second"));
+                .any(|entry| entry.id == second.to_string() && entry.raw_transcript == "second" && entry.translation_active));
             assert_eq!(
                 history.iter().any(|entry| entry.id == first.to_string()),
                 outcome != "cancel"
             );
+            if let Some(entry) = history.iter().find(|entry| entry.id == first.to_string()) {
+                assert!(!entry.translation_active);
+            }
             assert!(backend.snapshot().processing_dictations.is_empty());
             assert!(backend.voice_sessions.runtime_restore_idle());
             drop(sessions);
@@ -402,6 +424,7 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 assert_eq!(request["messages"][0]["content"], system);
                 assert_eq!(request["messages"][1]["content"], user);
                 assert!(serialized.contains("captured-context"));
+                assert_eq!(system.contains("用户经多次编辑"), !context.polish.translation_active);
                 assert!(!serialized.contains("Japanese"));
             }
         }

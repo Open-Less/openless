@@ -503,6 +503,8 @@ export interface UserPreferences {
   workingLanguages: string[];
   /** Translation mode target language (single-select, native name); empty string = Shift translation disabled. See issue #4. */
   translationTargetLanguage: string;
+  /** Absent means untouched/default 1; an explicit 1 must remain persisted and synced. */
+  translationShiftTapCount?: number;
   /** Chinese output script preference: auto-synced from the UI language (simplified/traditional); not exposed as a separate setting. */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
   /** Final output language preference: auto-synced from the UI language; not exposed as a separate setting. */

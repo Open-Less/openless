@@ -6,6 +6,15 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const es: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Traducción de grabación',
+    description: 'Activación con Shift y número de pulsaciones',
+    count: 'Pulsaciones de Shift',
+    scope:
+      'Durante la grabación, pulsa brevemente solo Shift este número de veces para activar o desactivar la traducción. Se aplica al atajo Shift predeterminado; se desactiva si Shift es la tecla de grabación.',
+    times_one: '{{count}} pulsación',
+    times_other: '{{count}} pulsaciones',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,

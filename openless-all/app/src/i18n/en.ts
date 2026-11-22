@@ -9,6 +9,15 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const en: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Recording translation',
+    description: 'Shift toggle and tap count',
+    count: 'Shift tap count',
+    scope:
+      'During recording, tap Shift alone this many times to turn translation on or off. Applies to the default Shift translation shortcut; disabled when Shift is the recording key.',
+    times_one: '{{count}} tap',
+    times_other: '{{count}} taps',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,

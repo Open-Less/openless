@@ -72,6 +72,29 @@
     "applicationListInvalidatedBy": "history_changed",
     "unavailableAssignment": "keep_and_skip"
   },
+  "recordingTranslation": {
+    "preference": {
+      "field": "translationShiftTapCount",
+      "type": "optional nonzero uint8",
+      "default": 1,
+      "range": [1, 255],
+      "uiChoices": [1, 2, 3],
+      "absent": "untouched; omit when serialized",
+      "explicitDefault": "persist and sync 1",
+      "sync": "v1 preferences Portable"
+    },
+    "nativeShiftGesture": {
+      "hosts": ["macos", "windows"],
+      "binding": "built-in standalone Shift translation shortcut only",
+      "tapMaxMs": 350,
+      "interTapMaxMs": 400,
+      "activation": "complete standalone down/up pairs; same count toggles both directions",
+      "ownership": "capture sessionId at key down; reject stale sessions and finalizing captures",
+      "reset": "capture or preferences revision changes, shortcut reconfiguration, hook reset, combinations, repeat, long hold",
+      "effectiveMode": "BackendSnapshot.dictation.translationActive",
+      "customTranslationShortcut": "preserve binding and existing arm-only behavior; no additional Shift action"
+    }
+  },
   "startupSnapshot": {
     "fields": ["contractVersion", "backend"],
     "sample": {

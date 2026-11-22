@@ -6,6 +6,15 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const fr: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Traduction de l’enregistrement',
+    description: 'Bascule Shift et nombre d’appuis',
+    count: 'Nombre d’appuis sur Shift',
+    scope:
+      'Pendant l’enregistrement, appuyez brièvement sur Shift seul autant de fois pour activer ou désactiver la traduction. S’applique au raccourci Shift par défaut ; désactivé si Shift est la touche d’enregistrement.',
+    times_one: '{{count}} appui',
+    times_other: '{{count}} appuis',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,

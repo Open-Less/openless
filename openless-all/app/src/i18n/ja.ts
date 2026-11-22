@@ -11,6 +11,15 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
   ...en,
+  shiftTranslation: {
+    title: '録音の翻訳',
+    description: 'Shift 切り替えと連続押下回数',
+    count: 'Shift の連続押下回数',
+    scope:
+      '録音中に Shift を単独で同じ回数短く押すと、翻訳のオン・オフを切り替えます。既定の Shift 翻訳ショートカットに適用され、Shift が録音キーの場合は無効です。',
+    times_one: '{{count}} 回',
+    times_other: '{{count}} 回',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,

@@ -21,7 +21,7 @@
 1. 先评审范围：可迁移偏好用 Portable；设备路径、平台授权与本机状态按既有 DeviceProfile / Excluded 处理；服务密钥继续使用既有受控 credential accounts。不得把密钥转进 Portable，不新增应用历史、输入内容、瞬态录音任务。
 2. 在 `UserPreferences`、对应 Wire 的默认/解码映射和 registry 登记真实的新字段；使用旧版尚未认识的稳定顶层 preferences id。不向 style_packs、channels、device_profile 等旧严格 value 增加字段，不改变旧 id 的类型/枚举含义，不借提示词存设置。
 3. 新增可缺省设置用可区分“未设置”和“明确选择默认”的本机表示。此批 `translation_shift_tap_count: Option<NonZeroU8>`：None 不序列化，getter 有效值为 1；Some(1) 必须序列化为 1，允许值 1..255，UI 可以更窄。不能把恢复默认实现为清除字段/设 None。
-4. registry 为 `translationShiftTapCount` / Portable / Unsigned8，并拒绝零。界面与手势代码使用 getter 读取、通过原有设置写入入口保存显式值。此提交只供应数据/同步契约，Shift 手势与次数控件由后继任务实现。
+4. registry 为 `translationShiftTapCount` / Portable / Unsigned8，并拒绝零。界面与手势代码使用有效默认 1、通过原有设置写入入口保存显式值。数据/同步依赖提供字段合同；后继 [Shift 翻译实现](shift-translation.md)已接入原生完整手势、Core getter、前端类型和通用设置控件，不重复扩展同步协议。
 5. 为字段增加有效值、排除项、旧版保留、升级物化和显式默认回归。无需服务发布；遇到旧版已经认识且严格限制的旧 id，应使用新的稳定设置 id 和明确的客户端兼容投影，而非改 schemaVersion 或放松生产校验。
 
 未认识的 preferences / ui_preferences 值只在原有受账号、origin、vault、device 绑定的加密 ScopeState 中保留，不散入本机原生设置，也不据此执行任何操作。新客户端首次导出时发现 retained 中已有本版理解的 Portable 设置，会通过现有 `restore_scope` 的完整预检、加密 journal、独占写门、Host 副作用及读回流程物化；已明确存在的本机值优先。随后移除已物化的 retained 副本，避免旧副本重新盖过用户显式选择。服务收到本地物化回执后发布原有恢复事件，使界面重新读取设置。

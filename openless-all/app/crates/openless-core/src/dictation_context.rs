@@ -206,6 +206,8 @@ pub struct DictationContext {
     pub(crate) input_app: Option<crate::app_style_routing::InputApp>,
     /// Annotated built-in Raw prompt, captured before any later prompt changes.
     pub(crate) raw_passthrough_prompt: Option<String>,
+    /// Frozen guidance applied only to the final ordinary dictation mode.
+    pub(crate) expression_instructions: Option<String>,
     pub audio_source: DictationAudioSource,
     pub output_target: DictationOutputTarget,
     pub(crate) normal_archive_successful_recording: bool,
@@ -395,6 +397,7 @@ impl DictationContext {
             deferred_llm_error: None,
             unconfigured_llm_raw: None,
             raw_passthrough_prompt: None,
+            expression_instructions: None,
             omni,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
@@ -534,17 +537,33 @@ impl DictationContext {
         self.normal_archive_successful_recording
     }
 
+    pub(crate) fn with_expression_instructions(mut self, instructions: String) -> Self {
+        self.expression_instructions = Some(instructions);
+        self.restore_or_apply_unconfigured_llm_raw();
+        self
+    }
+
     fn restore_or_apply_unconfigured_llm_raw(&mut self) {
-        let Some((mode, prompt)) = self.unconfigured_llm_raw.clone() else {
-            return;
-        };
-        if self.is_plain_dictation_output() && !self.polish.translation_active {
-            self.polish.mode = PolishMode::Raw;
-            self.polish.style_system_prompt =
-                crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
-        } else {
-            self.polish.mode = mode;
-            self.polish.style_system_prompt = prompt;
+        let unconfigured_raw = self.unconfigured_llm_raw.is_some()
+            && self.is_plain_dictation_output() && !self.polish.translation_active;
+        if let Some((mode, prompt)) = self.unconfigured_llm_raw.clone() {
+            if unconfigured_raw {
+                self.polish.mode = PolishMode::Raw;
+                self.polish.style_system_prompt =
+                    crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
+            } else {
+                self.polish.mode = mode;
+                self.polish.style_system_prompt = prompt;
+            }
+        }
+        if let Some(instructions) = &self.expression_instructions {
+            if self.polish.translation_active {
+                if let Some(base) = self.polish.style_system_prompt.strip_suffix(instructions) {
+                    self.polish.style_system_prompt = base.to_owned();
+                }
+            } else if !unconfigured_raw && !self.polish.style_system_prompt.ends_with(instructions) {
+                self.polish.style_system_prompt.push_str(instructions);
+            }
         }
     }
 
