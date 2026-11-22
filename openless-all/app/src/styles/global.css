@@ -646,19 +646,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border-color: var(--ol-blue);
 }
 
-/* 列表项通用入场：新条目淡入轻降。
-   key 稳定时只有真正新增/过滤变化的项会重播，存量项不动。 */
-@keyframes ol-item-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 /* ── 词典页────────────────────────────────────────────── */
 
 /* A circular track and inset chip keep a constant gap around the end corners. */

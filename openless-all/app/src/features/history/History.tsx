@@ -45,6 +45,10 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   const grid = useRef<HTMLDivElement>(null);
   const [mobile, setMobile] = useState(mobileHost);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const selectRecord = useCallback((id: string) => {
+    setSelectedId(id);
+    setMobileDetailOpen(true);
+  }, []);
   const refreshedByUser = useRef(false);
   const clearRequest = useRef(false);
 
@@ -195,10 +199,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
             onQuery={setQuery}
             filtered={filtered}
             selectedId={item?.id}
-            onSelect={(id) => {
-              setSelectedId(id);
-              if (mobile) setMobileDetailOpen(true);
-            }}
+            onSelect={selectRecord}
             trigger={binding ? formatComboLabel(binding) : ''}
             loading={loading}
             loadError={loadError}

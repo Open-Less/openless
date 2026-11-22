@@ -586,6 +586,43 @@ test('saved status and the sync decision remain usable in a short narrow 110% vi
   await expect(remove).toBeFocused();
 });
 
+test('Web Search fields stay aligned and the hybrid option fits at both window sizes', async ({
+  page,
+}) => {
+  const label = '混合搜索（免费 + DeepSeek）';
+  for (const width of [1300, 330]) {
+    await page.setViewportSize({ width, height: 690 });
+    await page.goto(`/e2e/fixtures/settings-status.html?webSearch&hybridSearch&width=${width}&height=640&scale=large`);
+    await page.getByRole('button', { name: 'Open web search', exact: true }).click();
+    await settleNavigation(page);
+    const provider = page.getByRole('combobox', { name: '搜索服务' });
+    const option = page.getByRole('option', { name: label, exact: true });
+    const menu = page.locator('.ol-web-search-options');
+    const key = page.locator('.ol-field').filter({ has: page.getByLabel('Search API Key') });
+    await expect(key).toBeVisible();
+    const bounds = (await provider.boundingBox())!;
+    const keyBounds = (await key.boundingBox())!;
+    expect(keyBounds.x).toBeCloseTo(bounds.x, 0);
+    expect(keyBounds.width).toBeCloseTo(bounds.width, 0);
+    await provider.click();
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveCSS('transform', 'none');
+    const menuBounds = (await menu.boundingBox())!;
+    expect(menuBounds.width).toBeCloseTo(bounds.width, 0);
+    expect(menuBounds.x).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(width);
+    await expect(option).toHaveAttribute('aria-selected', 'true');
+    const text = option.locator(':scope > :first-child');
+    expect(await text.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    const textBounds = (await text.boundingBox())!;
+    const checkBounds = (await option.locator('.ol-select-check').boundingBox())!;
+    expect(textBounds.x + textBounds.width).toBeLessThan(checkBounds.x);
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await key.locator('input').fill('test-deepseek-key');
+  }
+});
+
 test('Web Search reports failures on its page and completes a departed save quietly', async ({
   page,
 }) => {

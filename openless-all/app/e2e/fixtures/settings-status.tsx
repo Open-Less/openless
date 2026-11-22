@@ -53,7 +53,9 @@ let experimentalReads = 0;
 let finishExperimentalToggle: (() => void) | undefined;
 const attempts = { save: 0, sync: 0, delete: 0 };
 const pending = new Map<SettingsOperation, { attempt: number; finish: (error: boolean) => void }>();
-let stored = JSON.stringify({ apiKey: 'fixture-key', voice: 'stella' });
+let stored = params.has('hybridSearch')
+  ? JSON.stringify({ provider: 'hybrid' })
+  : JSON.stringify({ apiKey: 'fixture-key', voice: 'stella' });
 
 function deferOperation<T>(
   operation: SettingsOperation,

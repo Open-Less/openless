@@ -7,6 +7,7 @@ import { Card } from '../../../ui/layout/Card';
 import { SelectLite } from '../../../ui/controls/SelectLite';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
+import './web-search.css';
 
 function isInteractive(element: HTMLElement | null) {
   return element?.isConnected && !element.closest('[inert]');
@@ -85,7 +86,7 @@ export function WebSearchSection() {
     };
   }, [i18n, notify]);
   return (
-    <Card>
+    <Card className="ol-web-search-settings">
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
@@ -98,6 +99,7 @@ export function WebSearchSection() {
           <SettingRow label={text('搜索服务', 'Search provider')}>
             <SelectLite
               ariaLabel={text('搜索服务', 'Search provider')}
+              popupClassName="ol-web-search-options"
               value={config.provider}
               onChange={(provider) => setConfig({ ...config, provider: provider as WebSearchConfig['provider'], apiKey: '', endpoint: '' })}
               options={[
@@ -118,7 +120,6 @@ export function WebSearchSection() {
                 aria-label="Search API Key"
                 type="password"
                 autoComplete="off"
-                style={{ maxWidth: 360 }}
                 value={config.apiKey}
                 onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
               />
@@ -136,7 +137,6 @@ export function WebSearchSection() {
                 aria-label="SearXNG URL"
                 type="url"
                 placeholder="https://search.example.com/search"
-                style={{ maxWidth: 360 }}
                 value={config.endpoint}
                 onChange={(e) => setConfig({ ...config, endpoint: e.target.value })}
               />

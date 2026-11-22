@@ -1,8 +1,9 @@
 import { TextField } from '../../ui/controls/TextField';
-import type { RefObject } from 'react';
+import { memo, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession } from '../../api/contracts';
 import { formatHistoryTime } from '../../lib/localeFormat';
+import { useInitialListRows } from '../../lib/useInitialListRows';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { Pill } from '../../ui/controls/Pill';
@@ -42,6 +43,7 @@ export function HistoryList({
 }: Props) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
+  const rows = useInitialListRows(filtered);
   return (
     <Card padding={0} className="ol-history-list ol-col-4">
       <TextField
@@ -85,90 +87,113 @@ export function HistoryList({
                 : t('history.empty', { trigger })}
             </div>
           )}
-          {filtered.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              data-history-record={s.id}
-              aria-current={selectedId === s.id ? 'true' : undefined}
-              onClick={() => onSelect(s.id)}
-              className="ol-history-list-record"
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                textAlign: 'left',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 4,
-                border: '0.5px solid',
-                borderColor: selectedId === s.id ? 'var(--ol-line)' : 'transparent',
-                background: selectedId === s.id ? 'var(--ol-surface-2)' : 'transparent',
-                cursor: 'default',
-                fontFamily: 'inherit',
-                transition:
-                  'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
-                // Rows fade in and drop slightly when search filters or new records
-                // insert.
-                animation: 'ol-item-in 0.22s var(--ol-motion-spring) both',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 11,
-                    fontFamily: 'var(--ol-font-numeric)',
-                    fontVariantNumeric: 'tabular-nums',
-                    color: 'var(--ol-ink-3)',
-                  }}
-                >
-                  {formatHistoryTime(s.createdAt, locale)}
-                </span>
-                <span
-                  style={{
-                    fontSize: 10,
-                    color: 'var(--ol-ink-4)',
-                    fontFamily: 'var(--ol-font-numeric)',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatDuration(s.durationMs, t, locale)}
-                </span>
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--ol-ink-2)',
-                  lineHeight: 1.45,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                }}
-              >
-                {historyTitle(s, t)}
-              </div>
-              {/* tone still follows baseMode: the color keeps the original coarse
-                        category info, the text becomes the actual style pack name. */}
-              <div style={{ display: 'flex', minWidth: 0 }} title={styleLabel(s)}>
-                <Pill
-                  size="sm"
-                  tone={s.mode === 'raw' ? 'outline' : 'default'}
-                  style={TRUNCATED_PILL_STYLE}
-                >
-                  {styleLabel(s)}
-                </Pill>
-              </div>
-            </button>
+          {rows.map((session) => (
+            <HistoryRow
+              key={session.id}
+              session={session}
+              selected={selectedId === session.id}
+              onSelect={onSelect}
+              styleLabel={styleLabel(session)}
+              t={t}
+              locale={locale}
+            />
           ))}
         </div>
       </div>
     </Card>
   );
 }
+
+const HistoryRow = memo(function HistoryRow({
+  session,
+  selected,
+  onSelect,
+  styleLabel,
+  t,
+  locale,
+}: {
+  session: DictationSession;
+  selected: boolean;
+  onSelect: Props['onSelect'];
+  styleLabel: string;
+  t: ReturnType<typeof useTranslation>['t'];
+  locale: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-history-record={session.id}
+      aria-current={selected ? 'true' : undefined}
+      onClick={() => onSelect(session.id)}
+      className="ol-history-list-record"
+      style={{
+        width: '100%',
+        padding: '10px 12px',
+        textAlign: 'left',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        border: '0.5px solid',
+        borderColor: selected ? 'var(--ol-line)' : 'transparent',
+        background: selected ? 'var(--ol-surface-2)' : 'transparent',
+        cursor: 'default',
+        fontFamily: 'inherit',
+        transition:
+          'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: 'var(--ol-font-numeric)',
+            fontVariantNumeric: 'tabular-nums',
+            color: 'var(--ol-ink-3)',
+          }}
+        >
+          {formatHistoryTime(session.createdAt, locale)}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            color: 'var(--ol-ink-4)',
+            fontFamily: 'var(--ol-font-numeric)',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {formatDuration(session.durationMs, t, locale)}
+        </span>
+      </div>
+      <div
+        style={{
+          fontSize: 12,
+          color: 'var(--ol-ink-2)',
+          lineHeight: 1.45,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}
+      >
+        {historyTitle(session, t)}
+      </div>
+      {/* Keep the base-mode color and use the style pack's name as the label. */}
+      <div style={{ display: 'flex', minWidth: 0 }} title={styleLabel}>
+        <Pill
+          size="sm"
+          tone={session.mode === 'raw' ? 'outline' : 'default'}
+          style={TRUNCATED_PILL_STYLE}
+        >
+          {styleLabel}
+        </Pill>
+      </div>
+    </button>
+  );
+});
