@@ -65,7 +65,7 @@ pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
     #[cfg(target_os = "windows")]
-    windows_app: Option<String>,
+    windows_app: Option<openless_core::app_style_routing::InputApp>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -86,11 +86,13 @@ struct WindowsSelectionTarget {
 struct MacosSelectionTarget {
     /// Foreground app at capture time (NSWorkspace frontmostApplication, `name (bundle)` form).
     front_app: Option<String>,
+    name: Option<String>,
     /// Bundle identifier captured with the foreground app, used by the host-document safety gate.
     bundle_id: Option<String>,
     /// Foreground app pid at capture time — used to return focus to the original app after the
     /// preview is confirmed.
     front_app_pid: Option<i32>,
+    dictation_window: Option<u32>,
 }
 
 /// Result of the final target/selection revalidation immediately before a
@@ -350,7 +352,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
         let windows = capture_windows_selection_target_for_window(foreground);
         let windows_app = windows.map_or_else(
             || windows_app_for_window(foreground),
-            |target| crate::activity_app_icons::app_name_for_pid(target.foreground_process_id),
+            |target| crate::activity_app_icons::app_for_pid(target.focused_process_id),
         );
         return SelectionInsertionTarget { windows, windows_app };
     }
@@ -367,8 +369,10 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
         return SelectionInsertionTarget {
             macos: Some(MacosSelectionTarget {
                 front_app,
+                name: front_app_name,
                 bundle_id,
                 front_app_pid,
+                dictation_window: None,
             }),
         };
     }
@@ -377,6 +381,56 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     {
         SelectionInsertionTarget::default()
     }
+}
+
+pub(crate) fn capture_dictation_insertion_target() -> SelectionInsertionTarget {
+    let target = capture_selection_insertion_target();
+    #[cfg(target_os = "macos")]
+    {
+        let mut target = target;
+        if let Some(app) = target.macos.as_mut() {
+            app.dictation_window = app.front_app_pid.and_then(macos_front_window_id);
+        }
+        return target;
+    }
+    #[cfg(not(target_os = "macos"))]
+    target
+}
+
+#[cfg(target_os = "macos")]
+fn macos_front_window_id(pid: i32) -> Option<u32> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::*;
+
+    // The WindowServer returns its front-to-back order without Screen Recording
+    // permission. Use only numeric metadata; no titles or images are read.
+    let windows = copy_window_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )?;
+    let owner = CFString::from_static_string("kCGWindowOwnerPID");
+    let layer = CFString::from_static_string("kCGWindowLayer");
+    let number = CFString::from_static_string("kCGWindowNumber");
+    for window in windows.iter() {
+        // SAFETY: CGWindowListCopyWindowInfo returns an array of CFDictionaries.
+        let window = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule((*window).cast()) };
+        let value = |key: &CFString| window.find(key)?.downcast::<CFNumber>()?.to_i32();
+        if value(&owner) == Some(pid) && value(&layer) == Some(0) {
+            return u32::try_from(value(&number)?).ok().filter(|id| *id != 0);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_target_is_current(target: &MacosSelectionTarget, pid: i32) -> bool {
+    current_front_app_pid() == Some(pid)
+        && target.dictation_window.is_none_or(|window| {
+            macos_front_window_id(pid) == Some(window) && current_front_app_pid() == Some(pid)
+        })
 }
 
 /// Whether the target snapshot is sufficient to start a Selection Polish
@@ -418,14 +472,9 @@ pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionT
 
     #[cfg(target_os = "macos")]
     {
-        let Some(captured_pid) = target
-            .macos
-            .as_ref()
-            .and_then(|captured| captured.front_app_pid)
-        else {
-            return false;
-        };
-        return current_front_app_pid() == Some(captured_pid);
+        return target.macos.as_ref().is_some_and(|captured| {
+            captured.front_app_pid.is_some_and(|pid| macos_target_is_current(captured, pid))
+        });
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -562,7 +611,7 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         // Do not reactivate it and sleep for 80ms on every delta; the caller
         // still validates the captured text control before posting keys.
         if current_front_app_pid() == Some(pid) {
-            return true;
+            return macos_target_is_current(captured, pid);
         }
         // The preview window is OpenLess's own window; after confirm, focus must go back to the
         // original app before pasting. NSRunningApplication activate is best-effort, and some
@@ -575,7 +624,7 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             // foreground was stolen by another app; repeated calls are idempotent.
             activate_app_by_pid(pid);
             std::thread::sleep(Duration::from_millis(80));
-            if current_front_app_pid() == Some(pid) {
+            if macos_target_is_current(captured, pid) {
                 return true;
             }
         }
@@ -1557,7 +1606,7 @@ pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
-    target.windows_app.clone()
+    target.windows_app.as_ref().map(|app| app.name.clone())
 }
 
 #[cfg(target_os = "macos")]
@@ -1581,8 +1630,49 @@ pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option
     None
 }
 
+/// Identity comes from the same native target as the insertion adapter.
+pub(crate) fn input_app_for_target(target: &SelectionInsertionTarget) -> Option<openless_core::app_style_routing::InputApp> {
+    #[cfg(target_os = "macos")]
+    {
+        let captured = target.macos.as_ref()?;
+        let pid = captured.front_app_pid?;
+        if pid as u32 == std::process::id() {
+            return None;
+        }
+        openless_core::app_style_routing::InputApp::macos(
+            captured.bundle_id.as_deref()?,
+            captured.name.as_deref(),
+        )
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let captured = target.windows?;
+        if captured.focused_process_id == std::process::id() {
+            return None;
+        }
+        target.windows_app.clone()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = target;
+        None
+    }
+}
+
 #[cfg(target_os = "windows")]
-fn windows_app_for_window(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
+pub(crate) fn ime_target_for_selection(
+    target: &SelectionInsertionTarget,
+) -> Option<crate::windows_ime_ipc::ImeSubmitTarget> {
+    let captured = target.windows?;
+    Some(crate::windows_ime_ipc::ImeSubmitTarget {
+        process_id: captured.focused_process_id,
+        thread_id: captured.focused_thread_id,
+        window_handle: captured.focused_window,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_for_window(hwnd: windows::Win32::Foundation::HWND) -> Option<openless_core::app_style_routing::InputApp> {
     use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
     if hwnd.0.is_null() {
@@ -1590,13 +1680,13 @@ fn windows_app_for_window(hwnd: windows::Win32::Foundation::HWND) -> Option<Stri
     }
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    crate::activity_app_icons::app_name_for_pid(pid)
+    crate::activity_app_icons::app_for_pid(pid)
 }
 
 #[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-    (windows_app_for_window(unsafe { GetForegroundWindow() }), None)
+    (windows_app_for_window(unsafe { GetForegroundWindow() }).map(|app| app.name), None)
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]

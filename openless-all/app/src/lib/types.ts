@@ -290,6 +290,24 @@ export interface StylePackExample {
   output: string;
 }
 
+export type AppCategory = 'coding' | 'chat' | 'email';
+
+export interface AppStyleEntry {
+  app: { id: string; name: string };
+  category: AppCategory | null;
+  seen: boolean;
+  stylePackId: string | null;
+}
+
+export interface AppStyleRouting {
+  categories: Partial<Record<AppCategory, string>>;
+  apps: AppStyleEntry[];
+}
+
+export type AppStyleAssignment =
+  | { target: 'category'; category: AppCategory; stylePackId: string | null }
+  | { target: 'app'; appId: string; stylePackId: string | null };
+
 export interface StylePack {
   id: string;
   name: string;

@@ -17,7 +17,7 @@
 先读[架构与接口调用](architecture.md)定位模块，再按[全平台构建指南](../openless-all/README.zh.md)配置开发环境。
 
 - **听写与模型**：[语音链路与服务渠道](development/speech.md) · [本地模型管理](development/local-models.md)
-- **文字处理**：[问答与选区调用](architecture.md#问答与选区) · [转写后的自定义润色策略](development/polish-strategy.md)
+- **文字处理**：[问答与选区调用](architecture.md#问答与选区) · [转写后的自定义润色策略](development/polish-strategy.md) · [按输入应用选择风格包](development/app-style-routing.md)
 - **数据与安全**：[云同步与旧快照协议](development/cloud-sync.md) · [远程输入协议](development/remote-input.md) · [WebView 内容安全策略](development/webview-security.md)
 - **宿主与排查**：[Linux 宿主接口与日志](development/linux.md) · [Windows 无响应诊断](development/windows-diagnostics.md)
 - **构建与发布**：[发布规范](../RELEASING.zh.md) · [自动检查、签名与分发](development/delivery.md)

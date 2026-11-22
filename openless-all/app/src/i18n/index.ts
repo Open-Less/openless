@@ -6,6 +6,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { zhCN } from './zh-CN';
 import { withDeletionMessages } from './deletionMessages';
+import { appStyleMessages } from './appStyleMessages';
 import { modelDownloadMessages } from './modelDownloads';
 import { setRemoteLocale } from '../lib/ipc';
 
@@ -55,7 +56,11 @@ const localeLoaders: Record<Exclude<SupportedLocale, 'zh-CN'>, () => Promise<typ
 };
 
 function localeResources(messages: typeof zhCN, lng: SupportedLocale) {
-  return { ...withDeletionMessages(messages, lng), modelDownloads: modelDownloadMessages[lng] };
+  return {
+    ...withDeletionMessages(messages, lng),
+    modelDownloads: modelDownloadMessages[lng],
+    appStyles: appStyleMessages[lng],
+  };
 }
 
 export async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {

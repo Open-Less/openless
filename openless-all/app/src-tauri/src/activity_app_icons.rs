@@ -91,6 +91,7 @@ fn macos_png(name: &str, bundle_id: Option<&str>) -> Option<Vec<u8>> {
 #[cfg(target_os = "macos")]
 #[derive(Debug, PartialEq, Eq)]
 struct MacIconRequest {
+    key: String,
     name: String,
     bundle: Option<String>,
 }
@@ -127,7 +128,7 @@ fn macos_requests(
                 Some(None) => return None,
                 found => found.flatten(),
             };
-            Some(MacIconRequest { name, bundle })
+            Some(MacIconRequest { key: name.clone(), name, bundle })
         })
         .collect()
 }
@@ -138,13 +139,32 @@ pub(crate) async fn macos_icons(
     names: Vec<String>,
     recorded_apps: impl IntoIterator<Item = (String, String)>,
 ) -> BTreeMap<String, String> {
-    let requests = macos_requests(names, recorded_apps);
+    macos_icons_for_requests(app, macos_requests(names, recorded_apps)).await
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn macos_input_app_icons(
+    app: &tauri::AppHandle,
+    inputs: Vec<openless_core::app_style_routing::InputApp>,
+) -> BTreeMap<String, String> {
+    let requests = inputs.into_iter().filter_map(|input| {
+        let bundle = input.macos_bundle_id()?.to_owned();
+        Some(MacIconRequest { key: input.id, name: input.name, bundle: Some(bundle) })
+    }).collect();
+    macos_icons_for_requests(app, requests).await
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_icons_for_requests(
+    app: &tauri::AppHandle,
+    requests: Vec<MacIconRequest>,
+) -> BTreeMap<String, String> {
     let cached = tauri::async_runtime::spawn_blocking(move || {
         let mut found = Vec::new();
         let mut missing = Vec::new();
         for request in requests {
             if let Some(png) = read_cached(&request.cache_key()) {
-                found.push((request.name, png));
+                found.push((request.key, png));
             } else {
                 missing.push(request);
             }
@@ -176,7 +196,7 @@ pub(crate) async fn macos_icons(
                     rows.into_iter()
                         .map(|(request, png)| {
                             let _ = cache(&request.cache_key(), &png);
-                            (request.name, png)
+                            (request.key, png)
                         })
                         .collect()
                 })
@@ -262,27 +282,30 @@ mod windows {
         Some(png)
     }
 
-    pub(crate) fn app_name_for_pid(pid: u32) -> Option<String> {
+    pub(crate) fn app_for_pid(pid: u32) -> Option<openless_core::app_style_routing::InputApp> {
         let path = process_path(pid)?;
-        // The executable stem is stable across documents; window titles can contain private text.
+        // The executable stem is for display and classification. Assignments use
+        // a distinct key for each executable without persisting the path itself.
         let name = path.file_stem()?.to_str()?.to_string();
-        if name.is_empty() {
-            return None;
-        }
+        let id = format!("windows:{:x}", Sha256::digest(path.to_string_lossy().to_lowercase().as_bytes()));
         if let Ok(mut sources) = sources().lock() {
-            if !sources.contains_key(&name) && sources.len() < 256 {
-                sources.insert(name.clone(), path.clone());
+            if !sources.contains_key(&id) && sources.len() < 512 {
+                sources.entry(name.clone()).or_insert_with(|| path.clone());
+                sources.insert(id.clone(), path.clone());
                 let name = name.clone();
-                // Persist only the icon, not the executable path. This also covers sessions when
-                // Overview is not visible until after a restart.
+                let id = id.clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    if read_cached(&name).is_none() {
-                        let _ = png_for(&name, &path);
+                    if read_cached(&id).is_none() {
+                        if let Some(png) = png_for(&id, &path) {
+                            if read_cached(&name).is_none() {
+                                let _ = cache(&name, &png);
+                            }
+                        }
                     }
                 });
             }
         }
-        Some(name)
+        Some(openless_core::app_style_routing::InputApp { id, name })
     }
 
     pub(crate) async fn icons(names: Vec<String>) -> BTreeMap<String, String> {
@@ -318,4 +341,4 @@ mod windows {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{app_name_for_pid, icons as windows_icons};
+pub(crate) use windows::{app_for_pid, icons as windows_icons};

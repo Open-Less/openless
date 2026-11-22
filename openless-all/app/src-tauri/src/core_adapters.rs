@@ -4228,9 +4228,9 @@ where
 
 impl CoreTextInserter for TauriTextInserter {
     fn capture_target(&self) -> Option<CapturedTextTarget> {
-        let insertion_target = crate::selection::capture_selection_insertion_target();
+        let insertion_target = crate::selection::capture_dictation_insertion_target();
         #[cfg(target_os = "windows")]
-        let ime_target = crate::windows_ime_target::capture_ime_submit_target();
+        let ime_target = crate::selection::ime_target_for_selection(&insertion_target);
         #[cfg(target_os = "macos")]
         // Legacy macOS composition preferences must not start AX range capture.
         let live_capture = None;
@@ -4258,9 +4258,11 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "macos")]
         let live_capture = self.live_capture.clone();
         #[cfg(target_os = "windows")]
-        let ime_target = self
-            .ime_target
-            .or_else(crate::windows_ime_target::capture_ime_submit_target);
+        let ime_target = if insertion_target.is_some() {
+            self.ime_target
+        } else {
+            crate::windows_ime_target::capture_ime_submit_target()
+        };
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
@@ -4904,7 +4906,7 @@ impl TauriTextInsertionSession {
                     }
                 }
                 if self.context.insertion.allow_non_tsf_fallback {
-                    return map_insert_status(windows_unicode_fallback(&self.context, &text));
+                    return map_insert_status(windows_unicode_fallback(&self.context, &self.insertion_target, &text));
                 }
                 return Err(BackendError::new(
                     BackendErrorCode::Platform,
@@ -4930,7 +4932,7 @@ impl TauriTextInsertionSession {
         {
             let status = match self.context.insertion.windows_insertion_mode {
                 openless_core::shared_types::WindowsInsertionMode::Tsf => {
-                    let mut target = crate::windows_ime_target::capture_ime_submit_target();
+                    let target = crate::selection::ime_target_for_selection(&self.insertion_target);
                     let mut recovered = false;
                     let status = loop {
                         let request = crate::windows_ime_ipc::ImeSubmitRequest {
@@ -4985,7 +4987,6 @@ impl TauriTextInsertionSession {
                                     }
                                     return Err(error);
                                 }
-                                target = crate::windows_ime_target::capture_ime_submit_target();
                                 recovered = true;
                             }
                             Err(error) => {
@@ -4997,19 +4998,21 @@ impl TauriTextInsertionSession {
                     if status == crate::types::InsertStatus::Failed
                         && self.context.insertion.allow_non_tsf_fallback
                     {
-                        windows_unicode_fallback(&self.context, &text)
+                        windows_unicode_fallback(&self.context, &self.insertion_target, &text)
                     } else {
                         status
                     }
                 }
                 openless_core::shared_types::WindowsInsertionMode::SendInput => {
-                    windows_unicode_fallback(&self.context, &text)
+                    windows_unicode_fallback(&self.context, &self.insertion_target, &text)
                 }
                 openless_core::shared_types::WindowsInsertionMode::Paste => {
                     let backend = Arc::clone(&self.backend);
                     let observe = self.context.insertion.observe_edits;
                     let restore = self.context.insertion.restore_clipboard_after_paste;
                     let shortcut = self.context.insertion.paste_shortcut;
+                    let target = self.insertion_target.clone();
+                    let fallback = self.context.insertion.allow_non_tsf_fallback;
                     tauri::async_runtime::spawn_blocking(move || {
                         crate::host_document::insert_with_delivery_check(
                             &text,
@@ -5025,8 +5028,14 @@ impl TauriTextInsertionSession {
                                         })
                             },
                             || {
-                                crate::insertion::TextInserter::new()
-                                    .insert(&text, restore, shortcut)
+                                let inserter = crate::insertion::TextInserter::new();
+                                if crate::selection::selection_insertion_target_is_current(&target) {
+                                    inserter.insert(&text, restore, shortcut)
+                                } else if fallback {
+                                    inserter.copy_fallback(&text)
+                                } else {
+                                    crate::types::InsertStatus::Failed
+                                }
                             },
                         )
                     })
@@ -5050,10 +5059,15 @@ impl TauriTextInsertionSession {
         {
             let restore = self.context.insertion.restore_clipboard_after_paste;
             let shortcut = self.context.insertion.paste_shortcut;
+            #[cfg(target_os = "macos")]
+            let target = self.insertion_target.clone();
             tauri::async_runtime::spawn_blocking(move || {
-                map_insert_status(
-                    crate::insertion::TextInserter::new().insert(&text, restore, shortcut),
-                )
+                let inserter = crate::insertion::TextInserter::new();
+                #[cfg(target_os = "macos")]
+                if !crate::selection::selection_insertion_target_is_current(&target) {
+                    return map_insert_status(inserter.copy_fallback(&text));
+                }
+                map_insert_status(inserter.insert(&text, restore, shortcut))
             })
             .await
             .map_err(|error| {
@@ -5564,8 +5578,19 @@ mod mac_insertion_lifecycle_tests {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::types::InsertStatus {
+fn windows_unicode_fallback(
+    context: &DictationContext,
+    target: &crate::selection::SelectionInsertionTarget,
+    text: &str,
+) -> crate::types::InsertStatus {
     let inserter = crate::insertion::TextInserter::new();
+    if !crate::selection::selection_insertion_target_is_current(target) {
+        return if context.insertion.allow_non_tsf_fallback {
+            inserter.copy_fallback(text)
+        } else {
+            crate::types::InsertStatus::Failed
+        };
+    }
     let status = inserter.insert_via_unicode_keystrokes(
         text,
         crate::unicode_keystroke::WindowsSendInputOptions {
@@ -5604,6 +5629,10 @@ impl TauriHostContextAdapter {
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
+        crate::selection::input_app_for_target(self.target.as_ref()?)
+    }
+
     fn capture(
         &self,
         include_cursor: bool,

@@ -9,7 +9,14 @@ void openless_macos_activity_app_icon(const char *name, const char *bundleId,
         NSWorkspace *workspace = NSWorkspace.sharedWorkspace;
         NSString *bundle = bundleId ? [NSString stringWithUTF8String:bundleId] : nil;
         NSURL *url = bundle.length ? [workspace URLForApplicationWithBundleIdentifier:bundle] : nil;
-        NSImage *icon = url ? [workspace iconForFile:url.path] : nil;
+        NSImage *icon = nil;
+        if (bundle.length) {
+            // Running copies can have an icon before Launch Services registers their path.
+            for (NSRunningApplication *app in [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle]) {
+                if ((icon = app.icon)) break;
+            }
+        }
+        if (!icon && url) icon = [workspace iconForFile:url.path];
         if (!icon && !bundle.length && name) {
             NSString *label = [NSString stringWithUTF8String:name];
             // Older rankings only have a name. Resolve it only when the running app is unambiguous.

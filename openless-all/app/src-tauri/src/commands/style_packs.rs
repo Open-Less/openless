@@ -1,4 +1,44 @@
 use super::*;
+use openless_core::app_style_routing::{AppStyleAssignment, AppStyleRouting};
+
+#[tauri::command]
+pub fn get_app_style_routing(core: CoreState<'_>) -> Result<AppStyleRouting, String> {
+    core.app_style_routing().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_app_style_assignment(
+    core: CoreState<'_>,
+    assignment: AppStyleAssignment,
+) -> Result<AppStyleRouting, String> {
+    core.set_app_style_assignment(assignment).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn clear_input_app_history(core: CoreState<'_>) -> Result<AppStyleRouting, String> {
+    core.clear_input_app_history().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_input_app_icons(
+    app: AppHandle,
+    core: CoreState<'_>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let inputs = core.app_style_routing().map_err(|error| error.to_string())?
+        .apps.into_iter().map(|entry| entry.app);
+    #[cfg(target_os = "macos")]
+    return Ok(crate::activity_app_icons::macos_input_app_icons(&app, inputs.collect()).await);
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        Ok(crate::activity_app_icons::windows_icons(inputs.map(|app| app.id).collect()).await)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (app, inputs);
+        Ok(Default::default())
+    }
+}
 
 fn refresh_tray_menu_async(app: &AppHandle) {
     let app_for_main = app.clone();

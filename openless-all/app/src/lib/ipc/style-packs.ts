@@ -1,4 +1,5 @@
-import type { PolishMode, StylePack, StylePackRuntimeDiagnostics } from '../types';
+import type { AppStyleAssignment, AppStyleRouting, PolishMode, StylePack, StylePackRuntimeDiagnostics } from '../types';
+import { previewAppStyleRouting } from '../../preview/appStyleRouting';
 import { invokeOrMock } from './shared';
 import {
   cloneMockStylePacks,
@@ -30,6 +31,24 @@ export function setStyleEnabled(mode: PolishMode, enabled: boolean): Promise<voi
 
 export function listStylePacks(): Promise<StylePack[]> {
   return invokeOrMock('list_style_packs', undefined, () => cloneMockStylePacks());
+}
+
+export function getAppStyleRouting(): Promise<AppStyleRouting> {
+  return invokeOrMock('get_app_style_routing', undefined, previewAppStyleRouting.snapshot);
+}
+
+export function setAppStyleAssignment(assignment: AppStyleAssignment): Promise<AppStyleRouting> {
+  return invokeOrMock('set_app_style_assignment', { assignment }, () =>
+    previewAppStyleRouting.set(assignment),
+  );
+}
+
+export function clearInputAppHistory(): Promise<AppStyleRouting> {
+  return invokeOrMock('clear_input_app_history', undefined, previewAppStyleRouting.clearHistory);
+}
+
+export function getInputAppIcons(): Promise<Record<string, string>> {
+  return invokeOrMock('get_input_app_icons', undefined, () => ({}));
 }
 
 export function saveStylePack(stylePack: StylePack): Promise<StylePack> {

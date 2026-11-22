@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::activity::ActivityDay;
+use crate::app_style_routing::{AppStyleAssignment, AppStyleRouting, AppStyleStore};
 use crate::coding_agent::{
     normalize_coding_agent_executable, normalize_coding_agent_workdir,
     normalize_less_computer_permission_mode, resolve_coding_agent_model, CodingAgentProvider,
@@ -2622,6 +2623,7 @@ pub struct OpenLessBackend {
     expression_profile: crate::expression_observation::SharedExpressionProfile,
     style_packs: Arc<StylePackStore>,
     style_pack_revision: Arc<AtomicU64>,
+    app_styles: AppStyleStore,
     preferences: Arc<PreferencesStore>,
     preferences_revision: Arc<AtomicU64>,
     settings_write_gate: Arc<Mutex<()>>,
@@ -3134,6 +3136,11 @@ impl OpenLessBackend {
                 "data directory is required",
             ));
         }
+        let app_styles = if restore_guard.is_some() {
+            AppStyleStore::in_memory()
+        } else {
+            AppStyleStore::open(&config.data_dir)
+        };
         let events = Arc::new(EventBus::new(256));
         // 保留裁剪与「最近 N 分钟」必须跟着注入的时钟走：同一个后端里
         // `created_at` 已经用 `clock` 生成，裁剪却偷读系统时钟的话，测试/
@@ -3480,6 +3487,7 @@ impl OpenLessBackend {
             expression_profile: repositories.expression_profile,
             style_packs: repositories.style_packs,
             style_pack_revision,
+            app_styles,
             preferences: repositories.preferences,
             preferences_revision,
             settings_write_gate,
@@ -7155,6 +7163,31 @@ impl OpenLessBackend {
         );
     }
 
+    pub fn app_style_routing(&self) -> Result<AppStyleRouting, BackendError> {
+        self.app_styles.snapshot()
+    }
+
+    pub fn set_app_style_assignment(
+        &self,
+        assignment: AppStyleAssignment,
+    ) -> Result<AppStyleRouting, BackendError> {
+        if let Some(id) = assignment.style_pack_id() {
+            if !self.style_packs.get(id)?.enabled {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "style pack is disabled",
+                ));
+            }
+        }
+        self.app_styles.set(assignment)?;
+        self.app_styles.snapshot()
+    }
+
+    pub fn clear_input_app_history(&self) -> Result<AppStyleRouting, BackendError> {
+        self.app_styles.clear_seen()?;
+        self.app_styles.snapshot()
+    }
+
     pub fn list_style_packs(&self, active_id: &str) -> Result<Vec<StylePack>, BackendError> {
         self.style_packs.list_with_active(active_id)
     }
@@ -8980,8 +9013,7 @@ impl OpenLessBackend {
             return;
         }
         let preferences = self.get_preferences();
-        let front_app =
-            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
+        let front_app = context.captured_front_app();
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
             crate::shared_types::PipelineMode::Deepseek => "deepseek",
@@ -9110,8 +9142,7 @@ impl OpenLessBackend {
                 None
             }
         };
-        let front_app =
-            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
+        let front_app = context.captured_front_app();
         let insert_status = match insert_outcome {
             Some(InsertOutcome::Inserted) => HistoryInsertStatus::Inserted,
             Some(InsertOutcome::PasteSent) => HistoryInsertStatus::PasteSent,
@@ -9162,6 +9193,13 @@ impl OpenLessBackend {
             polish_ms: attribution.polish_ms,
         };
         let activity_app = session.app_name.clone();
+        if matches!(insert_outcome, Some(InsertOutcome::Inserted | InsertOutcome::PasteSent)) {
+            if let Some(app) = &context.input_app {
+                if let Err(error) = self.app_styles.observe(app) {
+                    log::warn!("failed to persist input application: {error}");
+                }
+            }
+        }
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
@@ -9205,8 +9243,7 @@ impl OpenLessBackend {
             return;
         }
         let preferences = self.get_preferences();
-        let front_app =
-            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
+        let front_app = context.captured_front_app();
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
             crate::shared_types::PipelineMode::Deepseek => "deepseek",
@@ -9658,6 +9695,30 @@ impl OpenLessBackend {
         host_context: &dyn HostContextAdapter,
     ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
+        let input_app = if purpose == DictationContextPurpose::Dictation
+            && options.insert_text
+            && options.output_target == DictationOutputTarget::ForegroundApp
+            && options.front_app.is_none()
+        {
+            host_context.input_app()
+        } else {
+            None
+        };
+        let explicit_style = options
+            .style_pack_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty());
+        let assigned_ids = if explicit_style.is_none() {
+            input_app
+                .as_ref()
+                .map_or_else(Vec::new, |app| self.app_styles.candidates(app))
+        } else {
+            Vec::new()
+        };
+        let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);
+        let style_pack = self
+            .style_packs
+            .get_for_dictation(assigned_ids.iter().map(String::as_str), active_id)?;
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
             // This switch controls document text, including text supplied by
@@ -9683,12 +9744,6 @@ impl OpenLessBackend {
             }
         }
         let options = &captured_options;
-        let style_pack_id = options
-            .style_pack_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&preferences.active_style_pack_id);
-        let style_pack = self.style_packs.get_or_default_active(style_pack_id)?;
         let hotwords = self
             .vocabulary
             .list()?
@@ -9770,6 +9825,7 @@ impl OpenLessBackend {
             recent_history,
             options,
         );
+        context.input_app = input_app;
         context.pipeline_mode = pipeline_mode;
         if purpose == DictationContextPurpose::Dictation
             && !context.polish.translation_active

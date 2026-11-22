@@ -9,6 +9,40 @@
     "disabledErrorCode": "permission_denied",
     "cloudSync": "excluded"
   },
+  "appStyleRouting": {
+    "hosts": ["macos", "windows"],
+    "categories": ["coding", "chat", "email"],
+    "scope": "device_local",
+    "cloudSync": "excluded",
+    "snapshot": {
+      "categories": { "coding": "builtin.structured" },
+      "apps": [
+        {
+          "app": { "id": "macos:com.microsoft.VSCode", "name": "Visual Studio Code" },
+          "category": "coding",
+          "seen": true,
+          "stylePackId": null
+        }
+      ]
+    },
+    "commands": {
+      "get_app_style_routing": { "result": "AppStyleRouting" },
+      "set_app_style_assignment": {
+        "args": {
+          "assignment": [
+            { "target": "category", "category": "coding", "stylePackId": "builtin.structured" },
+            { "target": "app", "appId": "macos:com.microsoft.VSCode", "stylePackId": null }
+          ]
+        },
+        "result": "AppStyleRouting"
+      },
+      "clear_input_app_history": { "result": "AppStyleRouting" },
+      "get_input_app_icons": { "result": "map<appId, PNG data URL>" }
+    },
+    "precedence": ["explicit_session_pack", "specific_app", "app_category", "current_pack", "enabled_default"],
+    "uniquePackPerLevel": true,
+    "unavailableAssignment": "keep_and_skip"
+  },
   "startupSnapshot": {
     "fields": ["contractVersion", "backend"],
     "sample": {

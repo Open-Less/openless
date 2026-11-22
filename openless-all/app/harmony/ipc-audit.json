@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 198,
+  "total": 202,
   "wired": 108,
-  "missing": 90,
+  "missing": 94,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -129,6 +129,13 @@
         "src/lib/ipc/history.ts"
       ],
       "implementation": "rust"
+    },
+    {
+      "name": "clear_input_app_history",
+      "calledFrom": [
+        "src/lib/ipc/style-packs.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "clear_service_usage",
@@ -460,6 +467,13 @@
       "implementation": "unimplemented"
     },
     {
+      "name": "get_app_style_routing",
+      "calledFrom": [
+        "src/lib/ipc/style-packs.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "get_capsule_snapshot",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
@@ -507,6 +521,13 @@
         "src/lib/ipc/hotkeys.ts"
       ],
       "implementation": "frontend mobile capability adapter"
+    },
+    {
+      "name": "get_input_app_icons",
+      "calledFrom": [
+        "src/lib/ipc/style-packs.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "get_platform_capabilities",
@@ -1086,6 +1107,13 @@
       "name": "set_android_audio_monitoring",
       "calledFrom": [
         "src/lib/ipc/android-audio.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "set_app_style_assignment",
+      "calledFrom": [
+        "src/lib/ipc/style-packs.ts"
       ],
       "implementation": "unimplemented"
     },

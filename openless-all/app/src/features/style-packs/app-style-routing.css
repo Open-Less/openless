@@ -1,0 +1,76 @@
+.ol-app-style-dialog .ol-dialog-body {
+  scrollbar-gutter: stable;
+}
+
+.ol-app-style-dialog .ol-dialog-footer {
+  justify-content: flex-start;
+}
+
+.ol-app-style-hint {
+  color: var(--ol-ink-3);
+}
+
+.ol-app-style-group {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
+}
+
+.ol-app-style-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 44px;
+  padding: 4px 0;
+}
+
+.ol-app-style-row--app {
+  border-top: 1px solid var(--ol-line);
+}
+
+.ol-app-style-row h3,
+.ol-app-style-name {
+  flex: 1 1 9em;
+  min-width: 0;
+  margin: 0;
+  font-size: inherit;
+  overflow-wrap: anywhere;
+}
+
+.ol-app-style-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ol-app-style-icon {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+}
+
+.ol-app-style-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ol-app-style-picker {
+  flex: 1 1 12em;
+  min-width: 0;
+}
+
+.ol-app-style-picker .ol-select-trigger {
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  padding-block: 6px;
+}
+
+.ol-app-style-picker .ol-select-value,
+.ol-app-style-options .ol-select-item > :first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

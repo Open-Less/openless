@@ -5,6 +5,7 @@
 //! semantic state changes through [`events`].
 
 pub mod activity;
+pub mod app_style_routing;
 pub mod android_types;
 pub mod api;
 pub mod main_dictation_trace;

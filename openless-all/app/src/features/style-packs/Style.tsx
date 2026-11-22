@@ -1,6 +1,6 @@
 import { TextField } from '../../ui/controls/TextField';
 import { AnimatePresence, motion } from 'framer-motion';
-import { type CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { PolishMode } from '../../api/contracts';
 import { Icon } from '../../components/Icon';
 import { StylePackIconPicker } from './StylePackIconPicker';
@@ -12,6 +12,8 @@ import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Pill } from '../../ui/controls/Pill';
 import { Segmented } from '../../ui/controls/Segmented';
+import { AppStyleRoutingDialog } from './AppStyleRoutingDialog';
+import { getShortcutPlatform } from '../../runtime/environment';
 import { useStylePackWorkspace } from './useStylePackWorkspace';
 
 function modeTone(mode: PolishMode): 'default' | 'blue' | 'ok' | 'outline' | 'dark' {
@@ -19,6 +21,8 @@ function modeTone(mode: PolishMode): 'default' | 'blue' | 'ok' | 'outline' | 'da
 }
 
 export function Style() {
+  const [appStylesOpen, setAppStylesOpen] = useState(false);
+  const platform = getShortcutPlatform();
   const {
     t,
     mobile,
@@ -194,6 +198,11 @@ export function Style() {
               width: stackLayout ? '100%' : undefined,
             }}
           >
+            {(platform.isMac || platform.isWindows) && (
+              <Btn icon="style" onClick={() => setAppStylesOpen(true)}>
+                {t('appStyles.title')}
+              </Btn>
+            )}
             <Btn
               variant="blue"
               icon="archive"
@@ -205,6 +214,8 @@ export function Style() {
           </div>
         }
       />
+
+      {appStylesOpen && <AppStyleRoutingDialog packs={packs} onClose={() => setAppStylesOpen(false)} />}
 
       <Card
         padding={0}
