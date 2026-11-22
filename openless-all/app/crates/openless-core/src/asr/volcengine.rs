@@ -220,6 +220,8 @@ pub struct VolcengineStreamingASR {
     credentials: VolcengineCredentials,
     task_spawner: Arc<dyn TaskSpawner>,
     hotwords: Vec<DictionaryHotword>,
+    enable_ddc: bool,
+    enable_nonstream: bool,
     state: ParkingMutex<SyncState>,
     /// Guards the WebSocket write half so concurrent `send` calls serialize.
     /// Stored as Arc so spawned send tasks can hold their own clone — independent
@@ -255,6 +257,8 @@ impl VolcengineStreamingASR {
             credentials,
             task_spawner,
             hotwords,
+            enable_ddc: false,
+            enable_nonstream: false,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
@@ -263,6 +267,16 @@ impl VolcengineStreamingASR {
             send_done: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    pub fn with_enable_ddc(mut self, enable_ddc: bool) -> Self {
+        self.enable_ddc = enable_ddc;
+        self
+    }
+
+    pub fn with_enable_nonstream(mut self, enable_nonstream: bool) -> Self {
+        self.enable_nonstream = enable_nonstream;
+        self
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -661,6 +675,12 @@ impl VolcengineStreamingASR {
             "show_utterances": true,
             "enable_speaker_info": true,
         });
+        if self.enable_ddc {
+            request["enable_ddc"] = Value::Bool(true);
+        }
+        if self.enable_nonstream {
+            request["enable_nonstream"] = Value::Bool(true);
+        }
         if let Some(context) = hotword_context(&self.hotwords) {
             request["context"] = Value::String(context);
             let enabled_count = self.hotwords.iter().filter(|h| h.enabled).count();
@@ -1325,6 +1345,28 @@ mod tests {
             "文案: {msg}"
         );
         assert!(!msg.contains("网络"), "限流文案不应误导为网络失败: {msg}");
+    }
+
+    #[test]
+    fn first_frame_payload_omits_ddc_and_nonstream_by_default_and_includes_when_enabled() {
+        let creds = VolcengineCredentials {
+            service: VolcengineService::Standard,
+            auth_mode: VolcengineAuthMode::ApiKey,
+            app_id: String::new(),
+            access_token: "key".into(),
+            resource_id: VolcengineCredentials::default_resource_id().into(),
+        };
+        let default_asr = VolcengineStreamingASR::new(creds.clone(), Vec::new());
+        let default_payload = default_asr.build_first_frame_payload("cid-1");
+        assert!(default_payload["request"].get("enable_ddc").is_none());
+        assert!(default_payload["request"].get("enable_nonstream").is_none());
+
+        let enabled_asr = VolcengineStreamingASR::new(creds, Vec::new())
+            .with_enable_ddc(true)
+            .with_enable_nonstream(true);
+        let enabled_payload = enabled_asr.build_first_frame_payload("cid-2");
+        assert_eq!(enabled_payload["request"]["enable_ddc"], json!(true));
+        assert_eq!(enabled_payload["request"]["enable_nonstream"], json!(true));
     }
 
     #[tokio::test]

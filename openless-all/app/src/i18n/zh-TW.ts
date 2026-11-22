@@ -1716,6 +1716,12 @@ export const zhTW: typeof zhCN = {
       asrAdvancedEnableItnLabel: '數字正規化 (enable_itn)',
       asrAdvancedEnableItnHint:
         '把口語數字/單位正規化為阿拉伯數字（如「二零二六年」→「2026年」）。關閉後保留原始文字。',
+      asrAdvancedEnableDdcLabel: '語意順滑 (enable_ddc)',
+      asrAdvancedEnableDdcHint:
+        '在火山引擎 ASR 階段自動過濾語氣詞、口吃與無意義重複。',
+      asrAdvancedEnableNonstreamLabel: '二遍辨識 (enable_nonstream)',
+      asrAdvancedEnableNonstreamHint:
+        '在停頓/句末觸發非串流高精度重辨識，提升準確率（句末會有輕微延遲）。',
       volcengineAppKeyLabel: 'APP ID',
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',

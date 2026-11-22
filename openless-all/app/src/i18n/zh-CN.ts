@@ -1715,6 +1715,12 @@ export const zhCN = {
       asrAdvancedEnableItnLabel: '数字归一化 (enable_itn)',
       asrAdvancedEnableItnHint:
         '把口语数字/单位归一化为阿拉伯数字（如“二零二六年”→“2026年”）。关闭后保留原始文字。',
+      asrAdvancedEnableDdcLabel: '语义顺滑 (enable_ddc)',
+      asrAdvancedEnableDdcHint:
+        '在火山引擎 ASR 阶段自动过滤语气词、口吃与无意义重复。',
+      asrAdvancedEnableNonstreamLabel: '二遍识别 (enable_nonstream)',
+      asrAdvancedEnableNonstreamHint:
+        '在停顿/句末触发非流式高精度重识别，提升准确率（句末会有轻微延迟）。',
       volcengineAppKeyLabel: 'APP ID',
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',

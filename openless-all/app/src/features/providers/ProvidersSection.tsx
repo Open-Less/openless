@@ -851,8 +851,14 @@ export function ChannelCredentialFields({
           {t('settings.providers.zenmuxVocabularyNote')}
         </div>
       )}
-      {(providerType === 'openai-compatible' || providerType === 'zenmux') && (
-        <AsrAdvancedOptions provider={channelId} onUserMutation={onUserMutation} />
+      {(providerType === 'openai-compatible' ||
+        providerType === 'zenmux' ||
+        providerType === 'volcengine') && (
+        <AsrAdvancedOptions
+          provider={channelId}
+          providerType={providerType}
+          onUserMutation={onUserMutation}
+        />
       )}
       {/* Unified Bailian "fetch models" writes only model, never overwriting the user-chosen region or workspace endpoint. */}
       <ProviderTools
@@ -868,21 +874,24 @@ export function ChannelCredentialFields({
   );
 }
 
-// ASR advanced options: shown for the openai-compatible and zenmux presets.
-// openai-compatible exposes verbose_json / chunk duration (other named vendors keep hardcoded
-// behavior); zenmux exposes the enable_itn (number normalization) toggle — verbose_json /
-// chunking are meaningless for it.
+// ASR advanced options: shown for openai-compatible, zenmux, and volcengine presets.
+// openai-compatible exposes verbose_json / chunk duration; zenmux exposes enable_itn;
+// volcengine exposes enable_ddc (disfluency removal) and enable_nonstream (two-pass recognition).
 function AsrAdvancedOptions({
   provider,
+  providerType,
   onUserMutation,
 }: {
   provider: string;
+  providerType?: string;
   onUserMutation?: () => void;
 }) {
   const { t } = useTranslation();
   const [verboseJson, setVerboseJson] = useState(false);
   const [chunkDraft, setChunkDraft] = useState('');
   const [enableItn, setEnableItn] = useState(true);
+  const [enableDdc, setEnableDdc] = useState(false);
+  const [enableNonstream, setEnableNonstream] = useState(false);
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
   const [error, setError] = useState('');
 
@@ -898,6 +907,8 @@ function AsrAdvancedOptions({
         setVerboseJson(config.verboseJson);
         setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
         setEnableItn(config.enableItn);
+        setEnableDdc(config.enableDdc);
+        setEnableNonstream(config.enableNonstream);
       } catch (err) {
         if (!cancelled) {
           setStatus('error');
@@ -920,6 +931,8 @@ function AsrAdvancedOptions({
     verboseJson?: boolean;
     chunkDurationMs?: number | null;
     enableItn?: boolean;
+    enableDdc?: boolean;
+    enableNonstream?: boolean;
   }) => {
     onUserMutation?.();
     setStatus('saving');
@@ -931,18 +944,24 @@ function AsrAdvancedOptions({
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
       enableItn: partial.enableItn ?? enableItn,
+      enableDdc: partial.enableDdc ?? enableDdc,
+      enableNonstream: partial.enableNonstream ?? enableNonstream,
     };
     try {
       await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
       setVerboseJson(next.verboseJson);
       setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
       setEnableItn(next.enableItn);
+      setEnableDdc(next.enableDdc);
+      setEnableNonstream(next.enableNonstream);
       setStatus('idle');
     } catch (err) {
       setStatus('error');
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  const resolvedType = providerType ?? provider;
 
   return (
     <>
@@ -957,13 +976,31 @@ function AsrAdvancedOptions({
       >
         {t('settings.providers.asrAdvancedNote')}
       </div>
-      {provider === 'zenmux' ? (
+      {resolvedType === 'zenmux' ? (
         <SettingRow
           label={t('settings.providers.asrAdvancedEnableItnLabel')}
           desc={t('settings.providers.asrAdvancedEnableItnHint')}
         >
           <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
         </SettingRow>
+      ) : resolvedType === 'volcengine' ? (
+        <>
+          <SettingRow
+            label={t('settings.providers.asrAdvancedEnableDdcLabel')}
+            desc={t('settings.providers.asrAdvancedEnableDdcHint')}
+          >
+            <Toggle on={enableDdc} onToggle={(next) => void save({ enableDdc: next })} />
+          </SettingRow>
+          <SettingRow
+            label={t('settings.providers.asrAdvancedEnableNonstreamLabel')}
+            desc={t('settings.providers.asrAdvancedEnableNonstreamHint')}
+          >
+            <Toggle
+              on={enableNonstream}
+              onToggle={(next) => void save({ enableNonstream: next })}
+            />
+          </SettingRow>
+        </>
       ) : (
         <>
           <SettingRow

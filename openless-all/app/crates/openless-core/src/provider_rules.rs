@@ -13,6 +13,7 @@ use crate::errors::{BackendError, BackendErrorCode};
 
 pub const OPENAI_COMPATIBLE_ASR_PROVIDER_ID: &str = "openai-compatible";
 pub const ZENMUX_ASR_PROVIDER_ID: &str = "zenmux";
+pub const VOLCENGINE_ASR_PROVIDER_ID: &str = "volcengine";
 
 const BAILIAN_PROVIDER_ID: &str = "bailian";
 const QWEN3_REALTIME_PROVIDER_ID: &str = "bailian-qwen3-realtime";
@@ -1054,6 +1055,8 @@ pub struct AdvancedAsrConfig {
     pub verbose_json: bool,
     pub chunk_duration_ms: Option<u64>,
     pub enable_itn: bool,
+    pub enable_ddc: bool,
+    pub enable_nonstream: bool,
 }
 
 impl Default for AdvancedAsrConfig {
@@ -1062,6 +1065,8 @@ impl Default for AdvancedAsrConfig {
             verbose_json: false,
             chunk_duration_ms: None,
             enable_itn: true,
+            enable_ddc: false,
+            enable_nonstream: false,
         }
     }
 }
@@ -1092,11 +1097,22 @@ pub fn parse_advanced_asr_config(raw: Option<&str>) -> AdvancedAsrConfig {
             .get("enableItn")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
+        enable_ddc: value
+            .get("enableDdc")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        enable_nonstream: value
+            .get("enableNonstream")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
 pub fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> AdvancedAsrConfig {
-    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID && provider_id != ZENMUX_ASR_PROVIDER_ID {
+    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+        && provider_id != ZENMUX_ASR_PROVIDER_ID
+        && provider_id != VOLCENGINE_ASR_PROVIDER_ID
+    {
         return AdvancedAsrConfig::default();
     }
     parse_advanced_asr_config(raw)
@@ -1314,6 +1330,14 @@ mod tests {
         assert!(parsed.verbose_json);
         assert_eq!(parsed.chunk_duration_ms, Some(30_000));
         assert!(!parsed.enable_itn);
+        assert!(!parsed.enable_ddc);
+        assert!(!parsed.enable_nonstream);
+        let volc = advanced_asr_config_for(
+            VOLCENGINE_ASR_PROVIDER_ID,
+            Some(r#"{"enableDdc":true,"enableNonstream":true}"#),
+        );
+        assert!(volc.enable_ddc);
+        assert!(volc.enable_nonstream);
         assert_eq!(
             advanced_asr_config_for("whisper", Some(r#"{"verboseJson":true}"#)),
             AdvancedAsrConfig::default()

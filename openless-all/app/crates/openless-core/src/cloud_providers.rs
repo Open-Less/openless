@@ -902,11 +902,15 @@ async fn build_cloud_transcription_session(
                 .collect();
             let label =
                 crate::provider_rules::volc_resource_history_label(&credentials.resource_id);
-            let provider = Arc::new(VolcengineStreamingASR::with_task_spawner(
-                credentials,
-                hotwords,
-                Arc::clone(&task_spawner),
-            ));
+            let provider = Arc::new(
+                VolcengineStreamingASR::with_task_spawner(
+                    credentials,
+                    hotwords,
+                    Arc::clone(&task_spawner),
+                )
+                .with_enable_ddc(preparation.advanced_config.enable_ddc)
+                .with_enable_nonstream(preparation.advanced_config.enable_nonstream),
+            );
             provider.set_partial_sink(Arc::clone(&partials));
             provider.open_session().await.map_err(map_asr_error)?;
             (CloudTranscriptionSessionKind::Volcengine(provider), label)

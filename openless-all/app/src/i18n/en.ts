@@ -1804,6 +1804,12 @@ export const en: typeof zhCN = {
       asrAdvancedEnableItnLabel: 'Number normalization (enable_itn)',
       asrAdvancedEnableItnHint:
         'Normalizes spoken numbers/units into Arabic numerals (e.g. “twenty twenty-six” → “2026”). Turn off to keep the raw text.',
+      asrAdvancedEnableDdcLabel: 'Disfluency removal (enable_ddc)',
+      asrAdvancedEnableDdcHint:
+        'Filters filler words, hesitations, and stutters during Volcengine ASR recognition.',
+      asrAdvancedEnableNonstreamLabel: 'Two-pass recognition (enable_nonstream)',
+      asrAdvancedEnableNonstreamHint:
+        'Runs a non-streaming re-recognition pass at pauses for higher accuracy, with a slight end-of-utterance delay.',
       volcengineAppKeyLabel: 'APP ID',
       volcengineAccessKeyLabel: 'Access Token',
       volcengineApiKeyLabel: 'API Key',
