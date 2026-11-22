@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use openless_core::app_style_routing::{AppCategory, AppStyleAssignment, InputApp};
+use openless_core::app_style_routing::{AppStyleAssignment, InputApp};
 use openless_core::testing::{
     FixtureAudioRecorder, FixtureDictationEngine, FixtureTranscriptionEngine, RecordingHostActions,
 };
@@ -204,6 +204,12 @@ impl Fixture {
         build_engine: impl FnOnce(Arc<DelayedCredentials>) -> Arc<dyn openless_core::DictationEngine>,
     ) -> Self {
         let directory = std::env::temp_dir().join(format!("openless-target-{}", SessionId::new()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("input-app-catalog-cache.json"),
+            include_str!("fixtures/app-catalog.json"),
+        )
+        .unwrap();
         let credentials = Arc::new(DelayedCredentials::default());
         let focus = Arc::new(Mutex::new(Focus {
             current: "A",
@@ -430,9 +436,9 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     let chat = make_pack("CHAT-STYLE");
     let mail = make_pack("MAIL-STYLE");
     for (category, pack) in [
-        (AppCategory::Coding, &coding),
-        (AppCategory::Chat, &chat),
-        (AppCategory::Email, &mail),
+        ("coding".to_owned(), &coding),
+        ("chat".to_owned(), &chat),
+        ("email".to_owned(), &mail),
     ] {
         backend
             .set_app_style_assignment(AppStyleAssignment::Category {
@@ -442,6 +448,12 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
             .unwrap();
     }
     let expect_request = |payload: serde_json::Value, marker: &str| {
+        if marker == "CODING-STYLE" {
+            assert!(payload["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("fixture coding context"));
+        }
         assert!(
             payload["messages"][0]["content"]
                 .as_str()
@@ -457,7 +469,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     fixture.focus.lock().unwrap().current = "WeChat";
     backend
         .set_app_style_assignment(AppStyleAssignment::Category {
-            category: AppCategory::Coding,
+            category: "coding".to_owned(),
             style_pack_id: None,
         })
         .unwrap();
@@ -479,7 +491,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     backend.set_app_style_assignment(override_app).unwrap();
     backend
         .set_app_style_assignment(AppStyleAssignment::Category {
-            category: AppCategory::Coding,
+            category: "coding".to_owned(),
             style_pack_id: Some(coding.id.clone()),
         })
         .unwrap();
@@ -519,7 +531,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
                 .find(|entry| entry.app.name == app)
                 .unwrap()
                 .category,
-            Some(AppCategory::Coding)
+            Some("coding".to_owned())
         );
     }
 
@@ -581,6 +593,27 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     backend.activate_style_pack(&current.id).unwrap();
 
     fixture.focus.lock().unwrap().current = "VS Code";
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.microsoft.VSCode".into(),
+            style_pack_id: Some("builtin.raw".into()),
+        })
+        .unwrap();
+    backend.start_dictation().await.unwrap();
+    assert_eq!(
+        backend.stop_dictation().await.unwrap().polished_text,
+        "spoken test transcript"
+    );
+    assert!(
+        payloads.try_recv().is_err(),
+        "catalog context must preserve Raw passthrough"
+    );
+    backend
+        .set_app_style_assignment(AppStyleAssignment::App {
+            app_id: "macos:com.microsoft.VSCode".into(),
+            style_pack_id: Some(chat.id.clone()),
+        })
+        .unwrap();
     backend.set_style_pack_enabled(&chat.id, false).unwrap();
     backend.start_dictation().await.unwrap();
     backend.stop_dictation().await.unwrap();
@@ -596,7 +629,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
 
     let before_clear = backend.app_style_routing().unwrap();
     assert_eq!(before_clear.apps.len(), 7);
-    assert_eq!(before_clear.categories[&AppCategory::Chat], chat.id);
+    assert_eq!(before_clear.categories[&"chat".to_owned()], chat.id);
     let cleared = backend.clear_input_app_history().unwrap();
     assert_eq!(cleared.apps.len(), 1);
     assert!(!cleared.apps[0].seen);

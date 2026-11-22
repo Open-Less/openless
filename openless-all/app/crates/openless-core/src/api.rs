@@ -3139,7 +3139,10 @@ impl OpenLessBackend {
         let app_styles = if restore_guard.is_some() {
             AppStyleStore::in_memory()
         } else {
-            AppStyleStore::open(&config.data_dir)
+            AppStyleStore::open(
+                &config.data_dir,
+                deps.marketplace_config.as_ref().map(|config| config.base_url.clone()),
+            )
         };
         let events = Arc::new(EventBus::new(256));
         // 保留裁剪与「最近 N 分钟」必须跟着注入的时钟走：同一个后端里
@@ -5257,6 +5260,12 @@ impl OpenLessBackend {
         // pending journal therefore uses the Host's read-only loader before
         // startup recovery/auto-sync tries to capture credentials.
         if !self.snapshot().running {
+            let catalog = Arc::clone(&self.app_styles.catalog);
+            self.deps.task_spawner.spawn(Box::pin(async move {
+                if let Err(error) = catalog.refresh().await {
+                    log::debug!("application catalog refresh unavailable: {error}");
+                }
+            }));
             self.recover_cloud_notes()?;
         }
         let before = self.get_preferences();
@@ -7161,6 +7170,11 @@ impl OpenLessBackend {
             None,
             BackendEventKind::PreferencesChanged(PreferencesChange { revision }),
         );
+    }
+
+    pub async fn refresh_app_style_catalog(&self) -> Result<AppStyleRouting, BackendError> {
+        self.app_styles.catalog.refresh().await?;
+        self.app_styles.snapshot()
     }
 
     pub fn app_style_routing(&self) -> Result<AppStyleRouting, BackendError> {
@@ -9708,13 +9722,13 @@ impl OpenLessBackend {
             .style_pack_id
             .as_deref()
             .filter(|id| !id.trim().is_empty());
-        let assigned_ids = if explicit_style.is_none() {
-            input_app
-                .as_ref()
-                .map_or_else(Vec::new, |app| self.app_styles.candidates(app))
-        } else {
-            Vec::new()
-        };
+        let (mut assigned_ids, input_guidance) = input_app
+            .as_ref()
+            .map(|app| self.app_styles.selection(app))
+            .unwrap_or_default();
+        if explicit_style.is_some() {
+            assigned_ids.clear();
+        }
         let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);
         let style_pack = self
             .style_packs
@@ -9825,6 +9839,10 @@ impl OpenLessBackend {
             recent_history,
             options,
         );
+        if let Some(guidance) = input_guidance.filter(|_| context.uses_llm_polisher()) {
+            context.polish.style_system_prompt.push_str("\n\n# 输入场景参考\n以下场景信息辅助理解术语与对象，具体输出遵循当前风格包。\n");
+            context.polish.style_system_prompt.push_str(&guidance);
+        }
         context.input_app = input_app;
         context.pipeline_mode = pipeline_mode;
         if purpose == DictationContextPurpose::Dictation

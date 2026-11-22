@@ -1,89 +1,142 @@
-.ol-app-style-dialog .ol-dialog-body {
-  scrollbar-gutter: stable;
-  overflow-x: hidden;
+.ol-app-style-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+.ol-app-style-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  min-height: 0;
+  flex: 1 1 0;
+}
+.ol-app-style-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.ol-app-style-panel > h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+.ol-app-style-panel-body {
+  min-height: 0;
+  flex: 1 1 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
-
-.ol-app-style-dialog .ol-dialog-footer {
-  justify-content: flex-start;
-}
-
 .ol-app-style-hint {
   color: var(--ol-ink-3);
+  font-size: 13px;
+  margin: 0 0 14px;
 }
-
 .ol-app-style-group {
-  padding: 8px 12px;
+  padding: 12px;
   margin-bottom: 12px;
   border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
 }
-
-.ol-app-style-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  min-height: 44px;
-  padding: 4px 0;
+.ol-app-style-group > h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
 }
-
-.ol-app-style-row--app {
-  border-top: 1px solid var(--ol-line);
-}
-
-.ol-app-style-row h3,
-.ol-app-style-name {
-  flex: 1 1 9em;
-  min-width: 0;
-  margin: 0;
-  font-size: inherit;
-  overflow-wrap: anywhere;
-}
-
-.ol-app-style-name {
-  display: flex;
-  align-items: center;
+.ol-app-style-category-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
-
+.ol-app-style-page .ol-select-trigger {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 34px;
+  padding-block: 7px;
+}
+.ol-app-style-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--ol-line);
+}
+.ol-app-style-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.ol-app-style-name small {
+  display: block;
+  color: var(--ol-ink-3);
+  font-size: 0.85em;
+}
 .ol-app-style-icon {
   flex: 0 0 20px;
   width: 20px;
   height: 20px;
-}
-
-.ol-app-style-icon img {
-  width: 100%;
-  height: 100%;
   object-fit: contain;
 }
-
-.ol-app-style-picker {
-  flex: 1 1 12em;
-  min-width: 0;
-}
-
-.ol-app-style-picker .ol-select-trigger {
-  width: 100%;
-  height: auto;
-  min-height: 32px;
-  padding-block: 6px;
-}
-
-.ol-app-style-picker .ol-select-value,
+.ol-app-style-page .ol-select-value,
 .ol-app-style-options .ol-select-item > :first-child {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-
-.ol-app-style-group > h3 {
-  margin: 4px 0 8px;
-  font-size: inherit;
+.ol-app-members-popup {
+  width: min(340px, var(--available-width));
+  max-width: calc(100vw - 32px);
+  padding: 8px;
 }
-
-.ol-app-style-name small {
-  display: block;
-  font-size: 0.85em;
+.ol-app-members-list {
+  max-height: min(320px, 45vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin-top: 6px;
+}
+.ol-app-member-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--ol-r-sm);
+  background: transparent;
+  color: var(--ol-ink);
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.ol-app-member-option:hover,
+.ol-app-member-option:focus-visible {
+  background: var(--ol-surface-2);
+}
+.ol-app-member-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--ol-line);
+  border-radius: 5px;
+}
+.ol-app-member-option[aria-checked='true'] .ol-app-member-check {
+  color: var(--ol-blue);
+}
+.ol-app-member-option[data-conflict] .ol-app-member-check {
   color: var(--ol-ink-3);
+}
+@media (max-width: 720px) {
+  .ol-app-style-panels {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(220px, 1fr));
+  }
 }

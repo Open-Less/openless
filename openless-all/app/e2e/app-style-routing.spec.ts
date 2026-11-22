@@ -1,167 +1,162 @@
-import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { expect, test, type Page } from '@playwright/test';
 import { settleNavigation, settleSelectDismissal } from './support/navigation';
 import { fixtureOrigin } from './support/server';
 
-test('shares style packs across apps and categories with one selection per target', async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
-    document.addEventListener(
-      'keydown',
-      (event) => {
-        if (event.key === 'Escape') {
-          // Exercise a popup that drops its open marker during document capture.
-          document.querySelector('.ol-select-positioner[data-open]')?.removeAttribute('data-open');
-        }
-      },
-      { capture: true, once: true },
-    );
-  });
-  await page.goto('/?os=mac');
-  await page.getByRole('button', { name: '风格', exact: true }).click();
-  await page.getByRole('button', { name: '润色模式', exact: true }).click();
-  await settleNavigation(page);
-  const open = page.getByRole('button', { name: '按应用选择风格' });
-  await open.click();
+const catalog = JSON.parse(
+  readFileSync(
+    new URL('../crates/openless-core/tests/fixtures/app-catalog.json', import.meta.url),
+    'utf8',
+  ),
+);
 
-  const dialog = page.getByRole('dialog', { name: '按应用选择风格' });
-  const packFor = (name: string) => dialog.getByRole('combobox', { name: `${name}的风格包` });
-  const popup = page.locator('.ol-select-popup[data-open]');
-  const chat = packFor('聊天');
-  const email = packFor('邮件');
-  const wechat = packFor('WeChat');
-  const mail = packFor('Mail');
-  const choose = async (target: typeof chat, name: string) => {
-    await target.click();
-    await expect(popup).toHaveCSS('opacity', '1');
-    await popup.getByRole('option', { name, exact: true }).click();
-    await settleSelectDismissal(page);
-  };
-
-  await choose(chat, '清晰结构');
-  await email.click();
-  await expect(email).toHaveAttribute('aria-expanded', 'true');
-  await expect(popup).toHaveCSS('opacity', '1');
-  await expect(popup.getByRole('option', { name: '清晰结构', exact: true })).toBeEnabled();
-  await page.keyboard.press('Escape');
-  await settleSelectDismissal(page);
-  await expect(dialog).toBeVisible();
-
-  await choose(email, '清晰结构');
-  await expect(chat).toHaveText('清晰结构');
-  await expect(email).toHaveText('清晰结构');
-  await expect(wechat).toHaveText('跟随分类（清晰结构）');
-  await expect(mail).toHaveText('跟随分类（清晰结构）');
-
-  await choose(wechat, '清晰结构');
-  await choose(mail, '清晰结构');
-  await choose(email, '正式表达');
-  await expect(email).toHaveText('正式表达');
-  await expect(chat).toHaveText('清晰结构');
-  await expect(mail).toHaveText('清晰结构');
-  await expect(wechat).toHaveText('清晰结构');
-
-  await dialog.getByRole('button', { name: '清理应用记录' }).click();
-  await page
-    .getByRole('dialog', { name: '清理应用记录' })
-    .getByRole('button', { name: '清理应用记录' })
-    .click();
-  await expect(packFor('Visual Studio Code')).toHaveCount(0);
-  await expect(wechat).toHaveText('清晰结构');
-  await expect(mail).toHaveText('清晰结构');
-
-  await choose(wechat, '跟随分类（清晰结构）');
-  await expect(wechat).toHaveCount(0);
-  await expect(mail).toHaveText('清晰结构');
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-  await expect(open).toBeFocused();
-  await open.click();
-  await expect(chat).toHaveText('清晰结构');
-  await expect(email).toHaveText('正式表达');
-});
-
-test('keeps app rules reachable at a narrow window size and larger text', async ({ page }) => {
-  await page.setViewportSize({ width: 480, height: 470 });
-  await page.addInitScript(() => localStorage.setItem('ol.locale', 'de'));
-  await page.goto('/?os=win');
-  await page.locator('html').evaluate((element) => {
-    element.style.fontSize = '125%';
-  });
-
-  // The route can be opened directly in the existing preview shell.
-  await page.getByRole('button', { name: 'Stil', exact: true }).click();
-  await page
-    .getByRole('button', { name: /Überarbeitungsmodus|Glättungsmodus|Überarbeitungsstile/ })
-    .click();
-  await settleNavigation(page);
-  await page.getByRole('button', { name: 'Stile nach App' }).click();
-
-  const dialog = page.getByRole('dialog', { name: 'Stile nach App' });
-  const notes = dialog.getByRole('combobox', { name: 'Stilpaket für Notes' });
-  await notes.scrollIntoViewIfNeeded();
-  const frame = await dialog.boundingBox();
-  const field = await notes.boundingBox();
-  expect(frame).not.toBeNull();
-  expect(field).not.toBeNull();
-  expect(field!.x).toBeGreaterThanOrEqual(frame!.x);
-  expect(field!.x + field!.width).toBeLessThanOrEqual(frame!.x + frame!.width + 1);
-  await notes.click();
-  await expect(
-    page.getByRole('option', { name: 'Manuell gewählten Stil verwenden' }),
-  ).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(dialog.getByRole('button', { name: 'App-Verlauf löschen' })).toBeVisible();
-});
-
-test('refreshes newly dictated apps with inherited styles inside the dialog scroll area', async ({
-  page,
-}) => {
+test.beforeEach(async ({ page }) => {
+  await page.route('https://apic.openless.top/v1/app-catalog', (route) =>
+    route.fulfill({ json: catalog }),
+  );
   await page.route('**/src/preview/appStyleRouting.ts*', async (route) => {
     const response = await route.fetch();
     await route.fulfill({
       response,
       body: `${await response.text()}
 import { publishPreviewChange } from '/src/preview/events.ts';
+routing.apps = [
+  ['com.microsoft.VSCode', 'Visual Studio Code'], ['com.tencent.xinWeChat', 'WeChat'],
+  ['com.apple.mail', 'Mail'], ['com.apple.Notes', 'Notes'], ['org.example.custom', 'Custom Editor'],
+].map(([id, name]) => ({app: {id: 'macos:' + id, name}, memberId: 'macos:' + id, category: null, seen: true, stylePackId: null}));
 window.addEventListener('fixture:dictation-completed', () => {
   routing.apps.push(
-    { app: { id: 'macos:com.openai.codex', name: 'ChatGPT' }, category: 'coding', seen: true, stylePackId: null },
-    { app: { id: 'macos:com.stablyai.orca', name: 'Orca' }, category: 'coding', seen: true, stylePackId: null },
-    ...Array.from({ length: 35 }, (_, index) => ({
-      app: { id: 'macos:org.example.' + index, name: 'Writing app ' + index }, category: null, seen: true, stylePackId: null,
-    })),
+    {app: {id: 'macos:com.openai.codex', name: 'ChatGPT'}, memberId: 'catalog:chatgpt', category: null, seen: true, stylePackId: null},
+    ...Array.from({length: 35}, (_, i) => ({app: {id: 'macos:org.example.' + i, name: 'Writing app ' + i}, memberId: 'macos:org.example.' + i, category: null, seen: true, stylePackId: null})),
   );
   publishPreviewChange('history');
 });`,
     });
   });
-  await page.setViewportSize({ width: 980, height: 640 });
+});
+
+async function openPage(page: Page) {
   await page.goto(`${fixtureOrigin}/?os=mac`);
   await page.getByRole('button', { name: '风格', exact: true }).click();
-  await page.getByRole('button', { name: '润色模式', exact: true }).click();
+  await page.getByRole('button', { name: '按应用选择风格', exact: true }).click();
   await settleNavigation(page);
-  await page.getByRole('button', { name: '按应用选择风格' }).click();
-  const dialog = page.getByRole('dialog', { name: '按应用选择风格' });
-  await dialog.getByRole('combobox', { name: '编程的风格包' }).click();
-  await page.getByRole('option', { name: '清晰结构', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '编程的风格包' })).toBeVisible();
+  return page.locator('.ol-app-style-page');
+}
+
+async function choose(page: Page, target: string, name: string) {
+  await page.getByRole('combobox', { name: `${target}的风格包`, exact: true }).click();
+  await page.getByRole('option', { name, exact: true }).click();
   await settleSelectDismissal(page);
-  const footer = await dialog.getByRole('button', { name: '清理应用记录' }).boundingBox();
-  await page.evaluate(() => window.dispatchEvent(new Event('fixture:dictation-completed')));
-  for (const app of ['ChatGPT', 'Orca']) {
-    await expect(dialog.getByRole('combobox', { name: `${app}的风格包` })).toHaveText(
-      '跟随分类（清晰结构）',
-    );
-  }
-  await expect(dialog.getByRole('heading', { name: '指定应用' })).toBeVisible();
-  const body = dialog.locator('.ol-dialog-body');
-  expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  const lastApp = dialog.getByRole('combobox', { name: 'Writing app 9的风格包' });
-  await lastApp.scrollIntoViewIfNeeded();
-  await lastApp.click();
-  await expect(page.getByRole('option', { name: '使用当前手选风格', exact: true })).toBeVisible();
+}
+
+test('shares packs across categories and apps from the third Styles page', async ({ page }) => {
+  const surface = await openPage(page);
+  await expect(surface.locator('.ol-app-style-panel')).toHaveCount(2);
+  await choose(page, '聊天', '清晰结构');
+  await choose(page, '邮件', '清晰结构');
+  await expect(page.getByRole('combobox', { name: 'WeChat的风格包', exact: true })).toHaveText(
+    '跟随分类（清晰结构）',
+  );
+  await choose(page, 'WeChat', '清晰结构');
+  await choose(page, 'Mail', '清晰结构');
+  await choose(page, '邮件', '正式表达');
+  await expect(page.getByRole('combobox', { name: '聊天的风格包', exact: true })).toHaveText(
+    '清晰结构',
+  );
+  await expect(page.getByRole('combobox', { name: 'Mail的风格包', exact: true })).toHaveText(
+    '清晰结构',
+  );
+  await surface.getByRole('button', { name: '清理应用记录' }).click();
+  await page
+    .getByRole('dialog', { name: '清理应用记录' })
+    .getByRole('button', { name: '清理应用记录' })
+    .click();
+  await expect(
+    page.getByRole('combobox', { name: 'Visual Studio Code的风格包', exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'WeChat的风格包', exact: true })).toHaveText(
+    '清晰结构',
+  );
+});
+
+test('preselects official apps, moves a conflicting app, and assigns a newly observed app', async ({
+  page,
+}) => {
+  await openPage(page);
+  await choose(page, '编程', '清晰结构');
+  await choose(page, '聊天', '正式表达');
+  await page.getByRole('button', { name: '编程的应用', exact: true }).click();
+  const chatgpt = page.getByRole('checkbox', { name: 'ChatGPT', exact: true });
+  await expect(chatgpt).toBeChecked();
+  const wechat = page.getByRole('checkbox', { name: 'WeChat', exact: true });
+  await expect(wechat).toHaveAttribute('data-conflict', 'true');
+  await wechat.click();
+  const move = page.getByRole('dialog', { name: '移动应用' });
+  await expect(move).toContainText('聊天');
+  await expect(move).toContainText('正式表达');
+  await move.getByRole('button', { name: '移到此分类' }).click();
+  await expect(page.getByRole('combobox', { name: 'WeChat的风格包', exact: true })).toHaveText(
+    '跟随分类（清晰结构）',
+  );
+  await page.getByRole('button', { name: '编程的应用', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Custom Editor', exact: true }).click();
+  await expect(
+    page.getByRole('combobox', { name: 'Custom Editor的风格包', exact: true }),
+  ).toHaveText('跟随分类（清晰结构）');
+  await page.getByRole('checkbox', { name: 'Visual Studio Code', exact: true }).click();
   await page.keyboard.press('Escape');
-  const after = await dialog.getByRole('button', { name: '清理应用记录' }).boundingBox();
-  expect(after!.y).toBeCloseTo(footer!.y, 0);
-  expect(await body.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(
+    page.getByRole('combobox', { name: 'Visual Studio Code的风格包', exact: true }),
+  ).toHaveText('使用当前手选风格');
+});
+
+test('refreshes inherited styles after dictation and scrolls each large panel independently', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 980, height: 640 });
+  const surface = await openPage(page);
+  await choose(page, '编程', '清晰结构');
+  const clear = surface.getByRole('button', { name: '清理应用记录' });
+  const before = await clear.boundingBox();
+  await page.evaluate(() => window.dispatchEvent(new Event('fixture:dictation-completed')));
+  await expect(page.getByRole('combobox', { name: 'ChatGPT的风格包', exact: true })).toHaveText(
+    '跟随分类（清晰结构）',
+  );
+  const body = surface.locator('.ol-app-style-panel-body').nth(1);
+  expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+  await page
+    .getByRole('combobox', { name: 'Writing app 9的风格包', exact: true })
+    .scrollIntoViewIfNeeded();
+  const after = await clear.boundingBox();
+  expect(after!.y).toBeCloseTo(before!.y, 0);
+  expect(await surface.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+});
+
+test('keeps the new page usable with longer translated labels and larger text', async ({
+  page,
+}) => {
+  await page.addInitScript(() => localStorage.setItem('ol.locale', 'de'));
+  await page.setViewportSize({ width: 980, height: 640 });
+  await page.goto(`${fixtureOrigin}/?os=win`);
+  await page.locator('html').evaluate((element) => {
+    element.style.fontSize = '125%';
+  });
+  await page.getByRole('button', { name: 'Stil', exact: true }).click();
+  await page.getByRole('button', { name: 'Stile nach App', exact: true }).click();
+  await settleNavigation(page);
+  const picker = page.getByRole('combobox', { name: 'Stilpaket für Notes', exact: true });
+  await expect(picker).toBeVisible();
+  await picker.click();
+  await expect(
+    page.getByRole('option', { name: 'Manuell gewählten Stil verwenden', exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(
+    await page
+      .locator('.ol-app-style-page')
+      .evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
 });
 
 test('opens and saves the newly created pack despite overlapping change events', async ({
@@ -192,14 +187,11 @@ test('opens and saves the newly created pack despite overlapping change events',
   await page.getByRole('button', { name: '润色模式', exact: true }).click();
   await settleNavigation(page);
   await page.getByRole('button', { name: /新建风格/ }).click();
-  const name = page.getByRole('textbox', { name: '名称', exact: true });
+  const editor = page.getByRole('dialog', { name: '编辑风格', exact: true });
+  const name = editor.getByRole('textbox', { name: '名称', exact: true });
   await expect(name).toHaveValue('未命名风格');
   await name.fill('新建的独立风格');
-  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
   await expect(name).toHaveValue('新建的独立风格');
-  await expect(
-    page
-      .getByRole('dialog', { name: '编辑风格', exact: true })
-      .getByRole('button', { name: '激活', exact: true }),
-  ).toBeEnabled();
+  await expect(editor.getByRole('button', { name: '激活', exact: true })).toBeEnabled();
 });

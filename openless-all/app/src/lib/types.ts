@@ -290,23 +290,57 @@ export interface StylePackExample {
   output: string;
 }
 
-export type AppCategory = 'coding' | 'chat' | 'email' | 'writing' | 'office' | 'browser';
+export type AppCategory = string;
+
+export interface CatalogCategory {
+  id: AppCategory;
+  name: string;
+  labels?: Record<string, string>;
+  promptGuidance?: string;
+}
+
+export interface CatalogClient {
+  id: string;
+  name: string;
+  role: string;
+  category: AppCategory;
+  platforms: string[];
+  canonicalClientId?: string | null;
+  promptGuidance?: string;
+  identifiers: {
+    macosBundleIds: string[];
+    macosBundlePrefixes?: string[];
+    windowsExecutableStems: string[];
+    installedWebAppNames: string[];
+  };
+}
+
+export interface InputAppCatalog {
+  schemaVersion: number;
+  reviewedAt: string;
+  categories: CatalogCategory[];
+  clients: CatalogClient[];
+}
 
 export interface AppStyleEntry {
   app: { id: string; name: string };
+  memberId: string;
   category: AppCategory | null;
   seen: boolean;
   stylePackId: string | null;
 }
 
 export interface AppStyleRouting {
+  catalog: InputAppCatalog;
+  memberships: Record<string, AppCategory | null>;
   categories: Partial<Record<AppCategory, string>>;
   apps: AppStyleEntry[];
 }
 
 export type AppStyleAssignment =
   | { target: 'category'; category: AppCategory; stylePackId: string | null }
-  | { target: 'app'; appId: string; stylePackId: string | null };
+  | { target: 'app'; appId: string; stylePackId: string | null }
+  | { target: 'membership'; memberId: string; category: AppCategory | null };
 
 export interface StylePack {
   id: string;

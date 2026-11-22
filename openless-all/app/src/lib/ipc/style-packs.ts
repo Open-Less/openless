@@ -1,4 +1,10 @@
-import type { AppStyleAssignment, AppStyleRouting, PolishMode, StylePack, StylePackRuntimeDiagnostics } from '../types';
+import type {
+  AppStyleAssignment,
+  AppStyleRouting,
+  PolishMode,
+  StylePack,
+  StylePackRuntimeDiagnostics,
+} from '../types';
 import { previewAppStyleRouting } from '../../preview/appStyleRouting';
 import { invokeOrMock } from './shared';
 import {
@@ -35,6 +41,14 @@ export function listStylePacks(): Promise<StylePack[]> {
 
 export function getAppStyleRouting(): Promise<AppStyleRouting> {
   return invokeOrMock('get_app_style_routing', undefined, previewAppStyleRouting.snapshot);
+}
+
+export function refreshAppStyleCatalog(): Promise<AppStyleRouting> {
+  return invokeOrMock(
+    'refresh_app_style_catalog',
+    undefined,
+    previewAppStyleRouting.refreshCatalog,
+  );
 }
 
 export function setAppStyleAssignment(assignment: AppStyleAssignment): Promise<AppStyleRouting> {

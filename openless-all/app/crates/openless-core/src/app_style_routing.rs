@@ -2,23 +2,16 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use crate::app_catalog::{AppCatalog, AppCatalogStore};
 
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::persistence::{atomic_write, persistence_error, read_or_default};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AppCategory {
-    Coding,
-    Chat,
-    Email,
-    Writing,
-    Office,
-    Browser,
-}
+pub type AppCategory = String;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,121 +38,6 @@ impl InputApp {
     pub fn macos_bundle_id(&self) -> Option<&str> {
         self.id.strip_prefix("macos:")
     }
-
-    pub fn category(&self) -> Option<AppCategory> {
-        use AppCategory::{Browser, Chat, Coding, Email, Office, Writing};
-        if let Some(bundle) = self.macos_bundle_id() {
-            let bundle = bundle.to_ascii_lowercase();
-            // Installed web apps have their own stable bundle identity. Browser
-            // tabs retain the browser's category, regardless of their title.
-            let installed_web_app = [
-                "com.google.chrome.app.",
-                "com.microsoft.edgemac.app.",
-                "com.apple.safari.webapp.",
-            ]
-            .iter()
-            .any(|prefix| bundle.starts_with(prefix));
-            if installed_web_app
-                && matches!(
-                    self.name.to_ascii_lowercase().as_str(),
-                    "gemini" | "google gemini" | "chatgpt" | "claude" | "google ai studio"
-                )
-            {
-                return Some(Coding);
-            }
-            return match bundle.as_str() {
-                // Agent clients, IDEs, terminals, and development tools.
-                "com.openai.codex"
-                | "com.openai.chat"
-                | "com.anthropic.claudefordesktop"
-                | "com.stablyai.orca"
-                | "com.google.antigravity"
-                | "ai.opencode.desktop"
-                | "com.t3tools.t3code"
-                | "dev.kiro.desktop"
-                | "com.trae.app"
-                | "com.conductor.app"
-                | "com.superset.desktop"
-                | "com.exafunction.windsurf"
-                | "com.kangfenmao.cherrystudio"
-                | "com.docker.docker"
-                | "com.electron.dockerdesktop"
-                | "com.microsoft.vscode"
-                | "com.microsoft.vscodeinsiders"
-                | "com.apple.dt.xcode"
-                | "com.todesktop.230313mzl4w4u92"
-                | "dev.zed.zed"
-                | "com.sublimetext.4"
-                | "com.jetbrains.intellij"
-                | "com.jetbrains.intellij.ce"
-                | "com.jetbrains.pycharm"
-                | "com.jetbrains.pycharm.ce"
-                | "com.jetbrains.webstorm"
-                | "com.google.android.studio"
-                | "com.apple.terminal"
-                | "com.googlecode.iterm2"
-                | "com.mitchellh.ghostty"
-                | "dev.warp.warp-stable" => Some(Coding),
-                "com.tencent.xinwechat"
-                | "com.tencent.qq"
-                | "com.tencent.weworkmac"
-                | "com.apple.ichat"
-                | "com.tinyspeck.slackmacgap"
-                | "com.hnc.discord"
-                | "com.microsoft.teams2"
-                | "com.microsoft.teams"
-                | "ru.keepcoder.telegram"
-                | "org.telegram.desktop"
-                | "com.whatsapp.whatsapp"
-                | "com.electron.lark"
-                | "com.bytedance.macos.feishu"
-                | "com.laiwang.dingtalk"
-                | "us.zoom.xos" => Some(Chat),
-                "com.apple.mail"
-                | "com.microsoft.outlook"
-                | "org.mozilla.thunderbird"
-                | "com.readdle.smartemail-macos"
-                | "com.mimestream.mimestream" => Some(Email),
-                "com.apple.notes" | "md.obsidian" | "notion.id" | "abnerworks.typora"
-                | "net.shinyfrog.bear" | "com.ulyssesapp.mac" => Some(Writing),
-                "com.microsoft.word"
-                | "com.microsoft.excel"
-                | "com.microsoft.powerpoint"
-                | "com.apple.iwork.pages"
-                | "com.apple.iwork.numbers"
-                | "com.apple.iwork.keynote" => Some(Office),
-                "com.apple.safari"
-                | "com.google.chrome"
-                | "com.google.chrome.canary"
-                | "org.mozilla.firefox"
-                | "com.microsoft.edgemac"
-                | "com.brave.browser"
-                | "company.thebrowser.browser"
-                | "com.vivaldi.vivaldi" => Some(Browser),
-                _ => None,
-            };
-        }
-        if self.id.starts_with("windows:") {
-            // The host supplies the executable stem, never a window title.
-            return match self.name.to_ascii_lowercase().as_str() {
-                "chatgpt" | "codex" | "claude" | "orca" | "antigravity" | "opencode"
-                | "t3 code" | "kiro" | "trae" | "windsurf" | "conductor" | "superset"
-                | "cherry studio" | "docker desktop" | "code" | "code - insiders" | "cursor"
-                | "zed" | "devenv" | "idea64" | "pycharm64" | "webstorm64" | "studio64"
-                | "sublime_text" | "windowsterminal" => Some(Coding),
-                "wechat" | "weixin" | "qq" | "wxwork" | "slack" | "discord" | "ms-teams"
-                | "teams" | "telegram" | "whatsapp" | "lark" | "feishu" | "dingtalk" | "zoom" => {
-                    Some(Chat)
-                }
-                "outlook" | "olk" | "thunderbird" => Some(Email),
-                "obsidian" | "notion" | "typora" | "notepad" | "notepad++" => Some(Writing),
-                "winword" | "excel" | "powerpnt" | "wps" | "et" | "wpp" => Some(Office),
-                "chrome" | "msedge" | "firefox" | "brave" | "arc" | "vivaldi" => Some(Browser),
-                _ => None,
-            };
-        }
-        None
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +45,7 @@ impl InputApp {
 struct RoutingState {
     categories: BTreeMap<AppCategory, String>,
     apps: BTreeMap<String, AppEntry>,
+    memberships: BTreeMap<String, Option<AppCategory>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +59,8 @@ struct AppEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStyleRouting {
+    pub catalog: AppCatalog,
+    pub memberships: BTreeMap<String, Option<AppCategory>>,
     pub categories: BTreeMap<AppCategory, String>,
     pub apps: Vec<AppStyleEntry>,
 }
@@ -187,6 +68,7 @@ pub struct AppStyleRouting {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStyleEntry {
+    pub member_id: String,
     pub app: InputApp,
     pub category: Option<AppCategory>,
     pub seen: bool,
@@ -200,6 +82,10 @@ pub struct AppStyleEntry {
     rename_all_fields = "camelCase"
 )]
 pub enum AppStyleAssignment {
+    Membership {
+        member_id: String,
+        category: Option<AppCategory>,
+    },
     Category {
         category: AppCategory,
         style_pack_id: Option<String>,
@@ -213,6 +99,7 @@ pub enum AppStyleAssignment {
 impl AppStyleAssignment {
     pub(crate) fn style_pack_id(&self) -> Option<&str> {
         match self {
+            Self::Membership { .. } => None,
             Self::Category { style_pack_id, .. } | Self::App { style_pack_id, .. } => {
                 style_pack_id.as_deref()
             }
@@ -221,14 +108,16 @@ impl AppStyleAssignment {
 }
 
 pub(crate) struct AppStyleStore {
+    pub(crate) catalog: Arc<AppCatalogStore>,
     path: PathBuf,
     state: Mutex<Result<RoutingState, BackendError>>,
 }
 
 impl AppStyleStore {
-    pub(crate) fn open(data_dir: &Path) -> Self {
+    pub(crate) fn open(data_dir: &Path, base_url: Option<reqwest::Url>) -> Self {
         let path = data_dir.join("app-style-routing.json");
         Self {
+            catalog: Arc::new(AppCatalogStore::open(data_dir, base_url)),
             state: Mutex::new(read_or_default(&path)),
             path,
         }
@@ -236,6 +125,7 @@ impl AppStyleStore {
 
     pub(crate) fn in_memory() -> Self {
         Self {
+            catalog: Arc::new(AppCatalogStore::in_memory()),
             path: PathBuf::new(),
             state: Mutex::new(Ok(RoutingState::default())),
         }
@@ -245,27 +135,48 @@ impl AppStyleStore {
         let state = self.state.lock().unwrap();
         state
             .as_ref()
-            .map(RoutingState::snapshot)
+            .map(|state| state.snapshot(&self.catalog.snapshot()))
             .map_err(Clone::clone)
     }
 
-    pub(crate) fn candidates(&self, app: &InputApp) -> Vec<String> {
+    pub(crate) fn selection(&self, app: &InputApp) -> (Vec<String>, Option<String>) {
         let state = self.state.lock().unwrap();
         let Ok(state) = state.as_ref() else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
-        [
+        let catalog = self.catalog.snapshot();
+        let category = state.category_for(app, &catalog);
+        let ids = [
             state
                 .apps
                 .get(&app.id)
                 .and_then(|entry| entry.style_pack_id.as_ref()),
-            app.category()
-                .and_then(|category| state.categories.get(&category)),
+            category
+                .as_ref()
+                .and_then(|category| state.categories.get(category)),
         ]
         .into_iter()
         .flatten()
         .cloned()
-        .collect()
+        .collect();
+        let category_guidance = category
+            .and_then(|category| catalog.categories.iter().find(|item| item.id == category))
+            .map(|category| category.prompt_guidance.as_str());
+        let client_guidance = catalog
+            .client_for(app)
+            .map(|client| client.prompt_guidance.as_str());
+        let guidance = [category_guidance, client_guidance]
+            .into_iter()
+            .flatten()
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (ids, (!guidance.is_empty()).then_some(guidance))
+    }
+
+    #[cfg(test)]
+    fn candidates(&self, app: &InputApp) -> Vec<String> {
+        self.selection(app).0
     }
 
     pub(crate) fn observe(&self, app: &InputApp) -> Result<(), BackendError> {
@@ -293,6 +204,40 @@ impl AppStyleStore {
     pub(crate) fn set(&self, assignment: AppStyleAssignment) -> Result<(), BackendError> {
         self.update(|state| {
             match assignment {
+                AppStyleAssignment::Membership {
+                    member_id,
+                    category,
+                } => {
+                    let catalog = self.catalog.snapshot();
+                    let known = state.apps.contains_key(&member_id)
+                        || catalog
+                            .clients
+                            .iter()
+                            .any(|client| format!("catalog:{}", client.id) == member_id);
+                    if !known
+                        || category
+                            .as_ref()
+                            .is_some_and(|id| !catalog.categories.iter().any(|item| &item.id == id))
+                    {
+                        return Err(BackendError::new(
+                            BackendErrorCode::InvalidArgument,
+                            "unknown application or category",
+                        ));
+                    }
+                    // A newly recognized identity must replace its older app-specific membership.
+                    if member_id.starts_with("catalog:") {
+                        for (id, entry) in &state.apps {
+                            let app = InputApp {
+                                id: id.clone(),
+                                name: entry.name.clone(),
+                            };
+                            if RoutingState::member_id(&app, &catalog) == member_id {
+                                state.memberships.remove(id);
+                            }
+                        }
+                    }
+                    state.memberships.insert(member_id, category);
+                }
                 AppStyleAssignment::Category {
                     category,
                     style_pack_id: Some(id),
@@ -316,7 +261,10 @@ impl AppStyleStore {
                         )
                     })?;
                     entry.style_pack_id = style_pack_id;
-                    if !entry.seen && entry.style_pack_id.is_none() {
+                    if !entry.seen
+                        && entry.style_pack_id.is_none()
+                        && !state.memberships.contains_key(&app_id)
+                    {
                         state.apps.remove(&app_id);
                     }
                 }
@@ -327,9 +275,9 @@ impl AppStyleStore {
 
     pub(crate) fn clear_seen(&self) -> Result<(), BackendError> {
         self.update(|state| {
-            state.apps.retain(|_, entry| {
+            state.apps.retain(|id, entry| {
                 entry.seen = false;
-                entry.style_pack_id.is_some()
+                entry.style_pack_id.is_some() || state.memberships.contains_key(id)
             });
             Ok(true)
         })
@@ -359,8 +307,29 @@ impl AppStyleStore {
 }
 
 impl RoutingState {
-    fn snapshot(&self) -> AppStyleRouting {
+    fn member_id(app: &InputApp, catalog: &AppCatalog) -> String {
+        catalog
+            .client_for(app)
+            .map_or_else(|| app.id.clone(), |client| format!("catalog:{}", client.id))
+    }
+
+    fn category_for(&self, app: &InputApp, catalog: &AppCatalog) -> Option<AppCategory> {
+        let member = Self::member_id(app, catalog);
+        self.memberships
+            .get(&app.id)
+            .or_else(|| self.memberships.get(&member))
+            .cloned()
+            .unwrap_or_else(|| {
+                catalog
+                    .client_for(app)
+                    .map(|client| client.category.clone())
+            })
+    }
+
+    fn snapshot(&self, catalog: &AppCatalog) -> AppStyleRouting {
         AppStyleRouting {
+            catalog: catalog.clone(),
+            memberships: self.memberships.clone(),
             categories: self.categories.clone(),
             apps: self
                 .apps
@@ -371,7 +340,8 @@ impl RoutingState {
                         name: entry.name.clone(),
                     };
                     AppStyleEntry {
-                        category: app.category(),
+                        category: self.category_for(&app, catalog),
+                        member_id: Self::member_id(&app, catalog),
                         app,
                         seen: entry.seen,
                         style_pack_id: entry.style_pack_id.clone(),
@@ -387,94 +357,76 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_catalog_classifies_agents_and_common_input_apps() {
-        for bundle in [
-            "com.openai.codex",
-            "com.openai.chat",
-            "com.stablyai.orca",
-            "com.google.antigravity",
-            "com.anthropic.claudefordesktop",
-            "ai.opencode.desktop",
-            "com.t3tools.t3code",
-            "dev.kiro.desktop",
-            "com.trae.app",
-            "com.conductor.app",
-            "com.superset.desktop",
-            "com.docker.docker",
-            "com.microsoft.VSCode",
-        ] {
-            assert_eq!(
-                InputApp::macos(bundle, None).unwrap().category(),
-                Some(AppCategory::Coding),
-                "{bundle}"
-            );
+    fn membership_moves_replace_the_category_and_preserve_specific_styles() {
+        let dir =
+            std::env::temp_dir().join(format!("openless-membership-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("input-app-catalog-cache.json"),
+            include_str!("../tests/fixtures/app-catalog.json"),
+        )
+        .unwrap();
+        let store = AppStyleStore::open(&dir, None);
+        let editor = InputApp::macos("com.microsoft.VSCode", Some("VS Code")).unwrap();
+        for (category, pack) in [("coding", "code-style"), ("office", "office-style")] {
+            store
+                .set(AppStyleAssignment::Category {
+                    category: category.into(),
+                    style_pack_id: Some(pack.into()),
+                })
+                .unwrap();
         }
-        for (bundle, category) in [
-            ("com.apple.Notes", AppCategory::Writing),
-            ("com.tencent.xinWeChat", AppCategory::Chat),
-            ("com.apple.mail", AppCategory::Email),
-            ("com.microsoft.Word", AppCategory::Office),
-            ("com.google.Chrome", AppCategory::Browser),
-        ] {
-            assert_eq!(
-                InputApp::macos(bundle, None).unwrap().category(),
-                Some(category)
-            );
-        }
+        // An official app can be moved before its first dictation.
+        store
+            .set(AppStyleAssignment::Membership {
+                member_id: "catalog:vscode".into(),
+                category: Some("office".into()),
+            })
+            .unwrap();
+        assert_eq!(store.candidates(&editor), ["office-style"]);
+        store.observe(&editor).unwrap();
+        store
+            .set(AppStyleAssignment::App {
+                app_id: editor.id.clone(),
+                style_pack_id: Some("specific-style".into()),
+            })
+            .unwrap();
         assert_eq!(
-            InputApp::macos("com.google.Chrome.app.test-gemini", Some("Gemini"))
-                .unwrap()
-                .category(),
-            Some(AppCategory::Coding)
+            store.candidates(&editor),
+            ["specific-style", "office-style"]
         );
-        assert_eq!(
-            InputApp::macos("com.google.Chrome", Some("Gemini"))
-                .unwrap()
-                .category(),
-            Some(AppCategory::Browser)
-        );
-        // A display name cannot turn an unknown app or browser tab into an agent.
-        assert_eq!(
-            InputApp::macos("org.example.unknown", Some("ChatGPT"))
-                .unwrap()
-                .category(),
-            None
-        );
-        assert_eq!(
-            InputApp::macos("com.macpaw.site.Gemini2", Some("Gemini"))
-                .unwrap()
-                .category(),
-            None
-        );
-    }
-
-    #[test]
-    fn uses_platform_identity_instead_of_a_macos_display_name() {
-        assert_eq!(
-            InputApp::macos("com.tencent.xinWeChat", Some("微信"))
-                .unwrap()
-                .category(),
-            Some(AppCategory::Chat),
-        );
-        assert_eq!(
-            InputApp::macos("com.example.unknown", Some("Mail"))
-                .unwrap()
-                .category(),
-            None,
-        );
-        let windows = InputApp {
-            id: "windows:mail-product".into(),
-            name: "OUTLOOK".into(),
-        };
-        assert_eq!(windows.category(), Some(AppCategory::Email));
-        assert!(InputApp::macos("", Some("Mail")).is_none());
+        store
+            .set(AppStyleAssignment::Membership {
+                member_id: "catalog:vscode".into(),
+                category: Some("coding".into()),
+            })
+            .unwrap();
+        assert_eq!(store.candidates(&editor), ["specific-style", "code-style"]);
+        store
+            .set(AppStyleAssignment::Membership {
+                member_id: "catalog:vscode".into(),
+                category: None,
+            })
+            .unwrap();
+        assert_eq!(store.candidates(&editor), ["specific-style"]);
+        drop(store);
+        let reopened = AppStyleStore::open(&dir, None);
+        assert_eq!(reopened.snapshot().unwrap().apps[0].category, None);
+        assert_eq!(reopened.candidates(&editor), ["specific-style"]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn shared_packs_keep_one_assignment_per_target() {
         let dir =
             std::env::temp_dir().join(format!("openless-app-styles-{}", uuid::Uuid::new_v4()));
-        let store = AppStyleStore::open(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("input-app-catalog-cache.json"),
+            include_str!("../tests/fixtures/app-catalog.json"),
+        )
+        .unwrap();
+        let store = AppStyleStore::open(&dir, None);
         let editor = InputApp::macos("com.microsoft.VSCode", Some("VS Code")).unwrap();
         let chat = InputApp::macos("com.tencent.xinWeChat", Some("WeChat")).unwrap();
         let override_with = |app: &InputApp, pack: Option<&str>| AppStyleAssignment::App {
@@ -489,16 +441,16 @@ mod tests {
         store.observe(&editor).unwrap();
         store.observe(&chat).unwrap();
         store
-            .set(assign_category(AppCategory::Coding, "shared"))
+            .set(assign_category("coding".to_owned(), "shared"))
             .unwrap();
         store
-            .set(assign_category(AppCategory::Email, "shared"))
+            .set(assign_category("email".to_owned(), "shared"))
             .unwrap();
         store.set(override_with(&chat, Some("shared"))).unwrap();
         store.set(override_with(&editor, Some("shared"))).unwrap();
         let shared = store.snapshot().unwrap();
-        assert_eq!(shared.categories[&AppCategory::Coding], "shared");
-        assert_eq!(shared.categories[&AppCategory::Email], "shared");
+        assert_eq!(shared.categories[&"coding".to_owned()], "shared");
+        assert_eq!(shared.categories[&"email".to_owned()], "shared");
         assert_eq!(shared.apps.len(), 2);
         assert!(shared
             .apps
@@ -506,7 +458,7 @@ mod tests {
             .all(|entry| entry.style_pack_id.as_deref() == Some("shared")));
 
         store
-            .set(assign_category(AppCategory::Email, "replacement"))
+            .set(assign_category("email".to_owned(), "replacement"))
             .unwrap();
         store.set(override_with(&editor, Some("override"))).unwrap();
         assert_eq!(store.candidates(&editor), ["override", "shared"]);
@@ -515,11 +467,11 @@ mod tests {
 
         store.clear_seen().unwrap();
         drop(store);
-        let reopened = AppStyleStore::open(&dir);
+        let reopened = AppStyleStore::open(&dir, None);
         let snapshot = reopened.snapshot().unwrap();
         assert_eq!(snapshot.categories.len(), 2);
-        assert_eq!(snapshot.categories[&AppCategory::Coding], "shared");
-        assert_eq!(snapshot.categories[&AppCategory::Email], "replacement");
+        assert_eq!(snapshot.categories[&"coding".to_owned()], "shared");
+        assert_eq!(snapshot.categories[&"email".to_owned()], "replacement");
         assert_eq!(snapshot.apps.len(), 1);
         assert_eq!(snapshot.apps[0].app, chat);
         assert!(!snapshot.apps[0].seen);

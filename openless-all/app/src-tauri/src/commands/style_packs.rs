@@ -2,6 +2,13 @@ use super::*;
 use openless_core::app_style_routing::{AppStyleAssignment, AppStyleRouting};
 
 #[tauri::command]
+pub async fn refresh_app_style_catalog(core: CoreState<'_>) -> Result<AppStyleRouting, String> {
+    core.refresh_app_style_catalog()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn get_app_style_routing(core: CoreState<'_>) -> Result<AppStyleRouting, String> {
     core.app_style_routing().map_err(|error| error.to_string())
 }
