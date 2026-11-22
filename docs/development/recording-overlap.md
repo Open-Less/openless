@@ -27,7 +27,9 @@
 
 ## 后处理与写回
 
-Core 用同一条有序处理路径串行完成最终 ASR、润色与写入，避免为了重叠录音而同时调用不安全的本地模型。本地 ASR 使用已有“停止后识别”的缓冲能力；显式实时 TextStream 保留原实时协议。云端 ASR 仍可在录音期间返回胶囊原文。
+Core 用同一条有序处理路径串行完成最终 ASR、润色与写入。是否等停止后才连接 ASR 由本段冻结的“稳定转写”偏好决定，不因本地渠道统一强制开启；支持实时输出的本地模型继续在录音期间返回胶囊原文。TextStream 始终保留既有实时协议，SenseVoice/Gemma、Foundry 等离线适配仍按自身能力返回终稿，不因此获得流式识别能力。
+
+采集和本地推理分别拥有资源：`PipelineDictationEngine` 在麦克风已打开后通过宿主 task spawner 启动本地 ASR；模型加载或共享执行器等待期间，现有有界 PCM 缓冲保留音频。Sherpa 在线模型的每段仍有独立 `OnlineStream` 和 worker 队列，同一个缓存 recognizer 的建流、PCM 解码、分段、最终 flush 与销毁通过同一个执行锁串行；锁不覆盖整段会话寿命，也不覆盖润色或设备采集。后段可先采集并排队音频，前段解码让出执行器后继续输出本段原文。Sherpa 离线解码仍使用已有 permit，Foundry 仍使用已有 lifecycle/route 保护；实验性离线模型在原 `work` 锁上等待前次推理，而不是对重叠启动直接返回 Busy。旧 Sherpa 会话取消只清理自己的 worker/音频，不再设置运行时全局 prepare 取消标记。
 
 桌面原生键盘/输入源准备延后到最终写入，录音阶段不持有另一段的输入源或组合文本。胶囊流式原文保留；桌面目标输入框的润色文字在处理完成后交付，不在录音期间持续写入。其他宿主可以继续使用原有的准备时机，Core 的麦克风与后台资源仍分开登记。
 
@@ -69,6 +71,7 @@ macOS 目标包括进程、窗口、保留的 AX 输入控件身份，并复用 
 | --- | --- | --- |
 | 普通热键、按钮、Core stop/start | `src-tauri/src/coordinator/dictation_core.rs`、`commands/dictation.rs`；Core `api.rs` 的 `submit_dictation_session` 和 stop 公共路径 | 保留热键按序受理直到设备释放，后处理由独立任务继续；Core 相关 API 回归覆盖旧入口。 |
 | 独占采集、逐段缓冲、延迟成功/失败/取消 | `voice_session.rs`、`dictation_engine.rs`、`recording_overlap_tests.rs` | 用真实 Pipeline/Router 和可控音频夹具检查六种交错：第二段继续采集/已完整录完 × 第一段成功/失败/取消；验证每段全部首中尾帧、历史 id、一个采集 owner，以及迟到旧录音故障隔离。不是物理麦克风实测。 |
+| 本地实时原文及非重入执行 | `recording_overlap_tests.rs`、`src-tauri/src/asr/local/sherpa_runtime.rs`、`backend-tests/tests/sherpa_online.rs` | 同一生产 start/stop/finish 路径分别覆盖实时/稳定偏好下的上述六种交错，实时段 stop 前必须收到同 session partial，前段延迟 native 操作时后段采集可启动、解码等待，终稿/取消/历史不串段。独立宿主夹具包含生产 Sherpa 执行锁、旧段取消和离线超时所有权测试；默认使用非 native facade，不代表真实模型、物理麦克风或 Windows/Android 设备验收。 |
 | 请求使用冻结上下文 | `recording_overlap_tests.rs` → 生产 `providers::OpenAiChatPolisher` → 本机 HTTP 夹具 | 检查真实序列化的 system/user 消息与各段冻结上下文完全相同，包含捕获的光标材料；另行核对处理中改变全局语言不改变旧段语言快照。没有调用真实云模型。 |
 | 流式原文、语言菜单、多任务上下叠放 | `e2e/capsule-overlap.spec.ts`、`src/lib/capsuleLayout.test.ts` | Chromium 使用生产 React 组件和隔离宿主事件，核对固定身体位置、球体居中与 2px 连接、语言菜单开闭、流式原文、1→3→1 后台数量及定向取消；截图由测试输出。 |
 | native 事件与低内存胶囊 | `src-tauri/src/capsule_snapshot.rs`、`crates/openless-capsule`、`native-capsule` | native snapshot 的无 Tauri 回归、renderer/协议测试及 macOS 编译检查。没有宣称原生窗口在物理桌面实测。 |

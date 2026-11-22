@@ -353,10 +353,8 @@ impl DictationContext {
                 mute_during_recording: preferences.mute_during_recording,
                 // TextStream is explicitly a live ASR module; do not let an old
                 // batch-mode preference silently buffer its entire recording.
-                transcribe_after_stop: (preferences.stable_transcription_enabled
-                    && asr.provider_type != "experimental-textstream")
-                    || (is_local_asr_provider(&asr.provider_type)
-                        && asr.provider_type != "experimental-textstream"),
+                transcribe_after_stop: preferences.stable_transcription_enabled
+                    && asr.provider_type != "experimental-textstream",
                 archive_enabled: true,
                 archive_successful_recording: matches!(
                     options.output_target,
@@ -953,7 +951,14 @@ mod tests {
             ..UserPreferences::default()
         };
         let pack = builtin_style_pack_for_mode(PolishMode::Structured);
-        for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
+        for (provider, buffered) in [
+            ("experimental-textstream", false),
+            ("sherpa-onnx-local", true),
+            ("apple-speech", true),
+            ("foundry-local-whisper", true),
+            ("experimental-sensevoice", true),
+            ("volcengine", true),
+        ] {
             let context = DictationContext::capture(
                 &preferences,
                 &pack,

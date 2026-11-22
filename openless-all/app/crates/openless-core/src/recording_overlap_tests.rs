@@ -58,45 +58,37 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
         entered: Arc<tokio::sync::Notify>,
         sessions: TranscriptSessions,
         fail: bool,
+        native_gate: Arc<tokio::sync::Semaphore>,
+    }
+    enum Decode {
+        Pcm(Vec<u8>),
+        Finish(tokio::sync::oneshot::Sender<Result<TranscriptOutput, BackendError>>),
     }
     struct Transcript {
-        pcm: Mutex<Vec<u8>>,
-        first: bool,
-        fail: bool,
-        release: Arc<tokio::sync::Semaphore>,
-        entered: Arc<tokio::sync::Notify>,
+        pcm: Arc<Mutex<Vec<u8>>>,
+        commands: tokio::sync::mpsc::UnboundedSender<Decode>,
+        cancelled: Arc<tokio::sync::Notify>,
     }
     impl AudioConsumer for Transcript {
         fn consume_pcm_chunk(&self, pcm: &[u8]) {
-            self.pcm.lock().unwrap().extend_from_slice(pcm);
+            self.commands.send(Decode::Pcm(pcm.to_vec())).unwrap();
         }
     }
     impl TranscriptionSession for Transcript {
         fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
-            let (first, fail, release, entered) = (
-                self.first,
-                self.fail,
-                self.release.clone(),
-                self.entered.clone(),
-            );
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.commands.send(Decode::Finish(tx)).unwrap();
             Box::pin(async move {
-                if first {
-                    entered.notify_one();
-                    release.acquire().await.unwrap().forget();
-                    if fail {
-                        return Err(BackendError::new(
-                            BackendErrorCode::Provider,
-                            "first ASR failed",
-                        ));
-                    }
-                }
-                Ok(TranscriptOutput {
-                    text: if first { "first" } else { "second" }.into(),
-                    duration_ms: 3,
+                rx.await.unwrap_or_else(|_| {
+                    Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "controlled decode cancelled",
+                    ))
                 })
             })
         }
         fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.cancelled.notify_one();
             Box::pin(async { Ok(()) })
         }
     }
@@ -105,21 +97,84 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             &self,
             id: SessionId,
             _: Arc<DictationContext>,
-            _: Arc<dyn TextStreamSink>,
+            partials: Arc<dyn TextStreamSink>,
         ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
             let mut sessions = self.sessions.lock().unwrap();
+            let first = sessions.is_empty();
+            let (commands, mut input) = tokio::sync::mpsc::unbounded_channel();
             let session = Arc::new(Transcript {
-                pcm: Mutex::new(Vec::new()),
-                first: sessions.is_empty(),
-                fail: self.fail,
-                release: self.release.clone(),
-                entered: self.entered.clone(),
+                pcm: Arc::new(Mutex::new(Vec::new())),
+                commands,
+                cancelled: Arc::new(tokio::sync::Notify::new()),
             });
             sessions.push((id, session.clone()));
+            let pcm = session.pcm.clone();
+            let cancelled = session.cancelled.clone();
+            let native_gate = self.native_gate.clone();
+            let release = self.release.clone();
+            let entered = self.entered.clone();
+            let fail = self.fail;
+            // Like Sherpa online: PCM enters a per-session worker queue; only
+            // native operations share the model executor, never session lifetime.
+            tokio::spawn(async move {
+                loop {
+                    let command = tokio::select! {
+                        _ = cancelled.notified() => break,
+                        command = input.recv() => match command {
+                            Some(command) => command,
+                            None => break,
+                        },
+                    };
+                    let _native = tokio::select! {
+                        _ = cancelled.notified() => break,
+                        permit = native_gate.acquire() => permit.unwrap(),
+                    };
+                    match command {
+                        Decode::Pcm(chunk) => {
+                            pcm.lock().unwrap().extend_from_slice(&chunk);
+                            partials
+                                .publish(crate::ports::TextStreamChunk {
+                                    text: if first { "first live" } else { "second live" }.into(),
+                                    offset: 0,
+                                })
+                                .unwrap();
+                        }
+                        Decode::Finish(reply) => {
+                            if first {
+                                entered.notify_one();
+                                tokio::select! {
+                                    _ = cancelled.notified() => break,
+                                    permit = release.acquire() => permit.unwrap().forget(),
+                                }
+                            }
+                            let result = if first && fail {
+                                Err(BackendError::new(
+                                    BackendErrorCode::Provider,
+                                    "first ASR failed",
+                                ))
+                            } else {
+                                Ok(TranscriptOutput {
+                                    text: if first { "first" } else { "second" }.into(),
+                                    duration_ms: 3,
+                                })
+                            };
+                            let _ = reply.send(result);
+                            break;
+                        }
+                    }
+                }
+            });
             Box::pin(async { Ok(session as Arc<dyn TranscriptionSession>) })
         }
     }
-    for outcome in ["success", "failure", "cancel"] {
+    for (stable, outcome) in [
+        (false, "success"),
+        (false, "failure"),
+        (false, "cancel"),
+        (true, "success"),
+        (true, "failure"),
+        (true, "cancel"),
+    ] {
         for queue_second in [false, true] {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -185,6 +240,7 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                         entered: entered.clone(),
                         sessions: sessions.clone(),
                         fail: outcome == "failure",
+                        native_gate: Arc::new(tokio::sync::Semaphore::new(1)),
                     }),
                     Arc::new(
                         crate::providers::OpenAiChatPolisher::new(
@@ -197,7 +253,8 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                         )
                         .unwrap(),
                     ),
-                ),
+                )
+                .with_local_startup_spawner(Arc::new(TokioTaskSpawner)),
             )));
             let backend = Arc::new(
                 OpenLessBackend::new(
@@ -217,16 +274,33 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 primary: "F11".into(),
                 modifiers: vec![],
             };
-            let profile = backend.expression_profile.lock().unwrap().as_ref().unwrap().clone();
+            let profile = backend
+                .expression_profile
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .clone();
             for index in 0..10 {
-                profile.record(uuid::Uuid::new_v4(), 100 + index % 4,
-                    crate::expression_observation::ExpressionSignal { line_breaks: 1, exclamations: 0, terminal_punctuation: 0 }).unwrap();
+                profile
+                    .record(
+                        uuid::Uuid::new_v4(),
+                        100 + index % 4,
+                        crate::expression_observation::ExpressionSignal {
+                            line_breaks: 1,
+                            exclamations: 0,
+                            terminal_punctuation: 0,
+                        },
+                    )
+                    .unwrap();
             }
             prefs.expression_learning_enabled = true;
             prefs.cursor_context_enabled = true;
-            prefs.stable_transcription_enabled = true;
+            prefs.stable_transcription_enabled = stable;
+            prefs.active_asr_provider = "sherpa-onnx-local".into();
             prefs.translation_target_language = "English".into();
             backend.set_preferences(prefs).unwrap();
+            let mut events = backend.subscribe();
             let options = DictationStartOptions {
                 insert_text: false,
                 translation_requested: false,
@@ -263,11 +337,38 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                     .unwrap()
             };
             assert_eq!(owner.load(Ordering::SeqCst), 1);
+            if !stable {
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    loop {
+                        let event = events.recv().await.unwrap();
+                        if let crate::BackendEventKind::TranscriptDelta(delta) = event.kind {
+                            assert_eq!(event.session_id, Some(first));
+                            assert_eq!(delta.text, "first live");
+                            assert!(!delta.is_final);
+                            break;
+                        }
+                    }
+                })
+                .await
+                .expect("live local ASR must reach the production partial sink before stop");
+            } else {
+                while let Ok(event) = events.try_recv() {
+                    assert!(!matches!(
+                        event.kind,
+                        crate::BackendEventKind::TranscriptDelta(_)
+                    ));
+                }
+                assert!(sessions.lock().unwrap().is_empty());
+            }
             // Turn translation on and off in the same uninterrupted capture.
             assert!(!backend.snapshot().dictation.translation_active);
-            backend.toggle_dictation_translation_for_session(first).unwrap();
+            backend
+                .toggle_dictation_translation_for_session(first)
+                .unwrap();
             assert!(backend.snapshot().dictation.translation_active);
-            backend.toggle_dictation_translation_for_session(first).unwrap();
+            backend
+                .toggle_dictation_translation_for_session(first)
+                .unwrap();
             assert!(!backend.snapshot().dictation.translation_active);
             assert_eq!(owner.load(Ordering::SeqCst), 1);
 
@@ -316,13 +417,29 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                     _ => panic!("processing blocked the next hotkey recording"),
                 }
             } else {
-                backend.start_dictation_with_options(options).await.unwrap()
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    backend.start_dictation_with_options(options),
+                )
+                .await
+                .expect("prior native finish must not block capture")
+                .unwrap()
             };
             assert!(!backend.snapshot().dictation.translation_active);
-            assert!(backend.toggle_dictation_translation_for_session(first).is_err());
-            backend.toggle_dictation_translation_for_session(second).unwrap();
+            assert!(backend
+                .toggle_dictation_translation_for_session(first)
+                .is_err());
+            backend
+                .toggle_dictation_translation_for_session(second)
+                .unwrap();
             assert!(backend.snapshot().dictation.translation_active);
-            assert!(!backend.submitted_dictation_context(first).unwrap().polish.translation_active);
+            assert!(
+                !backend
+                    .submitted_dictation_context(first)
+                    .unwrap()
+                    .polish
+                    .translation_active
+            );
             let second_frozen = backend
                 .state
                 .read()
@@ -331,6 +448,19 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 .clone()
                 .unwrap();
             assert_eq!(owner.load(Ordering::SeqCst), 2);
+            if !stable {
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    while sessions.lock().unwrap().len() < 2 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(
+                    sessions.lock().unwrap()[1].1.pcm.lock().unwrap().is_empty(),
+                    "second live decode must wait while the first native operation is in flight"
+                );
+            }
             assert!(backend
                 .engine_progress_sink()
                 .publish(
@@ -374,6 +504,7 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             if outcome == "cancel" {
                 backend.cancel_dictation(Some(first)).await.unwrap();
             }
+            let mut observed_transcripts = Vec::new();
             release.add_permits(1);
             let result = stopping.await.unwrap();
             assert_eq!(result.is_ok(), outcome == "success");
@@ -386,9 +517,57 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                     2,
                     "old terminal stopped the new recorder"
                 );
+                if !stable {
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        loop {
+                            let event = events.recv().await.unwrap();
+                            if let crate::BackendEventKind::TranscriptDelta(delta) = event.kind {
+                                let is_second_live = event.session_id == Some(second)
+                                    && !delta.is_final
+                                    && delta.text == "second live";
+                                observed_transcripts.push((event.session_id, delta));
+                                if is_second_live {
+                                    break;
+                                }
+                            }
+                        }
+                    })
+                    .await
+                    .expect("old terminal must leave the new live partial stream intact");
+                }
                 backend.stop_dictation_session(second).await.unwrap()
             };
             assert_eq!(result.raw_text, "second");
+            while let Ok(event) = events.try_recv() {
+                if let crate::BackendEventKind::TranscriptDelta(delta) = event.kind {
+                    observed_transcripts.push((event.session_id, delta));
+                }
+            }
+            let finals: Vec<_> = observed_transcripts
+                .iter()
+                .filter(|(_, delta)| delta.is_final)
+                .map(|(id, delta)| (*id, delta.text.as_str()))
+                .collect();
+            let expected_finals = if outcome == "success" {
+                vec![(Some(first), "first"), (Some(second), "second")]
+            } else {
+                vec![(Some(second), "second")]
+            };
+            assert_eq!(finals, expected_finals);
+            for (id, delta) in &observed_transcripts {
+                assert!(matches!(*id, Some(id) if id == first || id == second));
+                if !delta.is_final {
+                    assert!(!stable);
+                    assert_eq!(
+                        delta.text,
+                        if *id == Some(first) {
+                            "first live"
+                        } else {
+                            "second live"
+                        }
+                    );
+                }
+            }
             assert_eq!(owner.load(Ordering::SeqCst), 0);
             {
                 let sessions = sessions.lock().unwrap();
@@ -399,9 +578,9 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
                 assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
                 let history = backend.list_history().unwrap();
-                assert!(history
-                    .iter()
-                    .any(|entry| entry.id == second.to_string() && entry.raw_transcript == "second" && entry.translation_active));
+                assert!(history.iter().any(|entry| entry.id == second.to_string()
+                    && entry.raw_transcript == "second"
+                    && entry.translation_active));
                 assert_eq!(
                     history.iter().any(|entry| entry.id == first.to_string()),
                     outcome != "cancel"
@@ -428,7 +607,10 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 assert_eq!(request["messages"][0]["content"], system);
                 assert_eq!(request["messages"][1]["content"], user);
                 assert!(serialized.contains("captured-context"));
-                assert_eq!(system.contains("用户经多次编辑"), !context.polish.translation_active);
+                assert_eq!(
+                    system.contains("用户经多次编辑"),
+                    !context.polish.translation_active
+                );
                 assert_eq!(context.polish.translation_target_language, "English");
             }
         }
