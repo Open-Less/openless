@@ -744,3 +744,41 @@ fn offline_install_and_legacy_preferences_upgrade_once_without_changing_choice()
     assert_eq!(prefs.active_style_pack_id, "imported.saved-selection");
     assert_eq!(prefs.selection_polish_style_pack_id, "imported.saved-selection");
 }
+
+#[test]
+fn v1_projection_fixture_matches_current_release_and_restores_only_equivalent_content() {
+    use crate::style_packs::{builtin_intent_pack, normalize_synced_builtin_pack, StylePackKind};
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/intent-reconstruction-v1-projection.json")).unwrap();
+    let mut expected = serde_json::to_value(builtin_intent_pack()).unwrap();
+    let object = expected.as_object_mut().unwrap();
+    object.remove("iconPath");
+    object.remove("active");
+    object.insert("kind".into(), "imported".into());
+    assert!(fixture == serde_json::json!({"pack":expected, "icon":null}), "fixture must equal current projected serialization");
+    let projected: StylePack = serde_json::from_value(fixture["pack"].clone()).unwrap();
+    let mut adopted = projected.clone();
+    normalize_synced_builtin_pack(&mut adopted);
+    assert_eq!(adopted.kind, StylePackKind::Builtin);
+    adopted.kind = StylePackKind::Imported;
+    assert_eq!(adopted, projected, "normalization may change kind only");
+    for field in ["prompt", "selectionPrompt", "voiceEditPrompt", "version", "originPackId", "originAuthorLogin", "recommendedModel", "baseMode", "examples"] {
+        let mut value = fixture["pack"].clone();
+        value[field] = match field {
+            "baseMode" => serde_json::json!("formal"),
+            "examples" => serde_json::json!([{ "input":"user", "output":"edit" }]),
+            _ => serde_json::json!("edited by old client"),
+        };
+        let mut edited: StylePack = serde_json::from_value(value).unwrap();
+        let before = edited.clone();
+        normalize_synced_builtin_pack(&mut edited);
+        assert_eq!(edited, before, "edited {field} must remain imported");
+        let mut packs = vec![edited.clone()];
+        super::normalize_cloud_style_packs(&mut packs);
+        assert_eq!(packs.iter().find(|pack| pack.id == edited.id), Some(&before), "store must preserve edited {field}");
+    }
+    let mut alias = projected;
+    alias.id = "imported.preserved-reference".into();
+    normalize_synced_builtin_pack(&mut alias);
+    assert_eq!(alias.id, "imported.preserved-reference");
+    assert_eq!(alias.kind, StylePackKind::Builtin);
+}

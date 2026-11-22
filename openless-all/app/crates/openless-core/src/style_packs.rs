@@ -541,6 +541,34 @@ pub(crate) fn same_style_origin(left: &StylePack, right: &StylePack) -> bool {
         && left.origin_author_login == right.origin_author_login
 }
 
+/// Restore only a provably unedited shipped release projected as imported by v1.
+/// Identity alone never authorizes claiming user-edited content as built in.
+pub(crate) fn normalize_synced_builtin_pack(pack: &mut StylePack) {
+    if pack.kind != StylePackKind::Imported {
+        return;
+    }
+    for release in [original_intent_pack(), builtin_intent_pack()] {
+        if same_style_origin(pack, &release)
+            && pack.version == release.version
+            && equivalent_style_payload(pack, &release)
+        {
+            pack.kind = StylePackKind::Builtin;
+            return;
+        }
+    }
+}
+
+/// Editable behavior defines equivalence; presentation, local selection,
+/// timestamps and local IDs remain untouched during adoption.
+pub(crate) fn equivalent_style_payload(left: &StylePack, right: &StylePack) -> bool {
+    left.prompt == right.prompt
+        && left.selection_prompt == right.selection_prompt
+        && left.voice_edit_prompt == right.voice_edit_prompt
+        && left.base_mode == right.base_mode
+        && left.examples == right.examples
+        && left.recommended_model == right.recommended_model
+}
+
 /// The sole dictation style boundary; never writes runtime additions to storage.
 pub fn dictation_style_prompt(pack: &StylePack) -> String {
     if is_shipped_dictation_style(pack) || pack.prompt.contains(DICTATION_REVISION_RULES) {

@@ -938,7 +938,8 @@ fn write_packs(path: &Path, packs: &[StylePack]) -> Result<(), BackendError> {
 
 fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
     use crate::style_packs::{
-        original_intent_pack, released_dictation_version, same_style_origin, BUILTIN_INTENT_ID,
+        equivalent_style_payload, normalize_synced_builtin_pack, original_intent_pack,
+        released_dictation_version, same_style_origin, BUILTIN_INTENT_ID,
     };
     let mut changed = false;
     for builtin in builtin_style_packs() {
@@ -957,18 +958,14 @@ fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
             let intent = builtin.id == BUILTIN_INTENT_ID;
             let released = if intent {
                 same_style_origin(local, &builtin)
+                    && local.version == original_intent_pack().version
                     && equivalent_style_payload(local, &original_intent_pack())
             } else {
                 local.kind == StylePackKind::Builtin && released_dictation_version(local).is_some()
             };
-            if intent
-                && local.kind != StylePackKind::Builtin
-                && same_style_origin(local, &builtin)
-                && equivalent_style_payload(local, &builtin)
-            {
-                local.kind = StylePackKind::Builtin;
-                changed = true;
-            }
+            let before_kind = local.kind;
+            normalize_synced_builtin_pack(local);
+            changed |= before_kind != local.kind;
             if version_newer(&builtin.version, &local.version) && released {
                 local.version = builtin.version;
                 local.prompt = builtin.prompt;
@@ -985,17 +982,6 @@ fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
         }
     }
     changed
-}
-
-// Editable instructions and configuration define equivalence; presentation,
-// local selection, timestamps and IDs are deliberately excluded.
-fn equivalent_style_payload(left: &StylePack, right: &StylePack) -> bool {
-    left.prompt == right.prompt
-        && left.selection_prompt == right.selection_prompt
-        && left.voice_edit_prompt == right.voice_edit_prompt
-        && left.base_mode == right.base_mode
-        && left.examples == right.examples
-        && left.recommended_model == right.recommended_model
 }
 
 fn ensure_at_least_one_enabled(packs: &mut [StylePack]) -> bool {
