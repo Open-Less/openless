@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
@@ -59,6 +59,9 @@ impl Source {
                 .header("X-Keenable-Title", "OpenLess")
                 .json(&json!({"query":query,"max_results":5,"snippet_max_length":220})),
             Self::DeepSeek => {
+                if deepseek_key.is_empty() {
+                    return Err("DeepSeek Search API key is missing".into());
+                }
                 if query.chars().count() > DEEPSEEK_QUERY_LIMIT {
                     return Err("Search query exceeds the DeepSeek limit".into());
                 }
@@ -81,8 +84,12 @@ impl Source {
         if self == Self::FreeSerp && body["engine_fallback"] == true {
             return Err("The FreeSerp web index is unavailable".into());
         }
-        parse_results(&body["results"], &["snippet", "summary"])
-            .map_err(|_| "Invalid search results".into())
+        let mut results = parse_results(&body["results"], &["snippet", "summary"])
+            .map_err(|_| RequestError::from("Invalid search results"))?;
+        for result in &mut results {
+            result.providers.push(self.name().into());
+        }
+        Ok(results)
     }
 
     fn claim(self) -> Result<(), String> {
@@ -161,8 +168,8 @@ fn merge(replies: Vec<Result<Vec<SearchResult>, String>>) -> Result<Vec<SearchRe
         .filter_map(Result::ok)
         .map(Vec::into_iter)
         .collect();
-    let mut seen = HashSet::new();
-    let mut results = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut results: Vec<SearchResult> = Vec::new();
     // Interleave by rank so one provider cannot occupy the whole result budget.
     loop {
         let mut advanced = false;
@@ -170,16 +177,25 @@ fn merge(replies: Vec<Result<Vec<SearchResult>, String>>) -> Result<Vec<SearchRe
             if let Some(item) = items.next() {
                 advanced = true;
                 let key = item.url.split('#').next().unwrap_or(&item.url);
-                if seen.insert(key.to_owned()) {
-                    results.push(item);
-                    if results.len() == MAX_RESULTS {
-                        return Ok(results);
+                if let Some(&index) = seen.get(key) {
+                    for provider in item.providers {
+                        if !results[index].providers.contains(&provider) {
+                            results[index].providers.push(provider);
+                        }
                     }
+                } else {
+                    seen.insert(key.to_owned(), results.len());
+                    results.push(item);
                 }
             }
         }
         if !advanced {
-            return Ok(results);
+            results.truncate(MAX_RESULTS);
+            return if results.is_empty() {
+                Err("Web Search returned no usable sources".into())
+            } else {
+                Ok(results)
+            };
         }
     }
 }
@@ -263,6 +279,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a", "f", "b", "d", "g"]
         );
+        assert_eq!(merged[0].providers, ["FreeSerp", "Keenable"]);
         assert_eq!(
             merge(vec![
                 Err("limited".into()),
@@ -273,6 +290,22 @@ mod tests {
             1
         );
         assert!(merge(vec![Err("limited".into()), Err("offline".into())]).is_err());
+        assert!(merge(vec![Ok(vec![]), Ok(vec![])]).is_err());
+        assert!(merge(vec![Err("blocked".into()), Ok(vec![])]).is_err());
+        assert_eq!(
+            merge(vec![
+                Err("HTTP 403".into()),
+                Err("timeout".into()),
+                fixture(Source::DeepSeek, &["only"]),
+            ])
+            .unwrap()[0]
+                .providers,
+            ["DeepSeek"]
+        );
+        assert!(Source::Keenable.parse(b"<html>CAPTCHA</html>").is_err());
+        assert!(Source::DeepSeek
+            .request(&reqwest::Client::new(), "rust", "")
+            .is_err());
         assert!(Source::FreeSerp
             .parse(br#"{"ok":false,"results":[]}"#)
             .is_err());
@@ -284,12 +317,140 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live public search endpoints"]
     async fn public_search_smoke() {
-        let rows = query(
-            &WebSearchConfig::default(),
-            "Rust language documentation",
+        let rows = super::super::search(&WebSearchConfig::default(), "Rust language documentation")
+            .await
+            .unwrap();
+        assert!(!rows.is_empty() && rows.len() <= MAX_RESULTS);
+        println!("{}", serde_json::to_string(&rows).unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "live free endpoints; no DeepSeek request without a key"]
+    async fn hybrid_missing_key_preserves_live_free_sources() {
+        let rows = super::super::search(
+            &WebSearchConfig {
+                provider: SearchProvider::Hybrid,
+                ..Default::default()
+            },
+            "Rust programming official documentation",
         )
         .await
         .unwrap();
-        assert!(!rows.is_empty() && rows.len() <= MAX_RESULTS);
+        assert!(!rows.is_empty());
+        assert!(rows
+            .iter()
+            .all(|row| !row.providers.iter().any(|provider| provider == "DeepSeek")));
+        println!("{}", serde_json::to_string(&rows).unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in paid official DeepSeek API; reads DEEPSEEK_API_KEY only in process"]
+    async fn hybrid_live_official_deepseek() {
+        let api_key = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY is required");
+        let rows = super::super::search(
+            &WebSearchConfig {
+                provider: SearchProvider::Hybrid,
+                api_key,
+                ..Default::default()
+            },
+            "Rust programming official documentation",
+        )
+        .await
+        .unwrap();
+        assert!(
+            rows.iter()
+                .any(|row| row.providers.iter().any(|provider| provider == "DeepSeek")),
+            "free fallback alone does not verify DeepSeek success"
+        );
+        println!(
+            "Official Search API: $0.75/1,000 nonempty successful requests (2026-11-23); {}",
+            serde_json::to_string(&rows).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn http_source_failure_does_not_hide_other_sources() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 8192];
+                let count = socket.read(&mut bytes).await.unwrap();
+                let body = if String::from_utf8_lossy(&bytes[..count]).starts_with("GET /blocked ")
+                {
+                    "<html>CAPTCHA</html>"
+                } else {
+                    r#"{"results":[{"title":"Docs","url":"https://doc.rust-lang.org/","snippet":"Rust"}]}"#
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = reqwest::Client::new();
+        let replies = join_all([Source::FreeSerp, Source::Keenable].map(|source| {
+            source.query(
+                &client,
+                client
+                    .get(format!(
+                        "{endpoint}/{}",
+                        if source == Source::FreeSerp {
+                            "blocked"
+                        } else {
+                            "valid"
+                        }
+                    ))
+                    .build()
+                    .unwrap(),
+            )
+        }))
+        .await;
+        let rows = merge(replies).unwrap();
+        assert_eq!(rows[0].url, "https://doc.rust-lang.org/");
+        assert_eq!(rows[0].providers, ["Keenable"]);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn timed_out_source_preserves_other_results() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 8192];
+            socket.read(&mut bytes).await.unwrap();
+            // The client must close its pending response when the source times out.
+            assert_eq!(socket.read(&mut bytes).await.unwrap(), 0);
+        });
+        let client = reqwest::Client::new();
+        let slow = Source::FreeSerp
+            .query(&client, client.get(endpoint).build().unwrap())
+            .await;
+        assert!(slow.as_ref().unwrap_err().contains("timed out"));
+        let fast = Source::Keenable
+            .parse(br#"{"results":[{"title":"Rust","url":"https://doc.rust-lang.org/"}]}"#)
+            .map_err(String::from)
+            .unwrap();
+        assert_eq!(
+            merge(vec![slow, Err("DeepSeek: HTTP 402".into()), Ok(fast)])
+                .unwrap()
+                .len(),
+            1
+        );
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
