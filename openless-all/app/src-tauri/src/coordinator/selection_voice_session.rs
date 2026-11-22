@@ -615,6 +615,9 @@ async fn continue_selection_voice_disposition(
     inner: &Arc<Inner>,
     disposition: SelectionVoiceDisposition,
 ) -> Result<EndWorkflowOutcome, String> {
+    if matches!(&disposition, SelectionVoiceDisposition::Question { .. }) {
+        crate::require_ask_anything()?;
+    }
     let route = inner
         .backend
         .services()

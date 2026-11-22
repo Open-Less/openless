@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ASK_ANYTHING_AVAILABLE } from '../../lib/appVersion';
 
 export type AppTab =
   | 'overview'
@@ -13,6 +14,10 @@ export type AppTab =
   | 'corrections'
   | 'localAsr';
 
+export function isTabAvailable(tab: AppTab): boolean {
+  return tab !== 'selectionAsk' || ASK_ANYTHING_AVAILABLE;
+}
+
 export interface AppState {
   currentTab: AppTab;
   setCurrentTab: (tab: AppTab) => void;
@@ -21,9 +26,18 @@ export interface AppState {
 }
 
 export function useAppState(initialTab: AppTab = 'overview', initialSettings = false): AppState {
-  const [currentTab, setCurrentTab] = useState<AppTab>(initialTab);
+  const [currentTab, setCurrentTab] = useState<AppTab>(() =>
+    isTabAvailable(initialTab) ? initialTab : 'overview',
+  );
   const [settingsOpen, setSettingsOpen] = useState<boolean>(initialSettings);
-  return { currentTab, setCurrentTab, settingsOpen, setSettingsOpen };
+  return {
+    currentTab,
+    setCurrentTab: (tab) => {
+      if (isTabAvailable(tab)) setCurrentTab(tab);
+    },
+    settingsOpen,
+    setSettingsOpen,
+  };
 }
 
 /** i18n key for a group's sub-item title: style → nav.polishMode, everything else nav.<id>. */

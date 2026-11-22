@@ -46,11 +46,13 @@ export function MobileNavigationSheet({
 
 export function MobileNavigationItem({
   active,
+  disabled,
   icon,
   label,
   onClick,
 }: {
   active?: boolean;
+  disabled?: boolean;
   icon: string;
   label: string;
   onClick: () => void;
@@ -59,6 +61,7 @@ export function MobileNavigationItem({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-current={active ? 'page' : undefined}
       className={['ol-nav-btn', active && 'ol-nav-btn-active'].filter(Boolean).join(' ')}
     >

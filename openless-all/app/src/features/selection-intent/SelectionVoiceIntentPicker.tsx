@@ -9,6 +9,7 @@ import {
   listenSelectionVoiceIntentShown,
 } from '../../api/selection';
 import { useModalActive } from '../../ui/layout/AppViewport';
+import { ASK_ANYTHING_AVAILABLE } from '../../lib/appVersion';
 
 export function SelectionVoiceIntentPicker() {
   const { t } = useTranslation();
@@ -132,7 +133,7 @@ export function SelectionVoiceIntentPicker() {
         <div className="ol-intent-options">
           <button
             className="ol-tool-button"
-            disabled={busy || !ready}
+            disabled={!ASK_ANYTHING_AVAILABLE || busy || !ready}
             onClick={() => choose('question')}
           >
             <MessageCircleQuestion size={20} />

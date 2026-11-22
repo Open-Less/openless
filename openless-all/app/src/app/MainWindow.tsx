@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HotkeySettingsProvider } from '../data/preferences';
 import { useReducedMotion } from '../lib/motion';
+import { IS_DEV_BUILD } from '../lib/appVersion';
 import { isTauriHost, type OS } from '../runtime/environment';
 import { CoreStartupScreen } from './CoreStartupScreen';
 import { MainWindowFirstFrame } from './MainWindowFirstFrame';
@@ -87,7 +88,7 @@ export function MainWindow({ os, previewOnboarding }: { os: OS; previewOnboardin
           </div>
         )}
       </Suspense>
-      {gate === 'ready' && caps?.supportsAutoUpdate === true && (
+      {gate === 'ready' && !IS_DEV_BUILD && caps?.supportsAutoUpdate === true && (
         <Suspense fallback={null}>
           <AutoUpdateGate />
         </Suspense>

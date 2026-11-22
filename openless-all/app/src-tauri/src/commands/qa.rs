@@ -3,7 +3,7 @@ use super::*;
 #[tauri::command]
 pub fn get_qa_hotkey_label(core: CoreState<'_>) -> String {
     let prefs = core.get_preferences();
-    if prefs.qa_companion_key.is_empty() {
+    if !crate::ask_anything_available() || prefs.qa_companion_key.is_empty() {
         return String::new();
     }
     format!(
@@ -20,6 +20,7 @@ pub fn set_qa_hotkey(
     coord: CoordinatorState<'_>,
     binding: Option<ShortcutBinding>,
 ) -> Result<(), String> {
+    crate::require_ask_anything()?;
     if binding
         .as_ref()
         .is_some_and(|binding| !binding.modifiers.is_empty())
@@ -47,6 +48,7 @@ pub async fn qa_window_dismiss(core: CoreState<'_>) -> Result<(), String> {
 /// end_qa_session.
 #[tauri::command]
 pub async fn qa_toggle_recording(core: CoreState<'_>) -> Result<(), String> {
+    crate::require_ask_anything()?;
     core.services()
         .qa
         .toggle_recording()
@@ -63,6 +65,7 @@ pub async fn qa_submit_text(
     expected_session_id: Option<openless_core::SessionId>,
     enforce_context: Option<bool>,
 ) -> Result<(), String> {
+    crate::require_ask_anything()?;
     if enforce_context.unwrap_or(false) {
         core.services()
             .qa

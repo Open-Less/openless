@@ -2112,6 +2112,19 @@ pub fn log_dir_path() -> std::path::PathBuf {
     }
 }
 
+// Keep this in sync with the frontend's version-flavor check.
+pub(crate) fn ask_anything_available() -> bool {
+    !env!("CARGO_PKG_VERSION_PRE").starts_with("dev.noask.")
+}
+
+pub(crate) fn require_ask_anything() -> Result<(), String> {
+    if ask_anything_available() {
+        Ok(())
+    } else {
+        Err("Ask Anything is disabled in this Dev build".into())
+    }
+}
+
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_window_mode(app);
     #[cfg(not(mobile))]

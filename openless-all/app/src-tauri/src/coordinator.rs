@@ -1929,6 +1929,7 @@ impl Coordinator {
     }
 
     pub async fn open_qa_from_overlay(&self) -> Result<(), String> {
+        crate::require_ask_anything()?;
         log::info!("[coord] overlay QA open requested");
         self.inner
             .backend
@@ -1940,6 +1941,7 @@ impl Coordinator {
     }
 
     pub async fn finalize_qa_from_overlay(&self) -> Result<(), String> {
+        crate::require_ask_anything()?;
         let Ok(_handoff) = self.inner.overlay_qa_handoff.try_lock() else {
             return Ok(());
         };

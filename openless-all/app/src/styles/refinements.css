@@ -233,6 +233,9 @@ button:disabled {
   border-bottom: 1px solid var(--ol-line-soft);
   font-size: 13.5px;
 }
+.ol-shortcut-row[aria-disabled="true"] > :first-child {
+  opacity: 0.45;
+}
 .ol-shortcut-row > :first-child {
   grid-column: span 8;
 }

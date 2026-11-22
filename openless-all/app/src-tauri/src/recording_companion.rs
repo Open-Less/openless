@@ -100,6 +100,9 @@ impl ChordState {
     }
 }
 pub(crate) fn configure(recording: ShortcutBinding, auxiliary: String) {
+    if !crate::ask_anything_available() {
+        return;
+    }
     let mut route = route().lock().unwrap();
     route.state = ChordState {
         recording: Some(recording),

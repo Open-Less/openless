@@ -30,6 +30,7 @@ import { setQaHotkey } from '../../api/qa';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 import type { ShortcutBinding, StylePack, StylePackHotkey } from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
+import { ASK_ANYTHING_AVAILABLE } from '../../lib/appVersion';
 
 export function ShortcutsSection() {
   const { t } = useTranslation();
@@ -63,6 +64,7 @@ export function ShortcutsSection() {
     desc?: string;
     group: string;
     binding: ShortcutBinding | null;
+    unavailable?: boolean;
     save: (binding: ShortcutBinding) => Promise<void>;
     disable?: () => Promise<void>;
     reset?: () => Promise<void>;
@@ -104,6 +106,7 @@ export function ShortcutsSection() {
     {
       id: 'qa',
       label: t('selectionAsk.title'),
+      unavailable: !ASK_ANYTHING_AVAILABLE,
       group: 'recording',
       desc: t('askAnything.auxiliaryHint', { key: formatComboLabel(prefs.dictationHotkey) }),
       binding: prefs.qaCompanionKey ? { primary: prefs.qaCompanionKey, modifiers: [] } : null,
@@ -291,6 +294,7 @@ export function ShortcutsSection() {
               className="ol-shortcut-row"
               role="group"
               aria-label={command.label}
+              aria-disabled={command.unavailable}
               key={command.id}
             >
               <div>
@@ -299,6 +303,7 @@ export function ShortcutsSection() {
               </div>
               <ShortcutRecorder
                 value={command.binding}
+                disabled={command.unavailable}
                 onSave={command.save}
                 onDisable={command.disable}
                 onReset={command.reset}
