@@ -31,7 +31,7 @@
 | 复用设置和服务选择 | `src/features/settings/shell/tabs.tsx::AdvancedTab` → `sections/WebSearchSection.tsx` → `webSearchConfig.ts` | 旧枚举保留；`auto` 显示免费聚合但未切换时保留原 ID。前端回归覆盖逐服务切换、保存重开、key 与地址恢复 |
 | 凭据隔离、配置恢复 | 原 Application account `web_search.config` → `src-tauri/src/commands/credentials.rs` → `persistence/credentials.rs::set_web_search_config` | 新增可选 JSON `providerConfigs: { [原服务ID]: {apiKey, endpoint} }`；顶层三字段继续代表当前服务。宿主验证已知字段后保存原字符串；不迁移到 preferences，不新增 secret account |
 | Ask 实际调用 | `src-tauri/src/commands/qa.rs` → `crates/openless-core/src/qa_service.rs` → `cloud_providers.rs` 的问答处理 → `qa_search_context` → `web_search::search` | 普通/多模态问答先规划公开搜索词，再插入检索上下文；大统一沿原服务端工具路径。当前 `dev.noask` 同时被前端 `src/lib/appVersion.ts` 和宿主 `recording_companion.rs::ask_anything_available` 禁用，**没有恢复**，因此不声称安装版 Ask 点击到模型的端到端验收已通过 |
-| Agent consumer 核查 | `crates/openless-core/src/coding_agent.rs` 的 Claude CLI 工具白名单含 `WebSearch`，Codex 流事件解析 `web_search` | 这些是外部 CLI 自己的搜索及工具事件，不调用本地 `web_search::search`，不受本设置控制。本次没有伪造新的 Agent 系统或接管外部 CLI 工具；其联网可用性未验收 |
+| Agent consumer 核查 | `crates/openless-core/src/less_computer.rs::run_once` 和 `coding_agent.rs::CodingAgentService::run_test` 是已保留的 Core runner 消费者；宿主进程适配当前未接入 | 本搜索设置未作用于这些 runner。Claude 白名单中的 `WebSearch` 与 Codex `web_search` 事件解析只能说明 CLI 协议封装存在，不能证明生产 Agent 可用或所选搜索已接入；详见下文 |
 | 并发、部分失败、全空 | `crates/openless-core/src/web_search/public_sources.rs::query/Source::query/merge` | 免费 fan-out 两源，混合三源；每源错误/拒绝/超时独立处理。有有效结果就返回其余结果，混合缺 key 仅跳过 DeepSeek；全空返回明确错误，全失败返回来源错误。CAPTCHA HTML、JSON error、HTTP 非成功不伪装成空成功 |
 | 排序与溯源 | 同文件 `merge`、`web_search.rs::SearchResult/context` | 按来源固定顺序、名次轮转，去重仅忽略 URL fragment，不擅自删除有语义的查询参数。结果包含原始可引用 HTTP(S) 链接和 `providers`；共同命中合并提供方。不保证搜索结果本身正确或实时 |
 | 取消与超时 | `cloud_providers.rs::qa_search_context`、`web_search.rs::search/search_inner` | 共享入口每 25ms 检查原取消信号，取消时丢弃搜索 future 及未完成请求；无需新会话 ID。总搜索最多 15 秒、源请求最多 8 秒、最多前三页摘录各 5 秒并发。正文读取失败保留检索摘要 |
@@ -39,7 +39,7 @@
 
 ### 配置兼容与同步限制
 
-当前新版 UI 保存并重开后恢复各服务配置；旧版仍能读取顶层活动服务。**旧版搜索设置 UI 只重建三个顶层字段，旧版编辑并保存会删除 `providerConfigs`**，因此配置集合恢复要求使用包含本修改的客户端，不能承诺跨旧版编辑保留。没有对已丢失的历史 key 做虚构恢复。
+当前新版 UI 保存并重开后恢复各服务配置；旧版仍能读取顶层活动服务。**旧版搜索设置 UI 只重建三个顶层字段，旧版编辑并保存会删除 `providerConfigs`**，因此配置集合恢复要求使用包含提交 `2870ab58` 的客户端，这是最低能力基线（本任务没有改版本号），不能承诺跨旧版编辑保留。没有对已丢失的历史 key 做虚构恢复。
 
 已与同步组核对：基线 E2EE 只导出 Channels 和 ProviderCredentials 的 ASR/LLM/Omni 白名单，Application 的 `web_search.config` 当前不在其中。这里的集合仍放原本机 secret，不把 key 混进 Portable/preferences，不承诺其跨设备同步；同步协议扩展需另行由同步负责人实现和验收。
 
@@ -73,3 +73,48 @@ cargo test --locked -p openless-core --lib hybrid_live_official_deepseek -- --ig
 ```
 
 无需用户更改正在运行的应用。协调者可安排上述受控 DeepSeek live 检查，再决定合入；当前未验证部分不得被描述成已完成的真实混合成功验收。
+
+## Ask Core 补充验收：配置确实进入最终模型请求
+
+`crates/openless-core/tests/qa_web_search_contract.rs` 直接调用桌面 `qa_adapter.rs:550` 和 Linux `qa.rs:361` 使用的公共函数 `answer_qa_with_context`，而非只调用搜索工具。测试在进程内创建独立 `InMemoryCredentialStore`，写入原 `web_search.config` 及本地模型地址，不读写用户配置，不启用 Ask Anything。
+
+两项默认 fixture 回归已通过：
+
+- 选择 SearXNG：Core 读取原 secret 中的服务，先向本地模型发送规划请求；模型夹具返回公开查询；Core 向所选本地 `/search` 发起实际 HTTP 查询；随后最终模型请求包含原始来源 URL 和摘要，并声明所选 SearXNG。两次模型请求都未开启 DeepSeek 大统一工具，输出事件的 `sessionId` 保持不变。
+- 选择 Off：只有一次最终模型请求，没有规划请求、搜索 HTTP 请求或检索数据注入。通用 system prompt 仍包含引用 WebSearchData 的说明，不把该说明误判为实际搜索结果。
+
+另有两项默认 ignored 的真实来源检查，已分别显式运行通过：免费、Hybrid 缺 key。它们同样走完整 `answer_qa_with_context`，读取各自进程内配置，由本地模型夹具规划并接收最终请求；真实来源均包含 FreeSerp 与 Keenable 的链接及 `providers`。这证明 **Ask Core 的服务选择生效、检索结果进入最终模型请求**；回答正文由本地 HTTP 夹具生成，不是实际云模型回答，且不是安装版 Ask UI 端到端验收，也不是 DeepSeek 付费成功验收。
+
+```sh
+cargo test --locked -p openless-core --test qa_web_search_contract
+cargo test --locked -p openless-core --test qa_web_search_contract qa_selected_free_reaches_answer_request_live -- --ignored --nocapture
+cargo test --locked -p openless-core --test qa_web_search_contract qa_selected_hybrid_without_key_reaches_answer_request_live -- --ignored --nocapture
+```
+
+## Agent 的实际缺口与需要协调者决定的范围
+
+不能把“能解析外部 CLI 的搜索事件”等同于“Agent 已使用所选免费/混合搜索”。针对当前基线与本分支逐入口核对的结果如下，以下位置相对 `openless-all/app/`，没有声称已核对整个系统。
+
+| 已存在的代码 | 调用与准确限制 |
+| --- | --- |
+| `crates/openless-core/src/api.rs:5033` 的 `submit_less_computer`、`:5073` 的 `build_less_computer_request` | 读普通 preferences 中的 CLI provider、工作目录、模型和权限，构造 `LessComputerRunRequest`；不读 `web_search.config`，没有搜索字段 |
+| `crates/openless-core/src/less_computer.rs:786` 的 `run_once` | 将原 `sessionId` 和任务包进 `CodingAgentRequest`，调用 `CodingAgentRunner::run_streaming`；没有调用 `web_search::search`，也没有注入检索数据 |
+| `crates/openless-core/src/coding_agent.rs:1876` 的 `CodingAgentService::run_test` | 设置检测/测试路径也构造该 request 后调用同一 runner，不读搜索凭据；不是另一套问答 Agent |
+| 同文件 `build_agent_command:884`、`build_claude_args:481`、`build_opencode_args:538`、`build_codex_args:557`、`build_dsh_patch_yaml:602` | Claude 预设 `WebSearch` 许可而禁 `WebFetch`；OpenCode 注入权限配置；Codex 使用 `exec` JSON 输出；dsh patch 只有事件插件与任务。都没有把所选搜索配置注册成工具，没有 app-owned tool handler。外部 CLI 自带工具如何执行不由这些事件解析器控制 |
+| 同文件 `CodingAgentProcessAdapter:443`、`CodingAgentRunner:1005`、`run_process:1130` | 进程接口只有执行命令/输出行/取消；JSON 工具事件是输出状态，不是发回 Core 等待处理的搜索 RPC。不能把解析 `mcp_tool_call` 或 `web_search` 当成完成工具接管 |
+| `crates/openless-core/src/domains.rs:2143/2173/2184`、`api.rs:3179`、`less_computer.rs:116` | 默认 `coding_agent_process=None`；仅当宿主调用 `configure_coding_agent_process` 才绑定 runner。仓库搜索该配置方法及 trait 实现，**未发现生产宿主配置调用或进程适配实现，只有 Core fixture 实现**；未绑定 runner 明确返回 Unsupported。不能据保留的类型声称安装版 Agent 真在执行外部 CLI |
+| `src-tauri/src/commands/qa.rs:210` 与 `src-tauri/src/lib.rs` 的命令注册 | 保留 `less_computer_submit_text` 函数，但当前注册表未发现此命令；前端文件清单也未发现 LessComputerPanel/CodingAgent 设置面板。Core 的门控仍要求 `testing_features_enabled && coding_agent_enabled`（`shared_types.rs:975`）。未恢复这些入口 |
+| `coding_agent.rs:1793` 的 MCP 探测 | 只对 Claude 执行 `mcp list` 解析用户已有 MCP 健康状态；MCP 是外部模型连接工具的协议，此处没有创建 OpenLess 搜索工具或按会话注入配置。不能从这个探测推断所有 CLI 的接入能力均已实现 |
+
+因此，当前 **没有已证明会消费本设置的生产 Agent 入口**；Ask 与 Agent 共同使用所选服务这一整体验收尚不成立。本次没有修改这些运行路径或偷偷替换其默认搜索工具，也没有为补足验收而恢复 Agent 或 Ask。
+
+最小兼容选择供协调者决定：
+
+1. **维持本批范围为已有 Ask 搜索，Agent 明确列为未接入。** 无需恢复任何已移除入口；已完成的搜索改动可独立验收。这是当前最小充分交付，但不应将 Agent 子要求标为完成。
+2. **若必须让 Agent 的每次搜索都走所选服务，先明确恢复哪一个已有 CLI/宿主入口。** 在既有 runner 上增加本次会话的本地工具桥，工具处理仍调用 `WebSearchConfig::load` 和 `web_search::search`，由原 `sessionId` 绑定设置快照与取消；只给经核实支持的 CLI 按次注入本地工具配置，key 留在宿主，不写入 argv/CLI 全局配置。可优先评估已有 MCP 接缝，但本仓库没有现成可复用的搜索服务端/请求回调，具体 CLI 版本及注册能力需要单独核实；此方案需要宿主和 runner 的接口实现及验收，不能包装成几个选项或事件解析的小修复，不需要线上代理或新 Agent 平台。
+
+仅在启动前把检索结果附加到原 prompt，是更小的可选辅助方案，但它只能提供首次材料，**不能控制 CLI 后续自行搜索使用哪个服务**，因此不满足“Agent 搜索统一受本选择控制”的完整要求。没有自动实施该方案，也没有把整段可能含隐私的 Agent 任务直接当公开查询发送。
+
+## 共用受控 CI
+
+已与风格负责人 `dispatch:ctx_445fa40c603a` 共享原 ignored `hybrid_live_official_deepseek` 入口和安全约定，复用其 `f10c62b6` 的单一 `ci.yml` 手动 `live_acceptance=off/style/search` 方案，默认关闭，不另建框架。本分支没有合入或修改其 CI；协调者须在包含两组已验收依赖的基线上运行一次 `live_acceptance=search`，仅该执行步骤通过环境注入官方 Secret，不导出 key，不在普通 PR 自动付费。搜索测试一次中性查询、不重试，必须实际包含 DeepSeek 提供方才通过；该受控检查结果当前仍待回传。
