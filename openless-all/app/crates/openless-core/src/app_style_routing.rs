@@ -374,8 +374,9 @@ mod tests {
 
     #[test]
     fn assignments_are_unique_within_each_level_and_persist_independently_of_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = AppStyleStore::open(dir.path());
+        let dir =
+            std::env::temp_dir().join(format!("openless-app-styles-{}", uuid::Uuid::new_v4()));
+        let store = AppStyleStore::open(&dir);
         let editor = InputApp::macos("com.microsoft.VSCode", Some("VS Code")).unwrap();
         let chat = InputApp::macos("com.tencent.xinWeChat", Some("WeChat")).unwrap();
         let override_with = |app: &InputApp, pack: Option<&str>| AppStyleAssignment::App {
@@ -407,7 +408,7 @@ mod tests {
 
         store.clear_seen().unwrap();
         drop(store);
-        let reopened = AppStyleStore::open(dir.path());
+        let reopened = AppStyleStore::open(&dir);
         let snapshot = reopened.snapshot().unwrap();
         assert_eq!(snapshot.categories.len(), 1);
         assert_eq!(snapshot.apps.len(), 1);
@@ -417,5 +418,6 @@ mod tests {
         assert_eq!(reopened.candidates(&chat), ["override"]);
         reopened.set(override_with(&chat, None)).unwrap();
         assert!(reopened.snapshot().unwrap().apps.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
