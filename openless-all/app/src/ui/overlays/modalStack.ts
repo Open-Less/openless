@@ -32,6 +32,7 @@ export function createModalStack() {
   let active = false;
   let restoreToPage: HTMLElement | null = null;
   let clickTarget: HTMLElement | null = null;
+  let popupEscape: KeyboardEvent | undefined;
 
   function focusLayer(layer: ModalLayer) {
     const preferred = layer.focus();
@@ -74,9 +75,11 @@ export function createModalStack() {
     if (active !== !!top) {
       active = !!top;
       if (active) {
+        document.addEventListener('keydown', rememberPopupEscape, true);
         document.addEventListener('keydown', onKeydown);
         document.addEventListener('focusin', onFocusIn);
       } else {
+        document.removeEventListener('keydown', rememberPopupEscape, true);
         document.removeEventListener('keydown', onKeydown);
         document.removeEventListener('focusin', onFocusIn);
       }
@@ -88,10 +91,15 @@ export function createModalStack() {
     if (top && event.target instanceof Node && !top.overlay.contains(event.target)) focusLayer(top);
   }
 
+  function rememberPopupEscape(event: KeyboardEvent) {
+    // A popup may remove its open marker before Escape bubbles to the dialog.
+    popupEscape = event.key === 'Escape' && top?.overlay.querySelector(OPEN_POPUP) ? event : undefined;
+  }
+
   function onKeydown(event: KeyboardEvent) {
     if (!top || event.defaultPrevented || event.isComposing) return;
     if (event.key === 'Escape') {
-      if (top.overlay.querySelector(OPEN_POPUP)) return;
+      if (popupEscape === event || top.overlay.querySelector(OPEN_POPUP)) return;
       event.preventDefault();
       event.stopPropagation();
       top.close();
