@@ -1,6 +1,7 @@
 import { fixtureOrigin } from './support/server';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 
 const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
@@ -240,9 +241,17 @@ for (const layout of ['desktop', 'narrow'] as const) {
       await expect(heading).toBeVisible();
       await expect(heading).toBeInViewport();
     };
-    const visit = async (scope: Locator, name: string, id: string) => {
-      await scope.getByRole('button', { name, exact: true }).click();
-      await expectDestination(id);
+    const visit = async (scope: Locator, name: string, id: string, fromSheet = false) => {
+      const button = scope.getByRole('button', { name, exact: true });
+      const available = id !== 'selectionAsk' || ASK_ANYTHING_AVAILABLE;
+      if (available) {
+        await button.click();
+      } else {
+        await expect(button).toBeDisabled();
+        if (fromSheet) await scope.getByRole('button', { name: '关闭', exact: true }).click();
+      }
+      if (fromSheet) await expect(page.locator('.ol-mobile-navigation-sheet')).toHaveCount(0);
+      if (available) await expectDestination(id);
     };
 
     await expectDestination('overview');
@@ -253,9 +262,7 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const visitFromSheet = async (sheet: string, name: string, id: string) => {
         await nav.getByRole('button', { name: sheet, exact: true }).click();
         const dialog = page.getByRole('dialog', { name: sheet, exact: true });
-        await dialog.getByRole('button', { name, exact: true }).click();
-        await expect(page.locator('.ol-mobile-navigation-sheet')).toHaveCount(0);
-        await expectDestination(id);
+        await visit(dialog, name, id, true);
       };
       for (const [name, id] of styleDestinations) await visitFromSheet('风格', name, id);
       await visitFromSheet('更多', '词典', 'vocab');
@@ -267,7 +274,7 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const tools = nav.getByRole('button', { name: '工具', exact: true });
       await tools.click();
       await expect(tools).toHaveAttribute('aria-expanded', 'true');
-      await expect(nav.getByRole('button', { name: /^(纠正规则|翻译|速记)$/ })).toHaveText(
+      await expect(nav.getByRole('button', { name: /^(纠正规则|随便问|翻译|速记)$/ })).toHaveText(
         toolDestinations.map(([name]) => name),
       );
       for (const [name, id] of toolDestinations) await visit(nav, name, id);

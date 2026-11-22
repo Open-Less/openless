@@ -1,3 +1,4 @@
+import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 import { openMicrophoneSettings } from './support/navigation';
@@ -8,7 +9,12 @@ test('every configurable shortcut can be cleared and stays clear after remount',
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  const rows = page.locator('.ol-shortcut-row[role="group"]');
+  if (!ASK_ANYTHING_AVAILABLE) {
+    const ask = page.getByRole('group', { name: '随便问', exact: true });
+    await expect(ask).toHaveAttribute('aria-disabled', 'true');
+    await expect(ask.getByRole('button', { name: '清空', exact: true })).toBeDisabled();
+  }
+  const rows = page.locator('.ol-shortcut-row[role="group"]:not([aria-disabled="true"])');
   await expect(rows.first()).toBeVisible();
   const count = await rows.count();
   expect(count).toBeGreaterThanOrEqual(6);

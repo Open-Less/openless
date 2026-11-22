@@ -183,65 +183,65 @@ test('rapid return to the current page cannot leave it transparent or inert', as
   }
 });
 
-for (const phase of ['exit', 'enter'] as const) {
-  test(`returning during a painted page ${phase} restores its opacity and blur`, async ({
-    page,
-  }) => {
-    await page.evaluate((phase) => {
-      const animate = Element.prototype.animate;
-      Element.prototype.animate = function (keyframes, options) {
-        const animation = animate.call(this, keyframes, options);
-        if (this.matches(`main [data-transition-phase="${phase}"]`)) {
-          Element.prototype.animate = animate;
-          animation.pause();
-          animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
-          document.body.dataset.testPageInterruption = phase;
-        }
-        return animation;
-      };
-    }, phase);
-    await page.getByRole('button', { name: '历史', exact: true }).click();
-    await expect(page.locator('body')).toHaveAttribute('data-test-page-interruption', phase);
-    const interrupted = page.locator(`main [data-transition-phase="${phase}"]`).first();
-    const opacity = Number(
-      await interrupted.evaluate((element) => getComputedStyle(element).opacity),
-    );
-    expect(opacity).toBeGreaterThan(0);
-    expect(opacity).toBeLessThan(1);
-    await expect(interrupted).toHaveCSS('filter', /blur\(/);
-    await page.getByRole('button', { name: '概览', exact: true }).click();
-    await settleNavigation(page);
-    const surface = page.locator('main [data-ol-page="overview"]');
-    await expect(
-      page.locator('main .ol-transition-viewport > [data-transition-phase]'),
-    ).toHaveCount(1);
-    await expect(surface).toHaveCSS('opacity', '1');
-    await expect(surface).toHaveCSS('filter', 'none');
-    expect(await surface.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
-  });
-}
-
-test('enabling reduced motion during a page exit immediately settles the latest page', async ({
-  page,
-}) => {
-  await page.evaluate(() => {
+async function pauseHistoryEntrance(page: Page, fraction: number) {
+  await page.evaluate((fraction) => {
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (keyframes, options) {
       const animation = animate.call(this, keyframes, options);
-      if (this.matches('main [data-transition-phase="exit"]')) {
+      if (this.matches('main [data-ol-page="history"][data-transition-phase="enter"]')) {
         Element.prototype.animate = animate;
         animation.pause();
-        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) / 2;
-        document.body.dataset.testPageExit = 'true';
+        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) * fraction;
       }
       return animation;
     };
-  });
+  }, fraction);
   await page.getByRole('button', { name: '历史', exact: true }).click();
-  await expect(page.locator('body')).toHaveAttribute('data-test-page-exit', 'true');
+  const history = page.locator('main [data-ol-page="history"]');
+  await expect(history).toHaveAttribute('data-transition-phase', 'enter');
+  await history.evaluate(async (element) => {
+    await element.getAnimations().find((animation) => animation.id === 'ol-page-enter')!.ready;
+  });
+  return history;
+}
+
+for (const [frame, fraction] of [['first frame', 0], ['mid-fade', 0.5]] as const) {
+  test(`returning from the incoming page at its ${frame} restores the retained page`, async ({
+    page,
+  }) => {
+    const history = await pauseHistoryEntrance(page, fraction);
+    const overview = page.locator('main [data-ol-page="overview"]');
+    const opacity = await history.evaluate((element) => Number(getComputedStyle(element).opacity));
+    if (fraction === 0) {
+      expect(opacity).toBe(0);
+    } else {
+      expect(opacity).toBeGreaterThan(0);
+      expect(opacity).toBeLessThan(1);
+    }
+    await expect(history).toHaveCSS('filter', 'none');
+    await expect(overview).toHaveAttribute('data-transition-phase', 'retained');
+    await expect(overview).toHaveAttribute('inert', '');
+    await expect(overview).toHaveCSS('opacity', '1');
+    await expect(overview).toHaveCSS('filter', 'none');
+
+    await page.getByRole('button', { name: '概览', exact: true }).click();
+    await settleNavigation(page);
+    await expect(
+      page.locator('main .ol-transition-viewport > [data-transition-phase]'),
+    ).toHaveCount(1);
+    await expect(history).toHaveCount(0);
+    await expect(overview).toHaveCSS('opacity', '1');
+    await expect(overview).toHaveCSS('filter', 'none');
+    expect(await overview.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+  });
+}
+
+test('enabling reduced motion mid-fade immediately settles the latest page', async ({
+  page,
+}) => {
+  const surface = await pauseHistoryEntrance(page, 0.5);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await settleNavigation(page);
-  const surface = page.locator('main [data-ol-page="history"]');
   await expect(surface).toHaveCSS('opacity', '1');
   await expect(surface).toHaveCSS('filter', 'none');
   expect(await surface.evaluate((element) => element.getAnimations().length)).toBe(0);

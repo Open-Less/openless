@@ -847,7 +847,7 @@ for (const { locale, width, title, enable, edit, editorTitle } of [
     }, locale);
     await page.locator('[data-ol-advanced-entry="polishStrategy"]').click();
     await settleNavigation(page);
-    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: `${title} Beta`, exact: true })).toBeVisible();
     await page.getByRole('switch', { name: enable, exact: true }).click();
     await page.getByRole('button', { name: edit, exact: true }).click();
     const panel = page.getByRole('dialog', { name: editorTitle, exact: true });

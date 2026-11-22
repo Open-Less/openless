@@ -33,6 +33,7 @@ const emit = (event: string, payload: unknown) => {
   }
 };
 const calls: string[] = [];
+const openedUrls: string[] = [];
 const pending: { resolve: (value: CredentialsStatus) => void; reject: (error: Error) => void }[] =
   [];
 let mocks: typeof import('../../src/lib/ipc/mock-data');
@@ -49,6 +50,7 @@ Object.assign(window, {
   },
   startupFixture: {
     calls,
+    openedUrls,
     presentations,
     releaseTheme,
     allowClipboard: (allowed: boolean) => {
@@ -92,7 +94,7 @@ Object.assign(window, {
     },
     invoke: async (
       command: string,
-      args?: { event?: string; handler?: number; sessionId?: string },
+      args?: { event?: string; handler?: number; sessionId?: string; path?: string },
     ) => {
       calls.push(command);
       if (command === 'get_startup_snapshot')
@@ -156,6 +158,10 @@ Object.assign(window, {
         };
       if (exerciseClipboard && command === 'copy_text_to_clipboard') {
         if (!clipboardAllowed) throw new Error('Clipboard write rejected');
+        return;
+      }
+      if (command === 'plugin:shell|open') {
+        openedUrls.push(args!.path!);
         return;
       }
       if (command === 'get_hotkey_capability') return mocks.mockHotkeyCapability;

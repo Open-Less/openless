@@ -1,5 +1,6 @@
 import { settleNavigation } from './support/navigation';
 import { test, expect, type Locator } from '@playwright/test';
+import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 
 async function expectReadableLayout(dialog: Locator) {
   await settleNavigation(dialog);
@@ -43,8 +44,11 @@ for (const theme of ['dark', 'light'] as const) {
       if (section === '快捷键') {
         const rows = dialog.locator('.ol-shortcut-row');
         await expect(rows.first()).toBeVisible();
-        expect(await rows.count()).toBeGreaterThanOrEqual(8);
-        await expect(dialog.getByText('随便问', { exact: true })).toHaveCount(0);
+        expect(await rows.count()).toBeGreaterThanOrEqual(9);
+        const ask = dialog.getByRole('group', { name: '随便问', exact: true });
+        await expect(ask).toBeVisible();
+        if (ASK_ANYTHING_AVAILABLE) await expect(ask).toBeEnabled();
+        else await expect(ask).toBeDisabled();
         const bounds = await rows.evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();

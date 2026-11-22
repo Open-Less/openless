@@ -168,10 +168,9 @@ test('repeated quick-note refresh keeps receipts at the top under desktop CSP', 
   await expect(tools).toHaveAttribute('aria-expanded', 'true');
   await page.getByRole('button', { name: '速记', exact: true }).click();
   await settleNavigation(page);
-  const refresh = page.getByRole('button', { name: '刷新', exact: true });
   const active = page.locator('.ol-notification-slot:not([data-exiting]) .ol-notification-card');
   const retiring = page.locator('.ol-notification-slot[data-exiting]');
-  await refresh.click();
+  await page.keyboard.press('Meta+r');
 
   for (let attempt = 0; attempt < 3; attempt++) {
     await expect(active).toHaveText('已刷新');
@@ -186,7 +185,7 @@ test('repeated quick-note refresh keeps receipts at the top under desktop CSP', 
         return animation;
       };
     });
-    await refresh.click();
+    await page.keyboard.press('Meta+r');
     await expect(retiring).toHaveCSS('position', 'absolute', { timeout: 2000 });
     const oldCard = retiring.locator('.ol-notification-card');
     const leaving = (await oldCard.boundingBox())!;
@@ -269,6 +268,7 @@ test('compact progress centers its track below status and fades the departing ca
   await emitNotifications(page, [
     {
       id: 'download',
+      taskId: 'download',
       state: 'saving',
       message: 'Downloading…',
       progress: true,
@@ -314,7 +314,9 @@ test('compact progress centers its track below status and fades the departing ca
     observer.observe(button, { attributes: true, attributeFilter: ['aria-hidden'] });
     return frames;
   });
-  await emitNotifications(page, [{ id: 'download', state: 'saved', message: 'Download complete' }]);
+  await emitNotifications(page, [
+    { id: 'download', taskId: 'download', state: 'saved', message: 'Download complete' },
+  ]);
   await expect(status).toHaveText('Download complete');
   await expect(card.locator('[data-slot="toast-action"]')).toHaveCount(0);
   const frames = await retiring.jsonValue();

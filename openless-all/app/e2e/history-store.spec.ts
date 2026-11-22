@@ -82,10 +82,10 @@ test('history writes update every page while recordings, activity and the usage 
   await navigate(page, 'usage', '用量');
   await page
     .getByRole('navigation', { name: '用量页面' })
-    .getByRole('button', { name: '记录' })
+    .getByRole('button', { name: '服务', exact: true })
     .click();
-  await expect(page.getByRole('region', { name: '模型用量列表' })).toContainText('deepseek-v3-2');
-  await expect(page.getByRole('region', { name: '最近记录列表' }).locator('time')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '模型缓存报告列表' })).toContainText('deepseek-v3-2');
+  await expect(page.getByRole('region', { name: '服务与用途列表' })).toContainText('没有可归属服务的记录');
 });
 
 test('history switches transcripts inside a fixed frame with copy below the text', async ({

@@ -94,7 +94,9 @@ test('delete progress becomes a warning on rejection and success only after a co
   await editor.getByRole('button', { name: '删除渠道', exact: true }).click();
   const confirm = page.getByRole('dialog', { name: '删除渠道', exact: true });
   const accept = confirm.getByRole('button', { name: '确认删除', exact: true });
-  const toast = page.locator('.ol-notification-card');
+  const toast = page.locator(
+    '[data-notification-key="legacy-notification:channel-delete:llm:fixture-channel"]',
+  );
   await page.evaluate(() => window.channelFixture.hold('delete'));
   await accept.click();
   await expect(toast).toHaveAttribute('data-state', 'deleting');

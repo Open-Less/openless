@@ -1,4 +1,4 @@
-import packageJson from '../../package.json';
+import packageJson from '../../package.json' with { type: 'json' };
 
 export const APP_VERSION = packageJson.version;
 export const APP_VERSION_LABEL = `v${APP_VERSION}`;
