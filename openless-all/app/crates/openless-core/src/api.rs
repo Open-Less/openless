@@ -11028,6 +11028,10 @@ mod tests {
     }
 
     fn backend() -> (TestBackend, Arc<FakeHost>) {
+        backend_with_original_protection(false)
+    }
+
+    fn backend_with_original_protection(enabled: bool) -> (TestBackend, Arc<FakeHost>) {
         let host = Arc::new(FakeHost::default());
         let data_dir = TestDataDir::new("facade");
         let backend = OpenLessBackend::new(
@@ -11045,8 +11049,19 @@ mod tests {
                 local_asr_runtime: None,
                 voice_activation_runtime: None,
                 marketplace_config: None,
-                selection_runtime: None,
-                selection_polisher: None,
+                selection_runtime: enabled.then(|| {
+                    Arc::new(crate::testing::FixtureSelectionRuntime::successful(
+                        crate::SelectionCapture {
+                            text: "fixture".into(),
+                            source_app: None,
+                        },
+                        InsertOutcome::Inserted,
+                    )) as Arc<dyn crate::SelectionRuntimeAdapter>
+                }),
+                selection_polisher: enabled.then(|| {
+                    Arc::new(crate::testing::FixtureTextPolisher::successful("fixture"))
+                        as Arc<dyn crate::TextPolisher>
+                }),
                 qa_runtime: None,
             },
         )
@@ -11160,7 +11175,7 @@ mod tests {
 
     #[tokio::test]
     async fn voice_workflows_share_one_busy_lease_and_release_it_on_terminal_paths() {
-        let (backend, _) = backend();
+        let (backend, _) = backend_with_original_protection(true);
         let mut preferences = backend.get_preferences();
         preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
@@ -14818,6 +14833,31 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn delayed_completed_callback_cannot_reset_or_observe_a_new_session() {
+        struct ReleaseAwareEngine;
+        impl DictationEngine for ReleaseAwareEngine {
+            fn start(
+                &self,
+                id: SessionId,
+                context: Arc<DictationContext>,
+                progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
+                FakeEngine.start(id, context, progress)
+            }
+            fn stop_recording(&self, _: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+                boxed(async { Ok(true) })
+            }
+            fn finish(
+                &self,
+                id: SessionId,
+                progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+                FakeEngine.finish(id, progress)
+            }
+            fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                FakeEngine.cancel(id)
+            }
+        }
+
         struct BlockingCommit {
             entered: Arc<tokio::sync::Notify>,
             release: Arc<(Mutex<bool>, std::sync::Condvar)>,
@@ -14866,6 +14906,8 @@ mod tests {
             }
         }
 
+        // This fixture acknowledges device release before delaying observation;
+        // a legacy engine without that acknowledgement must retain capture ownership.
         // Settings effects may synchronously wait for native hotkey registration.
         // Leave executor workers available while stop waits on that native
         // gate, so cancellation and a successor can make progress normally.
@@ -14884,7 +14926,7 @@ mod tests {
                     voice_activation_runtime: None,
                     host_actions: host.clone(),
                     text_inserter: Arc::new(FakeInserter),
-                    dictation_engine: Arc::new(FakeEngine),
+                    dictation_engine: Arc::new(ReleaseAwareEngine),
                     credential_store: Arc::new(
                         crate::credentials::InMemoryCredentialStore::default(),
                     ),
@@ -20460,7 +20502,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_restore_cancelled_apply_ticket_stays_busy_until_native_completion() {
-        let (backend, _) = backend();
+        let (backend, _) = backend_with_original_protection(true);
         let service = &backend.services().selection_voice;
         let session = service
             .begin(crate::domains::SelectionCapture {

@@ -346,7 +346,9 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 BackendErrorCode::Busy
             );
             let mut prefs = backend.get_preferences();
-            prefs.translation_target_language = "Japanese".into();
+            // Clearing the current global target is valid on desktop and the
+            // isolated mobile Core, and must not change either frozen segment.
+            prefs.translation_target_language.clear();
             backend.set_preferences(prefs).unwrap();
             assert_eq!(
                 backend
@@ -425,7 +427,7 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                 assert_eq!(request["messages"][1]["content"], user);
                 assert!(serialized.contains("captured-context"));
                 assert_eq!(system.contains("用户经多次编辑"), !context.polish.translation_active);
-                assert!(!serialized.contains("Japanese"));
+                assert_eq!(context.polish.translation_target_language, "English");
             }
         }
     }

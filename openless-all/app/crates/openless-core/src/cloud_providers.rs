@@ -3387,7 +3387,7 @@ mod tests {
                 format!("{:X}\r\n{data}\r\n", data.len())
             };
             let end = if gemini {
-                ""
+                "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
             } else {
                 match format {
                     LlmRequestFormat::ChatCompletions => "data: [DONE]\n\n",

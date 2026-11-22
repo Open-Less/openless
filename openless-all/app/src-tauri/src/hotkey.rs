@@ -1355,6 +1355,7 @@ mod platform {
 
         #[test]
         fn mac_shift_requires_release_and_rejects_native_mouse_and_key_combinations() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             let context = super::super::ShiftTranslationContext {
                 session_id: openless_core::SessionId::new(),
@@ -1397,6 +1398,7 @@ mod platform {
 
         #[tokio::test]
         async fn mac_held_recording_fn_allows_both_shift_toggles_before_recording_release() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.lock().await;
             use openless_core::testing::{
                 FixtureDictationEngine, FixtureEngineAction, RecordingHostActions,
             };
@@ -1524,6 +1526,7 @@ mod platform {
 
         #[test]
         fn mac_default_recording_controller_does_not_exempt_the_other_option_key() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightOption);
             let context = super::super::ShiftTranslationContext {
                 session_id: openless_core::SessionId::new(),
@@ -1618,6 +1621,7 @@ mod platform {
 
         #[test]
         fn mac_optional_modifier_edges_are_deduped_from_mock_flags() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(Arc::clone(&shared));
 
@@ -1671,6 +1675,7 @@ mod platform {
         // once, and the trigger must actually be held.
         #[test]
         fn mac_companion_key_down_aborts_trigger_once_per_hold() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
 
@@ -1698,6 +1703,7 @@ mod platform {
 
         #[test]
         fn mac_fn_auto_short_tap_dispatches_only_after_release() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Auto;
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
@@ -1728,6 +1734,7 @@ mod platform {
 
         #[test]
         fn mac_fn_auto_long_hold_is_reserved_for_system_functions() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Auto;
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
@@ -1752,6 +1759,7 @@ mod platform {
 
         #[test]
         fn mac_idle_input_source_switch_does_not_decode_appkit_events() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             for trigger in [HotkeyTrigger::Fn, HotkeyTrigger::RightOption] {
                 let shared = shared(trigger);
                 let (ctx, rx) = callback_context(shared);
@@ -1764,6 +1772,7 @@ mod platform {
 
         #[test]
         fn mac_system_controls_do_not_decode_appkit_during_non_fn_holds() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightOption);
             shared.trigger_held.store(true, Ordering::SeqCst);
             let (ctx, rx) = callback_context(shared);
@@ -1775,6 +1784,7 @@ mod platform {
 
         #[test]
         fn mac_fn_function_layer_event_suppresses_tap_without_pending_abort() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Toggle;
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
@@ -1803,6 +1813,7 @@ mod platform {
 
         #[test]
         fn mac_system_defined_event_does_not_abort_non_fn_dictation() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
             shared.trigger_press_id.store(7, Ordering::SeqCst);
@@ -1821,6 +1832,7 @@ mod platform {
 
         #[test]
         fn mac_globe_system_event_is_not_mistaken_for_a_function_layer_key() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             assert!(!is_auxiliary_function_key_event(
                 NX_SUBTYPE_AUX_CONTROL_BUTTONS,
                 (25_i64 << 16) as isize,
@@ -1830,6 +1842,7 @@ mod platform {
 
         #[test]
         fn mac_fn_hold_mode_keeps_press_to_talk_semantics() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Hold;
             let (ctx, rx) = callback_context(Arc::clone(&shared));
@@ -2466,6 +2479,7 @@ mod platform {
 
         #[test]
         fn windows_hook_context_belongs_to_its_listener_thread() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let (ctx, _) = callback_context(shared(HotkeyTrigger::RightControl));
             let mut ctx = Box::new(ctx);
             HOOK_CONTEXT.set(&mut *ctx);
@@ -2482,6 +2496,7 @@ mod platform {
 
         #[test]
         fn windows_shift_trigger_keeps_both_recording_edges() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             for (trigger, key) in [
                 (HotkeyTrigger::LeftShift, VK_LSHIFT),
                 (HotkeyTrigger::RightShift, VK_RSHIFT),
@@ -2502,6 +2517,7 @@ mod platform {
 
         #[test]
         fn windows_shortcut_recording_passes_bound_keys_to_the_frontend() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let state = shared(HotkeyTrigger::LeftControl);
             state.recording_active.store(true, Ordering::SeqCst);
             let (ctx, rx) = callback_context(Arc::clone(&state));
@@ -2596,6 +2612,7 @@ mod platform {
 
         #[test]
         fn windows_release_carries_combo_verdict_even_when_abort_bridge_has_not_drained() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let (ctx, rx, abort_rx) =
                 callback_context_with_combo(shared(HotkeyTrigger::RightControl));
             dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
@@ -2614,6 +2631,7 @@ mod platform {
 
         #[test]
         fn windows_modifier_edges_are_deduped_from_mock_hook_events() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
@@ -2640,6 +2658,7 @@ mod platform {
 
         #[test]
         fn windows_unrelated_key_does_not_trigger_configured_modifier() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
@@ -2650,6 +2669,7 @@ mod platform {
 
         #[test]
         fn windows_modifier_edges_ignore_unrelated_keys_and_reemit_after_release() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
@@ -2667,6 +2687,7 @@ mod platform {
 
         #[test]
         fn windows_optional_modifier_shortcuts_use_independent_latches() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             *shared.qa_trigger.write() = Some(HotkeyTrigger::RightCommand);
             *shared.translation_trigger.write() = Some(HotkeyTrigger::LeftOption);
@@ -2692,6 +2713,7 @@ mod platform {
 
         #[test]
         fn windows_right_control_routes_only_to_selection_polish_action() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Custom);
             *shared.selection_polish_trigger.write() = Some(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
@@ -2714,6 +2736,7 @@ mod platform {
 
         #[test]
         fn windows_option_triggers_keep_left_and_right_alt_separate() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let left_shared = shared(HotkeyTrigger::LeftOption);
             let (left_ctx, left_rx) = callback_context(left_shared);
 
@@ -2755,6 +2778,7 @@ mod platform {
         // modifier overlays (Shift = translation mode) do not.
         #[test]
         fn windows_companion_key_down_aborts_trigger_but_modifiers_do_not() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, _rx, combo_abort_rx) = callback_context_with_combo(shared);
 
@@ -2769,6 +2793,7 @@ mod platform {
 
         #[test]
         fn windows_escape_while_trigger_held_is_also_a_companion_key() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, _rx, combo_abort_rx) = callback_context_with_combo(shared);
 
@@ -2780,6 +2805,7 @@ mod platform {
 
         #[test]
         fn windows_shift_side_combo_receives_pressed_via_dispatch_keyboard_event() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             use crate::side_aware_combo::SideAwareComboMonitor;
             use crate::types::ShortcutBinding;
 
@@ -2812,6 +2838,7 @@ mod platform {
 
         #[test]
         fn windows_modifier_chord_uses_existing_companion_abort_semantics() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             use crate::side_aware_combo::SideAwareComboMonitor;
             use crate::types::ShortcutBinding;
 

@@ -120,3 +120,21 @@ Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为�
 - Android 编译揭示三个条件编译遗漏：移动端没有桌面位置核验函数，也没有桌面原生胶囊字段。桌面 AX/UIA 检查和原生后台球体更新已限于桌面编译，移动端继续使用原 IME/无障碍插入策略，不新增返回“目标可信”的假能力。修复后的 macOS 编译通过；Android 必须由后续真实目标编译确认。
 
 其他首轮门禁仍需以该次运行最终记录为准。上述修复先形成独立本地提交；由于任务明确只触发一次正常 CI，是否推送修复而自动产生后继 PR CI，先由协调者明确收敛，不用手动重跑或标签绕过失败。
+
+### 后继候选的因果修复记录
+
+协调者随后明确：不同提交因具体失败证据产生的最小修复，可以正常 push，由 PR synchronize 自动运行新候选 CI；禁止的是没有新代码/失败证据时对同一 SHA 反复手动重跑。`fe7fec21` 已按此授权推送，对应 [CI 45065448470](https://github.com/Open-Less/openless/actions/runs/45065448470)。该候选的 Android 门禁、两端 MSRV、两端原生胶囊及 Harmony 已通过，Windows 首次原生类型和测试编译已有 CI 证据，但本轮仍暴露以下失败，不能称为绿灯：
+
+| 具体失败 | 原因与最小修复 | 定向证据 / 保留的约束 |
+| --- | --- | --- |
+| 两个 Core busy/取消 apply-ticket 测试报 `selectionOriginalCopyFailed` | 旧测试使用没有原文保护能力的 backend。只为这两个测试显式配置既有 FixtureSelectionRuntime / Polisher，默认 unsupported 夹具保持不变。 | 两项本地通过；没有跳过生产原文保护，取消票据仍必须等原生 completion 才释放恢复 lease。 |
+| Gemini 流式翻译正例被判不完整 | 模型夹具没有 Gemini 的 `finishReason=STOP`；补正确的终止事件，不放宽 parser。 | `gemini_translation_streams_target_before_completion` 本地通过；STOP/截断失败语义保留。 |
+| 旧延迟 completion 测试等不到第二段 | 夹具引擎沿 legacy 默认返回“不确认设备停止”，却要求在旧完成回调未结束时重用采集。仅该用例使用显式确认 stop 的无设备引擎。 | 该单项本地通过，原来的旧回调不得重置/观察新段断言全部保留；生产资源 fence 不修改。 |
+| iOS 隔离 Core 的音频用例设置 Japanese 报未知目标 | iOS 已有目标清单契约不接受未经配置的新选择。改为清空全局目标，并继续断言两段冻结的 English 请求和完整声帧。 | 只因实际失败重跑该录音回归，本地通过；没有更改 iOS 生产目标语言策略，也没有重复已通过的目标/音频联合测试。 |
+| legacy 本机自捕获数据无法恢复 | 新官方 intent 包是第五个 canonical Builtin，而旧准入只接受四个按 mode 推导的 ID。按 owner 确认一次读取现有官方目录，以 ID + base_mode 配对准入。 | 旧两个失败恢复测试与新增正反例通过：五包含 intent、选中引用和用户自改 canonical prompt 保留；同名未知 ID、错 mode、非法 ID、Imported 保留前缀拒绝且不写仓库。未更改先准入后 normalize 顺序、v1 旧四 ID imported 投影或 secret 范围；Builtin 非 canonical alias 仍不属于此 legacy 修复的承诺。 |
+| 历史行外框比搜索框缩进约 35px | 新复选框占用了卡片外部布局宽度。复选框保持独立原生控件，定位在全宽行表面内部，正文预留空间。 | 原 geometry 测试通过，未放宽对齐值；单条/批量真实 checkbox 交互、首尾空白复制和滚动检查通过。 |
+| 两条搜索页面测试仍查旧文案 | 功能名称已明确为“免费聚合搜索 + DeepSeek Web Search”。只更新标签与免费入口期望。 | 两项受影响页面测试通过，330/1300px 对齐、防裁切、保存失败及离页保存反馈断言均保留。 |
+| Windows modifier-chord 第一个 Pressed 通道断开 | owner 确认是同测试进程的全局 ACTIVE_MONITOR 被并行 start/drop 替换。新增仅 cfg(test) 的共享生命周期锁，相关 native dispatcher 与唯一全局监听器恢复测试共用。同步测试用 blocking_lock，异步 native 测试用同一锁的 async guard。 | 受影响的 macOS harness 51 项通过；Windows 的 Pressed → 同 id 唯一 Combined → repeat 零 → Released 原断言未删除，需下一候选 Windows CI 执行。未改生产单例、手势排除规则或全仓测试并行配置。 |
+| Classic 仅翻译徽章仍期待 top=88 | 录音 owner 用身体124..156、上球体106..126和徽章72..100独立核对：旧值会重叠球体。仅更新遗漏的测试期望为72并补相对几何。 | Native 单项和 TS 几何测试通过；保留24px身体预留、2px球体连接、文本 rail48、复合翻译 rail top12/height88，生产布局不改。 |
+
+本地受影响的 Chromium 四项页面测试通过；未以它代替 WebKit、Windows 或安装 GUI。后续以新提交的正常 PR CI 为准，未手动重跑旧 SHA、未调用模型 live、未重复 211 旧版矩阵。

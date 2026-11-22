@@ -160,7 +160,7 @@ assertEqual(classicExternalGeometry.badgeTop, 72, 'Classic external badge sits a
 assertEqual(
   classicExternalGeometry.badgeBottom,
   100,
-  'Classic external badge leaves an 8px body gap',
+  'Classic external badge leaves a 24px body gap for the processing lobe',
 );
 if (
   classicExternalGeometry.railTop! + classicExternalGeometry.railHeight >

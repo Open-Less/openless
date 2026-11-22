@@ -590,7 +590,7 @@ test('saved status and the sync decision remain usable in a short narrow 110% vi
 test('Web Search fields stay aligned and the hybrid option fits at both window sizes', async ({
   page,
 }) => {
-  const label = '混合搜索（免费 + DeepSeek）';
+  const label = '免费聚合搜索 + DeepSeek Web Search';
   for (const width of [1300, 330]) {
     await page.setViewportSize({ width, height: 690 });
     await page.goto(`/e2e/fixtures/settings-status.html?webSearch&hybridSearch&width=${width}&height=640&scale=large`);
@@ -634,10 +634,10 @@ test('Web Search reports failures on its page and completes a departed save quie
   const save = page.getByRole('button', { name: '保存', exact: true });
   const notice = page.locator('.ol-notification-card');
   const key = page.getByLabel('Search API Key');
-  await expect(provider).toContainText('免费搜索');
+  await expect(provider).toContainText('免费聚合搜索');
   await expect(key).toHaveCount(0);
   await provider.click();
-  await page.getByRole('option', { name: '混合搜索（免费 + DeepSeek）', exact: true }).click();
+  await page.getByRole('option', { name: '免费聚合搜索 + DeepSeek Web Search', exact: true }).click();
   await expect(save).toBeDisabled();
   await key.fill('test-deepseek-key');
   await expect(save).toBeEnabled();

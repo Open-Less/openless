@@ -147,12 +147,13 @@ const HistoryRow = memo(function HistoryRow({
   onToggleOriginal: Props['onToggleOriginal'];
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, paddingInlineStart: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, position: 'relative' }}>
       <input
         type="checkbox"
         checked={checked}
         onChange={() => onToggleOriginal(session.id)}
         aria-label={t('history.selectOriginal', { title: historyTitle(session, t) })}
+        style={{ position: 'absolute', insetInlineStart: 12, margin: 0, zIndex: 1 }}
       />
       <button
         type="button"
@@ -164,6 +165,7 @@ const HistoryRow = memo(function HistoryRow({
           flex: 1,
           minWidth: 0,
           padding: '10px 12px',
+          paddingInlineStart: 40,
           textAlign: 'left',
           display: 'flex',
           flexDirection: 'column',
