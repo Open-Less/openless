@@ -4602,5 +4602,6 @@ fn get_capsule_auxiliary_snapshot(
     serde_json::json!({
         "suggestions": coord.backend().pending_corrections(),
         "fallback": coord.tauri_host().auxiliary_fallback_snapshot(),
+        "processing": coord.backend().snapshot().processing_dictations,
     })
 }

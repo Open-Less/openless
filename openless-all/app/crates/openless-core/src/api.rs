@@ -51,6 +51,8 @@ pub struct BackendSnapshot {
     pub running: bool,
     pub dictation: DictationStateSnapshot,
     #[serde(default)]
+    pub processing_dictations: Vec<DictationStateSnapshot>,
+    #[serde(default)]
     pub vocabulary_revision: u64,
     #[serde(default)]
     pub history_revision: u64,
@@ -1786,6 +1788,7 @@ impl BackendRepositories {
 struct MutableState {
     running: bool,
     dictation: DictationStateSnapshot,
+    processing_dictations: HashMap<SessionId, SubmittedDictation>,
     dictation_context: Option<Arc<DictationContext>>,
     /// The requested output target is published before async context capture
     /// completes, so a second quick-note hotkey edge can still resolve the
@@ -1800,6 +1803,34 @@ struct MutableState {
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
     recording_fault_cleanup: Option<SessionId>,
     silence_monitor: Option<SilenceMonitor>,
+}
+
+struct SubmittedDictation {
+    snapshot: DictationStateSnapshot,
+    context: Arc<DictationContext>,
+    submitted_at: std::time::Instant,
+}
+
+impl MutableState {
+    fn processing_snapshots(&self) -> Vec<DictationStateSnapshot> {
+        let mut tasks: Vec<_> = self.processing_dictations.values().collect();
+        tasks.sort_by_key(|task| task.submitted_at);
+        tasks.into_iter().map(|task| task.snapshot.clone()).collect()
+    }
+    fn session(&self, id: SessionId) -> Option<&DictationStateSnapshot> {
+        if self.dictation.session_id == Some(id) { Some(&self.dictation) }
+        else { self.processing_dictations.get(&id).map(|task| &task.snapshot) }
+    }
+
+    fn session_mut(&mut self, id: SessionId) -> Option<&mut DictationStateSnapshot> {
+        if self.dictation.session_id == Some(id) { Some(&mut self.dictation) }
+        else { self.processing_dictations.get_mut(&id).map(|task| &mut task.snapshot) }
+    }
+
+    fn session_context(&self, id: SessionId) -> Option<&Arc<DictationContext>> {
+        if self.dictation.session_id == Some(id) { self.dictation_context.as_ref() }
+        else { self.processing_dictations.get(&id).map(|task| &task.context) }
+    }
 }
 
 struct SilenceMonitor {
@@ -2346,12 +2377,12 @@ impl EngineProgressSink for BackendEngineProgress {
         match progress {
             EngineProgress::CaptureReady => {
                 let state = self.state.read().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 self.phase_changed.notify_waiters();
             }
             EngineProgress::RecordingLevel { elapsed_ms, level } => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 if !matches!(
                     state.dictation.phase,
                     DictationPhase::Starting | DictationPhase::Recording
@@ -2410,7 +2441,7 @@ impl EngineProgressSink for BackendEngineProgress {
             }
             EngineProgress::RecordingLimitReached => {
                 let state = self.state.read().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 if !matches!(
                     state.dictation.phase,
                     DictationPhase::Starting | DictationPhase::Recording
@@ -2433,7 +2464,7 @@ impl EngineProgressSink for BackendEngineProgress {
             }
             EngineProgress::RecordingFault(error) => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 state.dictation.phase = DictationPhase::Failed;
                 state.dictation.message = Some(error.message);
                 self.events.publish(
@@ -2458,11 +2489,11 @@ impl EngineProgressSink for BackendEngineProgress {
                     EngineStage::Transcribing => DictationPhase::Transcribing,
                     EngineStage::Polishing => DictationPhase::Polishing,
                 };
-                if state.dictation.phase != phase {
-                    state.dictation.phase = phase;
+                if state.session(session_id).unwrap().phase != phase {
+                    state.session_mut(session_id).unwrap().phase = phase;
                     self.events.publish(
                         Some(session_id),
-                        BackendEventKind::DictationStateChanged(state.dictation.clone()),
+                        BackendEventKind::DictationStateChanged(state.session(session_id).unwrap().clone()),
                     );
                     self.phase_changed.notify_waiters();
                 }
@@ -2471,7 +2502,7 @@ impl EngineProgressSink for BackendEngineProgress {
                 let mut state = self.state.write().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
                 if !matches!(
-                    state.dictation.phase,
+                    state.session(session_id).unwrap().phase,
                     DictationPhase::Starting
                         | DictationPhase::Recording
                         | DictationPhase::Transcribing
@@ -2483,8 +2514,7 @@ impl EngineProgressSink for BackendEngineProgress {
                 }
                 // Traditional final text was cleaned before correction and polishing.
                 let activation_phrases = state
-                    .dictation_context
-                    .as_ref()
+                    .session_context(session_id)
                     .filter(|context| {
                         !delta.is_final
                             || context.pipeline_mode
@@ -2551,7 +2581,7 @@ impl EngineProgressSink for BackendEngineProgress {
             EngineProgress::PolishDelta(delta) => {
                 let state = self.state.read().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
-                if state.dictation.phase != DictationPhase::Polishing {
+                if state.session(session_id).unwrap().phase != DictationPhase::Polishing {
                     return Err(BackendError::new(
                         BackendErrorCode::InvalidState,
                         "polish delta arrived outside the polishing phase",
@@ -2629,6 +2659,7 @@ pub struct OpenLessBackend {
     settings_write_gate: Arc<Mutex<()>>,
     // Serialize channel ownership changes through runtime cleanup, not status reads.
     local_asr_channel_gate: tokio::sync::Mutex<()>,
+    dictation_processing_gate: tokio::sync::Mutex<()>,
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
@@ -3466,6 +3497,7 @@ impl OpenLessBackend {
             state: Arc::new(RwLock::new(MutableState {
                 running: false,
                 dictation: DictationStateSnapshot::default(),
+                processing_dictations: HashMap::new(),
                 dictation_context: None,
                 dictation_start_output_target: None,
                 dictation_translation_requested: None,
@@ -3495,6 +3527,7 @@ impl OpenLessBackend {
             preferences_revision,
             settings_write_gate,
             local_asr_channel_gate: tokio::sync::Mutex::new(()),
+            dictation_processing_gate: tokio::sync::Mutex::new(()),
             cloud_sync,
             encrypted_sync,
             encrypted_sync_store,
@@ -5321,6 +5354,7 @@ impl OpenLessBackend {
                     backend: BackendSnapshot {
                         running: true,
                         dictation: state.dictation.clone(),
+            processing_dictations: state.processing_snapshots(),
                         vocabulary_revision: self.vocabulary_revision.load(Ordering::Acquire),
                         history_revision: self.history_revision.load(Ordering::Acquire),
                         style_pack_revision: self.style_pack_revision.load(Ordering::Acquire),
@@ -5336,6 +5370,7 @@ impl OpenLessBackend {
                 backend: BackendSnapshot {
                     running: true,
                     dictation: state.dictation.clone(),
+            processing_dictations: state.processing_snapshots(),
                     vocabulary_revision: self.vocabulary_revision.load(Ordering::Acquire),
                     history_revision: self.history_revision.load(Ordering::Acquire),
                     style_pack_revision: self.style_pack_revision.load(Ordering::Acquire),
@@ -5396,6 +5431,14 @@ impl OpenLessBackend {
         );
         for capture in pending_captures.into_values() {
             let _ = capture.discard().await;
+        }
+        let submitted = self.snapshot().processing_dictations;
+        for task in submitted {
+            if let Some(id) = task.session_id {
+                let _ = self.cancel_session_adapters(id).await;
+                self.reset_dictation_session(id);
+                self.remove_recording_draft(id);
+            }
         }
         if !was_running {
             return Ok(());
@@ -5518,6 +5561,7 @@ impl OpenLessBackend {
         BackendSnapshot {
             running: state.running,
             dictation: state.dictation.clone(),
+            processing_dictations: state.processing_snapshots(),
             vocabulary_revision: self.vocabulary_revision.load(Ordering::Acquire),
             history_revision: self.history_revision.load(Ordering::Acquire),
             style_pack_revision: self.style_pack_revision.load(Ordering::Acquire),
@@ -5539,6 +5583,28 @@ impl OpenLessBackend {
             .as_ref()
             .map(|context| context.output_target)
             .or(state.dictation_start_output_target)
+    }
+
+    /// Immutable final mode, language, context and materials for a submitted segment.
+    pub fn submitted_dictation_context(&self, session_id: SessionId) -> Option<Arc<DictationContext>> {
+        self.state.read().expect("backend state lock poisoned")
+            .processing_dictations.get(&session_id).map(|task| Arc::clone(&task.context))
+    }
+
+    /// Resolves only after the device stop joined and this segment became a job.
+    /// Callers race this with the terminal result for cancelled/failed startup.
+    pub async fn wait_for_dictation_submission(&self, session_id: SessionId) {
+        loop {
+            let changed = self.phase_changed.notified();
+            if self.submitted_dictation_context(session_id).is_some() { return; }
+            changed.await;
+        }
+    }
+
+    /// Resolve an explicit owner before a UI/CLI cancellation crosses an await.
+    pub fn dictation_cancel_target(&self) -> Option<SessionId> {
+        let state = self.state.read().expect("backend state lock poisoned");
+        state.dictation.session_id.or_else(|| state.processing_snapshots().first().and_then(|task| task.session_id))
     }
 
     /// Dispatch a launcher/single-instance intent through the same state
@@ -5575,7 +5641,7 @@ impl OpenLessBackend {
                 Ok(CliDispatchOutcome::QaToggled)
             }
             crate::cli::CliIntent::CancelDictation => {
-                if let Some(session_id) = self.snapshot().dictation.session_id {
+                if let Some(session_id) = self.dictation_cancel_target() {
                     self.cancel_dictation(Some(session_id)).await?;
                 } else if let Some(session_id) = self.less_computer_active_session() {
                     // 1.x voice_agent shared the dictation cancellation scope.
@@ -5904,10 +5970,12 @@ impl OpenLessBackend {
                     }
                 }
             }
-            HotkeyIntent::Stop => self
-                .stop_dictation_with_options(options.stop)
-                .await
-                .map(CliDispatchOutcome::DictationCompleted),
+            HotkeyIntent::Stop => {
+                let session = self.snapshot().dictation.session_id;
+                drop(_dispatch_guard);
+                self.stop_dictation_session_with_options(session, options.stop, None)
+                    .await.map(CliDispatchOutcome::DictationCompleted)
+            }
             HotkeyIntent::Cancel { press_id } => {
                 let active = self.snapshot().dictation.session_id;
                 if active.is_none() {
@@ -7771,8 +7839,8 @@ impl OpenLessBackend {
         // reading any document for an obsolete completion.
         {
             let state = self.state.read().expect("backend state lock poisoned");
-            if state.dictation.session_id != Some(session_id)
-                || state.dictation.phase != DictationPhase::Completed
+            if state.dictation.session_id.is_some_and(|id| id != session_id)
+                || state.session(session_id).is_none_or(|snapshot| snapshot.phase != DictationPhase::Completed)
             {
                 return;
             }
@@ -8304,6 +8372,7 @@ impl OpenLessBackend {
             return Err(error);
         }
         if context.insertion.enabled {
+            let defer_preparation = inserter.defer_preparation_until_stop();
             let insertion_context = Arc::clone(&context);
             let task_spawner = Arc::clone(&self.deps.task_spawner);
             let resources = Arc::clone(&starting_resources);
@@ -8311,6 +8380,9 @@ impl OpenLessBackend {
                 'static,
                 Result<Arc<ActiveTextInsertion>, BackendError>,
             > = Box::pin(async move {
+                if resources.cancel.is_cancelled() {
+                    return Err(VoiceCaptureLifecycle::cancelled_error());
+                }
                 let platform = inserter
                     .begin(session_id, Arc::clone(&insertion_context))
                     .await?;
@@ -8338,6 +8410,7 @@ impl OpenLessBackend {
                     .expect("text insertion registry lock poisoned")
                     .insert(session_id, preparation.clone());
             }
+            if !defer_preparation {
             let prepared = preparation.await;
             let still_active = self
                 .state
@@ -8368,7 +8441,11 @@ impl OpenLessBackend {
                     self.persist_failed_dictation(
                         &context,
                         session_id,
-                        "insertFailed",
+                        if error.code == BackendErrorCode::OutcomeUnknown {
+                            "insertOutcomeUnknown"
+                        } else if error.code == BackendErrorCode::InvalidState {
+                            "insertTargetChanged"
+                        } else { "insertFailed" },
                         String::new(),
                         String::new(),
                         None,
@@ -8385,6 +8462,7 @@ impl OpenLessBackend {
                     self.reset_dictation_session(session_id);
                     return Err(error);
                 }
+            }
             }
         }
         if context.output_target != DictationOutputTarget::ForegroundApp {
@@ -8482,6 +8560,26 @@ impl OpenLessBackend {
     pub async fn stop_dictation(&self) -> Result<DictationResult, BackendError> {
         self.stop_dictation_session_with_options(None, DictationStopOptions::default(), None)
             .await
+    }
+
+    /// Transfer finalization to an owned task and return once capture is released.
+    /// Terminal result/history/events still use this session's identity; dropping
+    /// an IPC reply cannot abandon that work. Legacy stop APIs keep awaiting it.
+    pub async fn submit_dictation_session(
+        self: &Arc<Self>, session_id: SessionId, options: DictationStopOptions,
+    ) -> Result<SessionId, BackendError> {
+        let backend = Arc::clone(self);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.deps.task_spawner.spawn(Box::pin(async move {
+            let result = backend.stop_dictation_session_with_options(Some(session_id), options, None).await;
+            if let Err(error) = &result { log::warn!("[dictation] submitted segment {session_id}: {error}"); }
+            let _ = send.send(result);
+        }));
+        tokio::select! {
+            _ = self.wait_for_dictation_submission(session_id) => Ok(session_id),
+            result = receive => result.map_err(|_| BackendError::new(BackendErrorCode::Cancelled,
+                "dictation finalization task stopped"))?.map(|result| result.session_id),
+        }
     }
 
     pub async fn stop_dictation_with_options(
@@ -8689,6 +8787,31 @@ impl OpenLessBackend {
             }
         }
 
+        // Native stop joins the audio producer before capture can be reassigned.
+        // An error cannot prove release; keep the capture lease through cleanup.
+        let capture_released = self.deps.dictation_engine.stop_recording(session_id).await.unwrap_or(false);
+        if capture_released {
+            let mut hotkey = self.hotkey.lock().expect("hotkey interpreter lock poisoned");
+            let mut state = self.state.write().expect("backend state lock poisoned");
+            ensure_active_session(&state, session_id)?;
+            let snapshot = std::mem::take(&mut state.dictation);
+            state.processing_dictations.insert(session_id, SubmittedDictation {
+                snapshot: snapshot.clone(), context: Arc::clone(&context),
+                submitted_at: std::time::Instant::now(),
+            });
+            state.dictation_context = None;
+            state.dictation_start_output_target = None;
+            state.silence_monitor = None;
+            hotkey.terminal(std::time::Instant::now());
+            self.voice_sessions.submit(session_id);
+            // Reuse the semantic event; consumers re-read the capture and job snapshots.
+            self.events.publish(Some(session_id), BackendEventKind::DictationJobsChanged(
+                state.processing_snapshots()));
+            self.phase_changed.notify_waiters();
+        }
+        // Queue final ASR/polish/insertion work, including unsafe local models.
+        // Waiting here never owns the physical recorder.
+        let _processing = self.dictation_processing_gate.lock().await;
         let progress = self.engine_progress_sink();
         let resources = self.voice_sessions.hold_resources(session_id)?;
         let finishing = self.deps.dictation_engine.finish(session_id, progress);
@@ -8825,15 +8948,7 @@ impl OpenLessBackend {
             &engine_result.polished_text,
             context.polish.chinese_script_preference,
         );
-        let correction_rules = match self.correction_rules.list() {
-            Ok(rules) => rules,
-            Err(error) => {
-                log::warn!(
-                    "failed to load correction rules for completed dictation: {error}; continuing without correction"
-                );
-                Vec::new()
-            }
-        };
+        let correction_rules = &context.correction_rules;
         let streamed_text_is_visible = self
             .text_insertions
             .lock()
@@ -8851,9 +8966,9 @@ impl OpenLessBackend {
         // insert a result after the session has been cancelled or replaced.
         let cancelled_before_insertion = {
             let state = self.state.read().expect("backend state lock poisoned");
-            state.dictation.session_id != Some(session_id)
+            state.session(session_id).is_none()
                 || !matches!(
-                    state.dictation.phase,
+                    state.session(session_id).map(|snapshot| snapshot.phase).unwrap_or(DictationPhase::Idle),
                     DictationPhase::Transcribing | DictationPhase::Polishing
                 )
         };
@@ -8869,14 +8984,14 @@ impl OpenLessBackend {
         {
             let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_active_session(&state, session_id)?;
-            state.dictation.phase = if context.insertion.enabled {
+            state.session_mut(session_id).unwrap().phase = if context.insertion.enabled {
                 DictationPhase::Inserting
             } else {
                 DictationPhase::Completed
             };
             self.events.publish(
                 Some(session_id),
-                BackendEventKind::DictationStateChanged(state.dictation.clone()),
+                BackendEventKind::DictationStateChanged(state.session(session_id).unwrap().clone()),
             );
             self.phase_changed.notify_waiters();
         }
@@ -8901,7 +9016,11 @@ impl OpenLessBackend {
                     self.persist_failed_dictation(
                         &context,
                         session_id,
-                        "insertFailed",
+                        if error.code == BackendErrorCode::OutcomeUnknown {
+                            "insertOutcomeUnknown"
+                        } else if error.code == BackendErrorCode::InvalidState {
+                            "insertTargetChanged"
+                        } else { "insertFailed" },
                         engine_result.raw_text.clone(),
                         engine_result.polished_text.clone(),
                         engine_result.polish_source.clone(),
@@ -8945,20 +9064,20 @@ impl OpenLessBackend {
 
         let session_replaced = {
             let mut state = self.state.write().expect("backend state lock poisoned");
-            let replaced = state.dictation.session_id != Some(session_id)
-                || state.dictation.phase
+            let replaced = state.session(session_id).is_none()
+                || state.session(session_id).map(|snapshot| snapshot.phase).unwrap_or(DictationPhase::Idle)
                     != if context.insertion.enabled {
                         DictationPhase::Inserting
                     } else {
                         DictationPhase::Completed
                     };
             if !replaced {
-                state.dictation.phase = DictationPhase::Completed;
+                state.session_mut(session_id).unwrap().phase = DictationPhase::Completed;
                 self.main_dictation_trace.record(
                     session_id,
                     format_args!("stage=terminal phase=completed"),
                 );
-                state.dictation.message = Some(match insert_outcome {
+                state.session_mut(session_id).unwrap().message = Some(match insert_outcome {
                     Some(InsertOutcome::Inserted) => "inserted".to_string(),
                     Some(InsertOutcome::PasteSent) => "paste_sent".to_string(),
                     Some(InsertOutcome::CopiedFallback) => "copied_fallback".to_string(),
@@ -8979,7 +9098,7 @@ impl OpenLessBackend {
                 );
                 self.events.publish(
                     Some(session_id),
-                    BackendEventKind::DictationStateChanged(state.dictation.clone()),
+                    BackendEventKind::DictationStateChanged(state.session(session_id).unwrap().clone()),
                 );
                 self.phase_changed.notify_waiters();
             }
@@ -9317,6 +9436,7 @@ impl OpenLessBackend {
             .dictation
             .session_id
             .is_some_and(|current| current != session_id)
+            || state.processing_dictations.keys().any(|id| *id != session_id)
         {
             return Ok(());
         }
@@ -9339,6 +9459,17 @@ impl OpenLessBackend {
             .lock()
             .expect("hotkey interpreter lock poisoned");
         let mut state = self.state.write().expect("backend state lock poisoned");
+        if state.processing_dictations.remove(&session_id).is_some() {
+            state.transcripts.remove(&session_id);
+            self.voice_sessions.release(session_id);
+            self.events.publish(Some(session_id), BackendEventKind::DictationJobsChanged(
+                state.processing_snapshots()));
+            self.phase_changed.notify_waiters();
+            drop(state);
+            drop(hotkey);
+            if let Err(error) = self.cleanup_cloud_note(session_id, false) { log::warn!("{error}"); }
+            return;
+        }
         if state.dictation.session_id != Some(session_id) {
             return;
         }
@@ -9449,7 +9580,7 @@ impl OpenLessBackend {
                     {
                         insertions.remove(&session_id);
                     }
-                    return Err(error);
+                    return if error.code == BackendErrorCode::Cancelled { Ok(()) } else { Err(error) };
                 }
             };
             let result = insertion.cancel().await;
@@ -9614,6 +9745,31 @@ impl OpenLessBackend {
         &self,
         session_id: Option<SessionId>,
     ) -> Result<(), BackendError> {
+        if let Some(id) = session_id {
+            let submitted = {
+                let mut state = self.state.write().expect("backend state lock poisoned");
+                if let Some(task) = state.processing_dictations.get_mut(&id) {
+                    task.snapshot.phase = DictationPhase::Cancelled;
+                    self.events.publish(Some(id), BackendEventKind::DictationStateChanged(task.snapshot.clone()));
+                    Some(task.context.output_target == DictationOutputTarget::QuickNote)
+                } else { None }
+            };
+            if let Some(preserve_quick_note) = submitted {
+                let result = self.cancel_session_adapters(id).await;
+                let _ = self.hide_dictation_feedback(id);
+                self.reset_dictation_session(id);
+                self.cleanup_voice_activation_after_dictation(id).await;
+                if preserve_quick_note {
+                    if let Ok(entries) = self.list_history() {
+                        if let Some(mut entry) = entries.into_iter().find(|entry| entry.id == id.to_string()) {
+                            entry.error_code = Some("cancelled".into());
+                            let _ = self.update_history_entry(entry);
+                        }
+                    }
+                } else { let _ = self.delete_history(&id.to_string()); }
+                return result;
+            }
+        }
         let (active, preserve_quick_note) = {
             let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_running(&state)?;
@@ -9947,16 +10103,14 @@ impl OpenLessBackend {
             error.message
         );
         let mut state = self.state.write().expect("backend state lock poisoned");
-        if state.dictation.session_id != Some(session_id) {
-            return;
-        }
-        state.dictation.phase = DictationPhase::Failed;
-        state.dictation.message = Some(format!("{:?}", error.code));
+        let Some(snapshot) = state.session_mut(session_id) else { return; };
+        snapshot.phase = DictationPhase::Failed;
+        snapshot.message = Some(format!("{:?}", error.code));
         self.main_dictation_trace.record(
             session_id,
             format_args!("stage=terminal phase=failed code={:?}", error.code),
         );
-        let snapshot = state.dictation.clone();
+        let snapshot = state.session(session_id).unwrap().clone();
         self.events.publish(
             Some(session_id),
             BackendEventKind::DictationStateChanged(snapshot),
@@ -9976,16 +10130,17 @@ fn ensure_running(state: &MutableState) -> Result<(), BackendError> {
     }
 }
 
+fn ensure_capture_session(state: &MutableState, session_id: SessionId) -> Result<(), BackendError> {
+    ensure_active_session(state, session_id)?;
+    if state.dictation.session_id == Some(session_id) { Ok(()) } else {
+        Err(BackendError::new(BackendErrorCode::Cancelled, "recording progress belongs to a submitted segment"))
+    }
+}
+
 fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<(), BackendError> {
     ensure_running(state)?;
-    if state.dictation.session_id == Some(session_id)
-        && !matches!(
-            state.dictation.phase,
-            DictationPhase::Idle
-                | DictationPhase::Completed
-                | DictationPhase::Cancelled
-                | DictationPhase::Failed
-        )
+    if state.session(session_id).is_some_and(|snapshot| !matches!(snapshot.phase,
+        DictationPhase::Idle | DictationPhase::Completed | DictationPhase::Cancelled | DictationPhase::Failed))
     {
         Ok(())
     } else {
@@ -9998,6 +10153,7 @@ fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<
 
 #[cfg(test)]
 mod tests {
+    include!("recording_overlap_tests.rs");
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;

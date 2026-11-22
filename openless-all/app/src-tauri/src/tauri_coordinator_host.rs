@@ -75,7 +75,7 @@ fn capsule_transcript_rail_position(
             const BODY_BOTTOM_INSET: f64 = 16.0;
             const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
-            const RAIL_GAP: f64 = 8.0;
+            const RAIL_GAP: f64 = 24.0;
             const BADGE_HEIGHT: f64 = 28.0;
             const BADGE_GAP: f64 = 8.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
@@ -2446,6 +2446,11 @@ impl TauriCoordinatorHost {
 
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        if let openless_core::BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            if let Some(native) = self.native.lock().as_ref() {
+                native.update_processing_count(jobs.len(), jobs.first().and_then(|task| task.session_id).map(|id| id.to_string()));
+            }
+        }
         self.capsule.snapshot.lock().record_backend_event(event);
         #[cfg(not(mobile))]
         if crate::desktop_resources::active()
@@ -3018,15 +3023,15 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 64.0, 8.0)
+            (460.0, 52.0, 48.0, 24.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
                 height: 88.0,
-                top_offset: 28.0,
-                gap: 8.0,
+                top_offset: 12.0,
+                gap: 24.0,
             })
         );
 

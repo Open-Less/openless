@@ -185,6 +185,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
 // white-and-blue recording/processing surface inside that stable host.
 
 interface ClassicCapsuleProps {
+  sessionId?: string;
   os: OS;
   state: CapsuleState;
   level: number;
@@ -207,6 +208,7 @@ interface ClassicCapsuleProps {
  * interaction only appears while recording).
  */
 function ClassicCapsule({
+  sessionId,
   os,
   state,
   level,
@@ -225,11 +227,11 @@ function ClassicCapsule({
   const { t } = useTranslation();
   const hostMetrics = getCapsuleHostMetrics(os, translation || qa, 'classic');
   const onCancel = useCallback(() => {
-    void (qa ? qaCancelTurn() : cancelDictation());
-  }, [qa]);
+    void (qa ? qaCancelTurn() : cancelDictation(sessionId));
+  }, [qa, sessionId]);
   const onConfirm = useCallback(() => {
-    void (qa ? qaStopRecording() : stopDictation());
-  }, [qa]);
+    void (qa ? qaStopRecording() : stopDictation(sessionId));
+  }, [qa, sessionId]);
   const asking = qa && isActiveCapsuleState(state) && !leaving;
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
@@ -386,9 +388,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const reducedMotion = useReducedMotion();
   const metrics = getCapsulePillMetrics(os);
   const [state, setState] = useState<CapsuleState>(preview.state);
+  const [displayedSession, setDisplayedSession] = useState<string>();
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
-  const [localAsrText, setLocalAsrText] = useState('');
+  const [localAsrText, setLocalAsrText] = useState(() =>
+    isTauri ? '' : (new URLSearchParams(window.location.search).get('text') ?? ''),
+  );
   const [transcriptEnabled, setTranscriptEnabled] = useState(
     () => isTauri || new URLSearchParams(window.location.search).get('transcript') !== '0',
   );
@@ -407,6 +412,19 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
+  const [processingJobs, setProcessingJobs] = useState<{ sessionId: string }[]>(() =>
+    isTauri
+      ? []
+      : Array.from(
+          {
+            length: Math.min(
+              20,
+              Math.max(0, Number(new URLSearchParams(window.location.search).get('jobs')) || 0),
+            ),
+          },
+          (_, index) => ({ sessionId: `preview-${index}` }),
+        ),
+  );
   const stylePreferenceReadyRef = useRef(false);
   const isClassic = capsuleStyle === 'classic';
   // Windows keeps the transcript in the dedicated capsule-rail HWND. The browser
@@ -467,7 +485,15 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     let stateRevision = 0;
     let suggestionsRevision = 0;
     let fallbackRevision = 0;
+    let jobsRevision = 0;
     void (async () => {
+      if (
+        !(await events.jobs((jobs) => {
+          jobsRevision += 1;
+          setProcessingJobs(jobs);
+        }))
+      )
+        return;
       const replayActiveSessionTranscript = async (sessionId: string) => {
         const snapshot = await getCapsuleSnapshot().catch((error) => {
           if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
@@ -490,6 +516,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           console.info('[capsule] first capsule:state received in webview, state=', p.state);
         }
         setState(p.state);
+        setDisplayedSession(p.sessionId ?? undefined);
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
         const previous = capsuleStateRef.current;
@@ -570,11 +597,13 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       // Disposable cards can miss their first event while the WebView is mounting.
       const suggestionsAtRead = suggestionsRevision;
       const fallbackAtRead = fallbackRevision;
+      const jobsAtRead = jobsRevision;
       try {
         const snapshot = await getCapsuleAuxiliarySnapshot();
         if (cancelled) return;
         if (suggestionsRevision === suggestionsAtRead) setSuggestions(snapshot.suggestions);
         if (fallbackRevision === fallbackAtRead) setInsertFallback(snapshot.fallback);
+        if (jobsRevision === jobsAtRead) setProcessingJobs(snapshot.processing ?? []);
       } catch {
         // Mobile hosts do not expose desktop card snapshots.
       }
@@ -752,7 +781,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     renderedSelectionPolish,
   );
   const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
-  const transcriptVisible = showLiveTranscript && !insertFallback && suggestions.length === 0;
+  const transcriptVisible =
+    showLiveTranscript && (state === 'recording' || (!insertFallback && suggestions.length === 0));
   const observeCaptionTrace = useMainCaptionTrace(
     transcriptViewRef,
     transcriptVisible && !splitTranscriptRail ? liveTranscript : '',
@@ -849,14 +879,14 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // exactly "didn't insert", so letting the terminal state cover it would report a
   // false success. The backend yields in sync: while the card is visible, idle hides
   // without closing the window (see capsule_focus.rs).
-  if (insertFallback) {
+  if (insertFallback && state !== 'recording') {
     return <InsertFallbackCard key={insertFallback.presentationId} payload={insertFallback} />;
   }
 
   // Card takes priority: it shares the window with the capsule but the timing doesn't
   // conflict — it pops after the text is corrected, when the session has long ended;
   // the backend dismisses it when a new dictation starts (see begin_session_as).
-  if (suggestions.length > 0) {
+  if (suggestions.length > 0 && state !== 'recording') {
     return <VocabSuggestionCard suggestions={suggestions} />;
   }
 
@@ -895,9 +925,23 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: isClassic ? 'auto' : 'transform, opacity',
       }}
     >
+      {renderedState === 'recording' && processingJobs.length > 0 && (
+        <button
+          className="ol-processing-satellite"
+          data-capsule-interactive
+          aria-label={`${t('capsule.thinking')} · ${processingJobs.length} · ${t('common.cancel')}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void cancelDictation(processingJobs[0].sessionId)}
+        >
+          <span aria-hidden="true">
+            {processingJobs.length > 1 ? processingJobs.length : '•••'}
+          </span>
+        </button>
+      )}
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule
+            sessionId={displayedSession}
             os={os}
             state={renderedState}
             level={leaving ? 0 : level}

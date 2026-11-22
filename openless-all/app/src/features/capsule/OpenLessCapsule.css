@@ -175,3 +175,32 @@
     transition: none;
   }
 }
+/* Anchored to the body, outside the transcript/menu flow. The neck joins the
+   upper liquid lobe to the recording pill without moving either anchor. */
+.ol-processing-satellite {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  width: 54px;
+  height: 20px;
+  border-radius: 50% 50% 38% 38% / 65% 65% 45% 45%;
+  border: 1px solid var(--ol-capsule-pill-border);
+  background: var(--ol-capsule-pill-bg);
+  box-shadow: var(--ol-capsule-pill-shadow);
+  color: var(--ol-capsule-center-ink);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.ol-processing-satellite::after {
+  content: '';
+  position: absolute;
+  left: 15px;
+  right: 15px;
+  bottom: -5px;
+  height: 8px;
+  border-radius: 0 0 50% 50%;
+  background: inherit;
+}

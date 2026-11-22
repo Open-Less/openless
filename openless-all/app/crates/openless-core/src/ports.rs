@@ -811,6 +811,9 @@ pub trait TextPolisher: Send + Sync {
 }
 
 pub trait TextInserter: Send + Sync {
+    /// Desktop keyboard/input-source preparation must run in the serialized
+    /// processing lane, so a recording never owns another segment's native state.
+    fn defer_preparation_until_stop(&self) -> bool { false }
     /// Freeze the native destination and its matching host-context reader before context or
     /// credentials can await. Only capture identity here; input-source changes belong to `begin`
     /// and its existing cancellation cleanup. Target-independent adapters use None.

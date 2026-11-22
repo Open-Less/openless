@@ -78,6 +78,7 @@
       "contractVersion": "2.0.0",
       "backend": {
         "running": true,
+        "processingDictations": [],
         "dictation": {
           "phase": "idle",
           "sessionId": null,
@@ -110,6 +111,7 @@
       "backend_started",
       "backend_stopping",
       "dictation_state_changed",
+      "dictation_jobs_changed",
       "transcript_delta",
       "polish_delta",
       "dictation_completed",
@@ -168,6 +170,11 @@
             "recordingReady": false
           }
         }
+      },
+      "dictation_jobs_changed": {
+        "sequence": 1,
+        "sessionId": null,
+        "kind": { "type": "dictation_jobs_changed", "payload": [] }
       },
       "transcript_delta": {
         "sequence": 1,
@@ -524,6 +531,7 @@
       "ok": true,
       "payload": {
         "running": true,
+        "processingDictations": [],
         "dictation": {
           "phase": "idle",
           "sessionId": null,

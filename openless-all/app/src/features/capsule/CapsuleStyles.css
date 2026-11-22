@@ -179,6 +179,10 @@
   width: 460px;
 }
 
+.ol-classic-capsule-stack {
+  gap: 24px;
+}
+
 .ol-siri-capsule-stack .ol-capsule-transcript-rail {
   height: 40px;
 }

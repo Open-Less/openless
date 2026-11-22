@@ -242,6 +242,10 @@ pub struct Frame {
     #[serde(default = "default_transcript_font_size")]
     pub transcript_font_size: f32,
     #[serde(default)]
+    pub processing_count: usize,
+    #[serde(default)]
+    pub processing_session_id: Option<String>,
+    #[serde(default)]
     pub labels: CapsuleLabels,
     #[serde(default)]
     pub theme: ThemeMode,
@@ -278,7 +282,8 @@ impl Frame {
     pub fn accepts(&self, session_id: &str, sequence: u64, action: Action) -> bool {
         self.interactive
             && !self.leaving
-            && self.session_id == session_id
+            && (self.session_id == session_id || (action == Action::Cancel
+                && self.state.phase == "recording" && self.processing_session_id.as_deref() == Some(session_id)))
             && sequence <= self.sequence
             && match action {
                 Action::Confirm => self.state.phase == "recording",
@@ -384,6 +389,8 @@ mod tests {
             transcript: String::new(),
             show_transcript: true,
             transcript_font_size: 15.0,
+            processing_count: 0,
+            processing_session_id: None,
             labels: Default::default(),
             theme: ThemeMode::System,
             leaving: false,
@@ -402,6 +409,20 @@ mod tests {
         assert!(!frame.accepts("new", 42, Action::Confirm));
         frame.state.phase = "completed".into();
         assert!(!frame.accepts("new", 42, Action::Cancel));
+    }
+
+    #[test]
+    fn background_cancel_only_accepts_the_displayed_job_without_cancelling_capture() {
+        let mut recording = frame();
+        recording.processing_count = 1;
+        recording.processing_session_id = Some("background-a".into());
+        assert!(recording.accepts("background-a", 42, Action::Cancel));
+        assert!(!recording.accepts("background-a", 42, Action::Confirm));
+        assert!(recording.accepts("new", 42, Action::Cancel));
+        recording.processing_session_id = Some("background-b".into());
+        assert!(!recording.accepts("background-a", 42, Action::Cancel));
+        recording.state.phase = "completed".into();
+        assert!(!recording.accepts("background-b", 42, Action::Cancel));
     }
     #[test]
     fn transcript_updates_without_volume_frames_but_never_crosses_sessions_or_terminal_states() {

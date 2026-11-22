@@ -22,7 +22,7 @@ const BUTTON_RADIUS: f32 = 12.0;
 const BUTTON_OFFSET: f32 = RECORDING_WIDTH / 2.0 - 4.0 - BUTTON_RADIUS;
 // Measured from the 60 fps reference: 232×64 physical pixels at 2×.
 const ENVELOPE: [f32; 11] = [0.22, 0.34, 0.48, 0.65, 0.82, 1.0, 0.82, 0.65, 0.48, 0.34, 0.22];
-const STACK_GAP: f32 = 8.0;
+const STACK_GAP: f32 = 24.0;
 const BADGE_HEIGHT: f32 = 28.0;
 const RAIL_HEIGHT: f32 = 52.0;
 const RAIL_PAD: f32 = 18.0;
@@ -194,6 +194,7 @@ enum Target {
     Confirm,
     /// `.ol-default-processing-cancel`: the whole processing pill.
     Processing,
+    Background,
 }
 
 /// `CapsuleWaveform`: the level is smoothed per frame, then shaped by the
@@ -481,6 +482,9 @@ impl DefaultCapsule {
         if frame.state.phase == "recording" {
             regions.push(Rect::from_center_size(pos2(center.x + BUTTON_OFFSET, center.y),
                 egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0)));
+            if frame.processing_session_id.is_some() {
+                regions.push(Rect::from_center_size(pos2(center.x, shell.top() - 8.0), vec2(54.0, 20.0)));
+            }
         }
         regions
     }
@@ -629,10 +633,15 @@ impl DefaultCapsule {
             .filter(|&point| {
                 frame.interactive
                     && !leaving
-                    && shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
+                    && (shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
+                        || recording && frame.processing_session_id.is_some()
+                            && Rect::from_center_size(pos2(center_x, body_top - 8.0), vec2(54.0, 20.0)).contains(point))
             })
             .and_then(|point| {
                 if recording {
+                    if frame.processing_session_id.is_some() && point.y < shell.top() {
+                        return Some(Target::Background);
+                    }
                     if point.distance(cancel_center) <= BUTTON_RADIUS {
                         Some(Target::Cancel)
                     } else if point.distance(confirm_center) <= BUTTON_RADIUS {
@@ -655,6 +664,7 @@ impl DefaultCapsule {
                 action = match target {
                     Target::Confirm => CapsuleAction::Confirm,
                     Target::Cancel | Target::Processing => CapsuleAction::Cancel,
+                    Target::Background => CapsuleAction::CancelProcessing,
                 };
             }
         } else if !down {
@@ -686,6 +696,15 @@ impl DefaultCapsule {
             && matches!(phase, "recording" | "transcribing" | "polishing")
             && !rail_text.is_empty();
         let rail_bottom = body_top - STACK_GAP;
+        if recording && !leaving && frame.processing_count > 0 {
+            let lobe = Rect::from_center_size(pos2(center_x, body_top - 8.0), vec2(54.0, 20.0));
+            painter.rect_filled(lobe, 10, tokens.surface);
+            painter.rect_stroke(lobe, 10, Stroke::new(0.7, tokens.line), StrokeKind::Inside);
+            painter.rect_filled(Rect::from_center_size(pos2(center_x, body_top + 1.0), vec2(24.0, 8.0)), 4, tokens.surface);
+            painter.text(lobe.center(), egui::Align2::CENTER_CENTER,
+                if frame.processing_count > 1 { frame.processing_count.to_string() } else { "•••".into() },
+                egui::FontId::proportional(11.0), tokens.ink);
+        }
         if rail_visible {
             let rail = self.rail.get_or_insert_with(|| Rail::new(center_x));
             rail.update(
@@ -705,7 +724,7 @@ impl DefaultCapsule {
         let badge_bottom = body_top
             - STACK_GAP
             - if rail_visible && (state.translation_active || state.qa) {
-                RAIL_HEIGHT + STACK_GAP
+                RAIL_HEIGHT + 8.0
             } else {
                 0.0
             };
@@ -1162,6 +1181,8 @@ mod tests {
             transcript: String::new(),
             show_transcript: false,
             transcript_font_size: 15.0,
+            processing_count: 0,
+            processing_session_id: None,
             labels: CapsuleLabels::for_locale("zh-CN"),
             theme: ThemeMode::System,
             leaving: false,

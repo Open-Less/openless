@@ -65,7 +65,25 @@ async fn dispatch(
         }
         return Ok(openless_core::CliDispatchOutcome::Noop);
     }
-    inner.backend.dispatch_dictation_hotkey_edge(edge).await
+    // Preserve FIFO through admission/device release, then let this segment's
+    // result continue in its owned task instead of blocking the hotkey reader.
+    let previous = inner.backend.snapshot().dictation.session_id;
+    let backend = Arc::clone(&inner.backend);
+    let (send, mut receive) = tokio::sync::oneshot::channel();
+    inner.host.spawn(async move {
+        let result = backend.dispatch_dictation_hotkey_edge(edge).await;
+        if let Err(error) = &result { log::warn!("[dictation] hotkey task failed: {error}"); }
+        let _ = send.send(result);
+    });
+    if let Some(id) = previous {
+        tokio::select! {
+                result = &mut receive => return result.unwrap_or_else(|_| Err(openless_core::BackendError::new(
+                    openless_core::BackendErrorCode::Cancelled, "hotkey task stopped"))),
+                _ = inner.backend.wait_for_dictation_submission(id) => return Ok(openless_core::CliDispatchOutcome::Noop),
+        }
+    }
+    receive.await.unwrap_or_else(|_| Err(openless_core::BackendError::new(
+        openless_core::BackendErrorCode::Cancelled, "hotkey task stopped")))
 }
 
 pub(super) async fn handle_pressed_edge(
@@ -160,7 +178,12 @@ pub(super) async fn cancel_active_session(inner: &Arc<Inner>) -> bool {
             return false;
         }
     }
-    match inner.backend.cancel_active_voice_session(None).await {
+    let result = if let Some(id) = inner.backend.dictation_cancel_target() {
+        inner.backend.cancel_dictation(Some(id)).await
+    } else {
+        inner.backend.cancel_active_voice_session(None).await
+    };
+    match result {
         Ok(()) => {
             inner.host.hide_less_computer_glow();
             true

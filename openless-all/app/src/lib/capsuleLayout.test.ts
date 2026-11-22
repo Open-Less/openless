@@ -153,13 +153,13 @@ assertEqual(
 );
 assertEqual(
   classicExternalGeometry.railTop,
-  28,
+  12,
   'Classic external rail clears the translation badge lane',
 );
-assertEqual(classicExternalGeometry.badgeTop, 88, 'Classic external badge sits above the pill');
+assertEqual(classicExternalGeometry.badgeTop, 72, 'Classic external badge sits above the pill');
 assertEqual(
   classicExternalGeometry.badgeBottom,
-  116,
+  100,
   'Classic external badge leaves an 8px body gap',
 );
 if (
@@ -172,10 +172,10 @@ if (
 const classicSameWindowGeometry = getClassicCapsuleGeometry('win', true, true, true);
 assertEqual(
   classicSameWindowGeometry.railTop,
-  64,
+  48,
   'Classic same-window rail keeps the body rail anchor',
 );
-assertEqual(classicSameWindowGeometry.badgeBottom, 56, 'Classic same-window badge clears the rail');
+assertEqual(classicSameWindowGeometry.badgeBottom, 40, 'Classic same-window badge clears the rail');
 for (const os of ['mac', 'win'] as const) {
   const external = getClassicCapsuleGeometry(os, true, true, false);
   if (
@@ -207,12 +207,12 @@ assertEqual(
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', false, true)?.topOffset,
-  64,
+  48,
   'Classic compact external rail anchors to the 172px body content top',
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', true, true)?.topOffset,
-  28,
+  12,
   'Classic translation external rail clears the explicit badge lane',
 );
 const typelessCompactRail = getCapsuleTranscriptRailPosition('typeless', false, true);

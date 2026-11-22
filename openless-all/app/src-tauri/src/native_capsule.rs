@@ -104,19 +104,21 @@ impl NativeCapsule {
                         }
                     }
                     let snapshot = backend.snapshot().dictation;
+                    let id = uuid::Uuid::parse_str(&session_id).ok().map(openless_core::SessionId::from_uuid);
                     if snapshot.session_id.map(|id| id.to_string()).as_deref()
                         != Some(session_id.as_str())
+                        && !backend.snapshot().processing_dictations.iter().any(|task| task.session_id == id)
                     {
                         return;
                     }
                     match action {
                         Action::Cancel => {
-                            coordinator.cancel_active_voice().await;
+                            if let Some(id) = id { let _ = backend.cancel_dictation(Some(id)).await; }
                         }
                         Action::Confirm
                             if snapshot.phase == openless_core::DictationPhase::Recording =>
                         {
-                            let _ = backend.stop_dictation().await;
+                            if let Some(id) = id { let _ = backend.submit_dictation_session(id, Default::default()).await; }
                         }
                         _ => {}
                     }
@@ -179,6 +181,16 @@ impl NativeCapsule {
         let mut latest = self.latest.lock();
         if let Some(frame) = latest.frame.as_mut() {
             if frame.update_transcript(session_id, text) {
+                self.send_frames(&latest);
+            }
+        }
+    }
+    pub(crate) fn update_processing_count(&self, count: usize, session_id: Option<String>) {
+        let mut latest = self.latest.lock();
+        if let Some(frame) = latest.frame.as_mut() {
+            if frame.processing_count != count || frame.processing_session_id != session_id {
+                frame.processing_count = count;
+                frame.processing_session_id = session_id;
                 self.send_frames(&latest);
             }
         }
@@ -320,6 +332,8 @@ impl NativeCapsule {
             transcript,
             show_transcript: preferences.capsule_transcript_enabled,
             transcript_font_size: preferences.capsule_transcript_font_size as f32,
+            processing_count: coordinator.backend().snapshot().processing_dictations.len(),
+            processing_session_id: coordinator.backend().snapshot().processing_dictations.first().and_then(|task| task.session_id).map(|id| id.to_string()),
             labels: CapsuleLabels::for_locale(&self.locale.lock()),
             theme: match preferences.theme_mode {
                 ThemeMode::System => openless_capsule::ThemeMode::System,
@@ -559,6 +573,8 @@ mod theme_tests {
                     transcript: "keep this transcript".into(),
                     show_transcript: true,
                     transcript_font_size: 15.0,
+                    processing_count: 0,
+                    processing_session_id: None,
                     labels: CapsuleLabels::for_locale("zh-CN"),
                     theme: openless_capsule::ThemeMode::Light,
                     leaving,

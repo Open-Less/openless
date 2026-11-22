@@ -41,7 +41,7 @@ flowchart LR
 
 ### 听写
 
-热键或原生按钮 → 宿主录音会话 → [dictation_engine.rs](../openless-all/app/crates/openless-core/src/dictation_engine.rs) → 转写及可选润色 → 宿主落字 → 历史与终态事件。宿主提供麦克风、目标编辑器和实际写入结果。录音取消、错误和超时沿原会话清理资源，迟到结果按会话身份丢弃。
+热键或原生按钮 → 宿主录音会话 → [dictation_engine.rs](../openless-all/app/crates/openless-core/src/dictation_engine.rs) → 转写及可选润色 → 宿主落字 → 历史与终态事件。宿主提供麦克风、目标编辑器和实际写入结果。设备确认停止后，采集拥有者转成保留原 sessionId 与冻结上下文的后台任务，下一段无需等待后处理；最终处理按提交顺序进行。录音取消、错误和超时只清理本段资源，旧段不能改写下一段状态。见[采集、任务与安全写回契约](development/recording-overlap.md)。
 
 云识别和润色由 Core 选择渠道并发送请求。本地模型的下载和激活按模型家族由 Core 与宿主共同负责。点击胶囊、流式原文与写入目标编辑器分别走各自的界面和宿主路径。见[语音链路](development/speech.md)、[本地模型](development/local-models.md)和[自定义润色策略](development/polish-strategy.md)。
 

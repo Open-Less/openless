@@ -77,6 +77,14 @@ fn with_voice_edit_uia<T>(
     }
 }
 
+/// Native focused-control identity only; never reads document or selection text.
+pub(crate) fn focused_input_identity() -> Option<Vec<i32>> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia.GetFocusedElement().map_err(|_| "inputTargetUnavailable".to_string())?;
+        runtime_id(&element).map_err(|_| "inputTargetUnavailable".to_string())
+    }).ok().filter(|identity| !identity.is_empty())
+}
+
 pub(super) fn read_qa_selection() -> Option<String> {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia

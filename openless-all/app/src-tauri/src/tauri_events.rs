@@ -199,6 +199,13 @@ async fn forward_legacy_event(
             let _ = app.emit("vocab:updated", ());
         }
         BackendEventKind::DictationStateChanged(snapshot) => {
+            let current = backend.snapshot();
+            if current.dictation.session_id.is_some_and(|id| Some(id) != snapshot.session_id) {
+                return;
+            }
+            if current.dictation.session_id.is_none()
+                && current.processing_dictations.first().is_some_and(|job| job.session_id != snapshot.session_id)
+            { return; }
             capsule_owners.transcription_notice = None;
             if snapshot.phase != DictationPhase::Idle {
                 capsule_owners.qa_voice = None;
@@ -208,6 +215,15 @@ async fn forward_legacy_event(
                 return;
             }
             emit_dictation_state(app, backend, snapshot)
+        }
+        BackendEventKind::DictationJobsChanged(jobs) => {
+            let _ = app.emit("dictation:jobs", &jobs);
+            let current = backend.snapshot();
+            if current.dictation.session_id.is_none() {
+                if let Some(job) = jobs.first() {
+                    emit_dictation_state(app, backend, job.clone());
+                }
+            }
         }
         BackendEventKind::VoiceActivationStateChanged(state) => {
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
@@ -259,6 +275,9 @@ async fn forward_legacy_event(
             });
         }
         BackendEventKind::InsertFallback(fallback) => {
+            if backend.snapshot().dictation.session_id.is_some_and(|id| Some(id) != session_id) {
+                return;
+            }
             if let Some(text) = fallback.copied_text {
                 if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                     coordinator.show_core_insert_fallback(text, &fallback.reason);
@@ -822,6 +841,7 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut Ca
     }
     emit_preferences(app, backend);
     let snapshot = backend.snapshot();
+    let _ = app.emit("dictation:jobs", &snapshot.processing_dictations);
     if let Some((owner, _)) = owners
         .qa_capsule
         .filter(|_| snapshot.dictation.phase == DictationPhase::Idle)
@@ -836,7 +856,9 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut Ca
             });
         }
     } else {
-        emit_dictation_state(app, backend, snapshot.dictation.clone());
+        emit_dictation_state(app, backend, if snapshot.dictation.session_id.is_none() {
+            snapshot.processing_dictations.first().cloned().unwrap_or_else(|| snapshot.dictation.clone())
+        } else { snapshot.dictation.clone() });
     }
     let _ = app.emit("credentials:changed", snapshot.credentials);
     let _ = app.emit("vocab:updated", ());

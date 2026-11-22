@@ -6,6 +6,7 @@ use crate::{CapsuleLabels, CapsulePopupState};
 pub enum CapsuleAction {
     None,
     Cancel,
+    CancelProcessing,
     Confirm,
 }
 

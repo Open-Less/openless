@@ -62,6 +62,9 @@ pub struct SelectionContext {
 /// paste.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget {
+    strict_input_target: bool,
+    #[cfg(target_os = "windows")]
+    dictation_control: Option<Vec<i32>>,
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
     #[cfg(target_os = "windows")]
@@ -93,6 +96,7 @@ struct MacosSelectionTarget {
     /// preview is confirmed.
     front_app_pid: Option<i32>,
     dictation_window: Option<u32>,
+    dictation_element: Option<std::sync::Arc<macos_ax::FocusedElement>>,
 }
 
 /// Result of the final target/selection revalidation immediately before a
@@ -354,7 +358,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
             || windows_app_for_window(foreground),
             |target| crate::activity_app_icons::app_for_pid(target.focused_process_id),
         );
-        return SelectionInsertionTarget { windows, windows_app };
+        return SelectionInsertionTarget { windows, windows_app, ..Default::default() };
     }
 
     #[cfg(target_os = "macos")]
@@ -373,7 +377,9 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
                 bundle_id,
                 front_app_pid,
                 dictation_window: None,
+                dictation_element: None,
             }),
+            ..Default::default()
         };
     }
 
@@ -384,12 +390,16 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 }
 
 pub(crate) fn capture_dictation_insertion_target() -> SelectionInsertionTarget {
-    let target = capture_selection_insertion_target();
+    let mut target = capture_selection_insertion_target();
+    target.strict_input_target = true;
+    #[cfg(target_os = "windows")]
+    { target.dictation_control = crate::host_document::focused_input_identity(); }
     #[cfg(target_os = "macos")]
     {
         let mut target = target;
         if let Some(app) = target.macos.as_mut() {
             app.dictation_window = app.front_app_pid.and_then(macos_front_window_id);
+            app.dictation_element = macos_ax::capture_focused_element();
         }
         return target;
     }
@@ -430,6 +440,7 @@ fn macos_target_is_current(target: &MacosSelectionTarget, pid: i32) -> bool {
     current_front_app_pid() == Some(pid)
         && target.dictation_window.is_none_or(|window| {
             macos_front_window_id(pid) == Some(window) && current_front_app_pid() == Some(pid)
+                && target.dictation_element.as_ref().is_some_and(|element| element.is_current())
         })
 }
 
@@ -467,13 +478,16 @@ pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionT
         let Some(captured) = target.windows else {
             return false;
         };
-        return capture_windows_selection_target().as_ref() == Some(&captured);
+        return capture_windows_selection_target().as_ref() == Some(&captured)
+            && (!target.strict_input_target || target.dictation_control.as_ref().is_some_and(|identity|
+                crate::host_document::focused_input_identity().as_ref() == Some(identity)));
     }
 
     #[cfg(target_os = "macos")]
     {
         return target.macos.as_ref().is_some_and(|captured| {
-            captured.front_app_pid.is_some_and(|pid| macos_target_is_current(captured, pid))
+            (!target.strict_input_target || captured.dictation_window.is_some() && captured.dictation_element.is_some())
+                && captured.front_app_pid.is_some_and(|pid| macos_target_is_current(captured, pid))
         });
     }
 
@@ -1126,7 +1140,9 @@ mod macos_ax {
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
+        fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
         fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+        fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, seconds: f32) -> AxError;
         fn AXUIElementCopyAttributeValue(
             element: AxUiElementRef,
             attribute: CFStringRef,
@@ -1162,6 +1178,31 @@ mod macos_ax {
     }
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    /// A retained native identity, never an AX text snapshot. AX objects may be
+    /// compared from the insertion worker; ownership ends with the segment.
+    #[derive(Debug)]
+    pub(super) struct FocusedElement(usize);
+    impl Drop for FocusedElement {
+        fn drop(&mut self) { unsafe { CFRelease(self.0 as CFTypeRef); } }
+    }
+    impl FocusedElement {
+        pub(super) fn is_current(&self) -> bool {
+            capture_focused_element().is_some_and(|current| unsafe {
+                CFEqual(self.0 as CFTypeRef, current.0 as CFTypeRef) != 0
+            })
+        }
+    }
+    pub(super) fn capture_focused_element() -> Option<std::sync::Arc<FocusedElement>> {
+        unsafe {
+            let system = AXUIElementCreateSystemWide();
+            if system.is_null() { return None; }
+            AXUIElementSetMessagingTimeout(system, 0.2);
+            let element = attribute(system, b"AXFocusedUIElement\0");
+            CFRelease(system as CFTypeRef);
+            element.map(|element| std::sync::Arc::new(FocusedElement(element as usize)))
+        }
+    }
 
     /// Query the system-wide AX tree for the focused element, then read its selected text.
     /// Returns None on failure (missing permission / no focus / control lacks the selection
@@ -1904,6 +1945,7 @@ mod tests {
             &SelectionInsertionTarget {
                 windows: Some(windows_target(10)),
                 windows_app: None,
+                ..Default::default()
             }
         ));
     }

@@ -22,6 +22,7 @@ struct ActiveVoiceSession {
 #[derive(Default)]
 pub(crate) struct VoiceSessionGate {
     active: Mutex<Option<ActiveVoiceSession>>,
+    submitted: Mutex<std::collections::HashMap<SessionId, ActiveVoiceSession>>,
     restore_guard: OnceLock<crate::domains::RuntimeRestoreGuard>,
 }
 
@@ -41,6 +42,17 @@ impl VoiceSessionGate {
     pub(crate) fn runtime_restore_idle(&self) -> bool {
         // A released owner with native cleanup holds is deliberately not idle.
         self.active.lock().is_ok_and(|active| active.is_none())
+            && self.submitted.lock().is_ok_and(|submitted| submitted.is_empty())
+    }
+
+    /// Called only after the recorder confirms device release. Processing holds
+    /// retain cancellation/restore ownership without retaining the microphone.
+    pub(crate) fn submit(&self, session_id: SessionId) {
+        let mut active = self.active.lock().expect("voice session lock poisoned");
+        if active.as_ref().is_some_and(|current| current.session_id == session_id) {
+            self.submitted.lock().expect("submitted voice lock poisoned")
+                .insert(session_id, active.take().unwrap());
+        }
     }
 
     pub(crate) fn acquire(
@@ -81,6 +93,13 @@ impl VoiceSessionGate {
 
     pub(crate) fn release(&self, session_id: SessionId) {
         let mut active = self.active.lock().expect("voice session lock poisoned");
+        let mut submitted = self.submitted.lock().expect("submitted voice lock poisoned");
+        if let Some(current) = submitted.get_mut(&session_id) {
+            current.released = true;
+            current.cancel.cancel();
+            if current.resources == 0 { submitted.remove(&session_id); }
+            return;
+        }
         if let Some(current) = active
             .as_mut()
             .filter(|current| current.session_id == session_id)
@@ -100,8 +119,8 @@ impl VoiceSessionGate {
         session_id: SessionId,
     ) -> Result<Arc<VoiceResourceHold>, BackendError> {
         let mut active = self.active.lock().expect("voice session lock poisoned");
-        let current = active
-            .as_mut()
+        let mut submitted = self.submitted.lock().expect("submitted voice lock poisoned");
+        let current = submitted.get_mut(&session_id).or_else(|| active.as_mut())
             .filter(|current| current.session_id == session_id && !current.released)
             .ok_or_else(|| {
                 BackendError::new(
@@ -131,6 +150,12 @@ impl Drop for VoiceResourceHold {
             .active
             .lock()
             .expect("voice session lock poisoned");
+        let mut submitted = self.gate.submitted.lock().expect("submitted voice lock poisoned");
+        if let Some(current) = submitted.get_mut(&self.session_id) {
+            current.resources -= 1;
+            if current.released && current.resources == 0 { submitted.remove(&self.session_id); }
+            return;
+        }
         if let Some(current) = active
             .as_mut()
             .filter(|current| current.session_id == self.session_id)

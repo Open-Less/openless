@@ -4227,6 +4227,7 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
+    fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         #[cfg(not(mobile))]
         let insertion_target = crate::selection::capture_dictation_insertion_target();
@@ -4275,6 +4276,11 @@ impl CoreTextInserter for TauriTextInserter {
             // whichever application happens to be focused at the end.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
+            #[cfg(not(mobile))]
+            if !crate::selection::selection_insertion_target_is_current(&insertion_target) {
+                return Err(BackendError::new(BackendErrorCode::InvalidState,
+                    "original input target changed; no text was inserted"));
+            }
             #[cfg(target_os = "windows")]
             if let Some(handle) = app.lock().as_ref() {
                 if let Some(state) = handle.try_state::<VocabPlacementState>() {
@@ -4781,12 +4787,12 @@ impl TauriTextInsertionSession {
     }
 
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
-        crate::selection::reactivate_selection_insertion_target(&self.insertion_target)
+        crate::selection::selection_insertion_target_is_current(&self.insertion_target)
             .then_some(())
             .ok_or_else(|| {
                 BackendError::new(
-                    BackendErrorCode::Platform,
-                    "original text insertion target is unavailable",
+                    BackendErrorCode::InvalidState,
+                    "original input target changed; no text was inserted",
                 )
             })
     }
