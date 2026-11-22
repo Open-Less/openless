@@ -1,4 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   AppStyleAssignment,
@@ -19,12 +26,17 @@ import { SnapshotQuery } from '../../data/snapshot-query';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 import { listenHistoryChanges } from '../../runtime/domain-events';
 import { getShortcutPlatform } from '../../runtime/environment';
+import { listenMainWindowFocus } from '../../runtime/windows/mainWindowFocus';
 import { Button } from '../../ui/controls/Button';
 import { Select } from '../../ui/controls/Select';
 import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
-import { AppMembershipPicker, type AppMemberOption } from './AppMembershipPicker';
+import {
+  AppMembershipPicker,
+  AppStylePagination,
+  type AppMemberOption,
+} from './AppMembershipPicker';
 import './app-style-routing.css';
 
 export function AppStyleRouting() {
@@ -42,25 +54,37 @@ export function AppStyleRouting() {
   const [catalogError, setCatalogError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [icons, setIcons] = useState<Record<string, string>>({});
+  const catalogRequest = useRef<Promise<void> | null>(null);
+  const appList = useRef<HTMLDivElement>(null);
+  const [appPage, setAppPage] = useState(0);
+  const [pageSize, setPageSize] = useState(3);
 
-  const refreshCatalog = async () => {
+  const refreshCatalog = useCallback(() => {
+    if (catalogRequest.current) return catalogRequest.current;
     setRefreshing(true);
-    try {
-      await refreshAppStyleCatalog();
-      await query.refresh();
-      setCatalogError(false);
-    } catch {
-      setCatalogError(true);
-    } finally {
-      setRefreshing(false);
-    }
-  };
+    catalogRequest.current = (async () => {
+      try {
+        await refreshAppStyleCatalog();
+        await query.refresh();
+        setCatalogError(false);
+      } catch {
+        setCatalogError(true);
+      } finally {
+        setRefreshing(false);
+        catalogRequest.current = null;
+      }
+    })();
+    return catalogRequest.current;
+  }, [query]);
 
   useEffect(() => {
     let live = true;
     const stops: Array<() => void> = [];
     const refresh = () => {
       if (document.visibilityState === 'visible') void query.refresh();
+    };
+    const renewCatalog = () => {
+      if (document.visibilityState === 'visible') void refreshCatalog();
     };
     const keep = async (source: Promise<() => void>) => {
       const stop = await source;
@@ -70,17 +94,36 @@ export function AppStyleRouting() {
     void Promise.allSettled([
       keep(listenHistoryChanges(refresh)),
       keep(listenStylePackChanges(() => packQuery.invalidate())),
+      keep(listenMainWindowFocus(renewCatalog)),
     ]);
-    void refreshCatalog();
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
+    renewCatalog();
+    window.addEventListener('focus', renewCatalog);
+    document.addEventListener('visibilitychange', renewCatalog);
     return () => {
       live = false;
       stops.forEach((stop) => stop());
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', renewCatalog);
+      document.removeEventListener('visibilitychange', renewCatalog);
     };
-  }, [query, packQuery]);
+  }, [query, packQuery, refreshCatalog]);
+
+  useLayoutEffect(() => {
+    const list = appList.current;
+    if (!list) return;
+    const measure = () => {
+      const rowHeight = Number.parseFloat(getComputedStyle(list).fontSize) * 6 + 24;
+      setPageSize(Math.max(1, Math.floor(list.clientHeight / rowHeight)));
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    measure();
+    return () => observer.disconnect();
+  }, []);
+
+  const apps = [...(routing?.apps ?? [])].sort((a, b) => a.app.name.localeCompare(b.app.name));
+  const pages = Math.max(1, Math.ceil(apps.length / pageSize));
+  const currentPage = Math.min(appPage, pages - 1);
+  useEffect(() => setAppPage((current) => Math.min(current, pages - 1)), [pages]);
 
   const appIds =
     routing?.apps
@@ -206,52 +249,76 @@ export function AppStyleRouting() {
     );
   };
 
+  const clearHistory = async () => {
+    if (
+      await confirm({
+        title: t('appStyles.clearHistory'),
+        description: t('appStyles.clearConfirm'),
+        confirmLabel: t('appStyles.clearHistory'),
+        cancelLabel: t('common.cancel'),
+        tone: 'danger',
+      })
+    ) {
+      await commit(clearInputAppHistory);
+      setAppPage(0);
+    }
+  };
+
   return (
     <div className="ol-app-style-page">
       <PageHeader
+        compact
         title={t('appStyles.title')}
         right={
-          <Button disabled={refreshing} onClick={() => void refreshCatalog()}>
-            {t('appStyles.refreshCatalog')}
+          <Button
+            disabled={busy || !routing?.apps.some((entry) => entry.seen)}
+            onClick={() => void clearHistory()}
+          >
+            {t('appStyles.clearHistory')}
           </Button>
         }
       />
-      <p className="ol-app-style-hint">{t('appStyles.priority')}</p>
-      {catalogError && (
-        <p role="status" className="ol-app-style-hint">
-          {t(
-            routing?.catalog.categories.length
-              ? 'appStyles.cachedCatalog'
-              : 'appStyles.catalogUnavailable',
-          )}
-        </p>
-      )}
-      {(error || Boolean(readError)) && <p role="alert">{t('common.operationFailed')}</p>}
+      <p
+        className="ol-app-style-hint ol-app-style-status"
+        role={error || readError ? 'alert' : catalogError ? 'status' : undefined}
+      >
+        {error || readError
+          ? t('common.operationFailed')
+          : catalogError
+            ? t(
+                routing?.catalog.categories.length
+                  ? 'appStyles.cachedCatalog'
+                  : 'appStyles.catalogUnavailable',
+              )
+            : t('appStyles.priority')}
+      </p>
       <div className="ol-app-style-panels">
         <Card className="ol-app-style-panel">
           <h2>{t('appStyles.byCategory')}</h2>
-          <div className="ol-app-style-panel-body">
+          <div
+            className="ol-app-style-panel-body ol-app-style-categories"
+            style={{
+              gridTemplateRows: `repeat(${routing?.catalog.categories.length || 1}, minmax(0, 1fr))`,
+            }}
+          >
             {routing?.catalog.categories.map((category) => (
               <section className="ol-app-style-group" key={category.id}>
-                <h3>{categoryName(category)}</h3>
-                <div className="ol-app-style-category-controls">
-                  <AppMembershipPicker
-                    category={category.id}
-                    categoryName={categoryName(category)}
-                    options={memberOptions}
-                    busy={busy}
-                    onToggle={(app) => toggleMember(app, category.id)}
-                  />
-                  {picker(
-                    {
-                      target: 'category',
-                      category: category.id,
-                      stylePackId: routing.categories[category.id] ?? null,
-                    },
-                    categoryName(category),
-                    t('appStyles.useCurrent'),
-                  )}
-                </div>
+                <AppMembershipPicker
+                  category={category.id}
+                  categoryName={categoryName(category)}
+                  options={memberOptions}
+                  busy={busy}
+                  onToggle={(app) => toggleMember(app, category.id)}
+                />
+                {picker(
+                  {
+                    target: 'category',
+                    category: category.id,
+                    stylePackId: routing.categories[category.id] ?? null,
+                  },
+                  categoryName(category),
+                  t('appStyles.useCurrent'),
+                )}
               </section>
             ))}
             {!routing?.catalog.categories.length && (
@@ -263,9 +330,13 @@ export function AppStyleRouting() {
         </Card>
         <Card className="ol-app-style-panel">
           <h2>{t('appStyles.byApp')}</h2>
-          <div className="ol-app-style-panel-body">
-            {[...(routing?.apps ?? [])]
-              .sort((a, b) => a.app.name.localeCompare(b.app.name))
+          <div
+            ref={appList}
+            className="ol-app-style-panel-body ol-app-style-apps"
+            style={{ gridTemplateRows: `repeat(${pageSize}, minmax(0, 1fr))` }}
+          >
+            {apps
+              .slice(currentPage * pageSize, (currentPage + 1) * pageSize)
               .map(({ app, category, stylePackId }) => {
                 const categoryPack = category
                   ? packs?.find((pack) => pack.enabled && pack.id === routing?.categories[category])
@@ -297,24 +368,16 @@ export function AppStyleRouting() {
               })}
             {!routing?.apps.length && <p className="ol-app-style-hint">{t('appStyles.empty')}</p>}
           </div>
-          <Button
-            variant="ghost"
-            disabled={busy || !routing?.apps.some((entry) => entry.seen)}
-            onClick={async () => {
-              if (
-                await confirm({
-                  title: t('appStyles.clearHistory'),
-                  description: t('appStyles.clearConfirm'),
-                  confirmLabel: t('appStyles.clearHistory'),
-                  cancelLabel: t('common.cancel'),
-                  tone: 'danger',
-                })
-              )
-                await commit(clearInputAppHistory);
-            }}
-          >
-            {t('appStyles.clearHistory')}
-          </Button>
+          <div className="ol-app-style-pager-slot">
+            {pages > 1 && (
+              <AppStylePagination
+                page={currentPage}
+                pages={pages}
+                onChange={setAppPage}
+                disabled={busy}
+              />
+            )}
+          </div>
         </Card>
       </div>
     </div>

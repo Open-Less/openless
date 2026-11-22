@@ -1,4 +1,7 @@
 .ol-app-style-page {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
@@ -26,10 +29,22 @@
 .ol-app-style-panel-body {
   min-height: 0;
   flex: 1 1 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+.ol-app-style-page ::-webkit-scrollbar {
+  display: none;
+}
+.ol-app-style-categories,
+.ol-app-style-apps {
+  display: grid;
+  min-height: 0;
+}
+.ol-app-style-status {
+  height: 3em;
+  flex-shrink: 0;
+  line-height: 1.5;
+  margin-top: 8px;
 }
 .ol-app-style-hint {
   color: var(--ol-ink-3);
@@ -37,32 +52,40 @@
   margin: 0 0 14px;
 }
 .ol-app-style-group {
-  padding: 12px;
-  margin-bottom: 12px;
-  border-radius: var(--ol-r-md);
-  background: var(--ol-surface-2);
-}
-.ol-app-style-group > h3 {
-  margin: 0 0 10px;
-  font-size: 14px;
-}
-.ol-app-style-category-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(72px, 0.6fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ol-line);
+}
+.ol-app-category-button.ol-action-button {
+  min-width: 0;
+}
+.ol-app-category-button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+.ol-app-category-button > svg {
+  flex-shrink: 0;
 }
 .ol-app-style-page .ol-select-trigger {
   width: 100%;
   min-width: 0;
   height: auto;
-  min-height: 34px;
-  padding-block: 7px;
+  min-height: 32px;
+  padding-block: 6px;
+  line-height: 1.3;
 }
 .ol-app-style-row {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 4px;
+  justify-content: center;
+  min-height: 0;
+  gap: 8px;
+  padding: 6px 4px;
   border-bottom: 1px solid var(--ol-line);
 }
 .ol-app-style-name {
@@ -92,27 +115,43 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.ol-app-members-popup {
-  width: min(340px, var(--available-width));
-  max-width: calc(100vw - 32px);
-  padding: 8px;
+.ol-app-members-dialog {
+  height: min(540px, calc(100dvh - 48px));
 }
-.ol-app-members-list {
-  max-height: min(320px, 45vh);
-  overflow: auto;
-  overscroll-behavior: contain;
-  margin-top: 6px;
+.ol-app-members-dialog .ol-dialog-body {
+  flex: 1 1 0;
+  overflow: hidden;
+}
+.ol-app-members-dialog .ol-dialog-footer {
+  justify-content: space-between;
+}
+.ol-app-members-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: var(--ol-font-weight-semibold);
+}
+.ol-app-members-search {
+  padding: 0 24px 16px;
+}
+.ol-app-members-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
 }
 .ol-app-member-option {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 36px;
-  padding: 8px;
-  border: 0;
-  border-radius: var(--ol-r-sm);
-  background: transparent;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
   color: var(--ol-ink);
   font: inherit;
   text-align: start;
@@ -121,7 +160,10 @@
 }
 .ol-app-member-option:hover,
 .ol-app-member-option:focus-visible {
-  background: var(--ol-surface-2);
+  background: var(--ol-control-muted);
+}
+.ol-app-member-option > :last-child {
+  min-width: 0;
 }
 .ol-app-member-check {
   display: grid;
@@ -138,9 +180,19 @@
 .ol-app-member-option[data-conflict] .ol-app-member-check {
   color: var(--ol-ink-3);
 }
-@media (max-width: 720px) {
-  .ol-app-style-panels {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: repeat(2, minmax(220px, 1fr));
-  }
+.ol-app-style-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.ol-app-style-pagination > span {
+  min-width: 3.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.ol-app-style-pager-slot {
+  height: 32px;
+  flex: 0 0 32px;
+  margin-top: 10px;
 }

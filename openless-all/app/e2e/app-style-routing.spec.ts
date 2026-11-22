@@ -38,26 +38,38 @@ window.addEventListener('fixture:dictation-completed', () => {
 async function openPage(page: Page) {
   await page.goto(`${fixtureOrigin}/?os=mac`);
   await page.getByRole('button', { name: '风格', exact: true }).click();
-  await page.getByRole('button', { name: '按应用选择风格', exact: true }).click();
+  await page.getByRole('button', { name: '自动风格', exact: true }).click();
   await settleNavigation(page);
   await expect(page.getByRole('combobox', { name: '编程的风格包' })).toBeVisible();
   return page.locator('.ol-app-style-page');
 }
 
 async function choose(page: Page, target: string, name: string) {
-  await page.getByRole('combobox', { name: `${target}的风格包`, exact: true }).click();
+  await (await revealField(page, `${target}的风格包`)).click();
   await page.getByRole('option', { name, exact: true }).click();
   await settleSelectDismissal(page);
 }
 
+async function revealField(page: Page, label: string) {
+  const field = page.getByRole('combobox', { name: label, exact: true });
+  if (await field.count()) return field;
+  const right = page.locator('.ol-app-style-panel').nth(1);
+  const previous = right.locator('.ol-app-style-pagination button').first();
+  while ((await previous.count()) && (await previous.isEnabled())) await previous.click();
+  const next = right.locator('.ol-app-style-pagination button').last();
+  while ((await field.count()) === 0 && (await next.count()) && (await next.isEnabled()))
+    await next.click();
+  return field;
+}
+
 test('shares packs across categories and apps from the third Styles page', async ({ page }) => {
   const surface = await openPage(page);
+  await expect(surface.getByRole('heading', { name: '自动风格', exact: true })).toBeVisible();
+  await expect(surface.getByRole('button', { name: '更新分类目录', exact: true })).toHaveCount(0);
   await expect(surface.locator('.ol-app-style-panel')).toHaveCount(2);
   await choose(page, '聊天', '清晰结构');
   await choose(page, '邮件', '清晰结构');
-  await expect(page.getByRole('combobox', { name: 'WeChat的风格包', exact: true })).toHaveText(
-    '跟随分类（清晰结构）',
-  );
+  await expect(await revealField(page, 'WeChat的风格包')).toHaveText('跟随分类（清晰结构）');
   await choose(page, 'WeChat', '清晰结构');
   await choose(page, 'Mail', '清晰结构');
   await choose(page, '邮件', '正式表达');
@@ -96,22 +108,19 @@ test('preselects official apps, moves a conflicting app, and assigns a newly obs
   await expect(move).toContainText('聊天');
   await expect(move).toContainText('正式表达');
   await move.getByRole('button', { name: '移到此分类' }).click();
-  await expect(page.getByRole('combobox', { name: 'WeChat的风格包', exact: true })).toHaveText(
-    '跟随分类（清晰结构）',
-  );
-  await page.getByRole('button', { name: '编程的应用', exact: true }).click();
+  const appDialog = page.getByRole('dialog', { name: '选择应用', exact: true });
+  await expect(appDialog.getByRole('checkbox', { name: 'WeChat', exact: true })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Custom Editor', exact: true }).click();
-  await expect(
-    page.getByRole('combobox', { name: 'Custom Editor的风格包', exact: true }),
-  ).toHaveText('跟随分类（清晰结构）');
   await page.getByRole('checkbox', { name: 'Visual Studio Code', exact: true }).click();
-  await page.keyboard.press('Escape');
-  await expect(
-    page.getByRole('combobox', { name: 'Visual Studio Code的风格包', exact: true }),
-  ).toHaveText('使用当前手选风格');
+  await appDialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(await revealField(page, 'WeChat的风格包')).toHaveText('跟随分类（清晰结构）');
+  await expect(await revealField(page, 'Custom Editor的风格包')).toHaveText('跟随分类（清晰结构）');
+  await expect(await revealField(page, 'Visual Studio Code的风格包')).toHaveText(
+    '使用当前手选风格',
+  );
 });
 
-test('refreshes inherited styles after dictation and scrolls each large panel independently', async ({
+test('refreshes inherited styles and paginates records on a non-scrolling board', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 980, height: 640 });
@@ -124,13 +133,41 @@ test('refreshes inherited styles after dictation and scrolls each large panel in
     '跟随分类（清晰结构）',
   );
   const body = surface.locator('.ol-app-style-panel-body').nth(1);
-  expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
-  await page
-    .getByRole('combobox', { name: 'Writing app 9的风格包', exact: true })
-    .scrollIntoViewIfNeeded();
+  expect(await body.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  const right = surface.locator('.ol-app-style-panel').nth(1);
+  const seen = new Set<string>();
+  while (true) {
+    for (const name of await right
+      .getByRole('combobox')
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')!)))
+      seen.add(name);
+    const next = right.getByRole('button', { name: '下一页', exact: true });
+    if (await next.isDisabled()) break;
+    await next.click();
+  }
+  expect(seen.size).toBe(41);
+  await expect(
+    right.getByRole('combobox', { name: 'Writing app 9的风格包', exact: true }),
+  ).toBeVisible();
   const after = await clear.boundingBox();
   expect(after!.y).toBeCloseTo(before!.y, 0);
   expect(await surface.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  expect(await surface.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expect(
+    page.locator('[data-ol-page="appStyles"][data-transition-phase="settled"]'),
+  ).toHaveCSS('overflow', 'hidden');
+  await page.getByRole('button', { name: '编程的应用', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '选择应用', exact: true });
+  await expect(dialog.locator('.ol-app-members-heading')).toContainText('编程');
+  await dialog.getByRole('textbox', { name: '搜索应用' }).fill('Writing app');
+  await expect(dialog.getByRole('checkbox')).toHaveCount(9);
+  await dialog.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(9);
+  expect(
+    await dialog
+      .locator('.ol-dialog-body')
+      .evaluate((node) => node.scrollHeight <= node.clientHeight + 1),
+  ).toBe(true);
 });
 
 test('keeps the new page usable with longer translated labels and larger text', async ({
@@ -143,9 +180,9 @@ test('keeps the new page usable with longer translated labels and larger text', 
     element.style.fontSize = '125%';
   });
   await page.getByRole('button', { name: 'Stil', exact: true }).click();
-  await page.getByRole('button', { name: 'Stile nach App', exact: true }).click();
+  await page.getByRole('button', { name: 'Automatische Stile', exact: true }).click();
   await settleNavigation(page);
-  const picker = page.getByRole('combobox', { name: 'Stilpaket für Notes', exact: true });
+  const picker = await revealField(page, 'Stilpaket für Notes');
   await expect(picker).toBeVisible();
   await picker.click();
   await expect(
@@ -157,6 +194,32 @@ test('keeps the new page usable with longer translated labels and larger text', 
       .locator('.ol-app-style-page')
       .evaluate((node) => node.scrollWidth <= node.clientWidth),
   ).toBe(true);
+  const surface = page.locator('.ol-app-style-page');
+  expect(await surface.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  const left = surface.locator('.ol-app-style-panel-body').first();
+  expect(await left.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+});
+
+test('renews the catalog automatically on page entry and restored focus', async ({ page }) => {
+  let requests = 0;
+  await page.route('https://apic.openless.top/v1/app-catalog', (route) => {
+    requests++;
+    return route.fulfill({ json: catalog });
+  });
+  await openPage(page);
+  await expect.poll(() => requests).toBeGreaterThan(0);
+  let before = requests;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => requests).toBeGreaterThan(before);
+  before = requests;
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect.poll(() => requests).toBeGreaterThan(before);
+  await page.getByRole('button', { name: '历史', exact: true }).click();
+  await settleNavigation(page);
+  before = requests;
+  await page.getByRole('button', { name: '自动风格', exact: true }).click();
+  await settleNavigation(page);
+  await expect.poll(() => requests).toBeGreaterThan(before);
 });
 
 test('opens and saves the newly created pack despite overlapping change events', async ({

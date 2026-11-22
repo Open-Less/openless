@@ -1,9 +1,52 @@
-import { Popover } from '@base-ui/react/popover';
-import { useState } from 'react';
+import { useId, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { Button } from '../../ui/controls/Button';
 import { TextField } from '../../ui/controls/TextField';
-import { usePopupViewport } from '../../ui/layout/AppViewport';
+import { Dialog, DialogBody, DialogFooter, DialogHeader } from '../../ui/overlays/Dialog';
+
+const iconButtonStyle: CSSProperties = {
+  display: 'grid',
+  placeItems: 'center',
+  padding: 0,
+  width: 30,
+  height: 30,
+};
+
+export function AppStylePagination({
+  page,
+  pages,
+  onChange,
+  disabled = false,
+}: {
+  page: number;
+  pages: number;
+  onChange: (page: number) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="ol-app-style-pagination">
+      <Button
+        icon="chevLeft"
+        style={iconButtonStyle}
+        ariaLabel={t('appStyles.previousPage')}
+        disabled={disabled || page === 0}
+        onClick={() => onChange(page - 1)}
+      />
+      <span aria-live="polite">
+        {page + 1} / {pages}
+      </span>
+      <Button
+        icon="chevRight"
+        style={iconButtonStyle}
+        ariaLabel={t('appStyles.nextPage')}
+        disabled={disabled || page + 1 >= pages}
+        onClick={() => onChange(page + 1)}
+      />
+    </div>
+  );
+}
 
 export interface AppMemberOption {
   id: string;
@@ -25,45 +68,73 @@ export function AppMembershipPicker({
   onToggle: (app: AppMemberOption) => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const { boundary, container } = usePopupViewport();
+  const title = useId();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
   const selected = options.filter((app) => app.category === category).length;
   const visible = options.filter((app) =>
     app.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
   );
+  const pages = Math.max(1, Math.ceil(visible.length / 9));
+  const currentPage = Math.min(page, pages - 1);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
-        className="ol-select-trigger"
+    <>
+      <Button
+        className="ol-app-category-button"
+        style={{
+          background: 'transparent',
+          padding: '4px 0',
+          justifyContent: 'flex-start',
+          fontWeight: 600,
+        }}
         disabled={busy}
-        aria-label={t('appStyles.appsFor', { name: categoryName })}
+        ariaLabel={t('appStyles.appsFor', { name: categoryName })}
+        onClick={() => {
+          setSearch('');
+          setPage(0);
+          setOpen(true);
+        }}
       >
-        <span className="ol-select-value">{t('appStyles.selectedApps', { count: selected })}</span>
-        <Icon name="chevDown" size={11} />
-      </Popover.Trigger>
-      <Popover.Portal container={container} className="ol-popup-portal">
-        <Popover.Positioner
-          className="ol-select-positioner"
-          positionMethod="fixed"
-          collisionBoundary={boundary}
-          side="bottom"
-          align="start"
-          sideOffset={8}
-          collisionPadding={8}
+        <span>{categoryName}</span>
+        <Icon name="chevRight" size={12} />
+      </Button>
+      {open && (
+        <Dialog
+          labelledBy={title}
+          onClose={() => {
+            if (!busy) setOpen(false);
+          }}
+          width="min(760px, 100%)"
+          cardClassName="ol-app-members-dialog"
         >
-          <Popover.Popup
-            className="ol-select-popup ol-app-members-popup"
-            aria-label={t('appStyles.appsFor', { name: categoryName })}
-          >
+          <DialogHeader>
+            <h2 id={title}>{t('appStyles.chooseApps')}</h2>
+            <div className="ol-app-members-heading">
+              <span>{categoryName}</span>
+              <Button
+                icon="close"
+                style={{ ...iconButtonStyle, borderRadius: '50%' }}
+                ariaLabel={t('common.close')}
+                disabled={busy}
+                onClick={() => setOpen(false)}
+              />
+            </div>
+          </DialogHeader>
+          <div className="ol-app-members-search">
             <TextField
               aria-label={t('appStyles.searchApps')}
               placeholder={t('appStyles.searchApps')}
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(0);
+              }}
             />
-            <div className="ol-app-members-list" role="group" aria-label={categoryName}>
-              {visible.map((app) => {
+          </div>
+          <DialogBody>
+            <div className="ol-app-members-grid" role="group" aria-label={categoryName}>
+              {visible.slice(currentPage * 9, (currentPage + 1) * 9).map((app) => {
                 const checked = app.category === category;
                 const conflict = app.category !== null && !checked;
                 return (
@@ -76,10 +147,7 @@ export function AppMembershipPicker({
                     disabled={busy}
                     className="ol-app-member-option"
                     data-conflict={conflict || undefined}
-                    onClick={() => {
-                      if (conflict) setOpen(false);
-                      void onToggle(app);
-                    }}
+                    onClick={() => void onToggle(app)}
                   >
                     <span className="ol-app-member-check" aria-hidden="true">
                       {(checked || conflict) && (
@@ -92,9 +160,18 @@ export function AppMembershipPicker({
               })}
               {!visible.length && <p className="ol-app-style-hint">{t('appStyles.noApps')}</p>}
             </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+          </DialogBody>
+          <DialogFooter>
+            <span>{t('appStyles.selectedApps', { count: selected })}</span>
+            <AppStylePagination
+              page={currentPage}
+              pages={pages}
+              onChange={setPage}
+              disabled={busy}
+            />
+          </DialogFooter>
+        </Dialog>
+      )}
+    </>
   );
 }
