@@ -108,7 +108,7 @@
   grid-template-rows: 0fr;
 }
 .ol-sidebar-nav-clip {
-  overflow: hidden;
+  overflow: clip;
   min-height: 0;
 }
 .ol-sidebar-nav-children {

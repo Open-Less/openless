@@ -372,7 +372,8 @@ fn server(
     listener.set_nonblocking(true).unwrap();
     let thread = std::thread::spawn(move || {
         let mut requests = vec![];
-        for (status, bytes) in responses {
+        let mut responses = responses.into_iter().peekable();
+        while responses.peek().is_some() {
             let start = std::time::Instant::now();
             let mut stream = loop {
                 if let Ok((stream, _)) = listener.accept() {
@@ -395,7 +396,21 @@ fn server(
                 request.push(byte[0]);
                 assert!(request.len() < 8192);
             }
-            requests.push(String::from_utf8(request).unwrap());
+            let request = String::from_utf8(request).unwrap();
+            // Backend startup refreshes the app catalog on the same origin.
+            // It must not consume the next marketplace response.
+            let (status, bytes) = if request.starts_with("GET /v1/app-catalog HTTP/1.1") {
+                (
+                    "200 OK",
+                    include_bytes!(
+                        "../../../app/crates/openless-core/tests/fixtures/app-catalog.json"
+                    )
+                    .to_vec(),
+                )
+            } else {
+                responses.next().unwrap()
+            };
+            requests.push(request);
             write!(
                 stream,
                 "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -444,6 +459,14 @@ fn style_library_marketplace_uses_real_anonymous_core_list_detail_download_and_s
     ]);
     let dir = tempfile::tempdir().unwrap();
     let (h, c) = marketplace_host(dir.path(), &url);
+    let owner = host(h).unwrap();
+    // Exercise catalog routing deterministically, regardless of whether the
+    // background startup refresh wins the race to the first HTTP request.
+    let routing = owner
+        .executor
+        .block_on(owner.backend.refresh_app_style_catalog())
+        .unwrap();
+    assert!(!routing.catalog.categories.is_empty());
     let list = run(
         h,
         c,
@@ -481,13 +504,18 @@ fn style_library_marketplace_uses_real_anonymous_core_list_detail_download_and_s
         "builtin.raw"
     );
     let requests = server.join().unwrap();
+    assert!(requests
+        .iter()
+        .all(|request| !request.to_lowercase().contains("authorization:")));
+    let requests: Vec<_> = requests
+        .iter()
+        .filter(|request| !request.starts_with("GET /v1/app-catalog HTTP/1.1"))
+        .collect();
+    assert_eq!(requests.len(), 4);
     assert!(requests[0].starts_with("GET /packs?q=hello+world&sort=popular&limit=2 HTTP/1.1"));
     assert!(requests[1].starts_with("GET /packs/01234567-89ab-cdef-0123-456789abcdef HTTP/1.1"));
     assert!(requests[3]
         .starts_with("GET /packs/01234567-89ab-cdef-0123-456789abcdef/download HTTP/1.1"));
-    assert!(requests
-        .iter()
-        .all(|request| !request.to_lowercase().contains("authorization:")));
     ol_ios_destroy(h);
 }
 
@@ -503,7 +531,10 @@ fn style_library_marketplace_error_is_coded_and_does_not_reflect_server_secrets(
     assert_eq!(failure["ok"], false);
     assert_eq!(failure["code"], "Provider");
     assert!(!failure.to_string().contains("private-server-secret"));
-    server.join().unwrap();
+    let requests = server.join().unwrap();
+    assert!(requests
+        .iter()
+        .any(|request| request.starts_with("GET /packs? HTTP/1.1")));
     assert_eq!(
         control(
             h,
