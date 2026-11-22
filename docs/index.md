@@ -16,6 +16,7 @@
 
 先读[架构与接口调用](architecture.md)定位模块，再按[全平台构建指南](../openless-all/README.zh.md)配置开发环境。
 
+- **官方风格包**：[来源、升级保护与口述修正契约](development/official-style-packs.md)
 - **听写与模型**：[语音链路与服务渠道](development/speech.md) · [本地模型管理](development/local-models.md)
 - **文字处理**：[问答与选区调用](architecture.md#问答与选区) · [转写后的自定义润色策略](development/polish-strategy.md) · [按输入应用选择风格包](development/app-style-routing.md)
 - **应用与模型目录**：[Agent 客户端、Harness 与模型研究表](research/agent-app-model-catalog.md) · [外部目录与分类接口](development/app-style-routing.md#分类目录-api)
