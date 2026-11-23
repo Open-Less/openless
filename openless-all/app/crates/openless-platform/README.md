@@ -35,7 +35,7 @@ cargo test  --no-default-features --features storage          # 只测存储模�
 | `input` | 按键注入 + 全局热键 + 侧键组合 + 组合键 + 鼠标侧键 + macOS Fn | global-hotkey, parking_lot, once_cell |
 | `text` | 逐字输入 + 模拟粘贴 | → `input` |
 | `selection` | 选区模拟复制通道 | → `clipboard`, `input` |
-| `audio` | 录音静音 + 合成提示音 | cpal |
+| `audio` | 采集（设备/输入流/回环参考）+ 静音 + 提示音 | cpal, coreaudio-sys |
 | `permissions` | TCC / 注册表 / Android 运行时权限 | serde, cpal, winreg |
 | `storage` | 原子文件存储 + 平台加固 | uuid, libc |
 | `credentials` | 保险库原语（Windows CredMan / macOS Keychain） | keyring, security-framework, zeroize, anyhow |
@@ -65,6 +65,11 @@ src/
   audio/
     mute.rs           录音期间系统静音（含 mute/{windows,macos,unsupported}.rs）
     cue.rs            合成"开始录音"提示音（cpal，桌面平台）
+    capture/          采集：设备枚举、输入流、回环参考
+      mod.rs          门面：CaptureError / StreamFormat / SampleSink / classify_stream_error
+      backend.rs      cpal 输入流（Windows/Linux）+ Windows WASAPI 回环
+      macos_tap.rs    macOS 系统音频 tap（Core Audio process tap，14.6+）
+      macos_tap.m     tap 的 Objective-C 部分（build.rs 编译）
   credentials/
     keychain.rs       macOS Keychain 通用密码项（复用 item 引用，避免重复授权）
     store.rs          统一保险库原语：Windows 凭据管理器 / macOS 钥匙串 / 其余显式不可用
@@ -124,7 +129,7 @@ credentials::keychain::read/write(service, account)
 
 | 能力 | 原因 |
 |---|---|
-| 采集接线 / 回声参考（AEC） | 与宿主录音状态机、诊断回调强绑定，需先定义宿主对象模型 |
+| 无（采集接线与 AEC 回采已迁入） | — |
 | TSF / UIA / AX 选区读取 | 需要宿主自己的窗口与焦点上下文 |
 | 无 | 热键、权限、平台存储均已迁入 |
 | Windows/Android 凭据 | `keyring` 已是跨平台抽象；Android 需要 Context |

@@ -62,11 +62,13 @@ pub mod storage;
 pub mod text;
 
 /// 与宿主同构的类型别名：内核共享类型从这里转发，迁移过来的代码不用改 `crate::types::`。
+#[cfg(feature = "input")]
 pub(crate) mod types {
     pub use openless_core::shared_types::*;
 }
 
 /// 与宿主同构的别名：侧键规范化函数来自内核。
+#[cfg(feature = "input")]
 pub(crate) mod shortcut_binding {
     pub use openless_core::{is_side_specific_modifier_tag, normalize_side_modifier_tag};
 }

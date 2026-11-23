@@ -18,15 +18,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 pub(crate) mod android_capture;
 
 struct CaptureStream {
-    _cpal: Option<cpal::Stream>,
+    /// 桌面平台的采集流由 `openless-platform` 打开；宿主只负责持有与播放。
+    _platform: Option<openless_platform::audio::capture::CaptureStream>,
     #[cfg(target_os = "android")]
     _android: Option<android_capture::AndroidCapture>,
 }
 
-impl From<cpal::Stream> for CaptureStream {
-    fn from(stream: cpal::Stream) -> Self {
+impl From<openless_platform::audio::capture::CaptureStream> for CaptureStream {
+    fn from(stream: openless_platform::audio::capture::CaptureStream) -> Self {
         Self {
-            _cpal: Some(stream),
+            _platform: Some(stream),
             #[cfg(target_os = "android")]
             _android: None,
         }
@@ -40,8 +41,6 @@ use std::thread::{self, JoinHandle};
 
 use crate::issue1266_debug::{Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation, Outcome as DebugOutcome, Probe as DebugProbe};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
 use serde::Serialize;
 use thiserror::Error;
@@ -251,35 +250,6 @@ impl CaptureDiagnostics {
         }
     }
 }
-
-fn handle_microphone_stream_error(
-    state: &StreamState,
-    error: cpal::StreamError,
-    runtime_error_tx: &Sender<RecorderError>,
-) {
-    if !state.accepting_audio.load(Ordering::Acquire) {
-        return;
-    }
-    let error_count = state.diagnostics.microphone.record_error();
-    // Vendored 0.15 does not turn CoreAudio overload notices into stream errors.
-    // Preserve its device-loss and backend-error contract.
-    let kind = match &error {
-        cpal::StreamError::DeviceNotAvailable => "device_not_available",
-        cpal::StreamError::BackendSpecific { .. } => "backend_error",
-    };
-    state.diagnostics.event(
-        "P2",
-        "[\"H1\",\"H2\",\"H3\"]",
-        "microphone_stream_error",
-        "fatal_candidate",
-        &format!("{{\"error_kind\":\"{kind}\",\"error_count\":{error_count}}}"),
-    );
-    log::error!("[recorder] stream error: {error}");
-    let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {error}")));
-}
-
-#[path = "playback_reference.rs"]
-mod playback_reference;
 
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
@@ -2179,105 +2149,51 @@ impl Drop for StagedRecorder {
 
 /// Enumerate input devices, marking the system default device.
 pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
-    let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
-    let devices = host
-        .input_devices()
-        .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
-
-    let mut result = Vec::new();
-    for device in devices {
-        let name = match device.name() {
-            Ok(name) => name,
-            Err(err) => {
-                log::warn!("[recorder] failed to read input device name: {err}");
-                continue;
-            }
-        };
-        result.push(MicrophoneDevice {
-            is_default: default_name.as_deref() == Some(name.as_str()),
-            name,
-        });
-    }
-    Ok(result)
+    // 设备枚举在平台层（cpal 只被那里引用）。
+    Ok(openless_platform::audio::capture::input_devices()
+        .into_iter()
+        .map(|device| MicrophoneDevice {
+            name: device.name,
+            is_default: device.is_default,
+        })
+        .collect())
 }
 
 /// 打开「扬声器回环」参考采集，供 AEC 使用。
 ///
-/// 走的是宿主默认**输出**设备：Windows 的 WASAPI 允许在 render 设备上开 capture
-/// 流（loopback），Linux 的 PulseAudio/PipeWire 会把输出映射到 monitor 源，macOS
-/// 走 CoreAudio 的同一设备。没有可用回环源时返回错误，调用方记一条 warn 后继续
-/// 录音（AEC 退化为无参考），绝不让整次录音失败。
+/// 设备与采样格式由平台层决定（Windows：默认输出设备的 WASAPI loopback；
+/// macOS：CoreAudio 同设备回采）。没有可用回环源时返回错误，调用方记一条
+/// warn 后继续录音（AEC 退化为无参考），绝不让整次录音失败。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn start_reference_stream(
     stop_flag: &Arc<AtomicBool>,
     queue: &openless_core::FarEndQueue,
-) -> Result<cpal::Stream, RecorderError> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| RecorderError::EngineFailed("no default output device".into()))?;
-    let supported = device
-        .default_output_config()
-        .map_err(|error| RecorderError::EngineFailed(format!("default output config: {error}")))?;
-    let config = supported.config();
-    let channels = usize::from(config.channels);
-    let rate = config.sample_rate.0;
-    let device_name = device.name().unwrap_or_default();
+) -> Result<openless_platform::audio::capture::CaptureStream, RecorderError> {
     let queue = queue.clone();
     let stop_for_callback = Arc::clone(stop_flag);
-
-    macro_rules! make_reference_stream {
-        ($t:ty, $to_f32:expr) => {{
-            let queue = queue.clone();
-            let stop_for_callback = Arc::clone(&stop_for_callback);
-            device.build_input_stream(
-                &config,
-                move |data: &[$t], _: &cpal::InputCallbackInfo| {
-                    if stop_for_callback.load(Ordering::Acquire) {
-                        return;
-                    }
-                    let samples: Vec<f32> = data.iter().copied().map($to_f32).collect();
-                    queue.push(&samples, channels, rate);
-                },
-                |error| log::warn!("[recorder] speaker reference stream error: {error}"),
-                None,
-            )
-        }};
-    }
-
-    let stream = match supported.sample_format() {
-        SampleFormat::F32 => make_reference_stream!(f32, |sample: f32| sample),
-        SampleFormat::I16 => {
-            make_reference_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32)
-        }
-        SampleFormat::I32 => {
-            make_reference_stream!(i32, |sample: i32| sample as f32 / i32::MAX as f32)
-        }
-        SampleFormat::I8 => make_reference_stream!(i8, |sample: i8| sample as f32 / i8::MAX as f32),
-        SampleFormat::U8 => {
-            make_reference_stream!(u8, |sample: u8| (sample as f32 - 128.0) / 128.0)
-        }
-        other => {
-            return Err(RecorderError::EngineFailed(format!(
-                "unsupported speaker reference sample format: {other:?}"
-            )))
-        }
-    }
-    .map_err(|error| {
-        RecorderError::EngineFailed(format!("build speaker reference stream: {error}"))
-    })?;
-    stream
-        .play()
-        .map_err(|error| RecorderError::EngineFailed(format!("play speaker reference: {error}")))?;
+    let format_cell: Arc<OnceLock<openless_platform::audio::capture::StreamFormat>> =
+        Arc::new(OnceLock::new());
+    let sink = {
+        let queue = queue.clone();
+        let format_cell = Arc::clone(&format_cell);
+        openless_platform::audio::capture::sample_sink(move |samples: &[f32], _| {
+            if stop_for_callback.load(Ordering::Acquire) {
+                return;
+            }
+            let Some(format) = format_cell.get().copied() else {
+                return;
+            };
+            queue.push(samples, usize::from(format.channels.max(1)), format.sample_rate);
+        })
+    };
+    let (stream, format) = openless_platform::audio::capture::start_reference_stream(sink, None)
+        .map_err(map_capture_error)?;
+    let _ = format_cell.set(format);
+    stream.play().map_err(map_capture_error)?;
     log::info!(
-        "[recorder] speaker reference capturing outputDevice={} rate={} channels={channels}",
-        device_name,
-        rate
+        "[recorder] speaker reference capturing outputDevice default rate={} channels={}",
+        format.sample_rate,
+        format.channels
     );
     Ok(stream)
 }
@@ -2286,7 +2202,7 @@ fn start_reference_stream(
 fn start_reference_stream(
     _stop_flag: &Arc<AtomicBool>,
     _queue: &openless_core::FarEndQueue,
-) -> Result<cpal::Stream, RecorderError> {
+) -> Result<openless_platform::audio::capture::CaptureStream, RecorderError> {
     Err(RecorderError::EngineFailed(
         "speaker loopback is not available on mobile".into(),
     ))
@@ -2370,18 +2286,50 @@ fn run_audio_thread(
         thread::Builder::new()
             .name("openless-playback-reference".into())
             .spawn(move || {
-                let (stream, outcome) = match playback_reference::start(&stop, &diagnostics) {
-                    Ok((stream, buffer)) => {
-                        *reference_state.reference.lock() = Some(buffer);
-                        (Some(stream), "available")
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "[recorder] playback reference unavailable; recording without AEC: {error}"
-                        );
-                        (None, "fallback")
-                    }
+                // 回采源与格式都由平台层决定；宿主只把样本放进 AEC 的参考缓冲。
+                let format_cell: Arc<OnceLock<openless_platform::audio::capture::StreamFormat>> =
+                    Arc::new(OnceLock::new());
+                let sink = {
+                    let reference_state = Arc::clone(&reference_state);
+                    let format_cell = Arc::clone(&format_cell);
+                    openless_platform::audio::capture::sample_sink(
+                        move |samples: &[f32], captured_at| {
+                            let Some(format) = format_cell.get().copied() else {
+                                return;
+                            };
+                            let mut slot = reference_state.reference.lock();
+                            let buffer = slot.get_or_insert_with(|| {
+                                Arc::new(openless_core::ReferenceAudioBuffer::new(
+                                    format.sample_rate,
+                                ))
+                            });
+                            buffer.push_interleaved_at(
+                                samples,
+                                usize::from(format.channels.max(1)),
+                                captured_at.unwrap_or_else(std::time::Instant::now),
+                            );
+                        },
+                    )
                 };
+                let (stream, format, outcome) =
+                    match openless_platform::audio::capture::start_reference_stream(sink, None) {
+                        Ok((stream, format)) => {
+                            let _ = format_cell.set(format);
+                            match stream.play() {
+                                Ok(()) => (Some(stream), Some(format), "available"),
+                                Err(error) => {
+                                    log::warn!("[recorder] speaker reference play failed: {error}");
+                                    (None, None, "fallback")
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[recorder] playback reference unavailable; recording without AEC: {error}"
+                            );
+                            (None, None, "fallback")
+                        }
+                    };
                 diagnostics.event(
                     "P1",
                     "[\"H1\",\"H2\",\"H3\"]",
@@ -2392,7 +2340,12 @@ fn run_audio_thread(
                         outcome == "available"
                     ),
                 );
-                if let Some(stream) = stream {
+                if let (Some(stream), Some(format)) = (stream, format) {
+                    log::info!(
+                        "[recorder] speaker reference capturing rate={} channels={}",
+                        format.sample_rate,
+                        format.channels
+                    );
                     while !stop.load(Ordering::SeqCst) {
                         thread::sleep(std::time::Duration::from_millis(50));
                     }
@@ -2403,7 +2356,7 @@ fn run_audio_thread(
     } else {
         None
     };
-    // `cpal::Stream` is !Send, so the speaker loopback stays on this thread,
+    // The capture stream is !Send, so the speaker loopback stays on this thread,
     // but only after the microphone has already started.
     let speaker_reference = far_end_for_reference.as_ref().and_then(|queue| {
         match start_reference_stream(&stop_flag, queue) {
@@ -2534,14 +2487,16 @@ fn run_audio_thread(
     // backend it calls AudioOutputUnitStop directly, terminating the callback synchronously.
     // The subsequent drop handles dispose / resource release. If pause fails, warn only and
     // do not block the drop.
-    if let Some(cpal_stream) = &stream._cpal {
-        if let Err(err) = cpal_stream.pause() {
-            log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
+    // 平台层的 Drop 会停掉流；这里只显式 pause 一次，确保 macOS CoreAudio 的
+    // AudioOutputUnitStop 在 drop 前同步执行（否则麦克风占用指示灯不灭）。
+    if let Some(platform_stream) = &stream._platform {
+        if let Err(err) = platform_stream.pause() {
+            log::warn!("[recorder] capture stream pause before drop failed: {err}");
         }
     }
     drop(stream);
     drop(speaker_reference);
-    log::info!("[recorder] cpal Stream dropped (mic released)");
+    log::info!("[recorder] capture stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
     processor.finish();
@@ -2590,7 +2545,7 @@ fn build_input_stream(
                     Ok(capture) => {
                         return Ok((
                             CaptureStream {
-                                _cpal: None,
+                                _platform: None,
                                 _android: Some(capture),
                             },
                             state,
@@ -2607,167 +2562,130 @@ fn build_input_stream(
             }
         }
     }
-    let selecting_at = std::time::Instant::now();
-    let host = cpal::default_host();
-    let selected = select_input_device(&host, microphone_device_name.as_deref())?;
-    state.log_startup_phase("device_selected", selecting_at.elapsed());
-    let selected_name = selected.name().ok();
-    let start = |device: &cpal::Device| {
-        start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
-            .map(|(stream, state)| (stream.into(), state))
-    };
-    let initial_error = match start(&selected) {
-        Ok(stream) => return Ok(stream),
-        Err(RecorderError::PermissionDenied) => return Err(RecorderError::PermissionDenied),
-        Err(error) => error,
-    };
-    log::warn!("[recorder] selected microphone failed: {initial_error}; trying other inputs");
-    let default = host.default_input_device();
-    let default_name = default.as_ref().and_then(|device| device.name().ok());
-    let mut candidates = Vec::new();
-    if let Some(default) = default {
-        if default_name != selected_name {
-            candidates.push(default);
-        }
-    }
-    if let Ok(devices) = host.input_devices() {
-        candidates.extend(devices.filter(|device| {
-            let name = device.name().ok();
-            name.is_none() || (name != selected_name && name != default_name)
-        }));
-    }
-    try_input_candidates(candidates, initial_error, |device| start(&device))
-}
-
-fn try_input_candidates<T, U>(
-    candidates: impl IntoIterator<Item = T>,
-    mut last_error: RecorderError,
-    mut start: impl FnMut(T) -> Result<U, RecorderError>,
-) -> Result<U, RecorderError> {
-    for candidate in candidates {
-        match start(candidate) {
-            Ok(stream) => return Ok(stream),
-            Err(RecorderError::PermissionDenied) => return Err(RecorderError::PermissionDenied),
-            Err(error) => last_error = error,
-        }
-    }
-    Err(last_error)
-}
-
-fn start_device_stream(
-    device: &cpal::Device,
-    frame_tx: &AudioProcessingSender,
-    state: &Arc<StreamState>,
-    stop_flag: &Arc<AtomicBool>,
-    runtime_error_tx: &Sender<RecorderError>,
-) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
-    // Android DSP and neural denoisers share a 48 kHz capture contract.
-    // Keep native fallback for devices that cannot open this rate.
-    #[cfg(target_os = "android")]
-    if let Ok(ranges) = device.supported_input_configs() {
-        for range in ranges.filter(|range| {
-            range.min_sample_rate().0 <= 48_000 && range.max_sample_rate().0 >= 48_000
-        }) {
-            let config = range.with_sample_rate(cpal::SampleRate(48_000));
-            match start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
-            {
-                Ok(stream) => return Ok(stream),
-                Err(RecorderError::PermissionDenied) => {
-                    return Err(RecorderError::PermissionDenied)
-                }
-                Err(error) => log::warn!("[recorder] Android 48 kHz capture failed: {error}"),
-            }
-        }
-    }
-    let mut default = None;
-    let initial_error = match device.default_input_config() {
-        Ok(config) => {
-            default = Some(config.clone());
-            match start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
-            {
-                Ok(stream) => return Ok(stream),
-                Err(RecorderError::PermissionDenied) => {
-                    return Err(RecorderError::PermissionDenied)
-                }
-                Err(error) => error,
-            }
-        }
-        Err(error) => classify_default_config_err(error.to_string()),
-    };
-    if matches!(initial_error, RecorderError::PermissionDenied) {
-        return Err(initial_error);
-    }
-    // Query alternatives only after failure; never force mono or an ASR rate on hardware.
-    let ranges = match device.supported_input_configs() {
-        Ok(ranges) => ranges,
-        Err(_) => return Err(initial_error),
-    };
-    let configs = native_input_alternatives(default.as_ref(), ranges);
-    try_input_candidates(configs, initial_error, |config| {
-        start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
-    })
-}
-
-fn native_input_alternatives(
-    default: Option<&cpal::SupportedStreamConfig>,
-    ranges: impl IntoIterator<Item = cpal::SupportedStreamConfigRange>,
-) -> Vec<cpal::SupportedStreamConfig> {
-    let native_rate = default.map(|config| config.sample_rate().0);
-    let mut candidates = Vec::new();
-    for range in ranges {
-        let min = range.min_sample_rate().0;
-        let max = range.max_sample_rate().0;
-        for rate in [native_rate.unwrap_or(max).clamp(min, max), min, max] {
-            let candidate = range.with_sample_rate(cpal::SampleRate(rate));
-            let same = |other: &cpal::SupportedStreamConfig| {
-                other.config() == candidate.config()
-                    && other.sample_format() == candidate.sample_format()
+    // 设备选择、格式回退、样本格式转换都在平台层完成；宿主只负责把样本接入音频管线。
+    let format_cell: Arc<OnceLock<openless_platform::audio::capture::StreamFormat>> =
+        Arc::new(OnceLock::new());
+    let sink = {
+        let frame_tx = frame_tx.clone();
+        let state = Arc::clone(&state);
+        let stop_flag = Arc::clone(&stop_flag);
+        let runtime_error_tx = runtime_error_tx.clone();
+        let format_cell = Arc::clone(&format_cell);
+        openless_platform::audio::capture::sample_sink(move |samples: &[f32], captured_at| {
+            let Some(format) = format_cell.get().copied() else {
+                return;
             };
-            if !default.is_some_and(same) && !candidates.iter().any(same) {
-                candidates.push(candidate);
+            if !state.accepting_audio.load(Ordering::Acquire) {
+                return;
             }
-        }
-    }
-    candidates
+            if !samples.is_empty() {
+                state.note_first_pcm(false);
+            }
+            let channels = usize::from(format.channels.max(1));
+            state
+                .diagnostics
+                .data_callback(false, true, samples.len() / channels);
+            *state.last_callback_time.lock() = Some(std::time::Instant::now());
+            let frame = RawAudioFrame {
+                captured_at: captured_at.unwrap_or_else(std::time::Instant::now),
+                samples: samples.to_vec(),
+                channels,
+                input_sample_rate: format.sample_rate,
+            };
+            match frame_tx.try_send(AudioProcessingMessage::Frame(frame)) {
+                Ok(()) => {}
+                Err(TrySendError::Disconnected(_)) => {
+                    if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                        let _ = runtime_error_tx.send(RecorderError::EngineFailed(
+                            "audio processing worker disconnected".into(),
+                        ));
+                    }
+                    stop_flag.store(true, Ordering::Release);
+                }
+                Err(TrySendError::Full(_)) => {
+                    state.diagnostics.event(
+                        "P4",
+                        "[\"H4\"]",
+                        "processing_backpressure",
+                        "queue_full",
+                        "{}",
+                    );
+                    if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                        let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!(
+                            "audio processing backlog exceeded limit: queued_us={} queued_bytes={} callback_samples={} sample_rate={} channels={}",
+                            frame_tx.backlog.micros.load(Ordering::Acquire),
+                            frame_tx.backlog.bytes.load(Ordering::Acquire),
+                            samples.len(),
+                            format.sample_rate,
+                            format.channels,
+                        )));
+                    }
+                    stop_flag.store(true, Ordering::Release);
+                }
+            }
+        })
+    };
+    let error_sink = {
+        let state = Arc::clone(&state);
+        let runtime_error_tx = runtime_error_tx.clone();
+        openless_platform::audio::capture::error_sink(move |message: &str| {
+            handle_microphone_stream_error_message(&state, message, &runtime_error_tx);
+        })
+    };
+
+    let selecting_at = std::time::Instant::now();
+    let (stream, format) = openless_platform::audio::capture::start_input_stream(
+        microphone_device_name.as_deref(),
+        sink,
+        Some(error_sink),
+    )
+    .map_err(map_capture_error)?;
+    state.log_startup_phase("device_selected", selecting_at.elapsed());
+    state.accepting_audio.store(false, Ordering::Release);
+    let _ = format_cell.set(format);
+    stream.play().map_err(map_capture_error)?;
+    state.accepting_audio.store(true, Ordering::Release);
+    log::info!(
+        "[recorder] inputDevice={} inputFormat sampleRate={} channels={}",
+        microphone_device_name.as_deref().unwrap_or("<default>"),
+        format.sample_rate,
+        format.channels
+    );
+    Ok((stream.into(), state))
 }
 
-fn start_native_config(
-    device: &cpal::Device,
-    supported: cpal::SupportedStreamConfig,
-    frame_tx: &AudioProcessingSender,
-    state: &Arc<StreamState>,
-    stop_flag: &Arc<AtomicBool>,
+/// 流运行期错误：只在采样进行中上报，且计入本轮诊断。
+fn handle_microphone_stream_error_message(
+    state: &StreamState,
+    message: &str,
     runtime_error_tx: &Sender<RecorderError>,
-) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
-    let config = supported.config();
-    let building_at = std::time::Instant::now();
-    state.accepting_audio.store(false, Ordering::Release);
-    let stream = build_stream_for_format(
-        device,
-        &config,
-        supported.sample_format(),
-        frame_tx.clone(),
-        Arc::clone(state),
-        Arc::clone(stop_flag),
-        config.sample_rate.0,
-        config.channels as usize,
-        runtime_error_tx.clone(),
-    )?;
-    state.log_startup_phase("stream_built", building_at.elapsed());
-    let playing_at = std::time::Instant::now();
-    stream
-        .play()
-        .map_err(|error| classify_default_config_err(format!("play: {error}")))?;
-    state.accepting_audio.store(true, Ordering::Release);
-    state.log_startup_phase("stream_playing", playing_at.elapsed());
-    log::info!(
-        "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
-        device.name().unwrap_or_else(|_| "<unknown>".into()),
-        config.sample_rate.0,
-        config.channels,
-        supported.sample_format()
-    );
-    Ok((stream, Arc::clone(state)))
+) {
+    use openless_platform::audio::capture::{classify_stream_error, CaptureError};
+    let code = match classify_stream_error(message) {
+        CaptureError::PermissionDenied => "permission_denied",
+        CaptureError::NoDevice => "device_not_available",
+        CaptureError::Unsupported | CaptureError::Unavailable(_) => "backend_error",
+    };
+    state.diagnostics.microphone.record_callback();
+    state.diagnostics.reference.record_callback();
+    log::warn!("[recorder] microphone stream error ({code}): {message}");
+    if state.accepting_audio.load(Ordering::Acquire) {
+        let _ = runtime_error_tx.send(RecorderError::EngineFailed(message.to_string()));
+    }
+}
+
+/// 平台层采集错误 → 宿主的录音错误。
+fn map_capture_error(error: openless_platform::audio::capture::CaptureError) -> RecorderError {
+    use openless_platform::audio::capture::CaptureError;
+    match error {
+        CaptureError::PermissionDenied => {
+            RecorderError::PermissionDenied
+        }
+        CaptureError::NoDevice => RecorderError::NoInputDevice,
+        CaptureError::Unsupported | CaptureError::Unavailable(_) => {
+            RecorderError::EngineFailed(error.to_string())
+        }
+    }
 }
 
 /// The saved microphone is usually the default device. Asking every input for
@@ -2783,80 +2701,10 @@ pub(crate) fn default_input_matches_preference(
     }
 }
 
-fn select_input_device(
-    host: &cpal::Host,
-    microphone_device_name: Option<&str>,
-) -> Result<cpal::Device, RecorderError> {
-    let preferred = microphone_device_name
-        .map(str::trim)
-        .filter(|name| !name.is_empty());
-    if let Some(device) = host.default_input_device() {
-        if default_input_matches_preference(preferred, device.name().ok().as_deref()) {
-            return Ok(device);
-        }
-        let devices = host
-            .input_devices()
-            .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
-        for candidate in devices {
-            if candidate.name().ok().as_deref() == preferred {
-                return Ok(candidate);
-            }
-        }
-        log::warn!(
-            "[recorder] preferred input device not found; falling back to default: {}",
-            preferred.unwrap_or_default()
-        );
-        return Ok(device);
-    }
-
-    if let Some(preferred) = preferred {
-        let devices = host
-            .input_devices()
-            .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
-        for device in devices {
-            if device.name().ok().as_deref() == Some(preferred) {
-                return Ok(device);
-            }
-        }
-        log::warn!(
-            "[recorder] preferred input device not found; falling back to default: {preferred}"
-        );
-    }
-    host.input_devices()
-        .map_err(|error| RecorderError::EngineFailed(format!("input_devices: {error}")))?
-        .next()
-        .ok_or(RecorderError::NoInputDevice)
-}
-
 /// Startup-time default_input_config failure: coarsely classify permission issues via error
 /// string keywords. cpal usually returns `BackendSpecific` when macOS mic authorization is
 /// missing; best-effort recognition.
-fn classify_default_config_err(msg: String) -> RecorderError {
-    let lower = msg.to_lowercase();
-    if is_no_device_error(&lower) {
-        RecorderError::NoInputDevice
-    } else if lower.contains("permission") || lower.contains("denied") || lower.contains("authoriz")
-    {
-        RecorderError::PermissionDenied
-    } else {
-        RecorderError::EngineFailed(format!("default_input_config: {msg}"))
-    }
-}
-
 /// Startup-time build_stream failure: same classification as above; may be a permission issue.
-fn classify_build_stream_err(err: cpal::BuildStreamError) -> RecorderError {
-    let msg = err.to_string();
-    let lower = msg.to_lowercase();
-    if is_no_device_error(&lower) {
-        RecorderError::NoInputDevice
-    } else if lower.contains("permission") || lower.contains("denied") || lower.contains("authoriz")
-    {
-        RecorderError::PermissionDenied
-    } else {
-        RecorderError::EngineFailed(format!("build_input_stream: {msg}"))
-    }
-}
-
 /// Whether the error string implies "no usable input device right now" (as opposed to
 /// permission denied). Keyword set kept in sync with permissions.rs::is_no_device_error; the
 /// backend-tests harness compiles this module standalone, so no cross-module reference.
@@ -2879,108 +2727,6 @@ fn is_no_device_error(lower: &str) -> bool {
 /// `SupportedStreamConfig` -> the concrete build call for that SampleFormat.
 /// Only common cpal float and integer formats are supported; others fall back to an error.
 #[allow(clippy::too_many_arguments)]
-fn build_stream_for_format(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    sample_format: SampleFormat,
-    frame_tx: AudioProcessingSender,
-    state: Arc<StreamState>,
-    stop_flag: Arc<AtomicBool>,
-    input_sr: u32,
-    channels: usize,
-    runtime_error_tx: Sender<RecorderError>,
-) -> Result<cpal::Stream, RecorderError> {
-    macro_rules! make_stream {
-        ($t:ty, $to_f32:expr) => {{
-            let frame_tx = frame_tx.clone();
-            let state = Arc::clone(&state);
-            let stop_flag = Arc::clone(&stop_flag);
-            let runtime_error_for_callback = runtime_error_tx.clone();
-            let runtime_error_for_error = runtime_error_tx.clone();
-            let error_state = Arc::clone(&state);
-            let err_cb = move |err| {
-                handle_microphone_stream_error(&error_state, err, &runtime_error_for_error);
-            };
-            device
-                .build_input_stream::<$t, _, _>(
-                    config,
-                    move |data: &[$t], info| {
-                        if !state.accepting_audio.load(Ordering::Acquire) {
-                            return;
-                        }
-                        if !data.is_empty() {
-                            state.note_first_pcm(false);
-                        }
-                        let captured_at = playback_reference::capture_time(info);
-                        state.diagnostics.data_callback(false, true, data.len() / channels.max(1));
-                        let mut floats = Vec::with_capacity(data.len());
-                        for s in data {
-                            floats.push($to_f32(*s));
-                        }
-                        *state.last_callback_time.lock() = Some(std::time::Instant::now());
-                        match frame_tx.try_send(AudioProcessingMessage::Frame(RawAudioFrame {
-                            captured_at,
-                            samples: floats,
-                            channels,
-                            input_sample_rate: input_sr,
-                        })) {
-                            Ok(()) => {}
-                            Err(TrySendError::Disconnected(_)) => {
-                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
-                                    let _ = runtime_error_for_callback.send(
-                                        RecorderError::EngineFailed("audio processing worker disconnected".into()),
-                                    );
-                                }
-                                stop_flag.store(true, Ordering::Release);
-                            }
-                            Err(TrySendError::Full(_)) => {
-                                state.diagnostics.event("P4", "[\"H4\"]", "processing_backpressure", "queue_full", "{}");
-                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
-                                    let _ = runtime_error_for_callback.send(
-                                        RecorderError::EngineFailed(
-                                            format!("audio processing backlog exceeded limit: queued_us={} queued_bytes={} callback_samples={} sample_rate={} channels={}",
-                                                frame_tx.backlog.micros.load(Ordering::Acquire),
-                                                frame_tx.backlog.bytes.load(Ordering::Acquire),
-                                                data.len(), input_sr, channels),
-                                        ),
-                                    );
-                                }
-                                stop_flag.store(true, Ordering::Release);
-                            }
-                        }
-                    },
-                    err_cb,
-                    None,
-                )
-                .map_err(classify_build_stream_err)
-        }};
-    }
-
-    match sample_format {
-        SampleFormat::F32 => make_stream!(f32, |s: f32| s),
-        SampleFormat::F64 => make_stream!(f64, |s: f64| s as f32),
-        SampleFormat::I64 => make_stream!(i64, |s: i64| (s as f64 / i64::MAX as f64) as f32),
-        SampleFormat::U64 => make_stream!(u64, |s: u64| ((s as f64 / u64::MAX as f64) * 2.0 - 1.0)
-            as f32),
-        SampleFormat::U32 => make_stream!(u32, |s: u32| (s as f64 / u32::MAX as f64 * 2.0 - 1.0)
-            as f32),
-        SampleFormat::I16 => make_stream!(i16, |s: i16| s as f32 / i16::MAX as f32),
-        SampleFormat::U16 => {
-            make_stream!(u16, |s: u16| (s as f32 - 32768.0) / 32768.0)
-        }
-        SampleFormat::I32 => {
-            make_stream!(i32, |s: i32| s as f32 / i32::MAX as f32)
-        }
-        SampleFormat::I8 => make_stream!(i8, |s: i8| s as f32 / i8::MAX as f32),
-        SampleFormat::U8 => {
-            make_stream!(u8, |s: u8| (s as f32 - 128.0) / 128.0)
-        }
-        other => Err(RecorderError::EngineFailed(format!(
-            "unsupported sample format: {other:?}"
-        ))),
-    }
-}
-
 struct RawAudioFrame {
     captured_at: std::time::Instant,
     samples: Vec<f32>,
@@ -3789,23 +3535,7 @@ mod tests {
         assert!(chunks.iter().all(|chunk|decode_i16_le(chunk)==vec![8191;160]));
     }
 
-    #[test]
-    fn diagnostics_and_microphone_errors_stay_capture_scoped() {
-        let first=StreamState::new();let second=StreamState::new();
-        assert_ne!(first.diagnostics.run_id,second.diagnostics.run_id);
-        let (sender,receiver)=channel();
-        first.accepting_audio.store(false,Ordering::Release);
-        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
-        assert!(receiver.try_recv().is_err());assert_eq!(first.diagnostics.microphone.errors.load(Ordering::Relaxed),0);
-        first.accepting_audio.store(true,Ordering::Release);
-        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
-        assert!(matches!(receiver.try_recv(),Ok(RecorderError::EngineFailed(_))));
-        assert_eq!(first.diagnostics.microphone.record_callback(),(1,true));
-        assert_eq!(first.diagnostics.reference.record_callback(),(1,false));
-        assert_eq!(second.diagnostics.microphone.record_callback(),(1,false));
-    }
-
-    #[test]
+        #[test]
     fn audio_processing_worker_drains_accepted_frames_before_join() {
         let consumer = Arc::new(RecordingConsumer::default());
         let state = Arc::new(StreamState::new());
@@ -4174,24 +3904,7 @@ mod tests {
         assert!(called.load(Ordering::Acquire));
     }
 
-    #[test]
-    fn native_alternatives_preserve_channels_format_and_advertised_rates() {
-        let range = cpal::SupportedStreamConfigRange::new(
-            2,
-            cpal::SampleRate(44_100),
-            cpal::SampleRate(48_000),
-            cpal::SupportedBufferSize::Unknown,
-            SampleFormat::F32,
-        );
-        let native = range.with_sample_rate(cpal::SampleRate(48_000));
-        let alternatives = native_input_alternatives(Some(&native), [range, range]);
-        assert_eq!(alternatives.len(), 1);
-        assert_eq!(alternatives[0].channels(), 2);
-        assert_eq!(alternatives[0].sample_format(), SampleFormat::F32);
-        assert_eq!(alternatives[0].sample_rate().0, 44_100);
-    }
-
-    #[test]
+        #[test]
     fn unstarted_candidate_cannot_feed_asr_or_mark_audio_valid() {
         let state = StreamState::new();
         state.accepting_audio.store(false, Ordering::Release);
@@ -4209,39 +3922,7 @@ mod tests {
         assert!(state.last_callback_time.lock().is_none());
     }
 
-    #[test]
-    fn startup_uses_candidates_in_order_and_stops_after_success() {
-        let mut attempted = Vec::new();
-        let result = try_input_candidates(
-            ["native", "alternative", "other device"],
-            RecorderError::NoInputDevice,
-            |candidate| {
-                attempted.push(candidate);
-                if candidate == "alternative" {
-                    Ok(candidate)
-                } else {
-                    Err(RecorderError::EngineFailed(candidate.into()))
-                }
-            },
-        )
-        .unwrap();
-        assert_eq!(result, "alternative");
-        assert_eq!(attempted, ["native", "alternative"]);
-    }
-
-    #[test]
-    fn permission_failure_never_probes_more_devices() {
-        let mut attempts = 0;
-        let result: Result<(), _> =
-            try_input_candidates([1, 2], RecorderError::NoInputDevice, |_| {
-                attempts += 1;
-                Err(RecorderError::PermissionDenied)
-            });
-        assert!(matches!(result, Err(RecorderError::PermissionDenied)));
-        assert_eq!(attempts, 1);
-    }
-
-    #[test]
+            #[test]
     fn downmix_to_mono_averages_complete_interleaved_frames() {
         let mono = downmix_to_mono(&[1.0, -1.0, 0.5, 0.25, 0.0], 2);
 
