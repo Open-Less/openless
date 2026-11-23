@@ -129,6 +129,7 @@ impl Source {
 pub(super) async fn query(
     config: &WebSearchConfig,
     query: &str,
+    on_request: impl FnOnce() -> bool,
 ) -> Result<Vec<SearchResult>, String> {
     let sources: &[Source] = match config.provider {
         SearchProvider::FreeSerp => &[Source::FreeSerp],
@@ -151,7 +152,12 @@ pub(super) async fn query(
             Err(error) => replies.push(Err(error)),
         }
     }
-    replies.extend(join_all(requests).await);
+    if !requests.is_empty() {
+        if !on_request() {
+            return Err("Web Search cancelled".into());
+        }
+        replies.extend(join_all(requests).await);
+    }
     merge(replies)
 }
 
@@ -423,19 +429,13 @@ mod tests {
 
     #[tokio::test]
     async fn timed_out_source_preserves_other_results() {
-        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+        use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let mut socket = BufReader::new(socket);
-            let mut header = String::new();
-            loop {
-                header.clear();
-                assert!(socket.read_line(&mut header).await.unwrap() > 0);
-                if header == "\r\n" { break; }
-            }
+            let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = [0; 8192];
+            socket.read(&mut bytes).await.unwrap();
             // The client must close its pending response when the source times out.
             assert_eq!(socket.read(&mut bytes).await.unwrap(), 0);
         });

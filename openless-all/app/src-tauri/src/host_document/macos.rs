@@ -94,8 +94,8 @@ const EDIT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const BASELINE_ANCHOR_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[repr(C)]
-struct OpaqueAxRef(c_void);
-type AxUiElementRef = *mut OpaqueAxRef;
+pub(crate) struct OpaqueAxRef(c_void);
+pub(crate) type AxUiElementRef = *mut OpaqueAxRef;
 type CFStringRef = *const c_void;
 type CFTypeRef = *const c_void;
 type CFAllocatorRef = *const c_void;
@@ -119,8 +119,8 @@ const K_CF_NUMBER_CF_INDEX_TYPE: i32 = 14;
 
 /// Opaque handle for AXObserver.
 #[repr(C)]
-struct OpaqueAxObserver(c_void);
-type AxObserverRef = *mut OpaqueAxObserver;
+pub(crate) struct OpaqueAxObserver(c_void);
+pub(crate) type AxObserverRef = *mut OpaqueAxObserver;
 
 type AxObserverCallback = unsafe extern "C" fn(
     observer: AxObserverRef,
@@ -131,14 +131,14 @@ type AxObserverCallback = unsafe extern "C" fn(
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
-    fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
-    fn AXObserverCreate(
+    pub(crate) fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+    pub(crate) fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
+    pub(crate) fn AXObserverCreate(
         application: i32,
         callback: AxObserverCallback,
         observer: *mut AxObserverRef,
     ) -> AxError;
-    fn AXObserverAddNotification(
+    pub(crate) fn AXObserverAddNotification(
         observer: AxObserverRef,
         element: AxUiElementRef,
         notification: CFStringRef,
@@ -149,26 +149,26 @@ extern "C" {
         element: AxUiElementRef,
         notification: CFStringRef,
     ) -> AxError;
-    fn AXObserverGetRunLoopSource(observer: AxObserverRef) -> CFRunLoopSourceRef;
-    fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
-    fn AXUIElementCopyAttributeValue(
+    pub(crate) fn AXObserverGetRunLoopSource(observer: AxObserverRef) -> CFRunLoopSourceRef;
+    pub(crate) fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
+    pub(crate) fn AXUIElementCopyAttributeValue(
         element: AxUiElementRef,
         attribute: CFStringRef,
         value: *mut CFTypeRef,
     ) -> AxError;
-    fn AXUIElementSetAttributeValue(
+    pub(crate) fn AXUIElementSetAttributeValue(
         element: AxUiElementRef,
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> AxError;
-    fn AXUIElementCopyParameterizedAttributeValue(
+    pub(crate) fn AXUIElementCopyParameterizedAttributeValue(
         element: AxUiElementRef,
         parameterized_attribute: CFStringRef,
         parameter: CFTypeRef,
         value: *mut CFTypeRef,
     ) -> AxError;
-    fn AXValueGetValue(value: AxValueRef, value_type: i32, out: *mut c_void) -> u8;
-    fn AXValueCreate(value_type: i32, value_ptr: *const c_void) -> AxValueRef;
+    pub(crate) fn AXValueGetValue(value: AxValueRef, value_type: i32, out: *mut c_void) -> u8;
+    pub(crate) fn AXValueCreate(value_type: i32, value_ptr: *const c_void) -> AxValueRef;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]

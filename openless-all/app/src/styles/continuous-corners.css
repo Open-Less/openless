@@ -1,7 +1,7 @@
 /* One radius for interface surfaces; shader geometry and inline help text stay unclipped. */
 :where(
-  button,
-  input,
+  button:not(:where(.qa-prompt button, .qa-conversation .qa-close)),
+  input:not(.ol-field-control),
   select,
   textarea,
   dialog,
@@ -120,9 +120,7 @@
   .ol-startup-retry,
   .ol-advanced-settings-inline .ol-startup-diagnostics pre,
   .ol-skeleton,
-  .qa-prompt,
-  .qa-voice-pod,
-  .qa-answer-panel,
+  .qa-answer-panel:not(.qa-conversation),
   .qa-user-avatar,
   .qa-user-message p,
   .qa-thinking-dot,
@@ -139,8 +137,8 @@
 
 @supports (corner-shape: superellipse(1.5)) {
   :where(
-    button,
-    input,
+    button:not(:where(.qa-prompt button, .qa-conversation .qa-close)),
+    input:not(.ol-field-control),
     select,
     textarea,
     dialog,
@@ -259,9 +257,7 @@
     .ol-startup-retry,
     .ol-advanced-settings-inline .ol-startup-diagnostics pre,
     .ol-skeleton,
-    .qa-prompt,
-    .qa-voice-pod,
-    .qa-answer-panel,
+    .qa-answer-panel:not(.qa-conversation),
     .qa-user-avatar,
     .qa-user-message p,
     .qa-thinking-dot,

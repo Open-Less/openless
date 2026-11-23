@@ -1,17 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  listenEmbeddedQaShown,
-  listenQaDismissed,
-  qaGetSnapshot,
-  qaWindowDismiss,
-} from '../api/qa';
-import {
   cancelVoiceEditSession,
   getVoiceEditState,
   listenEmbeddedVoiceEditDismissed,
   listenEmbeddedVoiceEditShown,
 } from '../api/voice-edit';
-import { ASK_ANYTHING_AVAILABLE } from '../lib/appVersion';
 import { useAppViewport } from '../ui/layout/AppViewport';
 import { createAndroidPanelState, type AndroidPanelView } from './androidPanelState';
 
@@ -40,16 +33,9 @@ export function useAndroidPanels(enabled: boolean) {
     };
 
     const route = createAndroidPanelState(
-      async (kind, isCurrent) => {
-        if (kind === 'qa') {
-          await qaWindowDismiss();
-        } else {
-          const session = await getVoiceEditState();
-          if (!isCurrent()) return;
-          // Unlike a native auxiliary window the embedded panel has no host window
-          // to hide. Its route commits only after the session cancellation succeeds.
-          await cancelVoiceEditSession(session?.sessionId);
-        }
+      async (_kind, isCurrent) => {
+        const session = await getVoiceEditState();
+        if (isCurrent()) await cancelVoiceEditSession(session?.sessionId);
       },
       (next) => {
         setPanel(next);
@@ -98,33 +84,19 @@ export function useAndroidPanels(enabled: boolean) {
 
     void (async () => {
       const observed = route.generation();
-      const subscriptions = [
+      await Promise.all([
         subscribe(listenEmbeddedVoiceEditShown, () => {
           void route.switchTo('voice-edit');
         }),
         subscribe(listenEmbeddedVoiceEditDismissed, () => route.nativeDismiss('voice-edit')),
-      ];
-      if (ASK_ANYTHING_AVAILABLE) {
-        subscriptions.push(
-          subscribe(listenEmbeddedQaShown, () => {
-            void route.switchTo('qa');
-          }),
-          subscribe(listenQaDismissed, () => route.nativeDismiss('qa')),
-        );
-      }
-      await Promise.all(subscriptions);
+      ]);
       if (disposed || observed !== route.generation()) return;
       // Recreated WebViews may have missed their initial show event.
-      const [voice, qa] = await Promise.allSettled([
-        getVoiceEditState(),
-        ASK_ANYTHING_AVAILABLE ? qaGetSnapshot() : Promise.resolve(null),
-      ]);
+      const [voice] = await Promise.allSettled([getVoiceEditState()]);
       if (disposed || observed !== route.generation()) return;
       const phase = voice.status === 'fulfilled' ? voice.value?.phase : undefined;
       if (phase && phase !== 'completed' && phase !== 'cancelled') {
         await route.switchTo('voice-edit');
-      } else if (qa.status === 'fulfilled' && qa.value?.sessionId && qa.value.kind !== 'cancelled') {
-        await route.switchTo('qa');
       } else {
         releaseBack();
       }

@@ -21,10 +21,6 @@ const loaders = {
     import('../../features/translation/Translation').then((module) => ({
       default: module.Translation,
     })),
-  selectionAsk: () =>
-    import('../../features/selection-guide/SelectionAsk').then((module) => ({
-      default: module.SelectionAsk,
-    })),
   quickNote: () =>
     import('../../features/quick-note/QuickNote').then((module) => ({ default: module.QuickNote })),
   corrections: () =>
@@ -34,7 +30,6 @@ const loaders = {
 };
 
 export { Overview };
-export const SelectionAsk = lazy(loaders.selectionAsk);
 
 const pages: Partial<Record<AppTab, ComponentType>> = {
   // History is a primary destination on both desktop and mobile.
@@ -45,7 +40,6 @@ const pages: Partial<Record<AppTab, ComponentType>> = {
   appStyles: lazy(loaders.appStyles),
   marketplace: lazy(loaders.marketplace),
   translation: lazy(loaders.translation),
-  selectionAsk: SelectionAsk,
   quickNote: lazy(loaders.quickNote),
   corrections: lazy(loaders.corrections),
 };

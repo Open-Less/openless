@@ -1,4 +1,3 @@
-import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type ElementHandle, type Locator, type Page } from '@playwright/test';
 
@@ -333,19 +332,6 @@ test('channel sorting waits for a slow knob transition to finish', async ({ page
   await control.click();
   await expect(control).toHaveAttribute('aria-checked', 'false');
   await expect(control).toHaveAttribute('data-test-slide', 'transitionend');
-});
-
-test('the Selection Ask history switch slides when the feature is available', async ({ page }) => {
-  await page.getByRole('button', { name: '工具', exact: true }).click();
-  const ask = page.getByRole('button', { name: '随便问', exact: true });
-  if (!ASK_ANYTHING_AVAILABLE) {
-    await expect(ask).toBeDisabled();
-    return;
-  }
-  await ask.click();
-  const main = page.locator('main');
-  await expect(main.getByRole('switch').first()).toBeVisible();
-  expect(await exerciseVisibleSwitches(main, 'selectionAsk')).toBeGreaterThan(0);
 });
 
 test('toggling a switch never moves its neighbours', async ({ page }) => {

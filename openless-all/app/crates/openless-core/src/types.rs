@@ -56,6 +56,7 @@ impl PolishMode {
 pub enum HistorySource {
     #[default]
     Voice,
+    Qa,
     QuickNote,
     SelectionPolish,
     SelectionVoiceEdit,

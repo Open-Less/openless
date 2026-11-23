@@ -1,6 +1,6 @@
 // General → Selection Assistant: merges selection polish and selection voice editing so users don't confuse the two jobs.
 
-import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../api/contracts';
+import type { PlatformCapabilities } from '../../api/contracts';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -9,16 +9,10 @@ import { openVoiceEditWindow } from '../../api/voice-edit';
 import { setSelectionPolishHotkey } from '../../api/hotkeys';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { useHotkeySettings } from '../../data/preferences';
-import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../../ui/layout/Card';
 import { SectionTitle } from '../../ui/layout/SectionTitle';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { SelectionWorkspaceExtraControlsDialog } from './SelectionWorkspaceExtraControlsDialog';
-
-const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
-  { value: 'directReplace' },
-  { value: 'previewConfirm' },
-];
 
 export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcut?: boolean }) {
   const { t } = useTranslation();
@@ -49,21 +43,6 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const voiceEnabled = prefs.selectionVoiceEnabled;
   const editPlanFormat = prefs.selectionVoiceEditPlanFormat ?? 'xml';
   const editSystemPrompt = prefs.selectionVoiceEditSystemPrompt ?? '';
-  const deliveryControl = (
-    <Segmented
-      label={t('settings.selectionWorkspace.polishDelivery')}
-      value={prefs.selectionPolishOutputMode}
-      onChange={(next) =>
-        void updatePrefs((current) => ({ ...current, selectionPolishOutputMode: next }))
-      }
-      options={outputOptions.map((option) => ({
-        value: option.value,
-        label: t(`settings.selectionPolish.${option.value}`),
-        title: t(`settings.selectionPolish.${option.value}Hint`),
-      }))}
-    />
-  );
-
   return (
     <Card>
       <SectionTitle hint={t('settings.selectionWorkspace.hint')}>
@@ -122,12 +101,6 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
           />
         </SettingRow>
       )}
-      {showDesktop && !voiceEnabled && (
-        <SettingRow label={t('settings.selectionWorkspace.polishDelivery')}>
-          {deliveryControl}
-        </SettingRow>
-      )}
-
       {showVoice && (
         <>
           <SettingRow
@@ -143,12 +116,6 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
           </SettingRow>
           {voiceEnabled && (
             <>
-              <SettingRow
-                label={t('settings.selectionWorkspace.polishDelivery')}
-                desc={t('settings.selectionWorkspace.voiceDeliveryDesc')}
-              >
-                {deliveryControl}
-              </SettingRow>
               <SettingRow
                 label={t('settings.selectionWorkspace.extraControls')}
                 desc={t('settings.selectionWorkspace.extraControlsDesc')}

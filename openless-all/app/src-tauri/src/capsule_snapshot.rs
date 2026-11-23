@@ -68,6 +68,18 @@ fn payload_matches_backend_event(payload: &CapsulePayload, event: &BackendEventK
 }
 
 impl CapsuleSnapshotState {
+    #[cfg(not(mobile))]
+    pub(super) fn claim_ask(&mut self, session_id: &str) -> u64 {
+        if self.session_id.as_deref() != Some(session_id) {
+            self.session_id = Some(session_id.to_owned());
+            self.text.clear();
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.pending_session_id = None;
+        self.pending_payload_revision = None;
+        self.revision
+    }
+
     pub(super) fn commit_capsule_payload(
         &mut self,
         payload: &CapsulePayload,

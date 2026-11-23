@@ -3,7 +3,7 @@
   "identifier": "mobile",
   "description": "Capabilities for OpenLess Android main window",
   "platforms": ["android"],
-  "windows": ["main", "qa"],
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:default",

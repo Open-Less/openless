@@ -283,9 +283,6 @@ fn target_for_session(
 fn clear_host_session(inner: &Arc<Inner>, session_id: CoreSessionId) -> bool {
     let mut host = inner.selection_voice_host.lock();
     if host.target_session_id == Some(session_id) {
-        host.insertion_target
-            .cancelled
-            .store(true, std::sync::atomic::Ordering::Release);
         *host = SelectionVoiceHostState::default();
         return true;
     }
@@ -619,7 +616,7 @@ async fn continue_selection_voice_disposition(
     disposition: SelectionVoiceDisposition,
 ) -> Result<EndWorkflowOutcome, String> {
     if matches!(&disposition, SelectionVoiceDisposition::Question { .. }) {
-        crate::require_ask_anything()?;
+        return Err("随便问暂不可用，未更改选中的内容".into());
     }
     let route = inner
         .backend
@@ -762,7 +759,7 @@ impl Coordinator {
             .selection_voice
             .begin_preview_apply(owner, text.clone())
             .map_err(core_error)?;
-        let outcome = match self.apply_selection_voice_preview_ticket(&ticket).await {
+        let outcome = match self.apply_selection_voice_preview_ticket(&ticket) {
             Ok(outcome) => {
                 self.inner
                     .backend
@@ -785,82 +782,44 @@ impl Coordinator {
             }
         };
 
-        self.finish_selection_voice_preview_host(ticket.session_id, outcome, &ticket.source_text);
+        self.finish_selection_voice_preview_host(ticket.session_id);
         Ok(outcome)
     }
 
-    pub(crate) async fn apply_selection_voice_preview_ticket(
+    pub(crate) fn apply_selection_voice_preview_ticket(
         &self,
         ticket: &openless_core::SelectionVoiceApplyTicket,
     ) -> Result<SelectionVoiceApplyOutcome, String> {
         let prefs = self.inner.backend.get_preferences();
         let insertion_target = target_for_session(&self.inner, ticket.session_id)?;
-        let ticket = ticket.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            *insertion_target.original_clipboard.lock() = ticket.original_clipboard_revision;
-            // Explicit preview confirmation may return to the captured app.
-            // Automatic DirectReplace never activates another destination.
-            let preview_target_ready = ticket.owner_session_id.is_none()
-                || crate::selection::reactivate_selection_insertion_target(&insertion_target);
+        if !crate::selection::reactivate_selection_insertion_target(&insertion_target) {
+            return Err("selectionVoiceTargetUnavailable".to_string());
+        }
+        if crate::selection::is_truncated_selection_stand_in(&ticket.source_text) {
+            return Err("selectionVoiceSelectionTooLong".to_string());
+        }
+        // Empty source_text = caret insert (Help me write). Skip Ctrl+C content
+        // re-validation that assumes a non-empty selection (#1014).
+        if !ticket.source_text.trim().is_empty() {
             let validation = crate::selection::validate_selection_insertion_target(
                 &insertion_target,
                 &ticket.source_text,
             );
-            let result = if !preview_target_ready || (!ticket.source_text.is_empty() && validation.error_code().is_some())
-                || !crate::selection::selection_insertion_target_is_current(&insertion_target)
-            {
-                crate::selection::selection_result_fallback(
-                    &insertion_target,
-                    &ticket.replacement_text,
-                )
-            } else {
-                crate::selection::insert_selection_result(
-                    &insertion_target,
-                    &ticket.source_text,
-                    &ticket.replacement_text,
-                    prefs.paste_shortcut,
-                )
-            };
-            result
-                .map(|outcome| match outcome {
-                    openless_core::InsertOutcome::Inserted => SelectionVoiceApplyOutcome::Inserted,
-                    openless_core::InsertOutcome::PasteSent => {
-                        SelectionVoiceApplyOutcome::PasteSent
-                    }
-                    openless_core::InsertOutcome::CopiedFallback => {
-                        SelectionVoiceApplyOutcome::CopiedFallback
-                    }
-                })
-                .map_err(core_error)
-        })
-        .await
-        .map_err(|error| error.to_string())?
+            if let Some(code) = validation.error_code() {
+                return Err(code.to_string());
+            }
+        }
+        let status = self.inner.inserter.insert(
+            &ticket.replacement_text,
+            prefs.restore_clipboard_after_paste,
+            prefs.paste_shortcut,
+        );
+        selection_voice_apply_outcome(status)
     }
 
-    pub(crate) fn finish_selection_voice_preview_host(
-        &self,
-        session_id: CoreSessionId,
-        outcome: SelectionVoiceApplyOutcome,
-        original: &str,
-    ) {
+    pub(crate) fn finish_selection_voice_preview_host(&self, session_id: CoreSessionId) {
         clear_host_session(&self.inner, session_id);
-        let locale = self
-            .inner
-            .backend
-            .services()
-            .remote_input
-            .status()
-            .map(|status| status.locale)
-            .unwrap_or_else(|_| self.inner.backend.config().locale.clone());
-        let message = match outcome {
-            SelectionVoiceApplyOutcome::Inserted => {
-                crate::selection::original_recovery_message(&locale, original, true).unwrap_or("已替换")
-            }
-            SelectionVoiceApplyOutcome::CopiedFallback => "已复制结果，请手动粘贴",
-            SelectionVoiceApplyOutcome::PasteSent => "已发送粘贴；原文保留在历史记录",
-            SelectionVoiceApplyOutcome::Failed => "未插入；结果保留在历史记录",
-        };
-        finish_selection_voice_capsule(&self.inner, Some(message.into()));
+        finish_selection_voice_capsule(&self.inner, Some("已完成".into()));
     }
 }
 

@@ -1,4 +1,3 @@
-import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 
@@ -107,10 +106,7 @@ test('Android Back dismisses Voice Edit safely and ignores legacy Ask events', a
     .toBe(true);
   await page.evaluate(() => (window as any).startupFixture.showVoice('old-draft'));
   await expect(voice).toBeVisible();
-  await page.evaluate((available) => {
-    const idle = available ? { kind: 'idle', messages: [] } : { kind: 'idle' };
-    (window as any).startupFixture.emit('qa:state', idle);
-  }, ASK_ANYTHING_AVAILABLE);
+  await page.evaluate(() => (window as any).startupFixture.emit('qa:state', { kind: 'idle' }));
   await expect(voice.getByText('old-draft').first()).toBeVisible();
   expect(await page.evaluate(() => (window as any).startupFixture.pendingCancels())).toEqual([]);
   await page.evaluate(() => history.back());

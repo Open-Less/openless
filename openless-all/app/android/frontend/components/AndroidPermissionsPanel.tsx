@@ -595,13 +595,13 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                       const action = value as AndroidOverlayGestureAction;
                       void updateAndroidPref('androidOverlayGestureActions', (current) => ({
                         ...(current.androidOverlayGestureActions ?? {
-                          up: 'cancel', down: 'none', left: 'translation', right: 'qa',
+                          up: 'cancel', down: 'none', left: 'translation', right: 'none',
                         }),
                         [direction]: action,
                       }));
                     }}
                     style={selectStyle}
-                    options={(['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'qa', 'voice_edit'] as const).map((action) => ({
+                    options={(['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'voice_edit'] as const).map((action) => ({
                       value: action, label: t(`settings.permissions.androidOverlayGestureAction.${action}`, action),
                     }))}
                   />

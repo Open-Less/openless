@@ -8,6 +8,7 @@ import {
   isServiceViewInactive,
   resolveServiceView,
   visibleAdvancedPages,
+  visibleGeneralPages,
 } from './navigation';
 
 const assert = {
@@ -18,6 +19,29 @@ const assert = {
     if (actual !== expected) throw new Error(message);
   },
 };
+
+for (const os of ['mac', 'win'] as const) {
+  const nativePages = visibleGeneralPages('desktop', os, true).map((page) => page.id);
+  assert.equal(nativePages.includes('askEntry'), true, `${os}: desktop has Ask Anything settings`);
+  assert.equal(nativePages.includes('askHistory'), false, `${os}: desktop has one Ask subpage`);
+}
+for (const pages of [
+  visibleGeneralPages('desktop', 'mac'),
+  visibleGeneralPages('android', 'android', true),
+  visibleGeneralPages('mobile', 'mac', true),
+  visibleGeneralPages('harmony', 'harmony'),
+]) {
+  assert.equal(
+    pages.some((page) => page.id === 'askEntry'),
+    false,
+    'no unsupported Ask settings',
+  );
+  assert.equal(
+    pages.some((page) => page.id === 'askHistory'),
+    true,
+    'keeps legacy history settings',
+  );
+}
 
 const sections = [
   {

@@ -170,7 +170,9 @@ pub use crate::types::HistoryInsertStatus as InsertStatus;
 #[serde(rename_all = "camelCase")]
 pub enum SelectionPolishOutputMode {
     #[default]
+    #[serde(alias = "previewConfirm")]
     DirectReplace,
+    #[serde(skip_deserializing)]
     PreviewConfirm,
 }
 
@@ -599,9 +601,8 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
-    /// Kept in the device profile for compatibility with older Ask builds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qa_shortcut_behavior: Option<QaShortcutBehavior>,
+    #[serde(default)]
+    pub qa_shortcut_behavior: QaShortcutBehavior,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -1158,6 +1159,8 @@ struct UserPreferencesWire {
     qa_companion_key: String,
     qa_shortcut_behavior: Option<QaShortcutBehavior>,
     #[serde(default)]
+    qa_shortcut_behavior: QaShortcutBehavior,
+    #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
     /// `Some(None)` means the user explicitly disabled it.
@@ -1588,7 +1591,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                             AndroidOverlayGestureAction::StylePack
                         }
                     },
-                    right: AndroidOverlayGestureAction::Qa,
+                    right: AndroidOverlayGestureAction::None,
                 });
 
         Ok(Self {
@@ -1893,11 +1896,15 @@ fn default_qa_hotkey() -> Option<ShortcutBinding> {
     if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Initial action of the recording shortcut plus the Ask companion key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum QaShortcutBehavior {
+    #[default]
     Record,
     Open,
+    Draft,
+}
 }
 
 fn default_qa_companion_key() -> String { "Space".into() }
@@ -2071,7 +2078,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
-            qa_shortcut_behavior: None,
+            qa_shortcut_behavior: QaShortcutBehavior::default(),
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),

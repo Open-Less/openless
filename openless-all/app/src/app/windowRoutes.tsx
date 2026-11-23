@@ -3,7 +3,7 @@ import { Capsule } from '../features/capsule/Capsule';
 import { CapsuleTranscriptOverlay } from '../features/capsule/LiveTranscriptPill';
 import { AudioCueListener } from '../features/capsule/AudioCue';
 import type { OS } from '../runtime/environment';
-import { loadMainShell, QaPanel, VoiceEditPanel } from './destinations';
+import { loadMainShell, VoiceEditPanel } from './destinations';
 
 const loadMainWindow = () => import('./MainWindow');
 const MainWindow = lazy(() => loadMainWindow().then((module) => ({ default: module.MainWindow })));
@@ -22,7 +22,6 @@ export type WindowKind =
   | 'main'
   | 'capsule'
   | 'capsule-rail'
-  | 'qa'
   | 'voice-edit'
   | 'selection-voice-intent'
   | 'less-computer'
@@ -33,7 +32,6 @@ export function resolveWindowKind(params: URLSearchParams): WindowKind {
   switch (kind) {
     case 'capsule':
     case 'capsule-rail':
-    case 'qa':
     case 'voice-edit':
     case 'selection-voice-intent':
     case 'less-computer':
@@ -70,12 +68,6 @@ export function WindowRoutes({
           <Capsule os={os} />
           <AudioCueListener />
         </>
-      );
-    case 'qa':
-      return (
-        <Suspense fallback={null}>
-          <QaPanel />
-        </Suspense>
       );
     case 'selection-voice-intent':
       return (

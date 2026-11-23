@@ -19,10 +19,11 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@android/*": ["android/frontend/*"]
+      "@android/*": ["android/frontend/*"],
+      "@/*": ["third_party/rare-ui/*"]
     }
   },
-  "include": ["src", "android/frontend"],
+  "include": ["src", "android/frontend", "ask-window"],
   "references": [
     {
       "path": "./tsconfig.node.json"

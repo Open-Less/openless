@@ -301,7 +301,7 @@ assertMatch(
 );
 
 if (
-  !/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation \|\| qa,\s*capsuleStyle\);/.test(
+  !/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation,\s*capsuleStyle\);/.test(
     capsuleTsx,
   )
 ) {

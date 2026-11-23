@@ -46,7 +46,7 @@ pub fn set_translation_hotkey(
 }
 
 /// Sets the "switch style" global hotkey. `binding == None` (frontend passes null) = disable:
-/// clears the binding and unregisters the global key. Mirrors `set_qa_hotkey`'s `Option=None` disable mode (issue #576).
+/// clears the binding and unregisters the global key.
 #[tauri::command]
 pub fn set_switch_style_hotkey(
     coord: CoordinatorState<'_>,

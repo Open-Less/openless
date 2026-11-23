@@ -67,10 +67,18 @@ pub async fn start_dictation(core: CoreState<'_>) -> Result<(), String> {
 pub async fn stop_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
-    session_id: Option<openless_core::SessionId>,
+    window: tauri::WebviewWindow,
+    session_id: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    if ask_capsule_action(&window, session_id.as_deref(), false) {
+        return Ok(());
+    }
+    let _ = &window;
     ensure_core_started(&core).await?;
     if let Some(id) = session_id {
+        let id: openless_core::SessionId = serde_json::from_value(serde_json::Value::String(id))
+            .map_err(|_| "invalid session id".to_string())?;
         return core.submit_dictation_session(id, Default::default()).await.map(|_| ()).map_err(|error| error.to_string());
     }
     if coord.stop_less_computer_recording().await? {
@@ -87,14 +95,37 @@ pub async fn stop_dictation(
 pub async fn cancel_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
-    session_id: Option<openless_core::SessionId>,
+    window: tauri::WebviewWindow,
+    session_id: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    if ask_capsule_action(&window, session_id.as_deref(), true) {
+        return Ok(());
+    }
+    let _ = &window;
     ensure_core_started(&core).await?;
-    if let Some(id) = session_id.or_else(|| core.dictation_cancel_target()) {
+    let parsed_id = session_id
+        .map(|id| {
+            serde_json::from_value::<openless_core::SessionId>(serde_json::Value::String(id))
+                .map_err(|_| "invalid session id".to_string())
+        })
+        .transpose()?;
+    if let Some(id) = parsed_id.or_else(|| core.dictation_cancel_target()) {
         return core.cancel_dictation(Some(id)).await.map_err(|error| error.to_string());
     }
     coord.cancel_active_voice().await;
     Ok(())
+}
+
+#[cfg(not(mobile))]
+fn ask_capsule_action(window: &tauri::WebviewWindow, session_id: Option<&str>, cancel: bool) -> bool {
+    window.label() == "capsule"
+        && session_id.is_some_and(|id| {
+            window.try_state::<Arc<crate::ask_window::Desktop>>().is_some_and(|ask| {
+                (if cancel { ask.capsule_cancel(id) } else { ask.capsule_stop(id) })
+                    || ask.recognizes_capsule(id)
+            })
+        })
 }
 
 #[cfg(not(mobile))]

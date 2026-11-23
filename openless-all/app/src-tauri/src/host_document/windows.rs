@@ -202,7 +202,7 @@ pub(super) fn read_qa_selection() -> Option<String> {
             return Ok(None);
         }
         let text = range
-            .GetText(-1)
+            .GetText(16_000)
             .map_err(|_| "selectionUnavailable".to_string())?
             .to_string();
         Ok((!text.trim().is_empty()).then_some(text))
@@ -211,7 +211,7 @@ pub(super) fn read_qa_selection() -> Option<String> {
     .flatten()
 }
 
-unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
+pub(crate) unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
     use windows::Win32::System::Ole::{
         SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
     };
@@ -651,7 +651,7 @@ const BLOCKED_PROCESS_NAME_FRAGMENTS: &[&str] = &[
     "putty",
 ];
 
-fn is_blocked_process_name(executable_name: &str) -> bool {
+pub(crate) fn is_blocked_process_name(executable_name: &str) -> bool {
     let lowered = executable_name.to_lowercase();
     BLOCKED_PROCESS_NAME_FRAGMENTS
         .iter()

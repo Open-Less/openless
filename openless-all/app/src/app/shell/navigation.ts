@@ -11,7 +11,6 @@ export type AppTab =
   | 'appStyles'
   | 'marketplace'
   | 'translation'
-  | 'selectionAsk'
   | 'quickNote'
   | 'corrections'
   | 'localAsr';
@@ -61,7 +60,6 @@ interface NavItem {
 export const MORE_TABS: NavItem[] = [
   { id: 'vocab', icon: 'vocab' },
   { id: 'translation', icon: 'translate' },
-  { id: 'selectionAsk', icon: 'selectionAsk' },
   { id: 'quickNote', icon: 'history' },
   { id: 'corrections', icon: 'filter' },
 ];
@@ -96,7 +94,6 @@ export const NAV_TREE: NavNode[] = [
     icon: 'selectionAsk',
     children: [
       { id: 'corrections' },
-      { id: 'selectionAsk' },
       { id: 'translation' },
       { id: 'quickNote' },
     ],
