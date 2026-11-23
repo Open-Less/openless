@@ -721,7 +721,13 @@ async fn rapid_three_submissions_keep_pcm_and_join_final_input_before_the_next()
             context: Arc<DictationContext>,
         ) -> BoxFuture<'static, Result<Arc<dyn crate::ports::TextInsertionSession>, BackendError>>
         {
-            assert!(!context.insertion.streaming && !context.insertion.composition_input);
+            // Deferred preparation preserves stable input preferences; Raw still
+            // performs only final delivery, whose ordering is asserted below.
+            let preferences = crate::shared_types::UserPreferences::default();
+            assert_eq!(context.insertion.streaming, preferences.streaming_insert);
+            assert_eq!(context.insertion.composition_input,
+                cfg!(target_os = "windows") && preferences.windows_composition_input
+                    && preferences.windows_insertion_mode == crate::shared_types::WindowsInsertionMode::Tsf);
             let session = Arc::new(Insertion {
                 calls: self.calls.clone(),
                 entered: self.entered.clone(),
