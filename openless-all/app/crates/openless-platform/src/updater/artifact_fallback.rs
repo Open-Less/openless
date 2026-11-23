@@ -49,7 +49,7 @@ fn parts(raw: &str, github: bool) -> Option<(String, String)> {
     }
     Some((tag, asset))
 }
-pub(crate) fn github_fallback_for_cdn_artifact(raw: &str) -> Option<String> {
+pub fn github_fallback_for_cdn_artifact(raw: &str) -> Option<String> {
     let (tag, asset) = parts(raw, false)?;
     Some(format!(
         "https://github.com/Open-Less/openless/releases/download/{}/{}",
@@ -71,7 +71,7 @@ async fn available(raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
-    let client = crate::net::anonymous_no_redirect_http();
+    let client = openless_core::net::anonymous_no_redirect_http();
     let status = match client.head(url.clone()).timeout(BUDGET).send().await {
         Ok(response) => response.status(),
         Err(_) => return false,
@@ -91,7 +91,7 @@ async fn available(raw: &str) -> bool {
         .flatten()
         .is_some()
 }
-pub(crate) async fn resolve_artifact_download_url(raw: &str) -> String {
+pub async fn resolve_artifact_download_url(raw: &str) -> String {
     let cdn = if parts(raw, false).is_some() {
         raw.to_string()
     } else if let Some(cdn) = aliyun_for_github(raw) {

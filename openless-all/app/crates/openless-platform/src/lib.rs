@@ -62,6 +62,8 @@ pub mod selection;
 pub mod storage;
 #[cfg(feature = "text")]
 pub mod text;
+#[cfg(feature = "updater")]
+pub mod updater;
 
 /// 与宿主同构的类型别名：内核共享类型从这里转发，迁移过来的代码不用改 `crate::types::`。
 #[cfg(feature = "input")]

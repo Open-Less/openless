@@ -57,6 +57,22 @@ asr-foundry = [
 # Apple Speech（macOS Speech.framework）
 asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
 
+# 自更新：清单解析 + 源选择 + 签名校验（桌面与 Android 共用）
+updater = [
+    "dep:semver",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:reqwest",
+    "dep:tokio",
+    "dep:base64",
+    "dep:futures-util",
+    "dep:url",
+    "dep:minisign-verify",
+]
+
+# 兼容别名：Android 更新链路已并入 `updater`（同一份发现/验签实现）。
+updater-android = ["updater"]
+
 # 胶囊浮层：几何计算 + 平台窗口控制（不抢焦点 / 点击穿透 / 命中测试）
 capsule = ["dep:objc2", "dep:objc2-foundation"]
 
@@ -110,7 +126,12 @@ once_cell = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-tokio = { version = "1", features = ["sync", "rt"], optional = true }
+semver = { version = "1", optional = true }
+minisign-verify = { version = "0.2", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
+url = { version = "2", optional = true }
+base64 = { version = "0.22", optional = true }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"], optional = true }
 futures-util = { version = "0.3", optional = true }
 zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }

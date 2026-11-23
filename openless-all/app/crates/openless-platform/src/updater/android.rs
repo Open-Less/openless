@@ -1,5 +1,6 @@
 //! Android GitHub discovery uses official versioned APKs and their detached signatures.
-use crate::types::UpdateChannel;
+#![allow(dead_code, unused_imports)]
+use openless_core::shared_types::UpdateChannel;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -73,7 +74,7 @@ async fn update_get(
             if !allowed_request(&url, hop > 0) {
                 return Err("update URL is not an allowed HTTPS origin".into());
             }
-            let mut request = crate::net::anonymous_no_redirect_http()
+            let mut request = openless_core::net::anonymous_no_redirect_http()
                 .get(url.clone())
                 .header(reqwest::header::USER_AGENT, "OpenLess-Updater")
                 .timeout(budget);
@@ -220,7 +221,7 @@ pub(crate) fn android_signature_version(
     tag: &str,
     arch: &str,
 ) -> Result<String, String> {
-    let decoded = crate::android::updater_logic::decode_tauri_minisign_text(signature)?;
+    let decoded = super::android_logic::decode_tauri_minisign_text(signature)?;
     let trusted = decoded
         .lines()
         .find_map(|line| line.strip_prefix("trusted comment: "))
@@ -443,7 +444,7 @@ where
     F: FnMut(String, usize) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
-    for tag in super::github_feed_tags(feed, channel).into_iter().take(3) {
+    for tag in super::manifest::github_feed_tags(feed, channel).into_iter().take(3) {
         let version = tag_version(tag, channel).ok_or("invalid public release tag")?;
         let page = match fetch(
             format!("https://github.com/Open-Less/openless/releases/expanded_assets/{tag}"),

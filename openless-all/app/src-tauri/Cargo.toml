@@ -24,7 +24,7 @@ zeroize = "1"
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
 # Platform capability backends (clipboard today; text/input/audio/credentials next).
-openless-platform = { path = "../crates/openless-platform" }
+openless-platform = { path = "../crates/openless-platform", features = ["updater"] }
 # 平台层能力开关：与宿主自己的 cfg 并存（sherpa 原生库仍由 build.rs 按目标注入）。
 # 说明：Cargo 不支持"按 target 默认开 feature"，所以 native SDK 的编译期开关暂时
 # 仍由 build.rs 注入，平台层的纯逻辑部分用真 feature 表达。
