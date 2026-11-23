@@ -631,7 +631,7 @@ pub fn ask_new_conversation(window: WebviewWindow, host: AskState<'_>) -> IpcRes
     host.backend.ensure_runtime_ready().map_err(wire::error)?;
     let _guard = host.attachment_gate.lock();
     let conversation_id = if host.backend.get_preferences().qa_save_history {
-        host.service.new_conversation()
+        super::session::new_persistent_conversation(&host.service, &host.fence)
     } else {
         host.clear_session();
         host.service.open_transient()
@@ -697,27 +697,32 @@ pub async fn ask_submit(
     request: ask::AskSubmit,
 ) -> IpcResult {
     authorize(&window)?;
-    host.require_current(request.conversation_id)
-        .map_err(wire::error)?;
     let desktop = window.try_state::<Arc<super::Desktop>>();
     let conversation_id = request.conversation_id;
     let active_desktop = desktop.as_ref().map(|desktop| Arc::clone(&**desktop));
-    let transient = host.service.current_is_transient();
-    let backend = host.backend.clone();
-    let cancellation = host
-        .fence
-        .issue()
-        .requiring(move || transient || backend.get_preferences().qa_save_history);
+    let (transient, cancellation, generation) = {
+        // Bind the permit to the checked conversation atomically with session
+        // changes and permission revocation. Never hold this gate across await.
+        let _guard = host.attachment_gate.lock();
+        host.require_current(conversation_id).map_err(wire::error)?;
+        if !host.accepts_submission(conversation_id, active_desktop.as_deref()) {
+            return Err(wire::error(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "askSessionChanged",
+            )));
+        }
+        let transient = host.service.current_is_transient();
+        let backend = host.backend.clone();
+        let cancellation = host
+            .fence
+            .issue()
+            .requiring(move || transient || backend.get_preferences().qa_save_history);
+        let generation = desktop
+            .as_ref()
+            .and_then(|desktop| desktop.external_target_generation());
+        (transient, cancellation, generation)
+    };
     let current = || host.accepts_policy(transient, active_desktop.as_deref());
-    if !host.accepts_submission(conversation_id, active_desktop.as_deref()) {
-        return Err(wire::error(BackendError::new(
-            BackendErrorCode::Cancelled,
-            "askSessionChanged",
-        )));
-    }
-    let generation = desktop
-        .as_ref()
-        .and_then(|desktop| desktop.external_target_generation());
     let desktop = desktop.as_ref().map(|desktop| Arc::downgrade(&**desktop));
     let turn_id = host
         .service
@@ -1068,8 +1073,7 @@ pub fn ask_set_context_permission(
             })
     };
     if !allowed {
-        grant(false);
-        host.service.cancel_active_turns();
+        super::session::revoke_app_context(&host.context, &host.service, &host.fence);
     }
     let stored = host.context_preference.as_ref().is_some_and(|path| {
         crate::persistence::atomic_write(path, if allowed { b"true" } else { b"false" }).is_ok()

@@ -255,6 +255,7 @@ async fn natural_chat_finishes_once_and_retains_live_context_without_history_sto
     let runtime = runtime(model.clone(), context.clone(), search.clone());
     let mut req = request("接着说");
     req.messages = vec![AssistantMessage {
+        references: Vec::new(),
         role: AssistantRole::User,
         text: "刚才说的是海边旅行。".into(),
     }];
@@ -450,6 +451,7 @@ async fn compaction_at_model_window_preserves_goals_constraints_recent_turns_and
         let mut req = request("继续，遵守最开始的要求");
         req.messages = vec![
             AssistantMessage {
+                references: Vec::new(),
                 role: AssistantRole::User,
                 text: format!(
                     "只给只读建议，不要下载安装；输出中文，预算1000元。{}",
@@ -461,6 +463,7 @@ async fn compaction_at_model_window_preserves_goals_constraints_recent_turns_and
                 ),
             },
             AssistantMessage {
+                references: Vec::new(),
                 role: AssistantRole::Assistant,
                 text: format!(
                     "https://example.com/old {}",
@@ -472,14 +475,17 @@ async fn compaction_at_model_window_preserves_goals_constraints_recent_turns_and
                 ),
             },
             AssistantMessage {
+                references: Vec::new(),
                 role: AssistantRole::User,
                 text: "仍需保留这个约束。".into(),
             },
             AssistantMessage {
+                references: Vec::new(),
                 role: AssistantRole::Assistant,
                 text: "最近的事实 https://example.com/recent".into(),
             },
             AssistantMessage {
+                references: Vec::new(),
                 role: AssistantRole::User,
                 text: "现在日期也要核实。".into(),
             },
@@ -620,4 +626,31 @@ fn tools_do_not_grant_system_execution_or_unbounded_history() {
         r#"{"kind":"system","query":"private","limit":null}"#
     )
     .is_err());
+}
+
+#[tokio::test]
+async fn p2_unknown_window_finishes_after_large_voice_evidence() {
+    let mut model = Model::new(vec![
+        context_call("voiceHistory"),
+        Step::Text("基于已截断证据的回答。".into()),
+    ]);
+    model.window = None;
+    let model = Arc::new(model);
+    let context = Arc::new(Context::default());
+    context.history_bytes.store(25_000, Ordering::SeqCst);
+    let (sink, _) = events();
+    let response = runtime(model.clone(), context, Arc::new(Search::default()))
+        .run(
+            request("读取相关语音并回答"),
+            AskCancellation::default(),
+            sink,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.text, "基于已截断证据的回答。");
+    let requests = model.requests.lock();
+    assert_eq!(requests.len(), 2);
+    let output: serde_json::Value =
+        serde_json::from_str(&requests[1].tools.results[0].output).unwrap();
+    assert_eq!(output["truncated"], true);
 }

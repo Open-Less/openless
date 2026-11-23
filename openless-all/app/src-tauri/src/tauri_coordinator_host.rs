@@ -2213,6 +2213,14 @@ impl TauriCapsuleWindow {
     }
 }
 
+#[cfg(not(mobile))]
+pub(crate) fn notify_service_usage_changed(app: &crate::core_adapters::AppHandleSlot) {
+    let app = app.lock().clone();
+    if let Some(app) = app {
+        let _ = app.emit_to("main", "service-usage:changed", ());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,

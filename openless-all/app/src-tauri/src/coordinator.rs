@@ -491,11 +491,7 @@ fn shared_backend_from_stores(
     let usage_recorder = {
         let usage_app = Arc::clone(&app);
         let notify_usage_changed = move || {
-            use tauri::Emitter;
-            let handle = usage_app.lock().clone();
-            if let Some(handle) = handle {
-                let _ = handle.emit_to("main", "service-usage:changed", ());
-            }
+            crate::tauri_coordinator_host::notify_service_usage_changed(&usage_app);
         };
         match openless_core::usage_ledger::UsageLedger::open(
             config.data_dir.join("service-usage.json"),

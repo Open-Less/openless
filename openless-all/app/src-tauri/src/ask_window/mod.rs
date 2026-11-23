@@ -4,6 +4,7 @@ pub(crate) mod chat;
 pub(crate) mod context;
 pub(crate) mod entry_settings;
 pub(crate) mod hotkey;
+mod session;
 #[cfg(target_os = "macos")]
 mod macos_window;
 pub(crate) mod target;
@@ -573,7 +574,9 @@ impl Desktop {
                 desktop.external_target_epoch.store(0, Ordering::Release);
                 return Ok(());
             }
-            if original_foreground.is_some_and(|pid| foreground_pid() != Some(pid)) {
+            if original_foreground.is_some_and(|pid| {
+                capture::foreground().map(|foreground| foreground.pid) != Some(pid)
+            }) {
                 desktop.external_target_epoch.store(0, Ordering::Release);
                 return Ok(());
             }

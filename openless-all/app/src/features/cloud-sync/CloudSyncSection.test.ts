@@ -470,7 +470,16 @@ try {
   deferredStatus = new Promise((resolve) => {
     resolveStatus = resolve;
   });
-  find(tree, (node) => node.props['aria-label'] === 'cloudSyncE2ee.refresh').props.onClick();
+  const restored = update({});
+  events.get('cloud-sync-e2ee:restored')!({
+    payload: {
+      sequence: restored.sequence,
+      accountId: restored.account?.githubId ?? null,
+      serviceOrigin: restored.serviceOrigin,
+      vaultId: restored.vaultId,
+      taskId: null,
+    },
+  });
   const old = { ...server };
   const newer = update({ enabled: true });
   events.get('cloud-sync-e2ee:state')!({
