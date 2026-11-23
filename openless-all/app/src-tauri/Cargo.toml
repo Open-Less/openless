@@ -142,6 +142,10 @@ objc2-foundation = "0.2"
 objc2-app-kit = { version = "0.2", features = ["NSPanel", "NSResponder", "NSWindow"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 
+# sherpa 原生运行时只在提供静态库的目标上启用（与 build.rs 的 local_asr_sherpa 一致）。
+[target.'cfg(any(target_os = "windows", target_os = "android"))'.dependencies]
+openless-platform = { path = "../crates/openless-platform", features = ["asr-sherpa"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.58"
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"] }

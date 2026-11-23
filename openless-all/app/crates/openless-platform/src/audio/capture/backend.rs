@@ -167,8 +167,7 @@ fn open_stream(
     on_error: Option<&ErrorSink>,
 ) -> Result<(CaptureStream, StreamFormat), CaptureError> {
     // 优先用设备默认格式；失败后再试它支持的范围（不强行改单声道或 ASR 采样率）。
-    let mut last_error = None;
-    match device.default_input_config() {
+    let initial_error = match device.default_input_config() {
         Ok(supported) => {
             let config = supported.config();
             let format = StreamFormat {
@@ -193,11 +192,11 @@ fn open_stream(
                     );
                     return Ok((stream, format));
                 }
-                Err(error) => last_error = Some(error),
+                Err(error) => error,
             }
         }
-        Err(error) => last_error = Some(classify_stream_error(&error.to_string())),
-    }
+        Err(error) => classify_stream_error(&error.to_string()),
+    };
 
     if let Ok(ranges) = device.supported_input_configs() {
         for range in ranges {
@@ -221,7 +220,7 @@ fn open_stream(
             }
         }
     }
-    Err(last_error.unwrap_or(CaptureError::NoDevice))
+    Err(initial_error)
 }
 
 fn build_stream(

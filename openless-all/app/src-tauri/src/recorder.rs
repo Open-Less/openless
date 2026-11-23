@@ -78,10 +78,10 @@ const VOICE_CAPTURE_KEY_PREFIX: u64 = 1 << 63;
 // [DEBUG-VOICE-1003] Temporary P1-P6 diagnostics; remove only after user confirmation.
 // Audio/model work never waits for disk I/O. Only the dedicated NDJSON writer opens a file.
 pub(crate) fn voice_diagnostic(
-    probe_id: &'static str,
-    hypothesis_ids: &'static [&'static str],
-    event: &'static str,
-    outcome: &'static str,
+    probe_id: &str,
+    hypothesis_ids: &[&str],
+    event: &str,
+    outcome: &str,
     safe: serde_json::Value,
 ) {
     #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
@@ -252,15 +252,9 @@ impl CaptureDiagnostics {
 }
 
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
-pub trait AudioConsumer: Send + Sync {
-    /// Each delivery is a little-endian byte sequence of Int16 samples;
-    /// the length is always a multiple of 2.
-    fn consume_pcm_chunk(&self, pcm: &[u8]);
-
-    /// Mark the end of the current VAD-gated segment without stopping the consumer.
-    /// Consumers that do not maintain streaming endpoint state can ignore this boundary.
-    fn finish_segment(&self) {}
-}
+// 音频消费契约定义在内核（`openless_core::AudioConsumer`），宿主、平台层引擎与
+// 云端 ASR 共用同一份 trait；这里只做别名。
+pub use openless_core::AudioConsumer;
 
 pub(crate) struct AudioConsumerFanout {
     consumers: Vec<Arc<dyn AudioConsumer>>,
@@ -283,17 +277,6 @@ impl AudioConsumer for AudioConsumerFanout {
         for consumer in &self.consumers {
             consumer.finish_segment();
         }
-    }
-}
-
-/// Compatibility bridge for legacy recorder call sites while cloud ASR
-/// implementations live in the framework-independent core.
-impl<T> AudioConsumer for T
-where
-    T: openless_core::AudioConsumer + ?Sized,
-{
-    fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        openless_core::AudioConsumer::consume_pcm_chunk(self, pcm);
     }
 }
 

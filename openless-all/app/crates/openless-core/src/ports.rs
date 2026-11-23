@@ -525,6 +525,11 @@ impl AudioConsumer for CapturedPcm {
 /// Sink for canonical 16 kHz / mono / signed 16-bit little-endian PCM chunks.
 pub trait AudioConsumer: Send + Sync {
     fn consume_pcm_chunk(&self, pcm: &[u8]);
+
+    /// 标记当前 VAD 分段结束，但不停止消费。
+    ///
+    /// 不维护流式端点状态的消费者可以忽略；需要切段的实现（如流式 ASR）覆盖它。
+    fn finish_segment(&self) {}
 }
 
 /// Recording-time progress. Implementations must keep callbacks non-blocking.

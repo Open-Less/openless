@@ -1,17 +1,28 @@
-//! 本地 ASR 的平台侧部分。
+//! 本地 ASR。
 //!
-//! 拆成两层：
-//! - **纯逻辑**（本模块）：provider id 元数据、模型文件收据/安装状态、sherpa 运行时事件描述。
-//!   这些不依赖任何宿主类型，也不链接原生 SDK，因此可以独立编译与测试。
-//! - **原生运行时**（后续迁移）：sherpa-onnx / Foundry SDK / Apple Speech，需要各自的
-//!   原生库与 build 脚本，按 `asr-sherpa` / `asr-foundry` / `asr-apple` 子 feature 门控。
+//! 分两层：
+//! - **元数据/纯逻辑**（`asr` feature）：provider id 契约、模型文件收据、
+//!   sherpa 运行时阶段描述、诊断事件钩子；
+//! - **原生运行时**（`asr-sherpa` / `asr-foundry` / `asr-apple` 子 feature）：
+//!   真正链接厂商 SDK 的引擎实现。
 //!
-//! 宿主仍然拥有 `TranscriptionEngine` 端口实现与引擎选择策略；平台层只提供
-//! "模型在哪、装没装、运行时阶段叫什么" 这类事实。
+//! 宿主仍然拥有"选哪个引擎、什么时候启动"的策略；平台层提供引擎本身。
 
+pub mod descriptors;
+pub mod diagnostics;
 pub mod ids;
 pub mod receipt;
 
-// sherpa 的**描述层**（阶段枚举、事件负载）是纯逻辑，随 `asr` 一起编译；
-// 原生运行时要链接 sherpa-onnx，留在宿主的 `local_asr_sherpa` cfg 下，后续迁入。
+// 只有 Windows 与 Android arm64 提供 sherpa-onnx 静态库；其它目标即使开了
+// `asr-sherpa` 也不编译这个模块（引擎在宿主侧返回"不可用"）。
+#[cfg(all(
+    feature = "asr-sherpa",
+    any(target_os = "windows", target_os = "android")
+))]
 pub mod sherpa;
+
+/// 音频消费接口：引擎从录音管线接收 16 kHz 单声道 Int16 PCM。
+///
+/// 契约定义在内核 `openless_core::AudioConsumer`（宿主、平台层、引擎共用一份），
+/// 这里只做别名，避免三处各写一个 trait。
+pub use openless_core::AudioConsumer as PcmConsumer;

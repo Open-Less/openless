@@ -866,6 +866,20 @@ fn permission_requires_visible_start(
 }
 
 #[cfg(not(mobile))]
+/// 把平台层 ASR 诊断事件转发到宿主日志。
+///
+/// 用具名函数而不是闭包：钩子签名是 higher-ranked 的（`&str` 与 `&[&str]` 各自借用），
+/// 闭包在这里会被推断成单一生命周期而无法逃逸。
+fn forward_asr_diagnostic(
+    probe: &str,
+    hypotheses: &[&str],
+    stage: &str,
+    event: &str,
+    payload: serde_json::Value,
+) {
+    crate::recorder::voice_diagnostic(probe, hypotheses, stage, event, payload);
+}
+
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
     init_file_logger();
@@ -917,6 +931,11 @@ fn run_desktop() {
             // 热键实现已迁到 openless-platform，平台层在按键回调里需要两个宿主行为：
             // 按下时预取选区、录音中处理伴随键。这里注册一次。
             hotkey::install_dictation_hooks();
+
+            // 平台层 ASR 引擎的诊断事件转发到宿主的可导出日志。
+            openless_platform::asr::diagnostics::install_diagnostic_hook(Box::new(
+                forward_asr_diagnostic,
+            ));
 
             // Position the capsule at the bottom-center of the screen and hide it at
             // startup; the coordinator shows it on demand. Same semantics as Swift

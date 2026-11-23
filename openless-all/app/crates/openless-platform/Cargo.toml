@@ -38,8 +38,8 @@ default = [
 # ASR 元数据：provider id、模型收据、sherpa 运行时事件描述（纯逻辑，不链接原生库）
 asr = ["dep:anyhow", "dep:serde", "dep:serde_json", "dep:uuid"]
 
-# sherpa 原生运行时的描述层（原生库仍在宿主，WP3 后续步骤迁入）
-asr-sherpa = ["asr"]
+# sherpa 原生运行时（链接 sherpa-onnx；仅 Windows 与 Android arm64 提供依赖）
+asr-sherpa = ["asr", "dep:sherpa-onnx", "dep:tokio", "dep:parking_lot"]
 
 # 胶囊浮层：几何计算 + 平台窗口控制（不抢焦点 / 点击穿透 / 命中测试）
 capsule = ["dep:objc2", "dep:objc2-foundation"]
@@ -94,6 +94,7 @@ once_cell = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["sync"], optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -129,6 +130,11 @@ windows = { version = "0.58", features = [
 winreg = { version = "0.52", optional = true }
 
 # macOS：纯文本剪贴板通道 + Keychain 原语。
+[target.'cfg(any(target_os = "windows", target_os = "android"))'.dependencies]
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
+  "static",
+], optional = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-sys = { version = "0.2", optional = true }
 objc2 = { version = "0.6", optional = true }

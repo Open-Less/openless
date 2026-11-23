@@ -1,0 +1,1394 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+//! sherpa-onnx local ASR runtime (Windows offline batch + online streaming).
+//!
+//! Designed like `foundry_runtime.rs`: the runtime is the single owner of models, sessions and
+//! lifecycle, unaware of `Coordinator` / `Recorder` / UI / Tauri events. Failures propagate as
+//! `anyhow::Error` for the upper layer to translate into user-visible text.
+//!
+//! The Windows path currently wires in sherpa-onnx's `OfflineRecognizer` and
+//! `OnlineRecognizer`, supporting model loading, caching, whole-PCM transcription, online
+//! chunked decoding and release. Non-Windows keeps only a compilable status facade.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
+use anyhow::{Context, Result};
+use parking_lot::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
+
+#[cfg(feature = "asr-sherpa")]
+use super::blocking_decode::run_serialized_decode;
+
+use crate::asr::descriptors::{
+    SherpaPreparePhase, SherpaPrepareProgressPayload, SherpaRuntimeStatus, PROVIDER_ID,
+};
+
+const QWEN3_ASR_CHUNK_LIMIT_MS: u64 = 30_000;
+#[derive(Clone, Debug)]
+pub struct SherpaTokenEmission {
+    pub text: String,
+    pub is_delta: bool,
+    pub is_new_segment: bool,
+}
+
+const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
+
+#[cfg(feature = "asr-sherpa")]
+use sherpa_onnx::{
+    OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer,
+    OfflineRecognizerConfig, OfflineSenseVoiceModelConfig, OfflineWhisperModelConfig,
+    OnlineRecognizer, OnlineRecognizerConfig,
+};
+
+/// Offline model load state. Windows holds the native `OfflineRecognizer`; other platforms keep
+/// only the alias to preserve cross-platform compilation and the status-query shape.
+#[derive(Clone)]
+struct LoadedOfflineModel {
+    alias: String,
+    #[cfg(feature = "asr-sherpa")]
+    recognizer: Arc<OfflineRecognizer>,
+    #[cfg(feature = "asr-sherpa")]
+    decode_gate: Arc<tokio::sync::Semaphore>,
+}
+
+/// Online model load state. Each dictation session creates its own `OnlineStream` from the recognizer.
+#[derive(Clone)]
+struct LoadedOnlineModel {
+    // [DEBUG-VOICE-1003] Observe overlap without serializing native calls.
+    #[cfg(feature = "asr-sherpa")]
+    diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
+    alias: String,
+    #[cfg(feature = "asr-sherpa")]
+    recognizer: Arc<OnlineRecognizer>,
+}
+
+#[derive(Default)]
+struct RuntimeState {
+    offline_loaded: Option<LoadedOfflineModel>,
+    online_loaded: Option<LoadedOnlineModel>,
+    diagnostics: RuntimeDiagnostics,
+}
+
+#[derive(Clone, Default)]
+struct RuntimeDiagnostics {
+    last_prepare_ms: Option<u64>,
+    last_transcribe_ms: Option<u64>,
+    last_audio_ms: Option<u64>,
+    last_error: Option<String>,
+}
+
+/// Cross-session singleton. The lifecycle is serialized by an `AsyncMutex` so ensure_loaded /
+/// release never run concurrently.
+pub struct SherpaOnnxRuntime {
+    lifecycle: AsyncMutex<()>,
+    cancel_prepare: AtomicBool,
+    state: Mutex<RuntimeState>,
+}
+
+impl Default for SherpaOnnxRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SherpaOnnxRuntime {
+    pub fn new() -> Self {
+        Self {
+            lifecycle: AsyncMutex::new(()),
+            cancel_prepare: AtomicBool::new(false),
+            state: Mutex::new(RuntimeState::default()),
+        }
+    }
+
+    /// Whether the runtime actually has inference capability today: the targets that link
+    /// `sherpa-onnx` (Windows, arm64 Android — the host build script enables the `asr-sherpa` feature).
+    #[allow(dead_code)]
+    pub fn is_available(&self) -> bool {
+        cfg!(feature = "asr-sherpa")
+    }
+
+    pub async fn status_snapshot(&self, active_model: &str) -> SherpaRuntimeStatus {
+        let state = self.state.lock();
+        let loaded_model_id = active_loaded_model_id(&state, active_model);
+        let diagnostics = state.diagnostics.clone();
+        SherpaRuntimeStatus {
+            provider_id: PROVIDER_ID.into(),
+            available: self.is_available(),
+            runtime_ready: loaded_model_id.is_some(),
+            active_model: active_model.to_string(),
+            loaded_model_id,
+            error: diagnostics.last_error.clone(),
+            last_prepare_ms: diagnostics.last_prepare_ms,
+            last_transcribe_ms: diagnostics.last_transcribe_ms,
+            last_audio_ms: diagnostics.last_audio_ms,
+            last_error: diagnostics.last_error,
+        }
+    }
+
+    pub async fn ensure_loaded(&self, alias: &str, model_dir: &Path) -> Result<String> {
+        self.ensure_loaded_with_progress(alias, model_dir.to_path_buf(), |_| {})
+            .await
+    }
+
+    pub async fn ensure_loaded_with_progress<F>(
+        &self,
+        alias: &str,
+        model_dir: PathBuf,
+        progress: F,
+    ) -> Result<String>
+    where
+        F: Fn(SherpaPrepareProgressPayload) + Send + Sync + 'static,
+    {
+        let started = Instant::now();
+        let result = self
+            .ensure_loaded_with_progress_inner(alias, model_dir, progress)
+            .await;
+        let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        match &result {
+            Ok(loaded_alias) => {
+                log::info!(
+                    "[sherpa-asr] prepare finished model={} elapsed_ms={}",
+                    loaded_alias,
+                    elapsed_ms
+                );
+                self.record_prepare_result(elapsed_ms, None);
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                log::warn!(
+                    "[sherpa-asr] prepare failed model={} elapsed_ms={} error={}",
+                    alias,
+                    elapsed_ms,
+                    message
+                );
+                self.record_prepare_result(elapsed_ms, Some(message));
+            }
+        }
+        result
+    }
+
+    async fn ensure_loaded_with_progress_inner<F>(
+        &self,
+        alias: &str,
+        dir: PathBuf,
+        progress: F,
+    ) -> Result<String>
+    where
+        F: Fn(SherpaPrepareProgressPayload) + Send + Sync + 'static,
+    {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.cancel_prepare.store(false, Ordering::SeqCst);
+        validate_alias(alias)?;
+        if let Some(loaded_alias) = self.cached_loaded_alias(alias) {
+            progress(SherpaPrepareProgressPayload::new(
+                SherpaPreparePhase::Finished,
+                alias,
+                "Sherpa-Onnx model already loaded",
+                Some(100.0),
+                None,
+            ));
+            return Ok(loaded_alias);
+        }
+        self.check_prepare_cancelled()?;
+        progress(SherpaPrepareProgressPayload::new(
+            SherpaPreparePhase::Model,
+            alias,
+            "Sherpa-Onnx local model files",
+            Some(100.0),
+            None,
+        ));
+        self.check_prepare_cancelled()?;
+        progress(SherpaPrepareProgressPayload::new(
+            SherpaPreparePhase::Load,
+            alias,
+            "Load Sherpa-Onnx model",
+            Some(0.0),
+            None,
+        ));
+        let loaded = load_model(alias, &dir).await?;
+        self.check_prepare_cancelled()?;
+        progress(SherpaPrepareProgressPayload::new(
+            SherpaPreparePhase::Load,
+            alias,
+            "Load Sherpa-Onnx model",
+            Some(100.0),
+            None,
+        ));
+        match loaded {
+            LoadedModel::Offline(loaded) => self.state.lock().offline_loaded = Some(loaded),
+            LoadedModel::Online(loaded) => self.state.lock().online_loaded = Some(loaded),
+        }
+        progress(SherpaPrepareProgressPayload::new(
+            SherpaPreparePhase::Finished,
+            alias,
+            "Sherpa-Onnx model ready",
+            Some(100.0),
+            None,
+        ));
+        Ok(alias.to_string())
+    }
+
+    /// On Windows, whole-PCM batch transcription via the loaded `OfflineRecognizer`; non-Windows
+    /// keeps an empty implementation so the sherpa provider never appears as an available
+    /// inference capability.
+    #[allow(dead_code)]
+    pub async fn transcribe_pcm(
+        &self,
+        alias: &str,
+        model_dir: &Path,
+        pcm: &[u8],
+        language_hint: Option<&str>,
+        audio_timeout: std::time::Duration,
+    ) -> Result<String> {
+        if pcm.is_empty() {
+            return Ok(String::new());
+        }
+        let target = sherpa_target(alias)?;
+        if target.sherpa_execution_mode() != Some(openless_core::LocalAsrExecutionMode::Offline) {
+            anyhow::bail!("sherpa-onnx model {alias} is online-only; use streaming API");
+        }
+        let audio_ms = pcm_duration_ms(pcm);
+        let pcm_chunks = sherpa_offline_chunks(&target, pcm)
+            .into_iter()
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        let chunk_count = pcm_chunks.len();
+        let loaded_alias = self.ensure_loaded(alias, model_dir).await?;
+        let loaded = self
+            .state
+            .lock()
+            .offline_loaded
+            .clone()
+            .filter(|loaded| loaded.alias == loaded_alias)
+            .context("sherpa-onnx offline model not loaded")?;
+        let started = Instant::now();
+        let result = transcribe_loaded_model(
+            loaded,
+            pcm_chunks,
+            language_hint.map(str::to_string),
+            audio_timeout,
+        )
+        .await;
+        let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        match &result {
+            Ok(text) => {
+                log::info!(
+                    "[sherpa-asr] transcribe finished model={} audio_ms={} chunks={} elapsed_ms={} text_chars={}",
+                    alias,
+                    audio_ms,
+                    chunk_count,
+                    elapsed_ms,
+                    text.chars().count()
+                );
+                self.record_transcribe_result(audio_ms, elapsed_ms, None);
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                log::warn!(
+                    "[sherpa-asr] transcribe failed model={} audio_ms={} chunks={} elapsed_ms={} error={}",
+                    alias,
+                    audio_ms,
+                    chunk_count,
+                    elapsed_ms,
+                    message
+                );
+                self.record_transcribe_result(audio_ms, elapsed_ms, Some(message));
+            }
+        }
+        result
+    }
+
+    /// Create an independent online decoding session. The caller feeds it Recorder PCM chunks
+    /// and calls `finish()` when recording stops to flush the final text.
+    pub async fn create_online_session(
+        &self,
+        alias: &str,
+        model_dir: &Path,
+    ) -> Result<SherpaOnlineSession> {
+        if sherpa_target(alias)?.sherpa_execution_mode()
+            != Some(openless_core::LocalAsrExecutionMode::Online)
+        {
+            anyhow::bail!("sherpa-onnx model {alias} is not an online streaming model");
+        }
+        let loaded_alias = self.ensure_loaded(alias, model_dir).await?;
+        let loaded = self
+            .state
+            .lock()
+            .online_loaded
+            .clone()
+            .filter(|loaded| loaded.alias == loaded_alias)
+            .context("sherpa-onnx online model not loaded")?;
+        create_online_session_from_loaded(loaded)
+    }
+
+    pub fn request_cancel_prepare(&self) {
+        self.cancel_prepare.store(true, Ordering::SeqCst);
+    }
+
+    pub fn cancel_prepare_requested_for_tests(&self) -> bool {
+        self.cancel_prepare.load(Ordering::SeqCst)
+    }
+
+    pub async fn release_now(&self) -> Result<()> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let mut state = self.state.lock();
+        state.offline_loaded = None;
+        if let Some(loaded) = state.online_loaded.as_ref() {
+            #[cfg(feature = "asr-sherpa")]
+            crate::asr::diagnostics::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
+                serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
+                    "active": loaded.diagnostic_active.load(Ordering::Relaxed)}),
+            );
+        }
+        state.online_loaded = None;
+        Ok(())
+    }
+
+    /// Auto teardown releases only instances still belonging to this use. The generation is
+    /// re-checked inside the lifecycle lock so a timer waiting for old inference to finish can't
+    /// clear a model the user just switched to or a new session just loaded.
+    pub async fn release_if_generation(
+        &self,
+        generation: &std::sync::atomic::AtomicU64,
+        expected: u64,
+    ) -> Result<bool> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if generation.load(Ordering::Acquire) != expected {
+            return Ok(false);
+        }
+        let mut state = self.state.lock();
+        state.offline_loaded = None;
+        if let Some(loaded) = state.online_loaded.as_ref() {
+            #[cfg(feature = "asr-sherpa")]
+            crate::asr::diagnostics::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
+                serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
+                    "active": loaded.diagnostic_active.load(Ordering::Relaxed)}),
+            );
+        }
+        state.online_loaded = None;
+        Ok(true)
+    }
+
+    fn cached_loaded_alias(&self, alias: &str) -> Option<String> {
+        let state = self.state.lock();
+        if state
+            .offline_loaded
+            .as_ref()
+            .filter(|loaded| loaded.alias == alias)
+            .is_some()
+        {
+            return Some(alias.to_string());
+        }
+        if state
+            .online_loaded
+            .as_ref()
+            .filter(|loaded| loaded.alias == alias)
+            .is_some()
+        {
+            return Some(alias.to_string());
+        }
+        None
+    }
+
+    fn check_prepare_cancelled(&self) -> Result<()> {
+        if self.cancel_prepare.load(Ordering::SeqCst) {
+            anyhow::bail!("sherpa-onnx prepare cancelled");
+        }
+        Ok(())
+    }
+
+    fn record_prepare_result(&self, elapsed_ms: u64, error: Option<String>) {
+        let mut state = self.state.lock();
+        state.diagnostics.last_prepare_ms = Some(elapsed_ms);
+        state.diagnostics.last_error = error;
+    }
+
+    fn record_transcribe_result(&self, audio_ms: u64, elapsed_ms: u64, error: Option<String>) {
+        let mut state = self.state.lock();
+        state.diagnostics.last_audio_ms = Some(audio_ms);
+        state.diagnostics.last_transcribe_ms = Some(elapsed_ms);
+        state.diagnostics.last_error = error;
+    }
+
+    pub fn record_streaming_result(
+        &self,
+        alias: &str,
+        audio_ms: u64,
+        elapsed_ms: u64,
+        error: Option<String>,
+    ) {
+        match &error {
+            Some(message) => log::warn!(
+                "[sherpa-asr] streaming finished model={} audio_ms={} elapsed_ms={} error={}",
+                alias,
+                audio_ms,
+                elapsed_ms,
+                message
+            ),
+            None => log::info!(
+                "[sherpa-asr] streaming finished model={} audio_ms={} elapsed_ms={}",
+                alias,
+                audio_ms,
+                elapsed_ms
+            ),
+        }
+        self.record_transcribe_result(audio_ms, elapsed_ms, error);
+    }
+}
+
+fn active_loaded_model_id(state: &RuntimeState, active_model: &str) -> Option<String> {
+    state
+        .offline_loaded
+        .as_ref()
+        .filter(|loaded| loaded.alias == active_model)
+        .map(|loaded| loaded.alias.clone())
+        .or_else(|| {
+            state
+                .online_loaded
+                .as_ref()
+                .filter(|loaded| loaded.alias == active_model)
+                .map(|loaded| loaded.alias.clone())
+        })
+}
+
+fn validate_alias(alias: &str) -> Result<()> {
+    sherpa_target(alias).map(|_| ())
+}
+
+fn sherpa_target(alias: &str) -> Result<openless_core::LocalAsrTarget> {
+    openless_core::LocalAsrTarget::parse(openless_core::LocalAsrRuntime::SherpaOnnx, alias)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn pcm_duration_ms(pcm: &[u8]) -> u64 {
+    openless_core::asr::pcm::pcm_duration_ms(pcm)
+}
+
+fn sherpa_offline_chunks<'a>(
+    target: &openless_core::LocalAsrTarget,
+    pcm: &'a [u8],
+) -> Vec<&'a [u8]> {
+    let limit = (target.sherpa_family() == Some(openless_core::SherpaModelFamily::Qwen3Asr))
+        .then_some(QWEN3_ASR_CHUNK_LIMIT_MS);
+    openless_core::asr::whisper::split_pcm_by_duration(pcm, limit)
+}
+
+enum LoadedModel {
+    Offline(LoadedOfflineModel),
+    Online(LoadedOnlineModel),
+}
+
+#[cfg(feature = "asr-sherpa")]
+async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
+    let alias = alias.to_string();
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(
+        move || match sherpa_target(&alias)?.sherpa_execution_mode() {
+            Some(openless_core::LocalAsrExecutionMode::Offline) => {
+                let recognizer = create_offline_recognizer(&alias, &dir)?;
+                Ok(LoadedModel::Offline(LoadedOfflineModel {
+                    alias,
+                    recognizer: Arc::new(recognizer),
+                    decode_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+                }))
+            }
+            Some(openless_core::LocalAsrExecutionMode::Online) => {
+                let recognizer = create_online_recognizer(&alias, &dir)?;
+                Ok(LoadedModel::Online(LoadedOnlineModel {
+                    diagnostic_active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    alias,
+                    recognizer: Arc::new(recognizer),
+                }))
+            }
+            None => anyhow::bail!("unknown sherpa-onnx execution mode: {alias}"),
+        },
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("sherpa-onnx load join failed: {e:#}"))?
+}
+
+#[cfg(not(feature = "asr-sherpa"))]
+async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
+    match sherpa_target(alias)?.sherpa_execution_mode() {
+        Some(openless_core::LocalAsrExecutionMode::Offline) => {
+            Ok(LoadedModel::Offline(LoadedOfflineModel {
+                alias: alias.to_string(),
+            }))
+        }
+        Some(openless_core::LocalAsrExecutionMode::Online) => {
+            Ok(LoadedModel::Online(LoadedOnlineModel {
+                alias: alias.to_string(),
+            }))
+        }
+        None => anyhow::bail!("unknown sherpa-onnx execution mode: {alias}"),
+    }
+}
+
+#[cfg(feature = "asr-sherpa")]
+fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognizer> {
+    let mut config = OfflineRecognizerConfig::default();
+    let default_num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 4) as i32)
+        .unwrap_or(2);
+    config.model_config.num_threads = default_num_threads;
+    #[cfg(target_os = "windows")]
+    {
+        // Keep Windows offline decode on one ONNX worker until native multi-threaded decode is proven stable.
+        config.model_config.num_threads = 1;
+    }
+    config.model_config.provider = Some("cpu".into());
+    match sherpa_target(alias)?.sherpa_family() {
+        Some(openless_core::SherpaModelFamily::SenseVoice) => {
+            config.model_config.tokens = Some(path_to_string(&dir.join("tokens.txt"))?);
+            config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
+                model: Some(path_to_string(&dir.join("model.int8.onnx"))?),
+                language: Some("auto".into()),
+                use_itn: true,
+            };
+        }
+        Some(openless_core::SherpaModelFamily::Paraformer) => {
+            config.model_config.tokens = Some(path_to_string(&dir.join("tokens.txt"))?);
+            config.model_config.paraformer = OfflineParaformerModelConfig {
+                model: Some(path_to_string(&dir.join("model.int8.onnx"))?),
+            };
+        }
+        Some(openless_core::SherpaModelFamily::Whisper) => {
+            config.model_config.tokens = Some(path_to_string(&dir.join("tokens.txt"))?);
+            config.model_config.whisper = OfflineWhisperModelConfig {
+                encoder: Some(path_to_string(&dir.join("encoder.int8.onnx"))?),
+                decoder: Some(path_to_string(&dir.join("decoder.int8.onnx"))?),
+                language: Some("auto".into()),
+                task: Some("transcribe".into()),
+                tail_paddings: 0,
+                enable_token_timestamps: false,
+                enable_segment_timestamps: false,
+            };
+        }
+        Some(openless_core::SherpaModelFamily::Qwen3Asr) => {
+            config.model_config.qwen3_asr = OfflineQwen3ASRModelConfig {
+                conv_frontend: Some(path_to_string(&dir.join("conv_frontend.onnx"))?),
+                encoder: Some(path_to_string(&dir.join("encoder.int8.onnx"))?),
+                decoder: Some(path_to_string(&dir.join("decoder.int8.onnx"))?),
+                tokenizer: Some(path_to_string(&dir.join("tokenizer"))?),
+                max_new_tokens: QWEN3_ASR_MAX_NEW_TOKENS,
+                ..Default::default()
+            };
+            #[cfg(target_os = "windows")]
+            {
+                config.model_config.num_threads = 1;
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                config.model_config.num_threads = 3;
+            }
+        }
+        Some(openless_core::SherpaModelFamily::Zipformer) => {
+            anyhow::bail!("zipformer is not supported by offline batch M2")
+        }
+        None => anyhow::bail!("unknown sherpa-onnx model family: {alias}"),
+    }
+    log::info!(
+        "[sherpa-asr] create offline recognizer model={} threads={}",
+        alias,
+        config.model_config.num_threads
+    );
+    OfflineRecognizer::create(&config)
+        .ok_or_else(|| anyhow::anyhow!("create sherpa-onnx offline recognizer failed"))
+}
+
+#[cfg(feature = "asr-sherpa")]
+fn create_online_recognizer(alias: &str, dir: &Path) -> Result<OnlineRecognizer> {
+    let mut config = OnlineRecognizerConfig::default();
+    config.model_config.num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 4) as i32)
+        .unwrap_or(2);
+    config.model_config.provider = Some("cpu".into());
+    config.enable_endpoint = true;
+    config.rule1_min_trailing_silence = 2.4;
+    config.rule2_min_trailing_silence = 1.2;
+    config.rule3_min_utterance_length = 20.0;
+    config.decoding_method = Some("greedy_search".into());
+    match sherpa_target(alias)?.sherpa_family() {
+        Some(openless_core::SherpaModelFamily::Zipformer) => {
+            config.model_config.tokens = Some(path_to_string(&dir.join("tokens.txt"))?);
+            config.model_config.transducer.encoder = Some(path_to_string(
+                &dir.join("encoder-epoch-99-avg-1.int8.onnx"),
+            )?);
+            config.model_config.transducer.decoder =
+                Some(path_to_string(&dir.join("decoder-epoch-99-avg-1.onnx"))?);
+            config.model_config.transducer.joiner = Some(path_to_string(
+                &dir.join("joiner-epoch-99-avg-1.int8.onnx"),
+            )?);
+        }
+        family => anyhow::bail!("sherpa-onnx family {family:?} is not supported by online ASR"),
+    }
+    OnlineRecognizer::create(&config)
+        .ok_or_else(|| anyhow::anyhow!("create sherpa-onnx online recognizer failed"))
+}
+
+#[cfg(feature = "asr-sherpa")]
+fn path_to_string(path: &Path) -> Result<String> {
+    Ok(path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {}", path.display()))?
+        .to_string())
+}
+
+#[cfg(feature = "asr-sherpa")]
+async fn transcribe_loaded_model(
+    loaded: LoadedOfflineModel,
+    pcm_chunks: Vec<Vec<u8>>,
+    language_hint: Option<String>,
+    audio_timeout: std::time::Duration,
+) -> Result<String> {
+    let model_alias = loaded.alias.clone();
+    let chunk_count = pcm_chunks.len();
+    let decode_model_alias = model_alias.clone();
+    log::info!(
+        "[sherpa-asr] native decode begin model={} chunks={}",
+        model_alias,
+        chunk_count
+    );
+    let result = run_serialized_decode(
+        Arc::clone(&loaded.decode_gate),
+        audio_timeout,
+        move |cancelled| {
+            let mut texts = Vec::with_capacity(pcm_chunks.len());
+            for (chunk_index, pcm) in pcm_chunks.into_iter().enumerate() {
+                if cancelled.load(Ordering::Acquire) {
+                    anyhow::bail!("sherpa-onnx transcribe cancelled");
+                }
+                let chunk_number = chunk_index + 1;
+                let chunk_audio_ms = pcm_duration_ms(&pcm);
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} audio_ms={} stage=chunk_begin",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count,
+                    chunk_audio_ms
+                );
+                let samples = pcm_s16le_to_f32(&pcm)?;
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} samples={} stage=stream_create",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count,
+                    samples.len()
+                );
+                let stream = loaded.recognizer.create_stream();
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} stage=stream_created",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count
+                );
+                if let Some(language) = language_hint.as_deref().filter(|value| !value.is_empty()) {
+                    if stream.has_option("language") {
+                        stream.set_option("language", language);
+                    }
+                }
+                stream.accept_waveform(16_000, &samples);
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} stage=waveform_accepted",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count
+                );
+                loaded.recognizer.decode(&stream);
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} stage=decoded",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count
+                );
+                let result = stream
+                    .get_result()
+                    .ok_or_else(|| anyhow::anyhow!("sherpa-onnx returned no result"))?;
+                log::info!(
+                    "[sherpa-asr] native decode chunk model={} chunk={}/{} text_chars={} stage=result_received",
+                    decode_model_alias,
+                    chunk_number,
+                    chunk_count,
+                    result.text.chars().count()
+                );
+                texts.push(result.text);
+            }
+            let text = openless_core::asr::whisper::join_transcript_chunks(&texts);
+            log::info!(
+                "[sherpa-asr] native decode complete model={} chunks={} text_chars={}",
+                decode_model_alias,
+                chunk_count,
+                text.chars().count()
+            );
+            Ok(text)
+        },
+    )
+    .await;
+    match &result {
+        Ok(text) => log::info!(
+            "[sherpa-asr] native decode returned model={} text_chars={}",
+            model_alias,
+            text.chars().count()
+        ),
+        Err(error) => log::warn!(
+            "[sherpa-asr] native decode failed model={} error={:#}",
+            model_alias,
+            error
+        ),
+    }
+    result
+}
+
+#[cfg(not(feature = "asr-sherpa"))]
+async fn transcribe_loaded_model(
+    _loaded: LoadedOfflineModel,
+    _pcm_chunks: Vec<Vec<u8>>,
+    _language_hint: Option<String>,
+    _audio_timeout: std::time::Duration,
+) -> Result<String> {
+    Ok(String::new())
+}
+
+pub struct SherpaOnlineSession {
+    #[cfg(feature = "asr-sherpa")]
+    diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
+    alias: String,
+    #[cfg(feature = "asr-sherpa")]
+    recognizer: Arc<OnlineRecognizer>,
+    #[cfg(feature = "asr-sherpa")]
+    stream: sherpa_onnx::OnlineStream,
+    committed_text: String,
+    last_partial_text: String,
+    last_emitted_text: String,
+    pending_new_segment: bool,
+}
+
+// [DEBUG-VOICE-1003] P3 / H2,H4,H6: native entry/return and per-recognizer overlap.
+#[cfg(feature = "asr-sherpa")]
+struct VoiceNativeProbe<'a> {
+    active: &'a std::sync::atomic::AtomicUsize,
+    stage: &'static str,
+}
+
+#[cfg(feature = "asr-sherpa")]
+impl<'a> VoiceNativeProbe<'a> {
+    fn enter(active: &'a std::sync::atomic::AtomicUsize, stage: &'static str) -> Self {
+        let count = active.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::asr::diagnostics::voice_diagnostic(
+            "P3",
+            &["H2", "H4", "H6"],
+            "native",
+            "entered",
+            serde_json::json!({"stage": stage, "count": count}),
+        );
+        Self { active, stage }
+    }
+}
+
+#[cfg(feature = "asr-sherpa")]
+impl Drop for VoiceNativeProbe<'_> {
+    fn drop(&mut self) {
+        let count = self.active.fetch_sub(1, Ordering::Relaxed) - 1;
+        crate::asr::diagnostics::voice_diagnostic(
+            "P3",
+            &["H2", "H4", "H6"],
+            "native",
+            "returned",
+            serde_json::json!({"stage": self.stage, "count": count}),
+        );
+    }
+}
+
+// [DEBUG-VOICE-1003] P5 / H4: observe ownership before existing field destruction.
+// No fields are moved, reordered or manually dropped here.
+#[cfg(feature = "asr-sherpa")]
+impl Drop for SherpaOnlineSession {
+    fn drop(&mut self) {
+        crate::asr::diagnostics::voice_diagnostic("P5", &["H4"], "session_owner", "dropping",
+            serde_json::json!({"count": Arc::strong_count(&self.recognizer),
+                "active": self.diagnostic_active.load(Ordering::Relaxed)}),
+        );
+    }
+}
+
+impl SherpaOnlineSession {
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    pub fn accept_pcm_chunk<F>(&mut self, pcm: &[u8], on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        if pcm.is_empty() {
+            return Ok(());
+        }
+        let samples = pcm_s16le_to_f32(pcm)?;
+        self.accept_samples(&samples, on_token)
+    }
+
+    pub fn finish<F>(&mut self, on_token: &F) -> Result<String>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        self.finish_inner(on_token)
+    }
+
+    /// Flush the current VAD segment while keeping this online session alive for
+    /// the next speech segment.
+    pub fn flush_segment<F>(&mut self, on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        self.flush_segment_inner(on_token)
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    fn accept_samples<F>(&mut self, samples: &[f32], on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "accept");
+            self.stream.accept_waveform(16_000, samples);
+        }
+        self.drain_ready(on_token);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "asr-sherpa"))]
+    fn accept_samples<F>(&mut self, _samples: &[f32], _on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        Ok(())
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    fn finish_inner<F>(&mut self, on_token: &F) -> Result<String>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        finish_online_segment_input(
+            |tail| {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
+                self.stream.accept_waveform(16_000, tail);
+            },
+            || {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+                self.stream.input_finished();
+            },
+        );
+        self.drain_ready(on_token);
+        self.capture_result(on_token, false);
+        Ok(self.final_text())
+    }
+
+    #[cfg(not(feature = "asr-sherpa"))]
+    fn finish_inner<F>(&mut self, _on_token: &F) -> Result<String>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        Ok(self.final_text())
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    fn flush_segment_inner<F>(&mut self, on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        finish_online_segment_input(
+            |tail| {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
+                self.stream.accept_waveform(16_000, tail);
+            },
+            || {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+                self.stream.input_finished();
+            },
+        );
+        self.drain_ready_without_endpoint_reset(on_token);
+        self.capture_result(on_token, false);
+        if !self.last_partial_text.is_empty() {
+            append_segment(&mut self.committed_text, &self.last_partial_text);
+        }
+        self.last_partial_text.clear();
+        self.last_emitted_text.clear();
+        self.pending_new_segment = true;
+        {
+            // EOF also closes feature extraction; recognizer reset only resets decoding.
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "new_stream");
+            self.stream = self.recognizer.create_stream();
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "asr-sherpa"))]
+    fn flush_segment_inner<F>(&mut self, _on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        Ok(())
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    fn drain_ready<F>(&mut self, on_token: &F)
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        while self.recognizer.is_ready(&self.stream) {
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
+                self.recognizer.decode(&self.stream);
+            }
+            self.capture_result(on_token, true);
+        }
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    fn drain_ready_without_endpoint_reset<F>(&mut self, on_token: &F)
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        while self.recognizer.is_ready(&self.stream) {
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
+                self.recognizer.decode(&self.stream);
+            }
+            self.capture_result(on_token, false);
+        }
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    fn capture_result<F>(&mut self, on_token: &F, allow_endpoint_reset: bool)
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        let result = {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "result");
+            self.recognizer.get_result(&self.stream)
+        };
+        crate::asr::diagnostics::voice_diagnostic("P3", &["H2", "H4", "H6"], "native_result", "observed",
+            serde_json::json!({"present": result.is_some(),
+                "count": result.as_ref().map(|result| result.text.chars().count()).unwrap_or(0),
+                "stage": if allow_endpoint_reset { "streaming" } else { "flush" }}),
+        );
+        let Some(result) = result else {
+            return;
+        };
+        let text = result.text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.emit_delta(&text, on_token);
+        self.last_partial_text = text.clone();
+        if allow_endpoint_reset && self.recognizer.is_endpoint(&self.stream) {
+            append_segment(&mut self.committed_text, &text);
+            self.last_partial_text.clear();
+            self.last_emitted_text.clear();
+            self.pending_new_segment = true;
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "reset");
+                self.recognizer.reset(&self.stream);
+            }
+        }
+    }
+
+    fn emit_delta<F>(&mut self, text: &str, on_token: &F)
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        if text == self.last_emitted_text {
+            return;
+        }
+        let is_new_segment = self.pending_new_segment;
+        if let Some(delta) = text.strip_prefix(&self.last_emitted_text) {
+            if !delta.is_empty() {
+                on_token(&SherpaTokenEmission {
+                    text: delta.to_string(),
+                    is_delta: true,
+                    is_new_segment,
+                });
+            }
+        } else {
+            on_token(&SherpaTokenEmission {
+                text: text.to_string(),
+                is_delta: false,
+                is_new_segment,
+            });
+        }
+        self.pending_new_segment = false;
+        self.last_emitted_text = text.to_string();
+    }
+
+    fn final_text(&self) -> String {
+        let mut text = self.committed_text.clone();
+        if !self.last_partial_text.is_empty() {
+            append_segment(&mut text, &self.last_partial_text);
+        }
+        text.trim().to_string()
+    }
+}
+
+// Sherpa 1.13.2's online-decode-files.py supplies 0.66 s of zero samples before
+// input_finished(): marking EOF alone does not provide the model's trailing context.
+// This is bounded model input, not a wall-clock wait or continuous idle inference.
+fn finish_online_segment_input(accept_tail: impl FnOnce(&[f32]), input_finished: impl FnOnce()) {
+    const TAIL: [f32; 16_000 * 66 / 100] = [0.0; 16_000 * 66 / 100];
+    accept_tail(&TAIL);
+    input_finished();
+}
+
+fn append_segment(text: &mut String, segment: &str) {
+    let segment = segment.trim();
+    if segment.is_empty() {
+        return;
+    }
+    if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+        text.push(' ');
+    }
+    text.push_str(segment);
+}
+
+#[cfg(feature = "asr-sherpa")]
+fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
+    let stream = loaded.recognizer.create_stream();
+    crate::asr::diagnostics::voice_diagnostic(
+        "P5",
+        &["H4"],
+        "session_owner",
+        "created",
+        serde_json::json!({"count": Arc::strong_count(&loaded.recognizer)}),
+    );
+    Ok(SherpaOnlineSession {
+        diagnostic_active: loaded.diagnostic_active,
+        alias: loaded.alias,
+        recognizer: loaded.recognizer,
+        stream,
+        committed_text: String::new(),
+        last_partial_text: String::new(),
+        last_emitted_text: String::new(),
+        pending_new_segment: false,
+    })
+}
+
+#[cfg(not(feature = "asr-sherpa"))]
+fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
+    Ok(SherpaOnlineSession {
+        alias: loaded.alias,
+        committed_text: String::new(),
+        last_partial_text: String::new(),
+        last_emitted_text: String::new(),
+        pending_new_segment: false,
+    })
+}
+
+fn pcm_s16le_to_f32(pcm: &[u8]) -> Result<Vec<f32>> {
+    if pcm.len() % 2 != 0 {
+        anyhow::bail!("PCM buffer length is not aligned to i16 samples");
+    }
+    Ok(pcm
+        .chunks_exact(2)
+        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as f32 / 32768.0)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn release_generation_is_rechecked_after_waiting_for_native_lifecycle() {
+        let runtime = SherpaOnnxRuntime::new();
+        let generation = std::sync::atomic::AtomicU64::new(1);
+        let guard = runtime.lifecycle.lock().await;
+        let release = runtime.release_if_generation(&generation, 1);
+        tokio::pin!(release);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), &mut release)
+                .await
+                .is_err()
+        );
+        generation.store(2, Ordering::Release);
+        drop(guard);
+        assert!(
+            !release.await.unwrap(),
+            "stale cleanup must leave the newly-owned runtime intact"
+        );
+        assert!(runtime.release_if_generation(&generation, 2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn new_runtime_reports_offline_batch_status_shape() {
+        let runtime = SherpaOnnxRuntime::new();
+        let status = runtime.status_snapshot("sense-voice-small-zh").await;
+
+        assert_eq!(status.provider_id, PROVIDER_ID);
+        assert_eq!(status.available, cfg!(feature = "asr-sherpa"));
+        assert!(!status.runtime_ready);
+        assert_eq!(status.active_model, "sense-voice-small-zh");
+        assert_eq!(status.loaded_model_id, None);
+        assert_eq!(status.error, None);
+        assert_eq!(status.last_prepare_ms, None);
+        assert_eq!(status.last_transcribe_ms, None);
+        assert_eq!(status.last_audio_ms, None);
+        assert_eq!(status.last_error, None);
+    }
+
+    #[cfg(not(feature = "asr-sherpa"))]
+    #[tokio::test]
+    async fn status_snapshot_only_marks_active_model_ready() {
+        let runtime = SherpaOnnxRuntime::new();
+        runtime.state.lock().offline_loaded = Some(LoadedOfflineModel {
+            alias: "sense-voice-small-zh".into(),
+        });
+
+        let active = runtime.status_snapshot("sense-voice-small-zh").await;
+        let inactive = runtime.status_snapshot("paraformer-zh").await;
+
+        assert!(active.runtime_ready);
+        assert_eq!(
+            active.loaded_model_id.as_deref(),
+            Some("sense-voice-small-zh")
+        );
+        assert!(!inactive.runtime_ready);
+        assert_eq!(inactive.loaded_model_id, None);
+    }
+
+    #[tokio::test]
+    async fn ensure_loaded_rejects_unknown_alias() {
+        let runtime = SherpaOnnxRuntime::new();
+        let result = runtime
+            .ensure_loaded("unknown-sherpa-model", Path::new("unused"))
+            .await;
+        assert!(result.is_err());
+        let status = runtime.status_snapshot("sense-voice-small-zh").await;
+        assert!(status.last_prepare_ms.is_some());
+        assert!(status
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unknown-sherpa-model"));
+        assert_eq!(status.error, status.last_error);
+    }
+
+    #[tokio::test]
+    async fn status_snapshot_reports_runtime_diagnostics() {
+        let runtime = SherpaOnnxRuntime::new();
+        runtime.record_prepare_result(12, None);
+        runtime.record_transcribe_result(1_250, 34, Some("decode failed".into()));
+
+        let status = runtime.status_snapshot("paraformer-zh").await;
+
+        assert_eq!(status.last_prepare_ms, Some(12));
+        assert_eq!(status.last_audio_ms, Some(1_250));
+        assert_eq!(status.last_transcribe_ms, Some(34));
+        assert_eq!(status.error.as_deref(), Some("decode failed"));
+        assert_eq!(status.last_error.as_deref(), Some("decode failed"));
+    }
+
+    #[test]
+    fn request_cancel_prepare_marks_runtime_cancelled() {
+        let runtime = SherpaOnnxRuntime::new();
+        assert!(!runtime.cancel_prepare_requested_for_tests());
+        runtime.request_cancel_prepare();
+        assert!(runtime.cancel_prepare_requested_for_tests());
+    }
+
+    #[tokio::test]
+    async fn release_now_clears_loaded_model() {
+        let runtime = SherpaOnnxRuntime::new();
+        #[cfg(not(feature = "asr-sherpa"))]
+        {
+            runtime.state.lock().offline_loaded = Some(LoadedOfflineModel {
+                alias: "sense-voice-small-zh".into(),
+            });
+            runtime.state.lock().online_loaded = Some(LoadedOnlineModel {
+                alias: "zipformer-bilingual-zh-en-streaming".into(),
+            });
+        }
+        runtime.release_now().await.unwrap();
+
+        let status = runtime.status_snapshot("paraformer-zh").await;
+        assert!(!status.runtime_ready);
+        assert_eq!(status.loaded_model_id, None);
+        assert!(runtime.state.lock().offline_loaded.is_none());
+        assert!(runtime.state.lock().online_loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn transcribe_pcm_returns_empty_for_empty_input() {
+        let runtime = SherpaOnnxRuntime::new();
+        let text = runtime
+            .transcribe_pcm(
+                "sense-voice-small-zh",
+                Path::new("unused"),
+                &[],
+                Some("zh"),
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transcribe_pcm_rejects_online_model_alias() {
+        let runtime = SherpaOnnxRuntime::new();
+        let result = runtime
+            .transcribe_pcm(
+                "zipformer-bilingual-zh-en-streaming",
+                Path::new("unused"),
+                &[0, 0],
+                None,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("online-only"));
+    }
+
+    #[test]
+    fn only_qwen3_offline_audio_is_split_at_thirty_seconds() {
+        let qwen = sherpa_target("qwen3-asr-0.6b-int8").unwrap();
+        let thirty_seconds = vec![0; 32_000 * 30];
+        assert_eq!(
+            sherpa_offline_chunks(&qwen, &thirty_seconds),
+            vec![thirty_seconds.as_slice()]
+        );
+
+        let pcm = vec![0; 32_000 * 65];
+        let chunks = sherpa_offline_chunks(&qwen, &pcm);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), 32_000 * 30);
+        assert_eq!(chunks[1].len(), 32_000 * 30);
+        assert_eq!(chunks[2].len(), 32_000 * 5);
+
+        let sense_voice = sherpa_target("sense-voice-small-zh").unwrap();
+        assert_eq!(
+            sherpa_offline_chunks(&sense_voice, &pcm),
+            vec![pcm.as_slice()]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_online_session_rejects_offline_model_alias() {
+        let runtime = SherpaOnnxRuntime::new();
+        let result = runtime
+            .create_online_session("sense-voice-small-zh", Path::new("unused"))
+            .await;
+
+        assert!(result.is_err());
+        let error = result.err().unwrap();
+        assert!(format!("{error:#}").contains("not an online streaming model"));
+    }
+
+    #[test]
+    fn pcm_s16le_to_f32_converts_samples() {
+        let samples = pcm_s16le_to_f32(&[0, 0, 0xff, 0x7f, 0x00, 0x80]).unwrap();
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0], 0.0);
+        assert!(samples[1] > 0.99);
+        assert_eq!(samples[2], -1.0);
+    }
+
+    #[test]
+    fn pcm_s16le_to_f32_rejects_odd_length() {
+        assert!(pcm_s16le_to_f32(&[0]).is_err());
+    }
+
+    #[test]
+    fn segment_input_supplies_bounded_silent_context_before_eof() {
+        let events = std::cell::RefCell::new(Vec::new());
+        finish_online_segment_input(
+            |tail| {
+                assert_eq!(tail.len(), 10_560);
+                assert!(tail.iter().all(|sample| *sample == 0.0));
+                events.borrow_mut().push(("tail", tail.len()));
+            },
+            || events.borrow_mut().push(("finished", 0)),
+        );
+        assert_eq!(*events.borrow(), vec![("tail", 10_560), ("finished", 0)]);
+    }
+
+    #[test]
+    fn repeated_segment_boundaries_do_not_accumulate_tail_context() {
+        let samples = std::cell::Cell::new(0);
+        let boundaries = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            finish_online_segment_input(
+                |tail| samples.set(samples.get() + tail.len()),
+                || boundaries.set(boundaries.get() + 1),
+            );
+        }
+        assert_eq!(samples.get(), 21_120);
+        assert_eq!(boundaries.get(), 2);
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    #[tokio::test]
+    #[ignore = "requires explicit OPENLESS_SHERPA_TEST_MODEL_DIR and OPENLESS_SHERPA_TEST_WAV; never downloads"]
+    async fn voice_activation_decodes_a_second_segment_after_eof() {
+        let model_dir = std::env::var_os("OPENLESS_SHERPA_TEST_MODEL_DIR")
+            .expect("explicit Zipformer test model directory");
+        let wav_path = std::env::var_os("OPENLESS_SHERPA_TEST_WAV")
+            .expect("explicit 16 kHz mono speech fixture");
+        let wav = std::fs::read(wav_path).unwrap();
+        let pcm = openless_core::audio::decode_dictation_wav(&wav).unwrap();
+        assert!(!pcm.is_empty());
+        let runtime = SherpaOnnxRuntime::new();
+        let mut session = runtime
+            .create_online_session("zipformer-bilingual-zh-en-streaming", Path::new(&model_dir))
+            .await
+            .unwrap();
+        session.stream.set_option("openless-test-segment", "first");
+        for chunk in pcm.chunks(640) {
+            session.accept_pcm_chunk(chunk, &|_| {}).unwrap();
+        }
+        session.flush_segment(&|_| {}).unwrap();
+        let first = session.final_text();
+        assert!(
+            !first.is_empty(),
+            "the fixture must contain recognizable speech"
+        );
+        assert!(
+            !session.stream.has_option("openless-test-segment"),
+            "EOF must replace the feature stream"
+        );
+        for chunk in pcm.chunks(640) {
+            session.accept_pcm_chunk(chunk, &|_| {}).unwrap();
+        }
+        let result = session.finish(&|_| {}).unwrap();
+        assert_eq!(result, format!("{first} {first}"));
+    }
+
+    #[test]
+    fn append_segment_inserts_space_between_segments() {
+        let mut text = String::new();
+        append_segment(&mut text, "你好");
+        append_segment(&mut text, "world");
+        assert_eq!(text, "你好 world");
+    }
+
+    #[cfg(feature = "asr-sherpa")]
+    #[test]
+    fn sherpa_onnx_crate_exposes_online_recognizer_api_for_streaming_phase() {
+        let mut config = sherpa_onnx::OnlineRecognizerConfig::default();
+        config.model_config.transducer.encoder = Some("encoder.onnx".into());
+        config.model_config.transducer.decoder = Some("decoder.onnx".into());
+        config.model_config.transducer.joiner = Some("joiner.onnx".into());
+        config.model_config.tokens = Some("tokens.txt".into());
+        config.enable_endpoint = true;
+        config.decoding_method = Some("greedy_search".into());
+
+        assert_eq!(
+            config.model_config.transducer.encoder.as_deref(),
+            Some("encoder.onnx")
+        );
+        assert!(config.enable_endpoint);
+        assert_eq!(config.decoding_method.as_deref(), Some("greedy_search"));
+    }
+}
