@@ -1137,7 +1137,8 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
             let pack = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
             assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.selection_prompt, &[])));
             assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
-            assert!(!system.contains(openless_core::DICTATION_REVISION_RULES));
+            assert!(pack.selection_prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
+            assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         }
         assert_eq!(request["messages"][1]["content"], openless_core::prompts::selection_user_prompt(&original));
         assert!(request["messages"][1]["content"].as_str().unwrap().contains("UNIQUE_MIDDLE_全文"));

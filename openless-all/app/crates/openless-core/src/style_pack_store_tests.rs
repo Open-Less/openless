@@ -787,12 +787,27 @@ fn v1_projection_fixture_matches_released_1_1_and_restores_only_equivalent_conte
 
 
 #[test]
-fn intent_repair_preserves_exact_upstream_payload_and_installs_offline() {
-    use crate::style_packs::{builtin_intent_pack, original_intent_pack, StylePackKind};
+fn intent_repair_preserves_exact_upstream_prefix_with_one_final_suffix_and_installs_offline() {
+    use crate::style_packs::{
+        builtin_intent_pack, dictation_style_prompt, original_intent_pack, StylePackKind,
+        DICTATION_REVISION_RULES,
+    };
     let original = original_intent_pack();
     assert_eq!(original.prompt.chars().count(), 5671);
     assert_eq!(original.selection_prompt.chars().count(), 3494);
+    let repaired = builtin_intent_pack();
+    let suffix = format!("\n\n{DICTATION_REVISION_RULES}");
+    for (actual, upstream) in [
+        (&repaired.prompt, &original.prompt),
+        (&repaired.selection_prompt, &original.selection_prompt),
+    ] {
+        assert_eq!(actual.strip_suffix(suffix.as_str()), Some(upstream.as_str()));
+        assert_eq!(actual.matches(DICTATION_REVISION_RULES).count(), 1);
+    }
+    assert_eq!(dictation_style_prompt(&repaired), repaired.prompt);
     let mut expected = original;
+    expected.prompt.push_str(&suffix);
+    expected.selection_prompt.push_str(&suffix);
     expected.kind = StylePackKind::Builtin;
     expected.version = "1.2.0".into();
     assert_eq!(builtin_intent_pack(), expected);

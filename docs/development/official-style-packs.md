@@ -6,7 +6,7 @@
 
 「专为构建而生」的正文来源是市场包 `eb6a236e-3bc3-4a04-8168-851bdf797230`，来源作者 `appergb`，市场版本 `1.0.0`，云端更新时间 `2026-11-22T08:52:19.476456308+00:00`。已核实实际 [下载 ZIP](https://apic.openless.top/packs/eb6a236e-3bc3-4a04-8168-851bdf797230/download) 中的 `manifest.json`、`prompt.md`、`examples.json`：听写正文 5671 字符、选区正文 3494 字符，voiceEditPrompt 缺省为空串，examples 按 examplesFile 读取。详情页的 prompt 展示拼接了听写和选区指令，不能当作听写正文。
 
-Core 的 `src/builtin_styles/intent-reconstruction-v1.json` 是用户当时本机更新后已安装的不可变快照，与该实际 ZIP 的正文及所有行为配置逐字段一致。factory 仅将 kind 设为 builtin、分发版本设为 `1.2.0`；prompt、selectionPrompt、voiceEditPrompt、examples、recommendedModel 等有效配置保持原样。`1.2.0` 是修复分发版本，不代表市场正文升级：正文仍来自上述已核实的市场 `1.0.0` payload。五层、空层、字母分项、术语、改口和未决规则不作任何改写，也不追加通用口述修正尾段。
+Core 的 `src/builtin_styles/intent-reconstruction-v1.json` 是用户当时本机更新后已安装的不可变快照，与该实际 ZIP 的正文及所有行为配置逐字段一致。factory 将 kind 设为 builtin、分发版本设为 `1.2.0`；prompt 和 selectionPrompt 先逐字保留完整原文，再在末尾各追加一次 `DICTATION_REVISION_RULES`（撤回、改口、并列、未决规则），voiceEditPrompt、examples、recommendedModel 等其余有效配置保持原样。`1.2.0` 是修复分发版本，正文主体仍来自上述已核实的市场 `1.0.0` payload。原文的五层、空层、字母分项、术语以及已有增量处理章节不删改；末尾追加是用户明确要求，不以原文已有类似规则为由去重。内置尾段存于包内，请求时不重复追加。尚未发行的无尾段中间实现不作为历史发行版本保留。
 
 正常听写入口：`OpenLessBackend::capture_dictation_context` 解析所选包，`DictationContext::capture` 冻结 `dictation_style_prompt(pack)`。传统 ASR 后润色经 `cloud_providers.rs` 的润色分发调用 OpenAI/Gemini 共用的 `prompt_compose`；组合翻译使用现有源文和译文标记协议。多模态经同文件 `build_omni_prompt`，从冻结的 context 构建相同系统提示词，把完整音频送入 Omni provider；多模态翻译仍沿用现有仅输出译文规则，不增加第二套组合路径。选区编辑继续读取 selectionPrompt；voiceEditPrompt 为空时沿用原有默认。
 
@@ -14,7 +14,7 @@ Core 的 `src/builtin_styles/intent-reconstruction-v1.json` 是用户当时本�
 
 | 包 | 内置版本 | 原因 |
 | --- | --- | --- |
-| 专为构建而生 | 1.0.0 / 1.1.0 → 1.2.0 | 逐字恢复用户指定的实际市场包正文；1.1.0 曾替换五层及空层规则并追加尾段，现只作为可信迁移基线保留。 |
+| 专为构建而生 | 1.0.0 / 1.1.0 → 1.2.0 | 完整保留实际市场包正文作为前缀，末尾追加统一撤回与修正规则一次；1.1.0 只作为可信迁移基线保留。 |
 | 清晰结构 | 3.0.0 → 3.1.0 | 加强只整理不回答、完整阅读后组织、扩大范围更新整体目标、保留细节和未决问题；加入口述修正规则。 |
 | 轻度润色 | 2.0.0 → 2.1.0 | 加强任务边界、完整信息和语气保护，明确原意优先于旧字数比例；加入口述修正规则。 |
 | 正式表达 | 2.0.0 → 2.1.0 | 同上，尤其保护不确定程度和请求目的，避免正式化变成代答或补充方案。 |
@@ -42,12 +42,14 @@ Core 的 `src/builtin_styles/intent-reconstruction-v1.json` 是用户当时本�
 
 源码路径相对 `openless-all/app/crates/openless-core/`。以下测试仅使用临时 Store、夹具凭据及本机 HTTP 服务，不读取或写入用户实际配置。
 
-- `src/style_pack_store_tests.rs`：factory 与不可变源完整相等、新装可用；已发行 1.1 投影夹具保持不变；1.0 / 1.1 / 1.2 的 canonical 和同源 alias 归一化及原位升级，保留 ID、名称、禁用、active、创建时间、听写和选区选择；重开不重复写入；任一行为字段、来源或版本被编辑则不覆盖。升级不重映射 ID，因此绑定和历史引用继续指向原实体。
-- `tests/prompt_contract.rs`：恢复包完整正文进入普通润色和翻译系统提示词，无 1.1 覆盖块、无额外修正尾段；其他风格既有尾段保持一次。
+- `src/style_pack_store_tests.rs`：factory 的完整原文前缀与不可变源逐字相等、末尾统一规则一次、新装可用；已发行 1.1 投影夹具保持不变；1.0 / 1.1 / 1.2 的 canonical 和同源 alias 归一化及原位升级，保留 ID、名称、禁用、active、创建时间、听写和选区选择；重开不重复写入；任一行为字段、来源或版本被编辑则不覆盖。升级不重映射 ID，因此绑定和历史引用继续指向原实体。
+- `tests/prompt_contract.rs`：恢复包完整正文进入普通润色和翻译系统提示词，无 1.1 覆盖块，统一修正尾段保持一次且位于包内正文末尾，运行时不重复追加；其他风格既有尾段方式保持不变。
 - `tests/dictation_target_capture.rs::routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus`：正常 start → ASR → HTTP 请求中保留完整目标风格及翻译协议，沿用场景冻结；Raw 及取消翻译维持零请求。
-- `tests/selection_contract.rs::normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams`：选区生产 HTTP 请求完整保留恢复后的 selectionPrompt，无旧覆盖块或额外修正尾段，仍验证全文输入与不完整响应保护。
+- `tests/selection_contract.rs::normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams`：选区生产 HTTP 请求完整保留恢复后的 selectionPrompt，无旧覆盖块，统一修正尾段一次，仍验证全文输入与不完整响应保护。
 - `cloud_sync_e2ee_store::tests::v1_compat::projected_builtin_and_edited_alias_restore_without_losing_selection`：复用现有原生恢复入口，验证已发行 1.1 投影与编辑版本的选择保留；不扩展旧客户端兼容承诺。
 
-请求保留现有 `{{HOTWORDS}}` 热词占位符替换及尾端空白处理；逐字正文比较在 factory 和不可变源之间进行，请求比较使用同一既有热词合成入口，不改写包内规则。
+请求保留现有 `{{HOTWORDS}}` 热词占位符替换及尾端空白处理；逐字前缀比较在 factory 和不可变源之间进行，请求比较使用同一既有热词合成入口，不改写包内规则。
 
 这些验证不等于真实模型效果、GUI 或安装包验收；后续打包应使用包含该修复的提交。
+
+本次追加修改只在本机做源码静态检查，未运行编译或测试。上述更新的测试源码待 GitHub CI 执行，不能把此前无尾段版本的测试通过结果当作本次验证结果。

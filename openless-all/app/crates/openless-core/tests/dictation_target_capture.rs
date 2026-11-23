@@ -1224,8 +1224,9 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
             assert!(system.starts_with("当前应用：VS Code"));
             let pack = backend.get_style_pack(id).unwrap();
             assert!(system.find("本次输入场景：").unwrap() < system.find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim()).unwrap());
-            assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), usize::from(id != openless_core::BUILTIN_INTENT_ID), "{id}, translation={translation_requested}");
+            assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
             if id == openless_core::BUILTIN_INTENT_ID {
+                assert!(pack.prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
                 assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[])));
                 assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             }

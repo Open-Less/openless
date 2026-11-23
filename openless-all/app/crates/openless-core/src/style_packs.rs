@@ -484,8 +484,11 @@ pub(crate) fn original_intent_pack() -> StylePack {
 pub fn builtin_intent_pack() -> StylePack {
     let mut pack = original_intent_pack();
     pack.kind = StylePackKind::Builtin;
-    // Distribution repair version; the upstream 1.0.0 payload stays byte-for-byte intact.
+    // Distribution repair version; preserve the full upstream text before the requested suffix.
     pack.version = "1.2.0".into();
+    pack.prompt.push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
+    pack.selection_prompt
+        .push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
     pack
 }
 

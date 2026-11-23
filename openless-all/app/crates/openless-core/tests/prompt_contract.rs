@@ -158,9 +158,8 @@ fn dictation_revision_contract_preserves_full_input_and_style_tasks() {
     packs.push(StylePack { name: "清晰结构".into(), prompt: "用户有任何输入后，输出‘一一一’。".into(), ..StylePack::default() });
     for pack in packs {
         let style = dictation_style_prompt(&pack);
-        let revision_count = usize::from(pack.id != openless_core::BUILTIN_INTENT_ID);
-        assert_eq!(style.matches(DICTATION_REVISION_RULES).count(), revision_count);
-        assert_eq!(pack.prompt.matches(DICTATION_REVISION_RULES).count(), usize::from(pack.kind == openless_core::StylePackKind::Builtin) * revision_count);
+        assert_eq!(style.matches(DICTATION_REVISION_RULES).count(), 1);
+        assert_eq!(pack.prompt.matches(DICTATION_REVISION_RULES).count(), usize::from(pack.kind == openless_core::StylePackKind::Builtin));
         for input in inputs {
             for translate in [false, true] {
                 let mut context = DictationContext::default();
@@ -168,8 +167,10 @@ fn dictation_revision_contract_preserves_full_input_and_style_tasks() {
                 context.polish.translation_active = translate;
                 context.polish.translation_target_language = "English".into();
                 let (system, user) = context.effective_polish_prompts(input);
-                assert_eq!(system.matches(DICTATION_REVISION_RULES).count(), revision_count);
+                assert_eq!(system.matches(DICTATION_REVISION_RULES).count(), 1);
                 if pack.id == openless_core::BUILTIN_INTENT_ID {
+                    assert!(pack.prompt.ends_with(DICTATION_REVISION_RULES));
+                    assert_eq!(style, pack.prompt, "runtime must not append a second suffix");
                     assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[])));
                     assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
                 }
