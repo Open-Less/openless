@@ -65,10 +65,16 @@ pub mod context;
 pub mod input;
 pub mod jni;
 #[cfg(target_os = "android")]
+pub mod overlay_control;
+#[cfg(target_os = "android")]
+#[allow(dead_code, unused_imports, unused_variables)]
+pub mod overlay;
+#[cfg(target_os = "android")]
 pub mod local_migration;
 #[cfg(target_os = "android")]
 pub mod insert_tiers;
 #[cfg(target_os = "android")]
 pub mod edit_observation;
 #[cfg(target_os = "android")]
+#[allow(dead_code, unused_imports, unused_variables)]
 pub mod shizuku;

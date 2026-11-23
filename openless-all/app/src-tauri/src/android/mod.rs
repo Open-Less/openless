@@ -17,6 +17,7 @@ pub mod platform_env;
 #[cfg(target_os = "android")]
 pub(crate) mod local_migration;
 pub mod native_bridge;
+#[cfg(target_os = "android")]
 pub mod overlay;
 #[cfg(target_os = "android")]
 pub mod shizuku;
@@ -35,7 +36,9 @@ pub use accessibility::{
 };
 #[cfg(not(target_os = "android"))]
 pub use non_android::{
-    get_android_accessibility_status, get_android_shizuku_status, open_shizuku_app,
+    get_android_accessibility_status, get_android_overlay_status, hide_android_overlay,
+    refresh_android_overlay_if_visible, refresh_android_overlay_layout, replace_android_overlay,
+    request_android_overlay_permission, show_android_overlay, AndroidOverlayPermissionResult, get_android_shizuku_status, open_shizuku_app,
     paste_via_shizuku_with_result, recover_android_accessibility,
     request_android_accessibility_permission, request_android_shizuku_permission,
     AndroidAccessibilityPermissionResult, AndroidShizukuOpenResult,
@@ -50,6 +53,7 @@ pub use native_bridge::{
     refresh_overlay_layout, register_android_backend, register_android_coordinator,
     replace_overlay, show_overlay,
 };
+#[cfg(target_os = "android")]
 pub use overlay::{
     get_android_overlay_status, hide_android_overlay, refresh_android_overlay_if_visible,
     refresh_android_overlay_layout, replace_android_overlay, request_android_overlay_permission,

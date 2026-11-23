@@ -108,3 +108,50 @@ pub fn recover_android_accessibility(
         message_key: "not_android".to_string(),
     }
 }
+
+// ── 悬浮层（仅 Android 有实现） ──────────────────────────────────
+
+use openless_core::android_types::{AndroidOverlayPermissionState, AndroidOverlayStatus};
+
+/// 请求悬浮层权限的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidOverlayPermissionResult {
+    pub launched: bool,
+    pub message: String,
+}
+
+pub fn get_android_overlay_status() -> AndroidOverlayStatus {
+    AndroidOverlayStatus {
+        permission: AndroidOverlayPermissionState::NotAndroid,
+        overlay_visible: false,
+        message: String::new(),
+    }
+}
+
+pub fn request_android_overlay_permission() -> AndroidOverlayPermissionResult {
+    AndroidOverlayPermissionResult {
+        launched: false,
+        message: "Android overlay is only available on Android".to_string(),
+    }
+}
+
+pub fn show_android_overlay() -> Result<(), String> {
+    Err("Android overlay is only available on Android".into())
+}
+
+pub fn hide_android_overlay() -> Result<(), String> {
+    Ok(())
+}
+
+pub fn replace_android_overlay() -> Result<(), String> {
+    Err("Android overlay is only available on Android".into())
+}
+
+pub fn refresh_android_overlay_layout() -> Result<(), String> {
+    Ok(())
+}
+
+pub fn refresh_android_overlay_if_visible() -> Result<(), String> {
+    Ok(())
+}

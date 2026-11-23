@@ -18,7 +18,25 @@ use crate::types::{CapsulePayload, CapsuleState};
 
 static COORDINATOR: OnceLock<Arc<Coordinator>> = OnceLock::new();
 static CORE_BACKEND: OnceLock<Arc<OpenLessBackend>> = OnceLock::new();
-static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// 悬浮层控制已迁到平台层；宿主这里转发，保持 JNI 导出符号不变。
+#[cfg(target_os = "android")]
+pub(crate) use openless_platform::android::overlay_control::*;
+
+/// 非 Android：悬浮层不存在，所有控制都是空操作。
+#[cfg(not(target_os = "android"))]
+pub fn show_overlay() -> Result<(), String> { Ok(()) }
+#[cfg(not(target_os = "android"))]
+pub fn hide_overlay() -> Result<(), String> { Ok(()) }
+#[cfg(not(target_os = "android"))]
+pub fn replace_overlay() -> Result<(), String> { Ok(()) }
+#[cfg(not(target_os = "android"))]
+pub fn refresh_overlay_layout() -> Result<(), String> { Ok(()) }
+#[cfg(not(target_os = "android"))]
+pub fn refresh_overlay_if_visible() -> Result<(), String> { Ok(()) }
+#[cfg(not(target_os = "android"))]
+pub fn is_overlay_visible() -> bool { false }
+#[cfg(not(target_os = "android"))]
+pub fn notify_overlay_destroyed() {}
 #[cfg(target_os = "android")]
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
@@ -519,116 +537,6 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
         }
     }
     let _ = payload;
-}
-
-pub fn show_overlay() -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        crate::android::jni::android::with_android_env(|env, context| {
-            show_overlay_with_context(env, context)
-        })?;
-    }
-    Ok(())
-}
-
-pub fn hide_overlay() -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        crate::android::jni::android::with_android_env(|env, context| {
-            hide_overlay_with_context(env, context)
-        })?;
-    }
-    Ok(())
-}
-
-pub fn replace_overlay() -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        crate::android::jni::android::with_android_env(|env, context| {
-            replace_overlay_with_context(env, context)
-        })?;
-    }
-    Ok(())
-}
-
-pub fn refresh_overlay_layout() -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::start_service_action(
-                env,
-                context,
-                "com.openless.app.OpenLessOverlayService",
-                "com.openless.app.overlay.REFRESH_LAYOUT",
-            )
-        })?;
-    }
-    Ok(())
-}
-
-pub fn refresh_overlay_if_visible() -> Result<(), String> {
-    if is_overlay_visible() {
-        refresh_overlay_layout()
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "android")]
-fn show_overlay_with_context(
-    env: &mut jni::JNIEnv,
-    context: &jni::objects::JObject,
-) -> Result<(), String> {
-    crate::android::jni::android::start_service_action(
-        env,
-        context,
-        "com.openless.app.OpenLessOverlayService",
-        "com.openless.app.overlay.SHOW",
-    )?;
-    OVERLAY_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
-    Ok(())
-}
-
-#[cfg(target_os = "android")]
-fn hide_overlay_with_context(
-    env: &mut jni::JNIEnv,
-    context: &jni::objects::JObject,
-) -> Result<(), String> {
-    crate::android::jni::android::start_service_action(
-        env,
-        context,
-        "com.openless.app.OpenLessOverlayService",
-        "com.openless.app.overlay.HIDE",
-    )?;
-    OVERLAY_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
-    Ok(())
-}
-
-#[cfg(target_os = "android")]
-fn replace_overlay_with_context(
-    env: &mut jni::JNIEnv,
-    context: &jni::objects::JObject,
-) -> Result<(), String> {
-    crate::android::jni::android::start_service_action(
-        env,
-        context,
-        "com.openless.app.OpenLessOverlayService",
-        "com.openless.app.overlay.REPLACE_OVERLAY",
-    )?;
-    OVERLAY_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
-    Ok(())
-}
-
-pub fn is_overlay_visible() -> bool {
-    OVERLAY_VISIBLE.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-/// Called by the Kotlin overlay service's onDestroy() to synchronously clear
-/// the OVERLAY_VISIBLE flag when the OS kills the service, keeping
-/// refresh_overlay_if_visible() from sending commands to a dead service.
-pub fn notify_overlay_destroyed() {
-    OVERLAY_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
-    log::info!("[android-native] overlay service destroyed — OVERLAY_VISIBLE reset");
 }
 
 fn spawn_start_dictation(translation: bool) {
