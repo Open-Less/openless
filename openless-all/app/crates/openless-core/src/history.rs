@@ -233,7 +233,10 @@ fn retain_with_policy(
         let cutoff = now - chrono::Duration::days(i64::from(retention_days));
         sessions.retain(|session| {
             session.source == HistorySource::QuickNote
-                || session.error_code.as_deref() == Some("recording")
+                || matches!(
+                    session.error_code.as_deref(),
+                    Some("recording" | "selectionProcessing")
+                )
                 || chrono::DateTime::parse_from_rfc3339(&session.created_at)
                     .map(|time| time.with_timezone(&chrono::Utc) >= cutoff)
                     .unwrap_or(true)
@@ -245,7 +248,10 @@ fn retain_with_policy(
     let mut ordinary_seen = 0usize;
     sessions.retain(|session| {
         if session.source == HistorySource::QuickNote
-            || session.error_code.as_deref() == Some("recording")
+            || matches!(
+                session.error_code.as_deref(),
+                Some("recording" | "selectionProcessing")
+            )
         {
             true
         } else {

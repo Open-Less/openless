@@ -5,8 +5,11 @@
 //! semantic state changes through [`events`].
 
 pub mod activity;
+pub mod app_catalog;
+pub mod app_style_routing;
 pub mod android_types;
 pub mod api;
+pub mod main_dictation_trace;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
@@ -100,7 +103,7 @@ mod shortcut_types;
 ///
 /// This is independent from the application release version.  Increment the
 /// major component for a breaking host contract change and document the
-/// migration in `docs/linux-egui-backend-contract.md`.
+/// migration in `docs/development/linux.md`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{

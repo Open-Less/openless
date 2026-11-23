@@ -24,6 +24,8 @@ compile_error!(
 );
 
 mod android;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod activity_app_icons;
 mod asr;
 mod audio_mute;
 #[cfg(test)]
@@ -50,6 +52,7 @@ mod native_audio_cue;
 mod native_capsule;
 mod qa_adapter;
 mod recording_companion;
+pub(crate) use recording_companion::ask_anything_available;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // 仅桌面端。详见 issue #470。
@@ -268,8 +271,12 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            #[cfg(target_os = "macos")]
+            main_window_frame_ready,
             get_capsule_auxiliary_snapshot,
             commands::get_capsule_snapshot,
+            commands::main_caption_trace_enabled,
+            commands::report_main_caption_trace,
             commands::get_dictation_translation_target,
             commands::select_dictation_translation_target,
             commands::set_capsule_language_menu,
@@ -318,6 +325,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::clear_history,
             commands::get_activity_stats,
             commands::get_activity_apps,
+            commands::get_activity_app_icons,
             commands::read_audio_recording,
             commands::export_audio_recording,
             commands::retranscribe_recording,
@@ -408,6 +416,11 @@ macro_rules! app_invoke_handler_desktop {
             commands::cancel_selection_polish_preview,
             commands::repolish,
             commands::list_style_packs,
+            commands::get_app_style_routing,
+            commands::refresh_app_style_catalog,
+            commands::set_app_style_assignment,
+            commands::clear_input_app_history,
+            commands::get_input_app_icons,
             commands::create_style_pack_from_template,
             commands::save_style_pack,
             commands::set_style_pack_icon,
@@ -627,6 +640,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::clear_history,
             $crate::commands::get_activity_stats,
             $crate::commands::get_activity_apps,
+            $crate::commands::get_activity_app_icons,
             $crate::commands::read_audio_recording,
             $crate::commands::export_audio_recording,
             $crate::commands::retranscribe_recording,
@@ -714,6 +728,11 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::qa_set_edit_instruction_mode,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
+            $crate::commands::get_app_style_routing,
+            $crate::commands::refresh_app_style_catalog,
+            $crate::commands::set_app_style_assignment,
+            $crate::commands::clear_input_app_history,
+            $crate::commands::get_input_app_icons,
             $crate::commands::create_style_pack_from_template,
             $crate::commands::save_style_pack,
             $crate::commands::set_style_pack_icon,
@@ -881,6 +900,11 @@ fn run_desktop() {
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let core_backend = coordinator.backend();
+    #[cfg(all(not(mobile), debug_assertions))]
+    if std::env::var_os("OPENLESS_MAIN_DICTATION_TRACE").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        core_backend.enable_main_dictation_trace();
+    }
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
     let mut context = tauri::generate_context!();
@@ -1011,6 +1035,9 @@ fn run_desktop() {
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
+                    #[cfg(target_os = "macos")]
+                    desktop_resources::request_main_presentation(&main, false);
+                    #[cfg(not(target_os = "macos"))]
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }
@@ -2096,6 +2123,14 @@ pub fn log_dir_path() -> std::path::PathBuf {
     }
 }
 
+pub(crate) fn require_ask_anything() -> Result<(), String> {
+    if ask_anything_available() {
+        Ok(())
+    } else {
+        Err("Ask Anything is disabled in this build".into())
+    }
+}
+
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_window_mode(app);
     #[cfg(not(mobile))]
@@ -2108,13 +2143,28 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     };
     #[cfg(mobile)]
     let main = app.get_webview_window("main");
-    if let Some(w) = main {
-        let _ = w.show();
-        #[cfg(not(mobile))]
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+    #[cfg(target_os = "macos")]
+    if let Some(window) = main {
+        desktop_resources::request_main_presentation(&window, true);
     }
-    activate_app(app);
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(w) = main {
+            let _ = w.show();
+            #[cfg(not(mobile))]
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+        activate_app(app);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn main_window_frame_ready(window: tauri::WebviewWindow) {
+    if window.label() == "main" {
+        desktop_resources::main_frame_ready(&window);
+    }
 }
 
 /// Routes a CLI intent to the shared Core or the QA host still owned by Tauri. Two entry
@@ -2190,9 +2240,11 @@ pub(crate) fn request_microphone_from_foreground<R: Runtime>(
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(not(mobile))]
     {
-        // The main editor is an infrequent surface. Destroy its WebView when the
-        // user closes it so WebKit can release its content process and memory;
-        // tray/menu actions recreate it through ensure_main on the next open.
+        // Let a quick macOS reopen reuse the page. Once the grace expires, release
+        // the WebView's content and let ensure_main recreate it on the next open.
+        #[cfg(target_os = "macos")]
+        desktop_resources::hide_main_with_grace(app);
+        #[cfg(not(target_os = "macos"))]
         desktop_resources::close_main(app);
         let app_for_preview = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -4550,5 +4602,6 @@ fn get_capsule_auxiliary_snapshot(
     serde_json::json!({
         "suggestions": coord.backend().pending_corrections(),
         "fallback": coord.tauri_host().auxiliary_fallback_snapshot(),
+        "processing": coord.backend().snapshot().processing_dictations,
     })
 }

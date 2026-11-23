@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { emit } from '@tauri-apps/api/event';
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { createInstance } from 'i18next';
@@ -13,10 +14,27 @@ import '../../src/styles/refinements.css';
 
 const params = new URLSearchParams(location.search);
 const dashboard = params.has('dashboard');
+const pendingHeatmap = params.has('pendingHeatmap');
 const state = params.get('state');
 const profile = getPreviewProfile('mac');
 const year = new Date().getFullYear();
 const day = `${year}-01-01`;
+const icons = params.get('icons');
+const appIcon =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2Z0AAAAASUVORK5CYII=';
+let finishListening: (() => void) | undefined;
+let usageListeners = 0;
+let usageReads = 0;
+let usageVersion = 0;
+let finishUsage: (() => void) | undefined;
+const usageFixture = {
+  reads: () => usageReads,
+  listeners: () => usageListeners,
+  finishListening: () => finishListening?.(),
+  change: async () => { usageVersion++; await emit('service-usage:changed', null); },
+  finish: () => finishUsage?.(),
+};
+Object.assign(window, { usageFixture });
 let count = 2;
 let reads = 0;
 let deferred: (() => void) | undefined;
@@ -48,6 +66,13 @@ mockIPC(
           id: `dashboard-${index}`,
           finalText: `Record ${index + 1}: ${previewHistoryEntries[0].finalText}`,
         }));
+      case 'get_service_usage': {
+        usageReads++;
+        const snapshot = { records: [], droppedOrFailed: usageVersion };
+        if (params.has('deferUsage') && usageReads === 1)
+          return new Promise((resolve) => { finishUsage = () => resolve(snapshot); });
+        return snapshot;
+      }
       case 'get_activity_stats': {
         if (dashboard) {
           if (state === 'activity-error') throw new Error('Activity unavailable');
@@ -61,6 +86,16 @@ mockIPC(
           });
         return value;
       }
+      case 'get_activity_app_icons': {
+        if ((args as { year: number }).year !== year) throw new Error('Expected current year');
+        return icons !== null
+          ? {
+              Editor: appIcon,
+              Terminal: appIcon,
+              ...(icons === 'broken' && { Browser: 'data:image/png;base64,AAAA' }),
+            }
+          : {};
+      }
       case 'get_activity_apps': {
         if ((args as { year: number }).year !== year) throw new Error('Expected current year');
         if (dashboard) {
@@ -70,6 +105,7 @@ mockIPC(
         }
         reads++;
         const rows = [
+          ...(icons !== null ? [['Terminal', 1]] : []),
           ['Browser', 1],
           ['Editor', count],
         ];
@@ -84,6 +120,31 @@ mockIPC(
   },
   { shouldMockEvents: true },
 );
+
+// Delay only the real event registration transport to exercise the mount/background race.
+const bridge = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+const originalInvoke = bridge.invoke;
+let delayedListen = false;
+let failedListen = false;
+const usageListenerIds = new Set<unknown>();
+bridge.invoke = async (command, args) => {
+  if (command === 'plugin:event|listen' && args?.event === 'service-usage:changed') {
+    if (params.has('failUsageSubscription') && !failedListen) {
+      failedListen = true;
+      throw new Error('Fixture subscription failed');
+    }
+    if (params.has('delayUsageSubscription') && !delayedListen) {
+      delayedListen = true;
+      await new Promise<void>((resolve) => { finishListening = resolve; });
+    }
+    const id = await originalInvoke(command, args);
+    usageListenerIds.add(id);
+    usageListeners++;
+    return id;
+  }
+  if (command === 'plugin:event|unlisten' && usageListenerIds.delete(args?.eventId)) usageListeners--;
+  return originalInvoke(command, args);
+};
 
 // Install the native bridge before imports that can initialize the shared history store.
 const { mockSettings, mockCredentialsStatus } = await import('../../src/lib/ipc/mock-data');
@@ -134,9 +195,23 @@ function Fixture() {
       >
         App read count
       </button>
-      {activity.data && <ActivityHeatmap activity={activity.data} />}
+      {(activity.data || pendingHeatmap) && (
+        <ActivityHeatmap activity={activity.data ?? []} pending={activity.data === null} />
+      )}
     </main>
   );
+}
+const { useServiceUsage } = await import('../../src/data/usage');
+function UsageProbe() {
+  const query = useServiceUsage();
+  return <output data-testid="usage-version">{query.error ? 'error' : query.data?.droppedOrFailed ?? 'loading'}</output>;
+}
+function UsageFixture() {
+  const [mounted, setMounted] = useState(true);
+  return <main>
+    <button onClick={() => setMounted((value) => !value)}>Toggle usage subscriber</button>
+    {mounted && <UsageProbe />}
+  </main>;
 }
 const { Overview } = await import('../../src/features/overview/Overview');
 const { HotkeySettingsProvider } = await import('../../src/data/preferences');
@@ -145,7 +220,7 @@ applyFontScale((params.get('scale') as FontScaleId) ?? 'medium');
 createRoot(document.getElementById('root')!).render(
   <I18nextProvider i18n={i18n}>
     <AppViewport scale={dashboard}>
-      {dashboard ? (
+      {params.has('usage') ? <UsageFixture /> : dashboard ? (
         <HotkeySettingsProvider>
           <InteractionProvider>
             <TooltipProvider>

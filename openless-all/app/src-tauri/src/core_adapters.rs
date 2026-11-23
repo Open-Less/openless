@@ -1121,6 +1121,15 @@ trait SelectionPlatformBridge: Send + Sync {
         ),
         BackendError,
     >;
+    fn protect_original(
+        &self,
+        target: &crate::selection::SelectionInsertionTarget,
+        text: &str,
+    ) -> Result<(), BackendError> {
+        crate::selection::protect_selection_original(target, text).map_err(|_| {
+            BackendError::new(BackendErrorCode::Platform, "selectionOriginalCopyFailed")
+        })
+    }
     fn apply(
         &self,
         target: &crate::selection::SelectionInsertionTarget,
@@ -1214,48 +1223,19 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
         if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
-            return Err(BackendError::new(
-                BackendErrorCode::Platform,
-                "selectionPolishTargetUnavailable",
-            ));
-        }
-        if crate::selection::is_truncated_selection_stand_in(source_text) {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "selectionPolishSelectionTooLong",
-            ));
+            return crate::selection::selection_result_fallback(target, replacement_text);
         }
         let validation = crate::selection::validate_selection_insertion_target(target, source_text);
-        if let Some(code) = validation.error_code() {
-            let error_code = match validation {
-                crate::selection::SelectionInsertionTargetValidation::TargetUnavailable => {
-                    BackendErrorCode::Platform
-                }
-                crate::selection::SelectionInsertionTargetValidation::TargetChanged
-                | crate::selection::SelectionInsertionTargetValidation::SelectionChanged => {
-                    BackendErrorCode::Cancelled
-                }
-                crate::selection::SelectionInsertionTargetValidation::Valid => unreachable!(),
-            };
-            return Err(BackendError::new(error_code, code));
-        }
-        // Final line of defense right before pasting: during validate's simulate_copy fallback
-        // the foreground focus may have jumped away (if the other app happens to expose the same
-        // text, the text comparison lets it through). Re-check that the app captured at capture
-        // time is still foreground; if not, refuse.
-        #[cfg(target_os = "macos")]
-        if !crate::selection::selection_target_still_front(target) {
-            return Err(BackendError::new(
-                BackendErrorCode::Cancelled,
-                "selectionPolishTargetChanged",
-            ));
+        if validation.error_code().is_some() {
+            return crate::selection::selection_result_fallback(target, replacement_text);
         }
         let preferences = self.preferences()?;
-        map_insert_status(crate::insertion::TextInserter::new().insert(
+        crate::selection::insert_selection_result(
+            target,
+            source_text,
             replacement_text,
-            preferences.restore_clipboard_after_paste,
             preferences.paste_shortcut,
-        ))
+        )
     }
 }
 
@@ -1297,13 +1277,20 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         let bridge = Arc::clone(&self.bridge);
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            let (capture, target) = bridge.capture()?;
+            let (capture, target) = tauri::async_runtime::spawn_blocking(move || bridge.capture())
+                .await
+                .map_err(|error| {
+                    BackendError::new(BackendErrorCode::Platform, error.to_string())
+                })??;
             let mut targets = targets.lock();
             if targets.contains_key(&session_id) {
                 return Err(BackendError::new(
                     BackendErrorCode::Busy,
                     "selection target is already registered for this session",
                 ));
+            }
+            for target in targets.values() {
+                target.target.cancelled.store(true, Ordering::Release);
             }
             targets.clear();
             targets.insert(
@@ -1314,6 +1301,28 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                 },
             );
             Ok(capture)
+        })
+    }
+
+    fn protect_original(
+        &self,
+        session_id: SessionId,
+        text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        let bridge = Arc::clone(&self.bridge);
+        let target = self
+            .targets
+            .lock()
+            .get(&session_id)
+            .map(|target| target.target.clone())
+            .unwrap_or_default();
+        Box::pin(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                bridge.protect_original(&target, &text)?;
+                Ok(*target.original_clipboard.lock())
+            })
+            .await
+            .map_err(|error| BackendError::new(BackendErrorCode::Platform, error.to_string()))?
         })
     }
 
@@ -1332,12 +1341,16 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                     "selection target is no longer active",
                 )
             })?;
-            bridge.apply(
-                &target.target,
-                &source_text,
-                &replacement_text,
-                target.preview,
-            )
+            tauri::async_runtime::spawn_blocking(move || {
+                bridge.apply(
+                    &target.target,
+                    &source_text,
+                    &replacement_text,
+                    target.preview,
+                )
+            })
+            .await
+            .map_err(|error| BackendError::new(BackendErrorCode::Platform, error.to_string()))?
         })
     }
 
@@ -1379,7 +1392,9 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            targets.lock().remove(&session_id);
+            if let Some(target) = targets.lock().remove(&session_id) {
+                target.target.cancelled.store(true, Ordering::Release);
+            }
             Ok(())
         })
     }
@@ -4227,12 +4242,13 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
+    fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
         let ime_target = crate::windows_ime_target::capture_ime_submit_target();
         #[cfg(target_os = "macos")]
-        // Legacy macOS composition preferences must not start AX range capture.
+        // Retired AX composition does not capture or retain document text.
         let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
@@ -4258,16 +4274,16 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "macos")]
         let live_capture = self.live_capture.clone();
         #[cfg(target_os = "windows")]
-        let ime_target = self
-            .ime_target
-            .or_else(crate::windows_ime_target::capture_ime_submit_target);
+        let ime_target = if insertion_target.is_some() {
+            self.ime_target
+        } else {
+            crate::windows_ime_target::capture_ime_submit_target()
+        };
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
-            // Retain the target captured before context/credential awaits in
-            // the insertion resource. Every later write must reactivate it; a
-            // failed restore becomes an explicit error instead of typing into
-            // whichever application happens to be focused at the end.
+            // Keep the stable capture-time target while preparing native resources
+            // only when this session owns Core's ordered finalization.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
             #[cfg(target_os = "windows")]
@@ -4285,7 +4301,8 @@ impl CoreTextInserter for TauriTextInserter {
                     )
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
-                    context.uses_llm_polisher()
+                    context.insertion.streaming
+                        && context.uses_llm_polisher()
                         && !context.insertion.composition_input
                         && openless_core::streaming_insert::streaming_insert_eligible(
                         context.insertion.streaming,
@@ -4776,14 +4793,12 @@ impl TauriTextInsertionSession {
     }
 
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
-        crate::selection::reactivate_selection_insertion_target(&self.insertion_target)
+        crate::selection::reactivate_dictation_insertion_target(&self.insertion_target)
             .then_some(())
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::Platform,
-                    "original text insertion target is unavailable",
-                )
-            })
+            .ok_or_else(|| BackendError::new(
+                BackendErrorCode::Platform,
+                "original text insertion target is unavailable",
+            ))
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
@@ -5025,8 +5040,8 @@ impl TauriTextInsertionSession {
                                         })
                             },
                             || {
-                                crate::insertion::TextInserter::new()
-                                    .insert(&text, restore, shortcut)
+                                let inserter = crate::insertion::TextInserter::new();
+                                inserter.insert_guarded(&text, restore, shortcut, None, || true)
                             },
                         )
                     })
@@ -5051,9 +5066,16 @@ impl TauriTextInsertionSession {
             let restore = self.context.insertion.restore_clipboard_after_paste;
             let shortcut = self.context.insertion.paste_shortcut;
             tauri::async_runtime::spawn_blocking(move || {
-                map_insert_status(
-                    crate::insertion::TextInserter::new().insert(&text, restore, shortcut),
-                )
+                // Stable ordinary paste treats successful dispatch as delivery on macOS.
+                // Keep the shared clipboard lease and restore protection for every app path.
+                let status = crate::insertion::TextInserter::new().insert(&text, restore, shortcut);
+                #[cfg(target_os = "macos")]
+                let status = if status == crate::types::InsertStatus::PasteSent {
+                    crate::types::InsertStatus::Inserted
+                } else {
+                    status
+                };
+                map_insert_status(status)
             })
             .await
             .map_err(|error| {
@@ -5190,13 +5212,9 @@ fn replace_unwritten_target<T>(
 impl TextInsertionSession for TauriTextInsertionSession {
     fn supports_streaming(&self) -> bool {
         #[cfg(target_os = "macos")]
-        {
-            self.streaming_ready
-        }
+        { self.streaming_ready }
         #[cfg(not(target_os = "macos"))]
-        {
-            cfg!(target_os = "windows")
-        }
+        { cfg!(target_os = "windows") }
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
@@ -5564,7 +5582,10 @@ mod mac_insertion_lifecycle_tests {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::types::InsertStatus {
+fn windows_unicode_fallback(
+    context: &DictationContext,
+    text: &str,
+) -> crate::types::InsertStatus {
     let inserter = crate::insertion::TextInserter::new();
     let status = inserter.insert_via_unicode_keystrokes(
         text,
@@ -5572,7 +5593,7 @@ fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::ty
             newline_mode: context.insertion.windows_sendinput_newline_mode,
         },
     );
-    if status == crate::types::InsertStatus::Inserted || !context.insertion.allow_non_tsf_fallback {
+    if matches!(status, crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent) || !context.insertion.allow_non_tsf_fallback {
         status
     } else {
         inserter.copy_fallback(text)
@@ -5604,6 +5625,11 @@ impl TauriHostContextAdapter {
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    #[cfg(not(mobile))]
+    fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
+        crate::selection::input_app_for_target(self.target.as_ref()?)
+    }
+
     fn capture(
         &self,
         include_cursor: bool,

@@ -191,6 +191,34 @@ impl SelectionServiceInner {
         Ok(())
     }
 
+    fn publish_history_changed(&self) {
+        let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        self.events.publish(None, BackendEventKind::HistoryChanged(HistoryChange { revision }));
+    }
+
+    fn persist_original(
+        &self,
+        id: SessionId,
+        capture: &SelectionCapture,
+        mode: crate::types::PolishMode,
+    ) -> Result<(), BackendError> {
+        let prefs = self.preferences.get();
+        let record = original_record(
+            id,
+            capture,
+            mode,
+            HistorySource::SelectionPolish,
+            self.clock.now_utc().to_rfc3339(),
+        );
+        self.history.upsert_with_retention(
+            record,
+            prefs.history_retention_days,
+            prefs.history_max_entries,
+        )?;
+        self.publish_history_changed();
+        Ok(())
+    }
+
     fn set_capture(
         &self,
         session_id: SessionId,
@@ -331,10 +359,17 @@ impl SelectionServiceInner {
     fn set_preview(&self, session_id: SessionId, preview_text: String) -> Result<(), BackendError> {
         let mut state = self.state.write().expect("selection state lock poisoned");
         Self::ensure_active(&state, session_id)?;
+        update_original_record(
+            &self.history,
+            session_id,
+            Some(&preview_text),
+            "selectionPreview",
+        )?;
         state.snapshot.preview_text = Some(preview_text);
         state.snapshot.phase = SelectionPhase::Preview;
         let snapshot = state.snapshot.clone();
         drop(state);
+        self.publish_history_changed();
         self.events.publish(
             Some(session_id),
             BackendEventKind::SelectionStateChanged(snapshot),
@@ -366,6 +401,7 @@ impl SelectionServiceInner {
                 "selection source is unavailable",
             )
         })?;
+        require_original_record(&self.history, session_id, &source_text)?;
         let replacement_text = replacement
             .or_else(|| state.snapshot.preview_text.clone())
             .filter(|text| !text.trim().is_empty())
@@ -414,7 +450,15 @@ impl SelectionServiceInner {
                 "selection session is not applying",
             ));
         }
+        update_original_record(
+            &self.history,
+            session_id,
+            Some(&final_text),
+            "selectionPreview",
+        )?;
         state.snapshot.preview_text = Some(final_text.clone());
+        drop(state);
+        self.publish_history_changed();
         Ok(final_text)
     }
 
@@ -522,7 +566,7 @@ impl SelectionServiceInner {
         };
         let activity_app = session.app_name.clone();
         let mut changed = false;
-        match self.history.append_with_retention(
+        match self.history.upsert_with_retention(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
@@ -563,6 +607,14 @@ impl SelectionServiceInner {
                 SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
             )
         {
+            if let Err(error) = update_original_record(
+                &self.history,
+                session_id,
+                state.snapshot.preview_text.as_deref(),
+                "selectionFailed",
+            ) {
+                log::warn!("failed to settle selection history: {error}");
+            }
             state.snapshot.phase = SelectionPhase::Failed;
             let snapshot = state.snapshot.clone();
             drop(state);
@@ -588,6 +640,7 @@ impl SelectionServiceInner {
                 | BackendErrorCode::InvalidState
                 | BackendErrorCode::InvalidArgument
                 | BackendErrorCode::Busy
+                | BackendErrorCode::OutcomeUnknown
         );
         let mut state = self.state.write().expect("selection state lock poisoned");
         let active = state.snapshot.session_id == Some(session_id)
@@ -704,18 +757,14 @@ impl SelectionApi for SelectionService {
                     .capture(session_id, request.selected_text.clone())
                     .await?;
                 inner.set_capture(session_id, &capture)?;
+                inner.persist_original(session_id, &capture, request.mode)?;
+                inner
+                    .runtime
+                    .protect_original(session_id, capture.text.clone())
+                    .await?;
                 let (mut context, output_mode, uses_llm) = inner
                     .polish_context(&request, inner.source_app(session_id)?)
                     .await?;
-                // The polish prompt truncates at the XML envelope cap, but DirectReplace
-                // writes the model output over the entire captured selection. Refuse
-                // before any provider call so the unseen tail cannot be deleted.
-                if uses_llm && crate::prompts::exceeds_xml_envelope_cap(&capture.text) {
-                    return Err(BackendError::new(
-                        BackendErrorCode::InvalidArgument,
-                        crate::prompts::truncated_selection_replacement_message(),
-                    ));
-                }
                 context.polish.selection_input = true;
                 let context = Arc::new(context);
                 inner.set_context(session_id, Arc::clone(&context))?;
@@ -923,5 +972,82 @@ struct DiscardTextStreamSink;
 impl TextStreamSink for DiscardTextStreamSink {
     fn publish(&self, _chunk: TextStreamChunk) -> Result<(), BackendError> {
         Ok(())
+    }
+}
+
+/// A provisional row in the existing history store; raw_transcript is immutable input.
+pub(crate) fn original_record(
+    id: SessionId,
+    capture: &SelectionCapture,
+    mode: crate::types::PolishMode,
+    source: HistorySource,
+    created_at: String,
+) -> DictationSession {
+    let app = crate::shared_types::split_front_app_opt(capture.source_app.as_deref());
+    DictationSession {
+        id: id.to_string(),
+        created_at,
+        source,
+        raw_transcript: capture.text.clone(),
+        asr_transcript: None,
+        final_text: String::new(),
+        mode,
+        style_pack_id: None,
+        translation_active: false,
+        polish_source: None,
+        app_bundle_id: app.bundle_id,
+        app_name: app.name,
+        insert_status: HistoryInsertStatus::NotRequested,
+        error_code: Some("selectionProcessing".into()),
+        duration_ms: None,
+        dictionary_entry_count: None,
+        has_audio_recording: None,
+        asr_provider: None,
+        asr_model: None,
+        llm_provider: None,
+        llm_model: None,
+        pipeline_mode: None,
+        asr_ms: None,
+        polish_ms: None,
+    }
+}
+
+/// Update only terminal/progress fields; never replace the persisted original.
+pub(crate) fn update_original_record(
+    history: &HistoryStore,
+    id: SessionId,
+    result: Option<&str>,
+    status: &str,
+) -> Result<(), BackendError> {
+    if let Some(mut row) = history.read_entry(&id.to_string())? {
+        if let Some(result) = result {
+            row.final_text = result.to_string();
+        }
+        row.error_code = Some(status.to_string());
+        history.update_entry(row)?;
+    } else {
+        return Err(BackendError::new(
+            BackendErrorCode::Persistence,
+            "selectionOriginalUnavailable",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn require_original_record(
+    history: &HistoryStore,
+    id: SessionId,
+    original: &str,
+) -> Result<(), BackendError> {
+    if history
+        .read_entry(&id.to_string())?
+        .is_some_and(|row| row.raw_transcript == original)
+    {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            BackendErrorCode::Persistence,
+            "selectionOriginalUnavailable",
+        ))
     }
 }

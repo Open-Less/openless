@@ -39,6 +39,12 @@ mod uia_text;
 mod windows;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::insert_with_delivery_check;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::focused_input_identity;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::focused_input_position;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::focused_input_position;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome, LiveComposition};
@@ -105,11 +111,12 @@ pub(crate) fn capture_voice_edit_target() -> Result<
 }
 
 /// Restore the original app, compare the exact control, full text and selection, then write.
+/// The inserter must recheck the prepared target predicate after acquiring the delivery gate.
 /// Call only on the blocking native insertion thread.
 pub(crate) fn apply_voice_edit_target(
     target: &NativeVoiceEditTarget,
     text: &str,
-    insert: impl FnOnce(&str) -> Result<(), String>,
+    insert: impl FnOnce(&str, &mut dyn FnMut() -> bool) -> Result<(), String>,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {

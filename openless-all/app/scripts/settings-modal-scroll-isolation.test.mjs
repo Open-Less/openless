@@ -37,8 +37,8 @@ if (!(
 }
 assertMatch(
   floatingShellTsx,
-  /displayTab === 'overview' && !mobile[\s\S]*'ol-thinscroll ol-page-fixed'[\s\S]*'ol-thinscroll ol-scroll-fade'/,
-  '桌面概览固定在一屏，其他页面保留细滚动区，设置打开时才能锁住背景',
+  /\(displayTab === 'overview' \|\| displayTab === 'appStyles'\) && !mobile[\s\S]*'ol-thinscroll ol-page-fixed'[\s\S]*'ol-thinscroll ol-scroll-fade'/,
+  '桌面概览与自动风格固定在一屏，其他页面保留细滚动区，设置打开时才能锁住背景',
 );
 assertMatch(
   tokensCss,

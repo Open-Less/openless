@@ -125,6 +125,8 @@ pub struct DictationPolishContext {
     pub mode: PolishMode,
     pub style_pack_id: String,
     pub style_system_prompt: String,
+    /// Frozen target metadata, composed only at request time; never part of Raw identity.
+    pub input_scene_prefix: Option<String>,
     pub hotwords: Vec<String>,
     pub working_languages: Vec<String>,
     pub translation_target_language: String,
@@ -203,6 +205,11 @@ pub struct RecordingPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationContext {
+    pub(crate) input_app: Option<crate::app_style_routing::InputApp>,
+    /// Annotated built-in Raw prompt, captured before any later prompt changes.
+    pub(crate) raw_passthrough_prompt: Option<String>,
+    /// Frozen guidance applied only to the final ordinary dictation mode.
+    pub(crate) expression_instructions: Option<String>,
     pub audio_source: DictationAudioSource,
     pub output_target: DictationOutputTarget,
     pub(crate) normal_archive_successful_recording: bool,
@@ -249,6 +256,16 @@ impl Default for DictationContext {
 }
 
 impl DictationContext {
+    pub(crate) fn captured_front_app(&self) -> crate::shared_types::FrontApp {
+        if let Some(app) = &self.input_app {
+            return crate::shared_types::FrontApp {
+                name: Some(app.name.clone()),
+                bundle_id: app.macos_bundle_id().map(str::to_owned),
+            };
+        }
+        crate::shared_types::split_front_app_opt(self.polish.front_app.as_deref())
+    }
+
     pub(crate) fn capture(
         preferences: &UserPreferences,
         style_pack: &StylePack,
@@ -325,6 +342,7 @@ impl DictationContext {
             preferences.record_audio_for_debug && (preferences.debug_archive_processed || debug_both_off);
         let debug_keep_raw = preferences.record_audio_for_debug && preferences.debug_archive_raw;
         Self {
+            input_app: None,
             audio_source: options.audio_source,
             output_target: options.output_target,
             normal_archive_successful_recording: preferences.record_audio_for_debug,
@@ -378,11 +396,14 @@ impl DictationContext {
             llm,
             deferred_llm_error: None,
             unconfigured_llm_raw: None,
+            raw_passthrough_prompt: None,
+            expression_instructions: None,
             omni,
             polish: DictationPolishContext {
+                input_scene_prefix: None,
                 mode: style_pack.base_mode,
                 style_pack_id: style_pack.id.clone(),
-                style_system_prompt: style_pack.prompt.clone(),
+                style_system_prompt: crate::style_packs::dictation_style_prompt(style_pack),
                 hotwords,
                 working_languages: preferences.working_languages.clone(),
                 translation_target_language,
@@ -517,17 +538,37 @@ impl DictationContext {
         self.normal_archive_successful_recording
     }
 
+    pub(crate) fn with_expression_instructions(mut self, instructions: String) -> Self {
+        self.expression_instructions = Some(instructions);
+        self.restore_or_apply_unconfigured_llm_raw();
+        self
+    }
+
     fn restore_or_apply_unconfigured_llm_raw(&mut self) {
-        let Some((mode, prompt)) = self.unconfigured_llm_raw.clone() else {
-            return;
-        };
-        if self.is_plain_dictation_output() && !self.polish.translation_active {
-            self.polish.mode = PolishMode::Raw;
-            self.polish.style_system_prompt =
-                crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
-        } else {
-            self.polish.mode = mode;
-            self.polish.style_system_prompt = prompt;
+        let unconfigured_raw = self.unconfigured_llm_raw.is_some()
+            && self.is_plain_dictation_output() && !self.polish.translation_active;
+        if let Some((mode, prompt)) = self.unconfigured_llm_raw.clone() {
+            if unconfigured_raw {
+                self.polish.mode = PolishMode::Raw;
+                self.polish.style_system_prompt =
+                    crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
+            } else {
+                self.polish.mode = mode;
+                self.polish.style_system_prompt = prompt;
+            }
+        }
+        if let Some(instructions) = &self.expression_instructions {
+            if self.polish.translation_active {
+                if let Some(base) = self.polish.style_system_prompt.strip_suffix(instructions) {
+                    self.polish.style_system_prompt = base.to_owned();
+                }
+            } else if !unconfigured_raw
+                // Guidance may refine an existing polish task, never create one for canonical Raw.
+                && self.uses_llm_polisher()
+                && !self.polish.style_system_prompt.ends_with(instructions)
+            {
+                self.polish.style_system_prompt.push_str(instructions);
+            }
         }
     }
 
@@ -558,7 +599,17 @@ impl DictationContext {
         } else {
             user
         };
-        (system, user)
+        (self.with_input_scene_prefix(system), user)
+    }
+
+    /// Prepend metadata only for actual foreground-app dictation output.
+    pub(crate) fn with_input_scene_prefix(&self, system: String) -> String {
+        if self.output_target == DictationOutputTarget::ForegroundApp && !self.polish.selection_input {
+            if let Some(prefix) = &self.polish.input_scene_prefix {
+                return format!("{prefix}\n\n{system}");
+            }
+        }
+        system
     }
 
     /// Build the exact system prompt captured for this session.
@@ -574,8 +625,9 @@ impl DictationContext {
         self.output_target != DictationOutputTarget::Qa
             && (self.polish.translation_active
                 || self.polish.mode != PolishMode::Raw
-                || self.polish.style_system_prompt
-                    != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw))
+                || (self.polish.style_system_prompt
+                    != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw)
+                    && self.raw_passthrough_prompt.as_ref() != Some(&self.polish.style_system_prompt)))
     }
 
     /// Plain dictation whose polished text is simply inserted or saved. Voice Edit
@@ -834,6 +886,23 @@ mod tests {
     }
 
     #[test]
+    fn frozen_scene_does_not_change_raw_identity_or_internal_note_prompts() {
+        let mut context = DictationContext::default();
+        context.polish.mode = PolishMode::Raw;
+        context.polish.style_system_prompt = crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
+        let canonical = context.polish.style_system_prompt.clone();
+        context.polish.input_scene_prefix = Some("当前应用：Frozen target".into());
+        assert!(!context.uses_llm_polisher());
+        assert_eq!(context.polish.style_system_prompt, canonical);
+        assert!(context.effective_polish_system_prompt().starts_with("当前应用：Frozen target"));
+        for target in [DictationOutputTarget::QuickNote, DictationOutputTarget::CloudNote, DictationOutputTarget::VoiceEdit] {
+            let internal = context.with_output_target(target);
+            assert!(!internal.effective_polish_system_prompt().contains("Frozen target"));
+            assert_eq!(internal.polish.style_system_prompt, canonical);
+        }
+    }
+
+    #[test]
     fn local_fallback_uses_the_selected_sherpa_model_and_its_settings() {
         let fallback = local_asr_fallback(&fallback_preferences(), &cloud_asr(), true).unwrap();
         assert_eq!(fallback.provider_type, "sherpa-onnx-local");
@@ -882,7 +951,14 @@ mod tests {
             ..UserPreferences::default()
         };
         let pack = builtin_style_pack_for_mode(PolishMode::Structured);
-        for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
+        for (provider, buffered) in [
+            ("experimental-textstream", false),
+            ("sherpa-onnx-local", true),
+            ("apple-speech", true),
+            ("foundry-local-whisper", true),
+            ("experimental-sensevoice", true),
+            ("volcengine", true),
+        ] {
             let context = DictationContext::capture(
                 &preferences,
                 &pack,

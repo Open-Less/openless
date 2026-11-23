@@ -1,6 +1,7 @@
 //! Client-side logical documents for encrypted sync. No network or UI effects live here.
 
 mod export;
+pub(crate) use export::legacy_builtin_style_id;
 mod merge;
 pub mod registry;
 mod restore;

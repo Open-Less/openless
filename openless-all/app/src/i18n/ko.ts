@@ -11,6 +11,15 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ko: typeof zhCN = {
   ...en,
+  shiftTranslation: {
+    title: '녹음 번역',
+    description: 'Shift 전환 및 연속 누르기 횟수',
+    count: 'Shift 연속 누르기 횟수',
+    scope:
+      '녹음 중 Shift만 같은 횟수만큼 짧게 누르면 번역을 켜거나 끕니다. 기본 Shift 번역 단축키에만 적용되며 Shift가 녹음 키이면 비활성화됩니다.',
+    times_one: '{{count}}회',
+    times_other: '{{count}}회',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
@@ -121,6 +130,7 @@ export const ko: typeof zhCN = {
     delete: '클라우드 백업 삭제',
     working: '처리 중…',
     cancelTask: '현재 작업 취소',
+    cancelSync: '동기화 취소',
     cancelRequested: '취소를 요청했습니다. 작업이 종료되기를 기다립니다.',
     done: '동기화 설정을 업데이트했습니다.',
     restored: '클라우드 데이터를 복원했습니다. 이 기기의 전용 설정을 확인하세요.',
@@ -156,7 +166,7 @@ export const ko: typeof zhCN = {
     disableDescription:
       '이후 동기화를 중지합니다. 클라우드 백업과 로컬 데이터는 유지됩니다. 백업 삭제는 별도 작업입니다.',
     confirmDisable: '동기화 끄기',
-    refreshBackup: '클라우드 백업 보기 또는 새로고침',
+    refreshBackup: '클라우드 백업 보기',
     deleteTitle: '암호화된 클라우드 백업을 삭제할까요?',
     deleteDescription:
       '이 계정의 클라우드 백업만 삭제합니다. 로컬 데이터는 유지됩니다. 다른 기기에서 복원하려면 새 백업이 필요합니다.',
@@ -173,6 +183,7 @@ export const ko: typeof zhCN = {
     replace: '동기화 대상 로컬 데이터를 클라우드 데이터로 교체',
     replaceWarning:
       '동기화 범위의 로컬 데이터를 교체합니다. 로컬 변경을 유지하려면 병합을 선택하세요.',
+    mergeOverwriteDirection: '충돌 시 기기 버전을 선택하면 병합 동기화 때 클라우드 항목을 덮어쓰고, 클라우드 버전을 선택하면 기기 항목을 덮어씁니다.',
     restoreCheck: '복원 방식과 충돌 선택을 확인했습니다.',
     applyRestore: '복원 확인',
     conflictProgress: '충돌 {{selected}} / {{total}}개 해결',
@@ -319,8 +330,11 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
+    emptyTranscript: '빈 초안 · 음성 없음',
+    transcribing: '변환 중',
     asking: '무엇이든 질문',
     thinking: 'thinking',
+    slowConnection: '평소보다 연결이 느립니다',
     using: 'using',
     cancelled: '취소됨',
     error: '오류 발생',
@@ -329,10 +343,10 @@ export const ko: typeof zhCN = {
     translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
     selectionPolish: {
-      polishing: '다듬는 중...',
+      polishing: '다듬는 중…',
       replaced: '교체됨',
-      noSelection: '선택된 내용 없음',
-      failed: '다듬기 실패, 다시 시도하세요',
+      noSelection: '선택된 텍스트 없음',
+      failed: '다듬기 실패',
     },
   },
   selectionPolishPreview: {
@@ -397,6 +411,7 @@ export const ko: typeof zhCN = {
     mobileRecordStart: '녹음 시작',
     mobileRecordStop: '종료하고 제출',
     composerPlaceholder: '질문을 입력하세요. Enter로 보내기',
+    voiceInputPlaceholder: '음성으로 입력 중입니다',
     composerSend: '보내기',
     statusIdle: '{{recordHotkey}} 로 질문',
     statusRecording: '녹음 중',
@@ -485,7 +500,7 @@ export const ko: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '업데이트',
+        update: '팩 업데이트',
         withdraw: '내리기',
       },
       loadFailed: '내 게시물 불러오기 실패: {{err}}',
@@ -834,7 +849,7 @@ export const ko: typeof zhCN = {
     dismiss: '닫기',
   },
   vocab: {
-    selectAllVisible: '현재 결과 선택',
+    selectAllVisible: '모든 결과 선택',
     selecting: '선택',
     doneSelecting: '완료',
     disabledWord: '꺼짐',
@@ -1168,7 +1183,7 @@ export const ko: typeof zhCN = {
     },
     history: {
       title: '기록 저장',
-      desc: '활성화 시 Q&A 기록을 로컬에 저장. 기본 OFF.',
+      desc: '이 기기에 ‘무엇이든 질문’ 기록을 저장합니다. 기본값은 꺼짐입니다.',
     },
     howto: {
       title: '사용 방법',
@@ -1195,7 +1210,7 @@ export const ko: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: '마이크와 녹음',
-      recordingDesc: '마이크 모니터링과 인식, 그리고 모니터링과 알림입니다.',
+      recordingDesc: '마이크를 선택하고 녹음과 알림음을 설정합니다.',
       capsuleTitle: '캡슐 스타일',
       capsuleDesc: '캡슐 스위치, 여러 화면 표시, 스타일, 원문 스트리밍 표시.',
       textInputTitle: '텍스트 삽입',
@@ -1204,6 +1219,7 @@ export const ko: typeof zhCN = {
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
     advancedPages: {
+      polishStrategyTitle: '다듬기 전략',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInputTitle: '텍스트 삽입',
@@ -1212,7 +1228,7 @@ export const ko: typeof zhCN = {
       cursorContextTitle: '인식',
       startupDiagnosticsTitle: '시작 진단',
       cursorContextHint:
-        '커서 문맥은 기본적으로 켜져 있습니다. 주변 텍스트를 다듬기 요청에 포함하지 않으려면 여기서 끄세요.',
+        '기본으로 켜져 있습니다.',
     },
     advancedGroups: {
       recording: '녹음',
@@ -1274,7 +1290,6 @@ export const ko: typeof zhCN = {
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
     expressionLearning: {
-      clearHint: '삭제 후에도 진행 중인 받아쓰기에는 시작할 때 캡처한 선호가 사용될 수 있습니다.',
       lineBreaksMore: '줄바꿈 늘리기',
       lineBreaksLess: '줄바꿈 줄이기',
       exclamationsMore: '느낌표 늘리기',
@@ -1285,7 +1300,7 @@ export const ko: typeof zhCN = {
       title: '표현 습관',
       enabled: '표현 습관 학습',
       description:
-        '받아쓰기 후 서식 수정을 기기에서만 관찰하며 표현 습관에는 추상적인 통계만 저장합니다. 기록은 별도로 관리됩니다. 반복되고 일관된 줄바꿈과 문장 부호 선호를 선택한 텍스트 모델에 짧은 지시로 전달합니다. 끄면 학습은 즉시 중단되고 다음 받아쓰기부터 적용되지 않습니다. 진행 중인 받아쓰기에는 이미 캡처한 선호가 사용될 수 있습니다.',
+        '줄바꿈과 문장부호 선호를 학습해 이후 문장 다듬기에 사용합니다.',
       status: '안정된 선호 {{count}}개',
       clear: '표현 습관 지우기',
       error: '표현 습관을 읽거나 저장하지 못했습니다.',
@@ -1307,19 +1322,17 @@ export const ko: typeof zhCN = {
         '자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.',
       seconds: '{{count}}초',
       characters: '{{count}}자',
-      changeHint:
-        '설정을 변경하면 현재 관찰을 중지하고 대기 중인 제안을 지웁니다. 다음 음성 입력부터 적용됩니다. 초기화해도 사용 스위치는 바뀌지 않습니다.',
       reset: '매개변수 초기화',
       saveError: '저장하지 못했습니다. 다시 시도하세요.',
       description:
-        '입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.',
+        '받아쓰기 후 수동으로 고친 단어를 학습하고 확인한 단어를 사전에 추가합니다.',
     },
     dataStorage: {
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
+        '문장을 다듬을 때 커서 주변의 텍스트를 모델에 참고 자료로 보냅니다.',
     },
     localMigration: {
       title: '로컬 구성 마이그레이션',
@@ -1419,13 +1432,13 @@ export const ko: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          '기기의 에코 제거, 소음 억제와 자동 게인을 사용합니다.',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          '처리 전후의 녹음 스펙트럼을 비교합니다.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
-        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        spectrumWaiting: '녹음 대기 중',
         presets: 'Equalizer presets',
         choosePreset: 'Choose a preset',
         preset_normal: 'Flat',
@@ -1439,8 +1452,8 @@ export const ko: typeof zhCN = {
         aecLight: '경량(저 CPU)',
         aecModel: '모델(강화)',
         aecModelHint:
-          '모델 버전은 더 강하게 제거하지만 CPU를 약 3배 사용합니다. 오래된 기기에서는 경량을 권장합니다.',
-        aecHint: '스피커 사용 시 되먹임을 줄입니다. 참조 신호가 필요하므로 헤드폰이면 꺼 두세요.',
+          '에코 억제를 강화하며 CPU 사용량이 늘어납니다.',
+        aecHint: '마이크에 들어오는 스피커 재생음을 억제합니다.',
         buffer: '출력 버퍼',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1450,7 +1463,7 @@ export const ko: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          '소음 제거, 에코 억제, 음량과 이퀄라이저를 조절합니다.',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1458,11 +1471,11 @@ export const ko: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          '작은 소리 구간의 음량을 낮춥니다.',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          '공명과 음색을 조절합니다.',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1471,10 +1484,10 @@ export const ko: typeof zhCN = {
       },
       echoCancellationLabel: '재생 에코 제거',
       echoCancellationDesc:
-        '재생을 유지하면서 로컬 재생음을 참조합니다. macOS는 14.6 이상 및 시스템 오디오 녹음 권한이 필요합니다. 지원하지 않는 장치, Bluetooth 경로 또는 Linux ALSA에서는 일반 마이크 녹음으로 전환합니다. 다음 캡처부터 적용됩니다.',
+        '기기의 재생음을 참고해 녹음의 에코를 줄입니다. 다음 녹음부터 적용됩니다.',
       audioEnhancementLabel: '음성 향상',
       audioEnhancementDesc:
-        'RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.',
+        '배경 소음을 줄이고 음량을 자동 조절합니다. 다음 녹음부터 적용됩니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
@@ -1545,14 +1558,16 @@ export const ko: typeof zhCN = {
       polishSkipMaxCharsLabel: '짧은 입력은 다듬기 건너뛰기(최대 글자 수)',
       polishSkipMaxCharsDesc:
         '공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.',
-      polishStrategyEnabledLabel: '사용자 지정 다듬기 전략 사용',
+      polishStrategyEnabledLabel: '사용자 정의 전략 사용',
       polishStrategyEnabledDesc:
         'ASR 후 제한된 로컬 전략을 실행합니다. 오류는 일반 다듬기로 되돌아가며 파일·네트워크·자격 증명에 접근하지 않습니다.',
-      polishStrategyScriptLabel: '다듬기 전략 스크립트',
+      polishStrategyEdit: '수정',
+      polishStrategyEditorTitle: '다듬기 전략 수정',
+      polishStrategyScriptLabel: '스크립트',
       polishStrategyScriptDesc:
         'strategy(input)을 정의하고 skip, polish 또는 request를 반환합니다. 없는 언어·신뢰도·모델 값은 ()입니다.',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: 'Agent용 스킬 복사',
       polishStrategySkillCopied: 'Agent용 스킬을 복사했습니다',
       polishStrategySkillCopyFailed: '복사하지 못했습니다. 클립보드 권한을 확인하세요',
@@ -1573,15 +1588,16 @@ export const ko: typeof zhCN = {
       voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
       voiceActivationLocalOnly:
         '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
-      voiceActivationHotkeyLinked: "녹음 단축키와 연동",
-      voiceActivationHotkeyLinkedDesc: "기존 녹음 동작 대신 한 번 눌러 깨우기 대기를 시작하거나 일시 중지합니다. 앱 시작 시에는 중지됩니다. 중지하면 대기 마이크 예열을 끄지만 다른 녹음은 중단하지 않습니다. 깨우기는 로컬에서 처리하며 받아쓰기는 현재 서비스를 사용합니다.",
-      voiceActivationDisabled: "음성 활성화 꺼짐",
-      voiceActivationPaused: "깨우기 대기 일시 중지됨",
-      voiceActivationPausing: "깨우기 대기 중지 중…",
-      voiceActivationStarting: "깨우기 대기 시작 중…",
-      voiceActivationListening: "깨우기 명령 대기 중",
-      voiceActivationDictating: "받아쓰기 또는 마무리 중",
-      voiceActivationError: "대기를 시작할 수 없습니다. 모델, 마이크 권한 및 장치를 확인하세요.",
+      voiceActivationHotkeyLinked: '녹음 단축키와 연동',
+      voiceActivationHotkeyLinkedDesc:
+        '기존 녹음 동작 대신 한 번 눌러 깨우기 대기를 시작하거나 일시 중지합니다. 앱 시작 시에는 중지됩니다. 중지하면 대기 마이크 예열을 끄지만 다른 녹음은 중단하지 않습니다. 깨우기는 로컬에서 처리하며 받아쓰기는 현재 서비스를 사용합니다.',
+      voiceActivationDisabled: '음성 활성화 꺼짐',
+      voiceActivationPaused: '깨우기 대기 일시 중지됨',
+      voiceActivationPausing: '깨우기 대기 중지 중…',
+      voiceActivationStarting: '깨우기 대기 시작 중…',
+      voiceActivationListening: '깨우기 명령 대기 중',
+      voiceActivationDictating: '받아쓰기 또는 마무리 중',
+      voiceActivationError: '대기를 시작할 수 없습니다. 모델, 마이크 권한 및 장치를 확인하세요.',
       voiceActivationMultimodalModels:
         '여기에서 음성 활성화 모델을 준비합니다. 받아쓰기는 현재 멀티모달 서비스를 계속 사용합니다.',
       voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',
@@ -2444,6 +2460,7 @@ export const ko: typeof zhCN = {
     backToAdvanced: '고급 기능으로 돌아가기',
     back: '뒤로',
     advancedPages: {
+      polishStrategy: '인식 결과에 따라 다듬기를 제어합니다.',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
       webSearchTitle: 'Web Search',
       liveInput: '입력란의 실시간 원문 표시를 설정합니다.',
@@ -2455,7 +2472,7 @@ export const ko: typeof zhCN = {
       multimodal: '실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.',
       debug: '디버그 녹음을 보관하고 커서 문맥을 확인하며 로그를 내보냅니다.',
       voiceEnhancement: '고급 오디오 처리, 소음 감소, 재생 에코 억제를 설정합니다.',
-      cursorContext: '다듬기 요청에 쓰는 커서 주변 문맥과 짧은 입력 처리를 설정합니다.',
+      cursorContext: '커서 문맥, 수정 학습과 표현 습관을 관리합니다.',
       startupDiagnostics: '시작 시간, 백엔드 연결, 지연 검사를 확인합니다.',
     },
     descriptions: {
@@ -2479,7 +2496,7 @@ export const ko: typeof zhCN = {
       appearance: '테마 다크 라이트 언어 글꼴 글자 크기 배치 레이아웃 히트맵',
       privacy: '권한 마이크 접근성 기록 녹음 저장 개인정보 내보내기',
       advanced:
-        'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험 수정으로 단어 학습 vocabulary learning manual edits vocabulary learning Beta ',
+        'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험 수정으로 단어 학습 vocabulary learning manual edits vocabulary learning Beta 다듬기 전략 Rhai script',
       about: '버전 Beta 안정 업데이트 업그레이드',
     },
 
@@ -2731,6 +2748,10 @@ export const ko: typeof zhCN = {
     activePill: '현재 사용 중',
     setDefault: '기본값으로 설정',
     downloading: '다운로드 중',
+    cancelDownload: '다운로드 취소',
+    cancelDownloadTitle: '{{name}} 다운로드 취소',
+    cancellingDownload: '다운로드를 취소하는 중…',
+    downloadFailed: '모델 다운로드 실패',
     startDownload: '다운로드 시작',
     downloadNewModel: '새 모델 다운로드',
     activeModelLabel: '사용 중인 모델',

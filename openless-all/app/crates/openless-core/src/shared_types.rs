@@ -187,13 +187,13 @@ pub struct FrontApp {
 /// `FrontApp { name, bundle_id }`.
 ///
 /// macOS composes `"Claude (com.anthropic.claudefordesktop)"`; Windows has
-/// only window titles, no bundle id. History entries have separate
+/// an executable name, not a bundle id. History entries have separate
 /// `app_name` / `app_bundle_id` fields, so splitting lets the detail page
 /// show a readable app name instead of gluing the whole bundle id into the
 /// body text.
 ///
 /// Only macOS labels are `"name (bundle.id)"`; on Windows parentheses are
-/// part of the title. Callers must pass `is_macos` per platform (production
+/// part of the label. Callers must pass `is_macos` per platform (production
 /// goes through `split_front_app_opt`). Non-macOS labels and labels whose
 /// bracket structure doesn't parse stay whole as the app name — better a
 /// verbose display than misreading ordinary parentheses in a window title
@@ -231,7 +231,7 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
 
 /// `Option` convenience wrapper for `split_front_app_label`; keeps the
 /// platform switch in one place: only macOS display strings are
-/// `"name (bundle.id)"`; other platforms (Windows window titles, Linux)
+/// `"name (bundle.id)"`; other platforms (Windows, Linux)
 /// keep the whole string as the name and leave the bundle id empty.
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label
@@ -433,6 +433,9 @@ pub struct UserPreferences {
     /// Authoritative mode established by a V2 client; absent on untouched legacy settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capsule_display_mode_v2: Option<CapsuleDisplayMode>,
+    /// None means never chosen on this device; Some(1) is an explicit reset to the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation_shift_tap_count: Option<std::num::NonZeroU8>,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -596,6 +599,9 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
+    /// Kept in the device profile for compatibility with older Ask builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_shortcut_behavior: Option<QaShortcutBehavior>,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -969,6 +975,11 @@ pub struct UserPreferences {
 }
 
 impl UserPreferences {
+    pub fn translation_shift_tap_count(&self) -> u8 {
+        self.translation_shift_tap_count
+            .map_or(1, std::num::NonZeroU8::get)
+    }
+
     pub fn less_computer_available(&self) -> bool {
         self.testing_features_enabled && self.coding_agent_enabled
     }
@@ -1061,6 +1072,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     capsule_display_mode: CapsuleDisplayMode,
     capsule_display_mode_v2: Option<CapsuleDisplayMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_shift_tap_count: Option<std::num::NonZeroU8>,
     #[serde(default = "default_true")]
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -1143,6 +1156,7 @@ struct UserPreferencesWire {
     qa_hotkey: Option<ShortcutBinding>,
     #[serde(default = "default_qa_companion_key")]
     qa_companion_key: String,
+    qa_shortcut_behavior: Option<QaShortcutBehavior>,
     #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
@@ -1368,6 +1382,7 @@ impl Default for UserPreferencesWire {
             capsule_style: prefs.capsule_style,
             capsule_display_mode: prefs.capsule_display_mode,
             capsule_display_mode_v2: prefs.capsule_display_mode_v2,
+            translation_shift_tap_count: prefs.translation_shift_tap_count,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
@@ -1409,6 +1424,7 @@ impl Default for UserPreferencesWire {
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
             qa_companion_key: prefs.qa_companion_key,
+            qa_shortcut_behavior: prefs.qa_shortcut_behavior,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1597,6 +1613,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_display_mode_v2: wire
                 .capsule_display_mode_v2
                 .or_else(|| wire.capsule_display_mode.extended_sync_mode()),
+            translation_shift_tap_count: wire.translation_shift_tap_count,
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
@@ -1647,6 +1664,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             output_language_preference: wire.output_language_preference,
             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
+            qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1875,6 +1893,13 @@ fn default_qa_hotkey() -> Option<ShortcutBinding> {
     if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QaShortcutBehavior {
+    Record,
+    Open,
+}
+
 fn default_qa_companion_key() -> String { "Space".into() }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
@@ -2004,6 +2029,7 @@ impl Default for UserPreferences {
             capsule_style: CapsuleStyle::Classic,
             capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_display_mode_v2: None,
+            translation_shift_tap_count: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
@@ -2045,6 +2071,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
+            qa_shortcut_behavior: None,
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),

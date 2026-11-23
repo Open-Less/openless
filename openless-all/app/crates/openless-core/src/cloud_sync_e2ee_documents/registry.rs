@@ -33,6 +33,13 @@ pub struct PreferenceField {
 }
 pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
+        rust_name: "translation_shift_tap_count",
+        key: "translationShiftTapCount",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Unsigned8,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "hotkey",
         key: "hotkey",
         class: PreferenceClass::DeviceProfile,
@@ -406,6 +413,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "qa_companion_key",
         key: "qaCompanionKey",
+        class: PreferenceClass::DeviceProfile,
+        shape: PreferenceShape::Text,
+        reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "qa_shortcut_behavior",
+        key: "qaShortcutBehavior",
         class: PreferenceClass::DeviceProfile,
         shape: PreferenceShape::Text,
         reason: "device_bound",
@@ -1027,6 +1041,9 @@ pub fn excluded_extension_key(key: &str) -> bool {
 }
 
 pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> DocumentResult<()> {
+    if field.key == "translationShiftTapCount" && value.as_u64() == Some(0) {
+        return Err(DocumentError::InvalidDocument);
+    }
     use PreferenceShape::*;
     let valid = match field.shape {
         Boolean => value.is_boolean(),

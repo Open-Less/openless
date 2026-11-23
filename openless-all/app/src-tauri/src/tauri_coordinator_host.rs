@@ -75,7 +75,7 @@ fn capsule_transcript_rail_position(
             const BODY_BOTTOM_INSET: f64 = 16.0;
             const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
-            const RAIL_GAP: f64 = 8.0;
+            const RAIL_GAP: f64 = 24.0;
             const BADGE_HEIGHT: f64 = 28.0;
             const BADGE_GAP: f64 = 8.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
@@ -2213,6 +2213,14 @@ impl TauriCapsuleWindow {
     }
 }
 
+#[cfg(not(mobile))]
+pub(crate) fn notify_service_usage_changed(app: &crate::core_adapters::AppHandleSlot) {
+    let app = app.lock().clone();
+    if let Some(app) = app {
+        let _ = app.emit_to("main", "service-usage:changed", ());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
@@ -2432,8 +2440,18 @@ impl TauriCoordinatorHost {
             .commit_capsule_payload(payload, captured_revision)
     }
 
+    pub(crate) fn expire_terminal_capsule(&self) -> Option<CapsulePayload> {
+        self.capsule.snapshot.lock().expire_terminal_capsule()
+    }
+
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        #[cfg(not(mobile))]
+        if let openless_core::BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            if let Some(native) = self.native.lock().as_ref() {
+                native.update_processing_jobs(jobs);
+            }
+        }
         self.capsule.snapshot.lock().record_backend_event(event);
         #[cfg(not(mobile))]
         if crate::desktop_resources::active()
@@ -3006,15 +3024,15 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 64.0, 8.0)
+            (460.0, 52.0, 48.0, 24.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
                 height: 88.0,
-                top_offset: 28.0,
-                gap: 8.0,
+                top_offset: 12.0,
+                gap: 24.0,
             })
         );
 
@@ -3046,8 +3064,17 @@ mod tests {
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
             (classic_badge.height, classic_badge.top_offset),
-            (28.0, 88.0)
+            (28.0, 72.0)
         );
+        let body_top = 172.0 - 16.0 - 32.0;
+        let body_bottom = 172.0 - 16.0;
+        let lobe_top = body_top - 8.0 - 10.0;
+        let lobe_bottom = lobe_top + 20.0;
+        let badge_bottom = classic_badge.top_offset + classic_badge.height;
+        assert_eq!((body_top, body_bottom), (124.0, 156.0));
+        assert_eq!(body_top - badge_bottom, 24.0);
+        assert!(badge_bottom <= lobe_top, "the badge must clear the processing lobe");
+        assert_eq!(lobe_bottom - body_top, 2.0);
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
         assert!((typeless_badge.height - 20.0 * 0.447).abs() < 1e-12);

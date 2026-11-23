@@ -11,6 +11,7 @@ import {
   listenEmbeddedVoiceEditDismissed,
   listenEmbeddedVoiceEditShown,
 } from '../api/voice-edit';
+import { ASK_ANYTHING_AVAILABLE } from '../lib/appVersion';
 import { useAppViewport } from '../ui/layout/AppViewport';
 import { createAndroidPanelState, type AndroidPanelView } from './androidPanelState';
 
@@ -97,24 +98,32 @@ export function useAndroidPanels(enabled: boolean) {
 
     void (async () => {
       const observed = route.generation();
-      await Promise.all([
-        subscribe(listenEmbeddedQaShown, () => {
-          void route.switchTo('qa');
-        }),
-        subscribe(listenQaDismissed, () => route.nativeDismiss('qa')),
+      const subscriptions = [
         subscribe(listenEmbeddedVoiceEditShown, () => {
           void route.switchTo('voice-edit');
         }),
         subscribe(listenEmbeddedVoiceEditDismissed, () => route.nativeDismiss('voice-edit')),
-      ]);
+      ];
+      if (ASK_ANYTHING_AVAILABLE) {
+        subscriptions.push(
+          subscribe(listenEmbeddedQaShown, () => {
+            void route.switchTo('qa');
+          }),
+          subscribe(listenQaDismissed, () => route.nativeDismiss('qa')),
+        );
+      }
+      await Promise.all(subscriptions);
       if (disposed || observed !== route.generation()) return;
       // Recreated WebViews may have missed their initial show event.
-      const [voice, qa] = await Promise.allSettled([getVoiceEditState(), qaGetSnapshot()]);
+      const [voice, qa] = await Promise.allSettled([
+        getVoiceEditState(),
+        ASK_ANYTHING_AVAILABLE ? qaGetSnapshot() : Promise.resolve(null),
+      ]);
       if (disposed || observed !== route.generation()) return;
       const phase = voice.status === 'fulfilled' ? voice.value?.phase : undefined;
       if (phase && phase !== 'completed' && phase !== 'cancelled') {
         await route.switchTo('voice-edit');
-      } else if (qa.status === 'fulfilled' && qa.value.sessionId && qa.value.kind !== 'cancelled') {
+      } else if (qa.status === 'fulfilled' && qa.value?.sessionId && qa.value.kind !== 'cancelled') {
         await route.switchTo('qa');
       } else {
         releaseBack();

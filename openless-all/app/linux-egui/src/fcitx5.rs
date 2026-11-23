@@ -889,7 +889,6 @@ pub(crate) fn apply_selection_target(
     source: &str,
     replacement: &str,
 ) -> Result<(), BackendError> {
-    crate::selection::validate_selection_replacement_source(source)?;
     if send_bool_message("ApplySelectionTarget", |message| {
         message.append3(session_id, source, replacement)
     })? {

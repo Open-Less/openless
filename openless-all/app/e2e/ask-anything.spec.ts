@@ -1,3 +1,4 @@
+import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
 const fixture = `${fixtureOrigin}/e2e/fixtures/capsule-motion.html`;
@@ -161,7 +162,13 @@ test('overview is restored and the Ask page remains without the added three-row 
   await page.screenshot({ path: info.outputPath('overview-restored.png') });
   const nav = page.locator('.ol-sidebar-surface nav');
   await nav.getByRole('button', { name: '工具', exact: true }).click();
-  await nav.getByRole('button', { name: '随便问', exact: true }).click();
+  const ask = nav.getByRole('button', { name: '随便问', exact: true });
+  if (!ASK_ANYTHING_AVAILABLE) {
+    await expect(ask).toBeDisabled();
+    await expect(page.locator('[data-ol-page="overview"]')).toBeVisible();
+    return;
+  }
+  await ask.click();
   await expect(page.getByText('提问附加键', { exact: true })).toBeVisible();
   await expect(page.locator('.ol-recording-key-guide')).toHaveCount(0);
   await expect(page.getByText('保存历史', { exact: true })).toBeVisible();

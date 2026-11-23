@@ -1,21 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession, PolishMode } from '../../api/contracts';
 import { copyTextToClipboard } from '../../api/files';
 import { formatHistoryTime, formatLocaleDecimal } from '../../lib/localeFormat';
+import { useInitialListRows } from '../../lib/useInitialListRows';
 import { Button } from '../../ui/controls/Button';
 import { Pill } from '../../ui/controls/Pill';
 import { Card } from '../../ui/layout/Card';
-
-function useModeLabels(): Record<PolishMode, string> {
-  const { t } = useTranslation();
-  return {
-    raw: t('style.modes.raw.name'),
-    light: t('style.modes.light.name'),
-    structured: t('style.modes.structured.name'),
-    formal: t('style.modes.formal.name'),
-  };
-}
 
 export function RecentHistory({
   history,
@@ -30,8 +21,15 @@ export function RecentHistory({
   onOpenHistory?: () => void;
   onRetry: () => void;
 }) {
-  const { t } = useTranslation();
-  const modeLabel = useModeLabels();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
+  const rows = useInitialListRows(history);
+  const modeLabel: Record<PolishMode, string> = {
+    raw: t('style.modes.raw.name'),
+    light: t('style.modes.light.name'),
+    structured: t('style.modes.structured.name'),
+    formal: t('style.modes.formal.name'),
+  };
   return (
     <Card
       padding={0}
@@ -40,7 +38,8 @@ export function RecentHistory({
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        overflow: 'hidden',
+        // Keep the inner list's full wheel hit area in WebKit.
+        overflow: 'visible',
       }}
     >
       <div
@@ -92,8 +91,8 @@ export function RecentHistory({
                 {t(loading ? 'common.loading' : 'overview.recentEmptyHint')}
               </div>
             )}
-            {history.map((s) => (
-              <RecentRow key={s.id} session={s} modeLabel={modeLabel} />
+            {rows.map((s) => (
+              <RecentRow key={s.id} session={s} modeLabel={modeLabel[s.mode]} t={t} locale={locale} />
             ))}
           </>
         )}
@@ -102,15 +101,17 @@ export function RecentHistory({
   );
 }
 
-function RecentRow({
+const RecentRow = memo(function RecentRow({
   session,
   modeLabel,
+  t,
+  locale,
 }: {
   session: DictationSession;
-  modeLabel: Record<PolishMode, string>;
+  modeLabel: string;
+  t: ReturnType<typeof useTranslation>['t'];
+  locale: string;
 }) {
-  const { t, i18n } = useTranslation();
-  const locale = i18n.resolvedLanguage || i18n.language;
   const [copied, setCopied] = useState(false);
   const timer = useRef<number>();
   const mounted = useRef(false);
@@ -168,7 +169,7 @@ function RecentRow({
           {formatHistoryTime(session.createdAt, locale)}
         </span>
         <Pill size="sm" tone="default">
-          {modeLabel[session.mode]}
+          {modeLabel}
         </Pill>
       </div>
       <div
@@ -203,7 +204,7 @@ function RecentRow({
       </div>
     </div>
   );
-}
+});
 
 function formatDuration(
   ms: number,

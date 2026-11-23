@@ -491,11 +491,26 @@ fn shared_backend_from_stores(
         style_packs: style_packs.core(),
     };
     #[cfg(not(mobile))]
-    let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(config.data_dir.join("service-usage.json"))
-        .and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start(Arc::new(ledger)))
-    {
-        Ok(recorder) => Some(Arc::new(recorder)),
-        Err(error) => { log::warn!("service usage unavailable: {error}"); None }
+    let usage_recorder = {
+        let usage_app = Arc::clone(&app);
+        let notify_usage_changed = move || {
+            crate::tauri_coordinator_host::notify_service_usage_changed(&usage_app);
+        };
+        match openless_core::usage_ledger::UsageLedger::open(
+            config.data_dir.join("service-usage.json"),
+        )
+        .and_then(|ledger| {
+            openless_core::usage_ledger::UsageRecorder::start_with_change_listener(
+                Arc::new(ledger),
+                notify_usage_changed,
+            )
+        }) {
+            Ok(recorder) => Some(Arc::new(recorder)),
+            Err(error) => {
+                log::warn!("service usage unavailable: {error}");
+                None
+            }
+        }
     };
     #[cfg(mobile)]
     let usage_recorder = None;
@@ -1029,6 +1044,23 @@ impl Coordinator {
             _ => crate::types::INSERT_FALLBACK_REASON_INSERT_FAILED,
         };
         show_insert_fallback_card(&self.inner, text, reason);
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn show_selection_recovery_notice(&self, original: &str) {
+        let locale = self
+            .inner
+            .backend
+            .services()
+            .remote_input
+            .status()
+            .map(|status| status.locale)
+            .unwrap_or_else(|_| self.inner.backend.config().locale.clone());
+        let Some(message) = crate::selection::original_recovery_message(&locale, original, true) else {
+            return;
+        };
+        let epoch = emit_selection_polish_capsule(&self.inner, CapsuleState::Done, message);
+        schedule_selection_polish_capsule_idle(&self.inner, epoch, CAPSULE_AUTO_HIDE_DELAY_MS);
     }
 
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
@@ -1705,6 +1737,8 @@ impl Coordinator {
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&self.inner, &monitor);
                 let adapter = monitor.kind();
                 let inner_clone = Arc::clone(&self.inner);
                 std::thread::Builder::new()
@@ -1914,6 +1948,7 @@ impl Coordinator {
     }
 
     pub async fn open_qa_from_overlay(&self) -> Result<(), String> {
+        crate::require_ask_anything()?;
         log::info!("[coord] overlay QA open requested");
         self.inner
             .backend
@@ -1925,6 +1960,7 @@ impl Coordinator {
     }
 
     pub async fn finalize_qa_from_overlay(&self) -> Result<(), String> {
+        crate::require_ask_anything()?;
         let Ok(_handoff) = self.inner.overlay_qa_handoff.try_lock() else {
             return Ok(());
         };
@@ -2067,7 +2103,8 @@ mod core_capsule_tests {
 }
 
 #[cfg(not(mobile))]
-fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: u64, delay_ms: u64) {
+fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: Option<u64>, delay_ms: u64) {
+    let Some(epoch) = epoch else { return };
     let inner = Arc::clone(inner);
     let spawner = inner.host.clone();
     spawner.spawn(async move {

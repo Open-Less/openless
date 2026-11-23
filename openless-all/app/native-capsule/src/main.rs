@@ -94,17 +94,21 @@ impl eframe::App for CapsuleApp {
         // The process exits at idle; while visible this also detects entry from a click-through area.
         #[cfg(target_os = "macos")]
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        let action_session = if action == CapsuleAction::CancelProcessing {
+            frame.processing_session_id.as_deref().unwrap_or(&frame.session_id)
+        } else { &frame.session_id };
         let action = match action {
             CapsuleAction::None => None,
             CapsuleAction::Cancel => Some(Action::Cancel),
+            CapsuleAction::CancelProcessing => Some(Action::Cancel),
             CapsuleAction::Confirm => Some(Action::Confirm),
         };
         if let Some(action) =
-            action.filter(|action| frame.accepts(&frame.session_id, frame.sequence, *action))
+            action.filter(|action| frame.accepts(action_session, frame.sequence, *action))
         {
             let message = UiMessage::Action {
                 version: PROTOCOL_VERSION,
-                session_id: frame.session_id.clone(),
+                session_id: action_session.to_owned(),
                 sequence: frame.sequence,
                 action,
             };

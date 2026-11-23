@@ -55,6 +55,42 @@ pub fn get_activity_apps(core: CoreState<'_>, year: u32) -> Result<Vec<(String, 
     core.list_activity_apps(year).map_err(|error| error.to_string())
 }
 
+/// Resolves only the top ranked names through local native icon sources.
+#[tauri::command]
+pub async fn get_activity_app_icons(
+    app: tauri::AppHandle,
+    core: CoreState<'_>,
+    year: u32,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let names: Vec<_> = core
+        .list_activity_apps(year)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .take(5)
+        .map(|(name, _)| name)
+        .collect();
+    #[cfg(target_os = "macos")]
+    {
+        let recorded_apps = core
+            .list_history()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|record| Some((record.app_name?, record.app_bundle_id?)));
+        Ok(crate::activity_app_icons::macos_icons(&app, names, recorded_apps).await)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        Ok(crate::activity_app_icons::windows_icons(names).await)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (app, core, year);
+        Ok(std::collections::BTreeMap::new())
+    }
+}
+
 fn recording_path_candidates(session_id: &str) -> Result<[std::path::PathBuf; 2], String> {
     if !is_valid_session_id(session_id) {
         return Err("invalid session id".into());
@@ -295,21 +331,14 @@ fn copy_recording_to_mobile_url(
     Ok(())
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryRetranscriptionResult {
-    text: String,
-    updated_entry: Option<DictationSession>,
-}
-
-fn should_replace_failed_history(error_code: Option<&str>) -> bool {
-    matches!(error_code, Some("transcribeFailed" | "emptyTranscript"))
-}
+#[path = "history_retranscription.rs"]
+mod retranscription;
+pub use retranscription::HistoryRetranscriptionResult;
 
 /// Re-transcribes a history entry that has an archived recording using the
 /// **current** ASR provider (issue #613 / #1046).
 ///
-/// Flow: read `recordings/<id>.wav` → take PCM (skip the 44-byte WAV header) →
+/// Flow: read `recordings/<id>.wav` → decode and validate PCM WAV →
 /// re-transcribe with the current provider → failed entries are repaired in
 /// place; completed / polish-failed entries only get a temporary result and
 /// never overwrite recorded history.
@@ -323,79 +352,9 @@ pub async fn retranscribe_recording(
     session_id: String,
 ) -> Result<HistoryRetranscriptionResult, String> {
     if !is_valid_session_id(&session_id) {
-        return Err("invalid session id".into());
+        return Err("historyRetranscribeInvalidId".into());
     }
-    let entry = core
-        .list_history()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|entry| entry.id == session_id)
-        .ok_or_else(|| "history entry not found".to_string())?;
-    if core
-        .snapshot()
-        .dictation
-        .session_id
-        .is_some_and(|active| active.to_string() == session_id)
-    {
-        return Err("recording is still active; stop it before retranscribing".into());
-    }
-    if entry.has_audio_recording != Some(true) {
-        return Err("history entry has no archived recording".into());
-    }
-    if entry.pipeline_mode.as_deref() == Some("multimodal")
-        && entry.source != openless_core::HistorySource::QuickNote
-    {
-        return Err("multimodal history does not support retranscription".into());
-    }
-    let path = existing_recording_path(&session_id)?;
-    let wav = tokio::fs::read(&path).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "recording not found".into()
-        } else {
-            format!("read wav failed: {e}")
-        }
-    })?;
-    // The archived wav is 16k/mono/16-bit with a fixed 44-byte standard header
-    // (see asr::wav::encode_wav_16k_mono).
-    if wav.len() <= 44 {
-        return Err("recording is empty or corrupt".into());
-    }
-    let pcm = wav[44..].to_vec();
-
-    let retranscribe_started = std::time::Instant::now();
-    let retranscription = core
-        .services()
-        .auxiliary
-        .retranscribe_pcm(pcm)
-        .await
-        .map_err(openless_core::RetranscriptionFailure::into_message)?;
-    let text = retranscription.text;
-    let asr_call_label = retranscription.asr;
-    if text.trim().is_empty() {
-        return Err("重新转录仍未识别到语音".into());
-    }
-    let retranscribe_ms = retranscribe_started.elapsed().as_millis() as u64;
-
-    let updated_entry = if should_replace_failed_history(entry.error_code.as_deref())
-        || entry.error_code.as_deref() == Some("recording")
-        || entry.source == openless_core::HistorySource::QuickNote
-    {
-        Some(
-            core.apply_history_retranscription(
-                &session_id,
-                text.clone(),
-                &asr_call_label,
-                retranscribe_ms,
-            )
-            .map_err(|e| e.to_string())?,
-        )
-    } else {
-        None
-    };
-    Ok(HistoryRetranscriptionResult {
-        text,
-        updated_entry,
-    })
+    retranscription::retranscribe_recording_with_path(&core, session_id, existing_recording_path).await
 }
 
 #[tauri::command]
@@ -413,20 +372,10 @@ pub fn apply_quick_note_repolish(
 }
 
 #[cfg(test)]
-mod retranscription_tests {
-    use super::{recording_path_candidates, should_replace_failed_history};
-
+mod retranscription_path_tests {
     #[test]
     fn recording_paths_reject_non_session_ids() {
-        assert!(recording_path_candidates("../../victim").is_err());
-        assert!(recording_path_candidates("not-a-session").is_err());
-    }
-
-    #[test]
-    fn only_failed_transcriptions_are_replaced() {
-        assert!(should_replace_failed_history(Some("transcribeFailed")));
-        assert!(should_replace_failed_history(Some("emptyTranscript")));
-        assert!(!should_replace_failed_history(Some("polishFailed")));
-        assert!(!should_replace_failed_history(None));
+        assert!(super::recording_path_candidates("../../victim").is_err());
+        assert!(super::recording_path_candidates("not-a-session").is_err());
     }
 }

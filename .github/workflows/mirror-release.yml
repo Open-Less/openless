@@ -7,6 +7,12 @@ on:
     # Repair missed events without the website's old 15-minute full downloads.
     - cron: '17 */6 * * *'
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Published channel to mirror (no application rebuild)
+        type: choice
+        options: [all, stable, beta]
+        default: all
   repository_dispatch:
     types: [mirror-release]
 
@@ -28,6 +34,8 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - name: Validate mirror contracts
+        run: python3 -B openless-all/app/scripts/test_release_mirror.py
       - name: Install distribution tools
         timeout-minutes: 10
         run: |
@@ -58,4 +66,5 @@ jobs:
           OSS_AK: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_SK: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
           OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT || 'oss-cn-zhangjiakou.aliyuncs.com' }}
+          MIRROR_CHANNEL: ${{ inputs.channel || 'all' }}
         run: python3 openless-all/app/scripts/mirror-release.py

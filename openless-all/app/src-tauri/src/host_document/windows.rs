@@ -77,6 +77,91 @@ fn with_voice_edit_uia<T>(
     }
 }
 
+/// Native focused-control identity only; never reads document or selection text.
+pub(crate) fn focused_input_identity() -> Option<Vec<i32>> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia.GetFocusedElement().map_err(|_| "inputTargetUnavailable".to_string())?;
+        runtime_id(&element).map_err(|_| "inputTargetUnavailable".to_string())
+    }).ok().filter(|identity| !identity.is_empty())
+}
+
+/// EM_GETSEL exposes exact UTF-16 coordinates without reading document text.
+/// UIA identity alone cannot establish an insertion position in browser/custom
+/// controls. Those controls deliberately return None instead of a guessed caret.
+pub(crate) fn focused_input_position() -> Option<(u64, u64)> {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetGUIThreadInfo, GetWindowThreadProcessId, SendMessageTimeoutW,
+        GUITHREADINFO, SMTO_ABORTIFHUNG, SMTO_BLOCK,
+    };
+    unsafe {
+        let foreground = GetForegroundWindow();
+        let thread = GetWindowThreadProcessId(foreground, None);
+        let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+        if thread == 0 || GetGUIThreadInfo(thread, &mut info).is_err() || info.hwndFocus.0.is_null() { return None; }
+        let mut class = [0u16; 128];
+        let size = GetClassNameW(info.hwndFocus, &mut class);
+        if size <= 0 {
+            return None;
+        }
+        let class = String::from_utf16_lossy(&class[..size as usize]).to_ascii_lowercase();
+        if class != "edit" && !class.starts_with("richedit") {
+            return focused_uia_position();
+        }
+        let (mut start, mut end) = (u32::MAX, u32::MAX);
+        let mut result = 0usize;
+        const EM_GETSEL: u32 = 0x00b0;
+        if SendMessageTimeoutW(info.hwndFocus, EM_GETSEL, WPARAM(&mut start as *mut u32 as usize),
+            LPARAM(&mut end as *mut u32 as isize), SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, Some(&mut result)).0 == 0
+            || start == u32::MAX || end < start { return None; }
+        Some((start as u64, (end - start) as u64))
+    }
+}
+
+/// UIA character endpoints for browser/custom text controls; reads no document text.
+fn focused_uia_position() -> Option<(u64, u64)> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "inputTargetUnavailable".to_string())?;
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "inputTargetUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "inputTargetUnavailable".to_string())?;
+        if ranges.Length().unwrap_or(0) != 1 {
+            return Err("inputTargetUnavailable".into());
+        }
+        let selection = ranges
+            .GetElement(0)
+            .map_err(|_| "inputTargetUnavailable".to_string())?;
+        let offset = |endpoint| -> std::result::Result<u64, String> {
+            let range = selection
+                .Clone()
+                .map_err(|_| "inputTargetUnavailable".to_string())?;
+            range
+                .MoveEndpointByRange(TextPatternRangeEndpoint_Start, &selection, endpoint)
+                .map_err(|_| "inputTargetUnavailable".to_string())?;
+            let moved = range
+                .MoveEndpointByUnit(
+                    TextPatternRangeEndpoint_Start,
+                    TextUnit_Character,
+                    -i32::MAX,
+                )
+                .map_err(|_| "inputTargetUnavailable".to_string())?;
+            Ok(u64::from(moved.unsigned_abs()))
+        };
+        let start = offset(TextPatternRangeEndpoint_Start)?;
+        let end = offset(TextPatternRangeEndpoint_End)?;
+        Ok((
+            start,
+            end.checked_sub(start).ok_or("inputTargetUnavailable")?,
+        ))
+    })
+    .ok()
+}
+
 pub(super) fn read_qa_selection() -> Option<String> {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia
@@ -117,7 +202,7 @@ pub(super) fn read_qa_selection() -> Option<String> {
             return Ok(None);
         }
         let text = range
-            .GetText(16000)
+            .GetText(-1)
             .map_err(|_| "selectionUnavailable".to_string())?
             .to_string();
         Ok((!text.trim().is_empty()).then_some(text))
@@ -244,7 +329,7 @@ pub(super) fn capture_voice_edit_target() -> std::result::Result<
 pub(super) fn apply_voice_edit_target(
     target: &VoiceEditTarget,
     text: &str,
-    insert: impl FnOnce(&str) -> std::result::Result<(), String>,
+    insert: impl FnOnce(&str, &mut dyn FnMut() -> bool) -> std::result::Result<(), String>,
 ) -> std::result::Result<(), String> {
     with_voice_edit_uia(|uia| unsafe {
         let unavailable = |_| "voiceEditTargetUnavailable".to_string();
@@ -274,6 +359,19 @@ pub(super) fn apply_voice_edit_target(
                 .selection_utf16
                 .filter(|(start, end)| start != end)
                 .unwrap_or((0, target.text.encode_utf16().count()));
+            let mut selected_target = target.clone();
+            selected_target.selection_utf16 = Some(expected);
+            let still_current = || {
+                uia.GetFocusedElement()
+                    .and_then(|focused| voice_edit_snapshot(&focused))
+                    .is_ok_and(|mut current| {
+                        // UIA may omit the selection of an empty field, as allowed above.
+                        if current.text.is_empty() && current.selection_utf16.is_none() {
+                            current.selection_utf16 = Some((0, 0));
+                        }
+                        voice_edit_target_matches(&selected_target, &current).is_ok()
+                    })
+            };
             super::write_with_selection_recovery(
                 || {
                     range.Select().map_err(unavailable)?;
@@ -293,17 +391,11 @@ pub(super) fn apply_voice_edit_target(
                     {
                         return Err("voiceEditTargetUnavailable".into());
                     }
-                    insert(text)
+                    // Recheck without selecting again after the delivery gate has been acquired.
+                    insert(text, &mut || still_current())
                 },
                 || {
-                    let current = uia
-                        .GetFocusedElement()
-                        .and_then(|focused| voice_edit_snapshot(&focused));
-                    let mut selected_target = target.clone();
-                    selected_target.selection_utf16 = Some(expected);
-                    if current.is_ok_and(|current| {
-                        voice_edit_target_matches(&selected_target, &current).is_ok()
-                    }) {
+                    if still_current() {
                         let _ = original_selection.Select();
                     }
                 },

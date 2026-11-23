@@ -14,7 +14,12 @@ export type SettingsSectionId =
 
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
-  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
+  {
+    id: 'cursorContext',
+    icon: 'search',
+    titleKey: 'settings.advancedPages.cursorContextTitle',
+    beta: true,
+  },
   {
     id: 'voiceEnhancement',
     icon: 'mic',
@@ -28,11 +33,12 @@ export const ADVANCED_PAGES = [
     beta: true,
   },
   {
-    id: 'cursorContext',
-    icon: 'search',
-    titleKey: 'settings.advancedPages.cursorContextTitle',
+    id: 'polishStrategy',
+    icon: 'pencil',
+    titleKey: 'settings.advancedPages.polishStrategyTitle',
     beta: true,
   },
+  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   {
     id: 'startupDiagnostics',
     icon: 'bolt',
@@ -52,6 +58,13 @@ export const GENERAL_PAGES = [
     titleKey: 'settings.generalPages.recordingTitle',
     descriptionKey: 'settings.generalPages.recordingDesc',
   },
+  {
+    id: 'translation',
+    icon: 'translate',
+    titleKey: 'shiftTranslation.title',
+    descriptionKey: 'shiftTranslation.description',
+  },
+
   {
     id: 'capsule',
     icon: 'layout',
@@ -77,6 +90,7 @@ export type GeneralPageId = GeneralPage['id'];
 
 export function visibleGeneralPages(platform: PlatformKind | undefined): GeneralPage[] {
   return GENERAL_PAGES.filter((page) => {
+    if (page.id === 'translation') return platform == null || platform === 'desktop';
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;

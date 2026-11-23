@@ -11,6 +11,13 @@ export async function settleNavigation(scope: Page | Locator) {
   ).toHaveCount(0);
 }
 
+/** Wait for the closing menu to finish its focus handoff. */
+export async function settleSelectDismissal(scope: Page | Locator) {
+  await expect(
+    scope.locator('.ol-select-popup:is([data-open], [data-ending-style]):visible'),
+  ).toHaveCount(0);
+}
+
 /** Microphone controls live on a subpage. Opening that category unmounts its
  * entry, and the subpage heading stays at opacity 0 during the content fade.
  * A visibility probe therefore cannot tell the two surfaces apart: branch on

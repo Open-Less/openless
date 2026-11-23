@@ -1,0 +1,203 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "fixture",
+  "categories": [
+    {
+      "id": "coding",
+      "name": "编程",
+      "promptGuidance": "fixture coding context",
+      "labels": {
+        "zh-CN": "编程",
+        "zh-TW": "程式開發",
+        "en": "Coding",
+        "ja": "開発",
+        "ko": "코딩",
+        "es": "Programación",
+        "fr": "Programmation",
+        "de": "Programmieren"
+      }
+    },
+    {
+      "id": "chat",
+      "name": "聊天",
+      "promptGuidance": "",
+      "labels": {
+        "zh-CN": "聊天",
+        "zh-TW": "聊天",
+        "en": "Chat",
+        "ja": "チャット",
+        "ko": "채팅",
+        "es": "Chat",
+        "fr": "Messagerie",
+        "de": "Chat"
+      }
+    },
+    {
+      "id": "email",
+      "name": "邮件",
+      "promptGuidance": "",
+      "labels": {
+        "zh-CN": "邮件",
+        "zh-TW": "電子郵件",
+        "en": "Email",
+        "ja": "メール",
+        "ko": "이메일",
+        "es": "Correo",
+        "fr": "E-mail",
+        "de": "E-Mail"
+      }
+    },
+    {
+      "id": "writing",
+      "name": "写作与笔记",
+      "promptGuidance": "",
+      "labels": {
+        "zh-CN": "写作与笔记",
+        "zh-TW": "寫作與筆記",
+        "en": "Writing & notes",
+        "ja": "執筆・メモ",
+        "ko": "글쓰기 및 메모",
+        "es": "Escritura y notas",
+        "fr": "Rédaction et notes",
+        "de": "Schreiben und Notizen"
+      }
+    },
+    {
+      "id": "office",
+      "name": "办公",
+      "promptGuidance": "",
+      "labels": {
+        "zh-CN": "办公",
+        "zh-TW": "辦公",
+        "en": "Office",
+        "ja": "オフィス",
+        "ko": "오피스",
+        "es": "Ofimática",
+        "fr": "Bureautique",
+        "de": "Büro"
+      }
+    },
+    {
+      "id": "browser",
+      "name": "浏览器",
+      "promptGuidance": "",
+      "labels": {
+        "zh-CN": "浏览器",
+        "zh-TW": "瀏覽器",
+        "en": "Browsers",
+        "ja": "ブラウザ",
+        "ko": "브라우저",
+        "es": "Navegadores",
+        "fr": "Navigateurs",
+        "de": "Browser"
+      }
+    }
+  ],
+  "clients": [
+    {
+      "id": "vscode",
+      "name": "Visual Studio Code",
+      "role": "fixture",
+      "category": "coding",
+      "platforms": [
+        "macos"
+      ],
+      "identifiers": {
+        "macosBundleIds": [
+          "com.microsoft.VSCode"
+        ],
+        "macosBundlePrefixes": [],
+        "windowsExecutableStems": [],
+        "installedWebAppNames": []
+      },
+      "promptGuidance": "fixture editor context"
+    },
+    {
+      "id": "wechat",
+      "name": "WeChat",
+      "role": "fixture",
+      "category": "chat",
+      "platforms": [
+        "macos"
+      ],
+      "identifiers": {
+        "macosBundleIds": [
+          "com.tencent.xinWeChat"
+        ],
+        "macosBundlePrefixes": [],
+        "windowsExecutableStems": [],
+        "installedWebAppNames": []
+      }
+    },
+    {
+      "id": "mail",
+      "name": "Mail",
+      "role": "fixture",
+      "category": "email",
+      "platforms": [
+        "macos"
+      ],
+      "identifiers": {
+        "macosBundleIds": [
+          "com.apple.mail"
+        ],
+        "macosBundlePrefixes": [],
+        "windowsExecutableStems": [],
+        "installedWebAppNames": []
+      }
+    },
+    {
+      "id": "notes",
+      "name": "Notes",
+      "role": "fixture",
+      "category": "writing",
+      "platforms": [
+        "macos"
+      ],
+      "identifiers": {
+        "macosBundleIds": [
+          "com.apple.Notes"
+        ],
+        "macosBundlePrefixes": [],
+        "windowsExecutableStems": [],
+        "installedWebAppNames": []
+      }
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "role": "fixture",
+      "category": "coding",
+      "platforms": [
+        "macos"
+      ],
+      "identifiers": {
+        "macosBundleIds": [
+          "com.openai.codex"
+        ],
+        "macosBundlePrefixes": [],
+        "windowsExecutableStems": [],
+        "installedWebAppNames": []
+      }
+    },
+    {
+      "id": "orca",
+      "name": "Orca",
+      "role": "fixture",
+      "category": "coding",
+      "platforms": [
+        "macos"
+      ],
+      "identifiers": {
+        "macosBundleIds": [
+          "com.stablyai.orca"
+        ],
+        "macosBundlePrefixes": [],
+        "windowsExecutableStems": [],
+        "installedWebAppNames": []
+      }
+    }
+  ],
+  "modelFamilies": [],
+  "sources": []
+}

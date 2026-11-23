@@ -15,6 +15,38 @@ pub async fn get_capsule_snapshot(
     Ok(coord.tauri_host().capsule_snapshot())
 }
 
+#[cfg(not(mobile))]
+fn caption_trace_surface(
+    window: &tauri::WebviewWindow,
+) -> Option<openless_core::main_dictation_trace::CaptionTraceSurface> {
+    use openless_core::main_dictation_trace::CaptionTraceSurface;
+    match window.label() {
+        "capsule" => Some(CaptionTraceSurface::Capsule),
+        "capsule-rail" => Some(CaptionTraceSurface::Rail),
+        _ => None,
+    }
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn main_caption_trace_enabled(core: CoreState<'_>, window: tauri::WebviewWindow) -> bool {
+    core.main_dictation_trace_enabled() && caption_trace_surface(&window).is_some()
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn report_main_caption_trace(
+    core: CoreState<'_>,
+    window: tauri::WebviewWindow,
+    session_id: openless_core::SessionId,
+    sequence: u64,
+    stage: openless_core::main_dictation_trace::CaptionTraceStage,
+) {
+    if let Some(surface) = caption_trace_surface(&window) {
+        core.trace_main_dictation_webview(session_id, sequence, surface, stage);
+    }
+}
+
 async fn ensure_core_started(core: &openless_core::OpenLessBackend) -> Result<(), String> {
     if !core.snapshot().running {
         core.start().await.map_err(|error| error.to_string())?;
@@ -35,12 +67,17 @@ pub async fn start_dictation(core: CoreState<'_>) -> Result<(), String> {
 pub async fn stop_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    session_id: Option<openless_core::SessionId>,
 ) -> Result<(), String> {
     ensure_core_started(&core).await?;
+    if let Some(id) = session_id {
+        return core.submit_dictation_session(id, Default::default()).await.map(|_| ()).map_err(|error| error.to_string());
+    }
     if coord.stop_less_computer_recording().await? {
         return Ok(());
     }
-    core.stop_dictation()
+    let id = core.snapshot().dictation.session_id.ok_or("no active dictation session")?;
+    core.submit_dictation_session(id, Default::default())
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -50,8 +87,12 @@ pub async fn stop_dictation(
 pub async fn cancel_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    session_id: Option<openless_core::SessionId>,
 ) -> Result<(), String> {
     ensure_core_started(&core).await?;
+    if let Some(id) = session_id.or_else(|| core.dictation_cancel_target()) {
+        return core.cancel_dictation(Some(id)).await.map_err(|error| error.to_string());
+    }
     coord.cancel_active_voice().await;
     Ok(())
 }

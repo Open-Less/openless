@@ -93,6 +93,7 @@ export function RestoreReview({
       ) : (
         preview.conflicts.length > 0 && (
           <>
+            <p>{t('cloudSyncE2ee.mergeOverwriteDirection')}</p>
             <p>
               {t('cloudSyncE2ee.conflictProgress', { selected, total: preview.conflicts.length })}
             </p>
@@ -172,6 +173,8 @@ export function RestoreReview({
       )}
       <Btn
         variant="primary"
+        size="sm"
+        style={{ justifySelf: 'end' }}
         disabled={busy || stale || !reviewed || !complete}
         onClick={() =>
           onApply(

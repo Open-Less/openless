@@ -290,6 +290,58 @@ export interface StylePackExample {
   output: string;
 }
 
+export type AppCategory = string;
+
+export interface CatalogCategory {
+  id: AppCategory;
+  name: string;
+  labels?: Record<string, string>;
+  promptGuidance?: string;
+}
+
+export interface CatalogClient {
+  id: string;
+  name: string;
+  role: string;
+  category: AppCategory;
+  platforms: string[];
+  canonicalClientId?: string | null;
+  promptGuidance?: string;
+  identifiers: {
+    macosBundleIds: string[];
+    macosBundlePrefixes?: string[];
+    windowsExecutableStems: string[];
+    installedWebAppNames: string[];
+  };
+}
+
+export interface InputAppCatalog {
+  schemaVersion: number;
+  reviewedAt: string;
+  categories: CatalogCategory[];
+  clients: CatalogClient[];
+}
+
+export interface AppStyleEntry {
+  app: { id: string; name: string };
+  memberId: string;
+  category: AppCategory | null;
+  seen: boolean;
+  stylePackId: string | null;
+}
+
+export interface AppStyleRouting {
+  catalog: InputAppCatalog;
+  memberships: Record<string, AppCategory | null>;
+  categories: Partial<Record<AppCategory, string>>;
+  apps: AppStyleEntry[];
+}
+
+export type AppStyleAssignment =
+  | { target: 'category'; category: AppCategory; stylePackId: string | null }
+  | { target: 'app'; appId: string; stylePackId: string | null }
+  | { target: 'membership'; memberId: string; category: AppCategory | null };
+
 export interface StylePack {
   id: string;
   name: string;
@@ -451,6 +503,8 @@ export interface UserPreferences {
   workingLanguages: string[];
   /** Translation mode target language (single-select, native name); empty string = Shift translation disabled. See issue #4. */
   translationTargetLanguage: string;
+  /** Absent means untouched/default 1; an explicit 1 must remain persisted and synced. */
+  translationShiftTapCount?: number;
   /** Chinese output script preference: auto-synced from the UI language (simplified/traditional); not exposed as a separate setting. */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
   /** Final output language preference: auto-synced from the UI language; not exposed as a separate setting. */

@@ -1,6 +1,6 @@
-import { useEffect, useId, useState } from 'react';
+import { TextField } from '../../ui/controls/TextField';
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Icon } from '../../components/Icon';
 
 export function SyncPasswordField({
   label,
@@ -19,44 +19,25 @@ export function SyncPasswordField({
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    if (!value) setVisible(false);
-  }, [value]);
-  const visibilityLabel = t(
-    visible ? 'cloudSyncE2ee.concealPassword' : 'cloudSyncE2ee.revealPassword',
-    { field: label },
-  );
   return (
-    <div className="ol-sync-password-field">
+    <div className="ol-sync-form-field">
       <label htmlFor={id}>{label}</label>
-      <div className="ol-sync-password-input">
-        <input
-          id={id}
-          type={visible ? 'text' : 'password'}
-          value={value}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          autoComplete={autoComplete}
-          aria-invalid={errorId ? true : undefined}
-          aria-describedby={errorId}
-          maxLength={4096}
-          disabled={disabled}
-        />
-        <button
-          type="button"
-          className="ol-sync-password-visibility"
-          disabled={disabled}
-          aria-label={visibilityLabel}
-          aria-controls={id}
-          title={visibilityLabel}
-          onMouseDown={(event) => {
-            if (document.activeElement?.id === id) event.preventDefault();
-          }}
-          onClick={() => setVisible((shown) => !shown)}
-        >
-          <Icon name={visible ? 'eyeOff' : 'eye'} size={16} />
-        </button>
-      </div>
+      <TextField
+        id={id}
+        type="password"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        autoComplete={autoComplete}
+        aria-invalid={errorId ? true : undefined}
+        aria-describedby={errorId}
+        maxLength={4096}
+        disabled={disabled}
+        visibilityLabel={(visible) =>
+          t(visible ? 'cloudSyncE2ee.concealPassword' : 'cloudSyncE2ee.revealPassword', {
+            field: label,
+          })
+        }
+      />
     </div>
   );
 }

@@ -1,34 +1,23 @@
+import { TextField } from '../../../ui/controls/TextField';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readCredential, setCredential } from '../../../api/providers';
 import { Button as Btn } from '../../../ui/controls/Button';
 import { Card } from '../../../ui/layout/Card';
-import { inputStyle } from '../../../ui/controls/settingsFieldStyles';
+import { SelectLite } from '../../../ui/controls/SelectLite';
 import { SettingRow } from '../../../ui/controls/SettingRow';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
+import { parseSearchConfig, selectSearchProvider, type WebSearchConfig } from './webSearchConfig';
+import './web-search.css';
 
 function isInteractive(element: HTMLElement | null) {
   return element?.isConnected && !element.closest('[inert]');
 }
 
-export interface WebSearchConfig {
-  provider: 'auto' | 'free' | 'tavily' | 'brave' | 'searxng' | 'off';
-  apiKey: string;
-  endpoint: string;
-}
-export const defaultSearchConfig: WebSearchConfig = {
-  provider: 'free',
-  apiKey: '',
-  endpoint: '',
-};
+export { defaultSearchConfig } from './webSearchConfig';
+export type { WebSearchConfig } from './webSearchConfig';
 export async function loadSearchConfig(): Promise<WebSearchConfig> {
-  const raw = await readCredential('web_search.config');
-  const parsed = raw ? JSON.parse(raw) : {};
-  return {
-    provider: parsed.provider === 'auto' ? 'free' : (parsed.provider ?? 'free'),
-    apiKey: parsed.apiKey ?? '',
-    endpoint: parsed.endpoint ?? '',
-  };
+  return parseSearchConfig(await readCredential('web_search.config'));
 }
 
 export function saveSearchConfig(value: WebSearchConfig): Promise<void> {
@@ -83,50 +72,63 @@ export function WebSearchSection() {
     };
   }, [i18n, notify]);
   return (
-    <Card>
+    <Card className="ol-web-search-settings">
       <h3 ref={heading}>Web Search</h3>
       <p>
         {text(
-          '划词追问和 FN + 空格随便问可由模型自主搜索。仅在需要时发送搜索词；搜索结果会作为参考资料交给当前模型。',
-          'Selection Q&A and voice Ask can search when the model needs external information. Search queries go to the search provider; results go to your current model.',
-        )}
-      </p>
-      <p>
-        {text(
-          '仅用于传统和多模态管线。默认使用免费 Bing 网页搜索，无需 API Key；可改用自己的搜索服务。DeepSeek 大统一使用独立的原生搜索。免费网页接口可能受网络或限流影响。',
-          'For traditional and multimodal pipelines. Auto uses free Bing web search without an API key, or choose your own search service. DeepSeek suite uses its separate native search. Free search availability depends on connectivity and rate limits.',
+          '为提问提供联网搜索。免费聚合使用 FreeSerp 与 Keenable，受来源限额约束；搜索服务接收搜索词与 IP。',
+          'Search questions using FreeSerp and Keenable within their free limits. Providers receive queries and your IP.',
         )}
       </p>
       {config && (
         <>
           <SettingRow label={text('搜索服务', 'Search provider')}>
-            <select
-              aria-label="Web Search"
-              style={inputStyle}
-              value={config.provider}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  provider: e.target.value as WebSearchConfig['provider'],
-                  apiKey: '',
-                  endpoint: '',
-                })
+            <SelectLite
+              ariaLabel={text('搜索服务', 'Search provider')}
+              popupClassName="ol-web-search-options"
+              value={config.provider === 'auto' ? 'free' : config.provider}
+              onChange={(provider) =>
+                setConfig(selectSearchProvider(config, provider as WebSearchConfig['provider']))
               }
-            >
-              <option value="free">{text('Bing 免费网页搜索', 'Bing free web search')}</option>
-              <option value="tavily">Tavily</option>
-              <option value="brave">Brave Search</option>
-              <option value="searxng">SearXNG</option>
-              <option value="off">{text('关闭', 'Off')}</option>
-            </select>
+              options={[
+                { value: 'free', label: text('免费聚合搜索', 'Free Aggregated Search') },
+                {
+                  value: 'hybrid',
+                  label: text(
+                    '免费聚合搜索 + DeepSeek Web Search',
+                    'Free Aggregated Search + DeepSeek Web Search',
+                  ),
+                },
+                { value: 'free_serp', label: 'FreeSerp' },
+                { value: 'bing', label: 'Bing (RSS)' },
+                { value: 'tavily', label: 'Tavily' },
+                { value: 'brave', label: 'Brave Search' },
+                { value: 'searxng', label: 'SearXNG' },
+                { value: 'off', label: text('关闭', 'Off') },
+              ]}
+            />
           </SettingRow>
-          {['tavily', 'brave'].includes(config.provider) && (
-            <SettingRow label="API Key">
-              <input
+          {config.provider === 'hybrid' && (
+            <p>
+              {text(
+                '使用你的 DeepSeek API Key 调用官方独立 Search API；截至 2026-11-23，每千次非空成功请求 $0.75，问答模型用量另计。失败时仍使用免费有效结果。',
+                'Uses your DeepSeek API key for the official standalone Search API: $0.75 per 1,000 successful non-empty requests as of 2026-11-23. Answer model usage is separate. Free results remain available if DeepSeek fails.',
+              )}{' '}
+              <a
+                href="https://api-docs.deepseek.com/guides/search/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {text('官方说明', 'Official details')}
+              </a>
+            </p>
+          )}
+          {['tavily', 'brave', 'hybrid'].includes(config.provider) && (
+            <SettingRow label={config.provider === 'hybrid' ? 'DeepSeek API Key' : 'API Key'}>
+              <TextField
                 aria-label="Search API Key"
                 type="password"
                 autoComplete="off"
-                style={inputStyle}
                 value={config.apiKey}
                 onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
               />
@@ -136,15 +138,14 @@ export function WebSearchSection() {
             <SettingRow
               label="SearXNG URL"
               desc={text(
-                '填写已启用 JSON 输出的 /search 地址。',
-                'Enter a /search endpoint with JSON output enabled.',
+                '可填写允许自动查询且已启用 JSON 的公开 /search 地址，不要求自建。',
+                'You can use a public /search endpoint that permits automated queries and enables JSON. Self-hosting is not required.',
               )}
             >
-              <input
+              <TextField
                 aria-label="SearXNG URL"
                 type="url"
                 placeholder="https://search.example.com/search"
-                style={inputStyle}
                 value={config.endpoint}
                 onChange={(e) => setConfig({ ...config, endpoint: e.target.value })}
               />
@@ -154,7 +155,7 @@ export function WebSearchSection() {
             variant="primary"
             disabled={
               busy ||
-              (['tavily', 'brave'].includes(config.provider) && !config.apiKey.trim()) ||
+              (['tavily', 'brave', 'hybrid'].includes(config.provider) && !config.apiKey.trim()) ||
               (config.provider === 'searxng' && !/^https?:\/\//.test(config.endpoint))
             }
             onClick={async () => {

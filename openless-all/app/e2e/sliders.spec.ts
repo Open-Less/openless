@@ -52,7 +52,10 @@ test('pointer movement previews continuously and commits once at release', async
   const events = () => page.getByTestId('events').evaluate((node) => JSON.parse(node.textContent!));
   expect((await events()).changes.length).toBeGreaterThan(1);
   expect((await events()).commits).toEqual([]);
+  const thumb = solid.locator('xpath=ancestor::*[contains(@class,"ol-slider-thumb")]');
+  await expect(thumb).toHaveCSS('scale', '1.2');
   await page.mouse.up();
+  await expect(thumb).toHaveCSS('scale', 'none');
   await expect.poll(async () => (await events()).commits.length).toBe(1);
   const final = Number(await solid.inputValue());
   expect(final).toBeGreaterThanOrEqual(79);
