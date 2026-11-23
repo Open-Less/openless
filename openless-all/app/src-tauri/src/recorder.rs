@@ -3220,6 +3220,7 @@ impl AudioProcessingWorker {
                             }
                             // A warm microphone reuses this worker across recording segments.
                             processor = openless_core::AudioProcessor::new(processing);
+                            raw_normalizer = openless_core::audio::PcmNormalizer::default();
                             enhancement_enabled = processing.enhancement_enabled;
                             let _ = done.send(());
                         }
@@ -3754,6 +3755,33 @@ mod tests {
         let wav = std::fs::read(&path).unwrap();
         assert_eq!(wav.len(), 44 + 16_000 * 2);
         assert_eq!(&wav[44..], consumer.chunks.lock().unwrap().concat());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn raw_archive_resampling_restarts_with_each_warm_recording_segment() {
+        let path = std::env::temp_dir().join(format!("openless-raw-segments-{}.wav", uuid::Uuid::new_v4()));
+        let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start_with_targets(
+            Default::default(), consumer.clone(), Arc::new(|_| {}), Some(writer.clone()), None,
+            Arc::new(StreamState::new()), false, None, None,
+        ).unwrap();
+        for _ in 0..2 {
+            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(), samples: vec![0.3; 1001],
+                channels: 1, input_sample_rate: 44_100,
+            })).unwrap();
+            let (done, ack) = channel();
+            sender.send(AudioProcessingMessage::Flush(done)).unwrap();
+            ack.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        }
+        drop(sender);
+        worker.finish();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], consumer.chunks.lock().unwrap().concat());
+        assert_eq!(wav.len() - 44, 364 * 2 * 2);
         std::fs::remove_file(path).unwrap();
     }
 
