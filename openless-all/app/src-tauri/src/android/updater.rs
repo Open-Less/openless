@@ -19,30 +19,10 @@ mod android_impl {
     }
 
     fn device_arch() -> Result<&'static str, String> {
-        crate::android::jni::android::with_android_env(|env, _context| {
-            // SUPPORTED_ABIS is a static field, not a method — call_static_method crashes.
-            let abis_obj = env
-                .get_static_field("android/os/Build", "SUPPORTED_ABIS", "[Ljava/lang/String;")
-                .and_then(|value| value.l())
-                .map_err(|e| format!("read SUPPORTED_ABIS: {e}"))?;
-            let abis_array = jni::objects::JObjectArray::from(abis_obj);
-            let len = env
-                .get_array_length(&abis_array)
-                .map_err(|e| format!("SUPPORTED_ABIS length: {e}"))?;
-            if len == 0 {
-                return Err("SUPPORTED_ABIS is empty".to_string());
-            }
-            let first = env
-                .get_object_array_element(&abis_array, 0)
-                .map_err(|e| format!("SUPPORTED_ABIS[0]: {e}"))?;
-            let abi = env
-                .get_string(&jni::objects::JString::from(first))
-                .map_err(|e| format!("read abi string: {e}"))?
-                .to_string_lossy()
-                .into_owned();
-            Ok(map_abi_to_arch(&abi))
-        })
+        // 设备 ABI 由平台层读取（JNI 细节不下沉到宿主命令层）。
+        openless_platform::android::device_arch()
     }
+
 
     pub async fn check_update(channel: UpdateChannel) -> Result<Option<AppUpdateMetadata>, String> {
         let arch = device_arch()?;

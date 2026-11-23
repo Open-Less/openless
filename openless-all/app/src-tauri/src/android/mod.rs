@@ -68,22 +68,5 @@ pub use shizuku::{
 
 #[cfg(target_os = "android")]
 pub fn siwc_authorization_lease(acquire: bool) -> Result<(), String> {
-    jni::android::with_android_env(|env, context| {
-        let result = jni::android::call_static_void_with_context_class(
-            env,
-            context,
-            "com.openless.app.OpenLessRuntimeService",
-            if acquire {
-                "acquireAuthorization"
-            } else {
-                "releaseAuthorization"
-            },
-            "(Landroid/content/Context;)V",
-            &[::jni::objects::JValue::Object(context)],
-        );
-        if result.is_err() {
-            let _ = env.exception_clear();
-        }
-        result
-    })
+    openless_platform::android::siwc_authorization_lease(acquire)
 }

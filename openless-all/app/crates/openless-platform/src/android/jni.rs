@@ -1372,3 +1372,105 @@ pub mod android {
         })
     }
 }
+
+/// 用系统浏览器打开一个 URL。
+///
+/// 走注册过的 Activity Context（见 `ACTIVE_CONTEXT` 的说明），而不是临时推导 Context：
+/// 其它两种做法（一次性缓存 ndk-context、tao 的"仅前台可见"映射）在 Activity 不可见时都会失败。
+pub fn open_external_url(url: &str) -> Result<(), String> {
+    use jni::objects::JValue;
+
+    android::with_android_env(|env, context| {
+        let action = env
+            .new_string("android.intent.action.VIEW")
+            .map_err(|error| format!("create Intent action: {error}"))?;
+        let url = env
+            .new_string(url)
+            .map_err(|error| format!("create URL string: {error}"))?;
+        let uri = env
+            .call_static_method(
+                "android/net/Uri",
+                "parse",
+                "(Ljava/lang/String;)Landroid/net/Uri;",
+                &[JValue::Object(&url)],
+            )
+            .map_err(|error| format!("parse URL: {error}"))?
+            .l()
+            .map_err(|error| format!("parse URL object: {error}"))?;
+        let intent = env
+            .new_object(
+                "android/content/Intent",
+                "(Ljava/lang/String;Landroid/net/Uri;)V",
+                &[JValue::Object(&action), JValue::Object(&uri)],
+            )
+            .map_err(|error| format!("create Intent: {error}"))?;
+        env.call_method(
+            &intent,
+            "addFlags",
+            "(I)Landroid/content/Intent;",
+            &[JValue::Int(0x1000_0000)], // FLAG_ACTIVITY_NEW_TASK
+        )
+        .map_err(|error| format!("flag Intent: {error}"))?;
+        env.call_method(
+            context,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|error| format!("startActivity: {error}"))?;
+        Ok(())
+    })
+}
+
+/// SIWC 调试授权的租约（acquire / release）。
+pub fn siwc_authorization_lease(acquire: bool) -> Result<(), String> {
+    android::with_android_env(|env, context| {
+        let result = android::call_static_void_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessRuntimeService",
+            if acquire {
+                "acquireAuthorization"
+            } else {
+                "releaseAuthorization"
+            },
+            "(Landroid/content/Context;)V",
+            &[jni::objects::JValue::Object(context)],
+        );
+        if result.is_err() {
+            let _ = env.exception_clear();
+        }
+        result
+    })
+}
+
+/// 设备主 ABI 对应的 Rust 架构名。
+pub fn device_arch() -> Result<&'static str, String> {
+    android::with_android_env(|env, _context| {
+        // SUPPORTED_ABIS 是静态字段而不是方法，用 call_static_method 会崩。
+        let abis_obj = env
+            .get_static_field(
+                "android/os/Build",
+                "SUPPORTED_ABIS",
+                "[Ljava/lang/String;",
+            )
+            .and_then(|value| value.l())
+            .map_err(|e| format!("read SUPPORTED_ABIS: {e}"))?;
+        let abis_array = jni::objects::JObjectArray::from(abis_obj);
+        let len = env
+            .get_array_length(&abis_array)
+            .map_err(|e| format!("SUPPORTED_ABIS length: {e}"))?;
+        if len == 0 {
+            return Err("SUPPORTED_ABIS is empty".to_string());
+        }
+        let first = env
+            .get_object_array_element(&abis_array, 0)
+            .map_err(|e| format!("SUPPORTED_ABIS[0]: {e}"))?;
+        let abi = env
+            .get_string(&jni::objects::JString::from(first))
+            .map_err(|e| format!("read abi string: {e}"))?
+            .to_string_lossy()
+            .into_owned();
+        Ok(crate::updater::android_logic::map_abi_to_arch(&abi))
+    })
+}

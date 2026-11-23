@@ -6,6 +6,8 @@
 pub mod capsule_window;
 #[cfg(feature = "selection")]
 pub mod front_app;
+#[cfg(feature = "permissions")]
+pub mod shell;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 #[cfg(feature = "clipboard")]

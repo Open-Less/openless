@@ -1188,6 +1188,8 @@ fn run_desktop() {
             }
             RunEvent::Exit => {
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
+                #[cfg(target_os = "macos")]
+                device_watch::mark_watcher_stopping();
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.tauri_host().stop_native_capsule();

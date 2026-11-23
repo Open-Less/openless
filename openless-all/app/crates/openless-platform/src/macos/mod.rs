@@ -15,4 +15,6 @@ pub mod text;
 pub mod ax;
 #[cfg(feature = "selection")]
 pub mod front_app;
+#[cfg(feature = "capsule")]
+pub mod window;
 pub mod secure_input;

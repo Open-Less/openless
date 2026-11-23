@@ -78,3 +78,7 @@ pub mod edit_observation;
 #[cfg(target_os = "android")]
 #[allow(dead_code, unused_imports, unused_variables)]
 pub mod shizuku;
+
+// JNI 常驻能力：打开外部链接、SIWC 授权租约、设备 ABI。宿主经这些函数访问，不再直接摸 jni crate。
+#[cfg(target_os = "android")]
+pub use jni::{device_arch, open_external_url, siwc_authorization_lease};

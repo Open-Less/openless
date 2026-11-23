@@ -101,6 +101,7 @@ src/
       mod.rs          门面：CaptureError / StreamFormat / SampleSink / classify_stream_error
       backend.rs      cpal 输入流（Windows/Linux）+ Windows WASAPI 回环
       android_capture.rs  Android AudioRecord + AEC/降噪/AGC（48 kHz 单声道）
+      device_watch.rs   macOS 设备变更通知（CoreAudio 属性监听 + 常驻 runloop）
       macos_tap.rs    macOS 系统音频 tap（Core Audio process tap，14.6+）
       macos_tap.m     tap 的 Objective-C 部分（build.rs 编译）
   credentials/

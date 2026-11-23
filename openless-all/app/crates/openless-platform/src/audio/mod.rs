@@ -9,6 +9,8 @@
 
 // 采集与回环参考需要 cpal；只在桌面平台编译。
 pub mod capture;
+#[cfg(target_os = "macos")]
+pub mod device_watch;
 
 // 提示音需要 cpal；只在桌面平台编译，其余平台没有这个模块。
 #[cfg(any(target_os = "windows", target_os = "macos"))]

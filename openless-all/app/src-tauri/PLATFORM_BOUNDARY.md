@@ -24,6 +24,7 @@ scripts/check-platform-boundary.sh
 | `android/platform_env.rs` | 实现平台层的 `AndroidEnv` 接口（宿主注入点本身）。 |
 | `android/non_android.rs` | 非 Android 目标上的显式桩（`NotAndroid` 语义），供跨平台命令层编译。 |
 | `mobile_runtime.rs` | Android 启动编排：把 tao 的 JavaVM/Activity context 交给平台层并初始化存储根。 |
+| `macos_card_panel.rs` | 卡片面板的窗口类替换：在 AppKit 安装 KVO 之前把 tao 的 `NSWindow` 初始化成 `NSPanel`。这依赖 tao 的 ivar 布局，属于**窗口创建胶水**，无法下沉（平台层不链接 tao）。 |
 | `macos_streaming_input.rs` | macOS 流式逐字输入（WP7 待迁移）。 |
 | `persistence/*` | Android Keystore 分支：凭据库的宿主侧实现（平台层 `credentials` 只提供 macOS Keychain 原语与 Windows keyring）。 |
 

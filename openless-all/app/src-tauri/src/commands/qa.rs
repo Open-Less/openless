@@ -167,30 +167,15 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
         // assertion); the exception guard keeps an AppKit raise from punching
         // through.
         let _ = window.app_handle().run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            let Some(w) = app.get_webview_window(&label) else {
-                return;
-            };
-            let Ok(handle) = w.ns_window() else {
-                log::warn!("[chat-panel] ns_window unavailable; focus skipped");
-                return;
-            };
-            let ns = handle as *mut AnyObject;
+            let ns = handle as *mut std::ffi::c_void;
             if ns.is_null() {
                 return;
             }
-            // SAFETY: the closure performs a single ObjC message send with no
-            // return value and runs no Rust destructors; unwinding past the
-            // closure frame preserves memory safety.
-            let result = unsafe {
-                objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
-                    let nil: *mut AnyObject = std::ptr::null_mut();
-                    let _: () = msg_send![ns, makeKeyAndOrderFront: nil];
-                }))
-            };
-            if let Err(e) = result {
-                log::warn!("[chat-panel] makeKeyAndOrderFront raised (caught): {e:?}");
+            // SAFETY: 这段闭包由 run_on_main_thread 调度，正是 AppKit 要求的主线程。
+            if let Err(error) = unsafe {
+                openless_platform::macos::window::make_key_and_order_front(ns)
+            } {
+                log::warn!("[chat-panel] makeKeyAndOrderFront raised (caught): {error}");
             }
         });
         Ok(())

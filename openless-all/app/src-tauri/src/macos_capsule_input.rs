@@ -1,5 +1,5 @@
 //! Native click-through follows measured DOM controls, not the transparent WebView bounds.
-use objc2::{class, msg_send};
+
 use parking_lot::Mutex;
 use std::{
     collections::HashMap,
@@ -90,7 +90,7 @@ fn update_native_input(window: &tauri::WebviewWindow, regions: Regions) {
     let _ = window.run_on_main_thread(move || unsafe {
         // Keep a press routed to its original window through mouse-up. Opening
         // a language menu resizes the host before the DOM publishes new rectangles.
-        let pressed: usize = msg_send![class!(NSEvent), pressedMouseButtons];
+        let pressed = openless_platform::macos::capsule_window::pressed_mouse_buttons();
         if pressed != 0 {
             return;
         }

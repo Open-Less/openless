@@ -206,31 +206,7 @@ pub(crate) fn is_valid_local_pack_id(s: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    fn wide_null(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    let operation = wide_null("open");
-    let target = wide_null(&path.display().to_string());
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR(operation.as_ptr()),
-            PCWSTR(target.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    if result.0 as isize <= 32 {
-        Err(format!("ShellExecuteW failed: {}", result.0 as isize))
-    } else {
-        Ok(())
-    }
+    openless_platform::windows::shell::open_path_in_file_manager(path)
 }
 
 #[cfg(target_os = "macos")]

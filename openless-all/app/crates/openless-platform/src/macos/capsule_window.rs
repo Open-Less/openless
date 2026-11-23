@@ -134,3 +134,14 @@ mod tests {
         assert!(!should_receive_mouse(&regions, 10.0, 5.0));
     }
 }
+
+/// 当前按下的鼠标键数量。
+///
+/// 按下期间不切换点击穿透：按下与抬起可能落在不同窗口，中途改 `ignoresMouseEvents`
+/// 会把抬起事件投给别的窗口。
+pub fn pressed_mouse_buttons() -> usize {
+    unsafe {
+        let pressed: usize = objc2::msg_send![objc2::class!(NSEvent), pressedMouseButtons];
+        pressed
+    }
+}
