@@ -10,6 +10,8 @@
 
 #[cfg(target_os = "windows")]
 pub mod ipc;
+#[cfg(target_os = "windows")]
+pub mod uia;
 pub mod protocol;
 #[cfg(target_os = "windows")]
 pub mod session;

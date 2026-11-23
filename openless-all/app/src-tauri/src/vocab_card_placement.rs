@@ -3,58 +3,11 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Rect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
+// 卡片几何与 UIA 锚点共用平台层的几何类型（坐标语义一致：物理像素虚拟桌面坐标）。
+pub(crate) use openless_platform::common::geometry::Rect;
 
-impl Rect {
-    pub fn valid(self) -> bool {
-        self.right >= self.left
-            && self.bottom > self.top
-            && self.right.checked_sub(self.left).is_some()
-            && self.bottom.checked_sub(self.top).is_some()
-    }
-
-    pub fn from_xywh(x: f64, y: f64, width: f64, height: f64) -> Option<Self> {
-        let values = [x, y, x + width, y + height];
-        if width < 0.0
-            || height <= 0.0
-            || !values
-                .iter()
-                .all(|v| v.is_finite() && *v > i32::MIN as f64 && *v < i32::MAX as f64)
-        {
-            return None;
-        }
-        let rect = Self {
-            left: x.floor() as i32,
-            top: y.floor() as i32,
-            right: (x + width).ceil() as i32,
-            bottom: (y + height).ceil() as i32,
-        };
-        rect.valid().then_some(rect)
-    }
-
-    fn intersects(self, other: Self) -> bool {
-        self.left < other.right
-            && self.right >= other.left
-            && self.top < other.bottom
-            && self.bottom > other.top
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AnchorSnapshot {
-    pub window: usize,
-    pub process_id: u32,
-    pub window_rect: Rect,
-    pub anchor: Option<Rect>,
-    pub screen_rect: Option<Rect>,
-    pub captured_at: Instant,
-}
+/// UIA 锚点快照（平台层定义，宿主直接复用）。
+pub(crate) type AnchorSnapshot = openless_platform::common::geometry::UiaAnchor;
 
 #[derive(Default)]
 pub(crate) struct AnchorRegistry {

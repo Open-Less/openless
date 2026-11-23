@@ -58,7 +58,7 @@ asr-foundry = [
 asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
 
 # Windows TSF 文本服务通道（提交 / 选区）
-ime = ["dep:serde", "dep:serde_json", "dep:tokio", "dep:parking_lot"]
+ime = ["dep:serde", "dep:serde_json", "dep:tokio", "dep:parking_lot", "dep:windows-core"]
 
 # issue-1266 诊断观测（由宿主 feature 转发）
 diagnostics-1266 = []
@@ -166,6 +166,11 @@ windows = { version = "0.58", features = [
   "Win32_System_Ole",
   "Win32_System_WinRT",
   "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Accessibility",
+  "Win32_System_Variant",
+  "Win32_Globalization",
+  "Win32_UI_WindowsAndMessaging",
+  "implement",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
   "Win32_System_Com",
@@ -173,6 +178,7 @@ windows = { version = "0.58", features = [
   "Win32_Storage_FileSystem",
 ] }
 winreg = { version = "0.52", optional = true }
+windows-core = { version = "0.58", optional = true }
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"], optional = true }
 
 # macOS：纯文本剪贴板通道 + Keychain 原语。

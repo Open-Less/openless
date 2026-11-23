@@ -1,0 +1,1207 @@
+//! Short-lived UIA observation. All registration and COM objects belong to one
+//! MTA worker; callbacks only mark text dirty and never read document contents.
+use openless_core::host_document::EditPair;
+
+/// 仅当原生写入失败时恢复我们改过的选区。平台回调必须先复核原控件与文本未变。
+pub fn write_with_selection_recovery(
+    write: impl FnOnce() -> std::result::Result<(), String>,
+    recover: impl FnOnce(),
+) -> std::result::Result<(), String> {
+    let result = write();
+    if result.is_err() {
+        recover();
+    }
+    result
+}
+
+/// 光标上下文读取的单次预算上限（与宿主一致）。
+const MAX_BUDGET_CHARS: usize = 4_000;
+
+/// 光标上下文读取的中间结果（宿主据此区分"受限"与"不支持"）。
+#[derive(Debug, Clone)]
+pub enum ReadOutcome {
+    Window(openless_core::host_document::DocumentWindow),
+    Blocked(crate::common::block_reason::BlockReason),
+    /// 静态原因：区分"没有焦点"与"平台不支持"。
+    Unavailable(&'static str),
+}
+
+use crate::common::geometry::{Rect, UiaAnchor as AnchorSnapshot};
+use openless_core::host_document::ObservedInsertion;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, OnceLock,
+};
+use std::time::{Duration, Instant};
+use windows::core::{implement, Interface, Result, PWSTR, VARIANT};
+use windows::Win32::{
+    Foundation::{CloseHandle, BOOL, HWND},
+    System::{
+        Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_MULTITHREADED,
+        },
+        Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        },
+    },
+    UI::{Accessibility::*, WindowsAndMessaging::GetForegroundWindow},
+};
+
+type Callback = Box<dyn Fn(EditPair, Option<AnchorSnapshot>) -> bool + Send + Sync>;
+
+mod edit_settle;
+use edit_settle::{can_publish, has_edit_events, EditSettle};
+
+#[derive(Debug, Clone)]
+pub struct VoiceEditTarget {
+    runtime_id: Vec<i32>,
+    process_id: i32,
+    text: String,
+    selection_utf16: Option<(usize, usize)>,
+}
+
+fn voice_edit_target_matches(
+    target: &VoiceEditTarget,
+    current: &VoiceEditTarget,
+) -> std::result::Result<(), String> {
+    if current.runtime_id != target.runtime_id || current.process_id != target.process_id {
+        return Err("voiceEditTargetChanged".into());
+    }
+    if current.text != target.text || current.selection_utf16 != target.selection_utf16 {
+        return Err("voiceEditFieldChanged".into());
+    }
+    Ok(())
+}
+
+fn with_voice_edit_uia<T>(
+    read: impl FnOnce(&IUIAutomation) -> std::result::Result<T, String>,
+) -> std::result::Result<T, String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|_| "voiceEditTargetUnavailable".to_string())?;
+        struct ComGuard;
+        impl Drop for ComGuard {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() }
+            }
+        }
+        let _com = ComGuard;
+        let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
+            .map_err(|_| "voiceEditTargetUnavailable".to_string())?;
+        let timeouts: IUIAutomation2 = uia
+            .cast()
+            .map_err(|_| "voiceEditTargetUnavailable".to_string())?;
+        timeouts
+            .SetConnectionTimeout(200)
+            .and_then(|_| timeouts.SetTransactionTimeout(200))
+            .map_err(|_| "voiceEditTargetUnavailable".to_string())?;
+        read(&uia)
+    }
+}
+
+pub fn read_qa_selection() -> Option<String> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if element
+            .CurrentIsPassword()
+            .map_err(|_| "selectionUnavailable".to_string())?
+            .as_bool()
+        {
+            return Ok(None);
+        }
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionUnavailable".to_string())?
+            != 1
+        {
+            return Ok(None);
+        }
+        let range = ranges
+            .GetElement(0)
+            .map_err(|_| "selectionUnavailable".to_string())?;
+        if range
+            .CompareEndpoints(
+                TextPatternRangeEndpoint_Start,
+                &range,
+                TextPatternRangeEndpoint_End,
+            )
+            .map_err(|_| "selectionUnavailable".to_string())?
+            == 0
+        {
+            return Ok(None);
+        }
+        let text = range
+            .GetText(16000)
+            .map_err(|_| "selectionUnavailable".to_string())?
+            .to_string();
+        Ok((!text.trim().is_empty()).then_some(text))
+    })
+    .ok()
+    .flatten()
+}
+
+unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
+    use windows::Win32::System::Ole::{
+        SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+    };
+    let array = element.GetRuntimeId()?;
+    if array.is_null() {
+        return Err(windows::core::Error::from_win32());
+    }
+    let result = (|| {
+        let first = SafeArrayGetLBound(array, 1)?;
+        let last = SafeArrayGetUBound(array, 1)?;
+        if last < first || last.saturating_sub(first) >= 128 {
+            return Err(windows::core::Error::from_win32());
+        }
+        (first..=last)
+            .map(|index| {
+                let mut value = 0i32;
+                SafeArrayGetElement(array, &index, &mut value as *mut _ as *mut _)?;
+                Ok(value)
+            })
+            .collect()
+    })();
+    let _ = SafeArrayDestroy(array);
+    result
+}
+
+unsafe fn voice_edit_selection(
+    element: &IUIAutomationElement,
+    text: &str,
+) -> Result<Option<(usize, usize)>> {
+    let Ok(pattern) = element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+    else {
+        // ValuePattern-only controls support complete-field SetValue, not a selected-range replacement.
+        return Ok(None);
+    };
+    let selection = pattern.GetSelection()?;
+    match selection.Length()? {
+        0 => Ok(None),
+        1 => {
+            let selected = selection.GetElement(0)?;
+            let prefix = pattern.DocumentRange()?.Clone()?;
+            prefix.MoveEndpointByRange(
+                TextPatternRangeEndpoint_End,
+                &selected,
+                TextPatternRangeEndpoint_Start,
+            )?;
+            let prefix = prefix
+                .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)?
+                .to_string();
+            let selected = selected
+                .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)?
+                .to_string();
+            let start = prefix.encode_utf16().count();
+            let end = start.saturating_add(selected.encode_utf16().count());
+            if end > text.encode_utf16().count()
+                || !text.starts_with(&prefix)
+                || !text[prefix.len()..].starts_with(&selected)
+            {
+                return Err(windows::core::Error::from_win32());
+            }
+            Ok(Some((start, end)))
+        }
+        _ => Err(windows::core::Error::from_win32()),
+    }
+}
+
+unsafe fn voice_edit_snapshot(element: &IUIAutomationElement) -> Result<VoiceEditTarget> {
+    if element.CurrentIsPassword()?.as_bool() || !allowed_process(element)? {
+        return Err(windows::core::Error::from_win32());
+    }
+    let text = read_text(element)?;
+    Ok(VoiceEditTarget {
+        runtime_id: runtime_id(element)?,
+        process_id: element.CurrentProcessId()?,
+        selection_utf16: voice_edit_selection(element, &text)?,
+        text,
+    })
+}
+
+pub fn capture_voice_edit_target() -> std::result::Result<
+    (
+        String,
+        Option<openless_core::TextSelection>,
+        VoiceEditTarget,
+    ),
+    String,
+> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "voiceEditTargetUnavailable".to_string())?;
+        let target =
+            voice_edit_snapshot(&element).map_err(|_| "voiceEditTargetUnavailable".to_string())?;
+        if !uia
+            .CompareElements(
+                &element,
+                &uia.GetFocusedElement()
+                    .map_err(|_| "voiceEditTargetChanged".to_string())?,
+            )
+            .map_err(|_| "voiceEditTargetChanged".to_string())?
+            .as_bool()
+        {
+            return Err("voiceEditTargetChanged".into());
+        }
+        let selection = target
+            .selection_utf16
+            .filter(|(start, end)| start != end)
+            .map(|(start, end)| openless_core::TextSelection {
+                start: openless_core::host_document::utf16_offset_to_char_offset(&target.text, start) as u32,
+                end: openless_core::host_document::utf16_offset_to_char_offset(&target.text, end) as u32,
+            });
+        Ok((target.text.clone(), selection, target))
+    })
+}
+
+pub fn apply_voice_edit_target(
+    target: &VoiceEditTarget,
+    text: &str,
+    insert: impl FnOnce(&str) -> std::result::Result<(), String>,
+) -> std::result::Result<(), String> {
+    with_voice_edit_uia(|uia| unsafe {
+        let unavailable = |_| "voiceEditTargetUnavailable".to_string();
+        let element = uia.GetFocusedElement().map_err(unavailable)?;
+        let current = voice_edit_snapshot(&element).map_err(unavailable)?;
+        voice_edit_target_matches(target, &current)?;
+        if let Ok(pattern) =
+            element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+        {
+            let range = if target
+                .selection_utf16
+                .is_some_and(|(start, end)| start != end)
+            {
+                pattern
+                    .GetSelection()
+                    .and_then(|ranges| ranges.GetElement(0))
+                    .map_err(unavailable)?
+            } else {
+                pattern.DocumentRange().map_err(unavailable)?
+            };
+            let original_selection = pattern
+                .GetSelection()
+                .and_then(|ranges| ranges.GetElement(0))
+                .and_then(|range| range.Clone())
+                .map_err(unavailable)?;
+            let expected = target
+                .selection_utf16
+                .filter(|(start, end)| start != end)
+                .unwrap_or((0, target.text.encode_utf16().count()));
+            write_with_selection_recovery(
+                || {
+                    range.Select().map_err(unavailable)?;
+                    if !uia
+                        .CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                        .map_err(unavailable)?
+                        .as_bool()
+                    {
+                        return Err("voiceEditTargetChanged".into());
+                    }
+                    if read_text(&element).map_err(unavailable)? != target.text {
+                        return Err("voiceEditFieldChanged".into());
+                    }
+                    let selected =
+                        voice_edit_selection(&element, &target.text).map_err(unavailable)?;
+                    if selected != Some(expected) && !(target.text.is_empty() && selected.is_none())
+                    {
+                        return Err("voiceEditTargetUnavailable".into());
+                    }
+                    insert(text)
+                },
+                || {
+                    let current = uia
+                        .GetFocusedElement()
+                        .and_then(|focused| voice_edit_snapshot(&focused));
+                    let mut selected_target = target.clone();
+                    selected_target.selection_utf16 = Some(expected);
+                    if current.is_ok_and(|current| {
+                        voice_edit_target_matches(&selected_target, &current).is_ok()
+                    }) {
+                        let _ = original_selection.Select();
+                    }
+                },
+            )
+        } else {
+            let value = element
+                .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                .map_err(unavailable)?;
+            if value.CurrentIsReadOnly().map_err(unavailable)?.as_bool()
+                || !uia
+                    .CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                    .map_err(unavailable)?
+                    .as_bool()
+            {
+                return Err("voiceEditTargetUnavailable".into());
+            }
+            if read_text(&element).map_err(unavailable)? != target.text {
+                return Err("voiceEditFieldChanged".into());
+            }
+            value
+                .SetValue(&windows::core::BSTR::from(text))
+                .map_err(unavailable)
+        }
+    })
+}
+
+#[cfg(test)]
+mod voice_edit_tests {
+    use super::*;
+
+    #[test]
+    fn voice_edit_requires_the_original_control_complete_text_and_caret() {
+        let target = VoiceEditTarget {
+            runtime_id: vec![1, 2],
+            process_id: 1,
+            text: "a".repeat(5000),
+            selection_utf16: Some((2500, 2500)),
+        };
+        assert!(voice_edit_target_matches(&target, &target).is_ok());
+        let mut changed = target.clone();
+        changed.text.replace_range(2500..2501, "b");
+        assert_eq!(
+            voice_edit_target_matches(&target, &changed),
+            Err("voiceEditFieldChanged".into())
+        );
+        changed = target.clone();
+        changed.selection_utf16 = Some((2501, 2501));
+        assert!(voice_edit_target_matches(&target, &changed).is_err());
+        changed = target.clone();
+        changed.runtime_id.push(3);
+        assert_eq!(
+            voice_edit_target_matches(&target, &changed),
+            Err("voiceEditTargetChanged".into())
+        );
+        assert_eq!(openless_core::host_document::utf16_offset_to_char_offset("a😀b", 3), 2);
+    }
+}
+
+/// The paste command itself remains authoritative on failures. UIA may only
+/// promote PasteSent after observing a change in the very same editor. Failure
+/// to read the host never retries, suppresses, or changes the actual paste.
+pub fn insert_with_delivery_check(
+    text: &str,
+    consent: impl Fn() -> bool,
+    insert: impl FnOnce() -> openless_core::shared_types::InsertStatus,
+) -> openless_core::shared_types::InsertStatus {
+    use openless_core::shared_types::InsertStatus;
+    unsafe {
+        if !consent() || CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+            return insert();
+        }
+        struct ComGuard;
+        impl Drop for ComGuard {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() }
+            }
+        }
+        let _com = ComGuard;
+        let snapshot = (|| -> Result<_> {
+            let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
+            let timeouts: IUIAutomation2 = uia.cast()?;
+            timeouts.SetConnectionTimeout(200)?;
+            timeouts.SetTransactionTimeout(200)?;
+            let window = GetForegroundWindow();
+            let element = uia.GetFocusedElement()?;
+            if !consent() || element.CurrentIsPassword()?.as_bool() || !allowed_process(&element)? {
+                return Err(windows::core::Error::from_win32());
+            }
+            let before = read_text(&element)?;
+            Ok((uia, element, window, before))
+        })()
+        .ok();
+        let status = insert();
+        if status != InsertStatus::PasteSent {
+            return status;
+        }
+        let Some((uia, element, window, before)) = snapshot else {
+            return status;
+        };
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(1) && consent() {
+            let verified = (|| -> Result<bool> {
+                if GetForegroundWindow() != window
+                    || !uia
+                        .CompareElements(&element, &uia.GetFocusedElement()?)?
+                        .as_bool()
+                {
+                    return Err(windows::core::Error::from_win32());
+                }
+                if !consent() {
+                    return Ok(false);
+                }
+                let after = read_text(&element)?;
+                Ok(ObservedInsertion::delivered(&before, &after, text))
+            })();
+            match verified {
+                Ok(true) => return InsertStatus::Inserted,
+                Err(_) => break,
+                Ok(false) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        status
+    }
+}
+struct Request {
+    text: String,
+    target: crate::selection::target::SelectionInsertionTarget,
+    on_end: Box<dyn Fn() + Send + Sync>,
+    window: isize,
+    lifetime: Duration,
+    stop: Arc<AtomicBool>,
+    callback: Callback,
+}
+
+#[implement(
+    IUIAutomationEventHandler,
+    IUIAutomationPropertyChangedEventHandler,
+    IUIAutomationFocusChangedEventHandler,
+    IUIAutomationTextEditTextChangedEventHandler
+)]
+struct Changed {
+    dirty: Arc<AtomicBool>,
+}
+impl IUIAutomationEventHandler_Impl for Changed_Impl {
+    fn HandleAutomationEvent(
+        &self,
+        _: Option<&IUIAutomationElement>,
+        _: UIA_EVENT_ID,
+    ) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+impl IUIAutomationPropertyChangedEventHandler_Impl for Changed_Impl {
+    fn HandlePropertyChangedEvent(
+        &self,
+        _: Option<&IUIAutomationElement>,
+        _: UIA_PROPERTY_ID,
+        _: &VARIANT,
+    ) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+impl IUIAutomationFocusChangedEventHandler_Impl for Changed_Impl {
+    fn HandleFocusChangedEvent(&self, _: Option<&IUIAutomationElement>) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+impl IUIAutomationTextEditTextChangedEventHandler_Impl for Changed_Impl {
+    fn HandleTextEditTextChangedEvent(
+        &self,
+        _: Option<&IUIAutomationElement>,
+        _: TextEditChangeType,
+        _: *const windows::Win32::System::Com::SAFEARRAY,
+    ) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+pub fn spawn_edit_watcher(
+    text: String,
+    lifetime: Duration,
+    target: crate::selection::target::SelectionInsertionTarget,
+    callback: Callback,
+    on_end: Box<dyn Fn() + Send + Sync>,
+) -> Option<Arc<AtomicBool>> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    static WORKER: OnceLock<Option<mpsc::Sender<Request>>> = OnceLock::new();
+    let worker = WORKER
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<Request>();
+            std::thread::Builder::new()
+                .name("vocab-uia".into())
+                .spawn(move || unsafe {
+                    if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+                        return;
+                    }
+                    while let Ok(request) = rx.recv() {
+                        if !request.stop.load(Ordering::Acquire) {
+                            let _ = observe(&request);
+                        }
+                        (request.on_end)();
+                    }
+                    CoUninitialize();
+                })
+                .ok()
+                .map(|_| tx)
+        })
+        .as_ref()?;
+    let stop = Arc::new(AtomicBool::new(false));
+    worker
+        .send(Request {
+            text,
+            lifetime,
+            target,
+            on_end,
+            window: unsafe { GetForegroundWindow().0 as isize },
+            stop: stop.clone(),
+            callback,
+        })
+        .ok()?;
+    Some(stop)
+}
+
+/// Sensitive process name fragments (password managers, terminals). Matched against the
+/// lowercased executable filename only (not the full path), substring match.
+///
+/// Pure function — no COM, so it is unit-testable without a live UIA element. The live lookup
+/// is [`allowed_process`], shared by the edit watcher and the cursor-context reader so both
+/// paths answer identically (see `openless-core`'s equivalent `SENSITIVE_BUNDLE_PREFIXES` note
+/// on macOS: one ungated path means no gate).
+const BLOCKED_PROCESS_NAME_FRAGMENTS: &[&str] = &[
+    "keepass",
+    "1password",
+    "bitwarden",
+    "lastpass",
+    "dashlane",
+    "windowsterminal",
+    "powershell",
+    "pwsh",
+    "cmd.exe",
+    "conhost",
+    "mintty",
+    "wezterm",
+    "alacritty",
+    "putty",
+];
+
+fn is_blocked_process_name(executable_name: &str) -> bool {
+    let lowered = executable_name.to_lowercase();
+    BLOCKED_PROCESS_NAME_FRAGMENTS
+        .iter()
+        .any(|blocked| lowered.contains(blocked))
+}
+
+unsafe fn allowed_process(element: &IUIAutomationElement) -> Result<bool> {
+    let pid = element.CurrentProcessId()? as u32;
+    if pid == std::process::id() {
+        return Ok(false);
+    }
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)?;
+    let mut buffer = [0u16; 1024];
+    let mut len = buffer.len() as u32;
+    let result = QueryFullProcessImageNameW(
+        process,
+        PROCESS_NAME_WIN32,
+        PWSTR(buffer.as_mut_ptr()),
+        &mut len,
+    );
+    let _ = CloseHandle(process);
+    result?;
+    let path = String::from_utf16_lossy(&buffer[..len as usize]);
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    Ok(!is_blocked_process_name(name))
+}
+
+unsafe fn read_text(element: &IUIAutomationElement) -> Result<String> {
+    if element.CurrentIsPassword()?.as_bool() {
+        return Err(windows::core::Error::from_win32());
+    }
+    let text = if let Ok(pattern) =
+        element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+    {
+        pattern
+            .DocumentRange()?
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)?
+            .to_string()
+    } else {
+        element
+            .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)?
+            .CurrentValue()?
+            .to_string()
+    };
+    if text.encode_utf16().count() > ObservedInsertion::MAX_DOCUMENT_UTF16 {
+        return Err(windows::core::Error::from_win32());
+    }
+    Ok(text)
+}
+
+fn physical_rect(rect: windows::Win32::Foundation::RECT) -> Option<Rect> {
+    let rect = Rect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    };
+    rect.valid().then_some(rect)
+}
+
+unsafe fn caret_screen_rect(element: &IUIAutomationElement) -> Option<Rect> {
+    use windows::Win32::System::Ole::{
+        SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+    };
+    let CaretLookup::Found(range, _) = find_caret_range(element) else {
+        return None;
+    };
+    let array = range.GetBoundingRectangles().ok()?;
+    if array.is_null() {
+        return None;
+    }
+    // A collapsed range can legitimately have no rectangles. Never expand it into
+    // unrelated text merely to manufacture a precise-looking caret position.
+    let rect = (|| {
+        let first = SafeArrayGetLBound(array, 1).ok()?;
+        let last = SafeArrayGetUBound(array, 1).ok()?;
+        if last.checked_sub(first)? != 3 {
+            return None;
+        }
+        let mut values = [0.0f64; 4];
+        for (offset, value) in values.iter_mut().enumerate() {
+            let index = first + offset as i32;
+            SafeArrayGetElement(array, &index, value as *mut f64 as *mut _).ok()?;
+        }
+        Rect::from_xywh(values[0], values[1], values[2], values[3])
+    })();
+    let _ = SafeArrayDestroy(array);
+    rect
+}
+
+unsafe fn capture_placement(
+    element: &IUIAutomationElement,
+    window: HWND,
+) -> Option<AnchorSnapshot> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, GetWindowThreadProcessId};
+    let mut window_rect = RECT::default();
+    GetWindowRect(window, &mut window_rect).ok()?;
+    let window_rect = physical_rect(window_rect)?;
+    let mut process_id = 0;
+    GetWindowThreadProcessId(window, Some(&mut process_id));
+    if process_id == 0 {
+        return None;
+    }
+    let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let screen_rect = GetMonitorInfoW(monitor, &mut info)
+        .as_bool()
+        .then(|| physical_rect(info.rcMonitor))
+        .flatten();
+    let anchor = if element
+        .CurrentIsOffscreen()
+        .map(|value| value.as_bool())
+        .unwrap_or(true)
+    {
+        None
+    } else {
+        caret_screen_rect(element).or_else(|| {
+            let rect = physical_rect(element.CurrentBoundingRectangle().ok()?)?;
+            // A whole document is not an insertion point. Large controls use the
+            // original monitor's corner instead of covering the editor itself.
+            let screen = screen_rect?;
+            let width = i64::from(rect.right) - i64::from(rect.left);
+            let height = i64::from(rect.bottom) - i64::from(rect.top);
+            (width > 0 && height * 2 < i64::from(screen.bottom) - i64::from(screen.top))
+                .then_some(rect)
+        })
+    };
+    Some(AnchorSnapshot {
+        window: window.0 as usize,
+        process_id,
+        window_rect,
+        anchor,
+        screen_rect,
+        captured_at: Instant::now(),
+    })
+}
+
+unsafe fn composition_blocks(element: &IUIAutomationElement) -> bool {
+    // windows-rs 0.58 maps a successful null interface to Error::empty()
+    // (HRESULT 0). Actual provider failures are not evidence of an idle IME.
+    match element.GetCurrentPatternAs::<IUIAutomationTextEditPattern>(UIA_TextEditPatternId) {
+        Ok(pattern) => match pattern.GetActiveComposition() {
+            Ok(_) => true,
+            Err(error) => error.code().0 != 0,
+        },
+        Err(error) => error.code().0 != 0 && error.code().0 as u32 != UIA_E_NOTSUPPORTED,
+    }
+}
+
+unsafe fn observe(request: &Request) -> Result<()> {
+    if !crate::selection::target::is_current(&request.target) {
+        return Ok(());
+    }
+    let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
+    let timeouts: IUIAutomation2 = uia.cast()?;
+    timeouts.SetConnectionTimeout(200)?;
+    timeouts.SetTransactionTimeout(200)?;
+    let element = uia.GetFocusedElement()?;
+    if element.CurrentIsPassword()?.as_bool() || !allowed_process(&element)? {
+        return Ok(());
+    }
+    let target_is_current = || {
+        !request.stop.load(Ordering::Acquire)
+            && crate::selection::target::is_current(&request.target)
+            && GetForegroundWindow() == HWND(request.window as *mut _)
+    };
+    let active = || -> Result<bool> {
+        Ok(target_is_current()
+            && !element.CurrentIsPassword()?.as_bool()
+            && uia
+                .CompareElements(&element, &uia.GetFocusedElement()?)?
+                .as_bool())
+    };
+    let started = Instant::now();
+    let mut anchor = loop {
+        if !active()? || started.elapsed() >= Duration::from_secs(1) {
+            return Ok(());
+        }
+        if let Some(anchor) = ObservedInsertion::new(read_text(&element)?, &request.text) {
+            break anchor;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let dirty = Arc::new(AtomicBool::new(true));
+    let handler: IUIAutomationEventHandler = Changed {
+        dirty: dirty.clone(),
+    }
+    .into();
+    let property: IUIAutomationPropertyChangedEventHandler = handler.cast()?;
+    let focus: IUIAutomationFocusChangedEventHandler = handler.cast()?;
+    let finalized: IUIAutomationTextEditTextChangedEventHandler = handler.cast()?;
+    let text_edit_uia: IUIAutomation3 = uia.cast()?;
+    // Guard the last COM query against a focus switch inside the same HWND.
+    uia.AddFocusChangedEventHandler(None, &focus)?;
+    let text_registered = uia
+        .AddAutomationEventHandler(
+            UIA_Text_TextChangedEventId,
+            &element,
+            TreeScope_Element,
+            None,
+            &handler,
+        )
+        .is_ok();
+    let value_registered = uia
+        .AddPropertyChangedEventHandlerNativeArray(
+            &element,
+            TreeScope_Element,
+            None,
+            &property,
+            &[UIA_ValueValuePropertyId],
+        )
+        .is_ok();
+    let finalized_registered = text_edit_uia
+        .AddTextEditTextChangedEventHandler(
+            &element,
+            TreeScope_Element,
+            TextEditChangeType_CompositionFinalized,
+            None,
+            &finalized,
+        )
+        .is_ok();
+    // Always unregister, including provider errors and opt-out. Late callbacks
+    // only retain their own dirty flag; no host text or Core sink is accessible.
+    let result = (|| -> Result<()> {
+        if !has_edit_events(text_registered, value_registered, finalized_registered) {
+            return Ok(());
+        }
+        let mut settle = EditSettle::new(Instant::now());
+        while started.elapsed() < request.lifetime && active()? {
+            if dirty.swap(false, Ordering::AcqRel) {
+                settle.mark_changed(Instant::now());
+            }
+            if settle.should_probe() {
+                let composing = composition_blocks(&element);
+                settle.observe_composition(composing, Instant::now());
+            }
+            if settle.ready(Instant::now()) && !dirty.load(Ordering::Acquire) && active()? {
+                let current = read_text(&element)?;
+                let composing = composition_blocks(&element);
+                settle.observe_composition(composing, Instant::now());
+                if started.elapsed() >= request.lifetime || !active()? {
+                    break;
+                }
+                // An IME can commit between the text read and the composition
+                // check, with its finalization event still in flight.
+                if settle.ready(Instant::now())
+                    && !dirty.load(Ordering::Acquire)
+                    && settle.confirm_snapshot(&current, &read_text(&element)?, Instant::now())
+                    && !dirty.load(Ordering::Acquire)
+                {
+                    settle.clear();
+                    if !anchor.observe(&current, |edit| {
+                        let snapshot = capture_placement(&element, HWND(request.window as *mut _));
+                        can_publish(
+                            || active().unwrap_or(false),
+                            || {
+                                let composing = composition_blocks(&element);
+                                settle.observe_composition(composing, Instant::now());
+                                composing
+                            },
+                            || {
+                                target_is_current()
+                                    && started.elapsed() < request.lifetime
+                                    && !dirty.load(Ordering::Acquire)
+                            },
+                        ) && (request.callback)(edit, snapshot)
+                    }) {
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Ok(())
+    })();
+    if text_registered {
+        let _ = uia.RemoveAutomationEventHandler(UIA_Text_TextChangedEventId, &element, &handler);
+    }
+    if value_registered {
+        let _ = uia.RemovePropertyChangedEventHandler(&element, &property);
+    }
+    if finalized_registered {
+        let _ = text_edit_uia.RemoveTextEditTextChangedEventHandler(&element, &finalized);
+    }
+    let _ = uia.RemoveFocusChangedEventHandler(&focus);
+    result
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cursor context reader
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A separate, read-only path from the edit watcher above: `read_text()` / `observe()`
+// serve insertion-delivery checks and local edit learning (full document, never leaves the
+// device). This path serves LLM cursor context — it only ever fetches a bounded span around
+// the caret, and the result may be sent to the configured LLM provider, so it goes through
+// its own safety gate ([`allowed_process`] + `CurrentIsPassword`) before a single UIA text
+// call is made. See `windows_cursor_context开发方案.md` §4.
+
+/// Outcome of locating a usable caret [`IUIAutomationTextRange`].
+enum CaretLookup {
+    /// A zero-length (collapsed) range at the insertion point, tagged with which pattern
+    /// produced it (diagnostic only — never logged with document content).
+    Found(IUIAutomationTextRange, &'static str),
+    /// `TextPattern::GetSelection()` fallback found a real (non-collapsed) selection. Per
+    /// §8 of the design doc, the first version never guesses which end is the caret —
+    /// "selection rewrite" is a separate future feature, not folded into dictation context.
+    NonCollapsedSelection,
+    Unavailable(&'static str),
+}
+
+/// Finds the caret as a zero-length text range. **Only callable in a `spawn_blocking`
+/// context** (every call here is a synchronous COM round-trip).
+///
+/// Priority, matching §5/§8 of the design doc:
+/// 1. `IUIAutomationTextPattern2::GetCaretRange()`, only when `isActive == TRUE` — an inactive
+///    caret is unusable and short-circuits to `Unavailable` without trying the fallback (an
+///    inactive caret on this element is unlikely to become valid by asking a different pattern).
+/// 2. `IUIAutomationTextPattern::GetSelection()`, used only when it is exactly one collapsed
+///    range — this is the compatibility path for controls without `TextPattern2`.
+/// 3. Neither pattern exists (including controls that only expose `ValuePattern`, see §9):
+///    `Unavailable`. **Never** derived from `ValuePattern::CurrentValue()` — that pattern
+///    cannot report a caret offset, and guessing one (e.g. end-of-value) would silently inject
+///    wrong context when the user is editing mid-document.
+unsafe fn find_caret_range(element: &IUIAutomationElement) -> CaretLookup {
+    if let Ok(pattern2) =
+        element.GetCurrentPatternAs::<IUIAutomationTextPattern2>(UIA_TextPattern2Id)
+    {
+        let mut is_active = BOOL(0);
+        match pattern2.GetCaretRange(&mut is_active) {
+            Ok(range) if is_active.as_bool() => return CaretLookup::Found(range, "textPattern2"),
+            Ok(_) => return CaretLookup::Unavailable("caret is not active"),
+            // GetCaretRange itself failed even though the pattern exists; fall through and
+            // try the TextPattern/GetSelection compatibility path below.
+            Err(_) => {}
+        }
+    }
+
+    let Ok(pattern) = element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+    else {
+        let has_value_only = element
+            .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .is_ok();
+        return CaretLookup::Unavailable(if has_value_only {
+            "focused control exposes value but no caret text range"
+        } else {
+            "no caret-capable text pattern on focused element"
+        });
+    };
+    let Ok(selection) = pattern.GetSelection() else {
+        return CaretLookup::Unavailable("GetSelection failed");
+    };
+    let Ok(count) = selection.Length() else {
+        return CaretLookup::Unavailable("selection length unavailable");
+    };
+    if count != 1 {
+        // 0 => no selection/caret reported at all; >1 => discontiguous selection. Neither is
+        // "a caret"; stay conservative rather than picking one range heuristically.
+        return CaretLookup::Unavailable("no single caret-equivalent selection range");
+    }
+    let Ok(range) = selection.GetElement(0) else {
+        return CaretLookup::Unavailable("selection range unavailable");
+    };
+    match range.CompareEndpoints(
+        TextPatternRangeEndpoint_Start,
+        &range,
+        TextPatternRangeEndpoint_End,
+    ) {
+        Ok(0) => CaretLookup::Found(range, "textPattern"),
+        Ok(_) => CaretLookup::NonCollapsedSelection,
+        Err(_) => CaretLookup::Unavailable("selection endpoint comparison failed"),
+    }
+}
+
+struct RangeText {
+    text: String,
+    moved: i32,
+}
+
+fn cursor_read_plan(budget_chars: usize) -> Option<(i32, i32, i32)> {
+    let budget_chars = budget_chars.min(MAX_BUDGET_CHARS);
+    let over_fetch = budget_chars.checked_mul(2)?.max(1);
+    let over_fetch = i32::try_from(over_fetch).ok()?;
+    let text_cap = over_fetch.checked_mul(2)?.checked_add(64)?;
+    Some((over_fetch, over_fetch, text_cap))
+}
+
+/// Keep endpoint checks separate from text length: UIA units are linguistic, not Unicode scalars.
+unsafe fn read_range_side(
+    caret: &IUIAutomationTextRange,
+    endpoint: TextPatternRangeEndpoint,
+    requested: i32,
+    text_cap: i32,
+    before: bool,
+) -> std::result::Result<RangeText, &'static str> {
+    let range = caret.Clone().map_err(|_| "caret range clone failed")?;
+    let moved = range
+        .MoveEndpointByUnit(endpoint, TextUnit_Character, requested)
+        .map_err(|_| "caret range movement failed")?;
+    if (before && (moved > 0 || moved < requested)) || (!before && (moved < 0 || moved > requested))
+    {
+        return Err("caret range movement was inconsistent");
+    }
+
+    let start_to_caret = range
+        .CompareEndpoints(
+            TextPatternRangeEndpoint_Start,
+            caret,
+            TextPatternRangeEndpoint_Start,
+        )
+        .map_err(|_| "caret range start comparison failed")?;
+    let end_to_caret = range
+        .CompareEndpoints(
+            TextPatternRangeEndpoint_End,
+            caret,
+            TextPatternRangeEndpoint_End,
+        )
+        .map_err(|_| "caret range end comparison failed")?;
+    if (before && (start_to_caret > 0 || end_to_caret != 0))
+        || (!before && (start_to_caret != 0 || end_to_caret < 0))
+    {
+        return Err("caret range endpoints were inconsistent");
+    }
+
+    let text = range
+        .GetText(text_cap)
+        .map_err(|_| "caret range text unavailable")?;
+    let text = crate::common::uia_text::decode_bounded_utf16(text.as_wide(), text_cap as usize)?;
+    Ok(RangeText { text, moved })
+}
+
+/// Reads the document window around the caret. **Only callable in a `spawn_blocking`
+/// context.** Never reads the full document (��7 of the design doc): the range is expanded
+/// from the caret by `MoveEndpointByUnit`, not sliced out of `DocumentRange()`.
+unsafe fn read_document(element: &IUIAutomationElement, budget_chars: usize) -> ReadOutcome {
+    let (caret, source) = match find_caret_range(element) {
+        CaretLookup::Found(range, source) => (range, source),
+        CaretLookup::NonCollapsedSelection => {
+            return ReadOutcome::Unavailable("non-collapsed selection")
+        }
+        CaretLookup::Unavailable(reason) => return ReadOutcome::Unavailable(reason),
+    };
+    let budget_chars = budget_chars.min(MAX_BUDGET_CHARS);
+    let Some((before_want, after_want, text_cap)) = cursor_read_plan(budget_chars) else {
+        return ReadOutcome::Unavailable("cursor context budget is out of range");
+    };
+
+    let before = match read_range_side(
+        &caret,
+        TextPatternRangeEndpoint_Start,
+        -before_want,
+        text_cap,
+        true,
+    ) {
+        Ok(side) => side,
+        Err(reason) => return ReadOutcome::Unavailable(reason),
+    };
+    let after = match read_range_side(
+        &caret,
+        TextPatternRangeEndpoint_End,
+        after_want,
+        text_cap,
+        false,
+    ) {
+        Ok(side) => side,
+        Err(reason) => return ReadOutcome::Unavailable(reason),
+    };
+
+    // Diagnostic only: no document content or application identity is logged.
+    log::debug!(
+        "[cursor-context] source={source} before_want={before_want} before_moved={} before_chars={} after_want={after_want} after_moved={} after_chars={}",
+        before.moved,
+        before.text.chars().count(),
+        after.moved,
+        after.text.chars().count(),
+    );
+
+    let mut text = before.text;
+    let cursor = text.chars().count();
+    text.push_str(&after.text);
+
+    ReadOutcome::Window(openless_core::host_document::window_around_cursor(&text, cursor, budget_chars))
+}
+
+/// Synchronously reads the document around the cursor. **Only callable in a `spawn_blocking`
+/// context** — see `host_document::windows_probe` for the async/timeout wrapper.
+///
+/// Gate order follows §15-17 of the design doc: password field and process blocklist are
+/// checked immediately after acquiring the focused element, before any text pattern is
+/// touched. Focus consistency (§12) is re-checked right before returning a successful window,
+/// so a focus change mid-read (Alt+Tab, OpenLess's own UI stealing focus, …) discards the
+/// result instead of mixing one app's text with another's dictation.
+pub fn read_around_cursor_blocking(
+    budget_chars: usize,
+    target: Option<crate::selection::target::SelectionInsertionTarget>,
+) -> ReadOutcome {
+    if let Some(target) = target.as_ref() {
+        if !crate::selection::target::is_current(target) {
+            return ReadOutcome::Unavailable("insertion target changed before capture");
+        }
+    }
+
+    unsafe {
+        if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+            return ReadOutcome::Unavailable("COM initialization failed");
+        }
+        struct ComGuard;
+        impl Drop for ComGuard {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() }
+            }
+        }
+        let _com = ComGuard;
+
+        let outcome = (|| -> Result<ReadOutcome> {
+            let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
+            let timeouts: IUIAutomation2 = uia.cast()?;
+            timeouts.SetConnectionTimeout(200)?;
+            timeouts.SetTransactionTimeout(200)?;
+
+            let initial_window = GetForegroundWindow();
+            let element = uia.GetFocusedElement()?;
+            if let Some(target) = target.as_ref() {
+                if !crate::selection::target::is_current(target) {
+                    return Ok(ReadOutcome::Unavailable(
+                        "insertion target changed before UIA read",
+                    ));
+                }
+            }
+
+            if element.CurrentIsPassword()?.as_bool() {
+                return Ok(ReadOutcome::Blocked(
+                    crate::common::block_reason::BlockReason::SecureTextField,
+                ));
+            }
+            if !allowed_process(&element)? {
+                return Ok(ReadOutcome::Blocked(crate::common::block_reason::BlockReason::BlockedApp));
+            }
+
+            let outcome = read_document(&element, budget_chars);
+            if !matches!(outcome, ReadOutcome::Window(_)) {
+                return Ok(outcome);
+            }
+
+            // Focus must not have moved during the read above — otherwise this window's "before"
+            // text could belong to a different app than the dictation that is about to use it.
+            if GetForegroundWindow() != initial_window
+                || !uia
+                    .CompareElements(&element, &uia.GetFocusedElement()?)?
+                    .as_bool()
+            {
+                return Ok(ReadOutcome::Unavailable(
+                    "focus changed during capture",
+                ));
+            }
+            if let Some(target) = target.as_ref() {
+                if !crate::selection::target::is_current(target) {
+                    return Ok(ReadOutcome::Unavailable(
+                        "insertion target changed during capture",
+                    ));
+                }
+            }
+
+            Ok(outcome)
+        })();
+
+        outcome.unwrap_or(ReadOutcome::Unavailable("UIA call failed"))
+    }
+}
+
+#[cfg(test)]
+mod cursor_context_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_read_plan_is_bounded_and_overfetches_both_sides() {
+        assert_eq!(cursor_read_plan(600), Some((1200, 1200, 2464)));
+        assert_eq!(cursor_read_plan(usize::MAX), Some((8000, 8000, 16064)));
+    }
+
+    #[test]
+    fn password_managers_and_terminals_are_blocked_by_name() {
+        for name in [
+            "KeePassXC.exe",
+            "1Password.exe",
+            "Bitwarden.exe",
+            "powershell.exe",
+            "WindowsTerminal.exe",
+            "cmd.exe",
+            "conhost.exe",
+        ] {
+            assert!(is_blocked_process_name(name), "{name} should be blocked");
+        }
+    }
+
+    #[test]
+    fn ordinary_editors_are_not_blocked_by_name() {
+        for name in ["notepad.exe", "WINWORD.EXE", "Code.exe", "chrome.exe"] {
+            assert!(
+                !is_blocked_process_name(name),
+                "{name} should not be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_that_merely_contains_a_blocked_fragment_is_still_blocked() {
+        // Substring match is intentional here (unlike the macOS bundle-id prefix match): Windows
+        // executable names have no reverse-DNS namespace to anchor a prefix check against, and
+        // helper/updater binaries commonly append suffixes to the vendor name.
+        assert!(is_blocked_process_name("1password-updater.exe"));
+    }
+}

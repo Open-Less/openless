@@ -128,19 +128,8 @@ pub(crate) fn apply_voice_edit_target(
     }
 }
 
-/// Restore only the selection we changed when a native write fails. Platform
-/// callbacks must revalidate the original control and unchanged text first.
-#[cfg(any(test, target_os = "windows", target_os = "macos"))]
-fn write_with_selection_recovery(
-    write: impl FnOnce() -> Result<(), String>,
-    recover: impl FnOnce(),
-) -> Result<(), String> {
-    let result = write();
-    if result.is_err() {
-        recover();
-    }
-    result
-}
+// 写入失败时的选区恢复已迁到平台层（`openless-platform::ime::uia`）。
+pub(super) use openless_platform::ime::uia::write_with_selection_recovery;
 
 /// Timeout for a single AX message. 200ms is far above a normal AX round-trip (single-digit
 /// ms); it only catches hung apps.
@@ -179,26 +168,9 @@ pub enum HostDocumentStatus {
     Timeout,
 }
 
-/// Reason for a hard block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockReason {
-    /// macOS Secure Event Input is on (password fields, sudo prompts, etc.).
-    SecureInput,
-    /// Focused control's AXRole/AXSubrole is `AXSecureTextField`.
-    SecureTextField,
-    /// Foreground app is on the hardcoded blocklist (password managers / keychain / terminals).
-    BlockedApp,
-}
+/// 宿主文档读取被拒绝的原因（平台层定义）。
+pub use openless_platform::common::block_reason::BlockReason;
 
-impl BlockReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            BlockReason::SecureInput => "secure_input",
-            BlockReason::SecureTextField => "secure_text_field",
-            BlockReason::BlockedApp => "blocked_app",
-        }
-    }
-}
 
 /// Full result of one read; the debug command serializes it straight to the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -319,14 +291,9 @@ pub fn evaluate_gate(inputs: &GateInputs) -> Option<BlockReason> {
     None
 }
 
-/// Intermediate result returned by platform implementations to [`probe_around_cursor`].
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) enum ReadOutcome {
-    Window(DocumentWindow),
-    Blocked(BlockReason),
-    /// Carries a static reason so logs and the debug command can tell "no focus" from "unsupported".
-    Unavailable(&'static str),
-}
+/// 光标上下文读取的中间结果（平台层定义）。
+pub(crate) use openless_platform::ime::uia::ReadOutcome;
+
 
 /// Read the context around the cursor; any failure degrades to `None`, never an error.
 ///
