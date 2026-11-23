@@ -14,3 +14,29 @@ export function canRetranscribeHistoryEntry(
     (session.pipelineMode !== 'multimodal' || session.source === 'quick_note')
   );
 }
+
+const retranscriptionReasons = new Set([
+  'NoSpeech',
+  'Missing',
+  'InvalidAudio',
+  'Permission',
+  'Active',
+  'Busy',
+  'Unsupported',
+  'Configuration',
+  'Storage',
+  'Provider',
+  'InvalidId',
+]);
+
+/** Only the host's bounded error categories are safe to show as reasons. */
+export function retranscriptionErrorKey(message: string): string {
+  const reason = message.replace(/^historyRetranscribe/, '');
+  if (message.startsWith('historyRetranscribe') && retranscriptionReasons.has(reason)) {
+    return `history.retranscribeErrors.${reason}`;
+  }
+  // Older hosts returned this fixed message instead of a category.
+  if (message === '重新转录仍未识别到语音') return 'history.retranscribeErrors.NoSpeech';
+  if (message === 'recording not found') return 'history.retranscribeErrors.Missing';
+  return 'history.retranscribeErrors.Provider';
+}

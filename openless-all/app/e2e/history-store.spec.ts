@@ -84,8 +84,12 @@ test('history writes update every page while recordings, activity and the usage 
     .getByRole('navigation', { name: '用量页面' })
     .getByRole('button', { name: '服务', exact: true })
     .click();
-  await expect(page.getByRole('region', { name: '模型缓存报告列表' })).toContainText('deepseek-v3-2');
-  await expect(page.getByRole('region', { name: '服务与用途列表' })).toContainText('没有可归属服务的记录');
+  await expect(page.getByRole('region', { name: '模型缓存报告列表' })).toContainText(
+    'deepseek-v3-2',
+  );
+  await expect(page.getByRole('region', { name: '服务与用途列表' })).toContainText(
+    '没有可归属服务的记录',
+  );
 });
 
 test('history switches transcripts inside a fixed frame with copy below the text', async ({
@@ -253,4 +257,29 @@ test('a 375px desktop preview keeps one vertical scroll owner', async ({ page })
       .poll(() => owner.evaluate((node) => node.scrollHeight - node.clientHeight))
       .toBeLessThanOrEqual(1);
   }
+});
+
+test('history menu retranscription shows the safe empty-ASR reason and preserves the record', async ({
+  page,
+}) => {
+  await page.route('**/src/preview/history.ts*', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body:
+        (await response.text()) +
+        "\npreviewHistory.retranscribe = () => { throw new Error('historyRetranscribeNoSpeech'); };",
+    });
+  });
+  await page.goto(`${fixtureOrigin}/?os=mac`);
+  const surface = await navigate(page, 'history', '历史');
+  const entry = surface.locator('[data-history-record="mock-quick-note"]');
+  await entry.click();
+  const before = await entry.textContent();
+  await surface.getByRole('button', { name: '录音操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '重新转录', exact: true }).click();
+  await expect(
+    page.getByText('重新转录失败：识别服务未返回文字；原录音已保留', { exact: true }),
+  ).toBeVisible();
+  await expect(entry).toHaveText(before!);
 });
