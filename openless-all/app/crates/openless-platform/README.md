@@ -62,6 +62,7 @@ src/
     ax.rs             macOS AX 文档读写（选区/光标上下文/编辑监听）
     front_app.rs      NSWorkspace 前台应用身份（含按 pid 查 bundle）
     secure_input.rs   IsSecureEventInputEnabled
+    keystroke.rs      CGEvent 逐字投递 + TIS 输入源切换（主线程原语）
   common/
     uia_text.rs       UIA 字符单元解码（纯逻辑）
   ime/
@@ -112,6 +113,7 @@ src/
     ax.rs             macOS AX 文档读写（选区/光标上下文/编辑监听）
     front_app.rs      NSWorkspace 前台应用身份（含按 pid 查 bundle）
     secure_input.rs   IsSecureEventInputEnabled
+    keystroke.rs      CGEvent 逐字投递 + TIS 输入源切换（主线程原语）
   common/
     codec.rs          跨平台纯编解码
     error.rs          PlatformError（部分失败语义）

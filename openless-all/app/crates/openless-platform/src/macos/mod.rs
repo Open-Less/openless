@@ -13,6 +13,8 @@ pub mod text;
 
 #[cfg(feature = "ime")]
 pub mod ax;
+#[cfg(all(feature = "text", target_os = "macos"))]
+pub mod keystroke;
 #[cfg(feature = "selection")]
 pub mod front_app;
 #[cfg(feature = "capsule")]

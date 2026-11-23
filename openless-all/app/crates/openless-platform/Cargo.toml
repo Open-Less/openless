@@ -74,6 +74,7 @@ diagnostics-1266 = []
 # Android：JNI 接缝 + 无障碍插入通道
 android = [
     "dep:jni",
+    "updater",
     "dep:tokio",
     "clipboard",
     "permissions",
@@ -110,7 +111,7 @@ clipboard = ["dep:arboard"]
 input = ["dep:global-hotkey", "dep:parking_lot", "dep:once_cell"]
 
 # 文本写入：逐字输入与模拟粘贴（复用 input 的按键注入底层）
-text = ["input"]
+text = ["input", "dep:core-foundation"]
 
 # 选区读取：模拟复制通道（依赖剪贴板事务与复制键注入）
 selection = ["clipboard", "input", "dep:objc2"]
