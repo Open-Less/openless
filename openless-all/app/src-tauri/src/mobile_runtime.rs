@@ -29,6 +29,9 @@ pub fn run() {
             #[cfg(target_os = "android")]
             crate::android::platform_env::install();
 
+            // Android 采集的频谱接到 Kotlin 动画通道。
+            crate::recorder::android_capture::install_spectrum_sink();
+
             // JNI 基础通道需要宿主提供 JavaVM 与 Activity context。
             #[cfg(target_os = "android")]
             install_android_jni_context();

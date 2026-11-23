@@ -101,6 +101,9 @@ pub fn classify_stream_error(message: &str) -> CaptureError {
     CaptureError::Unavailable(message.to_string())
 }
 
+#[cfg(target_os = "android")]
+pub mod android_capture;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod backend;
 
@@ -111,6 +114,7 @@ mod macos_tap;
 pub use backend::{
     default_input_name, input_devices, start_input_stream, start_reference_stream,
 };
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use backend::CaptureStream as DesktopCaptureStream;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

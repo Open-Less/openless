@@ -98,6 +98,7 @@ src/
     capture/          采集：设备枚举、输入流、回环参考
       mod.rs          门面：CaptureError / StreamFormat / SampleSink / classify_stream_error
       backend.rs      cpal 输入流（Windows/Linux）+ Windows WASAPI 回环
+      android_capture.rs  Android AudioRecord + AEC/降噪/AGC（48 kHz 单声道）
       macos_tap.rs    macOS 系统音频 tap（Core Audio process tap，14.6+）
       macos_tap.m     tap 的 Objective-C 部分（build.rs 编译）
   credentials/
