@@ -8,6 +8,7 @@ pub mod non_android;
 pub mod edit_observation;
 #[cfg(target_os = "android")]
 pub mod insert;
+#[cfg(target_os = "android")]
 pub mod insert_tiers;
 #[cfg(target_os = "android")]
 pub mod jni;
@@ -17,6 +18,7 @@ pub mod platform_env;
 pub(crate) mod local_migration;
 pub mod native_bridge;
 pub mod overlay;
+#[cfg(target_os = "android")]
 pub mod shizuku;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod update_pipeline;
@@ -33,8 +35,11 @@ pub use accessibility::{
 };
 #[cfg(not(target_os = "android"))]
 pub use non_android::{
-    get_android_accessibility_status, request_android_accessibility_permission,
-    AndroidAccessibilityPermissionResult,
+    get_android_accessibility_status, get_android_shizuku_status, open_shizuku_app,
+    paste_via_shizuku_with_result, recover_android_accessibility,
+    request_android_accessibility_permission, request_android_shizuku_permission,
+    AndroidAccessibilityPermissionResult, AndroidShizukuOpenResult,
+    AndroidShizukuPermissionResult,
 };
 #[cfg(target_os = "android")]
 pub use insert::android_insert_with_strategy;
@@ -50,6 +55,7 @@ pub use overlay::{
     refresh_android_overlay_layout, replace_android_overlay, request_android_overlay_permission,
     show_android_overlay, AndroidOverlayPermissionResult,
 };
+#[cfg(target_os = "android")]
 pub use shizuku::{
     get_android_shizuku_status, open_shizuku_app, paste_via_shizuku_with_result,
     recover_android_accessibility, request_android_shizuku_permission, AndroidShizukuOpenResult,

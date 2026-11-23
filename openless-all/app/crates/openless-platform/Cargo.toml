@@ -74,6 +74,7 @@ diagnostics-1266 = []
 # Android：JNI 接缝 + 无障碍插入通道
 android = [
     "dep:jni",
+    "dep:tokio",
     "clipboard",
     "permissions",
     "selection",
