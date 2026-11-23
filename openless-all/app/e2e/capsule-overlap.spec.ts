@@ -26,11 +26,12 @@ test('processing lobe stays joined to recording through transcript, menu and job
   const assertAnchors = async () => {
     const lower = (await body.boundingBox())!;
     const upper = (await lobe.boundingBox())!;
+    expect(upper.height).toBeCloseTo(22, 1);
     expect(lower.y).toBeCloseTo(anchor!.y, 1);
-    expect(upper.x + upper.width / 2 - (lower.x + lower.width / 2)).toBeCloseTo(10, 1);
-    expect(upper.y + upper.height - lower.y).toBeCloseTo(20, 1);
+    expect(upper.x + upper.width / 2 - (lower.x + lower.width / 2)).toBeCloseTo(0, 1);
+    expect(upper.y + upper.height - lower.y).toBeCloseTo(4, 1);
   };
-  await expect(lobe).toContainText('正在转录');
+  await expect(lobe).toContainText('处理中');
   await page.waitForTimeout(250);
   await page.screenshot({ path: info.outputPath('recording-processing.png') });
   await assertAnchors();
@@ -92,6 +93,13 @@ test('processing lobe stays joined to recording through transcript, menu and job
   await expect(page.locator('.ol-capsule-transcript-rail')).not.toContainText('不得污染');
   await emit('dictation:jobs', [{ sessionId: 'old-b' }]);
   await assertAnchors();
+  await expect.poll(() => page.evaluate(() => {
+    const rear = document.querySelector('.ol-processing-satellite')!.getBoundingClientRect();
+    const body = document.querySelector('.ol-default-capsule')!.getBoundingClientRect();
+    const x = rear.left + rear.width / 2, y = (rear.top + body.top) / 2;
+    return (window as any).fixture.inputRegions.some((r: any) =>
+      x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height);
+  })).toBe(true);
   await lobe.click({ position: { x: 52, y: 10 } });
   await expect
     .poll(() => page.evaluate(() => (window as any).fixture.dictationActions.at(-1)))
@@ -100,7 +108,38 @@ test('processing lobe stays joined to recording through transcript, menu and job
     .poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
     .toEqual({ sessionId: 'old-b' });
   await expect(body).toHaveAttribute('data-recording', 'true');
+  await body.locator('.ol-default-action').nth(1).click();
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
+    .toEqual({ sessionId: 'recording-a' });
 });
+
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`processing wave settles into slow connection and cancels its owner: ${reducedMotion}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion });
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
+    await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
+    await page.evaluate(() => (window as any).fixture.emit('capsule:state', {
+      state: 'polishing', sessionId: 'processing-a', translation: false,
+    }));
+    const pill = page.locator('.ol-default-capsule');
+    await expect(pill).toHaveCSS('width', '116px');
+    await expect(pill.locator('.ol-capsule-wave-progress')).toHaveCount(1);
+    await expect(pill).toHaveAttribute('data-slow-connection', 'false');
+    if (reducedMotion === 'reduce') {
+      await expect(pill.locator('.ol-capsule-wave-progress')).toHaveCSS('animation-name', 'none');
+    }
+    await expect(pill).toHaveAttribute('data-slow-connection', 'true', { timeout: 6000 });
+    await expect(pill.locator('.ol-capsule-marquee')).toBeVisible();
+    await pill.locator('.ol-default-processing-cancel').click();
+    await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
+      .toEqual({ sessionId: 'processing-a' });
+    await page.evaluate(() => (window as any).fixture.emit('capsule:state', {
+      state: 'recording', sessionId: 'recording-b', translation: false,
+    }));
+    await expect(pill).toHaveAttribute('data-slow-connection', 'false');
+    await expect(pill.locator('.ol-capsule-marquee')).toHaveCount(0);
+  });
+}
 
 test('translation keeps its element and moves continuously when streaming starts', async ({
   page,
@@ -187,7 +226,8 @@ test('translation keeps its element and moves continuously when streaming starts
       });
     }, phase);
     await expect(page.locator('.ol-default-capsule')).toHaveAttribute('data-recording', 'true');
-    await expect(badge).toHaveAttribute('data-visible', 'true');
+    await expect(badge).toHaveAttribute('data-visible', 'false');
+    await expect(page.locator('.ol-processing-satellite')).toContainText('正在翻译');
   }
   await page.evaluate(() => (window as any).fixture.emit('dictation:jobs', []));
   await expect(badge).toHaveAttribute('data-visible', 'false');
@@ -205,18 +245,18 @@ test('translation keeps its element and moves continuously when streaming starts
   await page.screenshot({ path: info.outputPath('translation-after-stop.png') });
 });
 
-test('empty recognition preserves its recovery message', async ({ page }) => {
+test('empty recognition shows its concise status', async ({ page }) => {
   await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
   await page.waitForFunction(() => (window as any).fixture.hasListener('dictation:jobs'));
   await page.evaluate(() =>
     (window as any).fixture.emit('capsule:state', {
       state: 'error',
       sessionId: 'empty-a',
-      message: '未识别到语音，录音已保留，可在历史中重新转录',
+      message: 'empty_transcript',
     }),
   );
   const label = page.locator('.ol-default-status');
-  await expect(label).toContainText('可在历史中重新转录');
+  await expect(label).toHaveText('空稿 · 未识别到语音');
   await expect
     .poll(() => label.evaluate((element) => element.scrollWidth <= element.clientWidth))
     .toBe(true);

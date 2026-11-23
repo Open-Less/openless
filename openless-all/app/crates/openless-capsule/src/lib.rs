@@ -199,18 +199,18 @@ impl CapsuleLabels {
         Self {
             thinking,
             empty_transcript: match locale {
-                _ if locale.starts_with("zh") && !locale.starts_with("zh-TW") && !locale.starts_with("zh-HK") => "未识别到语音，录音已保留，可在历史中重新转录",
-                _ if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") => "未辨識到語音，錄音已保留，可在歷史中重新轉錄",
-                _ if locale.starts_with("en") => "No speech recognized. Recording saved; retranscribe in History.",
-                _ if locale.starts_with("de") => "Keine Sprache erkannt. Aufnahme gespeichert; im Verlauf erneut transkribieren.",
-                _ if locale.starts_with("es") => "No se reconoció voz. Grabación guardada; vuelve a transcribir en el historial.",
-                _ if locale.starts_with("fr") => "Aucune parole reconnue. Enregistrement conservé ; retranscrivez dans l’historique.",
-                _ if locale.starts_with("ja") => "音声を認識できませんでした。録音は保存されています。履歴から再文字起こしできます。",
-                _ if locale.starts_with("ko") => "음성을 인식하지 못했습니다. 녹음이 저장되었습니다. 기록에서 다시 변환하세요.",
-                _ => "No speech recognized. Recording saved; retranscribe in History.",
+                _ if locale.starts_with("zh") && !locale.starts_with("zh-TW") && !locale.starts_with("zh-HK") => "空稿 · 未识别到语音",
+                _ if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") => "空稿 · 未辨識到語音",
+                _ if locale.starts_with("en") => "Empty · No speech",
+                _ if locale.starts_with("de") => "Leer · Keine Sprache",
+                _ if locale.starts_with("es") => "Vacío · Sin voz",
+                _ if locale.starts_with("fr") => "Vide · Aucune voix",
+                _ if locale.starts_with("ja") => "空の原稿・音声なし",
+                _ if locale.starts_with("ko") => "빈 초안 · 음성 없음",
+                _ => "Empty · No speech",
             }.into(),
-            transcribing: if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") { "正在轉錄" }
-                else if locale.starts_with("zh") { "正在转录" }
+            transcribing: if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") { "處理中" }
+                else if locale.starts_with("zh") { "处理中" }
                 else if locale.starts_with("de") { "Transkription" }
                 else if locale.starts_with("es") { "Transcribiendo" }
                 else if locale.starts_with("fr") { "Transcription" }

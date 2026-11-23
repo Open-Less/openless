@@ -185,9 +185,13 @@ impl NativeCapsule {
             }
         }
     }
-    pub(crate) fn update_processing_count(&self, count: usize, session_id: Option<String>, translation: bool) {
+    pub(crate) fn update_processing_jobs(&self, jobs: &[openless_core::DictationStateSnapshot]) {
         let mut latest = self.latest.lock();
         if let Some(frame) = latest.frame.as_mut() {
+            let background: Vec<_> = jobs.iter().filter(|job| job.session_id.map(|id| id.to_string()).as_deref() != Some(frame.session_id.as_str())).collect();
+            let count = background.len();
+            let session_id = background.first().and_then(|job| job.session_id).map(|id| id.to_string());
+            let translation = background.first().is_some_and(|job| job.translation_active);
             if frame.processing_count != count || frame.processing_session_id != session_id || frame.processing_translation != translation {
                 frame.processing_count = count;
                 frame.processing_translation = translation;
@@ -312,7 +316,8 @@ impl NativeCapsule {
         } else {
             String::new()
         };
-        let processing_jobs = coordinator.backend().snapshot().processing_dictations;
+        let processing_jobs: Vec<_> = coordinator.backend().snapshot().processing_dictations.into_iter()
+            .filter(|job| job.session_id.map(|id| id.to_string()) != payload.session_id).collect();
         let mut frame = Frame {
             session_id: payload.session_id.clone().unwrap_or_default(),
             sequence,
@@ -335,7 +340,7 @@ impl NativeCapsule {
             show_transcript: preferences.capsule_transcript_enabled,
             transcript_font_size: preferences.capsule_transcript_font_size as f32,
             processing_count: processing_jobs.len(),
-            processing_translation: processing_jobs.iter().any(|job| job.translation_active),
+            processing_translation: processing_jobs.first().is_some_and(|job| job.translation_active),
             processing_session_id: processing_jobs.first().and_then(|task| task.session_id).map(|id| id.to_string()),
             labels: CapsuleLabels::for_locale(&self.locale.lock()),
             theme: match preferences.theme_mode {

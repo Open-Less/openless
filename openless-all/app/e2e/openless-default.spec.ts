@@ -45,7 +45,7 @@ test('processing stays cancellable, hides confirm and shows a compact status', a
     'background-color',
     'rgba(28, 34, 45, 0.88)',
   );
-  await expect(pill).toHaveCSS('width', '80px');
+  await expect(pill).toHaveCSS('width', '116px');
   // Translation remains visible while the submitted recording is processing.
   await expect(page.locator('.ol-classic-translation')).toHaveCSS('opacity', '1');
   await page.screenshot({
