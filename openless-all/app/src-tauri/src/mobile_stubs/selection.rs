@@ -40,6 +40,10 @@ pub(crate) fn reactivate_selection_insertion_target(_target: &SelectionInsertion
     true
 }
 
+pub(crate) fn reactivate_dictation_insertion_target(_target: &SelectionInsertionTarget) -> bool {
+    true
+}
+
 pub(crate) fn resolve_selection_workspace_capture(
 ) -> (Option<SelectionContext>, SelectionInsertionTarget) {
     (capture_selection(), SelectionInsertionTarget)

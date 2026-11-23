@@ -6,6 +6,15 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const es: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Traducción de grabación',
+    description: 'Activación con Shift y número de pulsaciones',
+    count: 'Pulsaciones de Shift',
+    scope:
+      'Durante la grabación, pulsa brevemente solo Shift este número de veces para activar o desactivar la traducción. Se aplica al atajo Shift predeterminado; se desactiva si Shift es la tecla de grabación.',
+    times_one: '{{count}} pulsación',
+    times_other: '{{count}} pulsaciones',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
@@ -336,8 +345,11 @@ export const es: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    emptyTranscript: 'Vacío · Sin voz',
+    transcribing: 'Transcribiendo',
     asking: 'Pregunta lo que quieras',
     thinking: 'pensando',
+    slowConnection: 'Conexión más lenta de lo habitual',
     using: 'actuando',
     cancelled: 'Cancelado',
     error: 'Se ha producido un error',
@@ -346,10 +358,10 @@ export const es: typeof zhCN = {
     translationChangeFailed: 'No se pudo cambiar el idioma. Vuelve a seleccionarlo.',
     translating: 'Traduciendo',
     selectionPolish: {
-      polishing: 'Mejorando el texto…',
+      polishing: 'Mejorando…',
       replaced: 'Reemplazado',
-      noSelection: 'No hay texto seleccionado',
-      failed: 'No se pudo mejorar el texto. Inténtalo de nuevo',
+      noSelection: 'Sin texto seleccionado',
+      failed: 'Error al mejorar',
     },
   },
   selectionPolishPreview: {

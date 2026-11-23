@@ -33,6 +33,7 @@ block2 = "0.5"
 objc2 = { version = "0.5", features = ["exception"] }
 parking_lot = "0.12"
 futures-util = "0.3"
+dispatch2 = "0.3"
 
 [target.'cfg(windows)'.dev-dependencies]
 parking_lot = "0.12"

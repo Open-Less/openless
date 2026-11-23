@@ -5,6 +5,16 @@ use openless_core::domains::{SelectionCapture, SelectionRuntimeAdapter};
 
 pub(crate) struct SuppliedTextRuntime;
 impl SelectionRuntimeAdapter for SuppliedTextRuntime {
+    fn protect_original(
+        &self,
+        _session: SessionId,
+        _text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        // This port only previews explicitly supplied app text. It cannot capture
+        // or overwrite an external selection, and iOS promises no automatic
+        // clipboard access. Core still saves the complete input in history.
+        Box::pin(async { Ok(None) })
+    }
     fn capture(
         &self,
         _session: SessionId,

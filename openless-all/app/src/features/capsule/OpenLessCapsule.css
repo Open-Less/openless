@@ -1,6 +1,7 @@
 /* Compact geometry with a theme-aware frosted surface and readable blue controls. */
 .ol-default-capsule {
   position: relative;
+  z-index: 1;
   height: 32px;
   flex: 0 0 auto;
   isolation: isolate;
@@ -23,28 +24,83 @@
   box-shadow: inset 0 1px 0 var(--ol-pill-highlight);
   border: 1px solid var(--ol-pill-border);
   border-radius: inherit;
+  transition: box-shadow 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.ol-default-capsule::after {
-  content: '';
+/* Rightward-advancing uniform translucent water-wave progress fill inside the clipped pill. */
+.ol-capsule-wave-layer {
   position: absolute;
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  background: var(--ol-pill-sweep);
-  transform: translateX(-100%);
+  overflow: hidden;
+  contain: layout paint;
   pointer-events: none;
 }
-.ol-default-capsule[data-processing='true']::after {
-  animation: ol-capsule-sweep 2.4s linear infinite;
+.ol-capsule-wave-progress {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  transform: translate3d(-100%, 0, 0);
+  will-change: transform;
+  animation: ol-wave-advance 4.2s cubic-bezier(0.22, 0.65, 0.36, 1) forwards;
 }
-/* Reference processing fill travels left→right; it is not a pulsing spinner. */
-@keyframes ol-capsule-sweep {
+.ol-capsule-wave-svg {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  width: calc(100% + 16px);
+  height: 64px;
+  display: block;
+  will-change: transform;
+  animation: ol-wave-bob 3.2s linear infinite;
+}
+.ol-capsule-wave-bubbles {
+  position: absolute;
+  inset: 0 4px 0 4px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ol-capsule-wave-bubble {
+  position: absolute;
+  border-radius: 50%;
+  border: 0.75px solid var(--ol-pill-wave-bubble);
+  background: radial-gradient(circle at 30% 30%, var(--ol-pill-wave-bubble), transparent 70%);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: ol-bubble-drift 2.8s ease-in-out infinite;
+}
+@keyframes ol-wave-advance {
   0% {
-    transform: translateX(-100%);
+    transform: translate3d(-100%, 0, 0);
   }
-  85%,
   100% {
-    transform: translateX(0);
+    transform: translate3d(0%, 0, 0);
+  }
+}
+@keyframes ol-wave-bob {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, -32px, 0);
+  }
+}
+@keyframes ol-bubble-drift {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0) scale(0.75);
+  }
+  25% {
+    opacity: 0.85;
+  }
+  80% {
+    opacity: 0.65;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(5px, -5px, 0) scale(1);
   }
 }
 .ol-default-capsule[data-translation='true']::before {
@@ -120,7 +176,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 14px;
+  padding: 0 12px;
+  overflow: hidden;
   pointer-events: none;
   font-size: 12px;
   font-weight: calc(500 + var(--ol-font-weight-offset));
@@ -132,9 +189,80 @@
   transition-delay: 0ms;
 }
 .ol-default-status > span {
+  max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
+}
+/* Single-layer per-character magnification + luminous sweep synchronized left-to-right
+   with the water wave. Strictly one text node per glyph (zero ghosting/duplication). */
+.ol-lens-word {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.ol-lens-char {
+  display: inline-block;
+  color: var(--ol-pill-ink);
+  opacity: 0.78;
+  transform: scale(1);
+  transform-origin: center center;
+  will-change: transform, opacity;
+  animation: ol-char-wave-lens 0.95s cubic-bezier(0.22, 0.65, 0.36, 1) both;
+}
+@keyframes ol-char-wave-lens {
+  0% {
+    transform: scale(1);
+    color: var(--ol-pill-ink);
+    opacity: 0.78;
+    text-shadow: none;
+  }
+  32% {
+    transform: scale(1.22);
+    color: var(--ol-pill-shimmer-peak);
+    opacity: 1;
+    text-shadow: 0 0 8px var(--ol-pill-shimmer-glow);
+  }
+  100% {
+    transform: scale(1.06);
+    color: var(--ol-pill-ink);
+    opacity: 1;
+    text-shadow: none;
+  }
+}
+.ol-capsule-marquee {
+  width: 100%;
+  overflow: hidden;
+  mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 10px,
+    #000 calc(100% - 10px),
+    transparent
+  );
+}
+.ol-capsule-marquee-track {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  will-change: transform;
+  animation: ol-capsule-marquee-scroll 5.4s linear infinite;
+}
+.ol-capsule-marquee-item {
+  padding-right: 26px;
+  color: var(--ol-pill-ink);
+}
+@keyframes ol-capsule-marquee-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
 }
 .ol-default-capsule[data-error='true'] .ol-default-status {
   color: var(--ol-pill-error);
@@ -157,21 +285,110 @@
   gap: 2px;
   width: 40px;
   height: 18px;
+  contain: layout style;
 }
 .ol-default-waveform > span {
   width: 1.5px;
-  height: 1.5px;
+  height: 16px;
   flex: 0 0 1.5px;
   border-radius: 999px;
   background: var(--ol-pill-ink);
+  transform: scaleY(0.1);
+  transform-origin: center center;
+  will-change: transform;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ol-default-capsule::after {
+  .ol-capsule-wave-progress,
+  .ol-capsule-wave-svg,
+  .ol-capsule-wave-bubble,
+  .ol-lens-char,
+  .ol-capsule-marquee-track {
     animation: none !important;
+  }
+  .ol-lens-char {
+    opacity: 1;
+    transform: none;
+  }
+  .ol-capsule-wave-progress {
+    transform: translate3d(0%, 0, 0);
   }
   .ol-default-recording,
   .ol-default-action,
   .ol-default-status {
     transition: none;
+  }
+}
+/* The rear pill rises and shrinks from the foreground capsule, resting centered
+   behind it with only ~1/5 (~4px of 22px) tucked under the foreground top edge,
+   differentiated by a softer gray tone. */
+.ol-processing-satellite {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 60px;
+  width: max-content;
+  max-width: 96px;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0 10px 3px;
+  border-radius: 11px;
+  border: 1px solid var(--ol-satellite-border);
+  background: var(--ol-satellite-fill);
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  box-shadow: inset 0 1px 0 var(--ol-pill-highlight);
+  color: var(--ol-satellite-ink);
+  font-family: var(--ol-font-sans);
+  font-size: 10px;
+  font-weight: calc(500 + var(--ol-font-weight-offset));
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  transform-origin: center bottom;
+  will-change: transform, opacity;
+  animation: ol-processing-rise 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.ol-processing-satellite[data-leaving='true'] {
+  pointer-events: none;
+  animation: ol-processing-sink 220ms cubic-bezier(0.4, 0, 0.85, 0.6) forwards;
+}
+.ol-processing-satellite-label {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@keyframes ol-processing-rise {
+  0% {
+    transform: translate(-50%, 26px) scale(1.16, 1.3);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, 0) scale(1, 1);
+    opacity: 1;
+  }
+}
+@keyframes ol-processing-sink {
+  0% {
+    transform: translate(-50%, 0) scale(1, 1);
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translate(-50%, 24px) scale(0.92, 0.9);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-processing-satellite,
+  .ol-processing-satellite[data-leaving='true'] {
+    animation: none;
   }
 }

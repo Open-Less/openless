@@ -16,10 +16,14 @@
 
 先读[架构与接口调用](architecture.md)定位模块，再按[全平台构建指南](../openless-all/README.zh.md)配置开发环境。
 
+- **官方风格包**：[来源、升级保护与口述修正契约](development/official-style-packs.md)
+- **选区全文与原文保护**：[历史、剪贴板与安全写回契约](development/selection-originals.md)
 - **听写与模型**：[语音链路与服务渠道](development/speech.md) · [本地模型管理](development/local-models.md)
+- **录音翻译**：[同段 Shift 开关、次数与验收范围](development/shift-translation.md)
 - **文字处理**：[问答与选区调用](architecture.md#问答与选区) · [转写后的自定义润色策略](development/polish-strategy.md) · [按输入应用选择风格包](development/app-style-routing.md)
 - **应用与模型目录**：[Agent 客户端、Harness 与模型研究表](research/agent-app-model-catalog.md) · [外部目录与分类接口](development/app-style-routing.md#分类目录-api)
-- **数据与安全**：[云同步与旧快照协议](development/cloud-sync.md) · [远程输入协议](development/remote-input.md) · [WebView 内容安全策略](development/webview-security.md)
+- **数据与安全**：[云同步与旧快照协议](development/cloud-sync.md) · [v1 扩展与跨版本保留](development/sync-v1-compatibility.md) · [远程输入协议](development/remote-input.md) · [WebView 内容安全策略](development/webview-security.md)
+- **联网搜索**：[免费聚合、DeepSeek 混合搜索与验收边界](development/web-search.md)
 - **宿主与排查**：[Linux 宿主接口与日志](development/linux.md) · [Windows 无响应诊断](development/windows-diagnostics.md)
 - **构建与发布**：[发布规范](../RELEASING.zh.md) · [自动检查、签名与分发](development/delivery.md)
 - **维护资料**：[架构图图源](images/client-diagrams/README.md) · [AOCI Code 索引](aoci-code.md) · [第三方组件署名与许可](ATTRIBUTION.md)

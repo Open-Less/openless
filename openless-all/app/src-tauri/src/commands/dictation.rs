@@ -67,12 +67,17 @@ pub async fn start_dictation(core: CoreState<'_>) -> Result<(), String> {
 pub async fn stop_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    session_id: Option<openless_core::SessionId>,
 ) -> Result<(), String> {
     ensure_core_started(&core).await?;
+    if let Some(id) = session_id {
+        return core.submit_dictation_session(id, Default::default()).await.map(|_| ()).map_err(|error| error.to_string());
+    }
     if coord.stop_less_computer_recording().await? {
         return Ok(());
     }
-    core.stop_dictation()
+    let id = core.snapshot().dictation.session_id.ok_or("no active dictation session")?;
+    core.submit_dictation_session(id, Default::default())
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -82,8 +87,12 @@ pub async fn stop_dictation(
 pub async fn cancel_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    session_id: Option<openless_core::SessionId>,
 ) -> Result<(), String> {
     ensure_core_started(&core).await?;
+    if let Some(id) = session_id.or_else(|| core.dictation_cancel_target()) {
+        return core.cancel_dictation(Some(id)).await.map_err(|error| error.to_string());
+    }
     coord.cancel_active_voice().await;
     Ok(())
 }

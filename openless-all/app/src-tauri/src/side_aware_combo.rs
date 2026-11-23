@@ -14,6 +14,10 @@ use crate::shortcut_binding::{is_side_specific_modifier_tag, normalize_side_modi
 use crate::types::ShortcutBinding;
 use openless_core::is_modifier_chord_binding;
 
+// Test dispatchers and monitor lifetimes share this process-global fixture.
+#[cfg(test)]
+pub(crate) static TEST_MONITOR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 static ACTIVE_MONITOR: OnceLock<RwLock<Option<ActiveSideCombo>>> = OnceLock::new();
 
 struct ActiveSideCombo {
@@ -772,6 +776,7 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn restoring_live_side_binding_preserves_its_event_route() {
+        let _monitor_guard = TEST_MONITOR_LOCK.blocking_lock();
         use std::sync::mpsc;
         let binding = ShortcutBinding {
             primary: "D".into(),

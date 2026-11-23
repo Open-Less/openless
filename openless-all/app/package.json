@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.3-Beta.2+build.noask.20261123",
+  "version": "2.0.3-Beta.3+build.noask.20261123",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@base-ui/utils": "0.5.0",
     "@shadcn/react": "^0.2.1",
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/api": "^2.1.1",

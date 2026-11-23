@@ -11,6 +11,15 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ko: typeof zhCN = {
   ...en,
+  shiftTranslation: {
+    title: '녹음 번역',
+    description: 'Shift 전환 및 연속 누르기 횟수',
+    count: 'Shift 연속 누르기 횟수',
+    scope:
+      '녹음 중 Shift만 같은 횟수만큼 짧게 누르면 번역을 켜거나 끕니다. 기본 Shift 번역 단축키에만 적용되며 Shift가 녹음 키이면 비활성화됩니다.',
+    times_one: '{{count}}회',
+    times_other: '{{count}}회',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
@@ -321,8 +330,11 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
+    emptyTranscript: '빈 초안 · 음성 없음',
+    transcribing: '변환 중',
     asking: '무엇이든 질문',
     thinking: 'thinking',
+    slowConnection: '평소보다 연결이 느립니다',
     using: 'using',
     cancelled: '취소됨',
     error: '오류 발생',
@@ -331,10 +343,10 @@ export const ko: typeof zhCN = {
     translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
     selectionPolish: {
-      polishing: '다듬는 중...',
+      polishing: '다듬는 중…',
       replaced: '교체됨',
-      noSelection: '선택된 내용 없음',
-      failed: '다듬기 실패, 다시 시도하세요',
+      noSelection: '선택된 텍스트 없음',
+      failed: '다듬기 실패',
     },
   },
   selectionPolishPreview: {

@@ -307,6 +307,7 @@ fn publish_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -
     let selection_voice_active = false;
     let session_active = inner.backend.snapshot().dictation.phase
         != openless_core::DictationPhase::Idle
+        || !inner.backend.snapshot().processing_dictations.is_empty()
         || inner.backend.less_computer_active_session().is_some()
         || selection_voice_active;
     let esc_exclusive = esc_exclusive_for_capsule(state, session_active);

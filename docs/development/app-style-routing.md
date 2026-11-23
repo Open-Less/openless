@@ -51,6 +51,42 @@ macOS 用目录中的 Bundle ID 匹配。安装式 Web App 同时匹配目录中
 
 最终写入由宿主复核原目标。Windows 使用同一次捕获的窗口、进程和线程。macOS 恢复原应用并在可获得窗口编号时检查原窗口。同窗口标签页等细粒度目标仍取决于宿主能力。
 
+## 冻结应用场景前缀
+
+普通前台落字听写由 `capture_dictation_context_with_host` 从 `CapturedTextTarget.host_context` 同步获取 `input_app()` 和可用的 `input_location()`，在异步光标捕获及渠道凭据读取前，用同一次本地目录/用户归属快照确定分类、用途参考与候选风格。`options.front_app` 只是调用方上下文，不能替代实际写入目标的身份；没有稳定目标身份时名称/标识写“未知”，不能拿后来前台的 app 补齐。不会读取应用历史来构建本次前缀，也不上传历史到公共目录 API。
+
+`DictationPolishContext.input_scene_prefix` 单独保存已渲染的短前缀，与 canonical `style_system_prompt` 分开。格式为：
+
+```text
+当前应用：{目标应用名称，否则未知}
+应用标识：{宿主现有目标 ID，否则未知}
+应用分类：{用户覆盖后的有效分类名称，否则未知}
+应用主要用途：{官方客户端 promptGuidance 用途参考，否则未知}
+当前输入位置：{可信目标位置，否则应用内输入，无法正确确定}
+本次输入场景：{已有分类用途参考及谨慎的组织建议}
+请结合上述信息理解用户的输入场景，再按照后续提供的用户风格要求处理本次语音内容。保持用户的原意，不自行增加需求或推断无法确定的信息。
+```
+
+目录没有独立的主要用途字段，现有客户端 `promptGuidance` 是唯一复用的用途参考；为空就如实未知，不根据应用名、分类或 role 自行生成用途。分类提示只在场景行提供参考，不改变风格指定的输出任务，不替用户添加开发任务、方案或回答问题。用户改分类只影响下一段；已开始的录音与已提交段不会因目录刷新、改规则、切窗口而变化。
+
+`HostContextAdapter::input_location()` 是 object-safe 默认方法，默认返回 `None`。实现只能返回同一冻结目标中已验证的控件语义标签/角色，禁止从输入正文、窗口标题推断“搜索框”“聊天框”等位置。以下三种情况都原样显示“应用内输入，无法正确确定”：光标上下文开关关闭（不调用位置方法）；宿主无读取权限或无法确认位置；当前宿主尚未实现可信标签快照。当前桌面 AX/UIA 目标保留身份和范围，没有已经验证可消费的标签 getter，因此默认未知；这不表示平台本身无法提供标签。现有光标正文的隐私开关和权限路径保持原样。
+
+传统润色在 `run_cloud_polish` 请求构建时调用 `with_input_scene_prefix`，统一系统提示词与 Omni 走 `effective_polish_prompts` / `build_omni_prompt`。序列化顺序为 **场景前缀 → 所选风格（内置修正在包内）→ 非内置修正尾缀 → 本次完整输入**；翻译协议及其他既有约束沿用原实现。旧的“输入场景参考”追加块已移除，不重复注入。Raw 的模式和 canonical 提示词判断完全不含场景，取消翻译仍可零模型直通。显式自选包优先于自动规则；调用方显式提供 `front_app` 时保持原有手选回退（除非同时指定 `style_pack_id`），真实目标元数据仍独立用于场景前缀；其余调用仍为具体应用 > 分类 > 手选。内部速记、云笔记、问答和选区不采用前台场景前缀，也不因此改变它们原有的选包规则。
+
+### 验证与限制
+
+| 要求 | 实际入口与源码（Core src/ 或 tests/） | 验证/限制 |
+| --- | --- | --- |
+| 已知/未知应用与可靠/未知位置 | start_dictation → `api.rs::capture_dictation_context_with_host`；`app_style_routing.rs::selection` | `dictation_target_capture::routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app` 检查实际 HTTP 请求；可靠控件标签由测试宿主显式提供，未宣称物理桌面标签实测。 |
+| 录音中切 app、改规则、用户改分类 | 同一正常入口，冻结在 `DictationPolishContext.input_scene_prefix` | 夹具在凭据等待/录音期间切前台或改归属，核对原应用/分类/目标/有效风格。 |
+| 自选风格、普通润色与翻译、请求顺序 | `cloud_providers.rs::run_cloud_polish`；`dictation_context.rs::effective_polish_prompts` | 生产 Pipeline + SharedCloudTextPolisher + 本地 HTTP，检查前缀只出现一次、风格和修正顺序、完整输入。返回文字是夹具，不是实际模型遵循证明。 |
+| Raw 零请求与取消翻译 | 同一 HTTP 测试；`dictation_context.rs::uses_llm_polisher` | 内置 Raw、实时取消及提交时取消均检查零请求；自定义 Raw 继续请求模型。 |
+| 内部目的地及 Omni | `with_input_scene_prefix`；`build_omni_prompt` | 局部单元测试检查内部目的地不注入、Omni 前置及翻译约束。未运行真实 Omni 音频请求或真实云模型，没有真实模型输出/渠道证据。 |
+
+本次局部验收通过：生产入口集成测试 6 项、提示词契约 7 项、场景单元测试 3 项。
+
+局部命令：应用目录运行 `cargo test --locked -p openless-core --test dictation_target_capture --test prompt_contract`，以及 `cargo test --locked -p openless-core --lib scene`。本次不改安装版本、生产服务或用户真实数据，不执行发布构建。
+
 ## 本机数据与刷新
 
 `app-style-routing.json` 保存分类风格、应用指定风格、归属覆盖，以及输入目标的标识、名称和使用状态。应用特征只包含识别和配置所需元数据。成功插入或发送粘贴的听写新增目标应用。页面订阅现有历史变更事件，输入完成后更新列表；返回前台时重新读取。

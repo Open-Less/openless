@@ -47,7 +47,11 @@ export function HistoryDetail({
   const locale = i18n.resolvedLanguage || i18n.language;
   const os = getRuntimeOS();
   const { prefs } = useHotkeySettings();
-  const [contentView, setContentView] = useState<'polished' | 'raw'>('polished');
+  const [contentView, setContentView] = useState<'polished' | 'raw'>(
+    !item.finalText && ['selection_polish', 'selection_voice_edit'].includes(item.source ?? '')
+      ? 'raw'
+      : 'polished',
+  );
   const contentScroll = useRef<HTMLDivElement>(null);
   const [repolishOpen, setRepolishOpen] = useState(false);
   const [playbackRequest, setPlaybackRequest] = useState(0);

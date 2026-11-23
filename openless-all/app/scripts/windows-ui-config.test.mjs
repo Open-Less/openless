@@ -372,7 +372,7 @@ assertMatch(
   'typeless translation row should prevent badge overlap and clipping',
 );
 
-const conditionalReturn = capsuleTsx.indexOf('if (insertFallback)');
+const conditionalReturn = capsuleTsx.indexOf('if (insertFallback');
 const transcriptVisibilityHook = capsuleTsx.indexOf(
   'setCapsuleTranscriptVisible(transcriptVisible)',
 );

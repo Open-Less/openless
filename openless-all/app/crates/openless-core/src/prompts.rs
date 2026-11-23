@@ -12,21 +12,13 @@ pub fn system_prompt(mode: PolishMode) -> String {
 
 /// Character cap for untrusted text inside an XML prompt envelope.
 ///
-/// The envelope truncates past this limit and appends a marker. Any flow that
-/// writes the model result back over the original selection must refuse inputs
-/// above the cap — the model never saw the tail, so a rewrite would delete it.
+/// General dictation/QA context retains this budget. Explicit selection input
+/// uses `escape_xml_envelope` instead and is never truncated at this boundary.
 pub const MAX_XML_ENVELOPE_CHARS: usize = 16_000;
 
 /// Whether `raw` is longer than the XML envelope will show a model.
 pub fn exceeds_xml_envelope_cap(raw: &str) -> bool {
     raw.chars().count() > MAX_XML_ENVELOPE_CHARS
-}
-
-/// Error text for a replacement that would be computed from a truncated view.
-pub fn truncated_selection_replacement_message() -> String {
-    format!(
-        "selection is longer than {MAX_XML_ENVELOPE_CHARS} characters; refusing to replace it from a truncated model view"
-    )
 }
 
 /// issue #609 F-02: unified hardening before untrusted text goes into an XML envelope.
@@ -51,13 +43,18 @@ pub fn sanitize_for_xml_envelope(raw: &str, tag: &str) -> String {
         std::borrow::Cow::Borrowed(raw)
     };
 
+    escape_xml_envelope(&capped, tag)
+}
+
+/// Escape envelope boundaries without truncating explicit selection input.
+pub fn escape_xml_envelope(raw: &str, tag: &str) -> String {
     // Neutralize case + inner-whitespace variants of open/close tags. Replace the
     // whole `<` / `</` + (optional whitespace) tag (optional whitespace) `>` span with
     // a safe form that escapes the leading `<`, destroying its meaning as an XML
     // boundary while staying readable.
     let lower_tag = tag.to_ascii_lowercase();
-    let mut out = String::with_capacity(capped.len());
-    let chars: Vec<char> = capped.chars().collect();
+    let mut out = String::with_capacity(raw.len());
+    let chars: Vec<char> = raw.chars().collect();
     let mut i = 0usize;
     while i < chars.len() {
         if chars[i] == '<' {
@@ -164,7 +161,7 @@ pub fn polish_injection_defense() -> &'static str {
 /// output. A selection has no "voice input", no "mode", no "cursor"; it needs the
 /// selection frame.
 pub fn selection_user_prompt(selected_text: &str) -> String {
-    let escaped = sanitize_for_xml_envelope(selected_text, "selected_text");
+    let escaped = escape_xml_envelope(selected_text, "selected_text");
     format!(
         "下面是用户选中的文本。请按 system prompt 中的任务要求处理这段文本，\
          输出处理后的正文，它会被原样替换选区。\n\n\

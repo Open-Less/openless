@@ -7,6 +7,15 @@ import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
 
 export const zhCN = {
+  shiftTranslation: {
+    title: '录音翻译',
+    description: 'Shift 开关与连按次数',
+    count: 'Shift 连按次数',
+    scope:
+      '录音时独立短按相同次数的 Shift 可开启或取消翻译。仅适用于默认 Shift 翻译快捷键；Shift 用作录音键时不启用。',
+    times_one: '{{count}} 次',
+    times_other: '{{count}} 次',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
@@ -307,8 +316,11 @@ export const zhCN = {
     durationMinutes: '{{value}} 分钟',
   },
   capsule: {
+    emptyTranscript: '空稿 · 未识别到语音',
+    transcribing: '处理中',
     asking: '随便问',
     thinking: 'thinking',
+    slowConnection: '连接比平常慢',
     using: 'using',
     cancelled: '已取消',
     error: '出错了',
@@ -317,10 +329,10 @@ export const zhCN = {
     translationChangeFailed: '语言切换失败，请重新选择。',
     translating: '正在翻译',
     selectionPolish: {
-      polishing: '正在润色...',
+      polishing: '正在润色…',
       replaced: '已替换',
-      noSelection: '未选中内容',
-      failed: '润色失败，请重试',
+      noSelection: '未选中文本',
+      failed: '润色失败',
     },
   },
   selectionPolishPreview: {

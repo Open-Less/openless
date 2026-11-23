@@ -44,7 +44,7 @@ export const CLASSIC_CAPSULE_HOST_HEIGHT = 172;
 export const CLASSIC_CAPSULE_BOTTOM_INSET = 16;
 export const CLASSIC_CAPSULE_BADGE_HEIGHT = 28;
 export const CLASSIC_CAPSULE_BADGE_GAP = 8;
-export const CLASSIC_CAPSULE_RAIL_GAP = 8;
+export const CLASSIC_CAPSULE_RAIL_GAP = 24;
 
 export interface ClassicCapsuleGeometry {
   hostHeight: number;
@@ -84,8 +84,9 @@ export function getClassicCapsuleGeometry(
     : null;
   const badgeBottom =
     bodyTop -
-    CLASSIC_CAPSULE_BADGE_GAP -
-    (sameWindowRail && translationActive ? railHeight + CLASSIC_CAPSULE_RAIL_GAP : 0);
+    (sameWindowRail && translationActive
+      ? CLASSIC_CAPSULE_BADGE_GAP + railHeight + CLASSIC_CAPSULE_RAIL_GAP
+      : CLASSIC_CAPSULE_RAIL_GAP);
   const badgeTop = badgeBottom - CLASSIC_CAPSULE_BADGE_HEIGHT;
   return {
     hostHeight,
@@ -116,7 +117,7 @@ export function getClassicTranslationBadgeOffset(
     transcriptInSameWindow,
   );
   const baseBadgeBottomOffset =
-    CLASSIC_CAPSULE_HOST_HEIGHT - geometry.bodyTop + CLASSIC_CAPSULE_BADGE_GAP;
+    CLASSIC_CAPSULE_HOST_HEIGHT - geometry.bodyTop + CLASSIC_CAPSULE_RAIL_GAP;
   return geometry.badgeBottomOffset - baseBadgeBottomOffset;
 }
 

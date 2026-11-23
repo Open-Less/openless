@@ -1379,9 +1379,11 @@ impl EncryptedSyncService {
                 kdf: Kdf::fixed(Salt::random().map_err(protocol_error)?),
             };
             let captured = self
-                .0
-                .data
-                .export(self.scope(&runtime, context.vault_id.as_str(), context.key_id.as_str())?)
+                .export_local(self.scope(
+                    &runtime,
+                    context.vault_id.as_str(),
+                    context.key_id.as_str(),
+                )?)
                 .await?;
             let documents = captured.documents.documents().clone();
             let (snapshot, key) = tokio::task::spawn_blocking(move || {
@@ -1825,7 +1827,7 @@ impl EncryptedSyncService {
         remote: ValidatedSyncDocuments,
     ) -> SyncResult<RestorePreview> {
         let scope = self.active_scope(runtime)?;
-        let local = self.0.data.export(scope.clone()).await?;
+        let local = self.export_local(scope.clone()).await?;
         let baseline = self.baseline_documents(runtime)?;
         let merged = documents::diff_sync_documents(baseline.as_ref(), &local.documents, &remote)
             .map_err(document_error)?;
@@ -2083,7 +2085,7 @@ impl EncryptedSyncService {
             return Err(error("restore_review_required"));
         }
         let scope = self.active_scope(runtime)?;
-        let mut captured = self.0.data.export(scope.clone()).await?;
+        let mut captured = self.export_local(scope.clone()).await?;
         self.check_cancelled()?;
         let merge = documents::diff_sync_documents(baseline.as_ref(), &captured.documents, &remote)
             .map_err(document_error)?;
@@ -2168,7 +2170,7 @@ impl EncryptedSyncService {
                 return Err(error("revision_conflict"));
             }
             let scope = self.active_scope(&runtime)?;
-            let captured = self.0.data.export(scope).await?;
+            let captured = self.export_local(scope).await?;
             let prior = previous.clone();
             let content = captured.documents.documents().clone();
             let (snapshot, key) = tokio::task::spawn_blocking(move || {
@@ -2775,6 +2777,14 @@ impl EncryptedSyncService {
                 ui_preferences,
             }),
         );
+    }
+
+    async fn export_local(&self, scope: SyncScope) -> SyncResult<ExportedDocuments> {
+        let captured = self.0.data.export(scope.clone()).await?;
+        if captured.materialized_preferences {
+            self.emit_restored(&scope, &captured);
+        }
+        Ok(captured)
     }
 }
 

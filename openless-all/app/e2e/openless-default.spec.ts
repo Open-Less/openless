@@ -5,8 +5,8 @@ test('default capsule follows both themes with eleven bars, including legacy sty
   page,
 }, info) => {
   for (const theme of [
-    { scheme: 'light' as const, fill: 'rgba(255, 255, 255, 0.86)', ink: 'rgb(29, 78, 216)' },
-    { scheme: 'dark' as const, fill: 'rgba(28, 34, 45, 0.88)', ink: 'rgb(167, 199, 255)' },
+    { scheme: 'light' as const, fill: 'rgba(255, 255, 255, 0.92)', ink: 'rgb(29, 78, 216)' },
+    { scheme: 'dark' as const, fill: 'rgba(32, 39, 52, 0.92)', ink: 'rgb(167, 199, 255)' },
   ]) {
     await page.emulateMedia({ colorScheme: theme.scheme });
     for (const style of ['classic', 'typeless']) {
@@ -43,10 +43,11 @@ test('processing stays cancellable, hides confirm and shows a compact status', a
   await expect(pill.locator('.ol-default-confirm')).toBeDisabled();
   await expect(page.locator('.ol-classic-translation')).toHaveCSS(
     'background-color',
-    'rgba(28, 34, 45, 0.88)',
+    'rgba(32, 39, 52, 0.92)',
   );
-  await expect(pill).toHaveCSS('width', '80px');
-  await expect(page.locator('.ol-classic-translation')).toHaveCSS('opacity', '0');
+  await expect(pill).toHaveCSS('width', '116px');
+  // Translation remains visible while the submitted recording is processing.
+  await expect(page.locator('.ol-classic-translation')).toHaveCSS('opacity', '1');
   await page.screenshot({
     path: info.outputPath('capsule-processing.png'),
     animations: 'disabled',
