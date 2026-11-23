@@ -59,10 +59,6 @@ const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 4096;
 /// Shed optional enhancement before a temporary backlog can stop capture.
 const AUDIO_PROCESSING_SHED_ENHANCEMENT_US: u64 = 500_000;
 static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
-/// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
-/// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
-/// archive messages accepted before stop are fully flushed.
-const WAV_ARCHIVE_QUEUE_CAPACITY: usize = 256;
 /// The provisional capture cap is 500 ms at the canonical 16 kHz mono i16 format.
 pub(crate) const STAGED_CAPTURE_MAX_BYTES: usize = TARGET_SAMPLE_RATE as usize;
 /// Voice handoff staging keeps up to 30 seconds while the formal dictation session is prepared.
@@ -365,10 +361,11 @@ enum WavArchiveMessage {
 }
 
 /// WAV archive entry point off the realtime audio callback. The callback only copies PCM and
-/// pushes messages into a bounded channel; file writing, seek, and sync all run on a dedicated
-/// thread.
+/// queues every frame without blocking on disk; file writing, seek, and sync run
+/// on a dedicated thread. A temporary disk backlog must not punch holes in a
+/// recoverable long recording.
 struct WavArchiveWriter {
-    sender: SyncSender<WavArchiveMessage>,
+    sender: Sender<WavArchiveMessage>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
     queue_full_warned: AtomicBool,
 }
@@ -376,7 +373,7 @@ struct WavArchiveWriter {
 impl WavArchiveWriter {
     fn create(path: &Path) -> std::io::Result<Self> {
         let archiver = WavArchiver::create(path)?;
-        let (sender, receiver) = sync_channel::<WavArchiveMessage>(WAV_ARCHIVE_QUEUE_CAPACITY);
+        let (sender, receiver) = channel::<WavArchiveMessage>();
         let join_handle = thread::Builder::new()
             .name("openless-wav-archive".into())
             .spawn(move || run_wav_archive_writer(archiver, receiver))?;
@@ -388,19 +385,9 @@ impl WavArchiveWriter {
     }
 
     fn append(&self, pcm_bytes: &[u8]) {
-        match self
-            .sender
-            .try_send(WavArchiveMessage::Pcm(pcm_bytes.to_vec()))
-        {
+        match self.sender.send(WavArchiveMessage::Pcm(pcm_bytes.to_vec())) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
-                    log::warn!(
-                        "[recorder] wav archive queue is full; dropping archive PCM until the writer catches up"
-                    );
-                }
-            }
-            Err(TrySendError::Disconnected(_)) => {
+            Err(_) => {
                 if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
                     log::warn!("[recorder] wav archive writer stopped before PCM was queued");
                 }
@@ -482,17 +469,16 @@ impl RawTap {
         }
     }
 
-    fn append_raw(&self, samples: &[f32]) {
+    fn append_pcm(&self, pcm: &[u8]) {
         if self.raw_writer.is_none() && self.write_processed {
             return;
         }
-        let pcm = openless_core::pcm_f32_to_i16_le(samples);
         if let Some(raw) = self.raw_writer.as_ref() {
-            raw.append(&pcm);
+            raw.append(pcm);
         }
         if !self.write_processed {
             if let Some(canonical) = self.canonical.as_ref() {
-                canonical.append(&pcm);
+                canonical.append(pcm);
             }
         }
     }
@@ -503,6 +489,7 @@ struct ForwardTarget {
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     archive: Option<Arc<WavArchiveWriter>>,
+    write_processed: bool,
 }
 
 enum CaptureSinkState {
@@ -541,7 +528,7 @@ impl CaptureSink {
 
     fn deliver(target: &ForwardTarget, pcm: &[u8]) {
         target.consumer.consume_pcm_chunk(pcm);
-        if let Some(archive) = target.archive.as_ref() {
+        if let Some(archive) = target.archive.as_ref().filter(|_| target.write_processed) {
             archive.append(pcm);
         }
     }
@@ -555,8 +542,9 @@ impl CaptureSink {
     ) -> Result<(), RecorderError> {
         // 只要处理前时，主档案由 DSP 线程写原始 PCM，这里就不能再写处理后。
         let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
-        *self.raw_tap.lock() = raw_tap;
+        let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
+        *tap_slot = raw_tap;
         let prefix = {
             let mut state = self.state.lock();
             let CaptureSinkState::Staging { pcm } = &mut *state else {
@@ -574,7 +562,8 @@ impl CaptureSink {
             *state = CaptureSinkState::Promoted(ForwardTarget {
                 consumer,
                 level_handler,
-                archive: if write_processed { archive } else { None },
+                archive,
+                write_processed,
             });
             prefix
         };
@@ -587,6 +576,12 @@ impl CaptureSink {
         };
         if let Some(target) = target {
             if !prefix.is_empty() {
+                if !target.write_processed {
+                    // The staged prefix predates RawTap registration; archive it once.
+                    if let Some(archive) = &target.archive {
+                        archive.append(&prefix);
+                    }
+                }
                 Self::deliver(&target, &prefix);
                 (target.level_handler)(pcm_rms_level(&prefix));
             }
@@ -626,6 +621,7 @@ impl AudioConsumer for CaptureSink {
                     consumer: Arc::clone(&target.consumer),
                     level_handler: Arc::clone(&target.level_handler),
                     archive: target.archive.clone(),
+                    write_processed: target.write_processed,
                 }),
                 CaptureSinkState::Discarded => None,
             }
@@ -908,8 +904,10 @@ impl WarmCaptureSink {
         archive: Option<Arc<WavArchiveWriter>>,
         raw_tap: Option<Arc<RawTap>>,
     ) -> Result<(), RecorderError> {
+        let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
-        *self.raw_tap.lock() = raw_tap;
+        let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
+        *tap_slot = raw_tap;
         let (prefix, staged_level) = {
             let mut state = self.state.lock();
             let WarmCaptureSinkState::Ring { claims, .. } = &mut *state;
@@ -930,6 +928,7 @@ impl WarmCaptureSink {
                     consumer,
                     level_handler,
                     archive,
+                    write_processed,
                 }),
             );
             (prefix, max_level)
@@ -949,6 +948,11 @@ impl WarmCaptureSink {
             .flatten();
         if let Some(target) = target {
             if !prefix.is_empty() {
+                if !target.write_processed {
+                    if let Some(archive) = &target.archive {
+                        archive.append(&prefix);
+                    }
+                }
                 CaptureSink::deliver(&target, &prefix);
                 if let Some(activation) = activation {
                     self.deliver_activation(&activation, &prefix);
@@ -3148,6 +3152,7 @@ impl AudioProcessingWorker {
                 #[cfg(target_os = "android")]
                 android_capture::prioritize_current_thread();
                 let mut processor = openless_core::AudioProcessor::new(processing);
+                let mut raw_normalizer = openless_core::audio::PcmNormalizer::default();
                 if let Some(queue) = far_end.clone() {
                     processor.attach_far_end(queue);
                 }
@@ -3170,23 +3175,21 @@ impl AudioProcessingWorker {
                         AudioProcessingMessage::Frame(frame) => {
                             #[cfg(target_os = "android")]
                             processor.set_monitoring_enabled(android_capture::monitoring_enabled());
-                            // 「处理前」的原始帧：额外 raw 档案永远拿原始 PCM；
-                            // 只要处理前、不要处理后时，主档案也写原始 PCM，回退与
-                            // 播放继续可用，且不会多出一份重复文件。
-                            if raw_archiver.is_some() || !write_processed {
-                                let pcm = openless_core::pcm_f32_to_i16_le(&frame.samples);
+                            // Raw means before enhancement, still canonical 16 kHz mono PCM.
+                            // Hold promotion ownership across raw and processed delivery so a
+                            // single frame cannot straddle the staged/live archive transition.
+                            let tap_slot = raw_tap_slot.as_ref().map(|slot| slot.lock());
+                            if let Some(raw_chunk) = raw_normalizer.process(&frame.samples, frame.channels, frame.input_sample_rate) {
                                 if let Some(raw) = &raw_archiver {
-                                    raw.append(&pcm);
+                                    raw.append(&raw_chunk.pcm_i16_le);
                                 }
                                 if !write_processed {
                                     if let Some(canonical) = &archiver {
-                                        canonical.append(&pcm);
+                                        canonical.append(&raw_chunk.pcm_i16_le);
                                     }
                                 }
-                            }
-                            if let Some(slot) = raw_tap_slot.as_ref() {
-                                if let Some(tap) = slot.lock().clone() {
-                                    tap.append_raw(&frame.samples);
+                                if let Some(tap) = tap_slot.as_ref().and_then(|slot| slot.as_ref()) {
+                                    tap.append_pcm(&raw_chunk.pcm_i16_le);
                                 }
                             }
                             let queued_us = backlog.micros.load(Ordering::Acquire);
@@ -3207,6 +3210,7 @@ impl AudioProcessingWorker {
                             ) {
                                 deliver(chunk);
                             }
+                            drop(tap_slot);
                             #[cfg(target_os = "android")]
                             android_capture::publish_monitor(&processor);
                         }
@@ -3614,6 +3618,40 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
 
+    #[test]
+    fn wav_archive_keeps_every_frame_when_disk_worker_is_delayed() {
+        let path =
+            std::env::temp_dir().join(format!("openless-archive-{}.wav", uuid::Uuid::new_v4()));
+        let archiver = WavArchiver::create(&path).unwrap();
+        let (sender, receiver) = channel();
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let worker_start = start.clone();
+        let join_handle = thread::spawn(move || {
+            worker_start.wait();
+            run_wav_archive_writer(archiver, receiver);
+        });
+        let writer = WavArchiveWriter {
+            sender,
+            join_handle: Mutex::new(Some(join_handle)),
+            queue_full_warned: AtomicBool::new(false),
+        };
+        let mut expected = Vec::new();
+        for index in 0..1024_u16 {
+            let pcm = index.to_le_bytes().repeat(320);
+            writer.append(&pcm);
+            expected.extend_from_slice(&pcm);
+        }
+        start.wait();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], expected);
+        assert_eq!(
+            u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize,
+            expected.len()
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[derive(Default)]
     struct RecordingConsumer {
         chunks: StdMutex<Vec<Vec<u8>>>,
@@ -3628,6 +3666,95 @@ mod tests {
         fn finish_segment(&self) {
             *self.segment_flushes.lock().unwrap() += 1;
         }
+    }
+
+    #[test]
+    fn raw_only_archive_keeps_staged_prefix_without_duplicating_live_processed_pcm() {
+        for warm in [false, true] {
+            let path =
+                std::env::temp_dir().join(format!("openless-prefix-{}.wav", uuid::Uuid::new_v4()));
+            let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
+            let raw = Arc::new(RawTap::new(Some(writer.clone()), None, false));
+            let consumer = Arc::new(RecordingConsumer::default());
+            let prefix = openless_core::pcm_f32_to_i16_le(&[0.1, 0.2]);
+            let live_raw = [0.3, 0.4];
+            let live_processed = openless_core::pcm_f32_to_i16_le(&[0.31, 0.41]);
+            if warm {
+                let sink = WarmCaptureSink::new(64);
+                sink.arm(17, false).unwrap();
+                sink.consume_pcm_chunk(&prefix);
+                sink.promote(
+                    17,
+                    consumer.clone(),
+                    Arc::new(|_| {}),
+                    Some(writer.clone()),
+                    Some(raw.clone()),
+                )
+                .unwrap();
+                raw.append_pcm(&openless_core::pcm_f32_to_i16_le(&live_raw));
+                sink.consume_pcm_chunk(&live_processed);
+            } else {
+                let sink = CaptureSink::new(64);
+                sink.consume_pcm_chunk(&prefix);
+                sink.promote(
+                    consumer.clone(),
+                    Arc::new(|_| {}),
+                    Some(writer.clone()),
+                    Some(raw.clone()),
+                )
+                .unwrap();
+                raw.append_pcm(&openless_core::pcm_f32_to_i16_le(&live_raw));
+                sink.consume_pcm_chunk(&live_processed);
+            }
+            writer.finish();
+            let wav = std::fs::read(&path).unwrap();
+            let mut expected = prefix.clone();
+            expected.extend(openless_core::pcm_f32_to_i16_le(&live_raw));
+            assert_eq!(&wav[44..], expected);
+            assert_eq!(
+                consumer.chunks.lock().unwrap().concat(),
+                [prefix, live_processed].concat()
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn raw_archive_normalizes_native_stereo_rate_to_the_canonical_wav_format() {
+        let path =
+            std::env::temp_dir().join(format!("openless-raw-format-{}.wav", uuid::Uuid::new_v4()));
+        let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start_with_targets(
+            Default::default(),
+            consumer.clone(),
+            Arc::new(|_| {}),
+            Some(writer.clone()),
+            None,
+            Arc::new(StreamState::new()),
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        let epoch = std::time::Instant::now();
+        for index in 0..100 {
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: epoch + std::time::Duration::from_millis(index * 10),
+                    samples: [0.2_f32, 0.4].repeat(480),
+                    channels: 2,
+                    input_sample_rate: 48_000,
+                }))
+                .unwrap();
+        }
+        drop(sender);
+        worker.finish();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(wav.len(), 44 + 16_000 * 2);
+        assert_eq!(&wav[44..], consumer.chunks.lock().unwrap().concat());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;
 mod cloud_sync_e2ee_protocol;
 pub mod cloud_sync_e2ee_store;
+mod long_recording;
 mod cloud_sync_transaction;
 mod cloud_sync_types;
 mod cloud_sync_validation;

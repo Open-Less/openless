@@ -184,6 +184,7 @@ impl PreparedTranscription for PreparedCloudTranscription {
                 asr_call_label,
                 language: preparation.context.asr.language.clone(),
                 finished: AtomicBool::new(false),
+                pcm_bytes: AtomicU64::new(0),
                 task_spawner,
             }) as Arc<dyn TranscriptionSession>)
         })
@@ -211,6 +212,7 @@ struct CloudTranscriptionSession {
     asr_call_label: crate::AsrCallLabel,
     language: Option<String>,
     finished: AtomicBool,
+    pcm_bytes: AtomicU64,
     task_spawner: Arc<dyn TaskSpawner>,
 }
 
@@ -247,6 +249,8 @@ impl TranscriptionEngine for SharedCloudTranscriptionEngine {
 
 impl AudioConsumer for CloudTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        self.pcm_bytes
+            .fetch_add(pcm.len() as u64, Ordering::Relaxed);
         match &self.kind {
             CloudTranscriptionSessionKind::Volcengine(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::Whisper(provider) => provider.consume_pcm_chunk(pcm),
@@ -293,10 +297,19 @@ impl TranscriptionSession for CloudTranscriptionSession {
         }
         let kind = self.kind.clone();
         let task_spawner = Arc::clone(&self.task_spawner);
+        let long_recording =
+            crate::long_recording::duration_ms(self.pcm_bytes.load(Ordering::Acquire))
+                > crate::long_recording::THRESHOLD_MS;
         Box::pin(async move {
             let transcript = match kind {
                 CloudTranscriptionSessionKind::Volcengine(provider) => {
                     let sender_result = provider.send_last_frame().await;
+                    if long_recording {
+                        if let Err(error) = sender_result {
+                            provider.cancel();
+                            return Err(map_asr_error(error));
+                        }
+                    }
                     if sender_result.is_err() {
                         // Stop the transport. A result already handed off by the
                         // receiver remains available through its oneshot channel.
@@ -352,22 +365,34 @@ impl TranscriptionSession for CloudTranscriptionSession {
                     provider.finish().await.map_err(map_asr_error)?
                 }
                 CloudTranscriptionSessionKind::Bailian(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
                 CloudTranscriptionSessionKind::QwenRealtime(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
                 CloudTranscriptionSessionKind::StepfunRealtime(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
                 CloudTranscriptionSessionKind::Xfyun(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }

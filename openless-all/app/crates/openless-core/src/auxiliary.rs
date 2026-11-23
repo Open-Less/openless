@@ -224,6 +224,17 @@ impl AuxiliaryApi for AuxiliaryService {
             if !context.uses_llm_polisher() {
                 return Ok(request.raw_text);
             }
+            if request.raw_text.chars().count() > crate::long_recording::POLISH_CHUNK_CHARS {
+                let output = crate::dictation_engine::polish_long_recording(
+                    Arc::clone(&service.polisher),
+                    SessionId::new(),
+                    context,
+                    request.raw_text,
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .await?;
+                return Ok(output.text);
+            }
             let output = service
                 .polisher
                 .polish(
@@ -261,56 +272,81 @@ impl AuxiliaryApi for AuxiliaryService {
                 })?;
             let fallback_label =
                 AsrCallLabel::new(context.asr.provider_type.clone(), context.asr.model.clone());
-            let session_id = SessionId::new();
-            let pace_replay = context.asr.provider_type == "volcengine";
-            let session = service
-                .transcription
-                .start(session_id, context, Arc::new(DiscardTextStream))
-                .await
-                .map_err(|mut error| {
-                    error.retryable = !is_terminal_foundry_error(&error);
-                    RetranscriptionFailure {
-                        error,
-                        attempted_asr: Some(fallback_label.clone()),
-                    }
-                })?;
-            let attempted_asr = session
-                .asr_call_label()
-                .unwrap_or_else(|| fallback_label.clone());
-            let mut guard = RetranscriptionCancelGuard::new(
-                Arc::clone(&session),
-                Arc::clone(&service.task_spawner),
-            );
-            if pace_replay {
-                // The realtime endpoint expects audio over time, including when
-                // playback is sourced from an archived recording.
-                let mut chunks = pcm.chunks(crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES);
-                if let Some(first) = chunks.next() {
-                    session.consume_pcm_chunk(first);
-                }
-                for chunk in chunks {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    session.consume_pcm_chunk(chunk);
-                }
+            let long_recording = crate::long_recording::duration_ms(pcm.len() as u64)
+                > crate::long_recording::THRESHOLD_MS;
+            let chunk_bytes = if long_recording {
+                crate::long_recording::RECOVERY_CHUNK_BYTES
             } else {
-                session.consume_pcm_chunk(&pcm);
-            }
-            let result = session.finish().await;
-            guard.disarm();
-            match result {
-                Ok(output) => Ok(RetranscriptionResult {
-                    text: output.text,
-                    duration_ms: output.duration_ms,
-                    asr: attempted_asr,
-                }),
-                Err(mut error) => {
-                    error.retryable = !is_terminal_foundry_error(&error);
-                    Err(RetranscriptionFailure {
-                        error,
-                        attempted_asr: Some(attempted_asr),
-                    })
+                pcm.len()
+            };
+            let mut combined = RetranscriptionResult {
+                text: String::new(),
+                duration_ms: 0,
+                asr: fallback_label.clone(),
+            };
+            for pcm in pcm.chunks(chunk_bytes) {
+                let session_id = SessionId::new();
+                let pace_replay = context.asr.provider_type == "volcengine";
+                let session = service
+                    .transcription
+                    .start(
+                        session_id,
+                        Arc::clone(&context),
+                        Arc::new(DiscardTextStream),
+                    )
+                    .await
+                    .map_err(|mut error| {
+                        error.retryable = !is_terminal_foundry_error(&error);
+                        RetranscriptionFailure {
+                            error,
+                            attempted_asr: Some(fallback_label.clone()),
+                        }
+                    })?;
+                let attempted_asr = session
+                    .asr_call_label()
+                    .unwrap_or_else(|| fallback_label.clone());
+                let mut guard = RetranscriptionCancelGuard::new(
+                    Arc::clone(&session),
+                    Arc::clone(&service.task_spawner),
+                );
+                if pace_replay {
+                    // The realtime endpoint expects audio over time, including when
+                    // playback is sourced from an archived recording.
+                    let mut chunks = pcm.chunks(crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES);
+                    if let Some(first) = chunks.next() {
+                        session.consume_pcm_chunk(first);
+                    }
+                    for chunk in chunks {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        session.consume_pcm_chunk(chunk);
+                    }
+                } else {
+                    session.consume_pcm_chunk(pcm);
+                }
+                let result = session.finish().await;
+                guard.disarm();
+                match result {
+                    Ok(output) => {
+                        if !combined.text.is_empty() && !output.text.is_empty() {
+                            combined.text.push('\n');
+                        }
+                        combined.text.push_str(&output.text);
+                        combined.duration_ms += output.duration_ms;
+                        combined.asr = attempted_asr;
+                    }
+                    Err(mut error) => {
+                        error.retryable = !is_terminal_foundry_error(&error);
+                        return Err(RetranscriptionFailure {
+                            error,
+                            attempted_asr: Some(attempted_asr),
+                        });
+                    }
                 }
             }
+            if long_recording {
+                combined.duration_ms = crate::long_recording::duration_ms(pcm.len() as u64);
+            }
+            Ok(combined)
         })
     }
 }
@@ -527,6 +563,52 @@ mod tests {
 
         assert_eq!(result, "指定风格结果");
         assert_eq!(service.preferences.get().active_style_pack_id, before);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn long_recording_history_retranscription_uses_all_pcm_and_canonical_duration() {
+        let transcription = Arc::new(FixtureTranscriptionEngine::successful("recovered", 125));
+        let (service, path) = service(
+            Arc::new(FixtureTextPolisher::successful("unused")),
+            transcription.clone(),
+        );
+        service
+            .preferences
+            .update(|prefs| prefs.active_asr_provider = "groq".into())
+            .unwrap();
+        let mut pcm = vec![1; 301 * crate::DICTATION_SAMPLE_RATE as usize * 2];
+        let len = pcm.len();
+        pcm[len - 4..].copy_from_slice(&[8, 0, 9, 0]);
+        let result = service.retranscribe_pcm(pcm.clone()).await.unwrap();
+        assert_eq!(transcription.pcm(), pcm);
+        assert_eq!(result.duration_ms, 301_000);
+        assert_eq!(result.text, ["recovered"; 6].join("\n"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn long_recording_history_repolish_sends_every_character_without_envelope_truncation() {
+        let polisher = Arc::new(FixtureTextPolisher::successful("completed part"));
+        let (service, path) = service(
+            polisher.clone(),
+            Arc::new(FixtureTranscriptionEngine::successful("unused", 0)),
+        );
+        let raw = format!("{}last detail", "完整原文。\n".repeat(4_000));
+        let result = service
+            .repolish(RepolishRequest {
+                raw_text: raw.clone(),
+                style_pack_id: Some(BUILTIN_STYLE_PACK_FORMAL_ID.into()),
+                front_app: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(polisher.inputs().concat(), raw);
+        assert!(polisher
+            .inputs()
+            .iter()
+            .all(|input| input.chars().count() <= 4_000));
+        assert!(!result.is_empty());
         let _ = std::fs::remove_file(path);
     }
 

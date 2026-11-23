@@ -579,6 +579,13 @@ pub trait RecordingControlSink: Send + Sync {
 pub trait RecordingArchive: Send + Sync {
     fn is_available(&self) -> bool;
 
+    /// Validate the finalized canonical archive without loading all audio when
+    /// the host can inspect its header and file metadata directly.
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let read = self.read_pcm();
+        Box::pin(async move { read.await.map(|pcm| pcm.len() as u64) })
+    }
+
     /// Move an undecided capture into the permanent quick-note archive.
     /// Hosts that do not need separate storage can keep the default no-op.
     fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {

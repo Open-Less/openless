@@ -2370,6 +2370,8 @@ struct BackendEngineProgress {
     phase_changed: Arc<tokio::sync::Notify>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
     raw_transcripts: Mutex<HashMap<SessionId, TranscriptAccumulator>>,
+    history: Arc<HistoryStore>,
+    history_revision: Arc<AtomicU64>,
 }
 
 impl EngineProgressSink for BackendEngineProgress {
@@ -2553,6 +2555,37 @@ impl EngineProgressSink for BackendEngineProgress {
                 };
                 let is_partial = !delta.is_final;
                 let transcript_chars = transcript.chars().count();
+                if delta.is_final
+                    && state.session(session_id).unwrap().elapsed_ms
+                        > crate::long_recording::THRESHOLD_MS
+                {
+                    // Keep the whole ASR text recoverable before an expensive LLM call.
+                    // The state lock prevents a late final delta overwriting cancellation.
+                    let saved = (|| -> Result<bool, BackendError> {
+                        let Some(mut entry) = self.history.list()?.into_iter().find(|entry| {
+                            entry.id == session_id.to_string()
+                                && entry.error_code.as_deref() == Some("recording")
+                        }) else {
+                            return Ok(false);
+                        };
+                        entry.raw_transcript = transcript.clone();
+                        entry.duration_ms = Some(state.session(session_id).unwrap().elapsed_ms);
+                        self.history.update_entry(entry)
+                    })();
+                    match saved {
+                        Ok(true) => {
+                            let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;
+                            self.events.publish(
+                                None,
+                                BackendEventKind::HistoryChanged(HistoryChange { revision }),
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!("failed to persist long-recording transcript: {error}")
+                        }
+                        Ok(false) => {}
+                    }
+                }
                 drop(state);
                 if is_partial {
                     let insertion = self
@@ -5280,6 +5313,8 @@ impl OpenLessBackend {
             phase_changed: Arc::clone(&self.phase_changed),
             text_insertions: Arc::clone(&self.text_insertions),
             raw_transcripts: Mutex::new(HashMap::new()),
+            history: Arc::clone(&self.history),
+            history_revision: Arc::clone(&self.history_revision),
         })
     }
 
@@ -19508,6 +19543,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn long_recording_final_asr_is_saved_before_polishing_begins() {
+        for elapsed_ms in [300_000, 300_001] {
+            let (backend, _) = backend();
+            backend.start().await.unwrap();
+            let session = backend.start_dictation().await.unwrap();
+            let progress = backend.engine_progress_sink();
+            progress
+                .publish(
+                    session,
+                    EngineProgress::RecordingLevel {
+                        elapsed_ms,
+                        level: 0.5,
+                    },
+                )
+                .unwrap();
+            progress
+                .publish(session, EngineProgress::Stage(EngineStage::Transcribing))
+                .unwrap();
+            let raw = format!("{}final detail", "complete transcript. ".repeat(1_500));
+            progress
+                .publish(
+                    session,
+                    EngineProgress::TranscriptDelta(crate::types::TranscriptDelta {
+                        text: raw.clone(),
+                        offset: 0,
+                        is_final: true,
+                    }),
+                )
+                .unwrap();
+            let entry = backend
+                .list_history()
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.id == session.to_string())
+                .unwrap();
+            if elapsed_ms > crate::long_recording::THRESHOLD_MS {
+                assert_eq!(entry.raw_transcript, raw);
+                assert_eq!(entry.duration_ms, Some(elapsed_ms));
+            } else {
+                assert!(entry.raw_transcript.is_empty());
+            }
+            assert!(entry.final_text.is_empty());
+            assert_eq!(entry.insert_status, HistoryInsertStatus::NotRequested);
+            assert_eq!(
+                backend.snapshot().dictation.phase,
+                DictationPhase::Transcribing
+            );
+            backend.cancel_dictation(Some(session)).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn late_engine_progress_is_rejected_after_session_cancellation() {
         let (backend, _) = backend();
         backend.start().await.unwrap();
@@ -19518,6 +19605,8 @@ mod tests {
             phase_changed: Arc::clone(&backend.phase_changed),
             text_insertions: Arc::clone(&backend.text_insertions),
             raw_transcripts: Mutex::new(HashMap::new()),
+            history: Arc::clone(&backend.history),
+            history_revision: Arc::clone(&backend.history_revision),
         };
         backend.cancel_dictation(Some(session)).await.unwrap();
 
