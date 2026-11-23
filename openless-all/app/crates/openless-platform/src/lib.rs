@@ -52,6 +52,8 @@ pub mod clipboard;
 pub mod common;
 #[cfg(feature = "credentials")]
 pub mod credentials;
+#[cfg(feature = "ime")]
+pub mod ime;
 #[cfg(feature = "input")]
 pub mod input;
 #[cfg(feature = "permissions")]

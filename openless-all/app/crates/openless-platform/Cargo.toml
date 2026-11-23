@@ -57,6 +57,12 @@ asr-foundry = [
 # Apple Speech（macOS Speech.framework）
 asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
 
+# Windows TSF 文本服务通道（提交 / 选区）
+ime = ["dep:serde", "dep:serde_json", "dep:tokio", "dep:parking_lot"]
+
+# issue-1266 诊断观测（由宿主 feature 转发）
+diagnostics-1266 = []
+
 # 自更新：清单解析 + 源选择 + 签名校验（桌面与 Android 共用）
 updater = [
     "dep:semver",

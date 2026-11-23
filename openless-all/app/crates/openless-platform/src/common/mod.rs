@@ -2,3 +2,7 @@
 
 pub mod codec;
 pub mod error;
+
+/// issue-1266 诊断观测（TSF/录音链路共用）。
+#[cfg(feature = "ime")]
+pub mod issue1266;

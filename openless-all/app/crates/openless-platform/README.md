@@ -43,7 +43,9 @@ cargo test  --no-default-features --features storage          # 只测存储模�
 | `asr-sherpa` | sherpa-onnx 原生运行时（仅 Windows / Android arm64） | sherpa-onnx, tokio, parking_lot |
 | `asr-apple` | Apple Speech（仅 macOS） | objc2, block2, futures-util, parking_lot |
 | `asr-foundry` | Foundry Local（Windows WinML） | foundry-local-sdk, zip, tokio, uuid |
+| `ime` | Windows TSF 通道（提交 / 选区读取） | serde, tokio, parking_lot |
 | `ime-profile` | Windows IME 语言配置 | winreg |
+| `diagnostics-1266` | issue-1266 观测（宿主 feature 转发） | — |
 
 feature 之间的依赖写在 `Cargo.toml` 里，关闭底层能力会连带关掉依赖它的能力，
 不会留下悬空引用。
@@ -55,6 +57,11 @@ src/
   lib.rs              门面导出
   clipboard.rs        剪贴板：Intent / Snapshot / Clipboard
   text.rs             文本写入：send_paste_shortcut / type_text
+  ime/
+    protocol.rs       TSF 线协议（tag/状态码/payload/共享内存布局）
+    target.rs         前台焦点线程与窗口捕获
+    ipc.rs            WM_COPYDATA 提交与查询轮询
+    session.rs        插入会话状态机
   input/
     mod.rs            输入能力门面
     inject.rs         按键注入：send_copy_shortcut

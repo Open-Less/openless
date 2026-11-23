@@ -151,7 +151,7 @@ openless-platform = { path = "../crates/openless-platform", features = ["asr-she
 
 
 [target.'cfg(target_os = "windows")'.dependencies]
-openless-platform = { path = "../crates/openless-platform", features = ["asr-foundry"] }
+openless-platform = { path = "../crates/openless-platform", features = ["asr-foundry", "ime"] }
 windows-core = "0.58"
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"] }
 raw-window-handle = "0.6"
@@ -191,7 +191,7 @@ window-vibrancy = "0.7"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-issue-1266-diagnostics = []
+issue-1266-diagnostics = ["openless-platform/diagnostics-1266"]
 
 [profile.release]
 # 之前没有 [profile.release] —— 发布版走 Cargo 默认（无 LTO、不 strip、
