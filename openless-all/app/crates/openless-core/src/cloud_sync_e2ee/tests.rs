@@ -1034,6 +1034,103 @@ async fn auto_sync_local_retry_cannot_reconcile_a_later_manual_unknown_upload() 
 }
 
 #[tokio::test]
+async fn local_encrypted_sync_keeps_server_opaque_and_merges_upgrade_fields_on_client() {
+    let server = Server::start().await;
+    let first = Fixture::new(&server).await;
+    first.prepare().await;
+    first.create(false).await.unwrap();
+
+    let second = Fixture::new(&server).await;
+    second
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+    let before = second.data.documents.lock().unwrap().clone();
+    assert!(second
+        .service
+        .unlock("WrongPassword!9876".into(), false)
+        .await
+        .is_err());
+    assert_eq!(*second.data.documents.lock().unwrap(), before);
+    assert_eq!(server.state.lock().unwrap().revision, 1);
+    second.service.unlock(PASSWORD.into(), false).await.unwrap();
+    let preview = second.service.preview_restore("1".into()).await.unwrap();
+    second
+        .service
+        .apply_restore(preview.preview_id, RestoreMode::Replace, vec![])
+        .await
+        .unwrap();
+
+    // Simulate an upgraded client introducing both a known and a future setting.
+    first.data.documents.lock().unwrap().documents.extend([
+        LogicalDocument {
+            id: "translationShiftTapCount".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value: json!(3),
+        },
+        LogicalDocument {
+            id: "futureClientOnlySetting".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value: json!({"layout": "private-upgrade-layout", "version": 2}),
+        },
+    ]);
+    first.data.generation.fetch_add(1, Ordering::AcqRel);
+    first.service.sync_now().await.unwrap();
+
+    // The other instance edits an independent field against the common baseline.
+    second.data.edit("private-local-edit-on-second-client");
+    second.service.sync_now().await.unwrap();
+    first.service.sync_now().await.unwrap();
+    for client in [&first, &second] {
+        let documents = client.data.documents.lock().unwrap();
+        for (id, expected) in [
+            ("translationShiftTapCount", json!(3)),
+            (
+                "futureClientOnlySetting",
+                json!({"layout": "private-upgrade-layout", "version": 2}),
+            ),
+            ("futureLayout", json!("private-local-edit-on-second-client")),
+        ] {
+            assert_eq!(
+                documents
+                    .documents
+                    .iter()
+                    .find(|doc| doc.id == id)
+                    .unwrap()
+                    .value,
+                expected
+            );
+        }
+    }
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.revision, 3);
+    assert_eq!(remote.puts.len(), 3);
+    // The fixture server only stores complete opaque snapshots; it has no field merge.
+    for request in &remote.puts {
+        let envelope: Value = serde_json::from_slice(request).unwrap();
+        assert_eq!(envelope["protocolVersion"], 1);
+        assert!(envelope["ciphertext"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
+        assert!(envelope.get("documents").is_none());
+        let text = std::str::from_utf8(request).unwrap();
+        for private in [
+            PASSWORD,
+            "sk-private-fixture-key",
+            "translationShiftTapCount",
+            "futureClientOnlySetting",
+            "private-upgrade-layout",
+            "private-local-edit-on-second-client",
+        ] {
+            assert!(!text.contains(private));
+        }
+    }
+}
+
+#[tokio::test]
 async fn create_encrypts_real_data_and_wrong_password_never_changes_local_data() {
     let server = Server::start().await;
     let first = Fixture::new(&server).await;

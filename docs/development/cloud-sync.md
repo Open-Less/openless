@@ -51,6 +51,20 @@
 
 发布遵循 [RELEASING.md](../../RELEASING.md) 的对应提交 CI、签名和资产检查流程。真实 GitHub 授权及两台设备的生产数据往返仍须单独验收，不能由本地模拟服务器的通过结果代替。
 
+### 当前客户端的本地小回归
+
+2026-11-23 按用户明确要求，在 Beta.3 合并提交 `b3651cf2` 上增加并本地运行 `cloud_sync_e2ee::tests::local_encrypted_sync_keeps_server_opaque_and_merges_upgrade_fields_on_client`，结果为 **1 passed、0 failed**，测试执行 3.93 秒。只运行该用例；编译复用已缓存依赖并禁止联网获取，临时编译目录和测试数据在退出后删除，没有访问用户配置、系统钥匙串、真实账号或生产服务。
+
+该用例复用真实 `EncryptedSyncService`、密码派生、加解密、客户端三方合并和本地加密基线，连接已有的回环 HTTP 夹具。服务夹具只保存、下发完整密文及校验版本，不认识任何设置字段。第一个客户端新增 `translationShiftTapCount=3` 和一个将来版本的设置，第二个实例独立修改另一字段；两者同步后保留全部值，三次上传仍使用协议 v1，且请求中没有设置名、明文内容、服务密钥或同步密码。错误密码不能更改第二个实例的数据或云端版本。
+
+这条回归验证客户端与密文服务的职责分离及跨实例合并，不替代仓储恢复层、真实旧版矩阵、真实服务、平台钥匙串或物理双设备验收。后两类本次没有执行；既有旧版范围仍以 [v1 兼容记录](sync-v1-compatibility.md) 为准。正常开发中的编译仍按项目规则在云端执行，本次本地运行是用户明确要求的单次例外。
+
+```bash
+cargo test --offline --locked -p openless-core --lib \
+  cloud_sync_e2ee::tests::local_encrypted_sync_keeps_server_opaque_and_merges_upgrade_fields_on_client \
+  -- --exact --nocapture
+```
+
 ## 旧版手动快照
 
 本页维护 `/me/sync` 兼容客户端和服务端的合同。当前加密同步使用[独立的 `/v1/` 协议](#加密云同步)。已注册加密恢复门的仓库拒绝旧版多文件恢复，以保护恢复事务。
