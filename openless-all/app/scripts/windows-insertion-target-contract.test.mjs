@@ -28,29 +28,55 @@ assert.match(
   'partially dispatched Unicode input must remain uncertain instead of becoming copy-only fallback',
 );
 
-// Native wiring contract: do not touch the system clipboard or steal focus; real window effects
-// still require on-device acceptance.
-const unavailableTarget = finalInsert.match(
-  /if let Err\(error\) = self\.restore_insertion_target\(\) \{([\s\S]*?)\n        \}/,
-)?.[1];
-assert.ok(
-  unavailableTarget,
-  'an unavailable original target must reach the configured copy-only fallback',
-);
+// Ordinary dictation adds text at delivery-time focus. Selection replacement below
+// still validates its original control, range and complete source text.
+const ordinaryInserter = adapters.match(
+  /impl CoreTextInserter for TauriTextInserter \{[\s\S]*?(?=\n#\[derive\(Clone\)\]\nstruct TauriTextInsertionSession)/,
+)?.[0];
+assert.ok(ordinaryInserter, 'the ordinary dictation inserter must exist');
 assert.match(
-  unavailableTarget,
-  /#\[cfg\(target_os = "windows"\)\]\s*if self\.context\.insertion\.allow_non_tsf_fallback\s*\{\s*return self\.copy_fallback\(text\)\.await;\s*\}/,
-  'Windows may only copy when fallback is enabled and restoring the original target failed',
+  ordinaryInserter,
+  /fn defer_preparation_until_stop\(&self\) -> bool\s*\{\s*true\s*\}/,
+  'ordinary target preparation must remain inside ordered finalization',
 );
+const captureTarget = ordinaryInserter.match(/fn capture_target\([\s\S]*?(?=\n    fn begin)/)?.[0];
 assert.match(
-  unavailableTarget,
-  /return Err\(error\);/,
-  'disabled fallback must preserve the restore error',
+  captureTarget ?? '',
+  /insertion_target: None/,
+  'ordinary capture must not freeze a future write destination',
 );
 assert.doesNotMatch(
-  unavailableTarget,
-  /insert_final|windows_unicode_fallback|\.insert\(/,
-  'a failed target restore must never paste or type into the new focus',
+  captureTarget ?? '',
+  /capture_dictation_insertion_target/,
+  'ordinary capture must not acquire the old strict position anchor',
+);
+assert.match(
+  ordinaryInserter,
+  /insertion_target\s*\.unwrap_or_else\(crate::selection::capture_selection_insertion_target\)/,
+  'the finalization adapter must capture the delivery-time focus',
+);
+const ordinaryTargetCheck = adapters.match(
+  /fn restore_insertion_target\([\s\S]*?(?=\n    async fn write_chunk)/,
+)?.[0];
+assert.match(
+  ordinaryTargetCheck ?? '',
+  /if !self\.context\.insertion\.composition_input\s*\{\s*return Ok\(\(\)\);\s*\}/,
+  'ordinary added text must bypass original-control and caret rejection',
+);
+assert.doesNotMatch(
+  ordinaryInserter,
+  /reactivate_selection_insertion_target/,
+  'ordinary input must never reactivate an old application',
+);
+assert.match(
+  finalInsert,
+  /InsertStatus::Failed\s*&& self\.context\.insertion\.allow_non_tsf_fallback[\s\S]*?windows_unicode_fallback/,
+  'known TSF failure may use the configured Unicode fallback',
+);
+assert.doesNotMatch(
+  unicodeFallback ?? '',
+  /selection_insertion_target_is_current/,
+  'ordinary Unicode fallback must type at current focus, not require the recording-time range',
 );
 assert.match(
   finalInsert,
@@ -93,6 +119,35 @@ assert.match(
 );
 
 const selection = await readFile(new URL('../src-tauri/src/selection.rs', import.meta.url), 'utf8');
+const selectionApply = adapters.match(
+  /impl SelectionPlatformBridge for NativeSelectionPlatformBridge[\s\S]*?(?=\n#\[cfg\(not\(mobile\)\)\]\nstruct TauriSelectionRuntime)/,
+)?.[0];
+assert.match(
+  selectionApply ?? '',
+  /validate_selection_insertion_target\(target, source_text\)[\s\S]*?if validation\.error_code\(\)\.is_some\(\)[\s\S]*?return crate::selection::selection_result_fallback[\s\S]*?crate::selection::insert_selection_result\(/,
+  'selection replacement must validate the original target and full source before writing',
+);
+const selectionValidation = selection.match(
+  /pub\(crate\) fn validate_selection_insertion_target\([\s\S]*?\n\}/,
+)?.[0];
+assert.match(
+  selectionValidation ?? '',
+  /selection_insertion_target_is_current\(target\)/,
+  'selection replacement must still verify its original control and range',
+);
+assert.match(
+  selectionValidation ?? '',
+  /selection_text_matches\(expected_selection,/,
+  'selection validation must receive the full original text',
+);
+const positionCheck = selection.match(
+  /pub\(crate\) fn selection_insertion_target_is_current\([\s\S]*?\n\}/,
+)?.[0];
+assert.match(
+  positionCheck ?? '',
+  /target_position::unchanged\([\s\S]*?focused_input_position\(\)/,
+  'selection target validation must retain the exact live-range comparison',
+);
 const restoreTarget = selection.match(
   /pub\(crate\) fn reactivate_selection_insertion_target[\s\S]*?(?=\n    #\[cfg\(target_os = "macos"\)\])/,
 )?.[0];

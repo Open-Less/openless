@@ -1124,7 +1124,7 @@ index 3a95c61..3657e6f 100644
 +            };
              let uses_polisher = !strategy_skips
                  && context.uses_llm_polisher()
-                 && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
+                 && !transcript.text.trim().is_empty()
                  && !skips_polish_for_short_text
 @@ -1068,6 +1075,16 @@ impl DictationEngine for PipelineDictationEngine {
                          )
