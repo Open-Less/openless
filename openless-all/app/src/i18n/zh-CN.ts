@@ -736,8 +736,6 @@ export const zhCN = {
     },
   },
   history: {
-    copyOriginals: '复制所选原文',
-    selectOriginal: '选择原文：{{title}}',
     exportError: '导出录音失败，请重试。',
     kicker: '历史记录',
     title: '历史记录',

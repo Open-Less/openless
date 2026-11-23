@@ -18,7 +18,7 @@ use crate::domains::{
     SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate, SelectionVoiceRoute,
     SelectionVoiceSnapshot, VoiceEditPlanRequest, VoiceEditPlanResult,
 };
-use crate::edit_plan::{apply_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
+use crate::edit_plan::{apply_selection_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::ports::{TextPolisher, TextStreamChunk, TextStreamSink};
@@ -699,7 +699,7 @@ impl SelectionVoiceWorkflow {
         let plan = self
             .generate_edit_plan(session_id, draft, instruction)
             .await?;
-        let preview = apply_edit_plan(draft, &plan)
+        let preview = apply_selection_edit_plan(draft, &plan)
             .map_err(|error| BackendError::new(BackendErrorCode::Provider, error.to_string()))?;
         Ok((preview, plan.summary))
     }
@@ -1489,7 +1489,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
                     &polished,
                 )
                 .await?;
-            let preview = apply_edit_plan(&request.draft, &plan).map_err(|error| {
+            let preview = apply_selection_edit_plan(&request.draft, &plan).map_err(|error| {
                 BackendError::new(BackendErrorCode::Provider, error.to_string())
             })?;
             if preview.trim().is_empty() {

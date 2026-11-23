@@ -30,7 +30,7 @@
 
 目标变化、原选区/范围变化等**确认未派发写入**的情况，只有原剪贴板事务仍持有剪贴板时才复制完整结果作为兜底。用户已经复制别的内容时保留其剪贴板，完整结果和原文仍在历史。已派发但未确认的交付保持 `PasteSent`，部分 Windows SendInput 也不再被当成“确认没有插入”而再次落字或复制。`OutcomeUnknown` 不允许重试确认。
 
-macOS 使用既有 `KeyboardDelivery` 核对交付后的原控件范围；Windows 粘贴继续如实报告 `PasteSent`，没有仅凭 Ctrl+V 派发就声称插入成功。确认插入后，现有不激活窗口的反馈显示“如果有掉词，可前往 App 的历史记录获取原文。”，提供八种界面语言。
+macOS 使用既有 `KeyboardDelivery` 核对交付后的原控件范围；Windows 粘贴继续如实报告 `PasteSent`，没有仅凭 Ctrl+V 派发就声称插入成功。仅当冻结原选区的 Unicode 字符数严格大于 4000 且已确认插入时，现有不激活窗口的反馈显示“如果有掉词，可前往 App 的历史记录获取原文。”，提供八种界面语言。
 
 ## 原位置与连续录音
 
@@ -56,7 +56,7 @@ Linux 的既有 fcitx5 直接目标路径在处理前使用现有复制能力，
 | 成功后原剪贴板，明确未写回才结果兜底；不覆盖新复制 | `selection::insert_selection_result` / `selection_result_fallback` → `insertion.rs` | 宿主 clipboard transaction 单测覆盖事务链和修订号；生产路径强制恢复原文。真实系统剪贴板成功/失败及用户复制竞态尚未做真机端到端验收，不能据单测声称已经通过。 |
 | 同 app 换输入框/位置不误写；新录音本身不废弃原目标 | `capture_dictation_insertion_target` / `selection_insertion_target_is_current` / `confirm_target_delivery` | `tests/dictation_target_capture.rs` 在正常 Core start/stop 下覆盖移动拒写，以及第一段延迟期间第二段采集、第一段实际交付和第二段正确续接的位置/正文断言；是受控输入目标，不是真实 AX/UIA 控件。 |
 | 不完整流不替换，不确定交付不重试 | 生产 `selection_streaming`、`TextEventStream`；`SelectionService::settle_confirm_failure`；既有 `InsertOutcome` | 请求集成夹具及协议/润色回归；`PasteSent` 保持未确认，历史保留完整原文。Mac/Windows 的真实焦点变化、系统交付回执尚未实测。 |
-| 详情、单条及批量取回原文，窄窗口无横向溢出 | 历史页面正常导航 → 原文视图/复制、列表复选框 | `e2e/selection-original-history.spec.ts` 使用正常 React/宿主 IPC 入口，核对 18000+ 字原文、首尾空白、单条及批量复制正文和窄窗口布局；Chromium 通过。 |
+| 详情按视图取回原文与结果，窄窗口无横向溢出 | 历史页面正常导航 → 点击行 → 原文/润色视图的已有复制按钮 | `e2e/selection-original-history.spec.ts` 核对 18000+ 字原文与结果、首尾空白、搜索、选行、对齐及窄窗口布局；列表没有复选框或批量复制。 |
 
 定向命令从 `openless-all/app` 运行：
 
@@ -170,3 +170,16 @@ Beta 基线自动合并；搜索只有 `docs/index.md` 发生冲突，处理为�
 新增真实 Select 回调边界回归在 Root 已接受 click 而 DOM 仍 false 时同步触发 Escape，旧实现错误关闭父 dialog，修复后保留父层、关闭当前意图并返回焦点。原目录真实 click → 立即 Escape 和已打开 Escape 断言均保留。两浏览器定向共 22 项及 TypeScript 通过，包含 queued／旧 popup、accepted、受控 open 接受／拒绝、IME、禁用／卸载、新顶层和后继意图。最终资格仍以新增提交的正常 PR CI 和独立增量审查为准；不重跑音频、同步矩阵或收费模型，不合 beta、不改版本和安装。
 
 该增量复审只余 IME 时长差异。补充一条受控时钟回归：0ms 任务已执行而 WebKit 5ms 窗口尚未结束时发出真实键盘 Escape，旧 0ms 实现错误 preventDefault；对齐后该按键不被过渡层抢走，后续正常 Escape 仍可关闭菜单。时钟仅用于这条 IME 边界，原真实 click → 立即 Escape 用例没有增加等待或重试。直接声明已锁定的 `@base-ui/utils@0.5.0` 来复用与库相同的 `platform.engine.webkit`，不升级依赖。
+
+
+## 653816 DEV 实测纠正
+
+用户所说的“选区”是其他 App 中待处理的正文。历史列表的复选框与“复制所选原文”是对旧要求的误读，已连同状态、事件、占位和专用八语言文案移除；保留点击行、搜索、原对齐和右侧详情。右侧仍复用 `HistoryDetail` → `useHistoryEntryActions.onCopy(showingRaw)`，复制当前视图的完整原文或完整结果，不 trim、不截断、不另建复制通道。
+
+正常选区仍由 `selection_service` 先保存原文并保护剪贴板，`selection_voice_service` 的 begin/edit_preview 与 apply ticket 继续携带冻结原文。独立 `coordinator/voice_edit_session.rs` 原先只在 commit 后把初始转写与后续指令拼作 rawTranscript；现改为 capture 后保存原选区（无选区时为待处理正文），初始 draft 就绪后保存完整处理前正文，预览与 commit 在同一 sessionId 上更新 finalText。原选区按冻结 field_text 的 Unicode 偏移提取，后续指令不进入 rawTranscript；取消或目标复核失败保留已有原文与完整预览，不写成功状态。此修正不改变 voice-edit 自身的录音、目标写回和共享剪贴板事务。
+
+提示统一复用 `selection/recovery_notice.rs`：不 trim 原文，用 `chars().count()`，严格 `>4000`，且只有 `Inserted` 有资格。直接选区热键、选区预览确认、选区语音直接写回及 QA 编辑预览确认均传入当前会话/票据的冻结原文；PasteSent、CopiedFallback、失败与取消继续使用原反馈。3999、4000、4001 的 ASCII、中文及 emoji 与空白计数由定向宿主测试覆盖。普通听写不使用该提示。
+
+本轮受控测试与真实 macOS/Windows 编辑器、系统剪贴板、物理音频及模型语义是不同证据；未读取真实用户历史或剪贴板，未启动或安装 OpenLess，未执行 live 模型、发布、版本变更或全 CI。现场日志与截图保留在本工作树的忽略目录 `.cache`，最终结果由交接报告记录。
+
+受控 HTTP 测试额外暴露翻译 FullRewrite 被旧 8192 字操作预算拒绝；选区专用 apply_selection_edit_plan 现在允许完整 FullRewrite，普通 apply_edit_plan 与局部替换/正则预算保持原状。voice-edit 历史如实保留原生 PasteSent，不能把仅派发粘贴写成 Inserted。

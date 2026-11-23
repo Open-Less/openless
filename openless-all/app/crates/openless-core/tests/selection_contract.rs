@@ -1084,7 +1084,13 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         let original = format!(" \t{} UNIQUE_MIDDLE_全文 {}\n ", "字".repeat(length / 2), "尾".repeat(length / 2));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-        let response = if translation {
+        let complete_result = format!(" \t{} RESULT_MIDDLE {}\n ", "成".repeat(9000), "果".repeat(9000));
+        let response = if succeeds {
+            let content = if translation {
+                format!("[[OPENLESS_POLISHED_SOURCE]]\nsource\n[[OPENLESS_TRANSLATION]]\n{complete_result}")
+            } else { complete_result.clone() };
+            format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":content},"finish_reason":"stop"}]}))
+        } else if translation {
             format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":"[[OPENLESS_POLISHED_SOURCE]]\nsource\n[[OPENLESS_TRANSLATION]]\ncomplete result"},"finish_reason":"stop"}]}))
         } else { response.to_owned() };
         let server = tokio::spawn(async move {
@@ -1132,7 +1138,7 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].raw_transcript, original);
         assert_eq!(runtime.applied().len(), usize::from(succeeds && !translation));
-        if succeeds { assert_eq!(history[0].final_text, "complete result"); }
+        if succeeds { assert_eq!(history[0].final_text, if translation { complete_result.trim() } else { &complete_result }); }
         backend.shutdown().await.unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }

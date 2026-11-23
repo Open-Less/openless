@@ -785,7 +785,7 @@ impl Coordinator {
             }
         };
 
-        self.finish_selection_voice_preview_host(ticket.session_id, outcome);
+        self.finish_selection_voice_preview_host(ticket.session_id, outcome, &ticket.source_text);
         Ok(outcome)
     }
 
@@ -841,6 +841,7 @@ impl Coordinator {
         &self,
         session_id: CoreSessionId,
         outcome: SelectionVoiceApplyOutcome,
+        original: &str,
     ) {
         clear_host_session(&self.inner, session_id);
         let locale = self
@@ -853,7 +854,7 @@ impl Coordinator {
             .unwrap_or_else(|_| self.inner.backend.config().locale.clone());
         let message = match outcome {
             SelectionVoiceApplyOutcome::Inserted => {
-                crate::selection::original_recovery_message(&locale)
+                crate::selection::original_recovery_message(&locale, original, true).unwrap_or("已替换")
             }
             SelectionVoiceApplyOutcome::CopiedFallback => "已复制结果，请手动粘贴",
             SelectionVoiceApplyOutcome::PasteSent => "已发送粘贴；原文保留在历史记录",

@@ -18,7 +18,7 @@ pub(crate) struct VoiceEditHostState {
     pub(crate) dictation_session_id: Option<SessionId>,
     pub(crate) finishing_initial_dictation: bool,
     pub(crate) target: Option<VoiceEditNativeTarget>,
-    pub(crate) initial_raw_text: String,
+    pub(crate) original_text: String,
     pub(crate) duration_ms: u64,
 }
 
@@ -106,11 +106,12 @@ async fn start_with_recording(
         let (text, selection, target) = capture?;
         let session = VoiceEditSession::start(text, selection).map_err(|e| e.to_string())?;
         let id = session.session_id();
+        let original = original_body(&session.snapshot());
         host.session = Some(session);
         host.target = Some(target);
         host.dictation_session_id = None;
         host.finishing_initial_dictation = false;
-        host.initial_raw_text.clear();
+        host.original_text = original;
         host.duration_ms = 0;
         id
     };
@@ -123,6 +124,14 @@ async fn start_with_recording(
         if current_session(&mut host, session_id)?.snapshot().phase != VoiceEditPhase::Dictating {
             return Err("voiceEditSessionChanged".into());
         }
+    }
+    let persisted = {
+        let host = inner.voice_edit_host.lock();
+        persist_history(&inner.backend, session_id, &host.original_text, "", 0, HistoryInsertStatus::NotRequested)
+    };
+    if let Err(error) = persisted {
+        let _ = cancel(inner, Some(session_id)).await;
+        return Err(error);
     }
     let recording = match existing_recording {
         Some(id) => Ok(id),
@@ -206,7 +215,10 @@ pub(super) async fn finish_dictation(
         )) {
             Ok(()) => {
                 let snapshot = session.snapshot();
-                host.initial_raw_text = result.raw_text;
+                host.original_text = original_body(&snapshot);
+                persist_history(&inner.backend, id, &host.original_text,
+                    snapshot.context.as_ref().map(|c| c.preview.as_str()).unwrap_or_default(),
+                    result.duration_ms, HistoryInsertStatus::NotRequested)?;
                 host.duration_ms = result.duration_ms;
                 Ok(snapshot)
             }
@@ -328,7 +340,11 @@ pub(super) async fn finish_instruction(
         let _ = session.recover_instruction();
         return Err(error.to_string());
     }
-    Ok(session.snapshot())
+    let snapshot = session.snapshot();
+    persist_history(&inner.backend, id, &host.original_text,
+        snapshot.context.as_ref().map(|c| c.preview.as_str()).unwrap_or_default(),
+        host.duration_ms, HistoryInsertStatus::NotRequested)?;
+    Ok(snapshot)
 }
 
 fn recover_after_instruction_error(inner: &Arc<Inner>, id: SessionId) {
@@ -361,10 +377,15 @@ pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEdi
         (
             ticket,
             target,
-            host.initial_raw_text.clone(),
+            host.original_text.clone(),
             host.duration_ms,
         )
     };
+    if let Err(error) = persist_history(&inner.backend, id, &raw, &ticket.text, duration, HistoryInsertStatus::NotRequested) {
+        let mut host = inner.voice_edit_host.lock();
+        let _ = current_session(&mut host, id)?.recover_commit();
+        return Err(error);
+    }
     let writer = Arc::clone(inner);
     let text = ticket.text.clone();
     let outcome = tokio::task::spawn_blocking(move || apply_native_target(&writer, &target, &text))
@@ -373,17 +394,20 @@ pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEdi
         .and_then(|result| result);
     let mut host = inner.voice_edit_host.lock();
     let session = current_session(&mut host, id)?;
-    if let Err(error) = outcome {
-        let _ = session.recover_commit();
-        #[cfg(target_os = "android")]
-        inner.host.show_voice_edit();
-        return Err(error);
-    }
+    let insert_status = match outcome {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = session.recover_commit();
+            #[cfg(target_os = "android")]
+            inner.host.show_voice_edit();
+            return Err(error);
+        }
+    };
     session.complete_commit().map_err(|e| e.to_string())?;
     let snapshot = session.snapshot();
     inner.host.set_voice_edit_interactive(false);
     drop(host);
-    persist_history(&inner.backend, &raw, duration, &ticket);
+    persist_history(&inner.backend, ticket.session_id, &raw, &ticket.text, duration, insert_status)?;
     Ok(snapshot)
 }
 
@@ -532,7 +556,7 @@ fn apply_native_target(
     inner: &Arc<Inner>,
     target: &VoiceEditNativeTarget,
     text: &str,
-) -> Result<(), String> {
+) -> Result<HistoryInsertStatus, String> {
     match target {
         #[cfg(target_os = "android")]
         VoiceEditNativeTarget::Android { generation } => {
@@ -549,7 +573,7 @@ fn apply_native_target(
                 let result = crate::android::replace_voice_edit_target(*generation, text)
                     .map_err(|error| format!("voiceEditReplaceFailed:{error}"))?;
                 if result == crate::android::accessibility::PASTE_RESULT_SUCCESS {
-                    return Ok(());
+                    return Ok(HistoryInsertStatus::Inserted);
                 }
                 // Only temporary panel focus is retryable; rejected writes are never repeated.
                 if result != "NO_FOCUSED_EDITOR" || std::time::Instant::now() >= retry_deadline {
@@ -560,6 +584,7 @@ fn apply_native_target(
         }
         #[cfg(not(target_os = "android"))]
         VoiceEditNativeTarget::Desktop { target } => {
+            let mut status = HistoryInsertStatus::Inserted;
             crate::host_document::apply_voice_edit_target(target, text, |text, still_current| {
                 let preferences = inner.backend.get_preferences();
                 match inner.inserter.insert_guarded(
@@ -569,52 +594,61 @@ fn apply_native_target(
                     None,
                     still_current,
                 ) {
-                    InsertStatus::Inserted | InsertStatus::PasteSent => Ok(()),
+                    InsertStatus::Inserted => Ok(()),
+                    InsertStatus::PasteSent => {
+                        status = HistoryInsertStatus::PasteSent;
+                        Ok(())
+                    }
                     InsertStatus::CopiedFallback => Err("voiceEditInsertFallback".into()),
                     InsertStatus::Failed | InsertStatus::NotRequested => {
                         Err("voiceEditInsertFailed".into())
                     }
                 }
-            })
+            })?;
+            Ok(status)
         }
+    }
+}
+
+// Use the frozen capture/draft, never the spoken edit instructions.
+fn original_body(snapshot: &VoiceEditSnapshot) -> String {
+    let Some(context) = snapshot.context.as_ref() else {
+        return String::new();
+    };
+    if let Some(selection) = context.selection {
+        let (start, end) = selection.normalized();
+        context.field_text.chars().skip(start).take(end - start).collect()
+    } else if context.draft.is_empty() {
+        context.field_text.clone()
+    } else {
+        context.draft.clone()
     }
 }
 
 fn persist_history(
     backend: &openless_core::OpenLessBackend,
-    initial_raw_text: &str,
+    id: SessionId,
+    original: &str,
+    result: &str,
     duration_ms: u64,
-    commit: &openless_core::VoiceEditCommit,
-) {
+    insert_status: HistoryInsertStatus,
+) -> Result<(), String> {
     let preferences = backend.get_preferences();
-    let turns = commit
-        .turns
-        .iter()
-        .map(|turn| turn.instruction_polished.as_str())
-        .collect::<Vec<_>>()
-        .join("；");
-    let raw = if turns.is_empty() {
-        initial_raw_text.to_string()
-    } else if initial_raw_text.is_empty() {
-        turns
-    } else {
-        format!("{}；{}", initial_raw_text, turns)
-    };
     let session = DictationSession {
-        id: commit.session_id.to_string(),
+        id: id.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
         source: HistorySource::VoiceEdit,
-        raw_transcript: raw,
+        raw_transcript: original.to_string(),
         asr_transcript: None,
-        final_text: commit.text.clone(),
+        final_text: result.to_string(),
         mode: PolishMode::Light,
         style_pack_id: None,
         translation_active: false,
         polish_source: Some("voice_edit_session".to_string()),
         app_bundle_id: None,
         app_name: None,
-        insert_status: HistoryInsertStatus::Inserted,
-        error_code: None,
+        insert_status,
+        error_code: if insert_status == HistoryInsertStatus::NotRequested { Some("selectionProcessing".into()) } else { None },
         duration_ms: Some(duration_ms),
         dictionary_entry_count: None,
         has_audio_recording: None,
@@ -626,13 +660,11 @@ fn persist_history(
         asr_ms: None,
         polish_ms: None,
     };
-    if let Err(error) = backend.append_history(
+    backend.upsert_history(
         session,
         preferences.history_retention_days,
         preferences.history_max_entries,
-    ) {
-        log::warn!("voice edit history persistence failed: {error}");
-    }
+    ).map_err(|error| error.to_string())
 }
 
 fn non_empty_or_fallback(primary: &str, fallback: &str) -> String {

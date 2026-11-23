@@ -766,8 +766,6 @@ export const ja: typeof zhCN = {
     },
   },
   history: {
-    copyOriginals: '選択した原文をコピー',
-    selectOriginal: '原文を選択：{{title}}',
     exportError: '録音のエクスポートに失敗しました。もう一度お試しください。',
     kicker: '履歴',
     title: '履歴',

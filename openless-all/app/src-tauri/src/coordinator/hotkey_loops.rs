@@ -481,22 +481,14 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                         },
                         _ => return,
                     };
-                    let message = if snapshot.insert_outcome
-                        == Some(openless_core::InsertOutcome::Inserted)
-                    {
-                        crate::selection::original_recovery_message(
-                            &inner
-                                .backend
-                                .services()
-                                .remote_input
-                                .status()
-                                .map(|status| status.locale)
-                                .unwrap_or_else(|_| inner.backend.config().locale.clone()),
-                        )
-                        .to_string()
-                    } else {
-                        message.to_string()
-                    };
+                    let locale = inner.backend.services().remote_input.status()
+                        .map(|status| status.locale)
+                        .unwrap_or_else(|_| inner.backend.config().locale.clone());
+                    let message = crate::selection::original_recovery_message(
+                        &locale,
+                        snapshot.source_text.as_deref().unwrap_or_default(),
+                        snapshot.insert_outcome == Some(openless_core::InsertOutcome::Inserted),
+                    ).unwrap_or(message);
                     let epoch = emit_selection_polish_capsule(&inner, CapsuleState::Done, message);
                     schedule_selection_polish_capsule_idle(
                         &inner,
