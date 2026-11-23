@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SelectLite } from '../../ui/controls/SelectLite';
 import '../../ui/styles/select.css';
@@ -17,7 +17,7 @@ import { useCapsuleLanguageMenu } from './useCapsuleLanguageMenu';
 import './CapsuleStyles.css';
 
 /** The same Base UI menu as settings, with temporary native headroom above the capsule. */
-export function CapsuleTranslationBadge({
+export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
   visible = true,
   processing = false,
 }: {
@@ -35,7 +35,11 @@ export function CapsuleTranslationBadge({
   const pendingChange = useRef<symbol | null>(null);
   const current = useRef(snapshot);
   current.current = snapshot;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
+  // Prefetch settings/target once on mount and keep one stable listener so the very
+  // first Shift press opens immediately with the right language width and zero lag.
   useEffect(() => {
     let disposed = false;
     const events = createCapsuleSubscriptions();
@@ -51,12 +55,6 @@ export function CapsuleTranslationBadge({
         if (!disposed && request === revision.current) setSnapshot(null);
       }
     };
-    if (!visible) {
-      setError(false);
-      setBusy(false);
-      pendingChange.current = null;
-      return;
-    }
     void (async () => {
       if (isTauriHost()) {
         if (!(await events.preferences(() => void refresh()))) return;
@@ -65,7 +63,7 @@ export function CapsuleTranslationBadge({
             const key = `${payload.sessionId}:${payload.state}:${payload.warming}:${payload.translation}`;
             if (key !== lastRecording) {
               lastRecording = key;
-              void refresh();
+              if (visibleRef.current || payload.translation) void refresh();
             }
           }))
         )
@@ -81,6 +79,14 @@ export function CapsuleTranslationBadge({
       events.dispose();
       pendingChange.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    if (!visible) {
+      setError(false);
+      setBusy(false);
+      pendingChange.current = null;
+    }
   }, [visible]);
 
   const target = nativeLanguageName(snapshot?.targetLanguage ?? savedTarget);
@@ -145,43 +151,54 @@ export function CapsuleTranslationBadge({
     }
   };
 
+  const showPicker = visible && !processing;
+
   return (
     <motion.div
       className="ol-classic-translation"
       data-visible={visible}
+      data-picker-open={showPicker}
       aria-hidden={!visible}
-      initial={reduced ? false : { opacity: 0, y: 7, scale: 0.94 }}
-      animate={{ opacity: visible ? 1 : 0, y: visible ? 0 : 7, scale: visible ? 1 : 0.94 }}
+      initial={reduced ? false : { opacity: 0, y: 16, scale: 0.88 }}
+      animate={{
+        opacity: visible ? 1 : 0,
+        y: visible ? 0 : 14,
+        scale: visible ? 1 : 0.88,
+      }}
       transition={
         reduced
           ? { duration: 0 }
-          : { duration: visible ? 0.2 : 0.12, delay: visible ? 0.04 : 0, ease: [0.22, 1, 0.36, 1] }
+          : visible
+            ? { duration: 0.3, delay: 0.02, ease: [0.22, 1, 0.36, 1] }
+            : { duration: 0.24, delay: 0.18, ease: [0.4, 0, 0.2, 1] }
       }
     >
-      <span>{t('capsule.translating')}</span>
-      {!processing && (
-        <div ref={anchor} className="ol-translation-language" data-busy={busy}>
-          <SelectLite
-            value={target}
-            options={options}
-            placeholder={selected?.displayName || target || '…'}
-            ariaLabel={t('translation.target.title')}
-            disabled={!visible || busy || !snapshot?.mutable}
-            open={menu.open}
-            onOpenChange={menu.onOpenChange}
-            onOpenChangeComplete={menu.onOpenChangeComplete}
-            onChange={(value) => void change(value)}
-            side="top"
-            popupStyle={{ width: 240 }}
-            popupClassName="ol-capsule-language-popup"
-          />
+      <span className="ol-classic-translation-label">{t('capsule.translating')}</span>
+      <div className="ol-translation-language-collapse" data-open={showPicker}>
+        <div className="ol-translation-language-collapse-inner">
+          <div ref={anchor} className="ol-translation-language" data-busy={busy}>
+            <SelectLite
+              value={target}
+              options={options}
+              placeholder={selected?.displayName || target || '…'}
+              ariaLabel={t('translation.target.title')}
+              disabled={!showPicker || busy || !snapshot?.mutable}
+              open={menu.open}
+              onOpenChange={menu.onOpenChange}
+              onOpenChangeComplete={menu.onOpenChangeComplete}
+              onChange={(value) => void change(value)}
+              side="top"
+              popupStyle={{ width: 240 }}
+              popupClassName="ol-capsule-language-popup"
+            />
+          </div>
         </div>
-      )}
-      {error && !processing && (
+      </div>
+      {error && showPicker && (
         <span className="ol-translation-error" role="alert">
           {t('capsule.translationChangeFailed')}
         </span>
       )}
     </motion.div>
   );
-}
+});

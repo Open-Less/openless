@@ -345,10 +345,11 @@ export const en: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
-    emptyTranscript: 'No speech recognized. Recording saved; retranscribe in History.',
+    emptyTranscript: 'Empty · No speech',
     transcribing: 'Transcribing',
     asking: 'Ask anything',
     thinking: 'thinking',
+    slowConnection: 'Connection slower than usual',
     using: 'using',
     cancelled: 'Cancelled',
     error: 'Something went wrong',
@@ -359,8 +360,8 @@ export const en: typeof zhCN = {
     selectionPolish: {
       polishing: 'Polishing…',
       replaced: 'Replaced',
-      noSelection: 'Nothing selected',
-      failed: 'Polish failed, try again',
+      noSelection: 'No text selected',
+      failed: 'Polish failed',
     },
   },
   selectionPolishPreview: {

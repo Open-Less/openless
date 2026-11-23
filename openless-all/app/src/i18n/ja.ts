@@ -336,10 +336,11 @@ export const ja: typeof zhCN = {
     durationMinutes: '{{value}} 分',
   },
   capsule: {
-    emptyTranscript: '音声を認識できませんでした。録音は保存されています。履歴から再文字起こしできます。',
+    emptyTranscript: '空の原稿・音声なし',
     transcribing: '文字起こし中',
     asking: 'なんでも質問',
     thinking: 'thinking',
+    slowConnection: '通常より接続が遅くなっています',
     using: 'using',
     cancelled: 'キャンセルしました',
     error: 'エラーが発生しました',
@@ -348,10 +349,10 @@ export const ja: typeof zhCN = {
     translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
     selectionPolish: {
-      polishing: '推敲中...',
+      polishing: '推敲中…',
       replaced: '置き換えました',
-      noSelection: '選択されていません',
-      failed: '推敲に失敗しました。もう一度お試しください',
+      noSelection: 'テキスト未選択',
+      failed: '推敲に失敗',
     },
   },
   selectionPolishPreview: {

@@ -350,10 +350,11 @@ export const fr: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
-    emptyTranscript: 'Aucune parole reconnue. Enregistrement conservé ; retranscrivez dans l’historique.',
+    emptyTranscript: 'Vide · Aucune voix',
     transcribing: 'Transcription',
     asking: 'Posez une question',
     thinking: 'réflexion',
+    slowConnection: 'Connexion plus lente que d’habitude',
     using: 'action',
     cancelled: 'Annulé',
     error: 'Une erreur s’est produite',
@@ -362,10 +363,10 @@ export const fr: typeof zhCN = {
     translationChangeFailed: 'Impossible de changer de langue. Veuillez réessayer.',
     translating: 'Traduction',
     selectionPolish: {
-      polishing: 'Amélioration du texte…',
+      polishing: 'Amélioration…',
       replaced: 'Remplacé',
       noSelection: 'Aucun texte sélectionné',
-      failed: 'L’amélioration a échoué. Réessayez',
+      failed: 'Échec',
     },
   },
   selectionPolishPreview: {

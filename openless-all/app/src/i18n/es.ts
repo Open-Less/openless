@@ -345,10 +345,11 @@ export const es: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
-    emptyTranscript: 'No se reconoció voz. Grabación guardada; vuelve a transcribir en el historial.',
+    emptyTranscript: 'Vacío · Sin voz',
     transcribing: 'Transcribiendo',
     asking: 'Pregunta lo que quieras',
     thinking: 'pensando',
+    slowConnection: 'Conexión más lenta de lo habitual',
     using: 'actuando',
     cancelled: 'Cancelado',
     error: 'Se ha producido un error',
@@ -357,10 +358,10 @@ export const es: typeof zhCN = {
     translationChangeFailed: 'No se pudo cambiar el idioma. Vuelve a seleccionarlo.',
     translating: 'Traduciendo',
     selectionPolish: {
-      polishing: 'Mejorando el texto…',
+      polishing: 'Mejorando…',
       replaced: 'Reemplazado',
-      noSelection: 'No hay texto seleccionado',
-      failed: 'No se pudo mejorar el texto. Inténtalo de nuevo',
+      noSelection: 'Sin texto seleccionado',
+      failed: 'Error al mejorar',
     },
   },
   selectionPolishPreview: {
