@@ -36,8 +36,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(target_os = "macos", test))]
 mod macos_vault;
 
-#[cfg(target_os = "macos")]
-mod macos_keychain;
 
 #[cfg(target_os = "macos")]
 static MACOS_SINGLE_ITEM_VAULT: OnceLock<Mutex<macos_vault::SingleItemVault>> = OnceLock::new();
@@ -279,10 +277,10 @@ fn remove_sync_secret_raw(account: &openless_core::credentials::SyncSecretAccoun
 fn remove_sync_secret_native(
     account: &openless_core::credentials::SyncSecretAccount,
 ) -> Result<()> {
-    match keyring_entry_for(account.as_str())?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => anyhow::bail!("could not remove encrypted sync key from system credential store"),
-    }
+    openless_platform::credentials::store::remove(CredentialsVault::SERVICE_NAME, account.as_str())
+        .map_err(|_| {
+            anyhow::anyhow!("could not remove encrypted sync key from system credential store")
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -1472,17 +1470,6 @@ fn credentials_path() -> Result<PathBuf> {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "macos")))]
-fn keyring_entry() -> Result<keyring::Entry> {
-    keyring_entry_for(KEYRING_CREDENTIALS_ACCOUNT)
-}
-
-#[cfg(not(target_os = "android"))]
-fn keyring_entry_for(account: &str) -> Result<keyring::Entry> {
-    keyring::Entry::new(CredentialsVault::SERVICE_NAME, account)
-        .context("open system credential vault")
-}
-
 #[cfg(target_os = "android")]
 fn android_credentials_path() -> Result<PathBuf> {
     let files_dir = crate::android::jni::android::app_files_dir()
@@ -2040,18 +2027,21 @@ fn get_keyring_password_native(account: &str) -> Result<Option<String>> {
     );
     #[cfg(target_os = "macos")]
     if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
-        return macos_keychain::read_primary();
+        return openless_platform::credentials::keychain::read(
+            CredentialsVault::SERVICE_NAME,
+            KEYRING_SINGLE_CREDENTIALS_ACCOUNT,
+        );
     }
     #[cfg(target_os = "windows")]
     {
         let mut attempt = 0usize;
         loop {
-            match keyring_entry_for(account)?.get_password() {
-                Ok(value) => return Ok(Some(value)),
-                // NoEntry is a definitive "not stored" answer, never a transient
-                // failure — return immediately so genuinely-unconfigured providers
-                // don't pay the retry latency.
-                Err(keyring::Error::NoEntry) => return Ok(None),
+            // 平台层把 NoEntry 映射成 Ok(None)，其余错误才是可重试的瞬时失败。
+            match openless_platform::credentials::store::read(
+                CredentialsVault::SERVICE_NAME,
+                account,
+            ) {
+                Ok(value) => return Ok(value),
                 Err(e) => {
                     attempt += 1;
                     if attempt >= KEYRING_READ_RETRY_ATTEMPTS {
@@ -2071,24 +2061,18 @@ fn get_keyring_password_native(account: &str) -> Result<Option<String>> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        match keyring_entry_for(account)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => {
-                Err(anyhow!(e)).with_context(|| format!("read system credential vault {account}"))
-            }
-        }
+        openless_platform::credentials::store::read(CredentialsVault::SERVICE_NAME, account)
+            .with_context(|| format!("read system credential vault {account}"))
     }
 }
 
 #[cfg(not(target_os = "android"))]
 fn delete_keyring_password(account: &str) {
-    match keyring_entry_for(account).and_then(|entry| {
-        entry
-            .delete_credential()
-            .with_context(|| format!("delete system credential vault {account}"))
-    }) {
-        Ok(()) | Err(_) => {}
+    // 平台层把"本来就不存在"也视为成功，这里只记日志。
+    if let Err(error) =
+        openless_platform::credentials::store::remove(CredentialsVault::SERVICE_NAME, account)
+    {
+        log::warn!("[vault] delete credential {account} failed: {error}");
     }
 }
 
@@ -2136,10 +2120,13 @@ fn set_keyring_password(account: &str, value: &str) -> Result<()> {
 fn set_keyring_password_native(account: &str, value: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     if account == KEYRING_SINGLE_CREDENTIALS_ACCOUNT {
-        return macos_keychain::write_primary(value);
+        return openless_platform::credentials::keychain::write(
+            CredentialsVault::SERVICE_NAME,
+            KEYRING_SINGLE_CREDENTIALS_ACCOUNT,
+            value,
+        );
     }
-    keyring_entry_for(account)?
-        .set_password(value)
+    openless_platform::credentials::store::write(CredentialsVault::SERVICE_NAME, account, value)
         .with_context(|| format!("write system credential vault {account}"))
 }
 
@@ -3278,19 +3265,8 @@ fn sync_io_error_code(kind: std::io::ErrorKind) -> &'static str {
 }
 
 fn sync_keyring_error_code(_cause: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
-    #[cfg(not(target_os = "android"))]
-    if let Some(error) = _cause.downcast_ref::<keyring::Error>() {
-        return Some(match error {
-            keyring::Error::NoStorageAccess(_) => "keyring_access_denied",
-            keyring::Error::NoEntry => "keyring_no_entry",
-            keyring::Error::BadEncoding(_) => "keyring_bad_encoding",
-            keyring::Error::TooLong(_, _) => "keyring_attribute_too_long",
-            keyring::Error::Invalid(_, _) => "keyring_invalid_attribute",
-            keyring::Error::Ambiguous(_) => "keyring_ambiguous",
-            keyring::Error::PlatformFailure(_) => "keyring_platform_failure",
-            _ => "keyring_other",
-        });
-    }
+    // 凭据读写已迁到平台层，错误被包装成 anyhow，无法再按 keyring 变体细分；
+    // 统一归为平台失败。需要细分时应在平台层暴露结构化错误。
     None
 }
 
@@ -6339,42 +6315,6 @@ mod sync_capture_diagnostic_tests {
             let code = sync_capture_read_error_code(&error);
             assert_eq!(code, expected);
             assert!(!code.contains(private));
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    #[test]
-    fn keyring_causes_are_classified_without_formatting_secret_material() {
-        let private = "fixture-private-value-never-log";
-        let cases: Vec<(keyring::Error, &str)> = vec![
-            (
-                keyring::Error::NoStorageAccess(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    private,
-                ))),
-                "keyring_access_denied",
-            ),
-            (
-                keyring::Error::PlatformFailure(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    private,
-                ))),
-                "io_timed_out",
-            ),
-            (
-                keyring::Error::BadEncoding(private.as_bytes().to_vec()),
-                "keyring_bad_encoding",
-            ),
-            (
-                keyring::Error::Invalid(private.into(), private.into()),
-                "keyring_invalid_attribute",
-            ),
-            (keyring::Error::NoEntry, "keyring_no_entry"),
-        ];
-        for (error, expected) in cases {
-            assert_eq!(
-                sync_capture_read_error_code(&anyhow::Error::new(error).context(private)),
-                expected
-            );
         }
     }
     #[test]

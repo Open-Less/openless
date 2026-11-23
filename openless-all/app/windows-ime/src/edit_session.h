@@ -48,6 +48,43 @@ struct OpenLessCompositionState {
   void Reset();
 };
 
+// Status values written into the shared memory buffer used by OpenLessSelectionReadSession.
+// Mirrored in src-tauri/src/windows_ime_protocol.rs.
+constexpr uint32_t kOpenLessSelectionPending = 0;
+constexpr uint32_t kOpenLessSelectionOk = 1;
+constexpr uint32_t kOpenLessSelectionNoSelection = 2;
+constexpr uint32_t kOpenLessSelectionFailed = 3;
+constexpr size_t kOpenLessSelectionTextOffset = 8;
+
+// Reads the focused selection into a shared memory buffer owned by the caller.
+//
+// OpenLess asks for this through WM_COPYDATA so it can capture a selection without simulating
+// Ctrl+C: reading through TSF never touches the clipboard, so no history entry is created and
+// nothing has to be cleaned up afterwards.
+class OpenLessSelectionReadSession final : public ITfEditSession {
+public:
+  OpenLessSelectionReadSession(ITfContext *context, HANDLE mapping, void *view, size_t bytes);
+  OpenLessSelectionReadSession(const OpenLessSelectionReadSession &) = delete;
+  OpenLessSelectionReadSession &operator=(const OpenLessSelectionReadSession &) = delete;
+  ~OpenLessSelectionReadSession();
+
+  STDMETHODIMP QueryInterface(REFIID iid, void **object) override;
+  STDMETHODIMP_(ULONG) AddRef() override;
+  STDMETHODIMP_(ULONG) Release() override;
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override;
+
+private:
+  // Publishes the result and releases the mapping. Safe to call twice.
+  void Publish(uint32_t status, const std::wstring &text);
+
+  LONG ref_count_ = 1;
+  ITfContext *context_ = nullptr;
+  HANDLE mapping_ = nullptr;
+  void *view_ = nullptr;
+  size_t bytes_ = 0;
+  bool published_ = false;
+};
+
 // What one edit session does to the document.
 enum class OpenLessEditOp {
   // Insert the text at the selection; the caller's usual dictation commit.

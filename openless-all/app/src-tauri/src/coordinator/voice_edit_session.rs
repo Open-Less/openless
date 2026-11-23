@@ -564,8 +564,10 @@ fn apply_native_target(
                 let preferences = inner.backend.get_preferences();
                 match inner.inserter.insert(
                     text,
-                    preferences.restore_clipboard_after_paste,
-                    preferences.paste_shortcut,
+                    crate::insertion::InsertOptions {
+                        restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
+                        paste_shortcut: preferences.paste_shortcut,
+                    },
                 ) {
                     InsertStatus::Inserted | InsertStatus::PasteSent => Ok(()),
                     InsertStatus::CopiedFallback => Err("voiceEditInsertFallback".into()),

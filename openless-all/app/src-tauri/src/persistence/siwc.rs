@@ -20,11 +20,8 @@ fn check_key(key: &str) -> Result<(), SiwcError> {
         Err(error("storage_failed"))
     }
 }
-#[cfg(not(target_os = "android"))]
-fn entry(key: &str) -> Result<keyring::Entry, SiwcError> {
-    check_key(key)?;
-    keyring::Entry::new("com.openless.app.siwc", key).map_err(|_| error("storage_failed"))
-}
+/// SIWC 使用独立的服务名，与 provider 凭据隔离。
+const SIWC_SERVICE: &str = "com.openless.app.siwc";
 #[cfg(target_os = "android")]
 fn item_path(key: &str) -> Result<std::path::PathBuf, SiwcError> {
     check_key(key)?;
@@ -42,9 +39,10 @@ impl SiwcVault for NativeSiwcVault {
         }
         #[cfg(not(any(target_os = "android", target_os = "macos")))]
         {
-            match entry(key)?.get_password() {
-                Ok(value) => Ok(Some(SecretValue::new(value))),
-                Err(keyring::Error::NoEntry) => Ok(None),
+            check_key(key)?;
+            match openless_platform::credentials::store::read(SIWC_SERVICE, key) {
+                Ok(Some(value)) => Ok(Some(SecretValue::new(value))),
+                Ok(None) => Ok(None),
                 Err(_) => Err(error("storage_unavailable")),
             }
         }
@@ -80,8 +78,8 @@ impl SiwcVault for NativeSiwcVault {
         }
         #[cfg(not(any(target_os = "android", target_os = "macos")))]
         {
-            entry(key)?
-                .set_password(value)
+            check_key(key)?;
+            openless_platform::credentials::store::write(SIWC_SERVICE, key, value)
                 .map_err(|_| error("storage_failed"))
         }
         #[cfg(target_os = "android")]
@@ -108,10 +106,9 @@ impl SiwcVault for NativeSiwcVault {
         }
         #[cfg(not(any(target_os = "android", target_os = "macos")))]
         {
-            match entry(key)?.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                Err(_) => Err(error("storage_failed")),
-            }
+            check_key(key)?;
+            openless_platform::credentials::store::remove(SIWC_SERVICE, key)
+                .map_err(|_| error("storage_failed"))
         }
         #[cfg(target_os = "android")]
         {
@@ -149,9 +146,10 @@ impl SiwcVault for NativeSiwcVault {
 
 #[cfg(target_os = "macos")]
 fn macos_values() -> Result<std::collections::BTreeMap<String, String>, SiwcError> {
-    let raw = match entry("vault.v1")?.get_password() {
-        Ok(raw) => zeroize::Zeroizing::new(raw),
-        Err(keyring::Error::NoEntry) => return Ok(Default::default()),
+    let raw = match openless_platform::credentials::store::read(SIWC_SERVICE, "vault.v1") {
+        Ok(Some(raw)) => zeroize::Zeroizing::new(raw),
+        // 不存在时返回空表；其余失败才是不可用。
+        Ok(None) => return Ok(Default::default()),
         Err(_) => return Err(error("storage_unavailable")),
     };
     serde_json::from_str(&raw).map_err(|_| error("storage_corrupt"))
@@ -170,8 +168,7 @@ fn macos_update<T>(
             serde_json::to_string(&values).map_err(|_| error("storage_failed"))?,
         );
         // Keep one stable Keychain item instead of prompting for every generation's chunks.
-        entry("vault.v1")?
-            .set_password(&payload)
+        openless_platform::credentials::store::write(SIWC_SERVICE, "vault.v1", &payload)
             .map_err(|_| error("storage_failed"))?;
         Ok(result)
     })

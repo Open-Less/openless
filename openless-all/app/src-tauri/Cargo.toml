@@ -23,6 +23,8 @@ zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
+# Platform capability backends (clipboard today; text/input/audio/credentials next).
+openless-platform = { path = "../crates/openless-platform" }
 # Pin the whole 2.12.x train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
 # unlocked resolve picks 2.12.0 and fails to compile (Monitor / UnexpectedMenuKind).
 # Direct pins keep fresh lockfile resolution on the compatible train.
@@ -92,8 +94,6 @@ tauri-plugin-updater = "=2.14.0"
 tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-autostart = "2.7.0"
 global-hotkey = "0.6"
-enigo = "0.3"
-arboard = "3"
 rcgen = { version = "0.13", features = ["x509-parser"] }
 x509-parser = { version = "0.16", features = ["verify"] }
 time = "0.3"
@@ -104,16 +104,6 @@ axum = { version = "^0.7", default-features = false, features = ["ws", "http1", 
 hyper = { version = "^1", features = ["server", "http1"] }
 hyper-util = { version = "^0.1", features = ["tokio", "server-auto", "server", "http1"] }
 tower = { version = "^0.5", features = ["util"] }
-
-[target.'cfg(target_os = "macos")'.dependencies.keyring]
-version = "3.6.3"
-default-features = false
-features = ["apple-native"]
-
-[target.'cfg(target_os = "windows")'.dependencies.keyring]
-version = "3.6.3"
-default-features = false
-features = ["windows-native"]
 
 [target.'cfg(unix)'.dependencies]
 # PIN persistence and owned optional-worker process groups use Unix primitives.
@@ -170,6 +160,7 @@ windows = { version = "0.58", features = [
   "Win32_System_DataExchange",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
+  "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_System_Registry",
   "Win32_System_Threading",

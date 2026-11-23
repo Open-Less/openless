@@ -4036,6 +4036,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "openless-platform"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "log",
+ "openless-core",
+ "thiserror 2.0.21",
+ "windows 0.58.0",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"

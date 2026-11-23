@@ -14,6 +14,7 @@ namespace {
 
 constexpr wchar_t kMessageWindowClassName[] = L"OpenLessImeMessageWindow";
 constexpr UINT kRunSubmitMessage = WM_APP + 1;
+constexpr UINT kRunReadSelectionMessage = WM_APP + 2;
 
 // WM_COPYDATA protocol, mirrored in src-tauri/src/windows_ime_protocol.rs.
 //
@@ -27,6 +28,7 @@ constexpr ULONG_PTR kCopyDataUpdate = 0x4F4C5531; // "OLU1": token + owner + sen
 constexpr ULONG_PTR kCopyDataFinish = 0x4F4C4631; // "OLF1": token + owner + sender process + focus HWND + UTF-16LE text, end the composition
 constexpr ULONG_PTR kCopyDataCancel = 0x4F4C4331; // "OLC1": token + owner + sender process + focus HWND + UTF-16LE text, restore selection
 constexpr ULONG_PTR kCopyDataVersion = 0x4F4C5631; // "OLV1": zero-length protocol probe
+constexpr ULONG_PTR kCopyDataReadSelection = 0x4F4C5231; // "OLR1": token + shared memory name
 constexpr DWORD kMaxSubmitBytes = 1024 * 1024;
 
 // Replies are nonzero so they differ from an unhandled message (0). A failed
@@ -157,6 +159,7 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientI
 // down, where blocking on another thread deadlocks the whole host process.
 STDMETHODIMP OpenLessTextService::Deactivate() {
   CancelPendingSubmit();
+  CloseSelectionBuffer();
   DestroyMessageWindow();
   // Only drop our references. Ending the composition here would need an edit
   // session, and TSF cleans the composition up when the service goes away.
@@ -290,6 +293,9 @@ LRESULT OpenLessTextService::HandleCopyData(const COPYDATASTRUCT *copy_data) {
   }
   if (copy_data->dwData == kCopyDataQuery) {
     return QuerySubmit(copy_data);
+  }
+  if (copy_data->dwData == kCopyDataReadSelection) {
+    return AcceptSelectionRead(copy_data);
   }
   return kStatusBadRequest;
 }
@@ -641,6 +647,128 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
   return S_OK;
 }
 
+LRESULT OpenLessTextService::AcceptSelectionRead(const COPYDATASTRUCT *copy_data) {
+  uint32_t token = 0;
+  if (!ReadToken(copy_data, &token)) {
+    return kStatusBadRequest;
+  }
+  constexpr size_t kTokenBytes = sizeof(uint32_t);
+  if (copy_data->cbData <= kTokenBytes ||
+      (copy_data->cbData - kTokenBytes) % sizeof(wchar_t) != 0) {
+    return kStatusBadRequest;
+  }
+  const size_t name_chars = (copy_data->cbData - kTokenBytes) / sizeof(wchar_t);
+  const auto *name = reinterpret_cast<const wchar_t *>(
+      static_cast<const BYTE *>(copy_data->lpData) + kTokenBytes);
+  if (name_chars < 2 || name[name_chars - 1] != L'\0') {
+    return kStatusBadRequest;
+  }
+
+  CloseSelectionBuffer();
+
+  const HANDLE mapping = OpenFileMappingW(FILE_MAP_WRITE, FALSE, name);
+  if (mapping == nullptr) {
+    return kStatusBadRequest;
+  }
+  void *view = MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 0);
+  if (view == nullptr) {
+    CloseHandle(mapping);
+    return kStatusBadRequest;
+  }
+
+  MEMORY_BASIC_INFORMATION info = {};
+  size_t bytes = 0;
+  if (VirtualQuery(view, &info, sizeof(info)) == sizeof(info)) {
+    bytes = static_cast<size_t>(info.RegionSize);
+  }
+
+  // Clear the header so a stale completion from an earlier request cannot be read as this one.
+  *reinterpret_cast<uint32_t *>(view) = kOpenLessSelectionPending;
+  *reinterpret_cast<uint32_t *>(static_cast<BYTE *>(view) + sizeof(uint32_t)) = 0;
+
+  read_mapping_ = mapping;
+  read_view_ = view;
+  read_view_bytes_ = bytes;
+  read_token_ = token;
+
+  // Never read from inside SendMessage: the host may be in the middle of its own edit session.
+  if (!PostMessageW(message_window_, kRunReadSelectionMessage, token, 0)) {
+    CloseSelectionBuffer();
+    return kStatusBadRequest;
+  }
+  return kStatusAccepted;
+}
+
+void OpenLessTextService::CloseSelectionBuffer() {
+  if (read_view_ != nullptr) {
+    // Let a waiting reader stop immediately instead of timing out.
+    *reinterpret_cast<uint32_t *>(read_view_) = kOpenLessSelectionFailed;
+    UnmapViewOfFile(read_view_);
+    read_view_ = nullptr;
+  }
+  if (read_mapping_ != nullptr) {
+    CloseHandle(read_mapping_);
+    read_mapping_ = nullptr;
+  }
+  read_view_bytes_ = 0;
+  read_token_ = 0;
+}
+
+void OpenLessTextService::RunPendingSelectionRead(uint32_t token) {
+  if (token == 0 || token != read_token_ || read_view_ == nullptr) {
+    return;
+  }
+
+  ITfDocumentMgr *document_mgr = nullptr;
+  ITfContext *context = nullptr;
+  HRESULT hr = thread_mgr_ != nullptr ? thread_mgr_->GetFocus(&document_mgr) : E_UNEXPECTED;
+  if (SUCCEEDED(hr) && document_mgr != nullptr) {
+    hr = document_mgr->GetTop(&context);
+    document_mgr->Release();
+    document_mgr = nullptr;
+  }
+  if (FAILED(hr) || context == nullptr) {
+    CloseSelectionBuffer();
+    return;
+  }
+
+  // The session takes ownership of the caller's buffer from here on.
+  const HANDLE mapping = read_mapping_;
+  void *view = read_view_;
+  const size_t bytes = read_view_bytes_;
+  read_mapping_ = nullptr;
+  read_view_ = nullptr;
+  read_view_bytes_ = 0;
+  read_token_ = 0;
+
+  auto *session = new (std::nothrow) OpenLessSelectionReadSession(context, mapping, view, bytes);
+  if (session == nullptr) {
+    context->Release();
+    if (view != nullptr) {
+      UnmapViewOfFile(view);
+    }
+    if (mapping != nullptr) {
+      CloseHandle(mapping);
+    }
+    return;
+  }
+
+  HRESULT edit_result = S_OK;
+  hr = context->RequestEditSession(client_id_, session, TF_ES_SYNC | TF_ES_READ, &edit_result);
+  const bool synchronous_rejected =
+      hr == TF_E_SYNCHRONOUS || (SUCCEEDED(hr) && edit_result == TF_E_SYNCHRONOUS);
+  if (synchronous_rejected) {
+    // Hosts such as Word refuse a synchronous lock; queue the read instead. The session keeps
+    // the buffer alive until TSF runs it, at which point the text lands in the mapping.
+    hr = context->RequestEditSession(client_id_, session, TF_ES_ASYNC | TF_ES_READ, &edit_result);
+  }
+  session->Release();
+  context->Release();
+  if (SUCCEEDED(hr) && FAILED(edit_result)) {
+    // The session published the failure itself; nothing else to do here.
+  }
+}
+
 LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT message, WPARAM wparam,
                                                         LPARAM lparam) {
   if (message == WM_NCCREATE) {
@@ -650,7 +778,9 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT messag
   }
 
   auto *service = reinterpret_cast<OpenLessTextService *>(GetWindowLongPtrW(window, GWLP_USERDATA));
-  if (service == nullptr || (message != WM_COPYDATA && message != kRunSubmitMessage)) {
+  if (service == nullptr ||
+      (message != WM_COPYDATA && message != kRunSubmitMessage &&
+       message != kRunReadSelectionMessage)) {
     return DefWindowProcW(window, message, wparam, lparam);
   }
 
@@ -661,6 +791,8 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT messag
   try {
     if (message == WM_COPYDATA) {
       result = service->HandleCopyData(reinterpret_cast<const COPYDATASTRUCT *>(lparam));
+    } else if (message == kRunReadSelectionMessage) {
+      service->RunPendingSelectionRead(static_cast<uint32_t>(wparam));
     } else {
       service->RunPendingSubmit(static_cast<uint32_t>(wparam));
     }

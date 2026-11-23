@@ -1253,8 +1253,10 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         let preferences = self.preferences()?;
         map_insert_status(crate::insertion::TextInserter::new().insert(
             replacement_text,
-            preferences.restore_clipboard_after_paste,
-            preferences.paste_shortcut,
+            crate::insertion::InsertOptions {
+                restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
+                paste_shortcut: preferences.paste_shortcut,
+            },
         ))
     }
 }
@@ -3119,7 +3121,7 @@ struct TauriActiveRecording {
     backend: BackendSlot,
     reconfigure_voice_activation: bool,
     archive: Option<Arc<TauriRecordingArchive>>,
-    _mute: Option<crate::audio_mute::AudioMuteGuard>,
+    _mute: Option<openless_platform::audio::AudioMuteGuard>,
 }
 
 impl PendingAudioCapture for TauriPendingAudioCapture {
@@ -3203,7 +3205,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     Arc::new(AudioConsumerBridge { inner: consumer });
                 let mute = recording_plan
                     .mute_during_recording
-                    .then(crate::audio_mute::AudioMuteGuard::activate)
+                    .then(openless_platform::audio::AudioMuteGuard::activate)
                     .and_then(|result| {
                         result
                             .map_err(|error| {
@@ -3813,7 +3815,7 @@ impl AudioRecorder for TauriAudioRecorder {
                 let (archive_path, mute) = prepare_recording_options(
                     archive_path,
                     recording_plan.mute_during_recording,
-                    crate::audio_mute::AudioMuteGuard::activate,
+                    openless_platform::audio::AudioMuteGuard::activate,
                 );
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
@@ -4826,10 +4828,7 @@ impl TauriTextInsertionSession {
                     return 0;
                 }
                 #[cfg(target_os = "windows")]
-                let result = crate::unicode_keystroke::type_unicode_chunk_with_options(
-                    &chunk,
-                    crate::unicode_keystroke::WindowsSendInputOptions { newline_mode },
-                );
+                let result = openless_platform::text::type_text(&chunk, newline_mode);
                 let written = match result {
                     Ok(written) => written,
                     Err(error) => error.typed_chars(),
@@ -5025,8 +5024,13 @@ impl TauriTextInsertionSession {
                                         })
                             },
                             || {
-                                crate::insertion::TextInserter::new()
-                                    .insert(&text, restore, shortcut)
+                                crate::insertion::TextInserter::new().insert(
+                                    &text,
+                                    crate::insertion::InsertOptions {
+                                        restore_clipboard_after_paste: restore,
+                                        paste_shortcut: shortcut,
+                                    },
+                                )
                             },
                         )
                     })
@@ -5051,9 +5055,13 @@ impl TauriTextInsertionSession {
             let restore = self.context.insertion.restore_clipboard_after_paste;
             let shortcut = self.context.insertion.paste_shortcut;
             tauri::async_runtime::spawn_blocking(move || {
-                map_insert_status(
-                    crate::insertion::TextInserter::new().insert(&text, restore, shortcut),
-                )
+                map_insert_status(crate::insertion::TextInserter::new().insert(
+                    &text,
+                    crate::insertion::InsertOptions {
+                        restore_clipboard_after_paste: restore,
+                        paste_shortcut: shortcut,
+                    },
+                ))
             })
             .await
             .map_err(|error| {
@@ -5566,12 +5574,8 @@ mod mac_insertion_lifecycle_tests {
 #[cfg(target_os = "windows")]
 fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::types::InsertStatus {
     let inserter = crate::insertion::TextInserter::new();
-    let status = inserter.insert_via_unicode_keystrokes(
-        text,
-        crate::unicode_keystroke::WindowsSendInputOptions {
-            newline_mode: context.insertion.windows_sendinput_newline_mode,
-        },
-    );
+    let status =
+        inserter.insert_via_unicode_keystrokes(text, context.insertion.windows_sendinput_newline_mode);
     if status == crate::types::InsertStatus::Inserted || !context.insertion.allow_non_tsf_fallback {
         status
     } else {

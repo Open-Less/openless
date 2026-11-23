@@ -1,0 +1,120 @@
+# 自成 workspace：与 app 主 workspace 分开解析依赖。
+# 原因：app workspace 里的 linux-egui 用 cpal 0.18（alsa-sys 0.4），而宿主用的是打过补丁的
+# cpal 0.15.3（alsa-sys 0.3.1）；两者都 links = "alsa"，无法在同一解析图里共存。
+# 这与 src-tauri 被 exclude 出主 workspace 是同一个理由。
+[workspace]
+
+[package]
+name = "openless-platform"
+version = "0.1.0"
+license = "AGPL-3.0-only"
+description = "OpenLess platform capability backends (clipboard, text IO, audio, input)"
+edition = "2021"
+rust-version = "1.99"
+publish = false
+
+# ─────────────────────────── 可选编译模块 ───────────────────────────
+#
+# 像内核的 Kconfig：**能力**是模块（feature），**平台**由 target_os 自动选。
+# 默认全部编进去；裁剪时用 `--no-default-features --features clipboard,text`。
+#
+# 模块之间的依赖关系显式声明在这里，关闭一个能力会连带关掉依赖它的能力，
+# 而不是留下一个引用不存在的模块编译失败。
+[features]
+default = [
+    "clipboard",
+    "input",
+    "text",
+    "selection",
+    "audio",
+    "permissions",
+    "storage",
+    "credentials",
+    "ime-profile",
+]
+
+# 剪贴板：全格式快照 / 历史排除 / 历史清理
+clipboard = ["dep:arboard"]
+
+# 输入：按键注入 + 全局热键 + 侧键组合 + 组合键 + 鼠标侧键 + macOS Fn 键
+input = ["dep:global-hotkey", "dep:parking_lot", "dep:once_cell"]
+
+# 文本写入：逐字输入与模拟粘贴（复用 input 的按键注入底层）
+text = ["input"]
+
+# 选区读取：模拟复制通道（依赖剪贴板事务与复制键注入）
+selection = ["clipboard", "input"]
+
+# 音频：录音期间静音 + 合成提示音
+audio = ["dep:cpal"]
+
+# 权限探测：macOS TCC / Windows 注册表 / Android 运行时权限
+permissions = ["dep:serde", "dep:cpal", "dep:winreg"]
+
+# 平台加固的原子文件存储
+storage = ["dep:uuid", "dep:libc"]
+
+# 凭据：macOS Keychain 原语
+credentials = [
+    "dep:parking_lot",
+    "dep:anyhow",
+    "dep:keyring-windows",
+    "dep:security-framework",
+    "dep:zeroize",
+]
+
+# Windows IME 语言配置（注册表）
+ime-profile = ["dep:winreg"]
+
+[dependencies]
+anyhow = { version = "1", optional = true }
+log = "0.4"
+thiserror = "2.0.21"
+# 共享类型（PasteShortcut / WindowsSendInputNewlineMode 等）来自内核合同，
+# 平台层只依赖类型，不依赖业务逻辑。
+openless-core = { path = "../openless-core" }
+
+# ── 可选依赖（按 feature 打开）─────────────────────────────────
+global-hotkey = { version = "0.6", optional = true }
+once_cell = { version = "1", optional = true }
+parking_lot = { version = "0.12", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
+
+# 提示音播放。必须复用宿主那份打过补丁的 cpal：它把 Windows COM 对象绑定到
+# 所属音频线程（见 src-tauri/vendor/cpal/OPENLESS_PATCH.md）。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+cpal = { version = "=0.15.3", path = "../../src-tauri/vendor/cpal", optional = true }
+
+# 凭据管理器：必须与宿主同版本同 native 后端，否则两个 keyring 后端会争同一 OS API。
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring-windows = { package = "keyring", version = "3.6.3", default-features = false, features = [
+  "windows-native",
+], optional = true }
+
+windows = { version = "0.58", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "ApplicationModel_DataTransfer",
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_WinRT",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_System_Com",
+  "Win32_Security_Credentials",
+  "Win32_Storage_FileSystem",
+] }
+winreg = { version = "0.52", optional = true }
+
+# macOS：纯文本剪贴板通道 + Keychain 原语。
+[target.'cfg(target_os = "macos")'.dependencies]
+arboard = { version = "3", optional = true }
+security-framework = { version = "=3.7.0", optional = true }
+zeroize = { version = "1", optional = true }

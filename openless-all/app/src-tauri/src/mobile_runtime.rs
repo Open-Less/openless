@@ -25,6 +25,10 @@ pub fn run() {
                 }
             }
 
+            // 平台层（openless-platform）的 Android 能力经这里注入 JNI 实现。
+            #[cfg(target_os = "android")]
+            crate::android::platform_env::install();
+
             crate::init_file_logger();
             log::info!("=== OpenLess mobile 启动 ===");
             initialize_android_ndk_context_for_audio();

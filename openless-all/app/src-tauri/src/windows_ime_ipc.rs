@@ -20,6 +20,8 @@ pub const IME_SUBMIT_TIMEOUT: Duration = Duration::from_millis(5000);
 const IME_SEND_TIMEOUT_MS: u32 = 2000;
 const IME_QUERY_SEND_TIMEOUT_MS: u32 = 500;
 const IME_QUERY_INTERVAL: Duration = Duration::from_millis(10);
+/// TSF 选区读取：DLL 可能异步排队 edit session，留出比查询更宽的窗口。
+const IME_SELECTION_READ_TIMEOUT: Duration = Duration::from_millis(400);
 const IME_WINDOW_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 const HRESULT_TIMEOUT: u32 = 0x8007_05B4;
@@ -352,6 +354,16 @@ async fn submit_text_to_platform(
     result?
 }
 
+/// 通过 TSF 文本服务读取焦点选区（不碰剪贴板）。
+///
+/// 目标应用没有激活 OpenLess 文本服务、DLL 版本过旧、或读取失败时返回 `None`，
+/// 调用方应继续回退到 UIA / 模拟复制。
+#[cfg(target_os = "windows")]
+pub(crate) fn read_focused_selection_text() -> Option<String> {
+    let target = crate::windows_ime_target::capture_ime_submit_target()?;
+    windows_message::read_selection_text(target)
+}
+
 #[cfg(target_os = "windows")]
 mod windows_message {
     use std::ffi::c_void;
@@ -359,15 +371,19 @@ mod windows_message {
 
     use super::{
         classify_protocol_probe_reply, classify_query_reply, classify_submit_reply,
-        emit_tsf_diagnostic_probe, next_submit_token, select_ime_window_with_probe,
-        ImeSubmitRequest, ImeSubmitTarget, ImeWindow, WindowsImeIpcError, WindowsImeIpcResult,
-        IME_CLIENT_WAIT_TIMEOUT, IME_QUERY_INTERVAL, IME_QUERY_SEND_TIMEOUT_MS,
-        IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
+        emit_tsf_diagnostic_probe, next_submit_token, select_ime_window,
+        select_ime_window_with_probe, ImeSubmitRequest, ImeSubmitTarget, ImeWindow,
+        WindowsImeIpcError, WindowsImeIpcResult, IME_CLIENT_WAIT_TIMEOUT, IME_QUERY_INTERVAL,
+        IME_QUERY_SEND_TIMEOUT_MS, IME_SELECTION_READ_TIMEOUT, IME_SEND_TIMEOUT_MS,
+        IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
     use crate::windows_ime_protocol::{
-        encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus,
-        IME_COPYDATA_QUERY, IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES, IME_STATUS_ACCEPTED,
-        IME_STATUS_PROTOCOL_VERSION, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
+        encode_composition_submit_payload, encode_query_payload, encode_read_selection_payload,
+        selection_mapping_name, ImeSubmitStatus, IME_COPYDATA_QUERY, IME_COPYDATA_READ_SELECTION,
+        IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES, IME_STATUS_ACCEPTED,
+        IME_STATUS_PROTOCOL_VERSION, OPENLESS_IME_MESSAGE_WINDOW_CLASS, SELECTION_BUFFER_BYTES,
+        SELECTION_MAX_CHARS, SELECTION_STATUS_FAILED, SELECTION_STATUS_NO_SELECTION,
+        SELECTION_STATUS_OK, SELECTION_STATUS_PENDING, SELECTION_TEXT_OFFSET,
     };
 
     const HWND_MESSAGE: isize = -3;
@@ -759,6 +775,145 @@ mod windows_message {
             previous = hwnd;
         }
         windows
+    }
+
+    /// 通过 TSF 文本服务读取焦点选区。
+    ///
+    /// 完全不碰剪贴板：请求走 `WM_COPYDATA`，结果通过一块一次性共享内存取回。
+    /// DLL 版本过旧（不认识 `OLR1`）、没有可用的 TSF 窗口、或读取失败都返回 `None`，
+    /// 由调用方回退到 UIA / 模拟复制。
+    pub(super) fn read_selection_text(target: ImeSubmitTarget) -> Option<String> {
+        let windows = enumerate_ime_windows();
+        let window = select_ime_window(target, &windows, false)?;
+        let token = next_submit_token();
+        let buffer = NamedSelectionBuffer::create(token)?;
+        let payload = encode_read_selection_payload(token, &buffer.name);
+        match send_copy_data(
+            window.hwnd,
+            IME_COPYDATA_READ_SELECTION,
+            &payload,
+            IME_QUERY_SEND_TIMEOUT_MS,
+        ) {
+            Ok(reply) if reply == IME_STATUS_ACCEPTED => {}
+            Ok(reply) => {
+                log::debug!(
+                    "[windows-ime] selection read rejected by dll: raw_status=0x{reply:08X}"
+                );
+                return None;
+            }
+            Err(SendFailure::NotDelivered(code)) => {
+                log::debug!("[windows-ime] selection read not delivered: OS error {code}");
+                return None;
+            }
+            Err(SendFailure::TimedOut) => {
+                log::debug!("[windows-ime] selection read timed out before dispatch");
+                return None;
+            }
+        }
+        let text = buffer.wait_for_text(IME_SELECTION_READ_TIMEOUT);
+        match &text {
+            Some(text) => log::debug!(
+                "[windows-ime] selection read via TSF OK ({} chars)",
+                text.chars().count()
+            ),
+            None => log::debug!("[windows-ime] selection read via TSF produced no text"),
+        }
+        text
+    }
+
+    /// 与 DLL 共享的一次性缓冲区。状态字段最后由 DLL 内存屏障写入，非零即表示文本已完整。
+    struct NamedSelectionBuffer {
+        name: String,
+        mapping: windows::Win32::Foundation::HANDLE,
+        view: *mut u8,
+    }
+
+    impl NamedSelectionBuffer {
+        fn create(token: u32) -> Option<Self> {
+            use windows::core::PCWSTR;
+            use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
+            use windows::Win32::System::Memory::{
+                CreateFileMappingW, MapViewOfFile, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
+            };
+
+            let name = selection_mapping_name(std::process::id(), token);
+            let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            let mapping = unsafe {
+                CreateFileMappingW(
+                    INVALID_HANDLE_VALUE,
+                    None,
+                    PAGE_READWRITE,
+                    0,
+                    SELECTION_BUFFER_BYTES as u32,
+                    PCWSTR(wide.as_ptr()),
+                )
+            }
+            .ok()?;
+            let mapped = unsafe { MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0) };
+            if mapped.Value.is_null() {
+                unsafe {
+                    let _ = windows::Win32::Foundation::CloseHandle(mapping);
+                }
+                return None;
+            }
+            let buffer = Self {
+                name,
+                mapping,
+                view: mapped.Value as *mut u8,
+            };
+            unsafe {
+                std::ptr::write_volatile(buffer.status_ptr(), SELECTION_STATUS_PENDING);
+            }
+            Some(buffer)
+        }
+
+        fn status_ptr(&self) -> *mut u32 {
+            self.view as *mut u32
+        }
+
+        fn length_ptr(&self) -> *mut u32 {
+            unsafe { self.view.add(4) as *mut u32 }
+        }
+
+        fn text_ptr(&self) -> *const u16 {
+            unsafe { self.view.add(SELECTION_TEXT_OFFSET) as *const u16 }
+        }
+
+        fn wait_for_text(&self, timeout: std::time::Duration) -> Option<String> {
+            let deadline = Instant::now() + timeout;
+            loop {
+                match unsafe { std::ptr::read_volatile(self.status_ptr()) } {
+                    SELECTION_STATUS_OK => {
+                        let requested = unsafe { std::ptr::read_volatile(self.length_ptr()) };
+                        let units = (requested as usize).min(SELECTION_MAX_CHARS);
+                        let text = unsafe {
+                            std::slice::from_raw_parts(self.text_ptr(), units)
+                        };
+                        return Some(String::from_utf16_lossy(text));
+                    }
+                    SELECTION_STATUS_NO_SELECTION | SELECTION_STATUS_FAILED => return None,
+                    _ => {}
+                }
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+
+    impl Drop for NamedSelectionBuffer {
+        fn drop(&mut self) {
+            use windows::Win32::System::Memory::{
+                UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS,
+            };
+            unsafe {
+                let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: self.view as *mut core::ffi::c_void,
+                });
+                let _ = windows::Win32::Foundation::CloseHandle(self.mapping);
+            }
+        }
     }
 
     fn send_copy_data(

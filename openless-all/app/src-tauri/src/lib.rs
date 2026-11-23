@@ -25,7 +25,6 @@ compile_error!(
 
 mod android;
 mod asr;
-mod audio_mute;
 #[cfg(test)]
 mod build_target;
 mod cli;
@@ -45,7 +44,6 @@ mod macos_dictation_key;
 #[cfg(target_os = "macos")]
 mod macos_streaming_input;
 #[cfg(not(mobile))]
-mod native_audio_cue;
 #[cfg(not(mobile))]
 mod native_capsule;
 mod qa_adapter;
@@ -115,7 +113,7 @@ mod style_zip_transfer;
 mod tauri_events;
 mod tls_crypto;
 mod types;
-#[cfg(not(mobile))]
+#[cfg(all(not(mobile), target_os = "macos"))]
 mod unicode_keystroke;
 #[cfg(mobile)]
 #[path = "mobile_stubs/unicode_keystroke.rs"]
@@ -915,6 +913,10 @@ fn run_desktop() {
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
             log::info!("=== OpenLess 启动 ===");
+
+            // 热键实现已迁到 openless-platform，平台层在按键回调里需要两个宿主行为：
+            // 按下时预取选区、录音中处理伴随键。这里注册一次。
+            hotkey::install_dictation_hooks();
 
             // Position the capsule at the bottom-center of the screen and hide it at
             // startup; the coordinator shows it on demand. Same semantics as Swift

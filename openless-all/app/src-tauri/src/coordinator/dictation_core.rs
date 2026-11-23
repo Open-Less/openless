@@ -173,11 +173,3 @@ pub(super) async fn cancel_active_session(inner: &Arc<Inner>) -> bool {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub(super) fn windows_sendinput_options_from_prefs(
-    preferences: &crate::types::UserPreferences,
-) -> crate::unicode_keystroke::WindowsSendInputOptions {
-    crate::unicode_keystroke::WindowsSendInputOptions {
-        newline_mode: preferences.windows_sendinput_newline_mode,
-    }
-}

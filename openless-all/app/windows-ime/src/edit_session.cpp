@@ -1,5 +1,6 @@
 #include "edit_session.h"
 
+#include <cstring>
 #include <utility>
 
 #include "display_attribute.h"
@@ -450,4 +451,111 @@ HRESULT OpenLessEditSession::FinishComposition(TfEditCookie edit_cookie) {
     composition_->Reset();
   }
   return hr;
+}
+
+OpenLessSelectionReadSession::OpenLessSelectionReadSession(ITfContext *context, HANDLE mapping,
+                                                           void *view, size_t bytes)
+    : context_(context), mapping_(mapping), view_(view), bytes_(bytes) {
+  if (context_ != nullptr) {
+    context_->AddRef();
+  }
+}
+
+OpenLessSelectionReadSession::~OpenLessSelectionReadSession() {
+  // Nothing was published (rejected session, or the host never ran it): report failure so the
+  // caller stops waiting on the shared buffer instead of timing out.
+  Publish(kOpenLessSelectionFailed, std::wstring());
+  if (context_ != nullptr) {
+    context_->Release();
+    context_ = nullptr;
+  }
+}
+
+STDMETHODIMP OpenLessSelectionReadSession::QueryInterface(REFIID iid, void **object) {
+  if (object == nullptr) {
+    return E_INVALIDARG;
+  }
+  *object = nullptr;
+  if (iid == IID_IUnknown || iid == IID_ITfEditSession) {
+    *object = static_cast<ITfEditSession *>(this);
+    AddRef();
+    return S_OK;
+  }
+  return E_NOINTERFACE;
+}
+
+STDMETHODIMP_(ULONG) OpenLessSelectionReadSession::AddRef() {
+  return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+}
+
+STDMETHODIMP_(ULONG) OpenLessSelectionReadSession::Release() {
+  const LONG count = InterlockedDecrement(&ref_count_);
+  if (count == 0) {
+    delete this;
+  }
+  return static_cast<ULONG>(count);
+}
+
+void OpenLessSelectionReadSession::Publish(uint32_t status, const std::wstring &text) {
+  if (published_) {
+    return;
+  }
+  published_ = true;
+  if (view_ != nullptr) {
+    const size_t capacity =
+        bytes_ > kOpenLessSelectionTextOffset ? (bytes_ - kOpenLessSelectionTextOffset) / sizeof(wchar_t)
+                                              : 0;
+    size_t units = text.size();
+    if (units > capacity) {
+      units = capacity;
+    }
+    auto *base = static_cast<BYTE *>(view_);
+    if (units > 0 && capacity > 0) {
+      std::memcpy(base + kOpenLessSelectionTextOffset, text.data(), units * sizeof(wchar_t));
+    }
+    *reinterpret_cast<uint32_t *>(base + sizeof(uint32_t)) = static_cast<uint32_t>(units);
+    // Status last, with a full barrier: a reader that sees a non-zero status sees complete text.
+    InterlockedExchange(reinterpret_cast<volatile LONG *>(base), static_cast<LONG>(status));
+  }
+  if (view_ != nullptr) {
+    UnmapViewOfFile(view_);
+    view_ = nullptr;
+  }
+  if (mapping_ != nullptr) {
+    CloseHandle(mapping_);
+    mapping_ = nullptr;
+  }
+}
+
+STDMETHODIMP OpenLessSelectionReadSession::DoEditSession(TfEditCookie edit_cookie) {
+  if (context_ == nullptr || view_ == nullptr) {
+    Publish(kOpenLessSelectionFailed, std::wstring());
+    return E_UNEXPECTED;
+  }
+
+  TF_SELECTION selection = {};
+  ULONG fetched = 0;
+  HRESULT hr = context_->GetSelection(edit_cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+  if (FAILED(hr)) {
+    Publish(kOpenLessSelectionFailed, std::wstring());
+    return hr;
+  }
+  if (fetched == 0 || selection.range == nullptr) {
+    Publish(kOpenLessSelectionNoSelection, std::wstring());
+    return S_OK;
+  }
+
+  std::wstring text;
+  hr = ReadOpenLessRangeText(edit_cookie, selection.range, &text);
+  selection.range->Release();
+  if (FAILED(hr)) {
+    Publish(kOpenLessSelectionFailed, std::wstring());
+    return hr;
+  }
+  if (text.empty()) {
+    Publish(kOpenLessSelectionNoSelection, std::wstring());
+    return S_OK;
+  }
+  Publish(kOpenLessSelectionOk, text);
+  return S_OK;
 }

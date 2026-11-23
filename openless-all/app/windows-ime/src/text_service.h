@@ -42,6 +42,9 @@ private:
   LRESULT AcceptSubmit(const COPYDATASTRUCT *copy_data, OpenLessEditOp op,
                        bool legacy_commit_payload = false);
   LRESULT QuerySubmit(const COPYDATASTRUCT *copy_data);
+  LRESULT AcceptSelectionRead(const COPYDATASTRUCT *copy_data);
+  void RunPendingSelectionRead(uint32_t token);
+  void CloseSelectionBuffer();
   void RunPendingSubmit(uint32_t token);
   void CancelPendingSubmit();
   HRESULT CommitTextOnOwnerThread(const std::wstring &text, OpenLessEditOp op,
@@ -67,6 +70,13 @@ private:
   std::wstring submit_text_;
   OpenLessEditOp submit_op_ = OpenLessEditOp::kCommit;
   std::shared_ptr<OpenLessAsyncEditState> async_edit_;
+
+  // Pending TSF selection read. The buffer belongs to the caller (OpenLess) and is handed to the
+  // read session once it is queued. Owner thread only.
+  HANDLE read_mapping_ = nullptr;
+  void *read_view_ = nullptr;
+  size_t read_view_bytes_ = 0;
+  uint32_t read_token_ = 0;
 
   // The live composition for the current dictation. Owner thread only.
   std::shared_ptr<OpenLessCompositionState> composition_ = std::make_shared<OpenLessCompositionState>();

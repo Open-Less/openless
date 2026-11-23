@@ -808,8 +808,10 @@ impl Coordinator {
         }
         let status = self.inner.inserter.insert(
             &ticket.replacement_text,
-            prefs.restore_clipboard_after_paste,
-            prefs.paste_shortcut,
+            crate::insertion::InsertOptions {
+                restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
+                paste_shortcut: prefs.paste_shortcut,
+            },
         );
         selection_voice_apply_outcome(status)
     }

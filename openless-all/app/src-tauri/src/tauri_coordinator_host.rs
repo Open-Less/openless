@@ -2321,12 +2321,12 @@ impl TauriCoordinatorHost {
                     && !preferences.mute_during_recording
                     && !payload.selection_polish
                 {
-                    crate::native_audio_cue::play_start();
+                    openless_platform::audio::play_start();
                 }
             } else if payload.state != CapsuleState::Recording
                 && previous == Some(CapsuleState::Recording)
             {
-                crate::native_audio_cue::stop();
+                openless_platform::audio::stop_cue();
             }
         }
         if let Some(native) = self.native.lock().as_ref() {
@@ -2360,7 +2360,7 @@ impl TauriCoordinatorHost {
         if let Some(native) = self.native.lock().as_ref() {
             native.stop();
         }
-        crate::native_audio_cue::stop();
+        openless_platform::audio::stop_cue();
     }
 
     fn app(&self) -> Option<AppHandle> {
@@ -2689,31 +2689,6 @@ impl TauriCoordinatorHost {
         }
     }
 
-    pub(crate) async fn switch_to_ascii(
-        &self,
-    ) -> Result<
-        Option<crate::unicode_keystroke::PreviousInputSource>,
-        crate::unicode_keystroke::TisError,
-    > {
-        let app = self.app().ok_or_else(|| {
-            crate::unicode_keystroke::TisError::MainThreadDispatch(
-                "Tauri AppHandle is not bound".to_string(),
-            )
-        })?;
-        crate::unicode_keystroke::switch_to_ascii(&app).await
-    }
-
-    pub(crate) async fn restore_input_source(
-        &self,
-        previous: Option<crate::unicode_keystroke::PreviousInputSource>,
-    ) -> Result<(), crate::unicode_keystroke::TisError> {
-        let app = self.app().ok_or_else(|| {
-            crate::unicode_keystroke::TisError::MainThreadDispatch(
-                "Tauri AppHandle is not bound".to_string(),
-            )
-        })?;
-        crate::unicode_keystroke::restore_input_source(&app, previous).await
-    }
 }
 
 #[cfg(test)]

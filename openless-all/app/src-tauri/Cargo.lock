@@ -1870,25 +1870,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
-name = "enigo"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf6f550bbbdd5fe66f39d429cb2604bcdacbf00dca0f5bbe2e9306a0009b7c6"
-dependencies = [
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
- "foreign-types-shared 0.3.1",
- "libc",
- "log",
- "objc2 0.5.3",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
- "windows 0.58.0",
- "xkbcommon",
- "xkeysym",
-]
-
-[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3355,8 +3336,6 @@ checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
 dependencies = [
  "byteorder",
  "log",
- "security-framework 2.11.1",
- "security-framework 3.7.0",
  "windows-sys 0.60.2",
  "zeroize",
 ]
@@ -3586,15 +3565,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "memmap2"
-version = "0.9.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3752,7 +3722,7 @@ dependencies = [
  "openssl-probe",
  "openssl-sys",
  "schannel",
- "security-framework 3.7.0",
+ "security-framework",
  "security-framework-sys",
  "tempfile",
 ]
@@ -4412,7 +4382,6 @@ name = "openless"
 version = "2.0.3-Beta.1"
 dependencies = [
  "anyhow",
- "arboard",
  "axum",
  "base64 0.22.1",
  "block2 0.5.1",
@@ -4425,7 +4394,6 @@ dependencies = [
  "coreaudio-sys",
  "cpal",
  "dispatch2",
- "enigo",
  "env_logger",
  "foundry-local-sdk",
  "futures-util",
@@ -4435,7 +4403,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jni 0.21.1",
- "keyring",
  "libc",
  "local-ip-address",
  "log",
@@ -4448,13 +4415,14 @@ dependencies = [
  "once_cell",
  "openless-capsule",
  "openless-core",
+ "openless-platform",
  "parking_lot",
  "raw-window-handle",
  "rcgen",
  "regex",
  "reqwest 0.12.28",
  "rustls",
- "security-framework 3.7.0",
+ "security-framework",
  "semver",
  "serde",
  "serde_json",
@@ -4544,6 +4512,29 @@ dependencies = [
  "uuid",
  "zeroize",
  "zip 9.0.5",
+]
+
+[[package]]
+name = "openless-platform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "cpal",
+ "global-hotkey",
+ "keyring",
+ "libc",
+ "log",
+ "once_cell",
+ "openless-core",
+ "parking_lot",
+ "security-framework",
+ "serde",
+ "thiserror 2.0.21",
+ "uuid",
+ "windows 0.58.0",
+ "winreg 0.52.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -5665,7 +5656,7 @@ dependencies = [
  "openssl-probe",
  "rustls-pki-types",
  "schannel",
- "security-framework 3.7.0",
+ "security-framework",
 ]
 
 [[package]]
@@ -5693,7 +5684,7 @@ dependencies = [
  "rustls-native-certs",
  "rustls-platform-verifier-android",
  "rustls-webpki",
- "security-framework 3.7.0",
+ "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
  "windows-sys 0.61.2",
@@ -5815,19 +5806,6 @@ dependencies = [
  "pkcs8",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "security-framework"
-version = "2.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
-dependencies = [
- "bitflags 2.13.2",
- "core-foundation 0.9.4",
- "core-foundation-sys",
- "libc",
- "security-framework-sys",
 ]
 
 [[package]]
@@ -8773,23 +8751,6 @@ dependencies = [
  "libc",
  "rustix",
 ]
-
-[[package]]
-name = "xkbcommon"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d66ca9352cbd4eecbbc40871d8a11b4ac8107cfc528a6e14d7c19c69d0e1ac9"
-dependencies = [
- "libc",
- "memmap2",
- "xkeysym",
-]
-
-[[package]]
-name = "xkeysym"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xz2"

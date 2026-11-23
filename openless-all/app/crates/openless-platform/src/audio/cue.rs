@@ -1,11 +1,14 @@
-//! Web Audio's existing two-note start cue, synthesized without a WebView.
-//! The temporary output stream is owned by its short-lived worker thread.
+//! 合成"开始录音"提示音，不依赖 WebView。
+//!
+//! 两音包络与 Web Audio 侧保持一致（880 Hz + 1108.73 Hz），由一条短命的 cpal 输出流播放；
+//! 每次播放自增 generation，`stop` 让正在播放的流立刻静音。
+
 use std::sync::atomic::{AtomicU64, Ordering};
 static GENERATION: AtomicU64 = AtomicU64::new(0);
-pub(crate) fn stop() {
+pub fn stop() {
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
-pub(crate) fn play_start() {
+pub fn play_start() {
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     let _ = std::thread::Builder::new()
         .name("openless-native-cue".into())

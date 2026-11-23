@@ -28,6 +28,25 @@ pub const IME_COPYDATA_CANCEL: usize = 0x4F4C_4331;
 /// in-process registration before sending a composition payload.
 pub const IME_COPYDATA_VERSION: usize = 0x4F4C_5631;
 
+/// "OLR1": uint32 token + UTF-16LE NUL-terminated shared-memory name. The DLL reads the focused
+/// selection through TSF and writes the text into that mapping, so reading a selection never
+/// touches the clipboard. Replies use the existing status codes: an old DLL answers
+/// `IME_STATUS_BAD_REQUEST`, which callers must treat as "no TSF selection channel".
+pub const IME_COPYDATA_READ_SELECTION: usize = 0x4F4C_5231;
+
+/// Shared-memory layout written by the DLL for [`IME_COPYDATA_READ_SELECTION`].
+///
+/// `u32 status` at 0, `u32 length_in_utf16_units` at 4, UTF-16LE text at 8. Status is written
+/// last with a full memory barrier, so a non-zero status means the text is complete.
+pub const SELECTION_BUFFER_BYTES: usize = 64 * 1024;
+pub const SELECTION_STATUS_PENDING: u32 = 0;
+pub const SELECTION_STATUS_OK: u32 = 1;
+pub const SELECTION_STATUS_NO_SELECTION: u32 = 2;
+pub const SELECTION_STATUS_FAILED: u32 = 3;
+pub const SELECTION_TEXT_OFFSET: usize = 8;
+/// Upper bound that still fits the mapping (header is 8 bytes).
+pub const SELECTION_MAX_CHARS: usize = (SELECTION_BUFFER_BYTES - SELECTION_TEXT_OFFSET) / 2;
+
 /// What one submit does in the host document. Mirrors `OpenLessEditOp` in the DLL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImeSubmitOp {
@@ -150,6 +169,23 @@ pub fn encode_query_payload(token: u32) -> [u8; 4] {
     token.to_le_bytes()
 }
 
+/// Per-request shared-memory name. `Local\` keeps it inside the session; the token keeps two
+/// concurrent reads from sharing one mapping.
+pub fn selection_mapping_name(process_id: u32, token: u32) -> String {
+    format!("Local\\OpenLessImeSelection.{process_id}.{token}")
+}
+
+/// `IME_COPYDATA_READ_SELECTION` payload: token followed by the NUL-terminated UTF-16LE name.
+pub fn encode_read_selection_payload(token: u32, mapping_name: &str) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(4 + (mapping_name.len() + 1) * 2);
+    payload.extend_from_slice(&token.to_le_bytes());
+    for unit in mapping_name.encode_utf16() {
+        payload.extend_from_slice(&unit.to_le_bytes());
+    }
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +229,33 @@ mod tests {
     fn empty_text_still_carries_the_token() {
         assert_eq!(encode_submit_payload(7, ""), vec![7, 0, 0, 0]);
         assert_eq!(encode_query_payload(7), [7, 0, 0, 0]);
+    }
+
+    #[test]
+    fn read_selection_payload_is_token_then_nul_terminated_utf16_name() {
+        let payload = encode_read_selection_payload(0x0102_0304, "N");
+        assert_eq!(
+            payload,
+            vec![0x04, 0x03, 0x02, 0x01, b'N', 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn selection_mapping_name_is_session_local_and_token_scoped() {
+        let first = selection_mapping_name(42, 1);
+        let second = selection_mapping_name(42, 2);
+        assert!(first.starts_with("Local\\OpenLessImeSelection."));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn selection_buffer_can_hold_a_full_capture_without_overflow() {
+        // 4000 字符是选区捕获的截断上限，必须远小于缓冲区容量。
+        assert!(SELECTION_MAX_CHARS >= 4000);
+        assert_eq!(
+            SELECTION_TEXT_OFFSET + SELECTION_MAX_CHARS * 2,
+            SELECTION_BUFFER_BYTES
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@
 //! polish and selection voice refuse to paste a rewrite of that stand-in over the
 //! real selection (the omitted middle would otherwise be deleted).
 //!
-//! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
+//! 模块依赖：`openless-platform`（剪贴板能力）+ libc + 平台 native 框架。
 //! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
 //! Linux 的选区读取路径。
 
@@ -20,11 +20,10 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
-#[cfg(any(target_os = "windows", test))]
-#[path = "selection/clipboard_capture.rs"]
-mod clipboard_capture;
 #[cfg(target_os = "windows")]
-use clipboard_capture::ClipboardPollOutcome;
+#[path = "selection/zero_clipboard.rs"]
+mod zero_clipboard;
+#[cfg(target_os = "windows")]
 
 const SELECTION_MAX_CHARS: usize = 4000;
 const SELECTION_TRUNCATE_HEAD: usize = 2000;
@@ -636,7 +635,7 @@ pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, Sele
     #[cfg(target_os = "macos")]
     let text = macos_ax::read_explicit_qa_text();
     #[cfg(target_os = "windows")]
-    let text = crate::host_document::read_qa_selection();
+    let text = zero_clipboard::read_focused_selection().map(|it| it.text);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let text: Option<String> = None;
     let selection = text.filter(|text| !text.trim().is_empty()).map(|text| {
@@ -685,6 +684,42 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         }
         log::info!(
             "[selection] AX read returned empty/whitespace{}",
+            source_app
+                .as_deref()
+                .map(|a| format!(" front_app={a}"))
+                .unwrap_or_default()
+        );
+    }
+
+    // 1b. Windows: TSF / UIA direct read（完全不碰剪贴板）
+    #[cfg(target_os = "windows")]
+    if let Some(selection) = zero_clipboard::read_focused_selection() {
+        let trimmed = selection.text.trim();
+        if !trimmed.is_empty() {
+            log::info!(
+                "[selection] {} read OK ({} chars){}",
+                selection.source.label(),
+                trimmed.chars().count(),
+                source_app
+                    .as_deref()
+                    .map(|a| format!(" front_app={a}"))
+                    .unwrap_or_default()
+            );
+            let (text, omits_middle) = stored_selection_text(trimmed);
+            return (
+                SelectionCaptureOutcome {
+                    selection: Some(SelectionContext {
+                        text,
+                        source_app,
+                        omits_middle,
+                    }),
+                },
+                SelectionCaptureMissReason::Ok,
+            );
+        }
+        log::info!(
+            "[selection] {} read returned empty/whitespace{}",
+            selection.source.label(),
             source_app
                 .as_deref()
                 .map(|a| format!(" front_app={a}"))
@@ -783,181 +818,53 @@ fn truncate_selection(text: &str) -> String {
     format!("{head}{SELECTION_TRUNCATED_MARKER}{tail}")
 }
 
-// ─────────────────────────── Simulated-copy fallback (mac/win) ───────────────────────────
+// ─────────────────────── 模拟复制兜底（平台层） ───────────────────────
+
+/// 平台层的模拟复制通道：备份剪贴板 → 发复制键 → 读 → 还原 → 清理历史。
+/// 这里只做"平台结果 → 无选区原因"的映射，事务细节都在 `openless-platform`。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    map_capture_outcome(openless_platform::selection::capture_via_simulated_copy())
+}
+
+/// 平台层结果 → 无选区原因。纯函数，便于在没有真实剪贴板的环境里测试。
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn map_capture_outcome(
+    outcome: openless_platform::selection::CaptureOutcome,
+) -> Result<String, SelectionCaptureMissReason> {
+    use openless_platform::selection::CaptureOutcome;
+
+    match outcome {
+        CaptureOutcome::Captured(text) if text.is_empty() => {
+            Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy)
+        }
+        CaptureOutcome::Captured(text) => Ok(text),
+        CaptureOutcome::Unchanged => Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel),
+        CaptureOutcome::Unreadable | CaptureOutcome::ClipboardBusy => {
+            Err(SelectionCaptureMissReason::ClipboardReadFailed)
+        }
+        CaptureOutcome::CopyFailed => Err(SelectionCaptureMissReason::CopyShortcutFailed),
+        CaptureOutcome::Unsupported => {
+            log::warn!("[selection] simulated copy is not available on this platform");
+            Err(SelectionCaptureMissReason::ClipboardReadFailed)
+        }
+    }
+}
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn simulate_copy_and_read() -> Option<String> {
     simulate_copy_and_read_diag().ok()
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
-    #[cfg(target_os = "windows")]
-    {
-        windows_simulate_copy_and_read_diag()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos_simulate_copy_and_read_diag()
-    }
-}
-
-/// Windows: detect the simulated Ctrl+C by watching the clipboard sequence number instead of
-/// writing a sentinel first. The sentinel used to land in Windows Clipboard History (Win+V) as
-/// `__openless_qa_sentinel_*__` entries on every capture (issues #1331 / #1335), and writing it
-/// woke the history listener mid-capture. Watching the sequence number removes that extra write
-/// and keeps these internal markers out of the user's clipboard history.
-#[cfg(target_os = "windows")]
-fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
-    let mut clipboard = match arboard::Clipboard::new() {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[selection] clipboard init failed: {e}");
-            return Err(SelectionCaptureMissReason::ClipboardInitFailed);
-        }
-    };
-    let (post_ok, outcome) =
-        clipboard_capture::capture_with_restore(&mut clipboard).map_err(|e| {
-            log::warn!("[selection] clipboard backup failed; skipping simulated copy: {e}");
-            SelectionCaptureMissReason::ClipboardReadFailed
-        })?;
-
-    if !post_ok {
-        return Err(SelectionCaptureMissReason::CopyShortcutFailed);
-    }
-    match outcome {
-        // The sequence never moved → Ctrl+C did not take effect or the target has no selection.
-        ClipboardPollOutcome::Unchanged => {
-            Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel)
-        }
-        ClipboardPollOutcome::Unreadable => Err(SelectionCaptureMissReason::ClipboardReadFailed),
-        ClipboardPollOutcome::Captured(text) if text.is_empty() => {
-            Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy)
-        }
-        ClipboardPollOutcome::Captured(text) => Ok(text),
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
-    type Error = arboard::Error;
-
-    fn backup_text(&mut self) -> Result<Option<String>, Self::Error> {
-        match self.get_text() {
-            Ok(text) => Ok(Some(text)),
-            // Only a missing text format may be treated as an absent text backup. Contention
-            // and other access failures must stop capture before Ctrl+C overwrites the user data.
-            Err(arboard::Error::ContentNotAvailable) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome) {
-        use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
-
-        let baseline_sequence = unsafe { GetClipboardSequenceNumber() };
-        let mut post_ok = post_copy_shortcut();
-        log::info!("[selection] post_copy: post_ok={post_ok}");
-        if !post_ok {
-            log::warn!("[selection] post_copy_shortcut failed");
-        }
-        let outcome = windows_poll_clipboard_after_copy(self, baseline_sequence, &mut post_ok);
-        (post_ok, outcome)
-    }
-
-    fn restore_text(&mut self, text: &str) {
-        if let Err(error) = self.set_text(text) {
-            log::warn!("[selection] clipboard restore failed: {error}");
-        }
-    }
-}
-
-/// macOS: write a sentinel so a failed Cmd+C can be told apart from a target app that has no
-/// selection, then restore the user's clipboard.
-#[cfg(target_os = "macos")]
-fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
-    // a) Snapshot the current clipboard (backup used to restore the original state)
-    let mut clipboard = match arboard::Clipboard::new() {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[selection] clipboard init failed: {e}");
-            return Err(SelectionCaptureMissReason::ClipboardInitFailed);
-        }
-    };
-    let original = match clipboard.get_text() {
-        Ok(t) => Some(t),
-        Err(e) => {
-            log::info!("[selection] clipboard get_text returned err (likely empty): {e}");
-            None
-        }
-    };
-
-    // b) Write a sentinel into the clipboard — used afterwards to check whether the simulated
-    //    copy actually overwrote it (if it is still the sentinel, Cmd+C did not take effect or
-    //    the target app has no selection).
-    let sentinel = format!("__openless_qa_sentinel_{}__", uuid_like_token());
-    if let Err(e) = clipboard.set_text(sentinel.clone()) {
-        log::warn!("[selection] clipboard set_text(sentinel) failed: {e}");
-        return Err(SelectionCaptureMissReason::ClipboardSentinelWriteFailed);
-    }
-
-    // c) Simulate Cmd+C
-    let mut post_ok = post_copy_shortcut();
-    log::info!(
-        "[selection] post_copy: post_ok={} original_was_some={}",
-        post_ok,
-        original.is_some()
-    );
-    if !post_ok {
-        log::warn!("[selection] post_copy_shortcut failed");
-        // Do not return immediately: the clipboard may already have been clobbered by some path;
-        // restore it via the flow below.
-    }
-
-    std::thread::sleep(Duration::from_millis(80));
-    let captured = clipboard.get_text().ok();
-
-    // d) Restore the original clipboard
-    if let Some(ref prev) = original {
-        if let Err(e) = clipboard.set_text(prev) {
-            log::warn!("[selection] clipboard restore failed: {e}");
-        }
-    } else {
-        // The user's original clipboard was empty → clear the sentinel / selection to avoid
-        // polluting it.
-        if let Err(e) = clipboard.set_text("") {
-            log::warn!("[selection] clipboard clear failed: {e}");
-        }
-    }
-
-    classify_simulated_copy_result(post_ok, captured, &sentinel)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn classify_simulated_copy_result(
-    post_ok: bool,
-    captured: Option<String>,
-    sentinel: &str,
-) -> Result<String, SelectionCaptureMissReason> {
-    if !post_ok {
-        return Err(SelectionCaptureMissReason::CopyShortcutFailed);
-    }
-    let captured = captured.ok_or(SelectionCaptureMissReason::ClipboardReadFailed)?;
-    if captured == sentinel {
-        return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
-    }
-    if captured.is_empty() {
-        return Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy);
-    }
-    Ok(captured)
-}
-
-/// Read the full current selection (trimmed, not head/tail truncated). This is
-/// used only by the Windows final safety check; the clipboard helper snapshots
-/// and restores the user's clipboard. Comparing against the untruncated text
-/// stops a head/tail stand-in from authorizing a paste over the omitted middle.
 #[cfg(target_os = "windows")]
 fn selected_text_for_validation() -> Option<String> {
+    // 先走 TSF / UIA：校验本来只是为了确认选区没变，不值得再写一次剪贴板。
+    if let Some(selection) = zero_clipboard::read_focused_selection() {
+        let trimmed = selection.text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
     let text = simulate_copy_and_read()?;
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -1021,26 +928,6 @@ fn windows_selection_targets_match(
     current: WindowsSelectionTarget,
 ) -> bool {
     captured == current
-}
-
-#[cfg(target_os = "macos")]
-fn uuid_like_token() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
-}
-
-#[cfg(target_os = "macos")]
-fn post_copy_shortcut() -> bool {
-    macos_paste::post_cmd_c().is_ok()
-}
-
-#[cfg(target_os = "windows")]
-fn post_copy_shortcut() -> bool {
-    windows_paste::send_ctrl_c().is_ok()
 }
 
 // ─────────────────────────── macOS AX read ───────────────────────────
@@ -1278,187 +1165,6 @@ mod macos_ax {
         }
         let cstr = CStr::from_ptr(buf.as_ptr() as *const c_char);
         cstr.to_str().ok().map(|s| s.to_string())
-    }
-}
-
-// ─────────────────────────── macOS Cmd+C post ───────────────────────────
-
-#[cfg(target_os = "macos")]
-mod macos_paste {
-    use std::ffi::c_void;
-
-    #[repr(C)]
-    struct OpaqueCGEvent(c_void);
-    type CGEventRef = *mut OpaqueCGEvent;
-
-    #[repr(C)]
-    struct OpaqueCGEventSource(c_void);
-    type CGEventSourceRef = *mut OpaqueCGEventSource;
-
-    type CGEventTapLocation = u32;
-    type CGEventSourceStateID = i32;
-    type CGKeyCode = u16;
-    type CGEventFlags = u64;
-
-    const KCG_HID_EVENT_TAP: CGEventTapLocation = 0;
-    const KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
-    const KCG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 0x0010_0000;
-    /// kVK_ANSI_C
-    const KEY_C: CGKeyCode = 8;
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGEventSourceCreate(state_id: CGEventSourceStateID) -> CGEventSourceRef;
-        fn CGEventCreateKeyboardEvent(
-            source: CGEventSourceRef,
-            virtual_key: CGKeyCode,
-            key_down: bool,
-        ) -> CGEventRef;
-        fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
-        fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        fn CFRelease(cf: *const c_void);
-    }
-
-    pub fn post_cmd_c() -> Result<(), String> {
-        unsafe {
-            let source = CGEventSourceCreate(KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE);
-            let down = CGEventCreateKeyboardEvent(source, KEY_C, true);
-            let up = CGEventCreateKeyboardEvent(source, KEY_C, false);
-            if down.is_null() || up.is_null() {
-                if !source.is_null() {
-                    CFRelease(source as *const c_void);
-                }
-                if !down.is_null() {
-                    CFRelease(down as *const c_void);
-                }
-                if !up.is_null() {
-                    CFRelease(up as *const c_void);
-                }
-                return Err("CGEventCreateKeyboardEvent returned null".into());
-            }
-            CGEventSetFlags(down, KCG_EVENT_FLAG_MASK_COMMAND);
-            CGEventSetFlags(up, KCG_EVENT_FLAG_MASK_COMMAND);
-            CGEventPost(KCG_HID_EVENT_TAP, down);
-            CGEventPost(KCG_HID_EVENT_TAP, up);
-            CFRelease(down as *const c_void);
-            CFRelease(up as *const c_void);
-            if !source.is_null() {
-                CFRelease(source as *const c_void);
-            }
-        }
-        Ok(())
-    }
-}
-
-// ─────────────────────────── Windows Ctrl+C send ───────────────────────────
-
-/// Poll the clipboard sequence number (not its text) until the target app's Ctrl+C lands.
-/// Watching the sequence avoids writing a sentinel — the old sentinel showed up in Windows
-/// Clipboard History as `__openless_qa_sentinel_*__` entries (#1331 / #1335). One Ctrl+C resend
-/// mid-window covers the case where the first chord hit a still-busy clipboard.
-#[cfg(target_os = "windows")]
-fn windows_poll_clipboard_after_copy(
-    clipboard: &mut arboard::Clipboard,
-    baseline_sequence: u32,
-    post_ok: &mut bool,
-) -> ClipboardPollOutcome {
-    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
-
-    const MAX_MS: u64 = 450;
-    const STEP_MS: u64 = 25;
-    let start = std::time::Instant::now();
-    let mut attempts = 0u32;
-    let mut resent_ctrl_c = false;
-    let mut changed = false;
-
-    loop {
-        attempts += 1;
-        if unsafe { GetClipboardSequenceNumber() } != baseline_sequence {
-            changed = true;
-            // The clipboard may be transiently held by another process (Clipboard History,
-            // cloud clipboard). Keep polling until the deadline instead of failing immediately.
-            if let Ok(text) = clipboard.get_text() {
-                log::info!(
-                    "[selection] clipboard_poll: waited_ms={} attempts={} resent={} changed=true",
-                    start.elapsed().as_millis() as u64,
-                    attempts,
-                    resent_ctrl_c
-                );
-                return ClipboardPollOutcome::Captured(text);
-            }
-        }
-
-        if start.elapsed().as_millis() as u64 >= MAX_MS {
-            break;
-        }
-        // Halfway through: if nothing landed yet, resend Ctrl+C once.
-        if !resent_ctrl_c && start.elapsed().as_millis() as u64 >= 150 {
-            if post_copy_shortcut() {
-                *post_ok = true;
-                resent_ctrl_c = true;
-                log::info!("[selection] clipboard_poll: resent Ctrl+C after sequence miss");
-            }
-        }
-        std::thread::sleep(Duration::from_millis(STEP_MS));
-    }
-
-    log::info!(
-        "[selection] clipboard_poll: waited_ms={} attempts={} resent={} changed={}",
-        start.elapsed().as_millis() as u64,
-        attempts,
-        resent_ctrl_c,
-        changed
-    );
-    if changed {
-        ClipboardPollOutcome::Unreadable
-    } else {
-        ClipboardPollOutcome::Unchanged
-    }
-}
-
-#[cfg(target_os = "windows")]
-mod windows_paste {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        VIRTUAL_KEY, VK_C, VK_CONTROL,
-    };
-
-    pub fn send_ctrl_c() -> Result<(), String> {
-        let mut inputs = [
-            keyboard_event(VK_CONTROL, false),
-            keyboard_event(VK_C, false),
-            keyboard_event(VK_C, true),
-            keyboard_event(VK_CONTROL, true),
-        ];
-
-        let sent = unsafe { SendInput(&mut inputs, std::mem::size_of::<INPUT>() as i32) };
-        if (sent as usize) != inputs.len() {
-            return Err(format!("SendInput sent {sent}/{}", inputs.len()));
-        }
-        Ok(())
-    }
-
-    fn keyboard_event(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
-        let mut flags = KEYBD_EVENT_FLAGS(0);
-        if key_up {
-            flags |= KEYEVENTF_KEYUP;
-        }
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: vk,
-                    wScan: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        }
     }
 }
 
@@ -1722,49 +1428,41 @@ mod tests {
     }
 
     #[test]
-    fn simulated_copy_result_classifies_failures_and_multibyte_text() {
-        let sentinel = "__openless_test_sentinel__";
-        for (post_ok, captured, expected) in [
+    fn capture_outcomes_map_to_capture_miss_reasons() {
+        use openless_platform::selection::CaptureOutcome;
+
+        for (outcome, expected) in [
             (
-                false,
-                Some("stale clipboard".to_string()),
+                CaptureOutcome::CopyFailed,
                 Err(SelectionCaptureMissReason::CopyShortcutFailed),
             ),
             (
-                true,
-                None,
+                CaptureOutcome::Unreadable,
                 Err(SelectionCaptureMissReason::ClipboardReadFailed),
             ),
             (
-                true,
-                Some(sentinel.to_string()),
+                CaptureOutcome::ClipboardBusy,
+                Err(SelectionCaptureMissReason::ClipboardReadFailed),
+            ),
+            (
+                CaptureOutcome::Unchanged,
                 Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel),
             ),
             (
-                true,
-                Some(String::new()),
+                CaptureOutcome::Captured(String::new()),
                 Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy),
             ),
             (
-                true,
-                Some("selected".to_string()),
+                CaptureOutcome::Captured("selected".into()),
                 Ok("selected".to_string()),
             ),
             (
-                true,
-                Some("中文选区".to_string()),
+                CaptureOutcome::Captured("中文选区".into()),
                 Ok("中文选区".to_string()),
             ),
         ] {
-            assert_eq!(
-                classify_simulated_copy_result(post_ok, captured, sentinel),
-                expected
-            );
+            assert_eq!(map_capture_outcome(outcome), expected);
         }
-        assert_eq!(
-            SelectionCaptureMissReason::ClipboardSentinelWriteFailed.as_str(),
-            "clipboard_sentinel_write_failed"
-        );
     }
 
     #[test]
