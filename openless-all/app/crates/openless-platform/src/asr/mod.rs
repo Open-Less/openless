@@ -34,3 +34,13 @@ pub mod sherpa;
 /// 契约定义在内核 `openless_core::AudioConsumer`（宿主、平台层、引擎共用一份），
 /// 这里只做别名，避免三处各写一个 trait。
 pub use openless_core::AudioConsumer as PcmConsumer;
+
+/// 本 crate 是否编译了 sherpa-onnx 原生运行时。
+///
+/// 宿主的 `cfg(local_asr_sherpa)` 由 build.rs 按目标注入（Cargo 不支持按 target 设默认
+/// feature），必须与这里保持一致 —— 宿主有一条测试断言两者相等，避免漂移。
+pub const SHERPA_AVAILABLE: bool =
+    cfg!(all(feature = "asr-sherpa", any(target_os = "windows", target_os = "android")));
+
+/// 本 crate 是否编译了 Foundry Local 的 WinML 运行时。
+pub const FOUNDRY_AVAILABLE: bool = cfg!(all(feature = "asr-foundry", target_os = "windows"));

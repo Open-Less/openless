@@ -51,3 +51,27 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod capability_consistency {
+    /// 宿主的 `cfg(local_asr_sherpa)` 由 build.rs 按目标注入，平台层用真 feature 表达。
+    /// 两者必须一致，否则"引擎可用性"会在不同代码路径下给出不同答案。
+    #[test]
+    fn local_asr_sherpa_cfg_matches_the_platform_feature() {
+        assert_eq!(
+            cfg!(local_asr_sherpa),
+            openless_platform::asr::SHERPA_AVAILABLE,
+            "build.rs cfg(local_asr_sherpa) drifted from openless-platform's asr-sherpa feature"
+        );
+    }
+
+    /// 同上：Foundry 的 WinML 运行时。
+    #[test]
+    fn foundry_runtime_cfg_matches_the_platform_feature() {
+        assert_eq!(
+            cfg!(all(target_os = "windows", local_asr_sherpa)),
+            openless_platform::asr::FOUNDRY_AVAILABLE,
+            "Windows Foundry runtime availability drifted from openless-platform's asr-foundry feature"
+        );
+    }
+}

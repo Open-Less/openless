@@ -60,38 +60,38 @@ feature 之间的依赖写在 `Cargo.toml` 里，关闭底层能力会连带关�
 src/
   android/
     accessibility.rs   无障碍服务通道
-    clipboard.rs   剪贴板（Java ClipboardManager）
+    clipboard.rs   全格式快照 + 历史排除
     context.rs   JavaVM / Activity context 注入点
     edit_observation.rs   编辑观察
-    input.rs   按键注入（Android）
+    input.rs   SendInput 底层
     insert_tiers.rs   插入策略分级
     jni.rs   JNI 助手与 Java 类访问
     local_migration.rs   本地数据迁移
-    mod.rs   Android 后端 + AndroidEnv 接缝
+    mod.rs   Windows 后端
     overlay_control.rs   悬浮层 Intent 控制
     overlay.rs   悬浮层权限与状态
     permissions.rs   运行时权限
-    selection.rs   选区读取（无障碍）
+    selection.rs   模拟复制读取选区
     shizuku.rs   Shizuku 授权与注入
-    text.rs   文本写入（无障碍 / Shizuku）
+    text.rs   逐字输入与模拟粘贴
   asr/
     apple.rs   Apple Speech（macOS）
-    descriptors.rs   sherpa 运行时阶段/事件
+    descriptors.rs   provider id 与阶段
     diagnostics.rs   诊断事件钩子
     foundry/
       descriptors.rs   provider id 与阶段
-      mod.rs   Foundry Local
+      mod.rs   Windows 后端
       native.rs   运行时下载 / 校验 / 安装
-      provider.rs   Whisper 分块推理
-      runtime.rs   模型路由与 GPU→CPU 回退
+      provider.rs   sherpa provider
+      runtime.rs   sherpa 离线/在线识别器
   asr/
     ids.rs   provider id 契约
-    mod.rs   本地 ASR 门面 + PcmConsumer
+    mod.rs   Windows 后端
     paths.rs   宿主注入的目录解析器
     receipt.rs   模型文件收据
     sherpa/
       blocking_decode.rs   串行化解码 worker
-      mod.rs   sherpa-onnx 运行时
+      mod.rs   Windows 后端
       provider.rs   sherpa provider
       runtime.rs   sherpa 离线/在线识别器
     capture/
@@ -99,38 +99,38 @@ src/
       backend.rs   cpal 输入流 + Windows 回环
       macos_tap.m   tap 的 Objective-C 实现
       macos_tap.rs   系统音频 tap（14.6+）
-      mod.rs   采集门面（CaptureError / StreamFormat / Sink）
+      mod.rs   Windows 后端
   audio/
     cue.rs   合成提示音
-    device_watch.rs
-    mod.rs   音频能力门面
+    device_watch.rs   macOS 设备变更通知（CoreAudio 属性监听）
+    mod.rs   Windows 后端
     mute/
-      macos.rs   macOS 静音
+      macos.rs   TCC（辅助功能 / 麦克风）
   audio/
     mute.rs   录音期间系统静音
     mute/
-      unsupported.rs   其它平台显式不可用
-      windows.rs   Windows 静音
+      unsupported.rs   无后端平台的显式失败
+      windows.rs   Windows 侧键组合
   capsule/
-    geometry.rs   显示器几何 / 放置 / 镜像
-    mod.rs   胶囊能力门面
-  clipboard.rs   剪贴板门面：Intent / Snapshot / 全格式快照
+    geometry.rs   Rect / UiaAnchor（跨能力共用）
+    mod.rs   Windows 后端
+  clipboard.rs   全格式快照 + 历史排除
   common/
     block_reason.rs   文档读取被拒原因
     codec.rs   UTF-16 分块编解码（纯逻辑）
     error.rs   PlatformError（部分失败语义）
     geometry.rs   Rect / UiaAnchor（跨能力共用）
     issue1266.rs   issue-1266 诊断观测
-    mod.rs   跨平台纯逻辑
+    mod.rs   Windows 后端
     uia_text.rs   UIA 字符单元解码（纯逻辑）
   credentials/
     keychain.rs   macOS Keychain
-    mod.rs   凭据库门面
+    mod.rs   Windows 后端
     store.rs   统一保险库原语
   ime/
     gate.rs   文本通道安全门
     ipc.rs   WM_COPYDATA 提交与查询
-    mod.rs   TSF 通道 + 共享恢复助手
+    mod.rs   Windows 后端
     protocol.rs   TSF 线协议
     session.rs   插入会话状态机
     target.rs   前台焦点捕获
@@ -142,60 +142,62 @@ src/
     combo.rs   自定义组合键听写
     global_runtime.rs   global-hotkey 共享运行时
     hotkey/
-      macos.rs   CGEventTap 后端
-      mod.rs   全局热键
+      macos.rs   TCC（辅助功能 / 麦克风）
+      mod.rs   Windows 后端
       unsupported.rs   无后端平台的显式失败
-      windows.rs   WH_KEYBOARD_LL 后端
+      windows.rs   Windows 侧键组合
   input/
     inject.rs   按键注入抽象
     macos_dictation_key.rs   Fn 听写键（macOS）
-    mod.rs   输入能力门面 + HostHooks
+    mod.rs   Windows 后端
     mouse.rs   鼠标侧键听写
+    qa_hotkey.rs   QA 组合键监听（共享 hotkey 运行时 + 转发线程）
     side_combo/
       keys.rs   快捷键解析
-      macos.rs   macOS 侧键组合
-      mod.rs   侧键组合
+      macos.rs   TCC（辅助功能 / 麦克风）
+      mod.rs   Windows 后端
+      unsupported.rs   无后端平台的显式失败
       windows.rs   Windows 侧键组合
   lib.rs   能力门面导出 + feature 门控
   macos/
     ax.rs   AX 文档读写（选区 / 光标上下文 / 编辑监听）
-    capsule_window.rs   交互区域命中 / 点击穿透 / 鼠标状态
+    capsule_window.rs   命中测试 / 点击穿透 / 光标 / 前台窗口
     cgevent.rs   CGEvent 按键注入
-    clipboard.rs   纯文本剪贴板（arboard）
-    front_app.rs   NSWorkspace 前台应用 + 激活
+    clipboard.rs   全格式快照 + 历史排除
+    front_app.rs   前台应用（窗口标题）与窗口激活
     guide.m   引导窗口 AppKit 实现
     guide.rs   辅助功能授权引导窗口
     keystroke.rs   CGEvent 逐字投递 + TIS 输入源切换
-    mod.rs   macOS 后端
+    mod.rs   Windows 后端
     secure_input.rs   Secure Event Input 状态
-    selection.rs   哨兵 + Cmd+C 读取选区
-    text.rs   模拟粘贴快捷键（CGEvent）
+    selection.rs   模拟复制读取选区
+    text.rs   逐字输入与模拟粘贴
     window.rs   窗口置前（带异常兜底）
   permissions/
     macos.rs   TCC（辅助功能 / 麦克风）
-    mod.rs   权限探测门面
+    mod.rs   Windows 后端
     other.rs   注册表 / Android 运行时权限
-  selection.rs   选区读取门面：CaptureOutcome
+  selection.rs   模拟复制读取选区
   selection/
-    target.rs
-    windows_target.rs
+    target.rs   前台焦点捕获
+    windows_target.rs   Windows 焦点指纹
   storage/
-    mod.rs   原子文件存储
+    mod.rs   Windows 后端
     secure_file.rs   平台加固的小文件写入
-  text.rs   文本写入门面：type_text / 粘贴快捷键
+  text.rs   逐字输入与模拟粘贴
   unsupported/
-    clipboard.rs   剪贴板不可用
-    input.rs   输入不可用
-    mod.rs   无实现平台的显式失败
-    selection.rs   选区读取不可用
-    text.rs   文本写入不可用
+    clipboard.rs   全格式快照 + 历史排除
+    input.rs   SendInput 底层
+    mod.rs   Windows 后端
+    selection.rs   模拟复制读取选区
+    text.rs   逐字输入与模拟粘贴
   updater/
     android_logic.rs   版本比较 / ABI / 验签
     android_pipeline.rs   Android 更新流水线
     android.rs   Android APK 发现 / 传输
     artifact_fallback.rs   产物地址回退
     manifest.rs   清单与并发发现
-    mod.rs   自更新门面
+    mod.rs   Windows 后端
     signature_index.rs   签名索引
   windows/
     capsule_window.rs   命中测试 / 点击穿透 / 光标 / 前台窗口
