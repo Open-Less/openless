@@ -68,15 +68,7 @@ pub(crate) struct SelectionInsertionTarget {
 }
 
 #[cfg(target_os = "windows")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WindowsSelectionTarget {
-    foreground_window: usize,
-    focused_window: usize,
-    foreground_process_id: u32,
-    foreground_thread_id: u32,
-    focused_process_id: u32,
-    focused_thread_id: u32,
-}
+use openless_platform::selection::windows_target::WindowsSelectionTarget;
 
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone)]
@@ -342,7 +334,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     {
         return SelectionInsertionTarget {
-            windows: capture_windows_selection_target(),
+            windows: openless_platform::selection::windows_target::capture(),
         };
     }
 
@@ -404,7 +396,7 @@ pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionT
         let Some(captured) = target.windows else {
             return false;
         };
-        return capture_windows_selection_target().as_ref() == Some(&captured);
+        return openless_platform::selection::windows_target::capture().as_ref() == Some(&captured);
     }
 
     #[cfg(target_os = "macos")]
@@ -441,10 +433,10 @@ pub(crate) fn validate_selection_insertion_target(
         let Some(captured) = target.windows else {
             return SelectionInsertionTargetValidation::TargetUnavailable;
         };
-        let Some(current_before_copy) = capture_windows_selection_target() else {
+        let Some(current_before_copy) = openless_platform::selection::windows_target::capture() else {
             return SelectionInsertionTargetValidation::TargetUnavailable;
         };
-        if !windows_selection_targets_match(captured, current_before_copy) {
+        if !openless_platform::selection::windows_target::matches(captured, current_before_copy) {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
 
@@ -453,10 +445,10 @@ pub(crate) fn validate_selection_insertion_target(
             return SelectionInsertionTargetValidation::SelectionChanged;
         }
 
-        let Some(current_after_copy) = capture_windows_selection_target() else {
+        let Some(current_after_copy) = openless_platform::selection::windows_target::capture() else {
             return SelectionInsertionTargetValidation::TargetUnavailable;
         };
-        if !windows_selection_targets_match(captured, current_after_copy) {
+        if !openless_platform::selection::windows_target::matches(captured, current_after_copy) {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
         return SelectionInsertionTargetValidation::Valid;
@@ -538,7 +530,7 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         // Windows' focus-stealing rules may reject SetForegroundWindow. Recovery counts only if
         // the exact same window/control fingerprint is re-captured; do not blindly paste into the
         // current app just because the activation call returned.
-        return capture_windows_selection_target().as_ref() == Some(&captured);
+        return openless_platform::selection::windows_target::capture().as_ref() == Some(&captured);
     }
 
     #[cfg(target_os = "macos")]
@@ -873,61 +865,6 @@ fn selected_text_for_validation() -> Option<String> {
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
     actual.is_some_and(|actual| actual == expected)
-}
-
-#[cfg(target_os = "windows")]
-fn capture_windows_selection_target() -> Option<WindowsSelectionTarget> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
-    };
-
-    unsafe {
-        let foreground = GetForegroundWindow();
-        if foreground.0.is_null() {
-            return None;
-        }
-
-        let mut foreground_process_id = 0;
-        let foreground_thread_id =
-            GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id));
-        if foreground_process_id == 0 || foreground_thread_id == 0 {
-            return None;
-        }
-
-        let mut gui_info = GUITHREADINFO {
-            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-            ..Default::default()
-        };
-        let focused = if GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok()
-            && !gui_info.hwndFocus.0.is_null()
-        {
-            gui_info.hwndFocus
-        } else {
-            foreground
-        };
-        let mut focused_process_id = 0;
-        let focused_thread_id = GetWindowThreadProcessId(focused, Some(&mut focused_process_id));
-        if focused_process_id == 0 || focused_thread_id == 0 {
-            return None;
-        }
-
-        Some(WindowsSelectionTarget {
-            foreground_window: foreground.0 as usize,
-            focused_window: focused.0 as usize,
-            foreground_process_id,
-            foreground_thread_id,
-            focused_process_id,
-            focused_thread_id,
-        })
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn windows_selection_targets_match(
-    captured: WindowsSelectionTarget,
-    current: WindowsSelectionTarget,
-) -> bool {
-    captured == current
 }
 
 // ─────────────────────────── macOS AX read ───────────────────────────
@@ -1500,11 +1437,11 @@ mod tests {
     #[test]
     fn windows_target_match_rejects_another_control_in_the_same_app() {
         let captured = windows_target(10);
-        assert!(windows_selection_targets_match(captured, captured));
+        assert!(openless_platform::selection::windows_target::matches(captured, captured));
 
         let mut another_control = captured;
         another_control.focused_window += 100;
-        assert!(!windows_selection_targets_match(captured, another_control));
+        assert!(!openless_platform::selection::windows_target::matches(captured, another_control));
     }
 
     #[cfg(target_os = "windows")]

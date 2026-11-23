@@ -57,11 +57,15 @@ src/
   lib.rs              门面导出
   clipboard.rs        剪贴板：Intent / Snapshot / Clipboard
   text.rs             文本写入：send_paste_shortcut / type_text
+  common/
+    uia_text.rs       UIA 字符单元解码（纯逻辑）
   ime/
     protocol.rs       TSF 线协议（tag/状态码/payload/共享内存布局）
     target.rs         前台焦点线程与窗口捕获
     ipc.rs            WM_COPYDATA 提交与查询轮询
     session.rs        插入会话状态机
+  selection/
+    windows_target.rs   Windows 焦点指纹（前台/焦点 HWND + pid/tid）
   input/
     mod.rs            输入能力门面
     inject.rs         按键注入：send_copy_shortcut
