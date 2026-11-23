@@ -23,6 +23,7 @@ scripts/check-platform-boundary.sh
 | `android/native_bridge.rs` | **Android 的 IPC 边界**：Kotlin 侧通过 JNI 调进来的入口，等价于桌面端的 `commands/*`。它持有 app 的 Coordinator/Backend 句柄与 JNI 导出符号，属于应用组装而不是平台能力。 |
 | `android/platform_env.rs` | 实现平台层的 `AndroidEnv` 接口（宿主注入点本身）。 |
 | `android/non_android.rs` | 非 Android 目标上的显式桩（`NotAndroid` 语义），供跨平台命令层编译。 |
+| `windows_ime_profile.rs` | Windows IME 语言配置的宿主薄封装；非 Windows 分支返回 `NotWindows` 状态。 |
 | `mobile_runtime.rs` | Android 启动编排：把 tao 的 JavaVM/Activity context 交给平台层并初始化存储根。 |
 | `macos_card_panel.rs` | 卡片面板的窗口类替换：在 AppKit 安装 KVO 之前把 tao 的 `NSWindow` 初始化成 `NSPanel`。这依赖 tao 的 ivar 布局，属于**窗口创建胶水**，无法下沉（平台层不链接 tao）。 |
 | `macos_streaming_input.rs` | macOS 流式逐字输入（WP7 待迁移）。 |

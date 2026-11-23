@@ -9,6 +9,7 @@
 
 pub mod combo;
 pub mod global_runtime;
+pub mod qa_hotkey;
 pub mod hotkey;
 pub mod inject;
 #[cfg(target_os = "macos")]

@@ -1,5 +1,6 @@
 //! Shared parsing/validation for user-configurable shortcut bindings.
 
+#[cfg(test)]
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 
 #[cfg(test)]

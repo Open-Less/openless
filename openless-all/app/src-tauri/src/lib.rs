@@ -71,19 +71,11 @@ mod omni;
 mod permissions;
 mod persistence;
 mod polish;
-#[cfg(not(mobile))]
-mod qa_hotkey;
-#[cfg(mobile)]
-#[path = "mobile_stubs/qa_hotkey.rs"]
 mod qa_hotkey;
 mod recorder;
 #[cfg(not(mobile))]
 mod remote_server;
 mod selection;
-#[cfg(not(mobile))]
-mod shortcut_binding;
-#[cfg(mobile)]
-#[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
 mod side_aware_combo;
 #[cfg(target_os = "android")]
