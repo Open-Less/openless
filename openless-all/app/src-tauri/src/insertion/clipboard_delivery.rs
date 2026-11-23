@@ -48,6 +48,9 @@ pub(crate) fn copy_with(
         return Err("selection session cancelled".into());
     }
     clipboard.set_text(text)?;
+    if clipboard.text()?.as_deref() != Some(text) {
+        return Err("clipboard write was not retained".into());
+    }
     Ok(clipboard.sequence())
 }
 
@@ -62,6 +65,9 @@ pub(crate) fn copy_if_current_with(
         return Ok(false);
     }
     clipboard.set_text(text)?;
+    if clipboard.text()?.as_deref() != Some(text) {
+        return Err("clipboard write was not retained".into());
+    }
     Ok(true)
 }
 
@@ -89,6 +95,24 @@ pub(crate) fn insert_with(
     restore_after_paste: bool,
     expected: Option<u64>,
     mut still_current: impl FnMut() -> bool,
+) -> InsertStatus {
+    insert_with_confirmation(
+        clipboard,
+        text,
+        restore_after_paste,
+        expected,
+        &mut still_current,
+        None::<fn() -> bool>,
+    )
+}
+
+pub(crate) fn insert_with_confirmation(
+    clipboard: &mut impl ClipboardDelivery,
+    text: &str,
+    restore_after_paste: bool,
+    expected: Option<u64>,
+    mut still_current: impl FnMut() -> bool,
+    confirm: Option<impl FnOnce() -> bool>,
 ) -> InsertStatus {
     if text.is_empty() {
         return InsertStatus::CopiedFallback;
@@ -142,8 +166,15 @@ pub(crate) fn insert_with(
         }
     };
     clipboard.wait_for_consumption();
-    if restore_after_paste {
+    // An unconfirmed ordinary paste must retain the result for manual pasting.
+    // Run the native receipt before restore, under the same delivery lease.
+    let confirmed = confirm.map(|confirm| confirm());
+    if restore_after_paste && confirmed != Some(false) {
         restore(clipboard, &plan);
     }
-    status
+    if confirmed == Some(true) {
+        InsertStatus::Inserted
+    } else {
+        status
+    }
 }

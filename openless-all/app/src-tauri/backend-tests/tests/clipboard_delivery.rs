@@ -340,9 +340,159 @@ fn backup_error_releases_delivery_gate_without_writing_and_next_copy_works() {
     );
     assert_eq!(board.lock().unwrap().revision, 1);
     assert!(board.lock().unwrap().dispatched.is_empty());
+    clipboard.backup_error = false;
+    clipboard.backup_error = false;
     clipboard_delivery::copy_with(&mut clipboard, "next explicit copy", || true).unwrap();
     assert_eq!(
         board.lock().unwrap().text.as_deref(),
         Some("next explicit copy")
     );
+}
+
+#[test]
+fn ordinary_unconfirmed_paste_retains_complete_text_and_new_copy_wins() {
+    for confirmed in [false, true] {
+        let board = Arc::new(Mutex::new(Board::default()));
+        external_copy(&board, "old clipboard");
+        let mut clipboard = Clipboard::new(&board);
+        let result = clipboard_delivery::insert_with_confirmation(
+            &mut clipboard,
+            "完整 result\n尾",
+            true,
+            None,
+            || true,
+            Some(|| confirmed),
+        );
+        assert_eq!(
+            result,
+            if confirmed {
+                InsertStatus::Inserted
+            } else {
+                InsertStatus::PasteSent
+            }
+        );
+        assert_eq!(
+            board.lock().unwrap().text.as_deref(),
+            Some(if confirmed {
+                "old clipboard"
+            } else {
+                "完整 result\n尾"
+            })
+        );
+        clipboard_delivery::copy_with(&mut clipboard, "manual fallback", || true).unwrap();
+        assert_eq!(
+            board.lock().unwrap().text.as_deref(),
+            Some("manual fallback")
+        );
+        clipboard_delivery::copy_with(&mut clipboard, "user new copy", || true).unwrap();
+        assert_eq!(board.lock().unwrap().text.as_deref(), Some("user new copy"));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "explicit local clipboard acceptance; never runs in CI"]
+fn native_clipboard_fallback_is_readable_and_not_restored_after_an_unconfirmed_paste() {
+    struct Native {
+        clipboard: arboard::Clipboard,
+    }
+    impl ClipboardDelivery for Native {
+        fn text(&mut self) -> Result<Option<String>, String> {
+            self.clipboard
+                .get_text()
+                .map(Some)
+                .map_err(|e| e.to_string())
+        }
+        fn set_text(&mut self, text: &str) -> Result<(), String> {
+            self.clipboard
+                .set_text(text.to_string())
+                .map_err(|e| e.to_string())
+        }
+        fn sequence(&self) -> Option<u64> {
+            unsafe {
+                use objc2::{
+                    msg_send,
+                    runtime::{AnyClass, AnyObject},
+                };
+                let board: *mut AnyObject =
+                    msg_send![AnyClass::get("NSPasteboard").unwrap(), generalPasteboard];
+                let value: isize = msg_send![board, changeCount];
+                Some(value as u64)
+            }
+        }
+        fn paste(&mut self) -> Result<(), DispatchError> {
+            Err(DispatchError::NotSent)
+        }
+        fn wait_for_consumption(&mut self) {}
+    }
+    struct Restore(String);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            arboard::Clipboard::new()
+                .unwrap()
+                .set_text(self.0.clone())
+                .unwrap();
+        }
+    }
+    let mut native = Native {
+        clipboard: arboard::Clipboard::new().unwrap(),
+    };
+    let original = native
+        .clipboard
+        .get_text()
+        .expect("acceptance requires a text clipboard to restore");
+    let _restore = Restore(original);
+    let expected = "OpenLess native receipt acceptance\n完整结果尾";
+    assert_eq!(
+        clipboard_delivery::insert_with_confirmation(
+            &mut native,
+            expected,
+            true,
+            None,
+            || true,
+            Some(|| false)
+        ),
+        InsertStatus::CopiedFallback
+    );
+    assert_eq!(native.clipboard.get_text().unwrap(), expected);
+    let receipt = clipboard_delivery::copy_with(&mut native, expected, || true).unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(native.clipboard.get_text().unwrap(), expected);
+    assert_eq!(native.sequence(), receipt);
+    // The prior native revision cannot overwrite a subsequent explicit copy.
+    native.set_text("subsequent explicit copy").unwrap();
+    assert!(!clipboard_delivery::copy_if_current_with(
+        &mut native,
+        "late restore",
+        receipt,
+        || true
+    )
+    .unwrap());
+    assert_eq!(
+        native.clipboard.get_text().unwrap(),
+        "subsequent explicit copy"
+    );
+}
+
+#[test]
+fn a_successful_set_without_retained_text_is_not_a_copy_receipt() {
+    struct Lost;
+    impl ClipboardDelivery for Lost {
+        fn text(&mut self) -> Result<Option<String>, String> {
+            Ok(Some("old".into()))
+        }
+        fn set_text(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn sequence(&self) -> Option<u64> {
+            Some(1)
+        }
+        fn paste(&mut self) -> Result<(), DispatchError> {
+            panic!("copy never pastes")
+        }
+        fn wait_for_consumption(&mut self) {
+            panic!("copy never dispatches")
+        }
+    }
+    assert!(clipboard_delivery::copy_with(&mut Lost, "complete result", || true).is_err());
 }

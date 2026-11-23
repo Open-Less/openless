@@ -1074,7 +1074,7 @@ impl DictationEngine for PipelineDictationEngine {
             let translation_active = context.polish.translation_active;
             let uses_polisher = !strategy_skips
                 && context.uses_llm_polisher()
-                && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
+                && !transcript.text.trim().is_empty()
                 && !skips_polish_for_short_text
                 && (!local_fallback_used || translation_active);
             log::info!(
