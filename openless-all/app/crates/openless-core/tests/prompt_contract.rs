@@ -168,6 +168,12 @@ fn dictation_revision_contract_preserves_full_input_and_style_tasks() {
                 context.polish.translation_target_language = "English".into();
                 let (system, user) = context.effective_polish_prompts(input);
                 assert_eq!(system.matches(DICTATION_REVISION_RULES).count(), 1);
+                if pack.id == openless_core::BUILTIN_INTENT_ID {
+                    assert!(pack.prompt.ends_with(DICTATION_REVISION_RULES));
+                    assert_eq!(style, pack.prompt, "runtime must not append a second suffix");
+                    assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[])));
+                    assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
+                }
                 assert!(user.contains(input), "complete current input must survive assembly");
                 if pack.kind == openless_core::StylePackKind::Imported {
                     assert!(system.find("用户有任何输入后").unwrap() < system.find(DICTATION_REVISION_RULES).unwrap());

@@ -484,6 +484,18 @@ pub(crate) fn original_intent_pack() -> StylePack {
 pub fn builtin_intent_pack() -> StylePack {
     let mut pack = original_intent_pack();
     pack.kind = StylePackKind::Builtin;
+    // Distribution repair version; preserve the full upstream text before the requested suffix.
+    pack.version = "1.2.0".into();
+    pack.prompt.push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
+    pack.selection_prompt
+        .push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
+    pack
+}
+
+// Retain the shipped 1.1.0 transformation solely as a trusted migration baseline.
+pub(crate) fn released_intent_v1_1_pack() -> StylePack {
+    let mut pack = original_intent_pack();
+    pack.kind = StylePackKind::Builtin;
     pack.version = "1.1.0".into();
     let start = pack
         .prompt
@@ -547,15 +559,24 @@ pub(crate) fn normalize_synced_builtin_pack(pack: &mut StylePack) {
     if pack.kind != StylePackKind::Imported {
         return;
     }
-    for release in [original_intent_pack(), builtin_intent_pack()] {
-        if same_style_origin(pack, &release)
-            && pack.version == release.version
-            && equivalent_style_payload(pack, &release)
-        {
-            pack.kind = StylePackKind::Builtin;
-            return;
-        }
+    if is_known_intent_release(pack) {
+        pack.kind = StylePackKind::Builtin;
     }
+}
+
+/// Source, version and every behavior field must match a known release.
+pub(crate) fn is_known_intent_release(pack: &StylePack) -> bool {
+    [
+        original_intent_pack(),
+        released_intent_v1_1_pack(),
+        builtin_intent_pack(),
+    ]
+    .iter()
+    .any(|release| {
+        same_style_origin(pack, release)
+            && pack.version == release.version
+            && equivalent_style_payload(pack, release)
+    })
 }
 
 /// Editable behavior defines equivalence; presentation, local selection,

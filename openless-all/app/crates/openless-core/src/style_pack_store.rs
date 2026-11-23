@@ -938,8 +938,8 @@ fn write_packs(path: &Path, packs: &[StylePack]) -> Result<(), BackendError> {
 
 fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
     use crate::style_packs::{
-        equivalent_style_payload, normalize_synced_builtin_pack, original_intent_pack,
-        released_dictation_version, same_style_origin, BUILTIN_INTENT_ID,
+        is_known_intent_release, normalize_synced_builtin_pack, released_dictation_version,
+        BUILTIN_INTENT_ID,
     };
     let mut changed = false;
     for builtin in builtin_style_packs() {
@@ -948,18 +948,14 @@ fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
             .position(|pack| pack.id == builtin.id)
             .or_else(|| {
                 packs.iter().position(|pack| {
-                    same_style_origin(pack, &builtin)
-                        && (equivalent_style_payload(pack, &original_intent_pack())
-                            || equivalent_style_payload(pack, &builtin))
+                    builtin.id == BUILTIN_INTENT_ID && is_known_intent_release(pack)
                 })
             });
         if let Some(index) = index {
             let local = &mut packs[index];
             let intent = builtin.id == BUILTIN_INTENT_ID;
             let released = if intent {
-                same_style_origin(local, &builtin)
-                    && local.version == original_intent_pack().version
-                    && equivalent_style_payload(local, &original_intent_pack())
+                is_known_intent_release(local)
             } else {
                 local.kind == StylePackKind::Builtin && released_dictation_version(local).is_some()
             };

@@ -34,7 +34,7 @@
 
 `export_snapshot` 只对旧四个 `builtin.raw/light/structured/formal` 之外的 builtin 包投影为已有的 imported 类型。完整 id、提示词、选区/语音编辑指令、版本、来源、配置及当前选择都保留。旧版拿到的是实际可选、可编辑的包实体，不是孤立引用。
 
-新版 `preflight_native` 调用风格组的 `normalize_synced_builtin_pack`：只有来源两字段、已知发行版本和完整行为配置一致，才把 imported 恢复为本机 builtin；名称或 id 本身不足以升级。支持同源别名 ID；旧版修改 prompt、selectionPrompt 或 voiceEditPrompt 后，保持 imported，沿既有 Store 用户修改保护规则保存，重启不会覆盖。导出仍是 imported，所以原有恢复读回比较与三方合并使用相同 wire 表示。
+新版 `preflight_native` 调用风格组的 `normalize_synced_builtin_pack`：只有来源两字段、已知发行版本和完整行为配置一致，才把 imported 恢复为本机 builtin；名称或 id 本身不足以升级。已知发行版本包括原市场正文 1.0.0、已发行改写正文 1.1.0，以及完整保留原市场正文并在听写及选区正文末尾各追加一次统一修正规则的内置修复分发版本 1.2.0；三者分别按完整行为配置识别，不能仅以版本号或 ID 判断。支持同源别名 ID；旧版修改 prompt、selectionPrompt 或 voiceEditPrompt 后，保持 imported，沿既有 Store 用户修改保护规则保存，重启不会覆盖。导出仍是 imported，所以原有恢复读回比较与三方合并使用相同 wire 表示。
 
 ## 合并、删除与边界
 
