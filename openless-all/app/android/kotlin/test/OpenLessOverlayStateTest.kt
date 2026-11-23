@@ -21,4 +21,20 @@ class OpenLessOverlayStateTest {
         assertTrue(OpenLessAndroidPreferences.shouldDisplayOverlay("always"))
         assertTrue(OpenLessAndroidPreferences.shouldDisplayOverlay(null))
     }
+
+    @Test
+    fun newlyAddedOverlayRootWithParentCountsAsLiveBeforeFirstTraversal() {
+        assertTrue(isOverlayRootLive(isAttachedToWindow = false, hasParent = true))
+        assertTrue(isOverlayRootLive(isAttachedToWindow = true, hasParent = true))
+        assertTrue(isOverlayRootLive(isAttachedToWindow = true, hasParent = false))
+        assertFalse(isOverlayRootLive(isAttachedToWindow = false, hasParent = false))
+    }
+
+    @Test
+    fun destroyedOrSupersededOverlayServiceIgnoresInteractions() {
+        assertTrue(shouldHandleOverlayServiceInteraction(destroyed = false, isCurrentInstance = true))
+        assertFalse(shouldHandleOverlayServiceInteraction(destroyed = true, isCurrentInstance = true))
+        assertFalse(shouldHandleOverlayServiceInteraction(destroyed = false, isCurrentInstance = false))
+        assertFalse(shouldHandleOverlayServiceInteraction(destroyed = true, isCurrentInstance = false))
+    }
 }
