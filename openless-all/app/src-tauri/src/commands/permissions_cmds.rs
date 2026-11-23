@@ -31,8 +31,8 @@ pub fn show_android_overlay() -> Result<(), String> {
 pub fn open_android_local_migration() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        return crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::start_activity_class(
+        return crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::start_activity_class(
                 env,
                 context,
                 "com.openless.app.OpenLessLocalMigrationActivity",

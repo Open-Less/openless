@@ -536,8 +536,8 @@ fn apply_native_target(
     match target {
         #[cfg(target_os = "android")]
         VoiceEditNativeTarget::Android { generation } => {
-            let backgrounded = crate::android::jni::android::with_android_env(|env, context| {
-                crate::android::jni::android::background_voice_edit_host(env, context)
+            let backgrounded = crate::android::jni::with_android_env(|env, context| {
+                crate::android::jni::background_voice_edit_host(env, context)
             })
             .map_err(|error| format!("voiceEditReplaceFailed:{error}"))?;
             if !backgrounded {

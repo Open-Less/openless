@@ -19,7 +19,7 @@ pub fn publish_monitor(processor: &openless_core::AudioProcessor) {
 /// 把平台层的频谱回调接到 Kotlin 通道。
 pub fn install_spectrum_sink() {
     platform::install_spectrum_sink(Box::new(|raw, processed| {
-        crate::android::native_bridge::emit_audio_spectrum(raw, processed);
+        crate::android::native_bridge::emit_audio_spectrum(raw.to_vec(), processed.to_vec());
     }));
 }
 

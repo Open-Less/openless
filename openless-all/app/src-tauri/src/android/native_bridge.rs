@@ -506,7 +506,7 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
         let state = capsule_state_name(payload.state);
         let message = payload.message.as_deref();
         // #region agent log
-        let has_ctx = crate::android::jni::android::has_active_activity();
+        let has_ctx = crate::android::jni::has_active_activity();
         log::warn!(
             "[OpenLessDbg58c22b] {{\"sessionId\":\"58c22b\",\"hypothesisId\":\"A\",\"location\":\"native_bridge::notify_capsule_state\",\"message\":\"notify attempt\",\"data\":{{\"state\":\"{state}\",\"hasCtx\":{has_ctx}}},\"timestamp\":{}}}",
             std::time::SystemTime::now()
@@ -515,8 +515,8 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
                 .unwrap_or(0)
         );
         // #endregion
-        if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::notify_overlay_bridge(
+        if let Err(error) = crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::notify_overlay_bridge(
                 env,
                 context,
                 state,
@@ -600,8 +600,8 @@ fn notify_ime_session(value: serde_json::Value) {
             *owner = None;
         }
     }
-    let _ = crate::android::jni::android::with_android_env(|env, context| {
-        crate::android::jni::android::notify_ime_session_event(env, context, &value.to_string())
+    let _ = crate::android::jni::with_android_env(|env, context| {
+        crate::android::jni::notify_ime_session_event(env, context, &value.to_string())
     });
 }
 
@@ -1066,15 +1066,15 @@ fn spawn_finalize_voice_edit_from_overlay() {
                 )
             });
             #[cfg(target_os = "android")]
-            let _ = crate::android::jni::android::with_android_env(|env, context| {
-                crate::android::jni::android::notify_overlay_bridge(
+            let _ = crate::android::jni::with_android_env(|env, context| {
+                crate::android::jni::notify_overlay_bridge(
                     env,
                     context,
                     if recording { "recording" } else { "error" },
                     recording.then_some("无法启动语音编辑，请确认已启用该功能并聚焦外部输入框"),
                     0.0,
                 )?;
-                crate::android::jni::android::show_overlay_toast(
+                crate::android::jni::show_overlay_toast(
                     env,
                     context,
                     "无法启动语音编辑，请确认已启用该功能并聚焦外部输入框",
@@ -1205,7 +1205,7 @@ mod jni_exports {
             };
             serde_json::to_value(status).map_err(|_| "encode dictionary status".into())
         });
-        crate::android::jni::android::export_jstring(
+        crate::android::jni::export_jstring(
             &mut env,
             &match result {
                 Ok(value) => value.to_string(),
@@ -1232,7 +1232,7 @@ mod jni_exports {
                 .unwrap_or_default())
         })
         .unwrap_or_default();
-        crate::android::jni::android::export_jstring(
+        crate::android::jni::export_jstring(
             &mut env,
             &serde_json::json!(result).to_string(),
         )
@@ -1257,7 +1257,7 @@ mod jni_exports {
             Ok(()) => serde_json::json!({"ok":true}),
             Err(error) => serde_json::json!({"ok":false,"error":error}),
         };
-        crate::android::jni::android::export_jstring(&mut env, &response.to_string())
+        crate::android::jni::export_jstring(&mut env, &response.to_string())
     }
 
     #[no_mangle]
@@ -1366,7 +1366,7 @@ mod jni_exports {
     ) -> jstring {
         let response = correction_rule_patterns_json();
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &response),
+            Ok(mut env) => crate::android::jni::export_jstring(&mut env, &response),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -1378,7 +1378,7 @@ mod jni_exports {
     ) -> jstring {
         let response = vocabulary_phrases_json();
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &response),
+            Ok(mut env) => crate::android::jni::export_jstring(&mut env, &response),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -1448,7 +1448,7 @@ mod jni_exports {
         })
         .unwrap_or("unavailable");
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, route),
+            Ok(mut env) => crate::android::jni::export_jstring(&mut env, route),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -1470,7 +1470,7 @@ mod jni_exports {
         };
         let encoded = format!("{},{},{}", usage.local, usage.cloud, latest);
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &encoded),
+            Ok(mut env) => crate::android::jni::export_jstring(&mut env, &encoded),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -1482,7 +1482,7 @@ mod jni_exports {
     ) -> jstring {
         let response = android_backend_snapshot_response(CORE_BACKEND.get().map(Arc::as_ref));
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &response),
+            Ok(mut env) => crate::android::jni::export_jstring(&mut env, &response),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -1532,7 +1532,7 @@ mod jni_exports {
         context: JObject,
     ) {
         let result = with_jni_context(env, context, |env, context| {
-            crate::android::jni::android::register_active_activity(env, context)
+            crate::android::jni::register_active_activity(env, context)
         });
         if let Err(error) = result {
             log::warn!("[android-native] register activity context failed: {error}");
@@ -1546,7 +1546,7 @@ mod jni_exports {
         context: JObject,
     ) {
         let _ = with_jni_context(env, context, |env, context| {
-            crate::android::jni::android::unregister_active_activity(env, context);
+            crate::android::jni::unregister_active_activity(env, context);
             Ok(())
         });
     }
@@ -1559,7 +1559,7 @@ mod jni_exports {
         _env: *mut JNIEnv,
         _class: JClass,
     ) -> jboolean {
-        crate::android::jni::android::has_active_activity() as jboolean
+        crate::android::jni::has_active_activity() as jboolean
     }
 
     /// Called by the Kotlin overlay service's onDestroy() to clear
@@ -1582,10 +1582,10 @@ mod jni_exports {
         _class: JClass,
     ) -> jboolean {
         match super::ensure_main_webview_window() {
-            Ok(()) => crate::android::jni::android::export_jboolean(true),
+            Ok(()) => crate::android::jni::export_jboolean(true),
             Err(error) => {
                 log::warn!("[android-native] ensure_main_webview_window failed: {error}");
-                crate::android::jni::android::export_jboolean(false)
+                crate::android::jni::export_jboolean(false)
             }
         }
     }
@@ -1598,7 +1598,7 @@ mod jni_exports {
     ) -> jstring {
         let response = export_provider_settings_json(include_credentials != 0);
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &response),
+            Ok(mut env) => crate::android::jni::export_jstring(&mut env, &response),
             Err(_) => std::ptr::null_mut(),
         }
     }
@@ -1621,7 +1621,7 @@ mod jni_exports {
             Ok(json) => import_provider_settings_json(&json, selection != 0, credentials != 0),
             Err(_) => serde_json::json!({"applied":[],"errors":{"providerSelection":"invalid JNI input","credentials":"invalid JNI input"}}).to_string(),
         };
-        crate::android::jni::android::export_jstring(&mut env, &response)
+        crate::android::jni::export_jstring(&mut env, &response)
     }
 
     #[no_mangle]
@@ -1647,7 +1647,7 @@ mod jni_exports {
             }
             _ => local_bundle_error("invalid JNI input"),
         };
-        crate::android::jni::android::export_jstring(&mut env, &response)
+        crate::android::jni::export_jstring(&mut env, &response)
     }
 
     #[no_mangle]
@@ -1676,7 +1676,7 @@ mod jni_exports {
             }
             _ => local_bundle_error("invalid JNI input"),
         };
-        crate::android::jni::android::export_jstring(&mut env, &response)
+        crate::android::jni::export_jstring(&mut env, &response)
     }
 
     #[no_mangle]
@@ -1695,7 +1695,7 @@ mod jni_exports {
             Ok(bundle) => inspect_local_migration_bundle_json(&bundle),
             Err(_) => local_bundle_error("invalid JNI input"),
         };
-        crate::android::jni::android::export_jstring(&mut env, &response)
+        crate::android::jni::export_jstring(&mut env, &response)
     }
 
     #[no_mangle]
@@ -1755,7 +1755,7 @@ mod jni_exports {
             ),
             _ => local_bundle_error("invalid JNI input"),
         };
-        crate::android::jni::android::export_jstring(&mut env, &response)
+        crate::android::jni::export_jstring(&mut env, &response)
     }
 }
 

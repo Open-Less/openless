@@ -10,8 +10,8 @@ struct HostAndroidEnv;
 
 impl AndroidEnv for HostAndroidEnv {
     fn check_permission(&self, permission: &str) -> Result<bool, String> {
-        crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::check_self_permission(env, context, permission)
+        crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::check_self_permission(env, context, permission)
         })
     }
 
@@ -20,29 +20,29 @@ impl AndroidEnv for HostAndroidEnv {
         if permission != "android.permission.RECORD_AUDIO" {
             return Err(format!("no runtime request bridge for {permission}"));
         }
-        crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::request_record_audio_permission(env, context)
+        crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::request_record_audio_permission(env, context)
         })
     }
 
     fn clipboard_read_text(&self) -> Result<Option<String>, String> {
-        crate::android::jni::android::with_android_env(|env, context| {
-            Ok(crate::android::jni::android::get_primary_clip_text(
+        crate::android::jni::with_android_env(|env, context| {
+            Ok(crate::android::jni::get_primary_clip_text(
                 env, context,
             ))
         })
     }
 
     fn clipboard_write_text(&self, text: &str) -> Result<(), String> {
-        crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::copy_to_clipboard(env, context, text).map(|_| ())
+        crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::copy_to_clipboard(env, context, text).map(|_| ())
         })
     }
 
     fn insert_via_accessibility(&self, text: &str) -> Result<bool, String> {
         // 无障碍插入是"一次性粘贴"，把文本放上剪贴板后由无障碍服务粘贴。
-        crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::copy_to_clipboard(env, context, text)
+        crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::copy_to_clipboard(env, context, text)
         })?;
         Ok(crate::android::accessibility::paste_via_accessibility())
     }

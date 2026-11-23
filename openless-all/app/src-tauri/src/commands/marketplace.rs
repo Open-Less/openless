@@ -118,7 +118,7 @@ pub async fn marketplace_my_packs(
 fn write_marketplace_archive_target(target_path: &str, bytes: &[u8]) -> Result<(), String> {
     #[cfg(target_os = "android")]
     if target_path.starts_with("content://") {
-        return crate::android::jni::android::write_content_uri(target_path, bytes)
+        return crate::android::jni::write_content_uri(target_path, bytes)
             .map_err(|_| "write marketplace archive target failed".to_string());
     }
 

@@ -122,7 +122,7 @@ async fn source_results(
     (github, cdn)
 }
 
-pub(crate) async fn candidates(
+pub async fn candidates(
     channel: UpdateChannel,
     arch: &str,
 ) -> Result<Vec<UpdateCandidate>, String> {
@@ -189,7 +189,7 @@ fn check_sources(
     Ok(update)
 }
 
-pub(crate) async fn check(
+pub async fn check(
     channel: UpdateChannel,
     arch: &str,
     current: &str,
@@ -273,7 +273,7 @@ async fn transfer_once<P: Fn(u64, Option<u64>)>(
     Ok(bytes)
 }
 
-pub(crate) async fn download<P: Fn(u64, Option<u64>)>(
+pub async fn download<P: Fn(u64, Option<u64>)>(
     version: String,
     arch: &str,
     url: String,

@@ -270,7 +270,7 @@ pub fn export_error_log(target_path: String) -> Result<(), String> {
     {
         if target_path.starts_with("content://") {
             let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
-            return crate::android::jni::android::write_content_uri(&target_path, &bytes)
+            return crate::android::jni::write_content_uri(&target_path, &bytes)
                 .map_err(|e| format!("复制日志失败：{e}"));
         }
         let path = target_path
@@ -296,7 +296,7 @@ pub fn export_error_log(target_path: String) -> Result<(), String> {
 pub fn export_error_log_to_downloads(file_name: String) -> Result<String, String> {
     let src = resolve_openless_log_path()?;
     let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
-    crate::android::jni::android::write_public_download(&file_name, &bytes)
+    crate::android::jni::write_public_download(&file_name, &bytes)
         .map_err(|e| format!("导出日志失败：{e}"))
 }
 

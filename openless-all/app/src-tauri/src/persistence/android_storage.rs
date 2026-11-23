@@ -35,7 +35,7 @@ pub(crate) fn resolve_android_app_files_dir(
 
 #[cfg(target_os = "android")]
 fn probe_jni_files_dir() -> Option<String> {
-    crate::android::jni::android::app_files_dir().ok()
+    crate::android::jni::app_files_dir().ok()
 }
 
 #[cfg(not(target_os = "android"))]

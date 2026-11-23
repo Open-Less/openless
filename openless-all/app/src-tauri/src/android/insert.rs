@@ -32,8 +32,8 @@ pub fn android_insert_with_strategy(
 
 fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertStatus {
     let previous_clip: Option<String> =
-        crate::android::jni::android::with_android_env(|env, context| {
-            Ok(crate::android::jni::android::get_primary_clip_text(
+        crate::android::jni::with_android_env(|env, context| {
+            Ok(crate::android::jni::get_primary_clip_text(
                 env, context,
             ))
         })
@@ -82,8 +82,8 @@ fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertSta
 
 fn restore_clipboard_after_success(previous_clip: Option<String>) {
     if let Some(prev) = previous_clip {
-        if let Err(e) = crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::set_primary_clip_text(env, context, &prev)
+        if let Err(e) = crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::set_primary_clip_text(env, context, &prev)
         }) {
             log::warn!("[android-insert] failed to restore clipboard: {e}");
         }
@@ -93,8 +93,8 @@ fn restore_clipboard_after_success(previous_clip: Option<String>) {
 fn clipboard_fallback(inserter: &TextInserter, text: &str) -> InsertStatus {
     let status = inserter.copy_fallback(text);
     if matches!(status, InsertStatus::CopiedFallback) {
-        let _ = crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::show_overlay_toast(env, context, "已复制到剪贴板")
+        let _ = crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::show_overlay_toast(env, context, "已复制到剪贴板")
         });
     }
     status

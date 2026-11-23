@@ -124,6 +124,19 @@ pub use backend::CaptureStream;
 pub struct CaptureStream;
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
+impl CaptureStream {
+    /// 移动端由宿主的系统采集通道负责，桌面采集流不可用。
+    pub fn play(&self) -> Result<(), CaptureError> {
+        Err(CaptureError::Unsupported)
+    }
+
+    /// 同上：没有需要暂停的桌面流。
+    pub fn pause(&self) -> Result<(), CaptureError> {
+        Err(CaptureError::Unsupported)
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn input_devices() -> Vec<DeviceInfo> {
     Vec::new()
 }

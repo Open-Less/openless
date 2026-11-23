@@ -121,7 +121,6 @@ mod unicode_keystroke;
 mod update_source;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
-#[cfg(target_os = "windows")]
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
 mod windows_ime_protocol;
@@ -881,6 +880,7 @@ fn forward_asr_diagnostic(
     crate::recorder::voice_diagnostic(probe, hypotheses, stage, event, payload);
 }
 
+#[cfg(not(mobile))]
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
     init_file_logger();
@@ -3017,8 +3017,8 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     #[cfg(target_os = "android")]
     {
-        match crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::open_qa_host(env, context)
+        match crate::android::jni::with_android_env(|env, context| {
+            crate::android::jni::open_qa_host(env, context)
         }) {
             Ok(()) => log::info!("[qa] android requested WarmupActivity foreground for QA"),
             Err(error) => log::warn!("[qa] android failed to foreground WarmupActivity: {error}"),
@@ -3460,8 +3460,8 @@ fn ensure_voice_edit_window<R: tauri::Runtime>(
 
 pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "android")]
-    if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
-        crate::android::jni::android::open_qa_host(env, context)
+    if let Err(error) = crate::android::jni::with_android_env(|env, context| {
+        crate::android::jni::open_qa_host(env, context)
     }) {
         log::warn!("[voice-edit] failed to foreground WarmupActivity: {error}");
     }

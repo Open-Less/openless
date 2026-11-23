@@ -46,7 +46,7 @@ mod android_impl {
     }
 
     fn updates_cache_dir() -> Result<PathBuf, String> {
-        crate::android::jni::android::app_cache_dir()
+        crate::android::jni::app_cache_dir()
             .map(|path| PathBuf::from(path).join("updates"))
     }
 
@@ -95,9 +95,9 @@ mod android_impl {
             .to_str()
             .ok_or_else(|| "apk path is not UTF-8".to_string())?
             .to_string();
-        let opened = crate::android::jni::android::with_android_env(|env, context| {
-            let path_obj = crate::android::jni::android::jobject_str(env, &path)?;
-            crate::android::jni::android::install_apk_from_path(env, context, &path_obj)
+        let opened = crate::android::jni::with_android_env(|env, context| {
+            let path_obj = crate::android::jni::jobject_str(env, &path)?;
+            crate::android::jni::install_apk_from_path(env, context, &path_obj)
         })?;
         if !opened {
             return Err(INSTALLER_NOT_OPENED_MSG.to_string());

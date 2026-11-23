@@ -96,8 +96,8 @@ pub fn run() {
                 // kill, since it means Tauri itself decided to tear down.
                 #[cfg(target_os = "android")]
                 {
-                    let _ = crate::android::jni::android::with_android_env(|env, context| {
-                        crate::android::jni::android::start_service_action(
+                    let _ = crate::android::jni::with_android_env(|env, context| {
+                        crate::android::jni::start_service_action(
                             env,
                             context,
                             "com.openless.app.OpenLessRuntimeService",

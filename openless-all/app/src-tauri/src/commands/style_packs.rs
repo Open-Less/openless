@@ -200,7 +200,7 @@ pub fn import_style_pack_from_zip(
     );
     #[cfg(target_os = "android")]
     if zip_path.starts_with("content://") {
-        let bytes = crate::android::jni::android::read_content_uri(
+        let bytes = crate::android::jni::read_content_uri(
             &zip_path,
             crate::persistence::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES,
         )?;
@@ -231,7 +231,7 @@ pub fn export_style_pack_to_zip(
         crate::style_zip_transfer::export_zip(
             &target_path,
             || core.export_style_pack_bytes(&id).map_err(|error| error.to_string()),
-            crate::android::jni::android::write_content_uri,
+            crate::android::jni::write_content_uri,
             || {
                 core.export_style_pack_path(&id, std::path::Path::new(&target_path))
                     .map_err(|error| error.to_string())

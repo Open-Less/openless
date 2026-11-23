@@ -5,19 +5,15 @@
 //!
 //! 路径（模型缓存/运行时/日志）由宿主经 [`crate::asr::paths`] 注入。
 
-// provider id 与阶段枚举是纯元数据，任何平台都需要（宿主的能力查询会引用）。
+// provider id 与阶段枚举是纯元数据。
 pub mod descriptors;
 
-// 真正的运行时需要 WinML / Foundry SDK，只在启用了 `asr-foundry` 的目标编译。
-#[cfg(feature = "asr-foundry")]
+// 运行时模块内部按 target 分支：Windows 走 WinML，其它平台保留类型兼容的桩，
+// 这样宿主的 Coordinator / 引擎选择代码在所有平台都能编译（与原宿主行为一致）。
 pub mod native;
-#[cfg(feature = "asr-foundry")]
 pub mod provider;
-#[cfg(feature = "asr-foundry")]
 pub mod runtime;
 
 pub use descriptors::PROVIDER_ID;
-#[cfg(feature = "asr-foundry")]
 pub use provider::FoundryLocalWhisperAsr;
-#[cfg(feature = "asr-foundry")]
 pub use runtime::FoundryLocalRuntime;

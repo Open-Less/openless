@@ -37,7 +37,15 @@ default = [
 ]
 
 # ASR 元数据：provider id、模型收据、sherpa 运行时事件描述（纯逻辑，不链接原生库）
-asr = ["dep:anyhow", "dep:serde", "dep:serde_json", "dep:uuid"]
+asr = [
+    "dep:anyhow",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:uuid",
+    "dep:parking_lot",
+    "dep:tokio",
+    "dep:futures-util",
+]
 
 # sherpa 原生运行时（链接 sherpa-onnx；仅 Windows 与 Android arm64 提供依赖）
 asr-sherpa = ["asr", "dep:sherpa-onnx", "dep:tokio", "dep:parking_lot"]
