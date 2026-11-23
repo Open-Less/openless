@@ -389,6 +389,159 @@ fn ordinary_unconfirmed_paste_retains_complete_text_and_new_copy_wins() {
     }
 }
 
+// Test-only: arboard restores one NSString, not arbitrary pasteboard formats.
+struct NativeAcceptanceClipboard<C: ClipboardDelivery> {
+    clipboard: C,
+    original: String,
+    expected_revision: u64,
+    owned_revision: Option<u64>,
+}
+
+impl<C: ClipboardDelivery> NativeAcceptanceClipboard<C> {
+    fn new(
+        mut clipboard: C,
+        item_types: impl FnOnce() -> Result<Vec<Vec<String>>, String>,
+    ) -> Result<Self, String> {
+        let revision = clipboard
+            .sequence()
+            .ok_or("clipboard revision unavailable")?;
+        if item_types()? != [vec!["public.utf8-plain-text".to_string()]] {
+            return Err("acceptance requires one item with only public.utf8-plain-text; no writes performed".into());
+        }
+        let original = clipboard.text()?.ok_or("clipboard text unavailable")?;
+        if clipboard.sequence() != Some(revision) {
+            return Err("clipboard changed during admission; no writes performed".into());
+        }
+        Ok(Self {
+            clipboard,
+            original,
+            expected_revision: revision,
+            owned_revision: None,
+        })
+    }
+    fn restore_if_owned(&mut self) -> Result<bool, String> {
+        let Some(revision) = self.owned_revision.take() else {
+            return Ok(false);
+        };
+        if self.clipboard.sequence() != Some(revision) {
+            return Ok(false);
+        }
+        self.clipboard.set_text(&self.original)?;
+        Ok(true)
+    }
+}
+impl<C: ClipboardDelivery> ClipboardDelivery for NativeAcceptanceClipboard<C> {
+    fn text(&mut self) -> Result<Option<String>, String> {
+        self.clipboard.text()
+    }
+    fn sequence(&self) -> Option<u64> {
+        self.clipboard.sequence()
+    }
+    fn paste(&mut self) -> Result<(), DispatchError> {
+        self.clipboard.paste()
+    }
+    fn wait_for_consumption(&mut self) {
+        self.clipboard.wait_for_consumption();
+    }
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        if self.clipboard.sequence() != Some(self.expected_revision) {
+            return Err("clipboard changed outside acceptance; write refused".into());
+        }
+        self.owned_revision = None;
+        self.clipboard.set_text(text)?;
+        let revision = self
+            .clipboard
+            .sequence()
+            .ok_or("clipboard write revision unavailable")?;
+        if self.clipboard.text()?.as_deref() != Some(text)
+            || self.clipboard.sequence() != Some(revision)
+        {
+            return Err("clipboard write receipt changed; restoration refused".into());
+        }
+        self.expected_revision = revision;
+        self.owned_revision = Some(revision);
+        Ok(())
+    }
+}
+impl<C: ClipboardDelivery> Drop for NativeAcceptanceClipboard<C> {
+    fn drop(&mut self) {
+        if let Err(error) = self.restore_if_owned() {
+            eprintln!("acceptance clipboard restoration failed: {error}");
+        }
+    }
+}
+
+#[test]
+fn native_acceptance_guard_refuses_non_restorable_types_without_writes() {
+    for types in [
+        vec![],
+        vec![vec!["public.utf8-plain-text", "public.html"]],
+        vec![vec!["public.utf8-plain-text", "public.rtf"]],
+        vec![vec!["public.utf8-plain-text", "public.file-url"]],
+        vec![vec!["public.utf16-plain-text"]],
+        vec![
+            vec!["public.utf8-plain-text"],
+            vec!["public.utf8-plain-text"],
+        ],
+    ] {
+        let board = Arc::new(Mutex::new(Board::default()));
+        external_copy(
+            &board,
+            "readable text does not prove all formats are restorable",
+        );
+        let result = NativeAcceptanceClipboard::new(Clipboard::new(&board), || {
+            Ok(types
+                .into_iter()
+                .map(|item| item.into_iter().map(str::to_string).collect())
+                .collect())
+        });
+        assert!(result.is_err());
+        assert_eq!(board.lock().unwrap().revision, 1);
+    }
+}
+#[test]
+fn native_acceptance_guard_restores_only_its_last_owned_plain_text_revision() {
+    for external in [false, true] {
+        let board = Arc::new(Mutex::new(Board::default()));
+        external_copy(&board, " original\n完整 ");
+        {
+            let mut guarded = NativeAcceptanceClipboard::new(Clipboard::new(&board), || {
+                Ok(vec![vec!["public.utf8-plain-text".into()]])
+            })
+            .unwrap();
+            guarded.set_text("probe 1").unwrap();
+            guarded.set_text("probe 2").unwrap();
+            assert_eq!(guarded.owned_revision, Some(3));
+            if external {
+                // Even a user's new copy of identical text revokes test ownership.
+                external_copy(&board, "probe 2");
+                assert!(guarded.set_text("must not overwrite a newer copy").is_err());
+            }
+        }
+        let board = board.lock().unwrap();
+        assert_eq!(board.revision, 4);
+        assert_eq!(
+            board.text.as_deref(),
+            Some(if external {
+                "probe 2"
+            } else {
+                " original\n完整 "
+            })
+        );
+    }
+}
+#[test]
+fn native_acceptance_guard_refuses_changes_during_admission_without_writes() {
+    let board = Arc::new(Mutex::new(Board::default()));
+    external_copy(&board, "original");
+    let result = NativeAcceptanceClipboard::new(Clipboard::new(&board), || {
+        external_copy(&board, "external copy during metadata read");
+        Ok(vec![vec!["public.utf8-plain-text".into()]])
+    });
+    assert!(result.is_err());
+    assert_eq!(board.lock().unwrap().revision, 2);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "explicit local clipboard acceptance; never runs in CI"]
@@ -425,23 +578,50 @@ fn native_clipboard_fallback_is_readable_and_not_restored_after_an_unconfirmed_p
         }
         fn wait_for_consumption(&mut self) {}
     }
-    struct Restore(String);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            arboard::Clipboard::new()
-                .unwrap()
-                .set_text(self.0.clone())
-                .unwrap();
+    // Read all declared types before accepting arboard's text-only backup.
+    fn item_types() -> Result<Vec<Vec<String>>, String> {
+        unsafe {
+            use objc2::{
+                msg_send,
+                runtime::{AnyClass, AnyObject},
+            };
+            let board: *mut AnyObject =
+                msg_send![AnyClass::get("NSPasteboard").unwrap(), generalPasteboard];
+            if board.is_null() {
+                return Err("pasteboard unavailable; no writes performed".into());
+            }
+            let items: *mut AnyObject = msg_send![board, pasteboardItems];
+            if items.is_null() {
+                return Err("pasteboard items unavailable; no writes performed".into());
+            }
+            let count: usize = msg_send![items, count];
+            if count != 1 {
+                return Err("acceptance requires exactly one item; no writes performed".into());
+            }
+            let item: *mut AnyObject = msg_send![items, objectAtIndex: 0usize];
+            let types: *mut AnyObject = msg_send![item, types];
+            let count: usize = msg_send![types, count];
+            if count != 1 {
+                return Err(
+                    "acceptance refuses multiple representations; no writes performed".into(),
+                );
+            }
+            let name: *mut AnyObject = msg_send![types, objectAtIndex: 0usize];
+            let name: *const std::ffi::c_char = msg_send![name, UTF8String];
+            if name.is_null() {
+                return Err("pasteboard type unavailable; no writes performed".into());
+            }
+            let name = std::ffi::CStr::from_ptr(name)
+                .to_str()
+                .map_err(|_| "invalid pasteboard type")?;
+            Ok(vec![vec![name.to_string()]])
         }
     }
-    let mut native = Native {
+    let native = Native {
         clipboard: arboard::Clipboard::new().unwrap(),
     };
-    let original = native
-        .clipboard
-        .get_text()
-        .expect("acceptance requires a text clipboard to restore");
-    let _restore = Restore(original);
+    let mut native = NativeAcceptanceClipboard::new(native, item_types)
+        .expect("native acceptance refused unsupported or changing clipboard before any write");
     let expected = "OpenLess native receipt acceptance\n完整结果尾";
     assert_eq!(
         clipboard_delivery::insert_with_confirmation(
@@ -454,24 +634,13 @@ fn native_clipboard_fallback_is_readable_and_not_restored_after_an_unconfirmed_p
         ),
         InsertStatus::CopiedFallback
     );
-    assert_eq!(native.clipboard.get_text().unwrap(), expected);
+    assert_eq!(native.text().unwrap().unwrap(), expected);
     let receipt = clipboard_delivery::copy_with(&mut native, expected, || true).unwrap();
     std::thread::sleep(Duration::from_millis(800));
-    assert_eq!(native.clipboard.get_text().unwrap(), expected);
+    assert_eq!(native.text().unwrap().unwrap(), expected);
     assert_eq!(native.sequence(), receipt);
-    // The prior native revision cannot overwrite a subsequent explicit copy.
-    native.set_text("subsequent explicit copy").unwrap();
-    assert!(!clipboard_delivery::copy_if_current_with(
-        &mut native,
-        "late restore",
-        receipt,
-        || true
-    )
-    .unwrap());
-    assert_eq!(
-        native.clipboard.get_text().unwrap(),
-        "subsequent explicit copy"
-    );
+    // External copies are simulated above, never impersonated on the user's board.
+    assert!(native.restore_if_owned().unwrap());
 }
 
 #[test]
