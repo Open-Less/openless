@@ -3619,10 +3619,17 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
 
+    fn archive_test_path(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}.wav",
+            std::process::id(),
+            NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
+        ))
+    }
+
     #[test]
     fn wav_archive_keeps_every_frame_when_disk_worker_is_delayed() {
-        let path =
-            std::env::temp_dir().join(format!("openless-archive-{}.wav", openless_core::SessionId::new()));
+        let path = archive_test_path("openless-archive");
         let archiver = WavArchiver::create(&path).unwrap();
         let (sender, receiver) = channel();
         let start = Arc::new(std::sync::Barrier::new(2));
@@ -3672,8 +3679,7 @@ mod tests {
     #[test]
     fn raw_only_archive_keeps_staged_prefix_without_duplicating_live_processed_pcm() {
         for warm in [false, true] {
-            let path =
-                std::env::temp_dir().join(format!("openless-prefix-{}.wav", openless_core::SessionId::new()));
+            let path = archive_test_path("openless-prefix");
             let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
             let raw = Arc::new(RawTap::new(Some(writer.clone()), None, false));
             let consumer = Arc::new(RecordingConsumer::default());
@@ -3722,8 +3728,7 @@ mod tests {
 
     #[test]
     fn raw_archive_normalizes_native_stereo_rate_to_the_canonical_wav_format() {
-        let path =
-            std::env::temp_dir().join(format!("openless-raw-format-{}.wav", openless_core::SessionId::new()));
+        let path = archive_test_path("openless-raw-format");
         let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
         let consumer = Arc::new(RecordingConsumer::default());
         let (worker, sender) = AudioProcessingWorker::start_with_targets(
@@ -3760,7 +3765,7 @@ mod tests {
 
     #[test]
     fn raw_archive_resampling_restarts_with_each_warm_recording_segment() {
-        let path = std::env::temp_dir().join(format!("openless-raw-segments-{}.wav", openless_core::SessionId::new()));
+        let path = archive_test_path("openless-raw-segments");
         let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
         let consumer = Arc::new(RecordingConsumer::default());
         let (worker, sender) = AudioProcessingWorker::start_with_targets(
