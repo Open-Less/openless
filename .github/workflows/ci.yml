@@ -953,6 +953,7 @@ jobs:
           cargo test --locked -p openless-core --target-dir src-tauri/target --test prompt_contract
           cargo test --locked -p openless-core --target-dir src-tauri/target --test dictation_target_capture
           cargo test --locked -p openless-core --target-dir src-tauri/target --test selection_contract normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams
+          cargo test --locked -p openless-core --target-dir src-tauri/target --test settings_field_updates
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
 
       - name: Compile Rust backend unit tests (Windows)

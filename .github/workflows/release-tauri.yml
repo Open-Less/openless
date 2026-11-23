@@ -707,7 +707,7 @@ jobs:
 
       - name: Launch the packaged Apple Silicon app
         if: (inputs.macos_smoke_sha != '' || (github.event_name == 'push' && contains(github.ref_name, '-Beta.'))) && matrix.updater-arch == 'aarch64'
-        timeout-minutes: 2
+        timeout-minutes: 5
         shell: bash
         working-directory: openless-all/app
         env:
@@ -720,7 +720,13 @@ jobs:
           [[ "$OPENLESS_BUILD_ID" == "$SMOKE_SHA" && "$(uname -m)" == arm64 ]]
           lipo "$app/Contents/MacOS/openless" -verify_arch arm64
           status=0
-          swift scripts/macos-packaged-launch-smoke.swift "$app" "$SMOKE_SHA" "$evidence" || status=$?
+          version=$(node -p "require('./package.json').version")
+          node scripts/desktop-version-contract.test.mjs "$version"
+          codesign -dv --verbose=4 "$app" 2> "$evidence/signature.txt"
+          swift scripts/macos-artifact-acceptance.swift "$app" "$version" "$evidence" || status=$?
+          if [[ $status -eq 0 ]]; then
+            python3 scripts/macos-initialized-style-acceptance.py "$evidence" || status=$?
+          fi
           {
             echo '### Packaged macOS app launch smoke'
             if [[ -s "$evidence/result.txt" ]]; then
