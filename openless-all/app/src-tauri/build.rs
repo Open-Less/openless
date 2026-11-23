@@ -19,18 +19,6 @@ fn main() {
         // Apple system recognition is independent of downloadable model runtimes.
         println!("cargo:rustc-link-lib=framework=Speech");
         link_macos_compiler_runtime();
-        println!("cargo:rerun-if-changed=src/playback_reference_macos.m");
-        cc::Build::new()
-            .file("src/playback_reference_macos.m")
-            .flag("-fobjc-arc")
-            .flag("-mmacosx-version-min=14.0")
-            .compile("openless_playback_reference");
-        println!("cargo:rerun-if-changed=src/accessibility_guide_macos.m");
-        cc::Build::new()
-            .file("src/accessibility_guide_macos.m")
-            .flag("-fobjc-arc")
-            .flag("-mmacosx-version-min=14.0")
-            .compile("openless_accessibility_guide");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=Foundation");

@@ -63,6 +63,7 @@ src/
     front_app.rs      NSWorkspace 前台应用身份（含按 pid 查 bundle）
     secure_input.rs   IsSecureEventInputEnabled
     keystroke.rs      CGEvent 逐字投递 + TIS 输入源切换（主线程原语）
+    guide.rs          辅助功能授权引导窗口（AppKit 在 guide.m）
   common/
     uia_text.rs       UIA 字符单元解码（纯逻辑）
   ime/
@@ -114,6 +115,7 @@ src/
     front_app.rs      NSWorkspace 前台应用身份（含按 pid 查 bundle）
     secure_input.rs   IsSecureEventInputEnabled
     keystroke.rs      CGEvent 逐字投递 + TIS 输入源切换（主线程原语）
+    guide.rs          辅助功能授权引导窗口（AppKit 在 guide.m）
   common/
     codec.rs          跨平台纯编解码
     error.rs          PlatformError（部分失败语义）

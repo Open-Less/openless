@@ -19,7 +19,7 @@ if (process.platform !== 'darwin') {
       'AppKit',
       '-framework',
       'ApplicationServices',
-      join(app, 'src-tauri/tests/accessibility-guide.m'),
+      join(app, 'crates/openless-platform/tests/accessibility-guide.m'),
       '-o',
       output,
     ],

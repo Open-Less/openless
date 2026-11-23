@@ -20,7 +20,7 @@ console.log(`macOS runtime minimum-system-version contract passed: ${minimumSyst
 
 const plist = await readFile(new URL('../src-tauri/Info.plist', import.meta.url), 'utf8');
 const tap = await readFile(
-  new URL('../src-tauri/src/playback_reference_macos.m', import.meta.url),
+  new URL('../crates/openless-platform/src/audio/capture/macos_tap.m', import.meta.url),
   'utf8',
 );
 const manifest = await readFile(new URL('../src-tauri/Cargo.toml', import.meta.url), 'utf8');

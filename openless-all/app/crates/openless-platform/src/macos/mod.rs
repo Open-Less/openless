@@ -15,6 +15,8 @@ pub mod text;
 pub mod ax;
 #[cfg(all(feature = "text", target_os = "macos"))]
 pub mod keystroke;
+#[cfg(feature = "permissions")]
+pub mod guide;
 #[cfg(feature = "selection")]
 pub mod front_app;
 #[cfg(feature = "capsule")]

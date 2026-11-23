@@ -2,7 +2,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #include <assert.h>
 #include <math.h>
-#import "../src/accessibility_guide_macos.m"
+#import "../src/macos/guide.m"
 
 int main(int argc, const char **argv) {
     @autoreleasepool {

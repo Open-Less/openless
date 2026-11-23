@@ -185,11 +185,8 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
         if pane == "accessibility" {
-            extern "C" {
-                fn openless_show_accessibility_guide();
-            }
-            // The AppKit helper schedules its work on the main thread.
-            unsafe { openless_show_accessibility_guide() };
+            // 引导窗口在平台层（AppKit 部分由其 build.rs 编译）。
+            openless_platform::macos::guide::show_accessibility_guide();
         }
         Ok(())
     }
