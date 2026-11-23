@@ -715,6 +715,7 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
 #[tokio::test]
 async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    const USER_EXAMPLE: &str = include_str!("fixtures/intent-input-comparison.txt");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -767,7 +768,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
         Arc::new(PipelineDictationEngine::new(
             Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
             Arc::new(FixtureTranscriptionEngine::successful(
-                "spoken test transcript",
+                USER_EXAMPLE,
                 500,
             )),
             Arc::new(SharedCloudTextPolisher::new(credentials)),
@@ -833,7 +834,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
         assert_eq!(system.matches("当前应用：").count(), 1);
         assert!(!system.contains("# 输入场景参考"));
         assert!(system.find("本次输入场景：").unwrap() < system.find(marker).unwrap());
-        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
+        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains(USER_EXAMPLE));
         assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         assert!(system.find(marker).unwrap() < system.find(openless_core::DICTATION_REVISION_RULES).unwrap());
         if marker == "CODING-STYLE" {
@@ -1059,7 +1060,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
     backend.start_dictation().await.unwrap();
     assert_eq!(
         backend.stop_dictation().await.unwrap().polished_text,
-        "spoken test transcript"
+        USER_EXAMPLE
     );
     assert!(
         payloads.try_recv().is_err(),
@@ -1123,23 +1124,23 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
                 .await
                 .unwrap()
         };
-        assert_eq!(result.polished_text, "spoken test transcript");
+        assert_eq!(result.polished_text, USER_EXAMPLE);
         assert!(
             payloads.try_recv().is_err(),
             "unexpected request after cancellation, live={live}"
         );
         assert_eq!(
             fixture.focus.lock().unwrap().delivered.last().unwrap(),
-            &("VS Code", "spoken test transcript".into())
+            &("VS Code", USER_EXAMPLE.into())
         );
         let history = backend.list_history().unwrap();
         let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
         assert!(!entry.translation_active);
         assert_eq!(entry.style_pack_id.as_deref(), Some("builtin.raw"));
-        assert_eq!(entry.final_text, "spoken test transcript");
+        assert_eq!(entry.final_text, USER_EXAMPLE);
     }
     backend.start_dictation().await.unwrap();
-    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, "spoken test transcript");
+    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, USER_EXAMPLE);
     assert!(payloads.try_recv().is_err(), "profile must not turn canonical Raw into a request");
     let custom_raw = backend
         .create_style_pack(StylePack {
@@ -1214,30 +1215,42 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
     assert_eq!(backend.get_preferences().active_style_pack_id, current.id);
     let local_file =
         std::fs::read_to_string(fixture.directory.join("app-style-routing.json")).unwrap();
-    assert!(!local_file.contains("spoken test transcript"));
+    assert!(!local_file.contains(USER_EXAMPLE));
     assert!(!local_file.contains("polished"));
+    let mut alias = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+    alias.id = "fixture.official-alias".into();
+    alias.kind = openless_core::StylePackKind::Imported;
+    let alias = backend.create_style_pack(alias).unwrap();
     // Exercise the production start -> ASR -> request serialization path.
     // Fixture outputs only prove routing/serialization, never model semantics.
-    for id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID, &current.id] {
+    for id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID, &alias.id, &current.id] {
         for translation_requested in [false, true] {
             backend.start_dictation_with_options(DictationStartOptions {
                 style_pack_id: Some(id.into()),
                 translation_requested,
                 ..Default::default()
             }).await.unwrap();
-            backend.stop_dictation().await.unwrap();
+            let result = backend.stop_dictation().await.unwrap();
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.iter().find(|row| row.id == result.session_id.to_string())
+                .unwrap().style_pack_id.as_deref(), Some(id));
             let payload = payloads.try_recv().unwrap();
             let system = payload["messages"][0]["content"].as_str().unwrap();
             assert!(system.starts_with("当前应用：VS Code"));
             let pack = backend.get_style_pack(id).unwrap();
             assert!(system.find("本次输入场景：").unwrap() < system.find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim()).unwrap());
             assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
-            if id == openless_core::BUILTIN_INTENT_ID {
+            if id == openless_core::BUILTIN_INTENT_ID || id == alias.id {
                 assert!(pack.prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
-                assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[])));
+                assert_eq!(pack.version, "1.3.0");
+                assert_eq!(pack.prompt, pack.selection_prompt);
+                let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
+                assert_eq!(system.matches(body.as_str()).count(), 1);
+                assert!(system.contains("同一个整体问题中分别表达目标"));
+                assert!(!system.contains("输出会原样替换该选区"));
                 assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             }
-            assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
+            assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains(USER_EXAMPLE));
             if translation_requested {
                 assert!(system.contains("[[OPENLESS_TRANSLATION]]"));
             }

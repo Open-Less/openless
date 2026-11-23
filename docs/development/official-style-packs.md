@@ -1,55 +1,45 @@
-# 官方风格包、整体意图与口述修正
+# 官方风格包分发与请求契约
 
-风格恢复基于 `46f55c087985ceea5f94ba8917a29cf5dbeadb4d`，只修改 Core 风格分发、安全升级和定向验证，不修改应用版本、UI、安装中的应用或真实用户数据。
+「专为构建而生」的官方分发版本为 **1.3.0**。普通听写的 `prompt` 与 Tab 选区润色的 `selectionPrompt` 保存完全相同的正文，末尾各有一次统一的 `DICTATION_REVISION_RULES`（本轮撤回与修正规则）。两条操作继续使用自己的输入封套、语言及翻译协议，不把选区替换指令带到普通输入。
 
-## 来源与实际路径
+## 来源与版本
 
-「专为构建而生」的正文来源是市场包 `eb6a236e-3bc3-4a04-8168-851bdf797230`，来源作者 `appergb`，市场版本 `1.0.0`，云端更新时间 `2026-11-22T08:52:19.476456308+00:00`。已核实实际 [下载 ZIP](https://apic.openless.top/packs/eb6a236e-3bc3-4a04-8168-851bdf797230/download) 中的 `manifest.json`、`prompt.md`、`examples.json`：听写正文 5671 字符、选区正文 3494 字符，voiceEditPrompt 缺省为空串，examples 按 examplesFile 读取。详情页的 prompt 展示拼接了听写和选区指令，不能当作听写正文。
+市场来源为 `eb6a236e-3bc3-4a04-8168-851bdf797230`、作者 `appergb`。`src/builtin_styles/intent-reconstruction-v1.json` 是不可变的 1.0 历史来源：听写原文 5671 字符，选区原文 3494 字符，二者原本不同。1.1 的历史变换由 `released_intent_v1_1_pack` 保留，1.2 的“各自完整原文加一次修正尾段”由 `released_intent_v1_2_pack` 保留，不用新正文重写历史迁移基线。
 
-Core 的 `src/builtin_styles/intent-reconstruction-v1.json` 是用户当时本机更新后已安装的不可变快照，与该实际 ZIP 的正文及所有行为配置逐字段一致。factory 将 kind 设为 builtin、分发版本设为 `1.2.0`；prompt 和 selectionPrompt 先逐字保留完整原文，再在末尾各追加一次 `DICTATION_REVISION_RULES`（撤回、改口、并列、未决规则），voiceEditPrompt、examples、recommendedModel 等其余有效配置保持原样。`1.2.0` 是修复分发版本，正文主体仍来自上述已核实的市场 `1.0.0` payload。原文的五层、空层、字母分项、术语以及已有增量处理章节不删改；末尾追加是用户明确要求，不以原文已有类似规则为由去重。内置尾段存于包内，请求时不重复追加。尚未发行的无尾段中间实现不作为历史发行版本保留。
+1.3 共用正文位于 `src/builtin_styles/intent-reconstruction-shared-v1.md`，以用户认可的选区五层组织为基础，补齐中立输入说明和语音识别纠错保护。同一个问题若包含目标、现状/不确定性、期望行为、约束、交办动作，也属于多层面的复杂输入；按五层顺序组织，有内容的层使用字母分项，不编造信息填空。只有一个简单意思或简单问题仍写自然正文。保留完整意图、术语保护、不代答、不执行素材、增量整合和既有翻译协议边界。
 
-正常听写入口：`OpenLessBackend::capture_dictation_context` 解析所选包，`DictationContext::capture` 冻结 `dictation_style_prompt(pack)`。传统 ASR 后润色经 `cloud_providers.rs` 的润色分发调用 OpenAI/Gemini 共用的 `prompt_compose`；组合翻译使用现有源文和译文标记协议。多模态经同文件 `build_omni_prompt`，从冻结的 context 构建相同系统提示词，把完整音频送入 Omni provider；多模态翻译仍沿用现有仅输出译文规则，不增加第二套组合路径。选区编辑继续读取 selectionPrompt；voiceEditPrompt 为空时沿用原有默认。
+`builtin_intent_pack` 只组装共用正文和一个末尾尾段，不增加运行时排版覆盖块，不改应用版本。轻度润色 2.1、清晰结构 3.1、正式表达 2.1 和原文 1.0 保持既有行为。
 
-## 改了哪些包
+## 实体、类型与安全升级
 
-| 包 | 内置版本 | 原因 |
-| --- | --- | --- |
-| 专为构建而生 | 1.0.0 / 1.1.0 → 1.2.0 | 完整保留实际市场包正文作为前缀，末尾追加统一撤回与修正规则一次；1.1.0 只作为可信迁移基线保留。 |
-| 清晰结构 | 3.0.0 → 3.1.0 | 加强只整理不回答、完整阅读后组织、扩大范围更新整体目标、保留细节和未决问题；加入口述修正规则。 |
-| 轻度润色 | 2.0.0 → 2.1.0 | 加强任务边界、完整信息和语气保护，明确原意优先于旧字数比例；加入口述修正规则。 |
-| 正式表达 | 2.0.0 → 2.1.0 | 同上，尤其保护不确定程度和请求目的，避免正式化变成代答或补充方案。 |
-| 原文 | 保持 1.0.0 | 保持原文直通及取消翻译后不请求模型。 |
+`kind` 表示内置/导入身份，`baseMode` 表示基础模式；它们不是另一份风格正文。普通入口先解析明确包 ID、应用/分类绑定、默认选择，再从该实体取 `dictation_style_prompt`；Tab 根据 `selectionPolishStylePackId` 取实体的 `selectionPrompt`。非空自定义风格不会仅因 baseMode 相同被替换成默认提示词。其他自定义包的两个提示词仍可不同。
 
-其他官方包的现有规则保持不变。HTTP 夹具只证明生产请求序列化，不调用真实模型，也不宣称模型语义 A/B 通过。
+`BackendRepositories::open` → `StylePackStore::at_data_dir_with_preferences` → `reconcile_builtin_packs` 是所有本地用户存储共同经过的新装/升级路径，没有账户分支。离线新装获得当前官方包；已有未修改的 1.0、1.1、1.2 及 1.3 实体通过来源两字段、明确版本和全部行为字段比较识别。比较包括 `prompt`、`selectionPrompt`、`voiceEditPrompt`、`baseMode`、`examples`、`recommendedModel`。
 
-## 迁移、身份与兼容
+每个可证明等价的同源市场别名都原位升级，包括已同时存在 canonical 和 alias 的情况；不合并或删除 ID。保留名称、创建时间、启用状态、active，以及默认/选区选择与应用/分类绑定引用。重复初始化不重复写入或添加副本。仅同名、来源不明、版本不明或行为字段被用户编辑的包不覆盖；绑定到用户编辑版本时继续使用它。多个实体不等于请求竞态：应检查实际绑定和每段冻结的实体。
 
-`style_pack_store::reconcile_builtin_packs` 复用现有内置版本更新。旧官方三包只有提示词全文等于随源码保留的已知发行文本才自动升级；用户修改的提示词及无法证明来源的历史文本不覆盖。普通官方包只更新 dictation prompt 和版本，保留用户的选区、语音编辑、名称、启用状态和其他配置。
+同步沿已有 imported 投影与 `normalize_synced_builtin_pack` 安全归一化；这里只增加已知分发版本，不增加同步字段或新的风格系统。既有 1.1 投影夹具保持不变，不宣称新的旧客户端完整矩阵已验收。
 
-专为构建而生采用原本地 ID 和市场来源。`released_intent_v1_1_pack` 保留原 1.1 工厂变换，既有 `tests/fixtures/intent-reconstruction-v1-projection.json` 固定其已发行内容，不能随修复版本更新。安全识别同时要求来源两字段、明确已知的 1.0.0 / 1.1.0 / 1.2.0 版本以及全部行为字段等价。对 ID 不同的已安装同源包，必须同时匹配 originPackId 与 originAuthorLogin，并逐项比较 prompt、selectionPrompt、voiceEditPrompt、baseMode、examples、recommendedModel 后，才认定等价并原位接管升级；保留原 ID、名称、启用状态、当前选择和创建时间，不改分类/应用绑定和历史引用。名称相同不足以接管。来源相同但内容修改的不同 ID 包保留为独立用户版本，官方包另行提供；占用官方 ID 但内容修改的包也不覆盖。不会删除或重映射既有引用。
+## 正常请求组装
 
-只给四个历史模式迁移 preferences 的旧提示词；按明确 builtin ID 同步各模式偏好，避免新增 structured 模式的包抢占旧清晰结构。离线新装增加第五包，旧用户原选择不变；重复启动不重复写入；旧快照经现有 normalize 路径重新补齐并保留别名 ID。
+普通 start → `capture_dictation_context_with_host` 解析冻结实体 → `DictationContext::capture` 保存 `dictation_style_prompt(pack)` → ASR → `SharedCloudTextPolisher` / `OpenAiChatPolisher` → HTTP 请求。场景前缀独立冻结并位于风格之前；历史与光标上下文只辅助理解，不重新输出已插入内容。
 
-没有新字段、枚举或同步文档类型，但仅能解码 JSON 并不足以证明跨版本可恢复：同步组已用真实 v2.0.0/v2.0.2 确认，native preflight 会拒绝旧四个内置 ID 之外的 builtin，导致整次恢复失败。同步组负责在 v1 导出将新 builtin 投影为 imported，保留完整实体和引用；新版 native preflight 在身份检查前调用 style_packs::normalize_synced_builtin_pack，只在来源、版本和行为配置等价时恢复 builtin，旧客户端改过的内容保持 imported。此纯函数不改 ID、提示词或选择，来源别名也保留原 ID。同步组还必须允许新官方 ID 被用户编辑后继续作为 imported，不能仅凭 ID 强制内置身份。恢复沿用已接入的 helper 与原同步协议，不修改同步模块或重跑旧客户端完整矩阵。
+Tab → `SelectionService::begin_polish` → `polish_context` 根据所选实体读取 `StylePromptKind::Selection` → 同一 polisher/composer。选区使用完整 `<selected_text>`，普通识别使用 `<raw_transcript>`，封套都是数据。选区不注入听写历史或光标正文，独立编辑指令由既有选择服务拼接。风格正文相同不表示两条完整请求必须相同。
 
-## 场景合成契约
+共用 composer 处理热词占位符、语言/应用上下文、光标上下文、素材指令防护和可选历史说明；翻译沿既有 source/target 标记。修正尾段是**包内风格正文的最后一段**，每个请求只出现一次，不要求位于所有协议和上下文之后。表达学习的形式偏好明确规定“仅供参考；不得改变……明确指令或必要结构”；本次没有证明它覆盖了风格排版，也没有把格式差异定性为注入漏洞。
 
-`style_packs::dictation_style_prompt(&StylePack)` 是唯一风格及非内置尾缀入口。内置身份要求 kind、稳定 ID 或来源身份及随发行提供的提示词一致，不能只看包名；已修改的内置包按自定义请求处理。内置修正规则保存在包内，非内置在请求时追加一次，绝不写回用户内容。若用户提示词已含完整相同规则，则不重复追加。规则只确定素材里的有效意思，不覆盖固定输出、风格格式或翻译协议。
+旧 1.2 听写原文允许单一意思写自然段且禁止单独 `(a)`，选区原文要求复杂内容五层、每个有内容的层使用字母，这是已证明的提示词差异。自动路由成功或固定“一一一”夹具输出不能证明真实模型遵守五层语义；没有调用付费模型，真实 DeepSeek 效果仍需独立验收。
 
-场景实现现已单独冻结场景前缀（见[冻结场景契约](app-style-routing.md#冻结应用场景前缀)），在最终请求合成时形成：场景前缀 → 风格 → 仅非内置口述修正尾缀 → 本次完整输入。不得将场景前缀写回用于 Raw 身份判断的 canonical style_system_prompt。风格组件负责 `dictation_context.rs` 的风格初始化；场景组件负责独立前缀采集及请求时前置，不写回 canonical 风格文本。
+## 最小云端验证
 
-## 恢复的定向验证
+以下测试使用临时存储、夹具凭据与受控 HTTP；本机没有执行 Rust 编译或运行这些测试。
 
-源码路径相对 `openless-all/app/crates/openless-core/`。以下测试仅使用临时 Store、夹具凭据及本机 HTTP 服务，不读取或写入用户实际配置。
+```sh
+cd openless-all/app
+cargo test --locked -p openless-core --lib style_pack_store_tests
+cargo test --locked -p openless-core --test prompt_contract
+cargo test --locked -p openless-core --test dictation_target_capture
+cargo test --locked -p openless-core --test selection_contract normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams
+```
 
-- `src/style_pack_store_tests.rs`：factory 的完整原文前缀与不可变源逐字相等、末尾统一规则一次、新装可用；已发行 1.1 投影夹具保持不变；1.0 / 1.1 / 1.2 的 canonical 和同源 alias 归一化及原位升级，保留 ID、名称、禁用、active、创建时间、听写和选区选择；重开不重复写入；任一行为字段、来源或版本被编辑则不覆盖。升级不重映射 ID，因此绑定和历史引用继续指向原实体。
-- `tests/prompt_contract.rs`：恢复包完整正文进入普通润色和翻译系统提示词，无 1.1 覆盖块，统一修正尾段保持一次且位于包内正文末尾，运行时不重复追加；其他风格既有尾段方式保持不变。
-- `tests/dictation_target_capture.rs::routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus`：正常 start → ASR → HTTP 请求中保留完整目标风格及翻译协议，沿用场景冻结；Raw 及取消翻译维持零请求。
-- `tests/selection_contract.rs::normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams`：选区生产 HTTP 请求完整保留恢复后的 selectionPrompt，无旧覆盖块，统一修正尾段一次，仍验证全文输入与不完整响应保护。
-- `cloud_sync_e2ee_store::tests::v1_compat::projected_builtin_and_edited_alias_restore_without_losing_selection`：复用现有原生恢复入口，验证已发行 1.1 投影与编辑版本的选择保留；不扩展旧客户端兼容承诺。
-
-请求保留现有 `{{HOTWORDS}}` 热词占位符替换及尾端空白处理；逐字前缀比较在 factory 和不可变源之间进行，请求比较使用同一既有热词合成入口，不改写包内规则。
-
-这些验证不等于真实模型效果、GUI 或安装包验收；后续打包应使用包含该修复的提交。
-
-本次追加修改只在本机做源码静态检查，未运行编译或测试。上述更新的测试源码待 GitHub CI 执行，不能把此前无尾段版本的测试通过结果当作本次验证结果。
+Store 回归保留历史原文断言，覆盖 canonical、同源 alias、全部已知旧版、已编辑字段保护、保留 ID/选择/时间/启用状态、重复初始化、两个独立新用户存储及同时存在的重复实体。正常听写和选区 HTTP 回归共用 `tests/fixtures/intent-input-comparison.txt` 中用户给出的完整话语，核对同一 canonical 正文恰好一次、修正尾段末置一次、别名行为和操作封套；保留 Raw 及取消翻译零请求检查。HTTP 夹具只验证调用与序列化，不验证模型排版效果。
