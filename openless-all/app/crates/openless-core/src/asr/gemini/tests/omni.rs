@@ -19,6 +19,7 @@ fn omni_provider(endpoint: String) -> OmniProvider {
         thinking_enabled: true,
         max_tokens_override: None,
         reasoning_effort: None,
+        realtime_options: Default::default(),
     })
 }
 

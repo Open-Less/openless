@@ -1,6 +1,8 @@
 use futures_util::future::BoxFuture;
 use openless_core::{
-    credentials::*, BackendError, BackendErrorCode, CredentialsStatus, UserPreferences,
+    credentials::*,
+    omni::realtime_options::{RealtimeAuthMode, RealtimeOptions},
+    BackendError, BackendErrorCode, CredentialsStatus, UserPreferences,
 };
 use std::{
     collections::HashMap,
@@ -131,6 +133,11 @@ impl CredentialStore for HarmonyCredentials {
             let has = |provider: &str, account: &str| {
                 get(provider, account).is_some_and(|v| !v.trim().is_empty())
             };
+            let omni_headers_auth = openless_core::provider_rules::is_realtime_omni_provider(&omni)
+                && get(&omni, OMNI_REALTIME_OPTIONS_ACCOUNT).is_some_and(|value| {
+                    RealtimeOptions::parse(&value)
+                        .is_ok_and(|options| options.auth_mode == RealtimeAuthMode::Headers)
+                });
             let config = openless_core::provider_rules::CredentialConfiguration {
                 asr_api_key: has(&asr, "asr.api_key"),
                 asr_endpoint: has(&asr, "asr.endpoint"),
@@ -150,7 +157,8 @@ impl CredentialStore for HarmonyCredentials {
                 llm_endpoint: has(&llm, "ark.endpoint"),
                 llm_model: has(&llm, "ark.model_id"),
                 llm_api_key_required: true,
-                omni_api_key: has(&omni, "omni.api_key"),
+                // Core's readiness check accepts an explicitly selected headers-only mode.
+                omni_api_key: omni_headers_auth || has(&omni, OMNI_API_KEY_ACCOUNT),
                 omni_endpoint: has(&omni, "omni.endpoint"),
                 omni_model: has(&omni, "omni.model"),
                 ..Default::default()
@@ -319,6 +327,73 @@ impl CredentialStore for HarmonyCredentials {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn realtime_headers_auth_is_ready_without_a_main_key() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-harmony-realtime-status-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let store = HarmonyCredentials::new(root.join("channels.json"));
+            let ready = || async {
+                store
+                    .status(UserPreferences::default())
+                    .await
+                    .unwrap()
+                    .omni_configured
+            };
+            for provider in ["openai-realtime", "openai"] {
+                store
+                    .set_active_provider(ProviderSlot::Omni, provider.into())
+                    .await
+                    .unwrap();
+                let key = |account| {
+                    CredentialKey::new(CredentialNamespace::Omni, Some(provider.into()), account)
+                        .unwrap()
+                };
+                for (account, value) in [
+                    (OMNI_ENDPOINT_ACCOUNT, "wss://gateway.example/realtime"),
+                    (OMNI_MODEL_ACCOUNT, "fixture-model"),
+                    (
+                        OMNI_EXTRA_HEADERS_ACCOUNT,
+                        r#"{"Authorization":"Bearer fixture"}"#,
+                    ),
+                ] {
+                    store
+                        .hydrate(key(account), SecretValue::new(value))
+                        .unwrap();
+                }
+                assert!(!ready().await);
+                store
+                    .write(
+                        key(OMNI_REALTIME_OPTIONS_ACCOUNT),
+                        SecretValue::new(r#"{"authMode":"headers"}"#),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(ready().await, provider == "openai-realtime");
+                store
+                    .write(
+                        key(OMNI_REALTIME_OPTIONS_ACCOUNT),
+                        SecretValue::new(r#"{"authMode":"bearer"}"#),
+                    )
+                    .await
+                    .unwrap();
+                assert!(!ready().await);
+                store
+                    .hydrate(key(OMNI_API_KEY_ACCOUNT), SecretValue::new("fixture"))
+                    .unwrap();
+                assert!(ready().await);
+            }
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn omni_recording_accepts_restored_settings_credentials_without_a_network_request() {
