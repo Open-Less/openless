@@ -330,10 +330,11 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
-    emptyTranscript: '음성을 인식하지 못했습니다. 녹음이 저장되었습니다. 기록에서 다시 변환하세요.',
+    emptyTranscript: '빈 초안 · 음성 없음',
     transcribing: '변환 중',
     asking: '무엇이든 질문',
     thinking: 'thinking',
+    slowConnection: '평소보다 연결이 느립니다',
     using: 'using',
     cancelled: '취소됨',
     error: '오류 발생',
@@ -342,10 +343,10 @@ export const ko: typeof zhCN = {
     translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
     selectionPolish: {
-      polishing: '다듬는 중...',
+      polishing: '다듬는 중…',
       replaced: '교체됨',
-      noSelection: '선택된 내용 없음',
-      failed: '다듬기 실패, 다시 시도하세요',
+      noSelection: '선택된 텍스트 없음',
+      failed: '다듬기 실패',
     },
   },
   selectionPolishPreview: {

@@ -316,10 +316,11 @@ export const zhCN = {
     durationMinutes: '{{value}} 分钟',
   },
   capsule: {
-    emptyTranscript: '未识别到语音，录音已保留，可在历史中重新转录',
-    transcribing: '正在转录',
+    emptyTranscript: '空稿 · 未识别到语音',
+    transcribing: '处理中',
     asking: '随便问',
     thinking: 'thinking',
+    slowConnection: '连接比平常慢',
     using: 'using',
     cancelled: '已取消',
     error: '出错了',
@@ -328,10 +329,10 @@ export const zhCN = {
     translationChangeFailed: '语言切换失败，请重新选择。',
     translating: '正在翻译',
     selectionPolish: {
-      polishing: '正在润色...',
+      polishing: '正在润色…',
       replaced: '已替换',
-      noSelection: '未选中内容',
-      failed: '润色失败，请重试',
+      noSelection: '未选中文本',
+      failed: '润色失败',
     },
   },
   selectionPolishPreview: {

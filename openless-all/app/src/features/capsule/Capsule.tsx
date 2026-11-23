@@ -199,7 +199,6 @@ interface ClassicCapsuleProps {
   operating: boolean;
   translation: boolean;
   qa: boolean;
-  backgroundTranslation: boolean;
   leaving: boolean;
   warming: boolean;
 }
@@ -223,7 +222,6 @@ function ClassicCapsule({
   operating,
   translation,
   qa,
-  backgroundTranslation,
   leaving,
   warming,
 }: ClassicCapsuleProps) {
@@ -237,7 +235,9 @@ function ClassicCapsule({
   }, [qa, sessionId]);
   const asking = qa && isActiveCapsuleState(state) && !leaving;
   const reduced = useReducedMotion();
-  const translating = (translation && isActiveCapsuleState(state)) || backgroundTranslation;
+  // The top floating translation badge reflects only the current foreground session,
+  // never background processing jobs (which show their own status on the rear satellite).
+  const translating = translation && isActiveCapsuleState(state);
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
@@ -273,7 +273,7 @@ function ClassicCapsule({
         ) : (
           <CapsuleTranslationBadge
             visible={translating && !leaving}
-            processing={state !== 'recording' || !translation}
+            processing={state !== 'recording'}
           />
         )}
       </motion.div>
@@ -889,6 +889,38 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
+  const [displayedSatellite, setDisplayedSatellite] = useState<{
+    sessionId: string;
+    translationActive: boolean;
+    count: number;
+    leaving: boolean;
+  } | null>(null);
+  const backgroundJobs = processingJobs.filter((job) => job.sessionId !== displayedSession);
+  const showSatellite =
+    (renderedState === 'recording' ||
+      renderedState === 'transcribing' ||
+      renderedState === 'polishing') &&
+    backgroundJobs.length > 0;
+  const activeSatelliteId = backgroundJobs[0]?.sessionId;
+  const activeSatelliteTranslation = Boolean(backgroundJobs[0]?.translationActive);
+  const activeSatelliteCount = backgroundJobs.length;
+  useEffect(() => {
+    if (showSatellite && activeSatelliteId) {
+      setDisplayedSatellite({
+        sessionId: activeSatelliteId,
+        translationActive: activeSatelliteTranslation,
+        count: activeSatelliteCount,
+        leaving: false,
+      });
+      return undefined;
+    }
+    setDisplayedSatellite((prev) => (prev ? { ...prev, leaving: true } : null));
+    const timer = window.setTimeout(() => {
+      setDisplayedSatellite((prev) => (prev?.leaving ? null : prev));
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [showSatellite, activeSatelliteId, activeSatelliteTranslation, activeSatelliteCount]);
+
   // Fallback card comes first: it pops the moment the session ends, while the capsule
   // is still rendering the Done/Error terminal state — and the session's outcome was
   // exactly "didn't insert", so letting the terminal state cover it would report a
@@ -940,22 +972,30 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: isClassic ? 'auto' : 'transform, opacity',
       }}
     >
-      {renderedState === 'recording' && processingJobs.length > 0 && (
-        <button
-          className="ol-processing-satellite"
-          style={{ bottom: hostMetrics.bottomInset + 12 }}
-          data-session-id={processingJobs[0].sessionId}
-          data-capsule-interactive
-          aria-label={`${t('capsule.transcribing')} · ${processingJobs.length} · ${t('common.cancel')}`}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => void cancelDictation(processingJobs[0].sessionId)}
-        >
-          <span aria-hidden="true">
-            {t('capsule.transcribing')}
-            {processingJobs.length > 1 ? ` · ${processingJobs.length}` : ''}
-          </span>
-        </button>
-      )}
+      {displayedSatellite && (() => {
+        const satelliteLabel = displayedSatellite.translationActive
+          ? t('capsule.translating')
+          : t('capsule.transcribing');
+        return (
+          <button
+            className="ol-processing-satellite"
+            style={{ bottom: hostMetrics.bottomInset + 28 }}
+            data-session-id={displayedSatellite.sessionId}
+            data-translation={displayedSatellite.translationActive}
+            data-leaving={displayedSatellite.leaving}
+            data-capsule-interactive
+            disabled={displayedSatellite.leaving}
+            aria-label={`${satelliteLabel} · ${displayedSatellite.count} · ${t('common.cancel')}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void cancelDictation(displayedSatellite.sessionId)}
+          >
+            <span className="ol-processing-satellite-label" aria-hidden="true">
+              {satelliteLabel}
+              {displayedSatellite.count > 1 ? ` · ${displayedSatellite.count}` : ''}
+            </span>
+          </button>
+        );
+      })()}
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule
@@ -964,7 +1004,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             state={renderedState}
             level={leaving ? 0 : level}
             insertedChars={insertedCharsRef.current}
-            message={renderedMessage}
+            message={renderedState === 'transcribing' ? undefined : renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
             transcriptFontSize={transcriptFontSize}
             transcriptVisible={transcriptVisible}
@@ -972,7 +1012,6 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             operating={operatingRef.current}
             translation={translation}
             qa={renderedQa}
-            backgroundTranslation={processingJobs.some((job) => job.translationActive)}
             leaving={leaving}
             warming={warming}
           />

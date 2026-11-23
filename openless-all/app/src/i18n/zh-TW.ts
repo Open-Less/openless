@@ -317,10 +317,11 @@ export const zhTW: typeof zhCN = {
     durationMinutes: '{{value}} 分鐘',
   },
   capsule: {
-    emptyTranscript: '未辨識到語音，錄音已保留，可在歷史中重新轉錄',
-    transcribing: '正在轉錄',
+    emptyTranscript: '空稿 · 未辨識到語音',
+    transcribing: '處理中',
     asking: '隨便問',
     thinking: 'thinking',
+    slowConnection: '連線比平常慢',
     using: 'using',
     cancelled: '已取消',
     error: '出錯了',
@@ -329,10 +330,10 @@ export const zhTW: typeof zhCN = {
     translationChangeFailed: '語言切換失敗，請重新選擇。',
     translating: '正在翻譯',
     selectionPolish: {
-      polishing: '正在潤色...',
+      polishing: '正在潤色…',
       replaced: '已替換',
-      noSelection: '未選中內容',
-      failed: '潤色失敗，請重試',
+      noSelection: '未選取文字',
+      failed: '潤色失敗',
     },
   },
   selectionPolishPreview: {
