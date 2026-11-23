@@ -4244,18 +4244,19 @@ where
 impl CoreTextInserter for TauriTextInserter {
     fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
-        // Capture app context for prompt routing, not a future write destination.
         let insertion_target = crate::selection::capture_selection_insertion_target();
+        #[cfg(target_os = "windows")]
+        let ime_target = crate::windows_ime_target::capture_ime_submit_target();
         #[cfg(target_os = "macos")]
         // Retired AX composition does not capture or retain document text.
         let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
-                insertion_target: None,
+                insertion_target: Some(insertion_target.clone()),
                 #[cfg(target_os = "macos")]
                 live_capture,
                 #[cfg(target_os = "windows")]
-                ime_target: None,
+                ime_target,
                 ..self.clone()
             }),
             host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
@@ -4281,8 +4282,8 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
-            // Deferred preparation runs in Core's ordered finalization. Ordinary
-            // dictation follows the user's current focus without reactivation.
+            // Keep the stable capture-time target while preparing native resources
+            // only when this session owns Core's ordered finalization.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
             #[cfg(target_os = "windows")]
@@ -4376,6 +4377,8 @@ impl CoreTextInserter for TauriTextInserter {
                 #[cfg(target_os = "macos")]
                 previous_input_source: Arc::new(Mutex::new(previous_input_source)),
                 #[cfg(target_os = "macos")]
+                streaming_ready,
+                #[cfg(target_os = "macos")]
                 streaming_worker,
                 #[cfg(target_os = "macos")]
                 cancel_requested,
@@ -4431,6 +4434,8 @@ struct TauriTextInsertionSession {
     app: AppHandle,
     #[cfg(target_os = "macos")]
     previous_input_source: Arc<Mutex<Option<crate::unicode_keystroke::PreviousInputSource>>>,
+    #[cfg(target_os = "macos")]
+    streaming_ready: bool,
     #[cfg(target_os = "macos")]
     streaming_worker: Option<crate::macos_streaming_input::MacStreamingInput>,
     #[cfg(target_os = "macos")]
@@ -4788,24 +4793,12 @@ impl TauriTextInsertionSession {
     }
 
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
-        // Ordinary dictation follows current focus; only a composition owns a range.
-        if !self.context.insertion.composition_input { return Ok(()); }
-
-        // Mobile insertion is validated by its own IME/accessibility strategy;
-        // the desktop AX/UIA position capability is not available there.
-        #[cfg(mobile)]
-        { Ok(()) }
-        #[cfg(not(mobile))]
-        {
-        crate::selection::selection_insertion_target_is_current(&self.insertion_target)
+        crate::selection::reactivate_dictation_insertion_target(&self.insertion_target)
             .then_some(())
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidState,
-                    "original input target or position changed or is unavailable; no text was inserted",
-                ).target_unavailable()
-            })
-        }
+            .ok_or_else(|| BackendError::new(
+                BackendErrorCode::Platform,
+                "original text insertion target is unavailable",
+            ))
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
@@ -4934,11 +4927,25 @@ impl TauriTextInsertionSession {
                 ));
             }
         }
+        if let Err(error) = self.restore_insertion_target() {
+            // When the original target is unavailable, copy only — never paste or send keystrokes to the current focus.
+            #[cfg(target_os = "windows")]
+            if self.context.insertion.allow_non_tsf_fallback {
+                return self.copy_fallback(text).await;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                log::warn!("[core-adapter] copying transcript to clipboard: {error}");
+                return self.copy_fallback(text).await;
+            }
+            #[cfg(not(target_os = "macos"))]
+            return Err(error);
+        }
         #[cfg(target_os = "windows")]
         {
             let status = match self.context.insertion.windows_insertion_mode {
                 openless_core::shared_types::WindowsInsertionMode::Tsf => {
-                    let target = crate::selection::ime_target_for_selection(&self.insertion_target);
+                    let mut target = crate::windows_ime_target::capture_ime_submit_target();
                     let mut recovered = false;
                     let status = loop {
                         let request = crate::windows_ime_ipc::ImeSubmitRequest {
@@ -4993,6 +5000,7 @@ impl TauriTextInsertionSession {
                                     }
                                     return Err(error);
                                 }
+                                target = crate::windows_ime_target::capture_ime_submit_target();
                                 recovered = true;
                             }
                             Err(error) => {
@@ -5058,19 +5066,15 @@ impl TauriTextInsertionSession {
             let restore = self.context.insertion.restore_clipboard_after_paste;
             let shortcut = self.context.insertion.paste_shortcut;
             tauri::async_runtime::spawn_blocking(move || {
-                let inserter = crate::insertion::TextInserter::new();
+                // Stable ordinary paste treats successful dispatch as delivery on macOS.
+                // Keep the shared clipboard lease and restore protection for every app path.
+                let status = crate::insertion::TextInserter::new().insert(&text, restore, shortcut);
                 #[cfg(target_os = "macos")]
-                let status = {
-                    let mut delivery = crate::host_document::KeyboardDelivery::capture();
-                    inserter.insert_confirmed(&text, restore, shortcut, || {
-                        delivery.take().is_some_and(|mut delivery| {
-                            delivery.record_posted(&text, crate::types::MacosNewlineMode::ShiftReturn);
-                            matches!(delivery.finish(), crate::host_document::KeyboardDeliveryOutcome::Delivered)
-                        })
-                    })
+                let status = if status == crate::types::InsertStatus::PasteSent {
+                    crate::types::InsertStatus::Inserted
+                } else {
+                    status
                 };
-                #[cfg(not(target_os = "macos"))]
-                let status = inserter.insert(&text, restore, shortcut);
                 map_insert_status(status)
             })
             .await
@@ -5207,8 +5211,10 @@ fn replace_unwritten_target<T>(
 
 impl TextInsertionSession for TauriTextInsertionSession {
     fn supports_streaming(&self) -> bool {
-        // Capsule partials remain live; target writes stay in ordered finalization.
-        false
+        #[cfg(target_os = "macos")]
+        { self.streaming_ready }
+        #[cfg(not(target_os = "macos"))]
+        { cfg!(target_os = "windows") }
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {

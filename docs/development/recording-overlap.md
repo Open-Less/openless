@@ -1,6 +1,6 @@
 # 录音采集与后台后处理
 
-**2026-11-23 规则更新：普通听写新增文字向最终交付时的当前焦点输入，不冻结原输入框或光标，也不激活旧应用。开始时的应用、场景和风格仍冻结，用于请求路由。只有选区润色、翻译和修改既有内容的 voice-edit 才复核原目标、范围及原文。下文旧的普通听写范围限制已被本段覆盖；真机验收与受控回归分别记录。**
+**普通输入以已发布正式版 v2.0.2-tauri（962705d5）为准：开始录音时捕获目标，交付时尝试恢复该目标。macOS 恢复原应用后使用应用当前控件与光标；Windows 仍核对原窗口和控件。普通输入不冻结选区范围；选区润色、翻译和 voice-edit 继续复核原控件、完整原文和范围。详见[正式版普通输入契约](stable-input.md)。**
 
 普通听写在宿主确认录音设备停止后允许开始下一段。后台段复用原 `sessionId`，继续完成转写、润色、插入及历史写入。麦克风同一时刻仍只有一个采集拥有者。
 
@@ -31,9 +31,9 @@ Core 用同一条有序处理路径串行完成最终 ASR、润色与写入。�
 
 采集和本地推理分别拥有资源：`PipelineDictationEngine` 在麦克风已打开后通过宿主 task spawner 启动本地 ASR；模型加载或共享执行器等待期间，现有有界 PCM 缓冲保留音频。Sherpa 在线模型的每段仍有独立 `OnlineStream` 和 worker 队列，同一个缓存 recognizer 的建流、PCM 解码、分段、最终 flush 与销毁通过同一个执行锁串行；锁不覆盖整段会话寿命，也不覆盖润色或设备采集。后段可先采集并排队音频，前段解码让出执行器后继续输出本段原文。Sherpa 离线解码仍使用已有 permit，Foundry 仍使用已有 lifecycle/route 保护；实验性离线模型在原 `work` 锁上等待前次推理，而不是对重叠启动直接返回 Busy。旧 Sherpa 会话取消只清理自己的 worker/音频，不再设置运行时全局 prepare 取消标记。
 
-桌面原生键盘/输入源准备延后到最终写入，录音阶段不持有另一段的输入源或组合文本。胶囊流式原文保留；桌面目标输入框的润色文字在处理完成后交付，不在录音期间持续写入。其他宿主可以继续使用原有的准备时机，Core 的麦克风与后台资源仍分开登记。
+桌面原生键盘/输入源准备延后到本段取得有序处理锁之后、最终 ASR/润色之前，录音阶段不持有另一段的输入源或组合文本。胶囊流式原文保留；目标润色分块与 Windows TSF 组合按正式版偏好启用，但组合不会在等待前段的采集期间打开。准备采用该段停止时封存的上下文，保留 Shift 翻译选择。其他宿主保留原有准备时机。
 
-普通听写仍通过 CapturedTextTarget 捕获提示上下文，但 Tauri 插入适配器在最终处理队列内才确定实际输入目标。普通听写不调用旧范围拒写策略，不为完成旧段拉回焦点。Core 对延迟准备的插入资源关闭目标实时组合与分块写入；胶囊 ASR partial 保持实时。TSF、Unicode 与粘贴最终提交都留在同一最终处理锁内。选区服务仍沿既有 SelectionInsertionTarget、完整原文与范围验证执行，不受此策略变更影响。
+普通听写通过 CapturedTextTarget 同时冻结目标和提示上下文；Tauri 的原生准备仍在有序处理队列中执行。目标恢复失败时，macOS 仅复制结果，Windows 按已有非 TSF 回退开关仅复制或报错。选区服务仍使用独立的严格 SelectionInsertionTarget、完整原文和范围验证。
 
 安全写回的结果沿现有结果/错误类型返回：
 
@@ -47,9 +47,9 @@ Core 用同一条有序处理路径串行完成最终 ASR、润色与写入。�
 | 情况 | 最简安全行为 |
 | --- | --- |
 | 同一输入框连续两段 | 录音可以接续；前段完整交付后，后段才开始实际输入。 |
-| 普通听写处理中移动光标或切换输入框 | 最终向当前焦点输入；开始时捕获的应用仍决定本段提示与风格。 |
-| 两段来自不同应用 | 不抢焦点。每段轮到实际交付时向当前焦点输入，模型上下文各自冻结。 |
-| 处理中原窗口/输入框失效 | 拒绝向当前焦点写入，保留该段历史正文。控件身份不可验证也按此处理。 |
+| 普通听写处理中移动光标或切换输入框 | macOS 恢复原应用，使用其当前控件与光标；Windows 恢复原窗口并核对控件，不以原光标范围拒写。 |
+| 两段来自不同应用 | 每段按提交顺序恢复各自捕获的目标；上下文各自冻结。 |
+| 处理中原目标无法恢复 | 不向无关应用输入；按正式版复制回退或报错，历史保留结果。 |
 | 第一段成功、失败或取消时第二段仍在录音 | 只结算第一段；第二段麦克风、首尾帧、热键代次、静音检测、胶囊原文及取消令牌不变。迟到的旧录音故障同样拒绝。 |
 | 第一段很慢，第二段已完整录完 | 两段都在后台列表内，麦克风空闲，可以继续采集；第二段排队，不运行第二份不安全的本地模型。 |
 | 完成先后与提交先后 | 最终处理串行化，因此结果按提交顺序完成；取消某段可以提前终止它，但不会使其他段失效。 |
@@ -77,7 +77,7 @@ Classic 当前录音胶囊固定在宿主底部并位于前景；上一段处理
 | 请求使用冻结上下文 | `recording_overlap_tests.rs` → 生产 `providers::OpenAiChatPolisher` → 本机 HTTP 夹具 | 检查真实序列化的 system/user 消息与各段冻结上下文完全相同，包含捕获的光标材料；另行核对处理中改变全局语言不改变旧段语言快照。没有调用真实云模型。 |
 | 流式原文、语言菜单、多任务上下叠放 | `e2e/capsule-overlap.spec.ts`、`src/lib/capsuleLayout.test.ts` | Chromium 使用生产 React 组件和隔离宿主事件，核对固定身体位置、后景偏移 10px 与 20px 半遮、语言菜单开闭、流式原文、1→3→1 后台数量及定向取消；截图由测试输出。 |
 | native 事件与低内存胶囊 | `src-tauri/src/capsule_snapshot.rs`、`crates/openless-capsule`、`native-capsule` | native snapshot 的无 Tauri 回归、renderer/协议测试及 macOS 编译检查。没有宣称原生窗口在物理桌面实测。 |
-| 可信原目标与位置 | `selection.rs`、`selection/target_position.rs`、`host_document/{macos,windows}.rs`、`core_adapters.rs`；Core `tests/dictation_target_capture.rs` | 数值范围校验复用生产函数，在 Core 收尾夹具复现同控件移光标、移光标后第二段、同位置第二段、范围不可读四种情形，验证旧段零写入、历史正文/明确未插入状态和第二段独立交付；不是实际桌面控件实测。macOS 编译覆盖；Windows 分支需 Windows 构建/真机验收。 |
+| 普通输入与严格选区 | selection.rs、core_adapters.rs；Core tests/dictation_target_capture.rs | 普通输入恢复正式版的捕获目标语义，夹具覆盖开始期间切换应用、同应用光标移动、不可读范围和按序双段；选区仍保留完整原文与范围检查。本轮只做静态检查，新增 Rust 检查待云端执行。 |
 | 其他平台 | 共享 Core 同一采集/任务协议 | Linux、Android、HarmonyOS、iOS 没有在本机进行编译或设备验收；各自专用 UI 尚未增加桌面上下处理球体。不要把桌面 React/原生 helper 的证据外推到这些 UI。 |
 
 在应用目录可运行受影响检查：`cargo test --locked -p openless-core --lib api::tests::`、`dictation_engine::tests::`、`voice_session::tests::`，`cargo test --locked -p openless-core --test contract_2`，`cargo test --locked -p openless-capsule --features ui,host --lib`，以及 `cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test capsule_snapshot`。UI 使用 `OPENLESS_E2E_PREVIEW_PORT=5511 OPENLESS_E2E_FIXTURE_PORT=5512 npx playwright test e2e/capsule-overlap.spec.ts --project=chromium`，不使用用户的 5435 预览。

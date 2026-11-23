@@ -813,6 +813,18 @@ fn read_selection_for_validation() -> Option<String> {
 /// foreground window; restore the original target first, then run the strict selection validation
 /// above, avoiding a blind paste.
 pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
+    reactivate_insertion_target(target, true)
+}
+
+/// Ordinary dictation retains stable app-level macOS activation; selection replacement
+/// continues to require its captured control before the full source/range validation.
+pub(crate) fn reactivate_dictation_insertion_target(target: &SelectionInsertionTarget) -> bool {
+    reactivate_insertion_target(target, false)
+}
+
+fn reactivate_insertion_target(target: &SelectionInsertionTarget, strict_control: bool) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = strict_control;
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::HWND;
@@ -850,7 +862,7 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         // Do not reactivate it and sleep for 80ms on every delta; the caller
         // still validates the captured text control before posting keys.
         if current_front_app_pid() == Some(pid) {
-            return macos_target_is_current(captured, pid);
+            return !strict_control || macos_target_is_current(captured, pid);
         }
         // The preview window is OpenLess's own window; after confirm, focus must go back to the
         // original app before pasting. NSRunningApplication activate is best-effort, and some
@@ -863,7 +875,8 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             // foreground was stolen by another app; repeated calls are idempotent.
             activate_app_by_pid(pid);
             std::thread::sleep(Duration::from_millis(80));
-            if macos_target_is_current(captured, pid) {
+            if current_front_app_pid() == Some(pid)
+                && (!strict_control || macos_target_is_current(captured, pid)) {
                 return true;
             }
         }
