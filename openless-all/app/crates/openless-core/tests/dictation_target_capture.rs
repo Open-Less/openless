@@ -128,7 +128,7 @@ impl HostContextAdapter for FocusContextAdapter {
     }
 }
 
-struct FocusInserter { focus: Arc<Mutex<Focus>> }
+struct FocusInserter { focus: Arc<Mutex<Focus>>, target: Option<&'static str> }
 impl TextInserter for FocusInserter {
     fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
@@ -136,28 +136,27 @@ impl TextInserter for FocusInserter {
         let target = focus.current;
         focus.captured.push(target);
         Some(CapturedTextTarget {
-            inserter: Arc::new(Self { focus: self.focus.clone() }),
+            inserter: Arc::new(Self { focus: self.focus.clone(), target: Some(target) }),
             host_context: Arc::new(FocusContextAdapter { focus: self.focus.clone(), target }),
         })
     }
     fn begin(&self, _: SessionId, context: Arc<DictationContext>)
         -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
-        assert!(!context.insertion.streaming);
-        assert!(!context.insertion.composition_input);
+        let _ = context;
         let mut focus = self.focus.lock().unwrap();
-        let current = focus.current;
-        focus.prepared.push(current);
-        let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession { focus: self.focus.clone() });
+        let target = self.target.unwrap_or(focus.current);
+        focus.prepared.push(target);
+        let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession { focus: self.focus.clone(), target });
         Box::pin(async move { Ok(session) })
     }
 }
-struct FocusSession { focus: Arc<Mutex<Focus>> }
+struct FocusSession { focus: Arc<Mutex<Focus>>, target: &'static str }
 impl TextInsertionSession for FocusSession {
     fn write(&self, _: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
         panic!("ordinary dictation must not stream into the target")
     }
     fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
-        panic!("successful current-focus input must not use fallback")
+        panic!("successful restored-target input must not use fallback")
     }
     fn finish(&self, text: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
         let mut focus = self.focus.lock().unwrap();
@@ -165,8 +164,9 @@ impl TextInsertionSession for FocusSession {
             focus.delivered_positions.push(position);
             focus.position = Some((position.0 + text.encode_utf16().count() as u64, 0));
         }
-        let current = focus.current;
-        focus.delivered.push((current, text));
+        // Stable macOS restores the captured app, and uses its live caret/control.
+        focus.current = self.target;
+        focus.delivered.push((self.target, text));
         Box::pin(async { Ok(InsertOutcome::Inserted) })
     }
     fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> { Box::pin(async { Ok(()) }) }
@@ -218,6 +218,7 @@ impl Fixture {
         dependencies.dictation_engine = build_engine(credentials.clone());
         dependencies.text_inserter = Arc::new(FocusInserter {
             focus: focus.clone(),
+            target: None,
         });
         let backend = Arc::new(
             OpenLessBackend::new(
@@ -268,7 +269,7 @@ async fn start(backend: Arc<OpenLessBackend>, route: u8) -> Result<SessionId, Ba
 }
 
 #[tokio::test]
-async fn every_dictation_entry_freezes_prompt_app_but_delivers_to_current_focus() {
+async fn every_dictation_entry_restores_stable_capture_time_app() {
     for route in 0..3 {
         let fixture = Fixture::new().await;
         let starting = tokio::spawn(start(fixture.backend.clone(), route));
@@ -280,12 +281,12 @@ async fn every_dictation_entry_freezes_prompt_app_but_delivers_to_current_focus(
         let focus = fixture.focus.lock().unwrap();
         assert_eq!(
             focus.delivered,
-            vec![("B", "spoken".to_string())],
+            vec![("A", "spoken".to_string())],
             "route {route}"
         );
         assert_eq!(focus.captured, vec!["A"]);
         assert_eq!(focus.context_captured, vec!["A"]);
-        assert_eq!(focus.prepared, vec!["B"]);
+        assert_eq!(focus.prepared, vec!["A"]);
     }
 }
 
@@ -332,7 +333,7 @@ async fn no_insertion_skips_target_capture_and_native_preparation() {
 }
 
 #[tokio::test]
-async fn ordinary_delayed_result_follows_current_focus_and_caret() {
+async fn ordinary_delayed_result_allows_stable_live_caret_and_ordered_sessions() {
     use openless_core::{DictationEngine, EngineFailure, EngineProgressSink, EngineResult};
 
     struct DelayedResult {
@@ -383,6 +384,7 @@ async fn ordinary_delayed_result_follows_current_focus_and_caret() {
         tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
         fixture.focus.lock().unwrap().position = moved;
         let second = if next_capture {
+            fixture.focus.lock().unwrap().current = "B";
             Some(fixture.backend.start_dictation().await.unwrap())
         } else {
             None
@@ -391,10 +393,14 @@ async fn ordinary_delayed_result_follows_current_focus_and_caret() {
         let result = stopping.await.unwrap().unwrap();
         assert_eq!(result.session_id, first);
         assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
+        assert_eq!(fixture.focus.lock().unwrap().delivered_positions,
+            moved.into_iter().collect::<Vec<_>>());
         if let Some(second) = second {
             assert_eq!(fixture.backend.snapshot().dictation.session_id, Some(second));
             fixture.backend.stop_dictation_session(second).await.unwrap();
-            assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 2);
+            assert_eq!(fixture.focus.lock().unwrap().delivered, [
+                ("A", "retained result".into()), ("B", "retained result".into()),
+            ]);
         }
         assert!(fixture.backend.list_history().unwrap().iter().all(|row| row.error_code.is_none()));
     }
@@ -707,8 +713,9 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
 }
 
 #[tokio::test]
-async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() {
+async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    const USER_EXAMPLE: &str = include_str!("fixtures/intent-input-comparison.txt");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -761,7 +768,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
         Arc::new(PipelineDictationEngine::new(
             Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
             Arc::new(FixtureTranscriptionEngine::successful(
-                "spoken test transcript",
+                USER_EXAMPLE,
                 500,
             )),
             Arc::new(SharedCloudTextPolisher::new(credentials)),
@@ -827,7 +834,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
         assert_eq!(system.matches("当前应用：").count(), 1);
         assert!(!system.contains("# 输入场景参考"));
         assert!(system.find("本次输入场景：").unwrap() < system.find(marker).unwrap());
-        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
+        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains(USER_EXAMPLE));
         assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         assert!(system.find(marker).unwrap() < system.find(openless_core::DICTATION_REVISION_RULES).unwrap());
         if marker == "CODING-STYLE" {
@@ -865,7 +872,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
     assert!(first_system.contains("应用主要用途：fixture editor context"));
     assert!(first_system.contains("当前输入位置：代码编辑区（可信控件标签）"));
     expect_request(first_payload, "CODING-STYLE");
-    assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "WeChat");
+    assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "VS Code");
     assert_eq!(
         backend.app_style_routing().unwrap().apps[0].app.name,
         "VS Code"
@@ -1003,8 +1010,9 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
     backend.update_style_pack(notes.clone()).unwrap();
     let mut assigned_payload = serde_json::Value::Null;
     for _ in 0..3 {
+        fixture.focus.lock().unwrap().current = "Notes";
         backend.start_dictation().await.unwrap();
-        // Switching windows preserves the frozen style, while delivery follows current focus.
+        // Stable ordinary input restores the capture-time app without rejecting a moved caret.
         fixture.focus.lock().unwrap().current = "WeChat";
         let result = backend.stop_dictation().await.unwrap();
         let payload = payloads.try_recv().unwrap();
@@ -1017,7 +1025,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
         assert_eq!(result.polished_text, "一一一");
         assert_eq!(
             fixture.focus.lock().unwrap().delivered.last().unwrap(),
-            &("WeChat", "一一一".into())
+            &("Notes", "一一一".into())
         );
         let history = backend.list_history().unwrap();
         let entry = history
@@ -1052,7 +1060,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
     backend.start_dictation().await.unwrap();
     assert_eq!(
         backend.stop_dictation().await.unwrap().polished_text,
-        "spoken test transcript"
+        USER_EXAMPLE
     );
     assert!(
         payloads.try_recv().is_err(),
@@ -1116,23 +1124,23 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
                 .await
                 .unwrap()
         };
-        assert_eq!(result.polished_text, "spoken test transcript");
+        assert_eq!(result.polished_text, USER_EXAMPLE);
         assert!(
             payloads.try_recv().is_err(),
             "unexpected request after cancellation, live={live}"
         );
         assert_eq!(
             fixture.focus.lock().unwrap().delivered.last().unwrap(),
-            &("VS Code", "spoken test transcript".into())
+            &("VS Code", USER_EXAMPLE.into())
         );
         let history = backend.list_history().unwrap();
         let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
         assert!(!entry.translation_active);
         assert_eq!(entry.style_pack_id.as_deref(), Some("builtin.raw"));
-        assert_eq!(entry.final_text, "spoken test transcript");
+        assert_eq!(entry.final_text, USER_EXAMPLE);
     }
     backend.start_dictation().await.unwrap();
-    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, "spoken test transcript");
+    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, USER_EXAMPLE);
     assert!(payloads.try_recv().is_err(), "profile must not turn canonical Raw into a request");
     let custom_raw = backend
         .create_style_pack(StylePack {
@@ -1207,30 +1215,42 @@ async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() 
     assert_eq!(backend.get_preferences().active_style_pack_id, current.id);
     let local_file =
         std::fs::read_to_string(fixture.directory.join("app-style-routing.json")).unwrap();
-    assert!(!local_file.contains("spoken test transcript"));
+    assert!(!local_file.contains(USER_EXAMPLE));
     assert!(!local_file.contains("polished"));
+    let mut alias = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+    alias.id = "fixture.official-alias".into();
+    alias.kind = openless_core::StylePackKind::Imported;
+    let alias = backend.create_style_pack(alias).unwrap();
     // Exercise the production start -> ASR -> request serialization path.
     // Fixture outputs only prove routing/serialization, never model semantics.
-    for id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID, &current.id] {
+    for id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID, &alias.id, &current.id] {
         for translation_requested in [false, true] {
             backend.start_dictation_with_options(DictationStartOptions {
                 style_pack_id: Some(id.into()),
                 translation_requested,
                 ..Default::default()
             }).await.unwrap();
-            backend.stop_dictation().await.unwrap();
+            let result = backend.stop_dictation().await.unwrap();
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.iter().find(|row| row.id == result.session_id.to_string())
+                .unwrap().style_pack_id.as_deref(), Some(id));
             let payload = payloads.try_recv().unwrap();
             let system = payload["messages"][0]["content"].as_str().unwrap();
             assert!(system.starts_with("当前应用：VS Code"));
             let pack = backend.get_style_pack(id).unwrap();
             assert!(system.find("本次输入场景：").unwrap() < system.find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim()).unwrap());
             assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
-            if id == openless_core::BUILTIN_INTENT_ID {
+            if id == openless_core::BUILTIN_INTENT_ID || id == alias.id {
                 assert!(pack.prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
-                assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[])));
+                assert_eq!(pack.version, "1.3.0");
+                assert_eq!(pack.prompt, pack.selection_prompt);
+                let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
+                assert_eq!(system.matches(body.as_str()).count(), 1);
+                assert!(system.contains("同一个整体问题中分别表达目标"));
+                assert!(!system.contains("输出会原样替换该选区"));
                 assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             }
-            assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("spoken test transcript"));
+            assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains(USER_EXAMPLE));
             if translation_requested {
                 assert!(system.contains("[[OPENLESS_TRANSLATION]]"));
             }

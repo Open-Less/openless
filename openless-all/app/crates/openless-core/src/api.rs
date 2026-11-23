@@ -8388,18 +8388,10 @@ impl OpenLessBackend {
         }
         if context.insertion.enabled {
             let defer_preparation = inserter.defer_preparation_until_stop();
-            // Deferred desktop delivery cannot open a live composition or a
-            // chunk writer while a predecessor is still delivering.
-            let insertion_context = if defer_preparation {
-                let mut insertion = (*context).clone();
-                insertion.insertion.streaming = false;
-                insertion.insertion.composition_input = false;
-                Arc::new(insertion)
-            } else {
-                Arc::clone(&context)
-            };
+            let insertion_context = Arc::clone(&context);
             let task_spawner = Arc::clone(&self.deps.task_spawner);
             let resources = Arc::clone(&starting_resources);
+            let preparation_state = Arc::clone(&self.state);
             let preparing: futures_util::future::BoxFuture<
                 'static,
                 Result<Arc<ActiveTextInsertion>, BackendError>,
@@ -8407,6 +8399,15 @@ impl OpenLessBackend {
                 if resources.cancel.is_cancelled() {
                     return Err(VoiceCaptureLifecycle::cancelled_error());
                 }
+                // Shift and stop options are sealed before deferred preparation.
+                // Use this session's submitted context, never the next capture's.
+                let insertion_context = if defer_preparation {
+                    preparation_state.read().expect("backend state lock poisoned")
+                        .session_context(session_id).cloned()
+                        .ok_or_else(VoiceCaptureLifecycle::cancelled_error)?
+                } else {
+                    insertion_context
+                };
                 let platform = inserter
                     .begin(session_id, Arc::clone(&insertion_context))
                     .await?;
@@ -8840,6 +8841,15 @@ impl OpenLessBackend {
         // Queue final ASR/polish/insertion work, including unsafe local models.
         // Waiting here never owns the physical recorder.
         let _processing = self.dictation_processing_gate.lock().await;
+        // Prepare the captured destination only after the predecessor has fully
+        // delivered. This enables stable polish streaming/TSF composition without
+        // acquiring native input resources during an overlapping recording.
+        let preparation = self.text_insertions.lock()
+            .expect("text insertion registry lock poisoned").get(&session_id).cloned();
+        if let Some(preparation) = preparation {
+            // Final insertion reports preparation errors after retaining the transcript.
+            let _ = preparation.await;
+        }
         let progress = self.engine_progress_sink();
         let resources = self.voice_sessions.hold_resources(session_id)?;
         let finishing = self.deps.dictation_engine.finish(session_id, progress);

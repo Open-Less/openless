@@ -789,13 +789,13 @@ fn v1_projection_fixture_matches_released_1_1_and_restores_only_equivalent_conte
 #[test]
 fn intent_repair_preserves_exact_upstream_prefix_with_one_final_suffix_and_installs_offline() {
     use crate::style_packs::{
-        builtin_intent_pack, dictation_style_prompt, original_intent_pack, StylePackKind,
+        released_intent_v1_2_pack, dictation_style_prompt, original_intent_pack, StylePackKind,
         DICTATION_REVISION_RULES,
     };
     let original = original_intent_pack();
     assert_eq!(original.prompt.chars().count(), 5671);
     assert_eq!(original.selection_prompt.chars().count(), 3494);
-    let repaired = builtin_intent_pack();
+    let repaired = released_intent_v1_2_pack();
     let suffix = format!("\n\n{DICTATION_REVISION_RULES}");
     for (actual, upstream) in [
         (&repaired.prompt, &original.prompt),
@@ -810,7 +810,7 @@ fn intent_repair_preserves_exact_upstream_prefix_with_one_final_suffix_and_insta
     expected.selection_prompt.push_str(&suffix);
     expected.kind = StylePackKind::Builtin;
     expected.version = "1.2.0".into();
-    assert_eq!(builtin_intent_pack(), expected);
+    assert_eq!(released_intent_v1_2_pack(), expected);
     let root = TestDir::new("intent-repair-install");
     let store = StylePackStore::at_data_dir(root.path()).unwrap();
     assert_eq!(
@@ -819,19 +819,20 @@ fn intent_repair_preserves_exact_upstream_prefix_with_one_final_suffix_and_insta
             .unwrap()
             .iter()
             .find(|pack| pack.id == expected.id),
-        Some(&expected)
+        Some(&crate::style_packs::builtin_intent_pack())
     );
 }
 
 #[test]
 fn intent_repair_upgrades_known_releases_and_keeps_local_identity() {
     use crate::style_packs::{
-        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, StylePackKind,
+        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, released_intent_v1_2_pack, StylePackKind,
         BUILTIN_INTENT_ID,
     };
     for release in [
         original_intent_pack(),
         released_intent_v1_1_pack(),
+        released_intent_v1_2_pack(),
         builtin_intent_pack(),
     ] {
         for alias in [false, true] {
@@ -905,11 +906,12 @@ fn intent_repair_upgrades_known_releases_and_keeps_local_identity() {
 #[test]
 fn intent_repair_never_overwrites_edited_or_unproven_releases() {
     use crate::style_packs::{
-        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, StylePackKind,
+        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, released_intent_v1_2_pack, StylePackKind,
     };
     for release in [
         original_intent_pack(),
         released_intent_v1_1_pack(),
+        released_intent_v1_2_pack(),
         builtin_intent_pack(),
     ] {
         for alias in [false, true] {
@@ -956,4 +958,68 @@ fn intent_repair_never_overwrites_edited_or_unproven_releases() {
             }
         }
     }
+}
+
+#[test]
+fn shared_intent_installs_for_independent_stores_and_keeps_one_final_revision_tail() {
+    use crate::style_packs::{builtin_intent_pack, DICTATION_REVISION_RULES};
+    let expected = builtin_intent_pack();
+    assert_eq!(expected.version, "1.3.0");
+    assert_eq!(expected.prompt, expected.selection_prompt);
+    let body = include_str!("builtin_styles/intent-reconstruction-shared-v1.md").trim_end();
+    assert_eq!(expected.prompt, format!("{body}\n\n{DICTATION_REVISION_RULES}"));
+    assert_eq!(expected.prompt.matches(DICTATION_REVISION_RULES).count(), 1);
+    assert!(body.contains("<raw_transcript>") && body.contains("<selected_text>"));
+    assert!(body.contains("同一个整体问题中分别表达目标"));
+    assert!(body.contains("使用自然正文，不强行凑五层或字母分项"));
+    for _ in 0..2 {
+        let root = TestDir::new("shared-intent-new-user");
+        let store = StylePackStore::at_data_dir(root.path()).unwrap();
+        assert_eq!(store.get(&expected.id).unwrap(), expected);
+        let before = fs::read(root.path().join("style-packs.json")).unwrap();
+        StylePackStore::at_data_dir(root.path()).unwrap();
+        assert_eq!(fs::read(root.path().join("style-packs.json")).unwrap(), before);
+    }
+}
+
+#[test]
+fn shared_intent_upgrades_all_proven_duplicates_without_remapping_bindings_or_edits() {
+    use crate::style_packs::{builtin_intent_pack, released_intent_v1_2_pack, StylePackKind};
+    let root = TestDir::new("shared-intent-duplicates");
+    let canonical = released_intent_v1_2_pack();
+    let mut alias = canonical.clone();
+    alias.id = "market.keep-id".into();
+    alias.kind = StylePackKind::Imported;
+    alias.name = "Renamed market copy".into();
+    let mut edited = alias.clone();
+    edited.id = "market.user-edited".into();
+    edited.selection_prompt.push_str("\nUser-authored selection format");
+    let source = vec![canonical.clone(), alias.clone(), edited.clone()];
+    fs::write(root.path().join("style-packs.json"), serde_json::to_vec(&source).unwrap()).unwrap();
+    let routing = serde_json::json!({"categories":{"coding": alias.id}, "apps":{}});
+    let routing_bytes = serde_json::to_vec(&routing).unwrap();
+    fs::write(root.path().join("app-style-routing.json"), &routing_bytes).unwrap();
+    let mut prefs = UserPreferences {
+        active_style_pack_id: alias.id.clone(),
+        selection_polish_style_pack_id: canonical.id.clone(),
+        ..Default::default()
+    };
+    let store = StylePackStore::at_data_dir_with_preferences(root.path(), &prefs).unwrap();
+    let packs = store.list().unwrap();
+    let expected = builtin_intent_pack();
+    for id in [&canonical.id, &alias.id] {
+        let pack = store.get(id).unwrap();
+        assert_eq!(pack.version, expected.version);
+        assert_eq!(pack.prompt, expected.prompt);
+        assert_eq!(pack.selection_prompt, expected.prompt);
+    }
+    assert_eq!(store.get(&edited.id).unwrap(), edited);
+    assert_eq!(store.get(&alias.id).unwrap().name, alias.name);
+    sync_style_pack_preferences(&mut prefs, &packs);
+    assert_eq!(prefs.active_style_pack_id, alias.id);
+    assert_eq!(prefs.selection_polish_style_pack_id, canonical.id);
+    assert_eq!(fs::read(root.path().join("app-style-routing.json")).unwrap(), routing_bytes);
+    let before = fs::read(root.path().join("style-packs.json")).unwrap();
+    StylePackStore::at_data_dir_with_preferences(root.path(), &prefs).unwrap();
+    assert_eq!(fs::read(root.path().join("style-packs.json")).unwrap(), before);
 }

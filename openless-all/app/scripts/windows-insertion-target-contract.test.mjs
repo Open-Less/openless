@@ -28,46 +28,30 @@ assert.match(
   'partially dispatched Unicode input must remain uncertain instead of becoming copy-only fallback',
 );
 
-// Ordinary dictation adds text at delivery-time focus. Selection replacement below
-// still validates its original control, range and complete source text.
+// Published stable captures its destination before credentials, then restores it.
+// Native preparation stays deferred so overlapping recordings cannot own input state.
 const ordinaryInserter = adapters.match(
   /impl CoreTextInserter for TauriTextInserter \{[\s\S]*?(?=\n#\[derive\(Clone\)\]\nstruct TauriTextInsertionSession)/,
 )?.[0];
-assert.ok(ordinaryInserter, 'the ordinary dictation inserter must exist');
-assert.match(
-  ordinaryInserter,
-  /fn defer_preparation_until_stop\(&self\) -> bool\s*\{\s*true\s*\}/,
-  'ordinary target preparation must remain inside ordered finalization',
-);
+assert.ok(ordinaryInserter);
+assert.match(ordinaryInserter,
+  /fn defer_preparation_until_stop\(&self\) -> bool\s*\{\s*true\s*\}/);
 const captureTarget = ordinaryInserter.match(/fn capture_target\([\s\S]*?(?=\n    fn begin)/)?.[0];
-assert.match(
-  captureTarget ?? '',
-  /insertion_target: None/,
-  'ordinary capture must not freeze a future write destination',
-);
-assert.doesNotMatch(
-  captureTarget ?? '',
-  /capture_dictation_insertion_target/,
-  'ordinary capture must not acquire the old strict position anchor',
-);
-assert.match(
-  ordinaryInserter,
-  /insertion_target\s*\.unwrap_or_else\(crate::selection::capture_selection_insertion_target\)/,
-  'the finalization adapter must capture the delivery-time focus',
-);
+assert.match(captureTarget ?? '', /insertion_target: Some\(insertion_target.clone\(\)\)/);
+assert.match(captureTarget ?? '', /capture_ime_submit_target/);
+assert.doesNotMatch(captureTarget ?? '', /capture_dictation_insertion_target/);
 const ordinaryTargetCheck = adapters.match(
   /fn restore_insertion_target\([\s\S]*?(?=\n    async fn write_chunk)/,
 )?.[0];
-assert.match(
-  ordinaryTargetCheck ?? '',
-  /if !self\.context\.insertion\.composition_input\s*\{\s*return Ok\(\(\)\);\s*\}/,
-  'ordinary added text must bypass original-control and caret rejection',
-);
-assert.doesNotMatch(
-  ordinaryInserter,
-  /reactivate_selection_insertion_target/,
-  'ordinary input must never reactivate an old application',
-);
+assert.match(ordinaryTargetCheck ?? '', /reactivate_dictation_insertion_target/);
+assert.match(finalInsert, /if let Err\(error\) = self.restore_insertion_target\(\)/);
+assert.match(finalInsert, /let mut target = crate::windows_ime_target::capture_ime_submit_target/);
+assert.doesNotMatch(finalInsert, /KeyboardDelivery::capture|insert_confirmed/,
+  'stable ordinary paste must not depend on an AX receipt');
+assert.match(finalInsert, /InsertStatus::PasteSent[\s\S]*?InsertStatus::Inserted/,
+  'macOS stable treats a successful paste dispatch as inserted');
+assert.match(adapters, /fn supports_streaming[\s\S]*?self.streaming_ready/,
+  'native polish chunks must remain enabled when stable preferences permit them');
 assert.match(
   finalInsert,
   /InsertStatus::Failed\s*&& self\.context\.insertion\.allow_non_tsf_fallback[\s\S]*?windows_unicode_fallback/,
@@ -149,7 +133,7 @@ assert.match(
   'selection target validation must retain the exact live-range comparison',
 );
 const restoreTarget = selection.match(
-  /pub\(crate\) fn reactivate_selection_insertion_target[\s\S]*?(?=\n    #\[cfg\(target_os = "macos"\)\])/,
+  /fn reactivate_insertion_target[\s\S]*?(?=\n    #\[cfg\(target_os = "macos"\)\])/,
 )?.[0];
 assert.ok(restoreTarget, 'the production Windows target restore path must exist');
 assert.match(

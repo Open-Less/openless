@@ -139,9 +139,8 @@ pub struct StylePack {
     pub origin_author_login: Option<String>,
 }
 
-/// The two workflows deliberately read different prompt slots from one pack.
-/// Keeping this choice in one helper prevents a UI-only split from drifting
-/// away from the prompt that is actually sent to the LLM.
+/// Operations select their respective authored slots. The official intent pack
+/// stores the same body in both; independently authored custom slots stay separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StylePromptKind {
     DictationAsr,
@@ -481,7 +480,7 @@ pub(crate) fn original_intent_pack() -> StylePack {
         .expect("bundled upstream style pack")
 }
 
-pub fn builtin_intent_pack() -> StylePack {
+pub(crate) fn released_intent_v1_2_pack() -> StylePack {
     let mut pack = original_intent_pack();
     pack.kind = StylePackKind::Builtin;
     // Distribution repair version; preserve the full upstream text before the requested suffix.
@@ -489,6 +488,18 @@ pub fn builtin_intent_pack() -> StylePack {
     pack.prompt.push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
     pack.selection_prompt
         .push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
+    pack
+}
+
+/// Both ordinary operations read one canonical authored body. The operation-specific
+/// envelopes and translation protocols remain in the existing request composer.
+pub fn builtin_intent_pack() -> StylePack {
+    let mut pack = original_intent_pack();
+    pack.kind = StylePackKind::Builtin;
+    pack.version = "1.3.0".into();
+    let body = include_str!("builtin_styles/intent-reconstruction-shared-v1.md").trim_end();
+    pack.prompt = format!("{body}\n\n{DICTATION_REVISION_RULES}");
+    pack.selection_prompt = pack.prompt.clone();
     pack
 }
 
@@ -569,6 +580,7 @@ pub(crate) fn is_known_intent_release(pack: &StylePack) -> bool {
     [
         original_intent_pack(),
         released_intent_v1_1_pack(),
+        released_intent_v1_2_pack(),
         builtin_intent_pack(),
     ]
     .iter()

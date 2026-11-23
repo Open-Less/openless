@@ -1071,8 +1071,11 @@ async fn original_persistence_failure_never_copies_calls_the_model_or_writes() {
 
 #[tokio::test]
 async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams() {
+    const USER_EXAMPLE: &str = include_str!("fixtures/intent-input-comparison.txt");
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     for (length, response, status, succeeds, translation) in [
+        (0, "", "200 OK", true, false),
+        (1, "", "200 OK", true, false),
         (40, "data: {\"choices\":[{\"delta\":{\"content\":\"complete result\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "200 OK", true, false),
         (4001, "data: {\"choices\":[{\"delta\":{\"content\":\"complete result\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "200 OK", true, false),
         (18001, "data: {\"choices\":[{\"delta\":{\"content\":\"complete result\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "200 OK", true, false),
@@ -1081,7 +1084,9 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         (18001, "{\"error\":\"context_length_exceeded\"}", "400 Bad Request", false, false),
         (18001, "", "200 OK", true, true),
     ] {
-        let original = format!(" \t{} UNIQUE_MIDDLE_全文 {}\n ", "字".repeat(length / 2), "尾".repeat(length / 2));
+        let original = if length <= 1 { USER_EXAMPLE.to_owned() } else {
+            format!(" \t{} UNIQUE_MIDDLE_全文 {}\n ", "字".repeat(length / 2), "尾".repeat(length / 2))
+        };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
         let complete_result = format!(" \t{} RESULT_MIDDLE {}\n ", "成".repeat(9000), "果".repeat(9000));
@@ -1120,7 +1125,13 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         let (backend, directory) = backend_with_selection_parts(runtime.clone(), polisher, credentials);
         let mut preferences = backend.get_preferences();
         preferences.active_llm_provider = "ark".into();
-        if !translation { preferences.selection_polish_style_pack_id = openless_core::BUILTIN_INTENT_ID.into(); }
+        let selected_id = if length == 1 {
+            let mut alias = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+            alias.id = "fixture.selection-official-alias".into();
+            alias.kind = openless_core::StylePackKind::Imported;
+            backend.create_style_pack(alias).unwrap().id
+        } else { openless_core::BUILTIN_INTENT_ID.into() };
+        if !translation { preferences.selection_polish_style_pack_id = selected_id.clone(); }
         preferences.multimodal_pipeline_enabled = false;
         preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
         write_preferences(&backend, preferences);
@@ -1134,18 +1145,28 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         let request = server.await.unwrap();
         if !translation {
             let system = request["messages"][0]["content"].as_str().unwrap();
-            let pack = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+            let pack = backend.get_style_pack(&selected_id).unwrap();
             assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.selection_prompt, &[])));
             assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             assert!(pack.selection_prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
+            assert_eq!(pack.version, "1.3.0");
+            assert_eq!(pack.prompt, pack.selection_prompt);
+            let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
+            assert_eq!(system.matches(body.as_str()).count(), 1);
+            assert!(system.contains("同一个整体问题中分别表达目标"));
+            assert!(!system.contains("输出会原样替换该选区"));
             assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         }
         assert_eq!(request["messages"][1]["content"], openless_core::prompts::selection_user_prompt(&original));
-        assert!(request["messages"][1]["content"].as_str().unwrap().contains("UNIQUE_MIDDLE_全文"));
+        assert!(request["messages"][1]["content"].as_str().unwrap().contains(
+            if length <= 1 { USER_EXAMPLE } else { "UNIQUE_MIDDLE_全文" }));
         assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
         let history = backend.list_history().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].raw_transcript, original);
+        if !translation {
+            assert_eq!(history[0].style_pack_id.as_deref(), Some(selected_id.as_str()));
+        }
         assert_eq!(runtime.applied().len(), usize::from(succeeds && !translation));
         if succeeds { assert_eq!(history[0].final_text, if translation { complete_result.trim() } else { &complete_result }); }
         backend.shutdown().await.unwrap();

@@ -943,34 +943,34 @@ fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
     };
     let mut changed = false;
     for builtin in builtin_style_packs() {
-        let index = packs
-            .iter()
-            .position(|pack| pack.id == builtin.id)
-            .or_else(|| {
-                packs.iter().position(|pack| {
-                    builtin.id == BUILTIN_INTENT_ID && is_known_intent_release(pack)
-                })
-            });
-        if let Some(index) = index {
-            let local = &mut packs[index];
-            let intent = builtin.id == BUILTIN_INTENT_ID;
-            let released = if intent {
-                is_known_intent_release(local)
-            } else {
-                local.kind == StylePackKind::Builtin && released_dictation_version(local).is_some()
-            };
-            let before_kind = local.kind;
-            normalize_synced_builtin_pack(local);
-            changed |= before_kind != local.kind;
-            if version_newer(&builtin.version, &local.version) && released {
-                local.version = builtin.version;
-                local.prompt = builtin.prompt;
-                if intent {
-                    local.selection_prompt = builtin.selection_prompt;
-                    local.kind = StylePackKind::Builtin;
+        // Every proven alias upgrades in place, even if a canonical copy also exists.
+        // Never merge IDs: preferences and app/category references keep their entity.
+        let indices: Vec<usize> = packs.iter().enumerate()
+            .filter(|(_, pack)| pack.id == builtin.id
+                || builtin.id == BUILTIN_INTENT_ID && is_known_intent_release(pack))
+            .map(|(index, _)| index).collect();
+        if !indices.is_empty() {
+            for index in indices {
+                let local = &mut packs[index];
+                let intent = builtin.id == BUILTIN_INTENT_ID;
+                let released = if intent {
+                    is_known_intent_release(local)
+                } else {
+                    local.kind == StylePackKind::Builtin && released_dictation_version(local).is_some()
+                };
+                let before_kind = local.kind;
+                normalize_synced_builtin_pack(local);
+                changed |= before_kind != local.kind;
+                if version_newer(&builtin.version, &local.version) && released {
+                    local.version = builtin.version.clone();
+                    local.prompt = builtin.prompt.clone();
+                    if intent {
+                        local.selection_prompt = builtin.selection_prompt.clone();
+                        local.kind = StylePackKind::Builtin;
+                    }
+                    local.updated_at = Some(chrono::Utc::now().to_rfc3339());
+                    changed = true;
                 }
-                local.updated_at = Some(chrono::Utc::now().to_rfc3339());
-                changed = true;
             }
         } else {
             packs.push(builtin);

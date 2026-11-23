@@ -350,7 +350,7 @@ fn backup_error_releases_delivery_gate_without_writing_and_next_copy_works() {
 }
 
 #[test]
-fn ordinary_unconfirmed_paste_retains_complete_text_and_new_copy_wins() {
+fn explicit_receipt_preserves_unconfirmed_result_and_new_copy_wins() {
     for confirmed in [false, true] {
         let board = Arc::new(Mutex::new(Board::default()));
         external_copy(&board, "old clipboard");
@@ -410,4 +410,22 @@ fn a_successful_set_without_retained_text_is_not_a_copy_receipt() {
         }
     }
     assert!(clipboard_delivery::copy_with(&mut Lost, "complete result", || true).is_err());
+}
+
+
+#[test]
+fn stable_ordinary_paste_restores_on_dispatch_without_requiring_a_receipt() {
+    for restore in [false, true] {
+        let board = Arc::new(Mutex::new(Board::default()));
+        external_copy(&board, "old clipboard");
+        let mut clipboard = Clipboard::new(&board);
+        assert_eq!(clipboard_delivery::insert_with(
+            &mut clipboard, "完整 result\n尾", restore, None, || true,
+        ), InsertStatus::PasteSent);
+        let board = board.lock().unwrap();
+        assert_eq!(board.dispatched, ["完整 result\n尾"]);
+        assert_eq!(board.consumed, ["完整 result\n尾"]);
+        assert_eq!(board.text.as_deref(),
+            Some(if restore { "old clipboard" } else { "完整 result\n尾" }));
+    }
 }
