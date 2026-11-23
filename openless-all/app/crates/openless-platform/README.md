@@ -65,6 +65,7 @@ src/
     ipc.rs            WM_COPYDATA 提交与查询轮询
     session.rs        插入会话状态机
   selection/
+    target.rs           选区插入目标（Windows 焦点指纹 / macOS 前台应用）+ 复核结果
     windows_target.rs   Windows 焦点指纹（前台/焦点 HWND + pid/tid）
   input/
     mod.rs            输入能力门面

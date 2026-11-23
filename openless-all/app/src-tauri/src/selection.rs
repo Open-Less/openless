@@ -59,49 +59,10 @@ pub struct SelectionContext {
 /// Cmd+C fallback) and compares it to the captured text — if the user moved to
 /// another app or changed the selection during the cloud request, we refuse to
 /// paste.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct SelectionInsertionTarget {
-    #[cfg(target_os = "windows")]
-    windows: Option<WindowsSelectionTarget>,
-    #[cfg(target_os = "macos")]
-    macos: Option<MacosSelectionTarget>,
-}
-
-#[cfg(target_os = "windows")]
-use openless_platform::selection::windows_target::WindowsSelectionTarget;
-
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone)]
-struct MacosSelectionTarget {
-    /// Foreground app at capture time (NSWorkspace frontmostApplication, `name (bundle)` form).
-    front_app: Option<String>,
-    /// Bundle identifier captured with the foreground app, used by the host-document safety gate.
-    bundle_id: Option<String>,
-    /// Foreground app pid at capture time — used to return focus to the original app after the
-    /// preview is confirmed.
-    front_app_pid: Option<i32>,
-}
-
-/// Result of the final target/selection revalidation immediately before a
-/// Selection Polish result could be pasted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectionInsertionTargetValidation {
-    Valid,
-    TargetUnavailable,
-    TargetChanged,
-    SelectionChanged,
-}
-
-impl SelectionInsertionTargetValidation {
-    pub(crate) const fn error_code(self) -> Option<&'static str> {
-        match self {
-            Self::Valid => None,
-            Self::TargetUnavailable => Some("selectionPolishTargetUnavailable"),
-            Self::TargetChanged => Some("selectionPolishTargetChanged"),
-            Self::SelectionChanged => Some("selectionPolishSelectionChanged"),
-        }
-    }
-}
+// 插入目标指纹与校验结果由平台层定义（Windows: 前台/焦点 HWND + pid/tid；macOS: 前台应用）。
+pub(crate) use openless_platform::selection::target::{
+    MacosSelectionTarget, SelectionInsertionTarget, SelectionInsertionTargetValidation,
+};
 
 pub struct SelectionCaptureOutcome {
     pub selection: Option<SelectionContext>,
@@ -391,31 +352,7 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
 /// Check that the foreground/focused target fingerprint has not changed since capture.
 /// Windows callers use this as a document-read fence, before and after synchronous UIA calls.
 pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionTarget) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let Some(captured) = target.windows else {
-            return false;
-        };
-        return openless_platform::selection::windows_target::capture().as_ref() == Some(&captured);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let Some(captured_pid) = target
-            .macos
-            .as_ref()
-            .and_then(|captured| captured.front_app_pid)
-        else {
-            return false;
-        };
-        return current_front_app_pid() == Some(captured_pid);
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let _ = target;
-        true
-    }
+    openless_platform::selection::target::is_current(target)
 }
 
 /// Revalidate the target and the selected text immediately before insertion.
@@ -1422,6 +1359,8 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
+    use openless_platform::selection::windows_target::WindowsSelectionTarget;
+
     fn windows_target(seed: usize) -> WindowsSelectionTarget {
         WindowsSelectionTarget {
             foreground_window: seed,

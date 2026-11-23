@@ -932,6 +932,12 @@ fn run_desktop() {
             // 按下时预取选区、录音中处理伴随键。这里注册一次。
             hotkey::install_dictation_hooks();
 
+            // 平台层的选区目标校验需要 macOS 前台应用 pid（NSWorkspace 在宿主侧）。
+            #[cfg(target_os = "macos")]
+            openless_platform::selection::target::install_front_app_probe(
+                crate::selection::current_front_app_pid,
+            );
+
             // 平台层 ASR 引擎需要宿主的目录策略（模型缓存 / 运行时 / 日志）。
             openless_platform::asr::paths::install_paths(openless_platform::asr::paths::AsrPaths {
                 foundry_local_root: crate::persistence::foundry_local_root,

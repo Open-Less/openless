@@ -8,6 +8,7 @@
 #[cfg(target_os = "windows")]
 use crate::windows::selection as backend;
 
+pub mod target;
 #[cfg(target_os = "windows")]
 pub mod windows_target;
 
