@@ -90,9 +90,9 @@ impl CapsuleLabels {
                 "已插入 {{count}}",
                 "翻譯為",
                 "正在翻譯",
-                "正在潤色...",
+                "正在潤色…",
                 "已替換",
-                "未選中內容",
+                "未選取文字",
                 "潤色失敗，請重試",
             ]
         } else if locale.starts_with("zh") {
@@ -104,9 +104,9 @@ impl CapsuleLabels {
                 "已插入 {{count}}",
                 "翻译为",
                 "正在翻译",
-                "正在润色...",
+                "正在润色…",
                 "已替换",
-                "未选中内容",
+                "未选中文本",
                 "润色失败，请重试",
             ]
         } else if locale.starts_with("ja") {
@@ -118,9 +118,9 @@ impl CapsuleLabels {
                 "{{count}} 文字を入力しました",
                 "翻訳先",
                 "翻訳中",
-                "推敲中...",
+                "推敲中…",
                 "置き換えました",
-                "選択されていません",
+                "テキスト未選択",
                 "推敲に失敗しました。もう一度お試しください",
             ]
         } else if locale.starts_with("ko") {
@@ -132,9 +132,9 @@ impl CapsuleLabels {
                 "{{count}}자 입력됨",
                 "번역 언어",
                 "번역 중",
-                "다듬는 중...",
+                "다듬는 중…",
                 "교체됨",
-                "선택된 내용 없음",
+                "선택된 텍스트 없음",
                 "다듬기 실패, 다시 시도하세요",
             ]
         } else if locale.starts_with("es") {
@@ -146,9 +146,9 @@ impl CapsuleLabels {
                 "{{count}} insertados",
                 "Traducir al",
                 "Traduciendo",
-                "Mejorando el texto…",
+                "Mejorando…",
                 "Reemplazado",
-                "No hay texto seleccionado",
+                "Sin texto seleccionado",
                 "No se pudo mejorar el texto. Inténtalo de nuevo",
             ]
         } else if locale.starts_with("fr") {
@@ -160,7 +160,7 @@ impl CapsuleLabels {
                 "{{count}} insérés",
                 "Traduire en",
                 "Traduction",
-                "Amélioration du texte…",
+                "Amélioration…",
                 "Remplacé",
                 "Aucun texte sélectionné",
                 "L’amélioration a échoué. Réessayez",
@@ -190,7 +190,7 @@ impl CapsuleLabels {
                 "Translating",
                 "Polishing…",
                 "Replaced",
-                "Nothing selected",
+                "No text selected",
                 "Polish failed, try again",
             ]
         };
