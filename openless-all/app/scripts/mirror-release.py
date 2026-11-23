@@ -31,6 +31,15 @@ TARGETS = {
 }
 
 FILE_TRANSFER_SECONDS = 300
+MAX_FILE_TRANSFER_SECONDS = 2700
+MIN_UPLOAD_BYTES_PER_SECOND = 64 * 1024
+
+def transfer_timeout_seconds(size):
+    # The observed cross-region link continued at 94-528 KiB/s. A fixed five
+    # minute wall limit killed healthy large-file uploads; budget by size while
+    # retaining a hard ceiling and rclone's separate idle timeout.
+    expected = 120 + (size + MIN_UPLOAD_BYTES_PER_SECOND - 1) // MIN_UPLOAD_BYTES_PER_SECOND
+    return min(MAX_FILE_TRANSFER_SECONDS, max(FILE_TRANSFER_SECONDS, expected))
 
 def select_releases(releases, requested_channel='all'):
     if requested_channel not in ('all', 'stable', 'beta'):
@@ -60,14 +69,16 @@ def copy_files(directory, destination, cache_control, budget_seconds):
             '--retries', '2', '--retries-sleep', '5s', '--timeout', '60s',
             '--contimeout', '20s', '--stats', '30s', '--stats-one-line',
             '--stats-log-level', 'NOTICE', '--log-level', 'INFO',
+            '--s3-upload-cutoff', '8Mi', '--s3-chunk-size', '8Mi',
+            '--s3-upload-concurrency', '4',
             '--header-upload', f'Cache-Control: {cache_control}',
-        ], check=True, timeout=min(FILE_TRANSFER_SECONDS, remaining))
+        ], check=True, timeout=min(transfer_timeout_seconds(path.stat().st_size), remaining))
         print(f'Upload completed: {path.name}', flush=True)
 
 def publish_verified_release(directory, channels, destination, tag, channel):
     # Any object failure/timeout stops before the first rolling manifest PUT.
     copy_files(directory, f'{destination}/releases/{tag}',
-        'public, max-age=31536000, immutable', 1200)
+        'public, max-age=31536000, immutable', 3600)
     copy_files(channels, f'{destination}/updates/{channel}',
         'public, max-age=60', 180)
 
