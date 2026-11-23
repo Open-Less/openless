@@ -2364,6 +2364,45 @@ impl ActiveTextInsertion {
     }
 }
 
+fn recording_history_entry(
+    context: &DictationContext,
+    session_id: SessionId,
+    created_at: String,
+) -> DictationSession {
+    let front_app = context.captured_front_app();
+    let pipeline_mode = match context.pipeline_mode {
+        crate::shared_types::PipelineMode::Traditional => "traditional",
+        crate::shared_types::PipelineMode::Deepseek => "deepseek",
+        crate::shared_types::PipelineMode::Multimodal => "multimodal",
+    };
+    DictationSession {
+        id: session_id.to_string(),
+        created_at,
+        source: OpenLessBackend::history_source_for_context(context),
+        raw_transcript: String::new(),
+        asr_transcript: None,
+        final_text: String::new(),
+        mode: context.polish.mode,
+        style_pack_id: Some(context.polish.style_pack_id.clone()),
+        translation_active: context.polish.translation_active,
+        polish_source: None,
+        app_bundle_id: front_app.bundle_id,
+        app_name: front_app.name,
+        insert_status: HistoryInsertStatus::NotRequested,
+        error_code: Some("recording".into()),
+        duration_ms: None,
+        dictionary_entry_count: None,
+        has_audio_recording: Some(context.recording.archive_enabled),
+        asr_provider: Some(context.asr.provider_id.clone()),
+        asr_model: context.asr.model.clone(),
+        llm_provider: None,
+        llm_model: None,
+        pipeline_mode: Some(pipeline_mode.into()),
+        asr_ms: None,
+        polish_ms: None,
+    }
+}
+
 struct BackendEngineProgress {
     events: Arc<EventBus>,
     state: Arc<RwLock<MutableState>>,
@@ -2372,6 +2411,8 @@ struct BackendEngineProgress {
     raw_transcripts: Mutex<HashMap<SessionId, TranscriptAccumulator>>,
     history: Arc<HistoryStore>,
     history_revision: Arc<AtomicU64>,
+    clock: Arc<dyn Clock>,
+    preferences: Arc<PreferencesStore>,
 }
 
 impl EngineProgressSink for BackendEngineProgress {
@@ -2562,15 +2603,45 @@ impl EngineProgressSink for BackendEngineProgress {
                     // Keep the whole ASR text recoverable before an expensive LLM call.
                     // The state lock prevents a late final delta overwriting cancellation.
                     let saved = (|| -> Result<bool, BackendError> {
-                        let Some(mut entry) = self.history.list()?.into_iter().find(|entry| {
-                            entry.id == session_id.to_string()
-                                && entry.error_code.as_deref() == Some("recording")
-                        }) else {
+                        let context = state.session_context(session_id).ok_or_else(|| {
+                            BackendError::new(
+                                BackendErrorCode::Internal,
+                                "long-recording history has no session context",
+                            )
+                        })?;
+                        if !matches!(
+                            context.output_target,
+                            DictationOutputTarget::ForegroundApp
+                                | DictationOutputTarget::QuickNote
+                                | DictationOutputTarget::Undecided
+                        ) {
                             return Ok(false);
-                        };
+                        }
+                        let existing = self.history.read_entry(&session_id.to_string())?;
+                        let new_entry = existing.is_none();
+                        let mut entry = existing.unwrap_or_else(|| {
+                            recording_history_entry(
+                                context,
+                                session_id,
+                                self.clock.now_utc().to_rfc3339(),
+                            )
+                        });
+                        if entry.error_code.as_deref() != Some("recording") {
+                            return Ok(false);
+                        }
                         entry.raw_transcript = transcript.clone();
                         entry.duration_ms = Some(state.session(session_id).unwrap().elapsed_ms);
-                        self.history.update_entry(entry)
+                        if new_entry {
+                            let prefs = self.preferences.get();
+                            self.history.upsert_with_retention(
+                                entry,
+                                prefs.history_retention_days,
+                                prefs.history_max_entries,
+                            )?;
+                            Ok(true)
+                        } else {
+                            self.history.update_entry(entry)
+                        }
                     })();
                     match saved {
                         Ok(true) => {
@@ -5315,6 +5386,8 @@ impl OpenLessBackend {
             raw_transcripts: Mutex::new(HashMap::new()),
             history: Arc::clone(&self.history),
             history_revision: Arc::clone(&self.history_revision),
+            clock: Arc::clone(&self.clock),
+            preferences: Arc::clone(&self.preferences),
         })
     }
 
@@ -9219,38 +9292,8 @@ impl OpenLessBackend {
             return;
         }
         let preferences = self.get_preferences();
-        let front_app = context.captured_front_app();
-        let pipeline_mode = match context.pipeline_mode {
-            crate::shared_types::PipelineMode::Traditional => "traditional",
-            crate::shared_types::PipelineMode::Deepseek => "deepseek",
-            crate::shared_types::PipelineMode::Multimodal => "multimodal",
-        };
-        let session = DictationSession {
-            id: session_id.to_string(),
-            created_at: self.clock.now_utc().to_rfc3339(),
-            source: Self::history_source_for_context(context),
-            raw_transcript: String::new(),
-            asr_transcript: None,
-            final_text: String::new(),
-            mode: context.polish.mode,
-            style_pack_id: Some(context.polish.style_pack_id.clone()),
-            translation_active: context.polish.translation_active,
-            polish_source: None,
-            app_bundle_id: front_app.bundle_id,
-            app_name: front_app.name,
-            insert_status: HistoryInsertStatus::NotRequested,
-            error_code: Some("recording".to_string()),
-            duration_ms: None,
-            dictionary_entry_count: None,
-            has_audio_recording: Some(context.recording.archive_enabled),
-            asr_provider: Some(context.asr.provider_id.clone()),
-            asr_model: context.asr.model.clone(),
-            llm_provider: None,
-            llm_model: None,
-            pipeline_mode: Some(pipeline_mode.to_string()),
-            asr_ms: None,
-            polish_ms: None,
-        };
+        let session =
+            recording_history_entry(context, session_id, self.clock.now_utc().to_rfc3339());
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
@@ -19576,16 +19619,19 @@ mod tests {
                 .list_history()
                 .unwrap()
                 .into_iter()
-                .find(|entry| entry.id == session.to_string())
-                .unwrap();
+                .find(|entry| entry.id == session.to_string());
             if elapsed_ms > crate::long_recording::THRESHOLD_MS {
+                let entry = entry.unwrap();
                 assert_eq!(entry.raw_transcript, raw);
                 assert_eq!(entry.duration_ms, Some(elapsed_ms));
+                assert!(entry.final_text.is_empty());
+                assert_eq!(entry.insert_status, HistoryInsertStatus::NotRequested);
             } else {
-                assert!(entry.raw_transcript.is_empty());
+                assert!(
+                    entry.is_none(),
+                    "normal foreground dictation must not gain an early history row"
+                );
             }
-            assert!(entry.final_text.is_empty());
-            assert_eq!(entry.insert_status, HistoryInsertStatus::NotRequested);
             assert_eq!(
                 backend.snapshot().dictation.phase,
                 DictationPhase::Transcribing
@@ -19607,6 +19653,8 @@ mod tests {
             raw_transcripts: Mutex::new(HashMap::new()),
             history: Arc::clone(&backend.history),
             history_revision: Arc::clone(&backend.history_revision),
+            clock: Arc::clone(&backend.clock),
+            preferences: Arc::clone(&backend.preferences),
         };
         backend.cancel_dictation(Some(session)).await.unwrap();
 

@@ -569,10 +569,12 @@ mod tests {
     #[tokio::test]
     async fn long_recording_history_retranscription_uses_all_pcm_and_canonical_duration() {
         let transcription = Arc::new(FixtureTranscriptionEngine::successful("recovered", 125));
-        let (service, path) = service(
+        let (mut service, path) = service(
             Arc::new(FixtureTextPolisher::successful("unused")),
             transcription.clone(),
         );
+        let preferences_path = path.with_extension("preferences.json");
+        service.preferences = Arc::new(PreferencesStore::open(preferences_path.clone()).unwrap());
         service
             .preferences
             .update(|prefs| prefs.active_asr_provider = "groq".into())
@@ -584,6 +586,7 @@ mod tests {
         assert_eq!(transcription.pcm(), pcm);
         assert_eq!(result.duration_ms, 301_000);
         assert_eq!(result.text, ["recovered"; 6].join("\n"));
+        let _ = std::fs::remove_file(preferences_path);
         let _ = std::fs::remove_file(path);
     }
 
