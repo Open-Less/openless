@@ -129,7 +129,8 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await expect(pill.locator('.ol-capsule-wave-progress')).toHaveCSS('animation-name', 'none');
     }
     await expect(pill).toHaveAttribute('data-slow-connection', 'true', { timeout: 6000 });
-    await expect(pill.locator('.ol-capsule-marquee')).toBeVisible();
+    await expect(pill.locator(reducedMotion === 'reduce'
+      ? '.ol-capsule-slow-static' : '.ol-capsule-marquee')).toBeVisible();
     await pill.locator('.ol-default-processing-cancel').click();
     await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
       .toEqual({ sessionId: 'processing-a' });
@@ -140,6 +141,85 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await expect(pill.locator('.ol-capsule-marquee')).toHaveCount(0);
   });
 }
+
+test('queued foreground processing starts a fresh phase without remounting the capsule', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
+  await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
+  await page.evaluate(() => {
+    const f = (window as any).fixture;
+    f.emit('dictation:jobs', [{ sessionId: 'queued-a' }, { sessionId: 'queued-b' }]);
+    f.emit('capsule:state', { state: 'polishing', sessionId: 'queued-a', translation: false });
+  });
+  const pill = page.locator('.ol-default-capsule');
+  await expect(pill).toHaveAttribute('data-slow-connection', 'true', { timeout: 6000 });
+  await page.evaluate(() => {
+    const pill = document.querySelector('.ol-default-capsule')!;
+    (pill as any).previousWave = pill.querySelector('.ol-capsule-wave-layer');
+    (pill as any).retainedOwner = true;
+    const f = (window as any).fixture;
+    f.emit('dictation:jobs', [{ sessionId: 'queued-b' }]);
+    f.emit('capsule:state', { state: 'polishing', sessionId: 'queued-b', translation: false });
+  });
+  await expect(pill).toHaveAttribute('data-slow-connection', 'false');
+  expect(await pill.evaluate((node) => (node as any).retainedOwner &&
+    (node as any).previousWave !== node.querySelector('.ol-capsule-wave-layer'))).toBe(true);
+  await expect(pill.locator('.ol-capsule-marquee')).toHaveCount(0);
+  await expect(pill).toHaveAttribute('data-slow-connection', 'true', { timeout: 6000 });
+  await pill.locator('.ol-default-processing-cancel').click();
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
+    .toEqual({ sessionId: 'queued-b' });
+});
+
+for (const locale of ['en', 'de', 'fr']) {
+  test(`reduced motion keeps slow processing visually readable at 125%: ${locale}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
+    await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
+    // The fixture uses the same i18next instance as the real capsule.
+    await page.evaluate(async (locale) => {
+      const { default: i18n } = await import('/src/i18n/index.ts');
+      await i18n.changeLanguage(locale);
+      (window as any).fixture.emit('capsule:state', { state: 'polishing', sessionId: 'slow-locale' });
+    }, locale);
+    await page.addStyleTag({ content: '.ol-default-status { font-size: 15px; }' });
+    const text = page.locator('.ol-capsule-slow-static');
+    await expect(text).toBeVisible({ timeout: 6000 });
+    expect(await text.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await expect(page.locator('.ol-capsule-marquee')).toHaveCount(0);
+    await expect(page.locator('.ol-translation-language-collapse')).toHaveCSS('transition-duration', '0s');
+    await expect(page.locator('.ol-default-capsule')).toHaveCSS('width', '116px');
+  });
+}
+
+test('processing foreground publishes the settled rear hit region and cancels only its job', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
+  await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
+  await page.evaluate(() => {
+    const f = (window as any).fixture;
+    f.emit('capsule:state', { state: 'polishing', sessionId: 'front-processing', translation: false });
+    f.emit('dictation:jobs', [{ sessionId: 'background-processing', translationActive: true }]);
+  });
+  const rear = page.locator('.ol-processing-satellite');
+  await expect(rear).toBeVisible();
+  await rear.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+  await expect.poll(() => page.evaluate(() => {
+    const rear = document.querySelector('.ol-processing-satellite')!.getBoundingClientRect();
+    const front = document.querySelector('.ol-default-capsule')!.getBoundingClientRect();
+    return (window as any).fixture.inputRegions.some((r: any) =>
+      r.top <= rear.top + 1 && r.top + r.height >= front.top - 1);
+  })).toBe(true);
+  const foreground = page.locator('.ol-default-capsule');
+  const r = (await rear.boundingBox())!, f = (await foreground.boundingBox())!;
+  expect(r.height).toBeCloseTo(22, 1);
+  expect(r.x + r.width / 2).toBeCloseTo(f.x + f.width / 2, 1);
+  expect(r.y + r.height - f.y).toBeCloseTo(4, 1);
+  await rear.click({ position: { x: r.width / 2, y: 8 } });
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
+    .toEqual({ sessionId: 'background-processing' });
+  await foreground.locator('.ol-default-processing-cancel').click();
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))
+    .toEqual({ sessionId: 'front-processing' });
+});
 
 test('translation keeps its element and moves continuously when streaming starts', async ({
   page,

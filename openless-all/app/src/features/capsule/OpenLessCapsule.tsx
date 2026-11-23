@@ -185,6 +185,7 @@ export function CapsuleWaveform({ level, active = true }: { level: number; activ
 }
 
 interface OpenLessPillProps {
+  sessionId?: string;
   os?: OS;
   state: CapsuleState;
   level: number;
@@ -201,6 +202,7 @@ interface OpenLessPillProps {
 
 /** A persistent shell clips the outgoing controls as it contracts. Content never scales. */
 export function OpenLessPill({
+  sessionId = '',
   state,
   level,
   insertedChars = 0,
@@ -219,18 +221,19 @@ export function OpenLessPill({
   useCapsulePresence(root, leaving, preview);
   const recording = state === 'recording';
   const processing = state === 'transcribing' || state === 'polishing';
-  const [slowConnection, setSlowConnection] = useState(false);
+  const [slowSession, setSlowSession] = useState<string | null>(null);
+  const slowConnection = processing && slowSession === sessionId;
   useEffect(() => {
     if (!processing || preview) {
-      setSlowConnection(false);
+      setSlowSession(null);
       return;
     }
-    setSlowConnection(false);
+    setSlowSession(null);
     const timer = window.setTimeout(() => {
-      setSlowConnection(true);
+      setSlowSession(sessionId);
     }, PROCESSING_WAVE_DURATION_MS);
     return () => window.clearTimeout(timer);
-  }, [processing, preview]);
+  }, [processing, preview, sessionId]);
 
   const slowLabel = t('capsule.slowConnection');
   const label = processing
@@ -284,7 +287,7 @@ export function OpenLessPill({
       }}
       transition={reduced ? { duration: 0 } : MORPH}
     >
-      {processing && !preview && <CapsuleWaterWave />}
+      {processing && !preview && <CapsuleWaterWave key={sessionId} />}
       <div className="ol-default-recording" aria-hidden={!recording && !warming}>
         <button
           className="ol-default-action ol-default-cancel"
@@ -309,7 +312,11 @@ export function OpenLessPill({
         </button>
       </div>
       <div className="ol-default-status" aria-hidden={recording || warming}>
-        {processing && slowConnection ? (
+        {processing && slowConnection && reduced ? (
+          <span className="ol-capsule-slow-static" role="status" title={slowLabel}>
+            {t(operating ? 'capsule.using' : 'capsule.thinking')}
+          </span>
+        ) : processing && slowConnection ? (
           <div className="ol-capsule-marquee" role="status" title={slowLabel}>
             <div className="ol-capsule-marquee-track">
               <span className="ol-capsule-marquee-item">{slowLabel}</span>
@@ -319,7 +326,7 @@ export function OpenLessPill({
             </div>
           </div>
         ) : processing && !preview ? (
-          <CapsuleProcessingLens label={label} />
+          <CapsuleProcessingLens key={sessionId} label={label} />
         ) : (
           <span ref={labelRef} role="status" title={label}>
             {label}

@@ -145,6 +145,11 @@
   margin-left: 6px;
   opacity: 1;
 }
+@media (prefers-reduced-motion: reduce) {
+  .ol-translation-language-collapse {
+    transition: none;
+  }
+}
 .ol-translation-language-collapse-inner {
   min-width: 0;
   overflow: hidden;

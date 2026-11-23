@@ -289,6 +289,7 @@ function ClassicCapsule({
           />
         )}
         <OpenLessPill
+          sessionId={sessionId}
           os={os}
           state={state}
           level={level}
@@ -861,12 +862,18 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       ],
     });
     window.addEventListener('resize', schedule);
+    const onSatelliteAnimationEnd = (event: AnimationEvent) => {
+      if (event.target instanceof Element && event.target.matches('.ol-processing-satellite'))
+        schedule();
+    };
+    document.addEventListener('animationend', onSatelliteAnimationEnd, true);
     schedule();
     return () => {
       stopped = true;
       observer.disconnect();
       cancelAnimationFrame(frame);
       window.removeEventListener('resize', schedule);
+      document.removeEventListener('animationend', onSatelliteAnimationEnd, true);
     };
   }, [isTauri, os, state, leaving, insertFallback, suggestions.length, publishInputRegions]);
 
