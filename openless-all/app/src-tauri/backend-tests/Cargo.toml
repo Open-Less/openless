@@ -28,7 +28,6 @@ log = "0.4"
 thiserror = "2"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-arboard = { version = "3", default-features = false }
 # Compile the production system recognizer without starting Tauri or a model runtime.
 block2 = "0.5"
 objc2 = { version = "0.5", features = ["exception"] }

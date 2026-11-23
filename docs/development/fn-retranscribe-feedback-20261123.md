@@ -40,7 +40,7 @@
 - empty_transcript_persists_a_failed_history_entry_without_activity：正常 Pipeline 空白 ASR + 已配置结构化润色正反例通过，润色调用数零、emptyTranscript 历史、无虚构 LLM 用量。
 - history_command_decodes_audio_repairs_legacy_empty_failure_and_preserves_errors：生产宿主实现 + 真实 Core AuxiliaryService 通过有效音频/元数据块、旧空稿修复、空 ASR、服务错误、截断和缺失文件、已完成记录不覆盖；失败历史与原 WAV 不变。
 - clipboard_delivery：10 项受控生产事务回归通过，覆盖未知粘贴保留、下一段借用/恢复、新用户复制优先、取消/目标变化和假写入回执拒绝；独立 Shift 生产手势模块 4 项通过。
-- 显式运行 native_clipboard_fallback_is_readable_and_not_restored_after_an_unconfirmed_paste：macOS 实际 arboard 写入/读回、800ms 后完整文本、原生 changeCount、迟到恢复不覆盖新复制通过；不发送粘贴按键，测试后明确恢复原文本剪贴板。它证明真实系统剪贴板，不证明真实目标 App 的键盘交付。
+- 历史实验记录：此前曾显式运行 native_clipboard_fallback_is_readable_and_not_restored_after_an_unconfirmed_paste，当次 macOS arboard 写入/读回、800ms 后完整文本及原生 changeCount 检查的事实保留；未发送粘贴按键，并在当次测试后恢复原文本剪贴板。该次观察不证明原子所有权或真实目标 App 的键盘交付。后续 Terra 复审确认 general clipboard 没有原子比较版本并写入的接口，用户新复制仍可穿插在检查与恢复、写入与取得 revision 之间，因此该显式实验、专用恢复工具及其辅助测试与测试依赖已移除，不再是可执行验收入口；不能宣称生产 OS 已提供原子保证。后续受控回归和隔离云端证据独立记录，本机不再进行此类实验。
 - WebKit 实际历史菜单点击“重新转录”后显示明确空 ASR 原因，记录保留；TypeScript 与错误映射检查通过。
 - macOS 宿主 cargo check 通过，保留既有原生编译警告；共享 Core cargo clippy --all-targets -- -D warnings 通过。
 
