@@ -41,6 +41,8 @@
 //!   windows/ macos/ unsupported/   按平台分的后端实现
 //! ```
 
+#[cfg(feature = "asr")]
+pub mod asr;
 #[cfg(feature = "audio")]
 pub mod audio;
 #[cfg(feature = "capsule")]

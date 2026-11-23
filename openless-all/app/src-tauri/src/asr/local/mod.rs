@@ -23,22 +23,8 @@ pub use sherpa_provider::SherpaOnnxAsr;
 #[allow(unused_imports)]
 pub use sherpa_runtime::SherpaOnnxRuntime;
 
-/// Retired channel IDs are used only for UI retirement and scoped cleanup.
-pub const PROVIDER_ID: &str = "local-qwen3";
-pub const LOCAL_QWEN3_MLX_PROVIDER_ID: &str = "local-qwen3-mlx";
-pub const LOCAL_QWEN3_C_PROVIDER_ID: &str = "local-qwen3-c";
-
-pub const LOCAL_WHISPER_PROVIDER_ID: &str = "local-whisper";
-
-pub fn is_local_whisper(id: &str) -> bool {
-    id == LOCAL_WHISPER_PROVIDER_ID
-}
-
-pub fn is_local_qwen3(id: &str) -> bool {
-    matches!(
-        id,
-        PROVIDER_ID | LOCAL_QWEN3_MLX_PROVIDER_ID | LOCAL_QWEN3_C_PROVIDER_ID
-    )
-}
-
-pub const APPLE_SPEECH_PROVIDER_ID: &str = "apple-speech";
+// provider id 是对外契约，已迁到平台层统一维护（宿主不再各写一份字符串）。
+pub use openless_platform::asr::ids::{
+    is_local_qwen3, is_local_whisper, APPLE_SPEECH_PROVIDER_ID, LOCAL_QWEN3_C_PROVIDER_ID,
+    LOCAL_QWEN3_MLX_PROVIDER_ID, LOCAL_WHISPER_PROVIDER_ID, PROVIDER_ID,
+};

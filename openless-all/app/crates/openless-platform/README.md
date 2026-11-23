@@ -39,6 +39,7 @@ cargo test  --no-default-features --features storage          # 只测存储模�
 | `permissions` | TCC / 注册表 / Android 运行时权限 | serde, cpal, winreg |
 | `storage` | 原子文件存储 + 平台加固 | uuid, libc |
 | `credentials` | 保险库原语（Windows CredMan / macOS Keychain） | keyring, security-framework, zeroize, anyhow |
+| `asr` | 本地 ASR 元数据（provider id / 模型收据 / sherpa 事件描述） | anyhow, serde, serde_json, uuid |
 | `ime-profile` | Windows IME 语言配置 | winreg |
 
 feature 之间的依赖写在 `Cargo.toml` 里，关闭底层能力会连带关掉依赖它的能力，
@@ -62,6 +63,10 @@ src/
     macos_dictation_key.rs  macOS Fn 听写键
     mouse.rs          Mouse4/5 侧键听写
   selection.rs        选区模拟复制：capture_via_simulated_copy / CaptureOutcome
+  asr/
+    ids.rs            provider id 契约 + 判定
+    receipt.rs        原生模型文件收据（不初始化 SDK）
+    sherpa.rs         sherpa 运行时阶段/事件负载（纯逻辑）
   audio/
     mute.rs           录音期间系统静音（含 mute/{windows,macos,unsupported}.rs）
     cue.rs            合成"开始录音"提示音（cpal，桌面平台）

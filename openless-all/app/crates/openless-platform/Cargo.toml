@@ -32,7 +32,14 @@ default = [
     "storage",
     "credentials",
     "ime-profile",
+    "asr",
 ]
+
+# ASR 元数据：provider id、模型收据、sherpa 运行时事件描述（纯逻辑，不链接原生库）
+asr = ["dep:anyhow", "dep:serde", "dep:serde_json", "dep:uuid"]
+
+# sherpa 原生运行时的描述层（原生库仍在宿主，WP3 后续步骤迁入）
+asr-sherpa = ["asr"]
 
 # 胶囊浮层：几何计算 + 平台窗口控制（不抢焦点 / 点击穿透 / 命中测试）
 capsule = ["dep:objc2", "dep:objc2-foundation"]
@@ -86,6 +93,7 @@ global-hotkey = { version = "0.6", optional = true }
 once_cell = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
