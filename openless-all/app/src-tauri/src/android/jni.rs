@@ -3,4 +3,4 @@
 //! JNI 助手与无障碍服务通道已迁到 `openless-platform::android`；宿主只在启动时
 //! 注入 JavaVM 与 Activity context（`openless_platform::android::context::install`）。
 
-pub(crate) use openless_platform::android::jni::android::*;
+pub use openless_platform::android::jni::android::*;

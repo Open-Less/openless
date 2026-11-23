@@ -202,14 +202,16 @@ windows = { version = "0.58", features = [
 winreg = { version = "0.52", optional = true }
 windows-core = { version = "0.58", optional = true }
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"], optional = true }
-
-# macOS：纯文本剪贴板通道 + Keychain 原语。
-[target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21", optional = true }
-
-[target.'cfg(any(target_os = "windows", target_os = "android"))'.dependencies]
 sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
   "static",
+], optional = true }
+
+# macOS：纯文本剪贴板通道 + Keychain 原语。
+# Windows 用静态库（随包发布）；Android 用 JNI 共享库（随 APK 的 jniLibs 打包）。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", optional = true }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
+  "shared",
 ], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

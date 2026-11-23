@@ -20,7 +20,7 @@ static COORDINATOR: OnceLock<Arc<Coordinator>> = OnceLock::new();
 static CORE_BACKEND: OnceLock<Arc<OpenLessBackend>> = OnceLock::new();
 // 悬浮层控制已迁到平台层；宿主这里转发，保持 JNI 导出符号不变。
 #[cfg(target_os = "android")]
-pub(crate) use openless_platform::android::overlay_control::*;
+pub use openless_platform::android::overlay_control::*;
 
 /// 非 Android：悬浮层不存在，所有控制都是空操作。
 #[cfg(not(target_os = "android"))]

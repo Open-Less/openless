@@ -1472,7 +1472,7 @@ fn credentials_path() -> Result<PathBuf> {
 
 #[cfg(target_os = "android")]
 fn android_credentials_path() -> Result<PathBuf> {
-    let files_dir = crate::android::jni::android::app_files_dir()
+    let files_dir = crate::android::jni::app_files_dir()
         .map_err(|error| anyhow::anyhow!("resolve Android credential directory: {error}"))?;
     Ok(PathBuf::from(files_dir)
         .join("OpenLess")

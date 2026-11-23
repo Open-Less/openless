@@ -2,5 +2,5 @@
 //!
 //! 已迁到 `openless-platform::android::overlay`。
 
-pub(crate) use openless_platform::android::overlay::*;
-pub(crate) use openless_platform::android::overlay_control::*;
+pub use openless_platform::android::overlay::*;
+pub use openless_platform::android::overlay_control::*;

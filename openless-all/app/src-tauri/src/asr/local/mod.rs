@@ -4,8 +4,11 @@
 mod blocking_decode;
 pub mod experimental;
 pub mod foundry;
+#[cfg(target_os = "windows")]
 pub mod foundry_native;
+#[cfg(target_os = "windows")]
 pub mod foundry_provider;
+#[cfg(target_os = "windows")]
 pub mod foundry_runtime;
 #[cfg(target_os = "windows")]
 mod native_model_receipt;
@@ -14,8 +17,10 @@ pub mod sherpa_provider;
 pub mod sherpa_runtime;
 pub mod test_run;
 
+#[cfg(target_os = "windows")]
 #[allow(unused_imports)]
 pub use foundry_provider::FoundryLocalWhisperAsr;
+#[cfg(target_os = "windows")]
 #[allow(unused_imports)]
 pub use foundry_runtime::FoundryLocalRuntime;
 #[allow(unused_imports)]

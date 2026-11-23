@@ -2,4 +2,4 @@
 //!
 //! 已迁到 `openless-platform::android::local_migration`。
 
-pub(crate) use openless_platform::android::local_migration::*;
+pub use openless_platform::android::local_migration::*;

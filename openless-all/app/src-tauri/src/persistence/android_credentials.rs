@@ -597,7 +597,7 @@ impl AndroidCredentialsCrypto for AndroidKeystoreCrypto {
         plaintext: &[u8],
         aad: &[u8],
     ) -> std::result::Result<SealedPayload, CryptoErrorKind> {
-        let packet = crate::android::jni::android::keystore_seal(plaintext, aad)
+        let packet = crate::android::jni::keystore_seal(plaintext, aad)
             .map_err(map_keystore_failure)?;
         split_packet(&packet)
     }
@@ -607,29 +607,29 @@ impl AndroidCredentialsCrypto for AndroidKeystoreCrypto {
         sealed: &SealedPayload,
         aad: &[u8],
     ) -> std::result::Result<Vec<u8>, CryptoErrorKind> {
-        crate::android::jni::android::keystore_open(&join_packet(sealed), aad)
+        crate::android::jni::keystore_open(&join_packet(sealed), aad)
             .map_err(map_keystore_failure)
     }
 
     fn delete_key(&mut self) -> std::result::Result<(), CryptoErrorKind> {
-        crate::android::jni::android::keystore_delete_key().map_err(map_keystore_failure)
+        crate::android::jni::keystore_delete_key().map_err(map_keystore_failure)
     }
 
     fn migration_complete(&mut self) -> std::result::Result<bool, CryptoErrorKind> {
-        crate::android::jni::android::keystore_migration_complete().map_err(map_keystore_failure)
+        crate::android::jni::keystore_migration_complete().map_err(map_keystore_failure)
     }
 
     fn mark_migration_complete(&mut self) -> std::result::Result<(), CryptoErrorKind> {
-        crate::android::jni::android::keystore_mark_migration_complete()
+        crate::android::jni::keystore_mark_migration_complete()
             .map_err(map_keystore_failure)
     }
 }
 
 #[cfg(target_os = "android")]
 fn map_keystore_failure(
-    failure: crate::android::jni::android::AndroidKeystoreFailure,
+    failure: crate::android::jni::AndroidKeystoreFailure,
 ) -> CryptoErrorKind {
-    use crate::android::jni::android::AndroidKeystoreFailure;
+    use crate::android::jni::AndroidKeystoreFailure;
     match failure {
         AndroidKeystoreFailure::AuthenticationFailed | AndroidKeystoreFailure::Malformed => {
             CryptoErrorKind::AuthenticationFailed

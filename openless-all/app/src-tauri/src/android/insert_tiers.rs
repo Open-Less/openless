@@ -2,4 +2,4 @@
 //!
 //! 已迁到 `openless-platform::android::insert_tiers`。
 
-pub(crate) use openless_platform::android::insert_tiers::*;
+pub use openless_platform::android::insert_tiers::*;

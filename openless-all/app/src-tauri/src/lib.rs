@@ -121,6 +121,7 @@ mod unicode_keystroke;
 mod update_source;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
+#[cfg(target_os = "windows")]
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
 mod windows_ime_protocol;

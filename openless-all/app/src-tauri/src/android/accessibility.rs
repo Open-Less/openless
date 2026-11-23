@@ -2,4 +2,4 @@
 //!
 //! 已迁到 `openless-platform::android::accessibility`。
 
-pub(crate) use openless_platform::android::accessibility::*;
+pub use openless_platform::android::accessibility::*;

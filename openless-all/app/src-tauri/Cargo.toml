@@ -116,6 +116,8 @@ libc = "0.2"
 jni = "0.21"
 ndk-context = "0.1"
 tao = "0.35"
+# Android 的 JNI 通道能力（无障碍 / Shizuku / 悬浮层 / AudioRecord）。
+openless-platform = { path = "../crates/openless-platform", features = ["android"] }
 
 # Local ASR on arm64 Android: the crate has no Android prebuilt download, so
 # scripts/run-android-tauri-build.mjs points SHERPA_ONNX_LIB_DIR at the

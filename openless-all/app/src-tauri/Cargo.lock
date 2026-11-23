@@ -4529,6 +4529,7 @@ dependencies = [
  "foundry-local-sdk",
  "futures-util",
  "global-hotkey",
+ "jni 0.21.1",
  "keyring",
  "libc",
  "log",

@@ -2669,7 +2669,7 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
     }
 
     fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
-        #[cfg(local_asr_sherpa)]
+        #[cfg(target_os = "windows")]
         use crate::asr::local::foundry_runtime as foundry;
 
         let session = self.clone();

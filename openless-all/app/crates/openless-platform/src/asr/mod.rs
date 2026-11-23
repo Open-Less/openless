@@ -14,8 +14,7 @@ pub mod ids;
 pub mod paths;
 pub mod receipt;
 
-// Foundry Local：Windows 用 WinML；其它目标保留类型兼容桩。
-#[cfg(feature = "asr-foundry")]
+// Foundry Local：描述层常开；WinML 运行时由 `asr-foundry` 控制。
 pub mod foundry;
 
 // Apple Speech 只在 macOS 编译（Speech.framework）。
