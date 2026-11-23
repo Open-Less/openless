@@ -93,7 +93,7 @@ impl CapsuleLabels {
                 "正在潤色…",
                 "已替換",
                 "未選取文字",
-                "潤色失敗，請重試",
+                "潤色失敗",
             ]
         } else if locale.starts_with("zh") {
             [
@@ -107,7 +107,7 @@ impl CapsuleLabels {
                 "正在润色…",
                 "已替换",
                 "未选中文本",
-                "润色失败，请重试",
+                "润色失败",
             ]
         } else if locale.starts_with("ja") {
             [
@@ -121,7 +121,7 @@ impl CapsuleLabels {
                 "推敲中…",
                 "置き換えました",
                 "テキスト未選択",
-                "推敲に失敗しました。もう一度お試しください",
+                "推敲に失敗",
             ]
         } else if locale.starts_with("ko") {
             [
@@ -135,7 +135,7 @@ impl CapsuleLabels {
                 "다듬는 중…",
                 "교체됨",
                 "선택된 텍스트 없음",
-                "다듬기 실패, 다시 시도하세요",
+                "다듬기 실패",
             ]
         } else if locale.starts_with("es") {
             [
@@ -149,7 +149,7 @@ impl CapsuleLabels {
                 "Mejorando…",
                 "Reemplazado",
                 "Sin texto seleccionado",
-                "No se pudo mejorar el texto. Inténtalo de nuevo",
+                "Error al mejorar",
             ]
         } else if locale.starts_with("fr") {
             [
@@ -163,7 +163,7 @@ impl CapsuleLabels {
                 "Amélioration…",
                 "Remplacé",
                 "Aucun texte sélectionné",
-                "L’amélioration a échoué. Réessayez",
+                "Échec",
             ]
         } else if locale.starts_with("de") {
             [
@@ -177,7 +177,7 @@ impl CapsuleLabels {
                 "Wird überarbeitet…",
                 "Ersetzt",
                 "Kein Text ausgewählt",
-                "Überarbeitung fehlgeschlagen. Erneut versuchen",
+                "Fehlgeschlagen",
             ]
         } else {
             [
@@ -191,7 +191,7 @@ impl CapsuleLabels {
                 "Polishing…",
                 "Replaced",
                 "No text selected",
-                "Polish failed, try again",
+                "Polish failed",
             ]
         };
         let [thinking, using, cancelled, error, inserted, translate_to, translating, polishing, replaced, no_selection, polish_failed] =
