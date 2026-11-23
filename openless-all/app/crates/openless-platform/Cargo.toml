@@ -59,7 +59,14 @@ asr-foundry = [
 asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
 
 # Windows TSF 文本服务通道（提交 / 选区）
-ime = ["dep:serde", "dep:serde_json", "dep:tokio", "dep:parking_lot", "dep:windows-core"]
+ime = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:parking_lot",
+    "dep:windows-core",
+    "dep:core-foundation",
+]
 
 # issue-1266 诊断观测（由宿主 feature 转发）
 diagnostics-1266 = []
@@ -190,6 +197,7 @@ sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = { version = "0.6", optional = true }
+core-foundation = { version = "0.10", optional = true }
 coreaudio-sys = { version = "0.2", optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", optional = true }

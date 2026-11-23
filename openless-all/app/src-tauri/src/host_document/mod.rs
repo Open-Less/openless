@@ -129,7 +129,7 @@ pub(crate) fn apply_voice_edit_target(
 }
 
 // 写入失败时的选区恢复已迁到平台层（`openless-platform::ime::uia`）。
-pub(super) use openless_platform::ime::uia::write_with_selection_recovery;
+pub(super) use openless_platform::ime::write_with_selection_recovery;
 
 /// Timeout for a single AX message. 200ms is far above a normal AX round-trip (single-digit
 /// ms); it only catches hung apps.
@@ -204,7 +204,7 @@ pub use openless_platform::ime::gate::{evaluate_gate, GateInputs};
 
 
 /// 光标上下文读取的中间结果（平台层定义）。
-pub(crate) use openless_platform::ime::uia::ReadOutcome;
+pub(crate) use openless_platform::ime::ReadOutcome;
 
 
 /// Read the context around the cursor; any failure degrades to `None`, never an error.

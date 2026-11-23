@@ -23,3 +23,26 @@ pub mod target;
 pub use ipc::{ImeSubmitRequest, ImeSubmitTarget, WindowsImeIpcServer};
 #[cfg(target_os = "windows")]
 pub use session::{WindowsImeSessionController, WindowsImeSessionError};
+
+/// 仅当原生写入失败时恢复我们改过的选区。
+///
+/// 平台回调必须先复核原控件（HWND/AX 元素）与文本未变，再调用恢复动作。
+pub fn write_with_selection_recovery(
+    write: impl FnOnce() -> std::result::Result<(), String>,
+    recover: impl FnOnce(),
+) -> std::result::Result<(), String> {
+    let result = write();
+    if result.is_err() {
+        recover();
+    }
+    result
+}
+
+/// 光标上下文读取的中间结果（宿主据此区分"受限"与"不支持"）。
+#[derive(Debug, Clone)]
+pub enum ReadOutcome {
+    Window(openless_core::host_document::DocumentWindow),
+    Blocked(crate::common::block_reason::BlockReason),
+    /// 静态原因：区分"没有焦点"与"平台不支持"。
+    Unavailable(&'static str),
+}

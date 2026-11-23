@@ -11,6 +11,8 @@ pub mod selection;
 #[cfg(feature = "text")]
 pub mod text;
 
+#[cfg(feature = "ime")]
+pub mod ax;
 #[cfg(feature = "selection")]
 pub mod front_app;
 pub mod secure_input;

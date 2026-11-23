@@ -57,6 +57,11 @@ src/
   lib.rs              门面导出
   clipboard.rs        剪贴板：Intent / Snapshot / Clipboard
   text.rs             文本写入：send_paste_shortcut / type_text
+  ime/gate.rs         文本通道安全门（Secure Input / 密码框 / 敏感应用黑名单）
+  macos/
+    ax.rs             macOS AX 文档读写（选区/光标上下文/编辑监听）
+    front_app.rs      NSWorkspace 前台应用身份（含按 pid 查 bundle）
+    secure_input.rs   IsSecureEventInputEnabled
   common/
     uia_text.rs       UIA 字符单元解码（纯逻辑）
   ime/
@@ -98,6 +103,11 @@ src/
   credentials/
     keychain.rs       macOS Keychain 通用密码项（复用 item 引用，避免重复授权）
     store.rs          统一保险库原语：Windows 凭据管理器 / macOS 钥匙串 / 其余显式不可用
+  ime/gate.rs         文本通道安全门（Secure Input / 密码框 / 敏感应用黑名单）
+  macos/
+    ax.rs             macOS AX 文档读写（选区/光标上下文/编辑监听）
+    front_app.rs      NSWorkspace 前台应用身份（含按 pid 查 bundle）
+    secure_input.rs   IsSecureEventInputEnabled
   common/
     codec.rs          跨平台纯编解码
     error.rs          PlatformError（部分失败语义）

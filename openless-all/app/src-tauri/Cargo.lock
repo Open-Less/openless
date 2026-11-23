@@ -4523,6 +4523,7 @@ dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
  "cc",
+ "core-foundation 0.10.1",
  "coreaudio-sys",
  "cpal",
  "foundry-local-sdk",

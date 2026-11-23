@@ -2,31 +2,11 @@
 //! MTA worker; callbacks only mark text dirty and never read document contents.
 use openless_core::host_document::EditPair;
 
-/// 仅当原生写入失败时恢复我们改过的选区。平台回调必须先复核原控件与文本未变。
-pub fn write_with_selection_recovery(
-    write: impl FnOnce() -> std::result::Result<(), String>,
-    recover: impl FnOnce(),
-) -> std::result::Result<(), String> {
-    let result = write();
-    if result.is_err() {
-        recover();
-    }
-    result
-}
-
-/// 光标上下文读取的单次预算上限（与宿主一致）。
-const MAX_BUDGET_CHARS: usize = 4_000;
-
-/// 光标上下文读取的中间结果（宿主据此区分"受限"与"不支持"）。
-#[derive(Debug, Clone)]
-pub enum ReadOutcome {
-    Window(openless_core::host_document::DocumentWindow),
-    Blocked(crate::common::block_reason::BlockReason),
-    /// 静态原因：区分"没有焦点"与"平台不支持"。
-    Unavailable(&'static str),
-}
-
 use crate::common::geometry::{Rect, UiaAnchor as AnchorSnapshot};
+use crate::ime::{write_with_selection_recovery, ReadOutcome};
+
+/// 光标上下文读取的单次预算上限（与宿主调度层一致）。
+const MAX_BUDGET_CHARS: usize = 4_000;
 use openless_core::host_document::ObservedInsertion;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
