@@ -28,10 +28,6 @@ mod asr;
 #[cfg(test)]
 mod build_target;
 mod cli;
-#[cfg(not(mobile))]
-mod combo_hotkey;
-#[cfg(mobile)]
-#[path = "mobile_stubs/combo_hotkey.rs"]
 mod combo_hotkey;
 mod commands;
 mod coordinator;
@@ -61,11 +57,6 @@ mod global_hotkey_runtime;
 // touches other apps' documents; all platform differences and security guards live here.
 // Currently macOS-only; other platforms degrade gracefully.
 mod host_document;
-#[cfg(not(mobile))]
-#[path = "hotkey.rs"]
-mod hotkey;
-#[cfg(mobile)]
-#[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
@@ -74,10 +65,6 @@ mod llm_gemini;
 mod macos_capsule_input;
 #[cfg(mobile)]
 mod mobile_runtime;
-#[cfg(not(mobile))]
-mod mouse_dictation;
-#[cfg(mobile)]
-#[path = "mobile_stubs/mouse_dictation.rs"]
 mod mouse_dictation;
 mod net;
 mod omni;
@@ -92,21 +79,12 @@ mod qa_hotkey;
 mod recorder;
 #[cfg(not(mobile))]
 mod remote_server;
-#[cfg(not(mobile))]
-#[path = "selection.rs"]
-mod selection;
-#[cfg(mobile)]
-#[path = "mobile_stubs/selection.rs"]
 mod selection;
 #[cfg(not(mobile))]
 mod shortcut_binding;
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
-#[cfg(not(mobile))]
-mod side_aware_combo;
-#[cfg(mobile)]
-#[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
 #[cfg(target_os = "android")]
 mod style_zip_transfer;
@@ -114,9 +92,6 @@ mod tauri_events;
 mod tls_crypto;
 mod types;
 #[cfg(all(not(mobile), target_os = "macos"))]
-mod unicode_keystroke;
-#[cfg(mobile)]
-#[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
 mod update_source;
 #[cfg(target_os = "windows")]

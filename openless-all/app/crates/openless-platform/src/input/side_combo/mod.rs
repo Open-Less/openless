@@ -481,12 +481,16 @@ fn macos_keycode_to_primary(keycode: i64) -> Option<&'static str> {
 
 #[cfg(target_os = "windows")]
 pub mod windows;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub mod unsupported;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
 /// 当前平台的侧键分发后端。
 #[cfg(target_os = "windows")]
 pub use windows as platform;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub use unsupported as platform;
 #[cfg(target_os = "macos")]
 pub use macos as platform;
 #[cfg(test)]

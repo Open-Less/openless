@@ -690,10 +690,8 @@ pub(super) fn less_computer_modifier_bridge_loop(
             // esc_cancel_bridge_loop / combo_abort_bridge_loop (see those
             // functions).
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
-            #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed
             | HotkeyEvent::SelectionPolishShortcutReleased => {}
-            #[cfg(not(mobile))]
             HotkeyEvent::FnRecordingPressed => {}
         }
     }
@@ -2241,10 +2239,13 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             HotkeyEvent::SelectionPolishShortcutReleased => {
                 handle_selection_workspace_hotkey_released(&inner_cloned);
             }
-            // Cannot occur outside recording mode (the CGEventTap only reports
-            // while recording_active); defensively ignored.
-            #[cfg(not(mobile))]
+            // Fn 键只在 macOS 的 CGEventTap 里产生；其它平台显式忽略。
+            #[cfg(not(target_os = "macos"))]
             HotkeyEvent::FnRecordingPressed => {}
+            // 移动端不会产生选区润色事件；分支保留以满足穷尽性。
+            #[cfg(mobile)]
+            HotkeyEvent::SelectionPolishShortcutPressed
+            | HotkeyEvent::SelectionPolishShortcutReleased => {}
         }
     }
 }

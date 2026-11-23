@@ -23,8 +23,7 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 #[path = "selection/zero_clipboard.rs"]
 mod zero_clipboard;
-#[cfg(target_os = "windows")]
-
+// 选区截断参数：所有平台共用（Android 的 QA 选区同样需要上限）。
 const SELECTION_MAX_CHARS: usize = 4000;
 const SELECTION_TRUNCATE_HEAD: usize = 2000;
 const SELECTION_TRUNCATE_TAIL: usize = 2000;

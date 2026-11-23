@@ -4,9 +4,11 @@
 //! 平台分发（macOS keycode / Windows 虚拟键）都在平台层。
 
 pub use openless_platform::input::side_combo::{
-    handle_companion_key_down, handle_primary_key, handle_side_modifier, normalize_windows_vk,
-    platform, ComboHotkeyError, SideAwareComboMonitor, SideModifier,
+    handle_companion_key_down, handle_primary_key, handle_side_modifier, platform,
+    ComboHotkeyError, SideAwareComboMonitor, SideModifier,
 };
+#[cfg(any(target_os = "windows", test))]
+pub use openless_platform::input::side_combo::normalize_windows_vk;
 
 /// 绑定校验（宿主保留入口，便于调用点不变）。
 pub fn validate_side_binding(
