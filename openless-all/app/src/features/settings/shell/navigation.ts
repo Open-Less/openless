@@ -60,7 +60,7 @@ export const GENERAL_PAGES = [
   },
   {
     id: 'translation',
-    icon: 'globe',
+    icon: 'translate',
     titleKey: 'shiftTranslation.title',
     descriptionKey: 'shiftTranslation.description',
   },
