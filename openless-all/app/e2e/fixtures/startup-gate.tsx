@@ -16,6 +16,7 @@ const originals = [
   ` \t${'长'.repeat(9000)}UNIQUE_MIDDLE_全文${'尾'.repeat(9000)}\n `,
   ' \nsecond original\t ',
 ];
+const results = [` \t${'成'.repeat(9000)}RESULT_MIDDLE${'果'.repeat(9000)}\n `, ''];
 const copiedTexts: string[] = [];
 const nativeTheme = params.get('nativeTheme') === 'light' ? 'light' : 'dark';
 const exerciseTheme = params.has('nativeTheme');
@@ -59,6 +60,7 @@ Object.assign(window, {
     openedUrls,
     presentations,
     originals,
+    results,
     copiedTexts,
     releaseTheme,
     allowClipboard: (allowed: boolean) => {
@@ -182,7 +184,7 @@ Object.assign(window, {
           source: 'selection_polish',
           mode: 'light',
           rawTranscript,
-          finalText: index === 0 ? 'processed 0' : '',
+          finalText: results[index],
           errorCode: index === 0 ? null : 'selectionFailed',
           insertStatus: 'inserted',
         }));

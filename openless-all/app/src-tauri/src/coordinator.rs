@@ -1047,7 +1047,7 @@ impl Coordinator {
     }
 
     #[cfg(not(mobile))]
-    pub(crate) fn show_selection_recovery_notice(&self) {
+    pub(crate) fn show_selection_recovery_notice(&self, original: &str) {
         let locale = self
             .inner
             .backend
@@ -1056,11 +1056,10 @@ impl Coordinator {
             .status()
             .map(|status| status.locale)
             .unwrap_or_else(|_| self.inner.backend.config().locale.clone());
-        let epoch = emit_selection_polish_capsule(
-            &self.inner,
-            CapsuleState::Done,
-            crate::selection::original_recovery_message(&locale),
-        );
+        let Some(message) = crate::selection::original_recovery_message(&locale, original, true) else {
+            return;
+        };
+        let epoch = emit_selection_polish_capsule(&self.inner, CapsuleState::Done, message);
         schedule_selection_polish_capsule_idle(&self.inner, epoch, CAPSULE_AUTO_HIDE_DELAY_MS);
     }
 

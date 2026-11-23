@@ -115,6 +115,7 @@ mod voice_edit_session;
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static WRITES: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_GATE: Mutex<Option<Arc<CaptureGate>>> = Mutex::new(None);
+static CAPTURE_SELECTION: Mutex<Option<openless_core::TextSelection>> = Mutex::new(None);
 static CAPTURE_TEXT: Mutex<Option<String>> = Mutex::new(None);
 static CURRENT_TARGET: Mutex<Option<host_document::NativeVoiceEditTarget>> = Mutex::new(None);
 static TARGET_PREPARED: Mutex<Option<Arc<Semaphore>>> = Mutex::new(None);
@@ -185,7 +186,7 @@ mod host_document {
             text: text.clone(),
         };
         *CURRENT_TARGET.lock().unwrap() = Some(target.clone());
-        Ok((text, None, target))
+        Ok((text, CAPTURE_SELECTION.lock().unwrap().take(), target))
     }
 
     pub(crate) fn apply_voice_edit_target(
@@ -414,7 +415,7 @@ async fn commit_revalidates_prepared_native_target_after_waiting_for_clipboard_d
                 assert_eq!(clipboard.dispatched, [before.context.unwrap().preview]);
                 assert_eq!(
                     inner.backend.list_history().unwrap().len(),
-                    history_before + 1
+                    history_before
                 );
             } else {
                 assert!(
@@ -495,7 +496,11 @@ async fn overlay_handoff_reuses_recording_and_preserves_audio_without_native_ins
         .fixture
         .actions()
         .contains(&FixtureEngineAction::Finish(recording)));
-    assert!(inner.backend.list_history().unwrap().is_empty());
+    let history = inner.backend.list_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_transcript, "originalspoken");
+    assert_eq!(history[0].final_text, "originalspoken");
+    assert_eq!(history[0].insert_status, openless_core::HistoryInsertStatus::NotRequested);
     assert_eq!(WRITES.load(Ordering::SeqCst), 0);
     assert!(inner.voice_edit_host.lock().dictation_session_id.is_none());
     voice_edit_session::cancel(&inner, Some(draft.session_id))
@@ -627,6 +632,40 @@ async fn cancelling_during_initial_or_instruction_asr_releases_the_backend() {
         voice_edit_session::cancel(&inner, Some(next.session_id))
             .await
             .unwrap();
+        inner.backend.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn frozen_selection_history_survives_cancel_and_commit_without_instruction_text() {
+    let _serial = SERIAL.lock().await;
+    for commit in [false, true] {
+        let original = format!(" \t{} UNIQUE_MIDDLE {}\n ", "😀".repeat(9000), "中".repeat(9000));
+        *CAPTURE_TEXT.lock().unwrap() = Some(format!("prefix{original}suffix"));
+        *CAPTURE_SELECTION.lock().unwrap() = Some(openless_core::TextSelection {
+            start: 6, end: 6 + original.chars().count() as u32,
+        });
+        let (_directory, inner, _) = fixture();
+        let id = voice_edit_session::start(&inner).await.unwrap().session_id;
+        let before = inner.backend.list_history().unwrap().into_iter().filter(|entry| entry.id == id.to_string()).collect::<Vec<_>>();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].raw_transcript, original);
+        assert!(before[0].final_text.is_empty());
+        voice_edit_session::finish_dictation(&inner, id).await.unwrap();
+        let draft = voice_edit_session::snapshot(&inner).unwrap().context.unwrap().preview;
+        assert_eq!(draft, original);
+        // Model instructions are stored in turns, never in rawTranscript.
+        if commit {
+            voice_edit_session::commit(&inner, id).await.unwrap();
+        } else {
+            voice_edit_session::cancel(&inner, Some(id)).await.unwrap();
+        }
+        let history = inner.backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, id.to_string());
+        assert_eq!(history[0].raw_transcript, original);
+        assert_eq!(history[0].final_text, draft);
+        assert_eq!(history[0].insert_status, if commit { openless_core::HistoryInsertStatus::PasteSent } else { openless_core::HistoryInsertStatus::NotRequested });
         inner.backend.shutdown().await.unwrap();
     }
 }

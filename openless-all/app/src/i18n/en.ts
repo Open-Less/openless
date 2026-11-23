@@ -775,8 +775,6 @@ export const en: typeof zhCN = {
     },
   },
   history: {
-    copyOriginals: 'Copy selected originals',
-    selectOriginal: 'Select original: {{title}}',
     exportError: 'Failed to export the recording. Please try again.',
     kicker: 'HISTORY',
     title: 'History',

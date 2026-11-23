@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession, StylePack } from '../../api/contracts';
-import { copyTextToClipboard } from '../../api/files';
 import { clearHistory } from '../../api/history';
 import { formatComboLabel } from '../../api/hotkeys';
 import { listStylePacks } from '../../api/style-packs';
@@ -41,15 +40,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   const [clearing, setClearing] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [copyingOriginals, setCopyingOriginals] = useState(false);
-  const toggleOriginal = (id: string) =>
-    setCheckedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const grid = useRef<HTMLDivElement>(null);
@@ -149,20 +139,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   const clearableCount = items.filter((entry) => entry.source !== 'quick_note').length;
   const binding = quickNotesOnly ? prefs?.quickNoteHotkey : prefs?.dictationHotkey;
 
-  const originalRecords = filtered.filter((entry) => checkedIds.has(entry.id));
-  const copyOriginals = async () => {
-    if (!originalRecords.length || copyingOriginals) return;
-    setCopyingOriginals(true);
-    try {
-      await copyTextToClipboard(originalRecords.map((entry) => entry.rawTranscript).join('\n\n'));
-      notify({ message: t('common.copied'), state: 'saved' });
-    } catch (error) {
-      notify({ message: t('history.copyFailed', { err: errorMessage(error) }), state: 'failed' });
-    } finally {
-      setCopyingOriginals(false);
-    }
-  };
-
   const onClear = async () => {
     if (!clearableCount || clearRequest.current) return;
     clearRequest.current = true;
@@ -224,11 +200,6 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
             filtered={filtered}
             selectedId={item?.id}
             onSelect={selectRecord}
-            checkedIds={checkedIds}
-            onToggleOriginal={toggleOriginal}
-            onCopyOriginals={() => void copyOriginals()}
-            copyingOriginals={copyingOriginals}
-            checkedCount={originalRecords.length}
             trigger={binding ? formatComboLabel(binding) : ''}
             loading={loading}
             loadError={loadError}

@@ -757,8 +757,6 @@ export const ko: typeof zhCN = {
     },
   },
   history: {
-    copyOriginals: '선택한 원문 복사',
-    selectOriginal: '원문 선택: {{title}}',
     exportError: '녹음을 내보내지 못했습니다. 다시 시도해 주세요.',
     kicker: '기록',
     title: '기록',

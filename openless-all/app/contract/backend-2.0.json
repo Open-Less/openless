@@ -28,6 +28,8 @@
     },
     "hostPort": "SelectionRuntimeAdapter.protect_original(sessionId, completeOriginal) -> Result<Option<opaque clipboard revision>>",
     "voiceApplyTicket": "optional originalClipboardRevision binds the original clipboard transaction to the existing sessionId",
+    "recoveryNotice": "only confirmed Inserted and frozen original Unicode scalar count > 4000; never trim or count bytes/UTF-16 units",
+    "historyCopy": "existing detail copy follows raw/polished view; no list checkboxes or bulk copy",
     "successfulWrite": "do not copy result; restore protected original unless a later user copy owns clipboard",
     "definiteNoWrite": "copy complete result only while original clipboard transaction still owns clipboard",
     "uncertainWrite": "PasteSent or OutcomeUnknown; never retry or copy as if definitely not inserted",

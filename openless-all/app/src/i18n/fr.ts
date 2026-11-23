@@ -795,8 +795,6 @@ export const fr: typeof zhCN = {
     },
   },
   history: {
-    copyOriginals: 'Copier les originaux sélectionnés',
-    selectOriginal: 'Sélectionner l’original : {{title}}',
     exportError: 'Impossible d’exporter l’enregistrement. Réessayez.',
     kicker: 'HISTORIQUE',
     title: 'Historique',

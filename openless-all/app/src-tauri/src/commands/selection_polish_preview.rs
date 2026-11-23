@@ -67,7 +67,7 @@ pub async fn confirm_selection_polish_preview(
         .insert_outcome
         == Some(openless_core::InsertOutcome::Inserted)
     {
-        coord.show_selection_recovery_notice();
+        coord.show_selection_recovery_notice(snapshot.source_text.as_deref().unwrap_or_default());
     }
     Ok(())
 }
