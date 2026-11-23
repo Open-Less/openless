@@ -325,7 +325,7 @@ test('translation keeps its element and moves continuously when streaming starts
   await expect(badge.locator('.ol-classic-translation-label')).toHaveText('正在翻译');
   await expect(badge).toHaveAttribute('data-picker-open', 'false');
   await expect(badge.locator('.ol-translation-language-collapse')).toHaveCSS('grid-template-columns', '0px');
-  await expect(badge.getByRole('combobox')).toBeDisabled();
+  await expect(badge.locator('[role="combobox"]')).toBeDisabled();
   await page.screenshot({ path: info.outputPath('translation-after-stop.png') });
 });
 

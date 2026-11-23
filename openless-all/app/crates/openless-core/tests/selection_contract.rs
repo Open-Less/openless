@@ -1165,10 +1165,12 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].raw_transcript, original);
         if !translation {
-            assert_eq!(history[0].style_pack_id.as_deref(), Some(selected_id.as_str()));
+            assert_eq!(history[0].style_pack_id.as_deref(),
+                succeeds.then_some(selected_id.as_str()));
         }
         assert_eq!(runtime.applied().len(), usize::from(succeeds && !translation));
         if succeeds { assert_eq!(history[0].final_text, if translation { complete_result.trim() } else { &complete_result }); }
+        else { assert!(history[0].final_text.is_empty()); }
         backend.shutdown().await.unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
