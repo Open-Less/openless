@@ -4520,9 +4520,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "block2 0.6.2",
  "cc",
  "coreaudio-sys",
  "cpal",
+ "futures-util",
  "global-hotkey",
  "keyring",
  "libc",

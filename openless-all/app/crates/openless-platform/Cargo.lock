@@ -2213,9 +2213,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "block2",
  "cc",
  "coreaudio-sys",
  "cpal",
+ "futures-util",
  "global-hotkey",
  "keyring",
  "libc",

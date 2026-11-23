@@ -41,6 +41,7 @@ cargo test  --no-default-features --features storage          # 只测存储模�
 | `credentials` | 保险库原语（Windows CredMan / macOS Keychain） | keyring, security-framework, zeroize, anyhow |
 | `asr` | 本地 ASR 元数据（provider id / 模型收据 / sherpa 描述 / 诊断钩子） | anyhow, serde, serde_json, uuid |
 | `asr-sherpa` | sherpa-onnx 原生运行时（仅 Windows / Android arm64） | sherpa-onnx, tokio, parking_lot |
+| `asr-apple` | Apple Speech（仅 macOS） | objc2, block2, futures-util, parking_lot |
 | `ime-profile` | Windows IME 语言配置 | winreg |
 
 feature 之间的依赖写在 `Cargo.toml` 里，关闭底层能力会连带关掉依赖它的能力，
@@ -70,6 +71,7 @@ src/
     descriptors.rs    sherpa 运行时阶段/事件负载（纯逻辑）
     diagnostics.rs    诊断事件钩子（宿主注册，引擎上报）
     sherpa/           sherpa-onnx 原生运行时（runtime / provider / blocking_decode）
+    apple.rs          Apple Speech（macOS Speech.framework）
   audio/
     mute.rs           录音期间系统静音（含 mute/{windows,macos,unsupported}.rs）
     cue.rs            合成"开始录音"提示音（cpal，桌面平台）

@@ -137,6 +137,9 @@ dispatch2 = "0.3"
 coreaudio-sys = "0.2"
 objc2 = { version = "0.5", features = ["exception"] }
 objc2-foundation = "0.2"
+# Apple Speech 只在 macOS 编译，对应平台层 feature。
+openless-platform = { path = "../crates/openless-platform", features = ["asr-apple"] }
+
 # 0.2.2 的 NSPanel feature 定义缺少结构体 cfg 所需的 NSResponder/NSWindow
 # （app workspace 靠 winit 的 feature union 掩盖了它，src-tauri 无 winit）。
 objc2-app-kit = { version = "0.2", features = ["NSPanel", "NSResponder", "NSWindow"] }
@@ -145,6 +148,7 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 # sherpa 原生运行时只在提供静态库的目标上启用（与 build.rs 的 local_asr_sherpa 一致）。
 [target.'cfg(any(target_os = "windows", target_os = "android"))'.dependencies]
 openless-platform = { path = "../crates/openless-platform", features = ["asr-sherpa"] }
+
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.58"

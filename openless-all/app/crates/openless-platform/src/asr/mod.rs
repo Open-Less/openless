@@ -13,6 +13,10 @@ pub mod diagnostics;
 pub mod ids;
 pub mod receipt;
 
+// Apple Speech 只在 macOS 编译（Speech.framework）。
+#[cfg(all(feature = "asr-apple", target_os = "macos"))]
+pub mod apple;
+
 // 只有 Windows 与 Android arm64 提供 sherpa-onnx 静态库；其它目标即使开了
 // `asr-sherpa` 也不编译这个模块（引擎在宿主侧返回"不可用"）。
 #[cfg(all(

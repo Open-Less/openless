@@ -41,6 +41,9 @@ asr = ["dep:anyhow", "dep:serde", "dep:serde_json", "dep:uuid"]
 # sherpa 原生运行时（链接 sherpa-onnx；仅 Windows 与 Android arm64 提供依赖）
 asr-sherpa = ["asr", "dep:sherpa-onnx", "dep:tokio", "dep:parking_lot"]
 
+# Apple Speech（macOS Speech.framework）
+asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
+
 # 胶囊浮层：几何计算 + 平台窗口控制（不抢焦点 / 点击穿透 / 命中测试）
 capsule = ["dep:objc2", "dep:objc2-foundation"]
 
@@ -95,6 +98,7 @@ parking_lot = { version = "0.12", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 tokio = { version = "1", features = ["sync"], optional = true }
+futures-util = { version = "0.3", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -136,6 +140,7 @@ sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
 ], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "0.6", optional = true }
 coreaudio-sys = { version = "0.2", optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", optional = true }
