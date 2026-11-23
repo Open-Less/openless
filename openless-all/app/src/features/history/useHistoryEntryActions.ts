@@ -11,7 +11,10 @@ import {
 } from '../../api/history';
 import { historyStore } from '../../data/history';
 import { useHotkeySettings } from '../../data/preferences';
-import { canRetranscribeHistoryEntry } from '../../lib/history-retranscribe';
+import {
+  canRetranscribeHistoryEntry,
+  retranscriptionErrorKey,
+} from '../../lib/history-retranscribe';
 import { getRuntimeOS } from '../../runtime/environment';
 import { audioBytes, recordingFileName } from './audio';
 import { errorMessage, historyTitle, isUserCancelled } from './presentation';
@@ -175,11 +178,12 @@ export function useHistoryEntryActions(
     } catch (error) {
       if (active.current) {
         const message = errorMessage(error);
-        if (message.includes('not found')) setAudioMissing(true);
+        const reasonKey = retranscriptionErrorKey(message);
+        if (reasonKey === 'history.retranscribeErrors.Missing') setAudioMissing(true);
         if (!isUserCancelled(message)) {
           notify({
             state: 'failed',
-            message: t('history.retranscribeFailed', { err: t('common.operationFailed') }),
+            message: t('history.retranscribeFailed', { err: t(reasonKey) }),
           });
         }
       }
