@@ -177,13 +177,13 @@ for (const locale of ['en', 'de', 'fr']) {
     await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
     // The fixture uses the same i18next instance as the real capsule.
     await page.evaluate(async (locale) => {
-      const { default: i18n } = await import('/src/i18n/index.ts');
-      await i18n.changeLanguage(locale);
+      const { setLocalePreference } = await import('/src/i18n/index.ts');
+      await setLocalePreference(locale as 'en' | 'de' | 'fr');
       (window as any).fixture.emit('capsule:state', { state: 'polishing', sessionId: 'slow-locale' });
     }, locale);
     await page.addStyleTag({ content: '.ol-default-status { font-size: 15px; }' });
     const text = page.locator('.ol-capsule-slow-static');
-    await expect(text).toBeVisible({ timeout: 6000 });
+    await expect(text).toHaveText({ en: 'thinking', de: 'denkt nach', fr: 'réflexion' }[locale]!, { timeout: 6000 });
     expect(await text.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
     await expect(page.locator('.ol-capsule-marquee')).toHaveCount(0);
     await expect(page.locator('.ol-translation-language-collapse')).toHaveCSS('transition-duration', '0s');

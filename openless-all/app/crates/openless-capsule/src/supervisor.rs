@@ -286,6 +286,7 @@ mod tests {
     #[tokio::test]
     async fn helper_replays_the_latest_frame_and_rejects_another_sessions_action() {
         use std::os::unix::fs::PermissionsExt;
+        for phase in ["recording", "transcribing", "polishing"] {
         let script = std::env::temp_dir().join(format!(
             "openless-capsule-test-{}-{}.sh",
             std::process::id(),
@@ -302,13 +303,19 @@ while IFS= read -r frame; do
     *'"frame"'*)
       printf '%s\n' '{"type":"action","version":2,"session_id":"old","sequence":7,"action":"cancel"}'
       printf '%s\n' '{"type":"action","version":2,"session_id":"current","sequence":7,"action":"confirm"}'
+      printf '%s\n' '{"type":"action","version":2,"session_id":"background","sequence":7,"action":"confirm"}'
+      printf '%s\n' '{"type":"action","version":2,"session_id":"background","sequence":7,"action":"cancel"}'
+      printf '%s\n' '{"type":"action","version":2,"session_id":"current","sequence":7,"action":"cancel"}'
       ;;
   esac
 done
 "#).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let (tx, mut rx) = watch::channel(Some(recording("old", 1)));
-        tx.send_replace(Some(recording("current", 7)));
+        let mut current = recording("current", 7);
+        current.state.phase = phase.into();
+        current.processing_session_id = Some("background".into());
+        tx.send_replace(Some(current));
         let (action_tx, mut action_rx) = tokio::sync::mpsc::unbounded_channel();
         let callback: Arc<dyn Fn(String, Action) + Send + Sync> =
             Arc::new(move |session, action| {
@@ -324,11 +331,17 @@ done
             )
             .await
         });
+        if phase == "recording" {
         let received = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(received, ("current".into(), Action::Confirm));
+        }
+        for expected in ["background", "current"] {
+            let received = tokio::time::timeout(Duration::from_secs(2), action_rx.recv()).await.unwrap().unwrap();
+            assert_eq!(received, (expected.into(), Action::Cancel));
+        }
         assert!(
             action_rx.try_recv().is_err(),
             "old-session cancel must be rejected"
@@ -340,6 +353,7 @@ done
             .unwrap()
             .is_ok());
         std::fs::remove_file(script).unwrap();
+        }
     }
 
     #[tokio::test]

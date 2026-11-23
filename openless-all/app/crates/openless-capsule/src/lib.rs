@@ -306,7 +306,8 @@ impl Frame {
         self.interactive
             && !self.leaving
             && (self.session_id == session_id || (action == Action::Cancel
-                && self.state.phase == "recording" && self.processing_session_id.as_deref() == Some(session_id)))
+                && matches!(self.state.phase.as_str(), "recording" | "transcribing" | "polishing")
+                && self.processing_session_id.as_deref() == Some(session_id)))
             && sequence <= self.sequence
             && match action {
                 Action::Confirm => self.state.phase == "recording",
@@ -443,6 +444,13 @@ mod tests {
         assert!(recording.accepts("background-a", 42, Action::Cancel));
         assert!(!recording.accepts("background-a", 42, Action::Confirm));
         assert!(recording.accepts("new", 42, Action::Cancel));
+        for phase in ["transcribing", "polishing"] {
+            recording.state.phase = phase.into();
+            assert!(recording.accepts("new", 42, Action::Cancel));
+            assert!(recording.accepts("background-a", 42, Action::Cancel));
+            assert!(!recording.accepts("background-a", 42, Action::Confirm));
+            assert!(!recording.accepts("unknown", 42, Action::Cancel));
+        }
         recording.processing_session_id = Some("background-b".into());
         assert!(!recording.accepts("background-a", 42, Action::Cancel));
         recording.state.phase = "completed".into();

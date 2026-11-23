@@ -53,6 +53,13 @@ pub(crate) struct NativeCapsule {
 /// motion plays on the helper before the host reaps it.
 const EXIT_MS: u64 = 200;
 
+fn projected_dictation_session(
+    capture: Option<openless_core::SessionId>,
+    jobs: &[openless_core::DictationStateSnapshot],
+) -> Option<openless_core::SessionId> {
+    capture.or_else(|| jobs.first().and_then(|job| job.session_id))
+}
+
 impl NativeCapsule {
     pub(crate) fn new(app: tauri::AppHandle) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -294,14 +301,11 @@ impl NativeCapsule {
             CapsuleState::Cancelled => "cancelled",
             CapsuleState::Error => "failed",
         };
+        let snapshot = coordinator.backend().snapshot();
         let interactive = matches!(
             payload.state,
             CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-        ) && coordinator
-            .backend()
-            .snapshot()
-            .dictation
-            .session_id
+        ) && projected_dictation_session(snapshot.dictation.session_id, &snapshot.processing_dictations)
             .is_some_and(|id| Some(id.to_string()) == payload.session_id);
         let style = match preferences.capsule_style {
             CapsuleStyle::Siri => "siri",
@@ -316,7 +320,7 @@ impl NativeCapsule {
         } else {
             String::new()
         };
-        let processing_jobs: Vec<_> = coordinator.backend().snapshot().processing_dictations.into_iter()
+        let processing_jobs: Vec<_> = snapshot.processing_dictations.into_iter()
             .filter(|job| job.session_id.map(|id| id.to_string()) != payload.session_id).collect();
         let mut frame = Frame {
             session_id: payload.session_id.clone().unwrap_or_default(),
@@ -565,6 +569,21 @@ pub(crate) fn native_capsule_set_locale(app: tauri::AppHandle, locale: String) {
 #[cfg(test)]
 mod theme_tests {
     use super::*;
+
+    #[test]
+    fn input_owner_projects_the_first_job_only_after_capture_releases() {
+        let capture = openless_core::SessionId::new();
+        let first = openless_core::SessionId::new();
+        let second = openless_core::SessionId::new();
+        let job = |id| openless_core::DictationStateSnapshot {
+            session_id: Some(id), phase: openless_core::DictationPhase::Polishing,
+            ..Default::default()
+        };
+        assert_eq!(projected_dictation_session(Some(capture), &[job(first), job(second)]), Some(capture));
+        assert_eq!(projected_dictation_session(None, &[job(first), job(second)]), Some(first));
+        assert_eq!(projected_dictation_session(None, &[job(second)]), Some(second));
+        assert_eq!(projected_dictation_session(None, &[]), None);
+    }
 
     #[test]
     fn a_theme_change_preserves_the_active_session_and_exit_state() {
