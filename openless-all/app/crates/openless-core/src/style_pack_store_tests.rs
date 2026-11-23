@@ -748,15 +748,15 @@ fn offline_install_and_legacy_preferences_upgrade_once_without_changing_choice()
 }
 
 #[test]
-fn v1_projection_fixture_matches_current_release_and_restores_only_equivalent_content() {
-    use crate::style_packs::{builtin_intent_pack, normalize_synced_builtin_pack, StylePackKind};
+fn v1_projection_fixture_matches_released_1_1_and_restores_only_equivalent_content() {
+    use crate::style_packs::{released_intent_v1_1_pack, normalize_synced_builtin_pack, StylePackKind};
     let fixture: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/intent-reconstruction-v1-projection.json")).unwrap();
-    let mut expected = serde_json::to_value(builtin_intent_pack()).unwrap();
+    let mut expected = serde_json::to_value(released_intent_v1_1_pack()).unwrap();
     let object = expected.as_object_mut().unwrap();
     object.remove("iconPath");
     object.remove("active");
     object.insert("kind".into(), "imported".into());
-    assert!(fixture == serde_json::json!({"pack":expected, "icon":null}), "fixture must equal current projected serialization");
+    assert!(fixture == serde_json::json!({"pack":expected, "icon":null}), "fixture must equal shipped 1.1 projected serialization");
     let projected: StylePack = serde_json::from_value(fixture["pack"].clone()).unwrap();
     let mut adopted = projected.clone();
     normalize_synced_builtin_pack(&mut adopted);
@@ -783,4 +783,162 @@ fn v1_projection_fixture_matches_current_release_and_restores_only_equivalent_co
     normalize_synced_builtin_pack(&mut alias);
     assert_eq!(alias.id, "imported.preserved-reference");
     assert_eq!(alias.kind, StylePackKind::Builtin);
+}
+
+
+#[test]
+fn intent_repair_preserves_exact_upstream_payload_and_installs_offline() {
+    use crate::style_packs::{builtin_intent_pack, original_intent_pack, StylePackKind};
+    let original = original_intent_pack();
+    assert_eq!(original.prompt.chars().count(), 5671);
+    assert_eq!(original.selection_prompt.chars().count(), 3494);
+    let mut expected = original;
+    expected.kind = StylePackKind::Builtin;
+    expected.version = "1.2.0".into();
+    assert_eq!(builtin_intent_pack(), expected);
+    let root = TestDir::new("intent-repair-install");
+    let store = StylePackStore::at_data_dir(root.path()).unwrap();
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .find(|pack| pack.id == expected.id),
+        Some(&expected)
+    );
+}
+
+#[test]
+fn intent_repair_upgrades_known_releases_and_keeps_local_identity() {
+    use crate::style_packs::{
+        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, StylePackKind,
+        BUILTIN_INTENT_ID,
+    };
+    for release in [
+        original_intent_pack(),
+        released_intent_v1_1_pack(),
+        builtin_intent_pack(),
+    ] {
+        for alias in [false, true] {
+            for kind in [StylePackKind::Imported, StylePackKind::Builtin] {
+                let root = TestDir::new("intent-repair-upgrade");
+                let mut installed = release.clone();
+                installed.kind = kind;
+                if alias {
+                    installed.id = "imported.keep-reference".into();
+                }
+                installed.name = "My renamed pack".into();
+                installed.enabled = false;
+                installed.active = true;
+                installed.created_at = Some("2026-11-22T08:52:19Z".into());
+                let mut packs = builtin_style_packs();
+                packs.retain(|pack| pack.id != BUILTIN_INTENT_ID);
+                packs.push(installed.clone());
+                fs::write(
+                    root.path().join("style-packs.json"),
+                    serde_json::to_vec(&packs).unwrap(),
+                )
+                .unwrap();
+                let mut prefs = UserPreferences {
+                    active_style_pack_id: installed.id.clone(),
+                    selection_polish_style_pack_id: installed.id.clone(),
+                    ..Default::default()
+                };
+                let store =
+                    StylePackStore::at_data_dir_with_preferences(root.path(), &prefs).unwrap();
+                let upgraded = store.list().unwrap();
+                assert_eq!(upgraded.len(), 5);
+                let pack = upgraded
+                    .iter()
+                    .find(|pack| pack.id == installed.id)
+                    .unwrap();
+                let mut expected = installed;
+                let target = builtin_intent_pack();
+                expected.version = target.version;
+                expected.prompt = target.prompt;
+                expected.selection_prompt = target.selection_prompt;
+                expected.kind = StylePackKind::Builtin;
+                expected.updated_at = pack.updated_at.clone();
+                assert_eq!(pack, &expected);
+                // Disabled packs retain their stored selection here; preference reconciliation
+                // separately applies the existing enabled-pack fallback policy.
+                let mut selectable = upgraded.clone();
+                selectable.iter_mut().find(|p| p.id == pack.id).unwrap().enabled = true;
+                sync_style_pack_preferences(&mut prefs, &selectable);
+                assert_eq!(prefs.active_style_pack_id, pack.id);
+                assert_eq!(prefs.selection_polish_style_pack_id, pack.id);
+                let bytes = fs::read(root.path().join("style-packs.json")).unwrap();
+                StylePackStore::at_data_dir_with_preferences(root.path(), &prefs).unwrap();
+                assert_eq!(
+                    fs::read(root.path().join("style-packs.json")).unwrap(),
+                    bytes
+                );
+                let mut snapshot = vec![release.clone()];
+                snapshot[0].id = pack.id.clone();
+                snapshot[0].kind = kind;
+                super::normalize_cloud_style_packs(&mut snapshot);
+                assert_eq!(snapshot.iter().filter(|p| p.id == pack.id).count(), 1);
+                assert_eq!(
+                    snapshot.iter().find(|p| p.id == pack.id).unwrap().prompt,
+                    pack.prompt
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn intent_repair_never_overwrites_edited_or_unproven_releases() {
+    use crate::style_packs::{
+        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, StylePackKind,
+    };
+    for release in [
+        original_intent_pack(),
+        released_intent_v1_1_pack(),
+        builtin_intent_pack(),
+    ] {
+        for alias in [false, true] {
+            for field in [
+                "prompt",
+                "selectionPrompt",
+                "voiceEditPrompt",
+                "baseMode",
+                "examples",
+                "recommendedModel",
+                "version",
+                "originPackId",
+                "originAuthorLogin",
+            ] {
+                let mut value = serde_json::to_value(&release).unwrap();
+                value["kind"] = serde_json::json!("imported");
+                if alias {
+                    value["id"] = serde_json::json!("imported.user-edited");
+                }
+                value[field] = match field {
+                    "baseMode" => serde_json::json!("formal"),
+                    "examples" => serde_json::json!([{ "input": "user", "output": "edited" }]),
+                    _ => serde_json::json!("user edited"),
+                };
+                let edited: StylePack = serde_json::from_value(value).unwrap();
+                let mut packs = vec![edited.clone()];
+                super::normalize_cloud_style_packs(&mut packs);
+                assert_eq!(
+                    packs.iter().find(|pack| pack.id == edited.id),
+                    Some(&edited),
+                    "{} alias={alias} {field}",
+                    release.version
+                );
+                assert!(!super::reconcile_builtin_packs(&mut packs));
+                // The same protection applies when local storage already calls it builtin.
+                let mut builtin = edited.clone();
+                builtin.kind = StylePackKind::Builtin;
+                let mut packs = vec![builtin.clone()];
+                super::reconcile_builtin_packs(&mut packs);
+                assert_eq!(
+                    packs.iter().find(|pack| pack.id == builtin.id),
+                    Some(&builtin)
+                );
+            }
+        }
+    }
 }

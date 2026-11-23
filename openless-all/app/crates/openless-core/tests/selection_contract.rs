@@ -1120,6 +1120,7 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         let (backend, directory) = backend_with_selection_parts(runtime.clone(), polisher, credentials);
         let mut preferences = backend.get_preferences();
         preferences.active_llm_provider = "ark".into();
+        if !translation { preferences.selection_polish_style_pack_id = openless_core::BUILTIN_INTENT_ID.into(); }
         preferences.multimodal_pipeline_enabled = false;
         preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
         write_preferences(&backend, preferences);
@@ -1131,6 +1132,13 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         };
         assert_eq!(result.is_ok(), succeeds, "{result:?}");
         let request = server.await.unwrap();
+        if !translation {
+            let system = request["messages"][0]["content"].as_str().unwrap();
+            let pack = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+            assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.selection_prompt, &[])));
+            assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
+            assert!(!system.contains(openless_core::DICTATION_REVISION_RULES));
+        }
         assert_eq!(request["messages"][1]["content"], openless_core::prompts::selection_user_prompt(&original));
         assert!(request["messages"][1]["content"].as_str().unwrap().contains("UNIQUE_MIDDLE_全文"));
         assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
