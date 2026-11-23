@@ -6,6 +6,15 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const fr: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Traduction de l’enregistrement',
+    description: 'Bascule Shift et nombre d’appuis',
+    count: 'Nombre d’appuis sur Shift',
+    scope:
+      'Pendant l’enregistrement, appuyez brièvement sur Shift seul autant de fois pour activer ou désactiver la traduction. S’applique au raccourci Shift par défaut ; désactivé si Shift est la touche d’enregistrement.',
+    times_one: '{{count}} appui',
+    times_other: '{{count}} appuis',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
@@ -341,8 +350,11 @@ export const fr: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    emptyTranscript: 'Vide · Aucune voix',
+    transcribing: 'Transcription',
     asking: 'Posez une question',
     thinking: 'réflexion',
+    slowConnection: 'Connexion plus lente que d’habitude',
     using: 'action',
     cancelled: 'Annulé',
     error: 'Une erreur s’est produite',
@@ -351,10 +363,10 @@ export const fr: typeof zhCN = {
     translationChangeFailed: 'Impossible de changer de langue. Veuillez réessayer.',
     translating: 'Traduction',
     selectionPolish: {
-      polishing: 'Amélioration du texte…',
+      polishing: 'Amélioration…',
       replaced: 'Remplacé',
       noSelection: 'Aucun texte sélectionné',
-      failed: 'L’amélioration a échoué. Réessayez',
+      failed: 'Échec',
     },
   },
   selectionPolishPreview: {

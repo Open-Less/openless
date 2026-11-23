@@ -147,6 +147,34 @@ impl CapsuleSnapshotState {
             return;
         }
         let event_session = event.session_id.map(|session| session.to_string());
+        if let BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            // A job list containing the event owner is the device-release edge.
+            // Removal of another job cannot retarget a displayed recording.
+            let submitted = jobs.iter().any(|job| job.session_id == event.session_id);
+            let settled_display = event_session == snapshot.session_id
+                && snapshot.payload.as_ref().is_none_or(|payload| payload.state != CapsuleState::Recording);
+            if submitted || settled_display {
+                if let Some(id) = jobs.first().and_then(|job| job.session_id) {
+                    let id = Some(id.to_string());
+                    if id != snapshot.session_id { snapshot.text.clear(); }
+                    snapshot.session_id = id.clone();
+                    snapshot.pending_session_id = id;
+                    snapshot.revision = event.sequence;
+                    snapshot.pending_payload_revision = Some(event.sequence);
+                }
+            }
+            snapshot.sequence = event.sequence;
+            return;
+        }
+        if snapshot.session_id.is_some() && event_session.is_some() && event_session != snapshot.session_id
+            && (matches!(&event.kind,
+                BackendEventKind::DictationCompleted(_) | BackendEventKind::TranscriptDelta(_) | BackendEventKind::PolishDelta(_))
+                || matches!(&event.kind, BackendEventKind::DictationStateChanged(state)
+                    if !matches!(state.phase, DictationPhase::Starting | DictationPhase::Recording)))
+        {
+            snapshot.sequence = event.sequence;
+            return;
+        }
         let pending_session_id = match &event.kind {
             BackendEventKind::QaLevel(_)
             | BackendEventKind::QaState(_)
@@ -296,6 +324,33 @@ mod tests {
             selection_polish: false,
             qa: false,
         }
+    }
+
+    #[test]
+    fn job_projection_cannot_replace_recording_but_can_advance_after_device_release() {
+        let a = SessionId::new();
+        let b = SessionId::new();
+        let job = |id| DictationStateSnapshot { session_id: Some(id), phase: DictationPhase::Transcribing, ..Default::default() };
+        let mut state = CapsuleSnapshotState::default();
+        state.record_backend_event(&BackendEvent { sequence: 1, session_id: Some(b),
+            kind: BackendEventKind::DictationStateChanged(DictationStateSnapshot {
+                session_id: Some(b), phase: DictationPhase::Starting, ..Default::default() }) });
+        assert!(state.commit_capsule_payload(&payload(b, CapsuleState::Recording), 1));
+        state.record_backend_event(&BackendEvent { sequence: 2, session_id: Some(a),
+            kind: BackendEventKind::DictationStateChanged(job(a)) });
+        assert_eq!(state.session_id, Some(b.to_string()));
+        assert_eq!(state.pending_payload_revision, None);
+        state.record_backend_event(&BackendEvent { sequence: 3, session_id: Some(a),
+            kind: BackendEventKind::DictationJobsChanged(vec![]) });
+        assert_eq!(state.session_id, Some(b.to_string()));
+        state.record_backend_event(&BackendEvent { sequence: 4, session_id: Some(b),
+            kind: BackendEventKind::DictationJobsChanged(vec![job(a), job(b)]) });
+        assert_eq!(state.session_id, Some(a.to_string()));
+        assert!(state.commit_capsule_payload(&payload(a, CapsuleState::Transcribing), 4));
+        state.record_backend_event(&BackendEvent { sequence: 5, session_id: Some(a),
+            kind: BackendEventKind::DictationJobsChanged(vec![job(b)]) });
+        assert_eq!(state.session_id, Some(b.to_string()));
+        assert!(state.commit_capsule_payload(&payload(b, CapsuleState::Transcribing), 5));
     }
 
     fn completed_dictation() -> (CapsuleSnapshotState, SessionId) {

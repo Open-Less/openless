@@ -41,13 +41,15 @@ flowchart LR
 
 ### 听写
 
-热键或原生按钮 → 宿主录音会话 → [dictation_engine.rs](../openless-all/app/crates/openless-core/src/dictation_engine.rs) → 转写及可选润色 → 宿主落字 → 历史与终态事件。宿主提供麦克风、目标编辑器和实际写入结果。录音取消、错误和超时沿原会话清理资源，迟到结果按会话身份丢弃。
+热键或原生按钮 → 宿主录音会话 → [dictation_engine.rs](../openless-all/app/crates/openless-core/src/dictation_engine.rs) → 转写及可选润色 → 宿主落字 → 历史与终态事件。宿主提供麦克风、目标编辑器和实际写入结果。设备确认停止后，采集拥有者转成保留原 sessionId 与冻结上下文的后台任务，下一段无需等待后处理；最终处理按提交顺序进行。录音取消、错误和超时只清理本段资源，旧段不能改写下一段状态。见[采集、任务与安全写回契约](development/recording-overlap.md)。
 
 云识别和润色由 Core 选择渠道并发送请求。本地模型的下载和激活按模型家族由 Core 与宿主共同负责。点击胶囊、流式原文与写入目标编辑器分别走各自的界面和宿主路径。见[语音链路](development/speech.md)、[本地模型](development/local-models.md)和[自定义润色策略](development/polish-strategy.md)。
 
 ### 问答与选区
 
 桌面问答窗口由 [windowRoutes.tsx](../openless-all/app/src/app/windowRoutes.tsx) 分派。界面发送 `qa_submit_text` 等命令给 [Tauri 问答适配](../openless-all/app/src-tauri/src/commands/qa.rs)，由 [Core 问答服务](../openless-all/app/crates/openless-core/src/qa_service.rs) 管理会话、请求和结果事件。[选区语音服务](../openless-all/app/crates/openless-core/src/selection_voice_service.rs) 根据语音意图生成编辑预览或问答，确认写回时由宿主复核原输入目标。Linux 的问答界面经 Linux 宿主调用同一业务层。
+
+系统选区润色/翻译保留完整选中文字，先写入同一历史记录的 `rawTranscript`，再保护原文剪贴板，最后发送完整模型请求。原文、原控件和原范围分别核对；服务拒绝或输出不完整不能替换选区。剪贴板兜底、原位置续接和平台验收边界见[选区全文与原文保护](development/selection-originals.md)。
 
 Android 浮窗从听写转到追问时，宿主先保存选区，再用 `stop_dictation_for_qa` 结束原录音取得转写，由 `QaApi::submit_captured_text` 提交问题。这个路径跳过原听写的润色和落字。
 
@@ -64,7 +66,7 @@ Android 的 [OpenLessImeService](../openless-all/app/android/kotlin/OpenLessImeS
 | 热键、权限、窗口、胶囊、目标插入 | [Tauri coordinator](../openless-all/app/src-tauri/src/coordinator/) · [界面窗口路由](../openless-all/app/src/app/windowRoutes.tsx) · [Windows TSF/IME](../openless-all/app/windows-ime/) |
 | 服务渠道、凭据、语音识别与润色 | [Core 模块声明](../openless-all/app/crates/openless-core/src/lib.rs) 中的 `provider_*`、`asr`、`polish`、`omni`、`credentials`。服务密钥通过宿主系统库保存。 |
 | 历史、词汇、纠错、风格和市场 | [Core 源码](../openless-all/app/crates/openless-core/src/) 中的 `history`、`vocabulary`、`correction`、`style_pack_store`、`marketplace`，配合对应的 `src/features` 页面。 |
-| 应用识别与按应用选择风格 | [app_catalog.rs](../openless-all/app/crates/openless-core/src/app_catalog.rs) 从独立公共 API 获取目录并保留可用缓存，[app_style_routing.rs](../openless-all/app/crates/openless-core/src/app_style_routing.rs) 管理本机分类归属和风格规则。目录内容在 `openless-marketplace` 服务端维护；目标与选择在听写开始时冻结。 |
+| 应用识别与按应用选择风格 | [app_catalog.rs](../openless-all/app/crates/openless-core/src/app_catalog.rs) 从独立公共 API 获取目录并保留可用缓存，[app_style_routing.rs](../openless-all/app/crates/openless-core/src/app_style_routing.rs) 管理本机分类归属和风格规则。目录内容在 `openless-marketplace` 服务端维护；目标、选择与独立场景前缀在听写开始时冻结，最终模型请求将场景放在所选风格之前；见[场景契约](development/app-style-routing.md#冻结应用场景前缀)。 |
 | 加密云同步 | [Tauri 云同步命令](../openless-all/app/src-tauri/src/commands/cloud_sync_e2ee.rs) → Core `cloud_sync_e2ee` → protocol、documents 和 store 模块。加密、身份、合并和恢复在原生层完成。见[数据与协议](development/cloud-sync.md)。 |
 | 远程输入 | [Tauri remote_server](../openless-all/app/src-tauri/src/remote_server/) 或 Linux 宿主 → Core 远程输入服务 → 外部音频会话。见[远程输入协议](development/remote-input.md)。 |
 | UI、主题、语言、浏览器夹具 | [src/ui](../openless-all/app/src/ui/) · [src/styles](../openless-all/app/src/styles/) · [src/i18n](../openless-all/app/src/i18n/) · [src/preview](../openless-all/app/src/preview/) |

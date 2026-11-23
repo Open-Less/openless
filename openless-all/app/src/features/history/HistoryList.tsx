@@ -128,6 +128,7 @@ const HistoryRow = memo(function HistoryRow({
       className="ol-history-list-record"
       style={{
         width: '100%',
+        minWidth: 0,
         padding: '10px 12px',
         textAlign: 'left',
         display: 'flex',
@@ -195,5 +196,5 @@ const HistoryRow = memo(function HistoryRow({
         </Pill>
       </div>
     </button>
-  );
+);
 });

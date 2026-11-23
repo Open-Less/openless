@@ -193,8 +193,9 @@ impl PipelineDictationEngine {
         }
     }
 
-    /// Once capture is running, local model loading must not hold the public
-    /// session in Starting: Stop must release the microphone before inference is ready.
+    /// Once capture is running, local model loading or waiting for its native
+    /// executor must not hold the public session in Starting: Stop must release
+    /// the microphone before inference is ready.
     /// Cloud routes and stable (record-first) mode keep their existing behavior.
     pub fn with_local_startup_spawner(mut self, spawner: Arc<dyn crate::TaskSpawner>) -> Self {
         self.local_startup_spawner = Some(spawner);
@@ -269,8 +270,7 @@ impl DictationEngine for PipelineDictationEngine {
         let sessions = Arc::clone(&self.sessions);
         let pending_captures = Arc::clone(&self.pending_captures);
         let local_startup_spawner = self.local_startup_spawner.clone().filter(|_| {
-            crate::experimental_asr::ExperimentalAsrModel::from_provider(&context.asr.provider_type)
-                .is_some()
+            crate::dictation_context::is_local_asr_provider(&context.asr.provider_type)
         });
         Box::pin(async move {
             let session = Arc::new(PipelineSession::new(Arc::clone(&context)));
@@ -1074,7 +1074,7 @@ impl DictationEngine for PipelineDictationEngine {
             let translation_active = context.polish.translation_active;
             let uses_polisher = !strategy_skips
                 && context.uses_llm_polisher()
-                && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
+                && !transcript.text.trim().is_empty()
                 && !skips_polish_for_short_text
                 && (!local_fallback_used || translation_active);
             log::info!(
@@ -3733,7 +3733,11 @@ mod tests {
     #[tokio::test]
     async fn local_model_loading_never_blocks_stop_or_cancel_of_the_microphone() {
         use crate::experimental_asr::ExperimentalAsrModel;
-        for model in ExperimentalAsrModel::ALL {
+        let providers = ExperimentalAsrModel::ALL
+            .map(|model| model.provider_type())
+            .into_iter()
+            .chain(["sherpa-onnx-local", "foundry-local-whisper", "apple-speech"]);
+        for provider in providers {
             for cancel in [false, true] {
                 let stops = Arc::new(AtomicUsize::new(0));
                 let pcm = Arc::new(Mutex::new(Vec::new()));
@@ -3761,7 +3765,7 @@ mod tests {
                     .with_local_startup_spawner(Arc::new(crate::TokioTaskSpawner)),
                 );
                 let mut context = (*raw_dictation_context()).clone();
-                context.asr.provider_type = model.provider_type().into();
+                context.asr.provider_type = provider.into();
                 let id = SessionId::new();
                 let progress = Arc::new(RecordingProgress::default());
                 tokio::time::timeout(

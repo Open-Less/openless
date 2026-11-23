@@ -520,3 +520,144 @@ test('the download mirror uses the shared popup above the actual narrow catalog 
   await expect(dialog).toBeVisible();
   await expect(mirror).toBeFocused();
 });
+
+test('Escape from an exiting mirror popup cancels its queued reopening', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixture}?catalog`);
+  const dialog = page.getByRole('dialog');
+  const mirror = page.getByRole('combobox', { name: 'Download mirror', exact: true });
+  await mirror.click();
+  const option = page.getByRole('option', { name: 'Mirror', exact: true });
+  await expect(option).toBeVisible();
+  // Keep the previous popup mounted, as it was during the WebKit failure.
+  await page.addStyleTag({ content: '.ol-select-popup[data-ending-style] { transition-duration: 1s !important; }' });
+  await option.click();
+  await expect(mirror).toContainText('Mirror');
+  await page.locator('.ol-select-popup .ol-select-item[data-selected]').evaluate((node) => {
+    const trigger = document.querySelector('[aria-label="Download mirror"]')!;
+    // Both events precede Base UI's next animation frame. Escape still targets
+    // the old popup while its focus handoff is pending.
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    node.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
+});
+
+test('Select owns Escape after Root accepts a click but before open commits', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=accepted`);
+  const dialog = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-observed')).toHaveText('false');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(mirror).toBeFocused();
+});
+
+test('Select respects a controlled open that refuses closing and then delegates ordinary Escape', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=held`);
+  await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false]');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false,false]');
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+});
+
+test('Select releases refused controlled opening requests', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=refused`);
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true]');
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,true]');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+for (const mode of ['disabled', 'removed', 'new-layer']) {
+  test(`Select revokes its opening transition when ${mode}`, async ({ page }) => {
+    await page.goto(`${fixture}?handoff=${mode}`);
+    await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+    const parent = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+    if (mode === 'new-layer') {
+      await expect(page.getByRole('dialog', { name: 'Handoff child', exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog', { name: 'Handoff child', exact: true })).toHaveCount(0);
+      await expect(parent).toBeVisible();
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+    } else {
+      if (mode === 'disabled') await expect(page.getByRole('combobox')).toBeDisabled();
+      else await expect(page.getByRole('combobox')).toHaveCount(0);
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(parent).toHaveCount(0);
+    }
+  });
+}
+
+test('Select leaves composition-end Escape to IME during its opening handoff', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=ime`);
+  await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+  await expect(page.getByTestId('handoff-observed')).toHaveText('false');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true]');
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+});
+
+test('Select keeps a newer open intent after revoking its accepted predecessor', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=new-intent`);
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false,true]');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+  await expect(mirror).toBeFocused();
+});
+
+test('Select keeps the WebKit composition-end guard across tasks before queued open', async ({ page, browserName }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.goto(`${fixture}?handoff=queued-ime`);
+  await page.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.evaluate((trigger) => {
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    trigger.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    trigger.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    window.addEventListener('keydown', (event) => {
+      (window as Window & { imeEscapePrevented?: boolean }).imeEscapePrevented = event.defaultPrevented;
+    }, { capture: true, once: true });
+  });
+  // The 0ms task has run, but neither the WebKit 5ms guard nor the queued
+  // animation frame has elapsed. This clock controls only this IME boundary.
+  await page.clock.runFor(1);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as Window & { imeEscapePrevented?: boolean }).imeEscapePrevented))
+    .toBe(browserName !== 'webkit');
+  await page.clock.runFor(32);
+  const dialog = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+  await expect(dialog).toBeVisible();
+  if (browserName === 'webkit') {
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(250);
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+    await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false]');
+    await expect(dialog).toBeVisible();
+  } else {
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+  }
+});

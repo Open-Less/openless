@@ -44,6 +44,7 @@ const bridge = {
   inputRegions: [] as any[],
   regionWrites: [] as any[],
   dictationActions: [] as string[],
+  dictationActionArgs: [] as unknown[],
   captionTraceReads: 0,
   captionTraceReports: [] as unknown[],
   qaActions: [] as { command: string; args: unknown }[],
@@ -120,6 +121,7 @@ window.__TAURI_INTERNALS__ = {
       )
     ) {
       bridge.dictationActions.push(command);
+      bridge.dictationActionArgs.push(args);
       return;
     }
     if (command === 'plugin:event|listen') {

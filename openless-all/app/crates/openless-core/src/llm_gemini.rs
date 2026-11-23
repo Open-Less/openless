@@ -184,6 +184,23 @@ impl GeminiProvider {
         Ok(clean_polish_output(&raw))
     }
 
+    pub(crate) async fn selection_streaming<F, C>(
+        &self,
+        system: String,
+        user: String,
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let body = self.build_generate_body(&system, vec![user_content(&user)]);
+        let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
+        self.send_streaming(&url, &body, on_delta, should_cancel)
+            .await
+    }
+
     pub async fn polish_streaming<F, C>(
         &self,
         raw_text: &str,
@@ -461,6 +478,7 @@ impl GeminiProvider {
         // events by bytes and decoding whole events is always safe.
         let mut byte_buffer: Vec<u8> = Vec::new();
         let mut full_text = String::new();
+        let mut completed = false;
         loop {
             // Same cancel flag as polish.rs streaming — break immediately on
             // user cancel / popover close instead of draining the HTTP body
@@ -495,6 +513,12 @@ impl GeminiProvider {
                             continue;
                         }
                     };
+                    if let Some(reason) = v["candidates"][0]["finishReason"].as_str() {
+                        if reason != "STOP" {
+                            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+                        }
+                        completed = true;
+                    }
                     // Gemini SSE: candidates[0].content.parts[*].text
                     if let Some(parts) = v["candidates"][0]["content"]["parts"].as_array() {
                         for part in parts {
@@ -510,6 +534,9 @@ impl GeminiProvider {
             }
         }
 
+        if !completed {
+            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+        }
         log::info!(
             "[llm] HTTP 200 gemini stream done; total chars={}",
             full_text.chars().count()
@@ -747,6 +774,12 @@ fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
     let first = candidates
         .first()
         .ok_or_else(|| LLMError::ParseError("candidates array is empty".into()))?;
+    if first["finishReason"]
+        .as_str()
+        .is_some_and(|reason| reason != "STOP")
+    {
+        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+    }
     let parts = first
         .get("content")
         .and_then(|c| c.get("parts"))

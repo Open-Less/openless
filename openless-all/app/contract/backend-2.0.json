@@ -15,6 +15,26 @@
     "disabledErrorCode": "permission_denied",
     "cloudSync": "excluded"
   },
+  "selectionOriginalProtection": {
+    "input": "complete explicit selection, including boundary whitespace; no application character cap",
+    "history": {
+      "store": "history.json",
+      "identity": "existing sessionId",
+      "original": "rawTranscript",
+      "result": "finalText",
+      "order": ["persist_original", "protect_original_clipboard", "model_request", "validate_original_target", "replace_once"],
+      "provisionalStatus": "selectionProcessing",
+      "failure": "retain_original_and_any_complete_result"
+    },
+    "hostPort": "SelectionRuntimeAdapter.protect_original(sessionId, completeOriginal) -> Result<Option<opaque clipboard revision>>",
+    "voiceApplyTicket": "optional originalClipboardRevision binds the original clipboard transaction to the existing sessionId",
+    "recoveryNotice": "only confirmed Inserted and frozen original Unicode scalar count > 4000; never trim or count bytes/UTF-16 units",
+    "historyCopy": "existing detail copy follows raw/polished view; no list checkboxes or bulk copy",
+    "successfulWrite": "do not copy result; restore protected original unless a later user copy owns clipboard",
+    "definiteNoWrite": "copy complete result only while original clipboard transaction still owns clipboard",
+    "uncertainWrite": "PasteSent or OutcomeUnknown; never retry or copy as if definitely not inserted",
+    "previewOnlyHosts": "supplied-text iOS preview never writes an external selection or automatically accesses clipboard"
+  },
   "appStyleRouting": {
     "hosts": ["macos", "windows"],
     "categories": "catalog.categories[].id",
@@ -72,12 +92,36 @@
     "applicationListInvalidatedBy": "history_changed",
     "unavailableAssignment": "keep_and_skip"
   },
+  "recordingTranslation": {
+    "preference": {
+      "field": "translationShiftTapCount",
+      "type": "optional nonzero uint8",
+      "default": 1,
+      "range": [1, 255],
+      "uiChoices": [1, 2, 3],
+      "absent": "untouched; omit when serialized",
+      "explicitDefault": "persist and sync 1",
+      "sync": "v1 preferences Portable"
+    },
+    "nativeShiftGesture": {
+      "hosts": ["macos", "windows"],
+      "binding": "built-in standalone Shift translation shortcut only",
+      "tapMaxMs": 350,
+      "interTapMaxMs": 400,
+      "activation": "complete standalone down/up pairs; same count toggles both directions",
+      "ownership": "capture sessionId at key down; reject stale sessions and finalizing captures",
+      "reset": "capture or preferences revision changes, shortcut reconfiguration, hook reset, combinations, repeat, long hold",
+      "effectiveMode": "BackendSnapshot.dictation.translationActive",
+      "customTranslationShortcut": "preserve binding and existing arm-only behavior; no additional Shift action"
+    }
+  },
   "startupSnapshot": {
     "fields": ["contractVersion", "backend"],
     "sample": {
       "contractVersion": "2.0.0",
       "backend": {
         "running": true,
+        "processingDictations": [],
         "dictation": {
           "phase": "idle",
           "sessionId": null,
@@ -110,6 +154,7 @@
       "backend_started",
       "backend_stopping",
       "dictation_state_changed",
+      "dictation_jobs_changed",
       "transcript_delta",
       "polish_delta",
       "dictation_completed",
@@ -168,6 +213,11 @@
             "recordingReady": false
           }
         }
+      },
+      "dictation_jobs_changed": {
+        "sequence": 1,
+        "sessionId": null,
+        "kind": { "type": "dictation_jobs_changed", "payload": [] }
       },
       "transcript_delta": {
         "sequence": 1,
@@ -524,6 +574,7 @@
       "ok": true,
       "payload": {
         "running": true,
+        "processingDictations": [],
         "dictation": {
           "phase": "idle",
           "sessionId": null,

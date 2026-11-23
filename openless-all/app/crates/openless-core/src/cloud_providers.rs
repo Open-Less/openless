@@ -1318,6 +1318,7 @@ async fn run_cloud_polish(
     } else {
         context.polish.style_system_prompt.clone()
     };
+    let style_system_prompt = context.with_input_scene_prefix(style_system_prompt);
     let stream = PolishStreamPublisher::new(
         Arc::clone(&partials),
         Arc::clone(&cancellation),
@@ -1328,80 +1329,96 @@ async fn run_cloud_polish(
     );
     let on_delta = |delta: &str| stream.publish(delta);
     let should_cancel = || stream.should_cancel();
-    let result = match &provider {
-        CloudPolisherProvider::OpenAi(provider @ crate::polish::ActiveLLMProvider::Codex(_))
-            if !context.polish.translation_active =>
-        {
-            provider
-                .polish(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                )
-                .await
+    let result = if context.polish.selection_input {
+        let (system, user) = context.effective_polish_prompts(&raw_text);
+        match &provider {
+            CloudPolisherProvider::OpenAi(provider) => {
+                provider
+                    .selection_streaming(system, user, on_delta, should_cancel)
+                    .await
+            }
+            CloudPolisherProvider::Gemini(provider) => {
+                provider
+                    .selection_streaming(system, user, on_delta, should_cancel)
+                    .await
+            }
         }
-        CloudPolisherProvider::OpenAi(provider) => {
-            provider
-                .polish_streaming(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                    on_delta,
-                    should_cancel,
-                )
-                .await
-        }
-        CloudPolisherProvider::Gemini(provider) if !context.polish.translation_active => {
-            provider
-                .polish(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                )
-                .await
-        }
-        CloudPolisherProvider::Gemini(provider) => {
-            provider
-                .polish_streaming(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                    on_delta,
-                    should_cancel,
-                )
-                .await
+    } else {
+        match &provider {
+            CloudPolisherProvider::OpenAi(
+                provider @ crate::polish::ActiveLLMProvider::Codex(_),
+            ) if !context.polish.translation_active => {
+                provider
+                    .polish(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                    )
+                    .await
+            }
+            CloudPolisherProvider::OpenAi(provider) => {
+                provider
+                    .polish_streaming(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                        on_delta,
+                        should_cancel,
+                    )
+                    .await
+            }
+            CloudPolisherProvider::Gemini(provider) if !context.polish.translation_active => {
+                provider
+                    .polish(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                    )
+                    .await
+            }
+            CloudPolisherProvider::Gemini(provider) => {
+                provider
+                    .polish_streaming(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                        on_delta,
+                        should_cancel,
+                    )
+                    .await
+            }
         }
     };
     if let Some(error) = stream.take_error() {
@@ -1419,6 +1436,12 @@ async fn run_cloud_polish(
                 llm_call_label: None,
             },
             None => {
+                if context.polish.selection_input {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "llmResponseIncomplete",
+                    ));
+                }
                 log::warn!(
                     "[cloud-provider] polish+translate response missing markers; using plain translation"
                 );
@@ -3078,6 +3101,20 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn omni_scene_precedes_style_and_preserves_translation() {
+        let mut context = crate::DictationContext::default();
+        context.polish.input_scene_prefix = Some("当前应用：Frozen target".into());
+        context.polish.style_system_prompt = "SELECTED-STYLE".into();
+        for translation in [false, true] {
+            context.polish.translation_active = translation;
+            let prompt = super::build_omni_prompt(&context);
+            assert!(prompt.starts_with("当前应用：Frozen target\n\nSELECTED-STYLE"));
+            assert_eq!(prompt.matches("当前应用：").count(), 1);
+            assert_eq!(prompt.contains("# 翻译"), translation);
+        }
+    }
+
+    #[test]
     fn native_search_is_exclusive_to_the_deepseek_pipeline() {
         use super::*;
         use crate::shared_types::PipelineMode;
@@ -3350,7 +3387,7 @@ mod tests {
                 format!("{:X}\r\n{data}\r\n", data.len())
             };
             let end = if gemini {
-                ""
+                "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
             } else {
                 match format {
                     LlmRequestFormat::ChatCompletions => "data: [DONE]\n\n",

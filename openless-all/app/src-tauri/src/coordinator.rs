@@ -1046,6 +1046,23 @@ impl Coordinator {
         show_insert_fallback_card(&self.inner, text, reason);
     }
 
+    #[cfg(not(mobile))]
+    pub(crate) fn show_selection_recovery_notice(&self, original: &str) {
+        let locale = self
+            .inner
+            .backend
+            .services()
+            .remote_input
+            .status()
+            .map(|status| status.locale)
+            .unwrap_or_else(|_| self.inner.backend.config().locale.clone());
+        let Some(message) = crate::selection::original_recovery_message(&locale, original, true) else {
+            return;
+        };
+        let epoch = emit_selection_polish_capsule(&self.inner, CapsuleState::Done, message);
+        schedule_selection_polish_capsule_idle(&self.inner, epoch, CAPSULE_AUTO_HIDE_DELAY_MS);
+    }
+
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
         let captured_revision = self.inner.host.capsule_revision();
         let _ = self.present_core_capsule_at_revision(payload, None, captured_revision);
@@ -1720,6 +1737,8 @@ impl Coordinator {
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&self.inner, &monitor);
                 let adapter = monitor.kind();
                 let inner_clone = Arc::clone(&self.inner);
                 std::thread::Builder::new()

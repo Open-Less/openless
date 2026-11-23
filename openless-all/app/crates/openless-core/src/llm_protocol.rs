@@ -444,6 +444,7 @@ pub(crate) struct TextEventStream {
     buffer: String,
     pending: Vec<u8>,
     messages_complete: bool,
+    require_complete: bool,
     pub done: bool,
     siwc: bool,
     request_id: Option<String>,
@@ -457,11 +458,17 @@ impl TextEventStream {
             buffer: String::new(),
             pending: Vec::new(),
             messages_complete: false,
+            require_complete: false,
             done: false,
             siwc: false,
             request_id: None,
             reported_tokens: crate::usage_ledger::ReportedTokens::default(),
         }
+    }
+
+    pub(crate) fn require_complete(mut self, required: bool) -> Self {
+        self.require_complete = required;
+        self
     }
 
     pub(crate) fn for_siwc(mut self, request_id: Option<String>) -> Self {
@@ -501,9 +508,7 @@ impl TextEventStream {
         }
         let value: Value = match serde_json::from_str(&data) {
             Ok(value) => value,
-            Err(_) if self.format == LlmRequestFormat::ChatCompletions => {
-                return Ok(Some(StreamEvent::Ignore))
-            }
+            Err(_) if self.format == LlmRequestFormat::ChatCompletions && !self.require_complete => return Ok(Some(StreamEvent::Ignore)),
             Err(_) => return Err(response_error("invalid LLM SSE JSON")),
         };
         if let Some(reported) = crate::usage_ledger::ReportedTokens::from_response(&value) {
@@ -534,6 +539,9 @@ impl TextEventStream {
             return Err(response_error("llmStreamError"));
         }
         if self.format == LlmRequestFormat::ChatCompletions {
+            if value["choices"][0]["finish_reason"] == "length" {
+                return Err(response_error("llmResponseIncomplete"));
+            }
             if value["choices"][0]["finish_reason"] == "content_filter" {
                 return Err(response_error("llmContentFiltered"));
             }
@@ -625,7 +633,7 @@ impl TextEventStream {
 
     pub fn finish(&mut self) -> Result<(), LLMError> {
         crate::polish::finish_utf8_sse_chunks(&mut self.buffer, &mut self.pending)?;
-        if self.format != LlmRequestFormat::ChatCompletions && !self.done {
+        if (self.require_complete || self.format != LlmRequestFormat::ChatCompletions) && !self.done {
             return Err(response_error("llmResponseIncomplete"));
         }
         Ok(())

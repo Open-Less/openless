@@ -413,6 +413,9 @@ pub enum BackendEventKind {
     BackendStarted,
     BackendStopping,
     DictationStateChanged(DictationStateSnapshot),
+    /// Capture has been released or a submitted task has settled. Entries keep
+    /// their original session IDs and never describe microphone ownership.
+    DictationJobsChanged(Vec<DictationStateSnapshot>),
     VoiceActivationStateChanged(crate::voice_activation::VoiceActivationStateSnapshot),
     TranscriptDelta(TranscriptDelta),
     PolishDelta(PolishDelta),
