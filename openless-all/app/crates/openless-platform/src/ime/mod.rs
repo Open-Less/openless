@@ -8,6 +8,7 @@
 //!
 //! 平台层只依赖 `HWND`/`pid`/`tid` 这类普通参数，不持有窗口框架对象。
 
+pub mod gate;
 #[cfg(target_os = "windows")]
 pub mod ipc;
 #[cfg(target_os = "windows")]

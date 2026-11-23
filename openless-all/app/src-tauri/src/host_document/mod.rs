@@ -198,98 +198,10 @@ impl HostDocumentReadResult {
     }
 }
 
-/// Inputs to the safety gate. Modeled as a plain data structure so the decision logic is
-/// unit-testable without AX — a wrong gate decision means sending passwords to the LLM, so
-/// this path must have test coverage.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GateInputs {
-    /// Result of `unicode_keystroke::is_secure_input_enabled()`.
-    pub secure_input: bool,
-    /// Foreground app bundle id (macOS).
-    pub bundle_id: Option<String>,
-    /// Focused element's `AXRole`.
-    pub role: Option<String>,
-    /// Focused element's `AXSubrole`.
-    pub subrole: Option<String>,
-}
+// 文本通道安全门在平台层（纯字符串判定，与 AX/UIA 实现解耦）。
+pub use openless_platform::ime::gate::{evaluate_gate, GateInputs};
 
-/// AX role/subrole value denoting a secure text field.
-const AX_SECURE_TEXT_FIELD: &str = "axsecuretextfield";
 
-/// Sensitive apps that are never read (bundle id prefixes, lowercase comparison).
-///
-/// No UI for this — a blocklist UI creates the illusion "configure it once and you're safe",
-/// while the real defense is read-off-by-default plus this hardcoded list. The list covers only
-/// the two categories whose content is almost certainly sensitive:
-///
-/// - **Password managers / keychain**: the document body is the credential itself.
-/// Prefix matching, so `com.1password` covers both `com.1password.1password` and its helper
-/// processes.
-const SENSITIVE_BUNDLE_PREFIXES: &[&str] = &[
-    "com.1password",
-    "com.agilebits.onepassword",
-    "com.apple.keychainaccess",
-    "com.bitwarden",
-    "com.lastpass",
-    "com.dashlane",
-    "org.keepassxc",
-    "com.kueh.keepassium",
-    "in.sinew.enpass",
-    "com.sinew.enpass",
-    "com.apple.passwords",
-];
-
-/// Terminal app bundle id prefixes. Besides forbidding scrollback reads, used for the macOS
-/// auto-wrap-mode decision: known terminals send U+000A, other apps conservatively send
-/// Shift+Return.
-const TERMINAL_BUNDLE_PREFIXES: &[&str] = &[
-    "com.apple.terminal",
-    "com.googlecode.iterm2",
-    "dev.warp.warp",
-    "com.github.wez.wezterm",
-    "io.alacritty",
-    "org.alacritty",
-    "net.kovidgoyal.kitty",
-    "co.zeit.hyper",
-    "org.tabby",
-    "com.tabby",
-    "com.mitchellh.ghostty",
-];
-
-fn bundle_id_starts_with_any(bundle_id: &str, prefixes: &[&str]) -> bool {
-    let lowered = bundle_id.to_ascii_lowercase();
-    prefixes.iter().any(|prefix| lowered.starts_with(prefix))
-}
-
-pub(crate) fn is_terminal_bundle_id(bundle_id: &str) -> bool {
-    bundle_id_starts_with_any(bundle_id, TERMINAL_BUNDLE_PREFIXES)
-}
-
-/// Gate decision. Returns `Some(reason)` to block, `None` to allow.
-///
-/// Checks are ordered by cost: Secure Input and bundle prefixes need no AX and are decided
-/// first; role/subrole needs one AX read and is checked last.
-pub fn evaluate_gate(inputs: &GateInputs) -> Option<BlockReason> {
-    if inputs.secure_input {
-        return Some(BlockReason::SecureInput);
-    }
-    if let Some(bundle) = inputs.bundle_id.as_deref() {
-        if bundle_id_starts_with_any(bundle, SENSITIVE_BUNDLE_PREFIXES)
-            || is_terminal_bundle_id(bundle)
-        {
-            return Some(BlockReason::BlockedApp);
-        }
-    }
-    let is_secure_field = |value: &Option<String>| {
-        value
-            .as_deref()
-            .is_some_and(|v| v.trim().eq_ignore_ascii_case(AX_SECURE_TEXT_FIELD))
-    };
-    if is_secure_field(&inputs.role) || is_secure_field(&inputs.subrole) {
-        return Some(BlockReason::SecureTextField);
-    }
-    None
-}
 
 /// 光标上下文读取的中间结果（平台层定义）。
 pub(crate) use openless_platform::ime::uia::ReadOutcome;

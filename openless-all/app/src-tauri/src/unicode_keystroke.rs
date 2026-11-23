@@ -396,7 +396,7 @@ mod macos_impl {
     /// when this signal is on, credentials are being typed on screen and
     /// nothing may be read.
     pub fn is_secure_input_enabled() -> bool {
-        unsafe { IsSecureEventInputEnabled() != 0 }
+        openless_platform::macos::secure_input::is_secure_input_enabled()
     }
 
     pub async fn switch_to_ascii<R: Runtime>(

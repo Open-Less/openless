@@ -32,6 +32,7 @@ default = [
     "storage",
     "credentials",
     "ime-profile",
+    "ime",
     "asr",
 ]
 
@@ -92,7 +93,7 @@ input = ["dep:global-hotkey", "dep:parking_lot", "dep:once_cell"]
 text = ["input"]
 
 # 选区读取：模拟复制通道（依赖剪贴板事务与复制键注入）
-selection = ["clipboard", "input"]
+selection = ["clipboard", "input", "dep:objc2"]
 
 # 音频：录音期间静音 + 合成提示音
 audio = ["dep:cpal", "dep:parking_lot", "dep:coreaudio-sys"]

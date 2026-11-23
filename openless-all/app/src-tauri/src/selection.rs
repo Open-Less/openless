@@ -1044,80 +1044,15 @@ mod macos_ax {
 
 // ─────────────────────────── front-app label ───────────────────────────
 
-/// Read the frontmost application identity from one `NSRunningApplication` snapshot.
-///
-/// The name, bundle identifier, and pid must come from the same application object: querying
-/// `NSWorkspace.frontmostApplication` separately for each field can combine metadata from two apps
-/// if focus changes between calls.
+// macOS 前台应用身份（name / bundle / pid / 指定 pid 的 bundle）在平台层实现。
 #[cfg(target_os = "macos")]
-fn current_front_app_snapshot() -> (Option<String>, Option<String>, Option<i32>) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
+pub(crate) use openless_platform::macos::front_app::{
+    bundle_id_for_pid, current_front_app_parts, current_front_app_snapshot,
+};
 
-    unsafe {
-        let Some(cls) = AnyClass::get("NSWorkspace") else {
-            return (None, None, None);
-        };
-        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return (None, None, None);
-        }
-        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return (None, None, None);
-        }
-        let name_obj: *mut AnyObject = msg_send![app, localizedName];
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        let pid: i32 = msg_send![app, processIdentifier];
-        (
-            ns_string_to_rust(name_obj),
-            ns_string_to_rust(bundle_obj),
-            (pid > 0).then_some(pid),
-        )
-    }
-}
-
-/// The foreground app's **structured** identity: `(localizedName, bundleIdentifier)`.
-///
-/// [`current_front_app`]'s `"Safari (com.apple.Safari)"` display string is for the LLM prompt;
-/// programmatic decisions (e.g. `host_document`'s bundle denylist) cannot use it — re-extracting
-/// the bundle from the display string is fragile and ugly. The real value lives here, and the
-/// display string is assembled from it.
-///
-/// This is also the only place in the repo that "reads the front app": `coordinator::capsule_focus`
-/// used to carry a near-verbatim duplicate and now calls this function.
 #[cfg(target_os = "macos")]
-pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
-    let (name, bundle, _) = current_front_app_snapshot();
-    (name, bundle)
-}
-
-/// The bundle id of **one process** — not "who is frontmost" but "who is this pid".
-///
-/// `host_document`'s security gate must decide **which app owns this AX element in hand**.
-/// Substituting the front app has two problems, the second being a security issue:
-///
-/// 1. The focused element's owner and "who is frontmost" may legitimately differ;
-/// 2. More importantly, the timing gap — the bundle is sampled **before** fetching the element,
-///    and every AX call can block up to `AX_MESSAGING_TIMEOUT_SECS`. If the user switches apps in
-///    between, the gate would use the old app's identity to admit an element belonging to the new
-///    app. Terminals and password managers are exactly what the bundle denylist blocks.
-///
-/// Asking via the element's own pid removes this window entirely.
-#[cfg(target_os = "macos")]
-pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    unsafe {
-        let cls = AnyClass::get("NSRunningApplication")?;
-        let app: *mut AnyObject = msg_send![cls, runningApplicationWithProcessIdentifier: pid];
-        if app.is_null() {
-            return None;
-        }
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        ns_string_to_rust(bundle_obj)
-    }
+pub(crate) fn current_front_app_pid() -> Option<i32> {
+    openless_platform::macos::front_app::current_front_app_pid()
 }
 
 #[cfg(target_os = "windows")]
@@ -1201,29 +1136,6 @@ pub(crate) fn current_front_app() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn ns_string_to_rust(ns_string: *mut objc2::runtime::AnyObject) -> Option<String> {
-    use objc2::msg_send;
-    if ns_string.is_null() {
-        return None;
-    }
-    let utf8: *const std::os::raw::c_char = unsafe { msg_send![ns_string, UTF8String] };
-    if utf8.is_null() {
-        return None;
-    }
-    let cstr = unsafe { std::ffi::CStr::from_ptr(utf8) };
-    let s = cstr.to_string_lossy().into_owned();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn current_front_app_pid() -> Option<i32> {
-    current_front_app_snapshot().2
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
