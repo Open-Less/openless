@@ -175,3 +175,15 @@ credentials::keychain::read/write(service, account)
 cpal 0.15.3（`links = "alsa"` 经 alsa-sys 0.3.1），而 app 主 workspace 里的 linux-egui
 用 cpal 0.18（alsa-sys 0.4），两者无法在同一解析图共存。这与 `src-tauri` 被
 exclude 出主 workspace 是同一个理由。
+
+### Android 目标的交叉检查
+
+本机没有 Android Studio，但有 NDK，可直接对平台层做类型检查：
+
+```bash
+NDK=/data-win/openless-cache/mobile-rime/android-sdk/android-ndk-r26b
+export CC_aarch64_linux_android=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+export AR_aarch64_linux_android=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_aarch64_linux_android
+cargo check --target aarch64-linux-android --no-default-features --features android
+```

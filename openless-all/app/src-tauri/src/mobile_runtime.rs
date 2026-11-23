@@ -29,6 +29,10 @@ pub fn run() {
             #[cfg(target_os = "android")]
             crate::android::platform_env::install();
 
+            // JNI 基础通道需要宿主提供 JavaVM 与 Activity context。
+            #[cfg(target_os = "android")]
+            install_android_jni_context();
+
             crate::init_file_logger();
             log::info!("=== OpenLess mobile 启动 ===");
             initialize_android_ndk_context_for_audio();
@@ -116,6 +120,21 @@ pub(crate) fn show_main_window(app: &AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+/// 把 tao 持有的 JavaVM / Activity context 交给平台层。
+#[cfg(target_os = "android")]
+fn install_android_jni_context() {
+    let Some(context) = tao::platform::android::prelude::main_android_context() else {
+        log::warn!("[android] tao Android context unavailable; JNI calls will fail");
+        return;
+    };
+    openless_platform::android::context::install(
+        openless_platform::android::context::AndroidContext {
+            java_vm: context.java_vm,
+            context_jobject: context.context_jobject,
+        },
+    );
 }
 
 #[cfg(target_os = "android")]

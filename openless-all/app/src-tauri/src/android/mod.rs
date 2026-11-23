@@ -1,11 +1,15 @@
 //! Android platform integration (JNI, overlay, accessibility, insert).
 
+#[cfg(target_os = "android")]
 pub mod accessibility;
+#[cfg(not(target_os = "android"))]
+pub mod non_android;
 #[cfg(target_os = "android")]
 pub mod edit_observation;
 #[cfg(target_os = "android")]
 pub mod insert;
 pub mod insert_tiers;
+#[cfg(target_os = "android")]
 pub mod jni;
 #[cfg(target_os = "android")]
 pub mod platform_env;
@@ -21,10 +25,16 @@ pub mod updater;
 pub mod updater_logic;
 pub use crate::types::android_types as types;
 
+#[cfg(target_os = "android")]
 pub use accessibility::{
     capture_voice_edit_target, get_android_accessibility_status, is_accessibility_enabled,
     paste_via_accessibility, paste_via_accessibility_with_result, replace_voice_edit_target,
     request_android_accessibility_permission, AndroidAccessibilityPermissionResult,
+};
+#[cfg(not(target_os = "android"))]
+pub use non_android::{
+    get_android_accessibility_status, request_android_accessibility_permission,
+    AndroidAccessibilityPermissionResult,
 };
 #[cfg(target_os = "android")]
 pub use insert::android_insert_with_strategy;

@@ -54,3 +54,13 @@ pub mod permissions;
 pub mod selection;
 #[cfg(target_os = "android")]
 pub mod text;
+
+// ── JNI 基础与基于无障碍服务的插入通道 ─────────────────────────────
+//
+// 这些模块需要 `jni` crate 与宿主的 Java 类名约定；它们仍是"平台实现"，
+// 只是比纯 Rust 逻辑多了一层 JNI 依赖。宿主只在启动时注入 context。
+pub mod accessibility;
+pub mod context;
+#[cfg(target_os = "android")]
+pub mod input;
+pub mod jni;

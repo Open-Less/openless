@@ -71,6 +71,18 @@ ime = [
 # issue-1266 诊断观测（由宿主 feature 转发）
 diagnostics-1266 = []
 
+# Android：JNI 接缝 + 无障碍插入通道
+android = [
+    "dep:jni",
+    "clipboard",
+    "permissions",
+    "selection",
+    "text",
+    "input",
+    "dep:serde",
+    "dep:serde_json",
+]
+
 # 自更新：清单解析 + 源选择 + 签名校验（桌面与 Android 共用）
 updater = [
     "dep:semver",
@@ -190,6 +202,9 @@ windows-core = { version = "0.58", optional = true }
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"], optional = true }
 
 # macOS：纯文本剪贴板通道 + Keychain 原语。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", optional = true }
+
 [target.'cfg(any(target_os = "windows", target_os = "android"))'.dependencies]
 sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
   "static",
