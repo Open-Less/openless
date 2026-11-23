@@ -1,5 +1,6 @@
 /* Shared by the recording pill and its translation badge in every host. */
 .ol-default-capsule,
+.ol-processing-satellite,
 .ol-classic-translation {
   --ol-pill-scheme: light;
   --ol-pill-fill: rgb(255 255 255 / 86%);
@@ -16,6 +17,7 @@
   --ol-pill-shadow: rgb(15 23 42 / 18%);
 }
 [data-ol-theme='dark'] .ol-default-capsule,
+[data-ol-theme='dark'] .ol-processing-satellite,
 [data-ol-theme='dark'] .ol-classic-translation {
   --ol-pill-scheme: dark;
   --ol-pill-fill: rgb(28 34 45 / 88%);

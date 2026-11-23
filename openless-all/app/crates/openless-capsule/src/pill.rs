@@ -392,6 +392,9 @@ impl Rail {
 
 pub struct DefaultCapsule {
     glass: Option<(Rect, f32)>,
+    rear: Option<Rect>,
+    rear_lift: Tween,
+    badge_bottom: Option<Tween>,
     started: bool,
     width: Tween,
     opacity: Tween,
@@ -414,6 +417,9 @@ impl Default for DefaultCapsule {
     fn default() -> Self {
         Self {
             glass: None,
+            rear: None,
+            rear_lift: Tween::at(20.0),
+            badge_bottom: None,
             started: false,
             width: Tween::at(COMPACT_WIDTH),
             opacity: Tween::at(0.0),
@@ -445,6 +451,7 @@ fn status_label(frame: &Frame) -> String {
     } else {
         state.text.trim()
     };
+    let message = if matches!(message, "empty_transcript" | "未识别到语音，录音已保留，可在历史中重新转录") { &labels.empty_transcript } else { message };
     let fallback = |text: &str| {
         if message.is_empty() {
             text.to_owned()
@@ -483,7 +490,9 @@ impl DefaultCapsule {
             regions.push(Rect::from_center_size(pos2(center.x + BUTTON_OFFSET, center.y),
                 egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0)));
             if frame.processing_session_id.is_some() {
-                regions.push(Rect::from_center_size(pos2(center.x, shell.top() - 8.0), vec2(54.0, 20.0)));
+                if let Some(rear) = self.rear {
+                    regions.push(Rect::from_min_max(rear.min, pos2(rear.right(), shell.top())));
+                }
             }
         }
         regions
@@ -507,6 +516,7 @@ impl DefaultCapsule {
         let stage = ui.max_rect();
         let tokens = tokens(dark);
         self.glass = None;
+        self.rear = None;
         if frame.state.selection_polish {
             if notice(&painter, stage, frame, &tokens, now) && !reduced {
                 ui.ctx().request_repaint();
@@ -527,7 +537,7 @@ impl DefaultCapsule {
             .size()
             .x;
         // `scrollWidth + 28`, rounded up so a label that fits is never ellipsized.
-        let status_width = (label_width.ceil() + 2.0 * STATUS_PADDING + if processing { 28.0 } else { 0.0 }).clamp(80.0, 300.0);
+        let status_width = (label_width.ceil() + 2.0 * STATUS_PADDING + if processing { 28.0 } else { 0.0 }).clamp(80.0, if label == frame.labels.empty_transcript { 444.0 } else { 300.0 });
         let time = |seconds: f64| if reduced { 0.0 } else { seconds };
 
         if !self.started {
@@ -583,7 +593,7 @@ impl DefaultCapsule {
             time(if layer_visible { 0.0 } else { 0.12 }),
             LINEAR,
         );
-        let badge_visible = (state.translation_active && recording
+        let badge_visible = ((state.translation_active || frame.processing_translation) && matches!(phase, "recording" | "transcribing" | "polishing")
             || state.qa
                 && matches!(
                     state.phase.as_str(),
@@ -616,6 +626,19 @@ impl DefaultCapsule {
             pos2(center_x + width / 2.0, body_bottom + lift),
         );
         self.glass = Some((shell, opacity));
+        let rear_visible = recording && !leaving && frame.processing_count > 0;
+        if rear_visible {
+            self.rear_lift.set(now, 0.0, time(0.22), 0.0, MORPH);
+        } else {
+            self.rear_lift.jump(20.0);
+        }
+        let rear_label = format!("{}{}", frame.labels.transcribing,
+            if frame.processing_count > 1 { format!(" · {}", frame.processing_count) } else { String::new() });
+        if recording && !leaving && frame.processing_count > 0 {
+            let galley = painter.layout_no_wrap(rear_label.clone(), egui::FontId::proportional(11.0), tokens.pill.ink);
+            self.rear = Some(Rect::from_min_size(pos2(center_x + 10.0 - (galley.size().x + 32.0).max(104.0) / 2.0, body_top - 20.0 + self.rear_lift.value(now)),
+                vec2((galley.size().x + 32.0).max(104.0), 40.0)));
+        }
         let outline = shapes::stadium(shell);
         let cancel_center = pos2(if processing { shell.left() + 16.0 } else { center_x - BUTTON_OFFSET }, shell.center().y);
         let confirm_center = pos2(center_x + BUTTON_OFFSET, shell.center().y);
@@ -635,11 +658,11 @@ impl DefaultCapsule {
                     && !leaving
                     && (shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
                         || recording && frame.processing_session_id.is_some()
-                            && Rect::from_center_size(pos2(center_x, body_top - 8.0), vec2(54.0, 20.0)).contains(point))
+                            && self.rear.is_some_and(|rear| rear.contains(point)))
             })
             .and_then(|point| {
                 if recording {
-                    if frame.processing_session_id.is_some() && point.y < shell.top() {
+                    if frame.processing_session_id.is_some() && point.y < shell.top() && self.rear.is_some_and(|rear| rear.contains(point)) {
                         return Some(Target::Background);
                     }
                     if point.distance(cancel_center) <= BUTTON_RADIUS {
@@ -696,14 +719,11 @@ impl DefaultCapsule {
             && matches!(phase, "recording" | "transcribing" | "polishing")
             && !rail_text.is_empty();
         let rail_bottom = body_top - STACK_GAP;
-        if recording && !leaving && frame.processing_count > 0 {
-            let lobe = Rect::from_center_size(pos2(center_x, body_top - 8.0), vec2(54.0, 20.0));
-            painter.rect_filled(lobe, 10, tokens.surface);
-            painter.rect_stroke(lobe, 10, Stroke::new(0.7, tokens.line), StrokeKind::Inside);
-            painter.rect_filled(Rect::from_center_size(pos2(center_x, body_top + 1.0), vec2(24.0, 8.0)), 4, tokens.surface);
-            painter.text(lobe.center(), egui::Align2::CENTER_CENTER,
-                if frame.processing_count > 1 { frame.processing_count.to_string() } else { "•••".into() },
-                egui::FontId::proportional(11.0), tokens.ink);
+        if let Some(rear) = self.rear {
+            painter.rect_filled(rear, 20, tokens.pill.fill);
+            painter.rect_stroke(rear, 20, Stroke::new(1.0, tokens.pill.border), StrokeKind::Inside);
+            painter.text(pos2(rear.center().x, rear.top() + 10.0), egui::Align2::CENTER_CENTER,
+                rear_label, egui::FontId::proportional(11.0), tokens.pill.ink);
         }
         if rail_visible {
             let rail = self.rail.get_or_insert_with(|| Rail::new(center_x));
@@ -723,11 +743,14 @@ impl DefaultCapsule {
         }
         let badge_bottom = body_top
             - STACK_GAP
-            - if rail_visible && (state.translation_active || state.qa) {
+            - if rail_visible && (state.translation_active || frame.processing_translation || state.qa) {
                 RAIL_HEIGHT + 8.0
             } else {
                 0.0
             };
+        let badge_position = self.badge_bottom.get_or_insert_with(|| Tween::at(badge_bottom));
+        badge_position.set(now, badge_bottom, time(0.22), 0.0, MORPH);
+        let badge_bottom = badge_position.value(now);
         let badge_opacity = self.badge_opacity.value(now);
         if badge_opacity > 0.0 {
             let badge = badge(
@@ -872,6 +895,7 @@ impl DefaultCapsule {
         }
 
         let animating = [
+            &self.rear_lift,
             &self.width,
             &self.opacity,
             &self.lift,
@@ -887,6 +911,7 @@ impl DefaultCapsule {
         .iter()
         .any(|tween| tween.active(now))
             || (!reduced && ((recording && !leaving) || self.sweep_since.is_some()))
+            || self.badge_bottom.as_ref().is_some_and(|tween| tween.active(now))
             || self.rail.as_ref().is_some_and(|rail| rail.animating(now));
         if animating {
             ui.ctx().request_repaint();
@@ -899,7 +924,7 @@ fn lerp_color(from: Color32, to: Color32, t: f32) -> Color32 {
     from.lerp_to_gamma(to, t.clamp(0.0, 1.0))
 }
 
-/// `.ol-classic-translation`: "Translate to" and the target language chip.
+/// `.ol-classic-translation`: translation status and the active target chip.
 /// The chip is a label here: the native helper has no language menu.
 fn badge(
     painter: &Painter,
@@ -909,9 +934,9 @@ fn badge(
     opacity: f32,
     pixels_per_point: f32,
 ) -> Vec<Shape> {
-    if frame.state.qa {
+    if frame.state.qa || frame.state.phase != "recording" || !frame.state.translation_active {
         let label = painter.layout_job(LayoutJob::single_section(
-            frame.labels.asking.clone(),
+            if frame.state.qa { frame.labels.asking.clone() } else { frame.labels.translating.clone() },
             format(11.0, 500.0, 16.5, tokens.pill.ink),
         ));
         let size = label.size();
@@ -934,7 +959,7 @@ fn badge(
     }
     let fade = |color: Color32| color.gamma_multiply(opacity);
     let label = painter.layout_job(LayoutJob::single_section(
-        frame.labels.translate_to.clone(),
+        frame.labels.translating.clone(),
         format(11.0, 400.0, 16.5, tokens.pill.ink),
     ));
     let target = frame
@@ -1182,6 +1207,7 @@ mod tests {
             show_transcript: false,
             transcript_font_size: 15.0,
             processing_count: 0,
+            processing_translation: false,
             processing_session_id: None,
             labels: CapsuleLabels::for_locale("zh-CN"),
             theme: ThemeMode::System,
@@ -1204,6 +1230,25 @@ mod tests {
         assert!(capsule.input_regions(&frame("completed")).is_empty());
         let mut siri=recording.clone();siri.state.style="siri".into();
         assert!(capsule.input_regions(&siri).is_empty());
+    }
+
+    #[test]
+    fn rear_pill_only_claims_its_exposed_half() {
+        let mut capsule = DefaultCapsule::default();
+        capsule.glass = Some((Rect::from_min_size(pos2(172.0, 124.0), vec2(116.0, 32.0)), 1.0));
+        capsule.rear = Some(Rect::from_min_size(pos2(188.0, 104.0), vec2(104.0, 40.0)));
+        let mut recording = frame("recording");
+        recording.processing_count = 1;
+        recording.processing_session_id = Some("old-a".into());
+        let regions = capsule.input_regions(&recording);
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[2].height(), 20.0);
+        assert!(regions[2].contains(pos2(240.0, 114.0)));
+        assert!(!regions[2].contains(pos2(240.0, 134.0)));
+        assert!(recording.accepts("old-a", 1, crate::Action::Cancel));
+        assert!(!recording.accepts("old-a", 1, crate::Action::Confirm));
+        recording.processing_session_id = Some("old-b".into());
+        assert!(!recording.accepts("old-a", 1, crate::Action::Cancel));
     }
 
     #[test]

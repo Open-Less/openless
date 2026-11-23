@@ -33,7 +33,7 @@ export function getCapsuleAuxiliarySnapshot() {
   return invokeOrPreview<{
     suggestions: PendingCorrection[];
     fallback: InsertFallbackCardPayload | null;
-    processing: { sessionId: string }[];
+    processing: { sessionId: string; translationActive?: boolean }[];
   }>('get_capsule_auxiliary_snapshot', undefined, () => ({
     suggestions: [],
     fallback: null,
@@ -48,7 +48,7 @@ export function createCapsuleSubscriptions() {
     dispose: events.dispose,
     state: (onPayload: (payload: CapsulePayload) => void) =>
       events.listen('capsule:state', onPayload, 'window'),
-    jobs: (onPayload: (payload: { sessionId: string }[]) => void) =>
+    jobs: (onPayload: (payload: { sessionId: string; translationActive?: boolean }[]) => void) =>
       events.listen('dictation:jobs', onPayload, 'app'),
     transcript: (onPayload: (payload: BackendEvent) => void) =>
       events.listen('backend:event', onPayload, 'app'),

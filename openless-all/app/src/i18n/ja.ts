@@ -336,6 +336,8 @@ export const ja: typeof zhCN = {
     durationMinutes: '{{value}} 分',
   },
   capsule: {
+    emptyTranscript: '音声を認識できませんでした。録音は保存されています。履歴から再文字起こしできます。',
+    transcribing: '文字起こし中',
     asking: 'なんでも質問',
     thinking: 'thinking',
     using: 'using',

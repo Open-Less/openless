@@ -317,6 +317,8 @@ export const zhTW: typeof zhCN = {
     durationMinutes: '{{value}} 分鐘',
   },
   capsule: {
+    emptyTranscript: '未辨識到語音，錄音已保留，可在歷史中重新轉錄',
+    transcribing: '正在轉錄',
     asking: '隨便問',
     thinking: 'thinking',
     using: 'using',

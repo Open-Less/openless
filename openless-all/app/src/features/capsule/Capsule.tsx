@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion';
 import { collectCapsuleInputRegions } from '../../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -198,6 +199,7 @@ interface ClassicCapsuleProps {
   operating: boolean;
   translation: boolean;
   qa: boolean;
+  backgroundTranslation: boolean;
   leaving: boolean;
   warming: boolean;
 }
@@ -221,6 +223,7 @@ function ClassicCapsule({
   operating,
   translation,
   qa,
+  backgroundTranslation,
   leaving,
   warming,
 }: ClassicCapsuleProps) {
@@ -233,11 +236,13 @@ function ClassicCapsule({
     void (qa ? qaStopRecording() : stopDictation(sessionId));
   }, [qa, sessionId]);
   const asking = qa && isActiveCapsuleState(state) && !leaving;
+  const reduced = useReducedMotion();
+  const translating = (translation && isActiveCapsuleState(state)) || backgroundTranslation;
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
     transcriptVisible || Boolean(liveText),
-    translation || qa,
+    translating || qa,
     transcriptInSameWindow,
   );
 
@@ -250,11 +255,13 @@ function ClassicCapsule({
           keyframe vs inline transform overrides causing visual jumps. */}
       {/* The language picker belongs to the interactive capsule, even when
           Windows puts the transcript in a separate click-through rail. */}
-      <div
+      <motion.div
+        initial={false}
+        animate={{ bottom: classicGeometry.badgeBottomOffset }}
+        transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
         style={{
           position: 'absolute',
           left: '50%',
-          bottom: classicGeometry.badgeBottomOffset,
           transform: 'translateX(-50%)',
           pointerEvents: 'none',
         }}
@@ -264,9 +271,12 @@ function ClassicCapsule({
             {t('capsule.asking')}
           </div>
         ) : (
-          <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+          <CapsuleTranslationBadge
+            visible={translating && !leaving}
+            processing={state !== 'recording' || !translation}
+          />
         )}
-      </div>
+      </motion.div>
       <div className="ol-classic-capsule-stack">
         {liveText && (
           <CapsuleTranscriptRail
@@ -412,7 +422,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
-  const [processingJobs, setProcessingJobs] = useState<{ sessionId: string }[]>(() =>
+  const [processingJobs, setProcessingJobs] = useState<
+    { sessionId: string; translationActive?: boolean }[]
+  >(() =>
     isTauri
       ? []
       : Array.from(
@@ -773,7 +785,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       ? lastVisibleMessage
       : state === 'transcribing' && localAsrText
         ? localAsrText
-        : message;
+        : message === 'empty_transcript' ||
+            message === '未识别到语音，录音已保留，可在历史中重新转录'
+          ? t('capsule.emptyTranscript')
+          : message;
   const liveTranscript = visibleCapsuleTranscript(
     localAsrText,
     transcriptEnabled,
@@ -928,13 +943,16 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       {renderedState === 'recording' && processingJobs.length > 0 && (
         <button
           className="ol-processing-satellite"
+          style={{ bottom: hostMetrics.bottomInset + 12 }}
+          data-session-id={processingJobs[0].sessionId}
           data-capsule-interactive
-          aria-label={`${t('capsule.thinking')} · ${processingJobs.length} · ${t('common.cancel')}`}
+          aria-label={`${t('capsule.transcribing')} · ${processingJobs.length} · ${t('common.cancel')}`}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => void cancelDictation(processingJobs[0].sessionId)}
         >
           <span aria-hidden="true">
-            {processingJobs.length > 1 ? processingJobs.length : '•••'}
+            {t('capsule.transcribing')}
+            {processingJobs.length > 1 ? ` · ${processingJobs.length}` : ''}
           </span>
         </button>
       )}
@@ -954,6 +972,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             operating={operatingRef.current}
             translation={translation}
             qa={renderedQa}
+            backgroundTranslation={processingJobs.some((job) => job.translationActive)}
             leaving={leaving}
             warming={warming}
           />

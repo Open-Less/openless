@@ -330,6 +330,8 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
+    emptyTranscript: '음성을 인식하지 못했습니다. 녹음이 저장되었습니다. 기록에서 다시 변환하세요.',
+    transcribing: '변환 중',
     asking: '무엇이든 질문',
     thinking: 'thinking',
     using: 'using',

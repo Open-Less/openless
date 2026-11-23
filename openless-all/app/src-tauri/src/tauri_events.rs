@@ -548,6 +548,7 @@ fn map_dictation_state(
     };
     let message = match snapshot.phase {
         DictationPhase::Failed => Some(match snapshot.message.as_deref() {
+            Some("empty_transcript") => "未识别到语音，录音已保留，可在历史中重新转录".to_string(),
             Some("input_target_changed") => "输入位置已变化或无法确认，未自动输入；结果已保留在历史记录".to_string(),
             Some("PermissionDenied") => "请允许麦克风权限后重试".to_string(),
             Some("Busy") => "另一个语音任务正在进行".to_string(),
@@ -1521,6 +1522,7 @@ mod tests {
     #[test]
     fn internal_failure_tokens_are_not_shown_to_users() {
         for token in [
+            "empty_transcript",
             "InvalidArgument",
             "InvalidState",
             "Busy",

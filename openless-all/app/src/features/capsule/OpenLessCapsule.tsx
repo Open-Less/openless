@@ -149,7 +149,13 @@ export function OpenLessPill({
   useLayoutEffect(() => {
     const element = labelRef.current;
     if (!element) return;
-    const measure = () => setStatusWidth(Math.min(300, Math.max(80, element.scrollWidth + 28)));
+    const measure = () =>
+      setStatusWidth(
+        Math.min(
+          label === t('capsule.emptyTranscript') ? 444 : 300,
+          Math.max(80, element.scrollWidth + 28),
+        ),
+      );
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);

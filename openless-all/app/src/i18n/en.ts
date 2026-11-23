@@ -345,6 +345,8 @@ export const en: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    emptyTranscript: 'No speech recognized. Recording saved; retranscribe in History.',
+    transcribing: 'Transcribing',
     asking: 'Ask anything',
     thinking: 'thinking',
     using: 'using',

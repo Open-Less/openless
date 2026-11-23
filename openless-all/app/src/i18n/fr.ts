@@ -350,6 +350,8 @@ export const fr: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    emptyTranscript: 'Aucune parole reconnue. Enregistrement conservé ; retranscrivez dans l’historique.',
+    transcribing: 'Transcription',
     asking: 'Posez une question',
     thinking: 'réflexion',
     using: 'action',

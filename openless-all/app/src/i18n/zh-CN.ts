@@ -316,6 +316,8 @@ export const zhCN = {
     durationMinutes: '{{value}} 分钟',
   },
   capsule: {
+    emptyTranscript: '未识别到语音，录音已保留，可在历史中重新转录',
+    transcribing: '正在转录',
     asking: '随便问',
     thinking: 'thinking',
     using: 'using',

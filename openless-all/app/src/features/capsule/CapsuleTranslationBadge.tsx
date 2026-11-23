@@ -17,7 +17,13 @@ import { useCapsuleLanguageMenu } from './useCapsuleLanguageMenu';
 import './CapsuleStyles.css';
 
 /** The same Base UI menu as settings, with temporary native headroom above the capsule. */
-export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean }) {
+export function CapsuleTranslationBadge({
+  visible = true,
+  processing = false,
+}: {
+  visible?: boolean;
+  processing?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const reduced = useReducedMotion();
   const [snapshot, setSnapshot] = useState<DictationTranslationTarget | null>(null);
@@ -103,7 +109,7 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
   const menu = useCapsuleLanguageMenu({
     anchor,
     target: snapshot,
-    visible,
+    visible: visible && !processing,
     onFailure: () => setError(true),
   });
   const change = async (value: string) => {
@@ -152,24 +158,26 @@ export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean 
           : { duration: visible ? 0.2 : 0.12, delay: visible ? 0.04 : 0, ease: [0.22, 1, 0.36, 1] }
       }
     >
-      <span>{t('capsule.translateTo')}</span>
-      <div ref={anchor} className="ol-translation-language" data-busy={busy}>
-        <SelectLite
-          value={target}
-          options={options}
-          placeholder={selected?.displayName || target || '…'}
-          ariaLabel={t('translation.target.title')}
-          disabled={!visible || busy || !snapshot?.mutable}
-          open={menu.open}
-          onOpenChange={menu.onOpenChange}
-          onOpenChangeComplete={menu.onOpenChangeComplete}
-          onChange={(value) => void change(value)}
-          side="top"
-          popupStyle={{ width: 240 }}
-          popupClassName="ol-capsule-language-popup"
-        />
-      </div>
-      {error && (
+      <span>{t('capsule.translating')}</span>
+      {!processing && (
+        <div ref={anchor} className="ol-translation-language" data-busy={busy}>
+          <SelectLite
+            value={target}
+            options={options}
+            placeholder={selected?.displayName || target || '…'}
+            ariaLabel={t('translation.target.title')}
+            disabled={!visible || busy || !snapshot?.mutable}
+            open={menu.open}
+            onOpenChange={menu.onOpenChange}
+            onOpenChangeComplete={menu.onOpenChangeComplete}
+            onChange={(value) => void change(value)}
+            side="top"
+            popupStyle={{ width: 240 }}
+            popupClassName="ol-capsule-language-popup"
+          />
+        </div>
+      )}
+      {error && !processing && (
         <span className="ol-translation-error" role="alert">
           {t('capsule.translationChangeFailed')}
         </span>

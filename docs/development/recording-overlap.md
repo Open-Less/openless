@@ -61,7 +61,13 @@ macOS 目标包括进程、窗口、保留的 AX 输入控件身份，并复用 
 
 ## 胶囊位置
 
-默认胶囊下方身体仍固定在宿主底部，顶部独立定位一枚 54×20 的处理球体并连接到身体。处理数量变化不参与正文、翻译徽章或菜单的排版。Classic 原文轨道与身体之间固定保留 24px；React、Windows 外置轨道定位和低内存原生 helper 使用相同间距。语言菜单仍使用现有宿主向上扩窗规则；没有创建第二个处理悬浮窗口。
+Classic 当前录音胶囊固定在宿主底部并位于前景；上一段处理胶囊向上移入后层，向右错开 10px，40px 高度中下半部被前景遮住，上半部保留可读的“正在转录”。它复用现有材质与圆角，重叠轮廓连成一体，宽度随多语言标签和数量适配，不再使用独立处理球体。处理数量变化不参与原文、翻译徽章或菜单的排版。Classic 原文轨道与身体仍固定保留 24px；语言菜单沿用宿主向上扩窗规则，没有第二个处理悬浮窗口。
+
+基线 `653816ac` 的启动入口固定调用 `desktop_resources::configure(..., false)`，因此默认桌面胶囊是 Tauri WebView，macOS 使用 WKWebView；`capsuleStyle=classic` 只选样式，不代表启用独立 egui helper。默认路径和备用 `openless-capsule` renderer 都消费原 sessionId 与 processing snapshot，后台翻译直接使用已有 `translationActive`，不读取下一段的模式或目标。
+
+翻译角标在 recording、transcribing、polishing/inserting 期间保留“正在翻译”；采集期间保留语言选择，后台阶段只展示状态。旧段翻译与新段普通录音并存时，角标保留直到后台列表移除该段。原文出现引起角标换位置时，React 的同一 motion 元素直接动画 bottom，原生 helper 的 Tween 从当前值改目标，不卸载重建。原文轨道与其他页面不因处理胶囊出现而重新排版。
+
+`empty_transcript` 由宿主映射为“未识别到语音，录音已保留，可在历史中重新转录”，React 与 helper 按界面语言显示，不再显示输入或设置无效；当前录音期间旧段错误继续沿宿主已有 session 归属过滤。
 
 后台语义事件不能改写新录音的原文身份或 native capsule 的显示身份。任务列表变化只更新处理指示器；仅设备释放事件允许从录音转入后台显示。其他段的成功/错误回执、复制回退卡不会盖过当前录音。
 
@@ -73,7 +79,7 @@ macOS 目标包括进程、窗口、保留的 AX 输入控件身份，并复用 
 | 独占采集、逐段缓冲、延迟成功/失败/取消 | `voice_session.rs`、`dictation_engine.rs`、`recording_overlap_tests.rs` | 用真实 Pipeline/Router 和可控音频夹具检查六种交错：第二段继续采集/已完整录完 × 第一段成功/失败/取消；验证每段全部首中尾帧、历史 id、一个采集 owner，以及迟到旧录音故障隔离。不是物理麦克风实测。 |
 | 本地实时原文及非重入执行 | `recording_overlap_tests.rs`、`src-tauri/src/asr/local/sherpa_runtime.rs`、`backend-tests/tests/sherpa_online.rs` | 同一生产 start/stop/finish 路径分别覆盖实时/稳定偏好下的上述六种交错，实时段 stop 前必须收到同 session partial，前段延迟 native 操作时后段采集可启动、解码等待，终稿/取消/历史不串段。独立宿主夹具包含生产 Sherpa 执行锁、旧段取消和离线超时所有权测试；默认使用非 native facade，不代表真实模型、物理麦克风或 Windows/Android 设备验收。 |
 | 请求使用冻结上下文 | `recording_overlap_tests.rs` → 生产 `providers::OpenAiChatPolisher` → 本机 HTTP 夹具 | 检查真实序列化的 system/user 消息与各段冻结上下文完全相同，包含捕获的光标材料；另行核对处理中改变全局语言不改变旧段语言快照。没有调用真实云模型。 |
-| 流式原文、语言菜单、多任务上下叠放 | `e2e/capsule-overlap.spec.ts`、`src/lib/capsuleLayout.test.ts` | Chromium 使用生产 React 组件和隔离宿主事件，核对固定身体位置、球体居中与 2px 连接、语言菜单开闭、流式原文、1→3→1 后台数量及定向取消；截图由测试输出。 |
+| 流式原文、语言菜单、多任务上下叠放 | `e2e/capsule-overlap.spec.ts`、`src/lib/capsuleLayout.test.ts` | Chromium 使用生产 React 组件和隔离宿主事件，核对固定身体位置、后景偏移 10px 与 20px 半遮、语言菜单开闭、流式原文、1→3→1 后台数量及定向取消；截图由测试输出。 |
 | native 事件与低内存胶囊 | `src-tauri/src/capsule_snapshot.rs`、`crates/openless-capsule`、`native-capsule` | native snapshot 的无 Tauri 回归、renderer/协议测试及 macOS 编译检查。没有宣称原生窗口在物理桌面实测。 |
 | 可信原目标与位置 | `selection.rs`、`selection/target_position.rs`、`host_document/{macos,windows}.rs`、`core_adapters.rs`；Core `tests/dictation_target_capture.rs` | 数值范围校验复用生产函数，在 Core 收尾夹具复现同控件移光标、移光标后第二段、同位置第二段、范围不可读四种情形，验证旧段零写入、历史正文/明确未插入状态和第二段独立交付；不是实际桌面控件实测。macOS 编译覆盖；Windows 分支需 Windows 构建/真机验收。 |
 | 其他平台 | 共享 Core 同一采集/任务协议 | Linux、Android、HarmonyOS、iOS 没有在本机进行编译或设备验收；各自专用 UI 尚未增加桌面上下处理球体。不要把桌面 React/原生 helper 的证据外推到这些 UI。 |
@@ -85,3 +91,12 @@ macOS 目标包括进程、窗口、保留的 AX 输入控件身份，并复用 
 本分支以 merge 保留 `30867f75` → `3330347d` 的风格祖先，仍由 `DictationContext::capture` 调用 `style_packs::dictation_style_prompt(style_pack)` 初始化风格；位置加固没有改动风格逻辑。组合验收只补 `dictation_target_capture`、`prompt_contract`、Raw 生产 Pipeline 零润色调用、双段隔离及宿主编译；真实模型和旧版同步仍由对应独立验收负责。
 
 复核普通入口 `commands/dictation.rs` → `DictationStartOptions` → `capture_dictation_context_with_host` → `DictationContext` → `PipelineDictationEngine` / `DictationEngineRouter`：可接受材料只有显式前台应用/光标上下文、词汇/纠错规则和开始时捕获的历史轮次，均在段内快照中克隆保存；最终模式/语言在 stop 时封存。`DictationInsertionContext` 的剪贴板字段只控制结果复制/恢复，不接收剪贴板正文。问答、选区与其他服务有各自输入，不能把那些服务的全局或临时材料冒充为普通听写的段内附件。本次未找到普通听写可直接复用的截图、剪贴板正文或文件附件提交参数，没有新增附件系统，也没有宣称附件归属已经实测。
+
+
+### 2026-11-23 叠放与翻译角标受控验收
+
+`e2e/capsule-overlap.spec.ts` 在 Chromium 与 WebKit 检查叠放、菜单、流式原文、原 session 取消、旧段成功/失败/取消、新段继续录音、后台翻译角标与空稿提示。动画测试逐帧记录同一 DOM 元素的位置，要求存在中间位置且没有一次完成全部位移。
+
+`scripts/capsule-stacking-webkit.swift` 用独立 macOS WKWebView 加载同一生产组件夹具，输出原生 WebKit 截图和逐帧坐标。先启动隔离 Vite，再用 `swiftc` 编译并传入夹具 URL 和已有输出目录；它不启动安装版 OpenLess，不使用麦克风或实际落字，也不验证 Tauri 热键与窗口宿主。
+
+本机受控截图的 172px 局部内，前景为 `(172,124,116,32)`，后景为 `(188,104,104,40)`；原文轨道、翻译角标在后台任务出现/移除和开关菜单时坐标不变。翻译流式切换另行记录同一角标连续移动的中间帧。历史页面未改动，不把本次胶囊宿主截图当作历史弹层真机验收。

@@ -1,6 +1,7 @@
 /* Compact geometry with a theme-aware frosted surface and readable blue controls. */
 .ol-default-capsule {
   position: relative;
+  z-index: 1;
   height: 32px;
   flex: 0 0 auto;
   isolation: isolate;
@@ -175,32 +176,45 @@
     transition: none;
   }
 }
-/* Anchored to the body, outside the transcript/menu flow. The neck joins the
-   upper liquid lobe to the recording pill without moving either anchor. */
+/* The rear pill rises from the same bottom anchor. The foreground covers its
+   lower half; copy stays in the exposed upper half. Neither enters stack flow. */
 .ol-processing-satellite {
   position: absolute;
-  z-index: 5;
-  left: 50%;
-  bottom: 46px;
+  z-index: 0;
+  left: calc(50% + 10px);
   transform: translateX(-50%);
-  width: 54px;
-  height: 20px;
-  border-radius: 50% 50% 38% 38% / 65% 65% 45% 45%;
-  border: 1px solid var(--ol-capsule-pill-border);
-  background: var(--ol-capsule-pill-bg);
-  box-shadow: var(--ol-capsule-pill-shadow);
-  color: var(--ol-capsule-center-ink);
+  min-width: 104px;
+  width: max-content;
+  max-width: calc(100% - 48px);
+  height: 40px;
+  box-sizing: border-box;
+  padding: 1px 16px 20px;
+  border-radius: 20px;
+  border: 1px solid var(--ol-pill-border);
+  background: var(--ol-pill-fill);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 var(--ol-pill-highlight);
+  color: var(--ol-pill-ink);
+  font-family: var(--ol-font-sans);
   font-size: 11px;
-  line-height: 16px;
+  line-height: 18px;
+  white-space: nowrap;
   cursor: pointer;
+  animation: ol-processing-rise 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
-.ol-processing-satellite::after {
-  content: '';
-  position: absolute;
-  left: 15px;
-  right: 15px;
-  bottom: -5px;
-  height: 8px;
-  border-radius: 0 0 50% 50%;
-  background: inherit;
+@keyframes ol-processing-rise {
+  from {
+    transform: translate(-50%, 20px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-processing-satellite {
+    animation: none;
+  }
 }

@@ -58,6 +58,8 @@ pub struct CapsulePopupState {
 #[serde(default)]
 pub struct CapsuleLabels {
     pub thinking: String,
+    pub transcribing: String,
+    pub empty_transcript: String,
     pub using: String,
     pub cancelled: String,
     pub error: String,
@@ -196,6 +198,25 @@ impl CapsuleLabels {
             labels.map(String::from);
         Self {
             thinking,
+            empty_transcript: match locale {
+                _ if locale.starts_with("zh") && !locale.starts_with("zh-TW") && !locale.starts_with("zh-HK") => "未识别到语音，录音已保留，可在历史中重新转录",
+                _ if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") => "未辨識到語音，錄音已保留，可在歷史中重新轉錄",
+                _ if locale.starts_with("en") => "No speech recognized. Recording saved; retranscribe in History.",
+                _ if locale.starts_with("de") => "Keine Sprache erkannt. Aufnahme gespeichert; im Verlauf erneut transkribieren.",
+                _ if locale.starts_with("es") => "No se reconoció voz. Grabación guardada; vuelve a transcribir en el historial.",
+                _ if locale.starts_with("fr") => "Aucune parole reconnue. Enregistrement conservé ; retranscrivez dans l’historique.",
+                _ if locale.starts_with("ja") => "音声を認識できませんでした。録音は保存されています。履歴から再文字起こしできます。",
+                _ if locale.starts_with("ko") => "음성을 인식하지 못했습니다. 녹음이 저장되었습니다. 기록에서 다시 변환하세요.",
+                _ => "No speech recognized. Recording saved; retranscribe in History.",
+            }.into(),
+            transcribing: if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") { "正在轉錄" }
+                else if locale.starts_with("zh") { "正在转录" }
+                else if locale.starts_with("de") { "Transkription" }
+                else if locale.starts_with("es") { "Transcribiendo" }
+                else if locale.starts_with("fr") { "Transcription" }
+                else if locale.starts_with("ja") { "文字起こし中" }
+                else if locale.starts_with("ko") { "변환 중" }
+                else { "Transcribing" }.into(),
             using,
             cancelled,
             error,
@@ -243,6 +264,8 @@ pub struct Frame {
     pub transcript_font_size: f32,
     #[serde(default)]
     pub processing_count: usize,
+    #[serde(default)]
+    pub processing_translation: bool,
     #[serde(default)]
     pub processing_session_id: Option<String>,
     #[serde(default)]
@@ -390,6 +413,7 @@ mod tests {
             show_transcript: true,
             transcript_font_size: 15.0,
             processing_count: 0,
+            processing_translation: false,
             processing_session_id: None,
             labels: Default::default(),
             theme: ThemeMode::System,
@@ -477,8 +501,8 @@ mod tests {
     fn labels_match_the_webview_i18n_sources() {
         fn value(block: &str, key: &str) -> String {
             let start = block
-                .find(&format!("\n    {key}: "))
-                .or_else(|| block.find(&format!("\n      {key}: ")))
+                .find(&format!("\n    {key}:"))
+                .or_else(|| block.find(&format!("\n      {key}:")))
                 .unwrap_or_else(|| panic!("missing capsule.{key}"));
             let rest = &block[start..];
             let quote = rest.find('\'').unwrap() + 1;
@@ -502,6 +526,8 @@ mod tests {
             let labels = CapsuleLabels::for_locale(locale);
             for (key, actual) in [
                 ("thinking", &labels.thinking),
+                ("transcribing", &labels.transcribing),
+                ("emptyTranscript", &labels.empty_transcript),
                 ("using", &labels.using),
                 ("cancelled", &labels.cancelled),
                 ("error", &labels.error),
