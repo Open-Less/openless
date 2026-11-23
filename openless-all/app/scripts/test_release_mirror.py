@@ -90,9 +90,24 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual(command[3], f'oss:fixture/releases/tag/{Path(command[2]).name}')
             self.assertIn('--checksum', command)
             self.assertEqual(command[command.index('--stats-log-level') + 1], 'NOTICE')
+            self.assertEqual(command[command.index('--s3-upload-cutoff') + 1], '8Mi')
+            self.assertEqual(command[command.index('--s3-chunk-size') + 1], '8Mi')
+            self.assertEqual(command[command.index('--s3-upload-concurrency') + 1], '4')
+            self.assertNotIn('--s3-disable-checksum', command)
             self.assertTrue(call.kwargs['check'])
             self.assertGreater(call.kwargs['timeout'], 0)
             self.assertLessEqual(call.kwargs['timeout'], mirror.FILE_TRANSFER_SECONDS)
+
+    def test_slow_large_upload_receives_a_size_based_but_bounded_budget(self):
+        self.assertEqual(mirror.transfer_timeout_seconds(4694), 300)
+        self.assertGreater(mirror.transfer_timeout_seconds(147390849), 1800)
+        self.assertLessEqual(mirror.transfer_timeout_seconds(147390849), mirror.MAX_FILE_TRANSFER_SECONDS)
+        self.assertEqual(mirror.transfer_timeout_seconds(10 * 1024**3), mirror.MAX_FILE_TRANSFER_SECONDS)
+
+    def test_phase_budget_still_caps_a_large_file(self):
+        with mock.patch.object(mirror.time, 'monotonic', side_effect=[0] + [59] * len(self.names)), mock.patch.object(mirror, 'transfer_timeout_seconds', return_value=2400), mock.patch.object(mirror.subprocess, 'run') as run:
+            mirror.copy_files(self.directory, 'oss:fixture', 'public', 60)
+        self.assertTrue(all(call.kwargs['timeout'] <= 1 for call in run.call_args_list))
 
     def test_all_payloads_finish_before_any_rolling_manifest_upload(self):
         self.save_index()
