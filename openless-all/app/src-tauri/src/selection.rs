@@ -447,26 +447,12 @@ fn read_selection_for_validation() -> Option<String> {
 pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            BringWindowToTop, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
-        };
-
         let Some(captured) = target.windows else {
             return false;
         };
-        unsafe {
-            let foreground = HWND(captured.foreground_window as *mut _);
-            if IsIconic(foreground).as_bool() {
-                let _ = ShowWindow(foreground, SW_RESTORE);
-            }
-            let _ = BringWindowToTop(foreground);
-            let _ = SetForegroundWindow(foreground);
-        }
-        std::thread::sleep(Duration::from_millis(80));
-        // Windows' focus-stealing rules may reject SetForegroundWindow. Recovery counts only if
-        // the exact same window/control fingerprint is re-captured; do not blindly paste into the
-        // current app just because the activation call returned.
+        // 平台层负责"恢复到前台 + 固定等待"，但 Windows 的前台抢占可能被拒绝，
+        // 所以仍以重新捕获的焦点指纹为准，绝不盲目粘贴。
+        openless_platform::windows::front_app::activate_window(captured.foreground_window);
         return openless_platform::selection::windows_target::capture().as_ref() == Some(&captured);
     }
 
@@ -493,7 +479,7 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         for _attempt in 0..4 {
             // Re-activate each round: NSRunningApplication activate may not take effect when the
             // foreground was stolen by another app; repeated calls are idempotent.
-            activate_app_by_pid(pid);
+            openless_platform::macos::front_app::activate_app_by_pid(pid);
             std::thread::sleep(Duration::from_millis(80));
             if current_front_app_pid() == Some(pid) {
                 return true;
@@ -514,23 +500,6 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
 /// macOS only: bring the app with the given pid back to the foreground (NSRunningApplication
 /// activate, NSApplicationActivateIgnoringOtherApps = 1). Silent on failure — validate still
 /// falls back to selection-text consistency.
-#[cfg(target_os = "macos")]
-fn activate_app_by_pid(pid: i32) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyClass;
-    unsafe {
-        let Some(cls) = AnyClass::get("NSRunningApplication") else {
-            return;
-        };
-        let app: *mut objc2::runtime::AnyObject =
-            msg_send![cls, runningApplicationWithProcessIdentifier: pid];
-        if app.is_null() {
-            return;
-        }
-        let _: bool = msg_send![app, activateWithOptions: 1u64]; // IgnoringOtherApps
-    }
-}
-
 /// macOS only: the last line of defense right before pasting. `validate_selection_insertion_target`'s
 /// simulate_copy fallback retries for up to 200ms, during which foreground focus may jump to
 /// another window or app (and text comparison alone would let it through if that target happens
@@ -1056,32 +1025,10 @@ pub(crate) fn current_front_app_pid() -> Option<i32> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_window_title(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
-
-    unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        (!title.is_empty()).then_some(title)
-    }
-}
-
-#[cfg(target_os = "windows")]
 pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
-    use windows::Win32::Foundation::HWND;
-
-    target
-        .windows
-        .as_ref()
-        .and_then(|captured| windows_window_title(HWND(captured.foreground_window as *mut _)))
+    target.windows.as_ref().and_then(|captured| {
+        openless_platform::windows::front_app::window_title(captured.foreground_window)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -1107,16 +1054,7 @@ pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option
 
 #[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    // Windows has no bundle id concept; the window title is the only identity we get for free.
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return (None, None);
-        }
-        (windows_window_title(hwnd), None)
-    }
+    openless_platform::windows::front_app::current_front_app_parts()
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]

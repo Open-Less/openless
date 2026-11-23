@@ -78,3 +78,19 @@ pub fn bundle_id_for_pid(pid: i32) -> Option<String> {
         unsafe { ns_string_to_rust(bundle_obj) }
     }
 }
+
+/// 把指定 pid 的应用激活到前台（NSRunningApplication activate，忽略其它应用）。
+///
+/// 尽力而为：Electron/自绘窗口类应用可能需要更久才恢复 key window，调用方应轮询确认。
+pub fn activate_app_by_pid(pid: i32) {
+    unsafe {
+        let Some(cls) = AnyClass::get("NSRunningApplication") else {
+            return;
+        };
+        let app: *mut AnyObject = msg_send![cls, runningApplicationWithProcessIdentifier: pid];
+        if app.is_null() {
+            return;
+        }
+        let _: bool = msg_send![app, activateWithOptions: 1u64]; // IgnoringOtherApps
+    }
+}
