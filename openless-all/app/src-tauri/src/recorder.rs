@@ -3622,7 +3622,7 @@ mod tests {
     #[test]
     fn wav_archive_keeps_every_frame_when_disk_worker_is_delayed() {
         let path =
-            std::env::temp_dir().join(format!("openless-archive-{}.wav", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("openless-archive-{}.wav", openless_core::SessionId::new()));
         let archiver = WavArchiver::create(&path).unwrap();
         let (sender, receiver) = channel();
         let start = Arc::new(std::sync::Barrier::new(2));
@@ -3673,7 +3673,7 @@ mod tests {
     fn raw_only_archive_keeps_staged_prefix_without_duplicating_live_processed_pcm() {
         for warm in [false, true] {
             let path =
-                std::env::temp_dir().join(format!("openless-prefix-{}.wav", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("openless-prefix-{}.wav", openless_core::SessionId::new()));
             let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
             let raw = Arc::new(RawTap::new(Some(writer.clone()), None, false));
             let consumer = Arc::new(RecordingConsumer::default());
@@ -3723,7 +3723,7 @@ mod tests {
     #[test]
     fn raw_archive_normalizes_native_stereo_rate_to_the_canonical_wav_format() {
         let path =
-            std::env::temp_dir().join(format!("openless-raw-format-{}.wav", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("openless-raw-format-{}.wav", openless_core::SessionId::new()));
         let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
         let consumer = Arc::new(RecordingConsumer::default());
         let (worker, sender) = AudioProcessingWorker::start_with_targets(
@@ -3760,7 +3760,7 @@ mod tests {
 
     #[test]
     fn raw_archive_resampling_restarts_with_each_warm_recording_segment() {
-        let path = std::env::temp_dir().join(format!("openless-raw-segments-{}.wav", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("openless-raw-segments-{}.wav", openless_core::SessionId::new()));
         let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
         let consumer = Arc::new(RecordingConsumer::default());
         let (worker, sender) = AudioProcessingWorker::start_with_targets(
