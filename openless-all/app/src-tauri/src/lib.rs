@@ -932,6 +932,15 @@ fn run_desktop() {
             // 按下时预取选区、录音中处理伴随键。这里注册一次。
             hotkey::install_dictation_hooks();
 
+            // 平台层 ASR 引擎需要宿主的目录策略（模型缓存 / 运行时 / 日志）。
+            openless_platform::asr::paths::install_paths(openless_platform::asr::paths::AsrPaths {
+                foundry_local_root: crate::persistence::foundry_local_root,
+                foundry_native_runtime_root: crate::persistence::foundry_native_runtime_root,
+                foundry_model_cache_root: crate::persistence::foundry_model_cache_root,
+                foundry_app_data_root: crate::persistence::foundry_app_data_root,
+                foundry_logs_root: crate::persistence::foundry_logs_root,
+            });
+
             // 平台层 ASR 引擎的诊断事件转发到宿主的可导出日志。
             openless_platform::asr::diagnostics::install_diagnostic_hook(Box::new(
                 forward_asr_diagnostic,

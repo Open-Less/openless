@@ -4524,6 +4524,7 @@ dependencies = [
  "cc",
  "coreaudio-sys",
  "cpal",
+ "foundry-local-sdk",
  "futures-util",
  "global-hotkey",
  "keyring",
@@ -4544,6 +4545,7 @@ dependencies = [
  "windows 0.58.0",
  "winreg 0.52.0",
  "zeroize",
+ "zip 9.0.5",
 ]
 
 [[package]]

@@ -151,6 +151,7 @@ openless-platform = { path = "../crates/openless-platform", features = ["asr-she
 
 
 [target.'cfg(target_os = "windows")'.dependencies]
+openless-platform = { path = "../crates/openless-platform", features = ["asr-foundry"] }
 windows-core = "0.58"
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"] }
 raw-window-handle = "0.6"

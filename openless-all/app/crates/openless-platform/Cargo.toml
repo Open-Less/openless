@@ -41,6 +41,19 @@ asr = ["dep:anyhow", "dep:serde", "dep:serde_json", "dep:uuid"]
 # sherpa 原生运行时（链接 sherpa-onnx；仅 Windows 与 Android arm64 提供依赖）
 asr-sherpa = ["asr", "dep:sherpa-onnx", "dep:tokio", "dep:parking_lot"]
 
+# Foundry Local（Windows WinML 本地 ASR）
+asr-foundry = [
+    "asr",
+    "dep:foundry-local-sdk",
+    "dep:tokio",
+    "dep:uuid",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:parking_lot",
+    "dep:futures-util",
+    "dep:zip",
+]
+
 # Apple Speech（macOS Speech.framework）
 asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
 
@@ -97,8 +110,9 @@ once_cell = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-tokio = { version = "1", features = ["sync"], optional = true }
+tokio = { version = "1", features = ["sync", "rt"], optional = true }
 futures-util = { version = "0.3", optional = true }
+zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -132,6 +146,7 @@ windows = { version = "0.58", features = [
   "Win32_Storage_FileSystem",
 ] }
 winreg = { version = "0.52", optional = true }
+foundry-local-sdk = { version = "=1.2.1", features = ["winml"], optional = true }
 
 # macOS：纯文本剪贴板通道 + Keychain 原语。
 [target.'cfg(any(target_os = "windows", target_os = "android"))'.dependencies]

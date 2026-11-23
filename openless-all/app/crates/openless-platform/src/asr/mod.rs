@@ -11,7 +11,12 @@
 pub mod descriptors;
 pub mod diagnostics;
 pub mod ids;
+pub mod paths;
 pub mod receipt;
+
+// Foundry Local：Windows 用 WinML；其它目标保留类型兼容桩。
+#[cfg(feature = "asr-foundry")]
+pub mod foundry;
 
 // Apple Speech 只在 macOS 编译（Speech.framework）。
 #[cfg(all(feature = "asr-apple", target_os = "macos"))]
