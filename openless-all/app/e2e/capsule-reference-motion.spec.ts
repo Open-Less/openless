@@ -52,7 +52,7 @@ test('the new capsule keeps a frosted, readable surface in both themes', async (
     await expect(page.locator('.ol-classic-translation')).toHaveCSS('color-scheme', theme);
     await page.screenshot({ path: info.outputPath(`capsule-${theme}.png`) });
     await patch(page, { state: 'polishing' });
-    await expect(pill.locator('[role="status"]')).toContainText('thinking');
+    await expect(pill.locator('[role="status"]')).toHaveAttribute('aria-label', '正在翻译');
     await expect(pill).toHaveCSS('opacity', '1');
   }
 });

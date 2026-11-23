@@ -22,6 +22,8 @@ test('processing lobe stays joined to recording through transcript, menu and job
   const lobe = page.locator('.ol-processing-satellite');
   await expect(body).toHaveCSS('width', '116px');
   await expect(lobe).toBeVisible();
+  await body.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+  await lobe.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const anchor = await body.boundingBox();
   const assertAnchors = async () => {
     const lower = (await body.boundingBox())!;
@@ -320,8 +322,10 @@ test('translation keeps its element and moves continuously when streaming starts
     }),
   );
   await expect(badge).toHaveAttribute('data-visible', 'true');
-  await expect(badge).toHaveText('正在翻译');
-  await expect(page.getByRole('combobox')).toHaveCount(0);
+  await expect(badge.locator('.ol-classic-translation-label')).toHaveText('正在翻译');
+  await expect(badge).toHaveAttribute('data-picker-open', 'false');
+  await expect(badge.locator('.ol-translation-language-collapse')).toHaveCSS('grid-template-columns', '0px');
+  await expect(badge.getByRole('combobox')).toBeDisabled();
   await page.screenshot({ path: info.outputPath('translation-after-stop.png') });
 });
 
