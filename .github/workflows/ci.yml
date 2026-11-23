@@ -63,6 +63,9 @@ jobs:
           # 需要基线提交才能算出差异，客户端不再重复 fetch。
           fetch-depth: 0
 
+      - name: Validate release mirror contracts
+        run: python3 -B openless-all/app/scripts/test_release_mirror.py
+
       - name: Detect changed areas
         id: detect
         working-directory: openless-all/app

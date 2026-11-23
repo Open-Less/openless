@@ -121,14 +121,14 @@ tag → prepare-release（仅创建／验证共享草稿，不构建）
 
 实现：`.github/workflows/mirror-release.yml` 和 `openless-all/app/scripts/mirror-release.py`。
 
-触发：Release published／edited、手动／repository dispatch，以及每 6 小时的补偿调度。必须合并到默认分支才能启用事件和调度。只执行默认分支的工具，不用带 OSS 密钥的 job 执行 Release 标签内代码。
+触发：Release published／edited、手动／repository dispatch，以及每 6 小时的补偿调度。手动可选 `all`／`stable`／`beta`，默认及其他事件仍处理两个渠道；单渠道恢复不重复处理另一渠道。必须合并到默认分支才能启用事件和调度。只执行默认分支的工具，不用带 OSS 密钥的 job 执行 Release 标签内代码。
 
 1. 读取已发布的最新 Stable 和 Beta；不处理草稿。网站旧任务每 15 分钟下载 3+3 个标签的方式不再沿用。
 2. 镜像它们的实际附件，校验下载长度与 GitHub 提供的 SHA-256。
 3. 用索引（新格式）或独立 `.sig`（历史格式）获取签名，用内置公钥运行 Minisign 验证所有七个更新目标，并检查签名中的完整版本／文件名。
 4. 两个 macOS、Windows NSIS 和四个 Android ABI 必须齐全；缺包、缺签名、校验失败时不推进该渠道。
 5. 先把包上传到 `releases/<tag>/`，全部成功后才替换 `updates/<channel>/` 的滚动 JSON。包保持 immutable 缓存头，清单缓存 60 秒。每个对象的 PUT 是原子的，不声称七个平台的清单能事务性同时切换。
-6. 使用 `rclone copy` 而非 `sync`／`purge`，不删除历史 OSS 对象，也不修改 GitHub 附件。无需重写或单独上传每个平台的 `.sig` 才能让新版 CDN 客户端更新。
+6. 使用逐文件 `rclone copyto`，每个对象使用独立进程并输出文件名、完成状态及 30 秒 NOTICE 级进度；不使用 `sync`／`purge`，不删除历史 OSS 对象，也不修改 GitHub 附件。单文件由 Python 强制限制为最多 5 分钟，安装包上传阶段总预算 20 分钟、清单阶段 3 分钟；任何包失败或超时都不得启动清单上传。无需重写或单独上传每个平台的 `.sig` 才能让新版 CDN 客户端更新。
 
 #### 配置与恢复
 
