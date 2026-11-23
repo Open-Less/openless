@@ -412,7 +412,7 @@ impl NativeCapsule {
             .available_monitors()
             .unwrap_or_default()
             .iter()
-            .map(MonitorRect::from_tauri)
+            .map(crate::capsule_mirrors::monitor_rect_from_tauri)
             .collect();
         let primary = self
             .app
@@ -420,7 +420,7 @@ impl NativeCapsule {
             .ok()
             .flatten()
             .as_ref()
-            .map(MonitorRect::from_tauri);
+            .map(crate::capsule_mirrors::monitor_rect_from_tauri);
         let cursor = self
             .app
             .cursor_position()

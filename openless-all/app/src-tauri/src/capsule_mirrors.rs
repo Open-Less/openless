@@ -18,85 +18,33 @@ use tauri::Monitor;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+// 显示器几何、放置、镜像选择已迁到平台层；宿主只负责 tauri Monitor → MonitorRect 的转换。
+pub(crate) use openless_platform::capsule::geometry::{
+    capsule_placement, mirror_targets, monitor_at_point, MonitorRect, MAX_CAPSULE_MIRRORS,
+};
+
+/// tauri 显示器信息 → 平台层 `MonitorRect`。
+#[cfg(not(mobile))]
+pub(crate) fn monitor_rect_from_tauri(monitor: &tauri::Monitor) -> MonitorRect {
+    let position = monitor.position();
+    let size = monitor.size();
+    let work = monitor.work_area();
+    MonitorRect::from_parts(
+        position.x,
+        position.y,
+        size.width as i32,
+        size.height as i32,
+        work.position.x,
+        work.position.y,
+        work.size.width as i32,
+        work.size.height as i32,
+        monitor.scale_factor().max(0.1),
+        openless_platform::capsule::geometry::monitor_identity(monitor.name().map(String::as_str)),
+    )
+}
+
 pub(crate) const CAPSULE_MIRROR_PREFIX: &str = "capsule-mirror-";
 pub(crate) const RAIL_MIRROR_PREFIX: &str = "capsule-rail-mirror-";
-
-/// Legacy slot count used to hide any previously created mirror windows.
-pub(crate) const MAX_CAPSULE_MIRRORS: usize = 7;
-
-/// Physical description of one monitor in virtual-desktop coordinates.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MonitorRect {
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-    pub(crate) work_left: i32,
-    pub(crate) work_top: i32,
-    pub(crate) work_right: i32,
-    pub(crate) work_bottom: i32,
-    /// Effective DPI scale (1.0 = 96 dpi).
-    pub(crate) scale: f64,
-    /// Stable Tauri monitor name hash, when the runtime exposes one.
-    /// A zero value means that only the outer bounds can identify the monitor.
-    pub(crate) identity: u64,
-}
-
-#[cfg(not(mobile))]
-fn monitor_identity(name: Option<&String>) -> u64 {
-    let Some(name) = name else {
-        return 0;
-    };
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in name.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    if hash == 0 {
-        1
-    } else {
-        hash
-    }
-}
-
-impl MonitorRect {
-    #[cfg(not(mobile))]
-    pub(crate) fn from_tauri(monitor: &Monitor) -> Self {
-        let position = monitor.position();
-        let size = monitor.size();
-        let work = monitor.work_area();
-        let left = position.x;
-        let top = position.y;
-        let work_left = work.position.x;
-        let work_top = work.position.y;
-        Self {
-            left,
-            top,
-            right: left + size.width as i32,
-            bottom: top + size.height as i32,
-            work_left,
-            work_top,
-            work_right: work_left + work.size.width as i32,
-            work_bottom: work_top + work.size.height as i32,
-            scale: monitor.scale_factor().max(0.1),
-            identity: monitor_identity(monitor.name()),
-        }
-    }
-
-    /// Work area (taskbar excluded), falling back to the full monitor when the OS reports none.
-    fn work_rect(&self) -> (i32, i32, i32, i32) {
-        if self.work_right > self.work_left && self.work_bottom > self.work_top {
-            (
-                self.work_left,
-                self.work_top,
-                self.work_right,
-                self.work_bottom,
-            )
-        } else {
-            (self.left, self.top, self.right, self.bottom)
-        }
-    }
-}
 
 /// Follow the mouse, not the capsule HWND (which can still be on the old screen).
 /// Fall back to the primary display if the cursor cannot be queried.
@@ -140,7 +88,7 @@ fn primary_monitor_rect<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Option<
         .primary_monitor()
         .ok()
         .flatten()
-        .map(|monitor| MonitorRect::from_tauri(&monitor))
+        .map(|monitor| monitor_rect_from_tauri(&monitor))
 }
 
 /// Resolve a monitor captured at session start against the current topology.
@@ -198,7 +146,7 @@ pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
     app.available_monitors()
         .unwrap_or_default()
         .iter()
-        .map(MonitorRect::from_tauri)
+        .map(monitor_rect_from_tauri)
         .find(|candidate| {
             (
                 candidate.left,
@@ -207,13 +155,6 @@ pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
                 candidate.bottom,
             ) == (rect.left, rect.top, rect.right, rect.bottom)
         })
-}
-
-pub(crate) fn monitor_at_point(monitors: &[MonitorRect], x: i32, y: i32) -> Option<MonitorRect> {
-    monitors
-        .iter()
-        .copied()
-        .find(|m| x >= m.left && x < m.right && y >= m.top && y < m.bottom)
 }
 
 /// Match the macOS pointer-based primary placement without querying the old window position.
@@ -239,7 +180,7 @@ pub(crate) fn target_monitor_rect<R: tauri::Runtime>(
         .primary_monitor()
         .ok()
         .flatten()
-        .map(|m| MonitorRect::from_tauri(&m))
+        .map(|m| monitor_rect_from_tauri(&m))
 }
 
 /// Every monitor currently connected, in the OS enumeration order.
@@ -249,48 +190,7 @@ pub(crate) fn all_monitor_rects<R: tauri::Runtime>(window: &WebviewWindow<R>) ->
         .available_monitors()
         .unwrap_or_default()
         .iter()
-        .map(MonitorRect::from_tauri)
-        .collect()
-}
-
-/// Physical placement of a capsule at the bottom center of `monitor`'s work area.
-///
-/// `logical_width` / `logical_height` / `logical_bottom_gap` are DPI-independent sizes; they
-/// are converted with the monitor's own scale, so mixed-DPI setups each get a correctly sized
-/// capsule. Returns `(physical_width, physical_height, x, y)`.
-pub(crate) fn capsule_placement(
-    logical_width: f64,
-    logical_height: f64,
-    logical_bottom_gap: f64,
-    monitor: MonitorRect,
-) -> (u32, u32, i32, i32) {
-    let scale = monitor.scale;
-    let phys_w = (logical_width * scale).round() as i32;
-    let phys_h = (logical_height * scale).round() as i32;
-    let (work_l, work_t, work_r, work_b) = monitor.work_rect();
-    let x = work_l + ((work_r - work_l - phys_w) / 2).max(0);
-    let y = work_b - phys_h - (logical_bottom_gap * scale).round() as i32;
-    let (x, y) = crate::clamp_to_monitor(x, y, phys_w, phys_h, work_l, work_t, work_r, work_b);
-    (phys_w.max(1) as u32, phys_h.max(1) as u32, x, y)
-}
-
-/// Mirror only on explicit opt-in, excluding the display already hosting the primary.
-pub(crate) fn mirror_targets(
-    mode: CapsuleDisplayMode,
-    monitors: &[MonitorRect],
-    primary: MonitorRect,
-) -> Vec<MonitorRect> {
-    if mode != CapsuleDisplayMode::AllScreens {
-        return Vec::new();
-    }
-    monitors
-        .iter()
-        .copied()
-        .filter(|m| {
-            (m.left, m.top, m.right, m.bottom)
-                != (primary.left, primary.top, primary.right, primary.bottom)
-        })
-        .take(MAX_CAPSULE_MIRRORS)
+        .map(monitor_rect_from_tauri)
         .collect()
 }
 

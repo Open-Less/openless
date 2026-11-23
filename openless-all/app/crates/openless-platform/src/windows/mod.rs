@@ -2,6 +2,8 @@
 //!
 //! 每个能力一个文件，与顶层能力 feature 一一对应；关闭某个能力时对应文件不编译。
 
+#[cfg(feature = "capsule")]
+pub mod capsule_window;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 #[cfg(feature = "clipboard")]

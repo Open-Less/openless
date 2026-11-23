@@ -43,6 +43,8 @@
 
 #[cfg(feature = "audio")]
 pub mod audio;
+#[cfg(feature = "capsule")]
+pub mod capsule;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 pub mod common;

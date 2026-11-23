@@ -1557,7 +1557,7 @@ impl TauriCapsuleWindow {
                 .app
                 .available_monitors()?
                 .iter()
-                .map(MonitorRect::from_tauri)
+                .map(crate::capsule_mirrors::monitor_rect_from_tauri)
                 .collect();
             let rect = |m: MonitorRect| Rect {
                 left: m.left,
@@ -1624,7 +1624,7 @@ impl TauriCapsuleWindow {
                         .ok()
                         .flatten()
                         .as_ref()
-                        .map(MonitorRect::from_tauri)
+                        .map(crate::capsule_mirrors::monitor_rect_from_tauri)
                 })
                 .or_else(|| monitors.first().copied());
             let Some(monitor) = monitor else {

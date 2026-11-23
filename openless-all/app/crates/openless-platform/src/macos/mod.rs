@@ -2,6 +2,8 @@
 
 #[cfg(feature = "input")]
 pub mod cgevent;
+#[cfg(feature = "capsule")]
+pub mod capsule_window;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 #[cfg(feature = "selection")]

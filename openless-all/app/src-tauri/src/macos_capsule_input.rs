@@ -1,25 +1,14 @@
 //! Native click-through follows measured DOM controls, not the transparent WebView bounds.
-use objc2::{
-    class, msg_send,
-    runtime::{AnyObject, Bool},
-};
-use objc2_foundation::{NSPoint, NSRect};
+use objc2::{class, msg_send};
 use parking_lot::Mutex;
-use serde::Deserialize;
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
 };
 use tauri::Manager;
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct InputRect {
-    left: f64,
-    top: f64,
-    width: f64,
-    height: f64,
-}
+/// 交互区域：直接复用平台层类型（字段公开，可从 DOM 量测结果构造）。
+pub(crate) use openless_platform::macos::capsule_window::InputRect;
 impl InputRect {
     fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.left
@@ -108,30 +97,19 @@ fn update_native_input(window: &tauri::WebviewWindow, regions: Regions) {
         let Ok(pointer) = owner.ns_window() else {
             return;
         };
-        let native = pointer as *mut AnyObject;
-        let view: *mut AnyObject = msg_send![native, contentView];
-        if view.is_null() {
+        let window = pointer as *mut std::ffi::c_void;
+        // 坐标换算与点击穿透判定都在平台层（AppKit 把屏幕点直接换算到窗口逻辑坐标，
+        // 避开 tauri 全局光标与窗口位置缩放因子不一致的问题）。
+        let Some((x, y)) = openless_platform::macos::capsule_window::cursor_in_window(window) else {
             return;
-        }
-        // AppKit converts screen points directly into this window's logical coordinates.
-        // Tauri's global cursor and window positions use different display scale factors.
-        let screen: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-        let point: NSPoint = msg_send![native, convertPointFromScreen: screen];
-        let local: NSPoint =
-            msg_send![view, convertPoint: point fromView: std::ptr::null::<AnyObject>()];
-        let bounds: NSRect = msg_send![view, bounds];
-        let flipped: Bool = msg_send![view, isFlipped];
-        let x = local.x - bounds.origin.x;
-        let y = if flipped.as_bool() {
-            local.y - bounds.origin.y
-        } else {
-            bounds.origin.y + bounds.size.height - local.y
         };
-        let pass = !regions
+        let receive = regions
             .lock()
             .get(owner.label())
-            .is_some_and(|rects| rects.iter().any(|rect| rect.contains(x, y)));
-        let _: () = msg_send![native, setIgnoresMouseEvents: Bool::new(pass)];
+            .is_some_and(|rects| {
+                openless_platform::macos::capsule_window::should_receive_mouse(rects, x, y)
+            });
+        openless_platform::macos::capsule_window::set_ignores_mouse_events(window, !receive);
     });
 }
 
