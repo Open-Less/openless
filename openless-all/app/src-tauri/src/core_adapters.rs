@@ -3446,6 +3446,41 @@ impl RecordingArchive for TauriRecordingArchive {
         self.available.load(Ordering::Acquire)
     }
 
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let path = self.path.lock().clone();
+        Box::pin(async move {
+            use tokio::io::AsyncReadExt;
+            let read = async {
+                let mut file = tokio::fs::File::open(path).await?;
+                let size = file.metadata().await?.len();
+                let mut header = [0; 44];
+                file.read_exact(&mut header).await?;
+                Ok::<_, std::io::Error>((size, header))
+            }
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("read dictation archive header: {error}"),
+                )
+            })?;
+            let (size, header) = read;
+            let pcm_bytes = u64::from(u32::from_le_bytes(header[40..44].try_into().unwrap()));
+            if &header[..4] != b"RIFF"
+                || &header[8..12] != b"WAVE"
+                || &header[36..40] != b"data"
+                || size != 44 + pcm_bytes
+                || !pcm_bytes.is_multiple_of(2)
+            {
+                return Err(BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "longRecordingArchiveIncomplete",
+                ));
+            }
+            Ok(pcm_bytes)
+        })
+    }
+
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
         let path = self.path.lock().clone();
         Box::pin(async move {

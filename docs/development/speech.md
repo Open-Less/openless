@@ -4,6 +4,8 @@
 
 ## 录音与转写
 
+普通录音严格超过 5 分钟后启用整段音频保留、识别中断重放和完整文字分段处理，覆盖半小时以上录音；实现、检查入口及真实平台边界见[长录音保护](long-recording.md)。
+
 普通听写的设备采集与后台任务按 sessionId 分开管理。设备确认停止后可以开始下一段；旧 stop 仍可等待最终结果。接口、定向取消、原目标写回、胶囊位置及各平台验收边界见[录音采集与后台后处理](recording-overlap.md)。
 
 [dictation_engine.rs](../../openless-all/app/crates/openless-core/src/dictation_engine.rs) 在识别器准备之前提交麦克风采集。准备期间，音频写入现有的有界 `BufferedTranscriptionSession`；准备成功后按顺序先发送缓冲，再发送实时音频。稳定模式等录音结束才连接识别器。准备失败、取消及会话终态都要清理已经打开的输入。500 ms 预录仍由独立选项控制。

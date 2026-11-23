@@ -361,12 +361,13 @@ impl DictationContext {
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
                 ) || debug_keep_processed
                     || debug_keep_raw,
-                // 功能必需档案（quick note / undecided）始终存处理后的 PCM；
-                // 调试录音则由两个开关决定，见上面 `debug_keep_*` 的迁移说明。
+                // Functional scratch audio must match the canonical PCM sent to ASR.
+                // Explicit raw-debug retention keeps its independently chosen source.
                 archive_processed: matches!(
                     options.output_target,
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
-                ) || debug_keep_processed,
+                ) || debug_keep_processed
+                    || !debug_keep_raw,
                 archive_raw: debug_keep_raw,
                 archive_required: matches!(
                     options.output_target,

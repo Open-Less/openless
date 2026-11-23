@@ -1126,9 +1126,7 @@ index 3a95c61..3657e6f 100644
                  && context.uses_llm_polisher()
                  && !transcript.text.trim().is_empty()
                  && !skips_polish_for_short_text
-@@ -1068,6 +1075,16 @@ impl DictationEngine for PipelineDictationEngine {
-                         )
-                         .await
+@@ -1068,4 +1075,14 @@ impl DictationEngine for PipelineDictationEngine {
                  };
 +                let output = output.and_then(|value| {
 +                    if require_translation && value.text.trim().is_empty() {
