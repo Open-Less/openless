@@ -69,11 +69,8 @@ pub(crate) fn target_monitor_rect_for_mode<R: tauri::Runtime>(
             resolve_frozen_monitor(frozen, &monitors, primary)
         }
         CapsuleDisplayMode::CursorScreen | CapsuleDisplayMode::AllScreens => {
-            let mut point = windows::Win32::Foundation::POINT::default();
-            // SAFETY: GetCursorPos writes only to this initialized POINT.
-            if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) }.is_ok()
-            {
-                if let Some(monitor) = monitor_at_point(&monitors, point.x, point.y) {
+            if let Some((x, y)) = openless_platform::windows::capsule_window::cursor_position() {
+                if let Some(monitor) = monitor_at_point(&monitors, x, y) {
                     return Some(monitor);
                 }
             }
@@ -120,29 +117,7 @@ pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
     app: &AppHandle<R>,
     raw_hwnd: usize,
 ) -> Option<MonitorRect> {
-    use std::ffi::c_void;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-
-    let hwnd = HWND(raw_hwnd as *mut c_void);
-    if hwnd.0.is_null() {
-        return None;
-    }
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-    if monitor.is_invalid() {
-        return None;
-    }
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: `info` is initialized with the required structure size and is written by Win32.
-    if !unsafe { GetMonitorInfoW(monitor, &mut info).as_bool() } {
-        return None;
-    }
-    let rect = info.rcMonitor;
+    let rect = openless_platform::windows::capsule_window::monitor_bounds_for_hwnd(raw_hwnd)?;
     app.available_monitors()
         .unwrap_or_default()
         .iter()

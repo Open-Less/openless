@@ -13,21 +13,15 @@ use super::*;
 /// app". Used to refresh qa_focus_target in issue #466's multi-turn flow.
 #[cfg(target_os = "windows")]
 pub(crate) fn capture_external_focus_target() -> Option<usize> {
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    use openless_platform::windows::capsule_window::{
+        current_process_id, foreground_process_id, foreground_window,
+    };
 
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == GetCurrentProcessId() {
-            return None;
-        }
-        Some(hwnd.0 as usize)
+    let hwnd = foreground_window()?;
+    if foreground_process_id() == Some(current_process_id()) {
+        return None;
     }
+    Some(hwnd)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -37,14 +31,7 @@ pub(crate) fn capture_external_focus_target() -> Option<usize> {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn capture_focus_target() -> Option<usize> {
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground.0.is_null() {
-        None
-    } else {
-        Some(foreground.0 as usize)
-    }
+    openless_platform::windows::capsule_window::foreground_window()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -72,42 +59,15 @@ pub(crate) fn capture_frontmost_app() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
-    use std::ffi::c_void;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
-    };
-
     let Some(raw_target) = target else {
         log::warn!("[coord] no original Windows insertion target captured");
         return false;
     };
-    let hwnd = HWND(raw_target as *mut c_void);
-    if hwnd.0.is_null() {
-        return false;
-    }
-    if !unsafe { IsWindow(hwnd).as_bool() } {
-        log::warn!("[coord] original Windows insertion target is no longer a valid window");
-        return false;
-    }
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground == hwnd {
+    if openless_platform::windows::capsule_window::restore_focus_to_window(raw_target) {
         return true;
     }
-
-    if unsafe { IsIconic(hwnd).as_bool() } {
-        let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
-    }
-    let _ = unsafe { SetForegroundWindow(hwnd) };
-    std::thread::sleep(std::time::Duration::from_millis(60));
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground != hwnd {
-        log::warn!("[coord] failed to restore original Windows insertion target before paste");
-        return false;
-    }
-    true
+    log::warn!("[coord] failed to restore original Windows insertion target before paste");
+    false
 }
 
 #[cfg(not(target_os = "windows"))]

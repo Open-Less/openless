@@ -449,3 +449,90 @@ mod tests {
         assert!(install_hit_test(HWND::default(), rect()).is_err());
     }
 }
+
+/// 当前鼠标位置（虚拟桌面坐标）。
+pub fn cursor_position() -> Option<(i32, i32)> {
+    let mut point = windows::Win32::Foundation::POINT::default();
+    // SAFETY: GetCursorPos 只写入这个已初始化的 POINT。
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) }
+        .ok()
+        .map(|_| (point.x, point.y))
+}
+
+/// 窗口所在显示器的外框（虚拟桌面坐标）；窗口无效时返回 `None`。
+pub fn monitor_bounds_for_hwnd(raw_hwnd: usize) -> Option<HitRect> {
+    use std::ffi::c_void;
+
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+
+    let hwnd = HWND(raw_hwnd as *mut c_void);
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` 已按 Win32 要求设置结构大小，仅由系统写入。
+    if !unsafe { GetMonitorInfoW(monitor, &mut info).as_bool() } {
+        return None;
+    }
+    let rect = info.rcMonitor;
+    Some(HitRect::new(rect.left, rect.top, rect.right, rect.bottom))
+}
+
+/// 前台窗口句柄（无前台窗口时 `None`）。
+pub fn foreground_window() -> Option<usize> {
+    let hwnd = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+    (!hwnd.0.is_null()).then_some(hwnd.0 as usize)
+}
+
+/// 前台窗口的进程 id。
+pub fn foreground_process_id() -> Option<u32> {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    let hwnd = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
+}
+
+/// 当前进程 id。
+pub fn current_process_id() -> u32 {
+    unsafe { windows::Win32::System::Threading::GetCurrentProcessId() }
+}
+
+/// 把焦点还给某个窗口（必要时从最小化恢复）。返回是否成功。
+pub fn restore_focus_to_window(raw_target: usize) -> bool {
+    use std::ffi::c_void;
+
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    let hwnd = HWND(raw_target as *mut c_void);
+    if hwnd.0.is_null() {
+        return false;
+    }
+    if !unsafe { IsWindow(hwnd) }.as_bool() {
+        return false;
+    }
+    if unsafe { GetForegroundWindow() } == hwnd {
+        return true;
+    }
+    if unsafe { IsIconic(hwnd) }.as_bool() {
+        let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
+    }
+    let _ = unsafe { SetForegroundWindow(hwnd) };
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    (unsafe { GetForegroundWindow() }) == hwnd
+}
