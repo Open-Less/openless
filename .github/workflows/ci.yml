@@ -18,6 +18,11 @@ on:
     branches: [main, beta]
   workflow_dispatch:
     inputs:
+      live_acceptance:
+        description: Paid official-provider acceptance only (skips ordinary platform checks)
+        type: choice
+        options: ['off', style, style-diagnostic, search]
+        default: 'off'
       platform:
         description: Platforms to check (macos runs only macOS gates)
         type: choice
@@ -37,7 +42,7 @@ on:
 # Supersede a PR or an equivalent manual request. Keep different manual
 # platform/runner selections independent, and preserve baseline push evidence.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}-${{ inputs.live_acceptance || 'off' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -45,6 +50,7 @@ jobs:
   # 跳过对应 job：判定脚本对任何未知情况（没有基线、git 失败、空 diff）都返回
   # true。push / tag / 手动运行不带基线，因此始终全量验证。
   changes:
+    if: github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off'
     name: Changed areas
     runs-on: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only') && 'macos-latest' || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -311,7 +317,7 @@ jobs:
   ui-motion:
     name: UI motion (Chromium + WebKit)
     needs: [changes, ui-motion-browsers]
-    if: always() && !(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only'))
+    if: (github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && !(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1202,7 +1208,7 @@ jobs:
     # Keep the existing Windows required check dependent on both compilers.
     name: Windows checks
     needs: [changes, cross-platform, windows-msrv]
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos')
+    if: (github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos')
     runs-on: ${{ needs.changes.outputs.desktop-only == 'false' && 'ubuntu-latest' || 'macos-latest' }}
     timeout-minutes: 5
     steps:
@@ -1225,3 +1231,40 @@ jobs:
           else
             test "$MSRV_RESULT" = success
           fi
+
+  live-acceptance:
+    name: Optional official-provider live acceptance
+    if: github.event_name == 'workflow_dispatch' && inputs.live_acceptance != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build acceptance without credentials
+        run: cargo test --locked -p openless-core --lib --no-run
+      - name: Run explicitly selected bounded acceptance
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LIVE_ACCEPTANCE: ${{ inputs.live_acceptance }}
+        run: |
+          set -euo pipefail
+          case "$LIVE_ACCEPTANCE" in
+            style) target=style_live_official_deepseek ;;
+            style-diagnostic) target=style_live_official_deepseek; export OPENLESS_LIVE_FIRST_ONLY=1 ;;
+            search) target=hybrid_live_official_deepseek ;;
+            *) exit 2 ;;
+          esac
+          cargo test --locked -p openless-core --lib "$target" -- --list --ignored | grep -q "$target: test"
+          cargo test --locked -p openless-core --lib "$target" -- --ignored --nocapture --test-threads=1 | tee live-acceptance.log
+      - name: Preserve public output evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-provider-live-acceptance
+          path: openless-all/app/live-acceptance.log
+          if-no-files-found: ignore

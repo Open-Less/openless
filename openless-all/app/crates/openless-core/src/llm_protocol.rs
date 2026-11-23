@@ -539,6 +539,8 @@ impl TextEventStream {
             }
             Err(_) => return Err(response_error("invalid LLM SSE JSON")),
         };
+        #[cfg(test)]
+        crate::polish::live_acceptance::observe_model(&value);
         if let Some(reported) = crate::usage_ledger::ReportedTokens::from_response(&value) {
             self.reported_tokens.merge_report(reported);
         }
