@@ -1109,6 +1109,7 @@ mod platform {
             let held_for = pressed_at.map(|at| now.saturating_duration_since(at));
             if !companion_seen && held_for.is_some_and(|duration| duration < FN_TAP_MAX_DURATION) {
                 let pressed_at = pressed_at.expect("checked above");
+                log::info!("[hotkey] Fn tap press_id={} held_ms={}", press_id, held_for.expect("checked above").as_millis());
                 send_or_log(
                     &ctx.tx,
                     HotkeyEvent::Pressed {

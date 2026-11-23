@@ -616,3 +616,255 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
         }
     }
 }
+
+#[tokio::test]
+async fn rapid_three_submissions_keep_pcm_and_join_final_input_before_the_next() {
+    use crate::ports::{
+        ActiveRecording, AudioConsumer, AudioRecorder, RecordingProgressSink, TextStreamSink,
+        TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    };
+    use std::sync::atomic::AtomicUsize;
+    struct Recorder(AtomicUsize);
+    struct Recording(usize, Arc<dyn AudioConsumer>);
+    impl AudioRecorder for Recorder {
+        fn start(
+            &self,
+            _: SessionId,
+            _: Arc<DictationContext>,
+            consumer: Arc<dyn AudioConsumer>,
+            _: Arc<dyn RecordingProgressSink>,
+        ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+            let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+            consumer.consume_pcm_chunk(&[n as u8, 1]);
+            consumer.consume_pcm_chunk(&[n as u8, 2]);
+            Box::pin(
+                async move { Ok(Box::new(Recording(n, consumer)) as Box<dyn ActiveRecording>) },
+            )
+        }
+    }
+    impl ActiveRecording for Recording {
+        fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.1.consume_pcm_chunk(&[self.0 as u8, 3]);
+            Box::pin(async { Ok(()) })
+        }
+    }
+    type Audio = Arc<Mutex<Vec<Arc<Transcript>>>>;
+    struct Transcriber {
+        audio: Audio,
+        release: Arc<tokio::sync::Semaphore>,
+        outcome: &'static str,
+    }
+    struct Transcript {
+        n: usize,
+        pcm: Mutex<Vec<u8>>,
+        release: Arc<tokio::sync::Semaphore>,
+        outcome: &'static str,
+    }
+    impl AudioConsumer for Transcript {
+        fn consume_pcm_chunk(&self, pcm: &[u8]) {
+            self.pcm.lock().unwrap().extend_from_slice(pcm);
+        }
+    }
+    impl TranscriptionSession for Transcript {
+        fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
+            let (n, release, outcome) = (self.n, self.release.clone(), self.outcome);
+            Box::pin(async move {
+                if n == 1 {
+                    release.acquire().await.unwrap().forget();
+                }
+                if n == 1 && outcome == "failure" {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "controlled first ASR failure",
+                    ));
+                }
+                Ok(TranscriptOutput {
+                    text: format!("segment{n}"),
+                    duration_ms: 3,
+                })
+            })
+        }
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    impl TranscriptionEngine for Transcriber {
+        fn start(
+            &self,
+            _: SessionId,
+            _: Arc<DictationContext>,
+            _: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+            let mut audio = self.audio.lock().unwrap();
+            let item = Arc::new(Transcript {
+                n: audio.len() + 1,
+                pcm: Mutex::new(Vec::new()),
+                release: self.release.clone(),
+                outcome: self.outcome,
+            });
+            audio.push(item.clone());
+            Box::pin(async { Ok(item as Arc<dyn TranscriptionSession>) })
+        }
+    }
+    struct Inserter {
+        calls: Arc<Mutex<Vec<String>>>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+    impl crate::ports::TextInserter for Inserter {
+        fn defer_preparation_until_stop(&self) -> bool {
+            true
+        }
+        fn begin(
+            &self,
+            _: SessionId,
+            context: Arc<DictationContext>,
+        ) -> BoxFuture<'static, Result<Arc<dyn crate::ports::TextInsertionSession>, BackendError>>
+        {
+            assert!(!context.insertion.streaming && !context.insertion.composition_input);
+            let session = Arc::new(Insertion {
+                calls: self.calls.clone(),
+                entered: self.entered.clone(),
+                release: self.release.clone(),
+            });
+            Box::pin(async { Ok(session as Arc<dyn crate::ports::TextInsertionSession>) })
+        }
+    }
+    struct Insertion {
+        calls: Arc<Mutex<Vec<String>>>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+    impl crate::ports::TextInsertionSession for Insertion {
+        fn write(
+            &self,
+            _: String,
+        ) -> BoxFuture<'static, Result<crate::ports::InsertWriteResult, BackendError>> {
+            panic!("no live target writes")
+        }
+        fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
+            panic!("no fallback expected")
+        }
+        fn finish(&self, text: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+            let (calls, entered, release) = (
+                self.calls.clone(),
+                self.entered.clone(),
+                self.release.clone(),
+            );
+            Box::pin(async move {
+                calls.lock().unwrap().push(format!("start:{text}"));
+                if text == "segment1" {
+                    entered.notify_one();
+                    release.acquire().await.unwrap().forget();
+                }
+                calls.lock().unwrap().push(format!("end:{text}"));
+                Ok(InsertOutcome::Inserted)
+            })
+        }
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    for outcome in ["success", "failure", "cancel"] {
+        let data = TestDataDir::new("rapid-three");
+        let audio = Arc::new(Mutex::new(Vec::new()));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let input_release = Arc::new(tokio::sync::Semaphore::new(0));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut deps = BackendDependencies::unsupported();
+        deps.task_spawner = Arc::new(TokioTaskSpawner);
+        deps.host_actions = Arc::new(FakeHost::default());
+        deps.credential_store = llm_configured_credentials();
+        deps.text_inserter = Arc::new(Inserter {
+            calls: calls.clone(),
+            entered: entered.clone(),
+            release: input_release.clone(),
+        });
+        deps.dictation_engine = Arc::new(crate::DictationEngineRouter::new(Arc::new(
+            crate::PipelineDictationEngine::new(
+                Arc::new(Recorder(AtomicUsize::new(0))),
+                Arc::new(Transcriber {
+                    audio: audio.clone(),
+                    release: release.clone(),
+                    outcome,
+                }),
+                Arc::new(crate::testing::FixtureTextPolisher::successful("unused")),
+            ),
+        )));
+        let backend = Arc::new(
+            OpenLessBackend::new(
+                BackendConfig {
+                    data_dir: data.path().into(),
+                    ..Default::default()
+                },
+                deps,
+            )
+            .unwrap(),
+        );
+        backend.start().await.unwrap();
+        backend
+            .activate_style_pack(crate::style_packs::BUILTIN_STYLE_PACK_RAW_ID)
+            .unwrap();
+        let mut ids = Vec::new();
+        let mut stops = Vec::new();
+        for _ in 0..3 {
+            let id = backend.start_dictation().await.unwrap();
+            ids.push(id);
+            let owner = backend.clone();
+            stops.push(tokio::spawn(async move {
+                owner.stop_dictation_session(id).await
+            }));
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                backend.wait_for_dictation_submission(id),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(calls.lock().unwrap().is_empty());
+        let cancel = if outcome == "cancel" {
+            let owner = backend.clone();
+            let first = ids[0];
+            let task = tokio::spawn(async move { owner.cancel_dictation(Some(first)).await });
+            tokio::task::yield_now().await;
+            Some(task)
+        } else {
+            None
+        };
+        release.add_permits(1);
+        if outcome == "success" {
+            tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+                .await
+                .unwrap();
+            assert_eq!(*calls.lock().unwrap(), ["start:segment1"]);
+            input_release.add_permits(1);
+        }
+        if let Some(cancel) = cancel {
+            cancel.await.unwrap().unwrap();
+        }
+        for (index, stop) in stops.into_iter().enumerate() {
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), stop)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.is_ok(), index > 0 || outcome == "success");
+        }
+        let expected: Vec<_> = (if outcome == "success" { 1 } else { 2 }..=3)
+            .flat_map(|n| [format!("start:segment{n}"), format!("end:segment{n}")])
+            .collect();
+        assert_eq!(*calls.lock().unwrap(), expected);
+        for (index, item) in audio.lock().unwrap().iter().enumerate() {
+            let n = index as u8 + 1;
+            assert_eq!(*item.pcm.lock().unwrap(), [n, 1, n, 2, n, 3]);
+        }
+        let history = backend.list_history().unwrap();
+        for (index, id) in ids.iter().enumerate().skip(1) {
+            assert!(history
+                .iter()
+                .any(|row| row.id == id.to_string()
+                    && row.final_text == format!("segment{}", index + 1)));
+        }
+        backend.shutdown().await.unwrap();
+    }
+}

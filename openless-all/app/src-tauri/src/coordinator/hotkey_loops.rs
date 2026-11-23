@@ -2281,7 +2281,8 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                 if inner.backend.snapshot().preferences_revision == context.preferences_revision
                     && is_builtin_translation_shift(&hotkey_runtime_target(&inner).translation)
                 {
-                    let _ = inner.backend.toggle_dictation_translation_for_session(context.session_id);
+                    let result = inner.backend.toggle_dictation_translation_for_session(context.session_id);
+                    log::info!("[hotkey] standalone Shift session={} result={:?}", context.session_id, result.as_ref().map_err(|error| error.code));
                 }
             }
             HotkeyEvent::TranslationModifierPressed => {

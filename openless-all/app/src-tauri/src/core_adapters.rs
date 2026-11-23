@@ -4244,23 +4244,18 @@ where
 impl CoreTextInserter for TauriTextInserter {
     fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
-        #[cfg(not(mobile))]
-        let insertion_target = crate::selection::capture_dictation_insertion_target();
-        #[cfg(mobile)]
+        // Capture app context for prompt routing, not a future write destination.
         let insertion_target = crate::selection::capture_selection_insertion_target();
-        #[cfg(target_os = "windows")]
-        let ime_target = crate::selection::ime_target_for_selection(&insertion_target);
         #[cfg(target_os = "macos")]
-        // Position safety uses the shared range reader, never a live composition
-        // or a document-text capture triggered by legacy composition preferences.
+        // Retired AX composition does not capture or retain document text.
         let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
-                insertion_target: Some(insertion_target.clone()),
+                insertion_target: None,
                 #[cfg(target_os = "macos")]
                 live_capture,
                 #[cfg(target_os = "windows")]
-                ime_target,
+                ime_target: None,
                 ..self.clone()
             }),
             host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
@@ -4286,16 +4281,10 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
-            // Retain the destination captured before context/credential awaits.
-            // Every write must still match its original range and capture
-            // generation; never reactivate an app or follow the current caret.
+            // Deferred preparation runs in Core's ordered finalization. Ordinary
+            // dictation follows the user's current focus without reactivation.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
-            #[cfg(not(mobile))]
-            if !crate::selection::selection_insertion_target_is_current(&insertion_target) {
-                return Err(BackendError::new(BackendErrorCode::InvalidState,
-                    "original input target or position changed or is unavailable; no text was inserted").target_unavailable());
-            }
             #[cfg(target_os = "windows")]
             if let Some(handle) = app.lock().as_ref() {
                 if let Some(state) = handle.try_state::<VocabPlacementState>() {
@@ -4311,7 +4300,7 @@ impl CoreTextInserter for TauriTextInserter {
                     )
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
-                    !crate::selection::dictation_target_requires_position(&insertion_target)
+                    context.insertion.streaming
                         && context.uses_llm_polisher()
                         && !context.insertion.composition_input
                         && openless_core::streaming_insert::streaming_insert_eligible(
@@ -4387,8 +4376,6 @@ impl CoreTextInserter for TauriTextInserter {
                 #[cfg(target_os = "macos")]
                 previous_input_source: Arc::new(Mutex::new(previous_input_source)),
                 #[cfg(target_os = "macos")]
-                streaming_ready,
-                #[cfg(target_os = "macos")]
                 streaming_worker,
                 #[cfg(target_os = "macos")]
                 cancel_requested,
@@ -4444,8 +4431,6 @@ struct TauriTextInsertionSession {
     app: AppHandle,
     #[cfg(target_os = "macos")]
     previous_input_source: Arc<Mutex<Option<crate::unicode_keystroke::PreviousInputSource>>>,
-    #[cfg(target_os = "macos")]
-    streaming_ready: bool,
     #[cfg(target_os = "macos")]
     streaming_worker: Option<crate::macos_streaming_input::MacStreamingInput>,
     #[cfg(target_os = "macos")]
@@ -4803,6 +4788,9 @@ impl TauriTextInsertionSession {
     }
 
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
+        // Ordinary dictation follows current focus; only a composition owns a range.
+        if !self.context.insertion.composition_input { return Ok(()); }
+
         // Mobile insertion is validated by its own IME/accessibility strategy;
         // the desktop AX/UIA position capability is not available there.
         #[cfg(mobile)]
@@ -4938,7 +4926,7 @@ impl TauriTextInsertionSession {
                     }
                 }
                 if self.context.insertion.allow_non_tsf_fallback {
-                    return map_insert_status(windows_unicode_fallback(&self.context, &self.insertion_target, &text));
+                    return map_insert_status(windows_unicode_fallback(&self.context, &text));
                 }
                 return Err(BackendError::new(
                     BackendErrorCode::Platform,
@@ -4946,23 +4934,8 @@ impl TauriTextInsertionSession {
                 ));
             }
         }
-        if let Err(error) = self.restore_insertion_target() {
-            // When the original target is unavailable, copy only — never paste or send keystrokes to the current focus.
-            #[cfg(target_os = "windows")]
-            if self.context.insertion.allow_non_tsf_fallback {
-                return self.copy_fallback(text).await;
-            }
-            #[cfg(target_os = "macos")]
-            {
-                log::warn!("[core-adapter] copying transcript to clipboard: {error}");
-                return self.copy_fallback(text).await;
-            }
-            #[cfg(not(target_os = "macos"))]
-            return Err(error);
-        }
         #[cfg(target_os = "windows")]
         {
-            let delivered_text = text.clone();
             let status = match self.context.insertion.windows_insertion_mode {
                 openless_core::shared_types::WindowsInsertionMode::Tsf => {
                     let target = crate::selection::ime_target_for_selection(&self.insertion_target);
@@ -5031,21 +5004,19 @@ impl TauriTextInsertionSession {
                     if status == crate::types::InsertStatus::Failed
                         && self.context.insertion.allow_non_tsf_fallback
                     {
-                        windows_unicode_fallback(&self.context, &self.insertion_target, &text)
+                        windows_unicode_fallback(&self.context, &text)
                     } else {
                         status
                     }
                 }
                 openless_core::shared_types::WindowsInsertionMode::SendInput => {
-                    windows_unicode_fallback(&self.context, &self.insertion_target, &text)
+                    windows_unicode_fallback(&self.context, &text)
                 }
                 openless_core::shared_types::WindowsInsertionMode::Paste => {
                     let backend = Arc::clone(&self.backend);
                     let observe = self.context.insertion.observe_edits;
                     let restore = self.context.insertion.restore_clipboard_after_paste;
                     let shortcut = self.context.insertion.paste_shortcut;
-                    let target = self.insertion_target.clone();
-                    let fallback = self.context.insertion.allow_non_tsf_fallback;
                     tauri::async_runtime::spawn_blocking(move || {
                         crate::host_document::insert_with_delivery_check(
                             &text,
@@ -5062,13 +5033,7 @@ impl TauriTextInsertionSession {
                             },
                             || {
                                 let inserter = crate::insertion::TextInserter::new();
-                                if crate::selection::selection_insertion_target_is_current(&target) {
-                                    inserter.insert_guarded(&text, restore, shortcut, None, || crate::selection::selection_insertion_target_is_current(&target))
-                                } else if fallback {
-                                    inserter.copy_fallback(&text)
-                                } else {
-                                    crate::types::InsertStatus::Failed
-                                }
+                                inserter.insert_guarded(&text, restore, shortcut, None, || true)
                             },
                         )
                     })
@@ -5078,14 +5043,6 @@ impl TauriTextInsertionSession {
                     })?
                 }
             };
-            if status == crate::types::InsertStatus::Inserted
-                && !crate::selection::confirm_target_delivery(
-                    &self.insertion_target,
-                    &delivered_text,
-                )
-            {
-                return Ok(InsertOutcome::PasteSent);
-            }
             return map_insert_status(status);
         }
         #[cfg(target_os = "android")]
@@ -5100,41 +5057,20 @@ impl TauriTextInsertionSession {
         {
             let restore = self.context.insertion.restore_clipboard_after_paste;
             let shortcut = self.context.insertion.paste_shortcut;
-            #[cfg(target_os = "macos")]
-            let target = self.insertion_target.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 let inserter = crate::insertion::TextInserter::new();
                 #[cfg(target_os = "macos")]
-                if !crate::selection::selection_insertion_target_is_current(&target) {
-                    return map_insert_status(inserter.copy_fallback(&text));
-                }
-                #[cfg(target_os = "macos")]
-                let mut delivery = crate::host_document::KeyboardDelivery::capture();
-                #[cfg(target_os = "macos")]
-                if !crate::selection::selection_insertion_target_is_current(&target) {
-                    return map_insert_status(inserter.copy_fallback(&text));
-                }
-                #[cfg(target_os = "macos")]
-                let status = inserter.insert_guarded(&text, restore, shortcut, None, || crate::selection::selection_insertion_target_is_current(&target));
+                let status = {
+                    let mut delivery = crate::host_document::KeyboardDelivery::capture();
+                    inserter.insert_confirmed(&text, restore, shortcut, || {
+                        delivery.take().is_some_and(|mut delivery| {
+                            delivery.record_posted(&text, crate::types::MacosNewlineMode::ShiftReturn);
+                            matches!(delivery.finish(), crate::host_document::KeyboardDeliveryOutcome::Delivered)
+                        })
+                    })
+                };
                 #[cfg(not(target_os = "macos"))]
                 let status = inserter.insert(&text, restore, shortcut);
-                #[cfg(target_os = "macos")]
-                if matches!(
-                    status,
-                    crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent
-                ) {
-                    if let Some(mut delivery) = delivery.take() {
-                        delivery.record_posted(&text, crate::types::MacosNewlineMode::ShiftReturn);
-                        if matches!(
-                            delivery.finish(),
-                            crate::host_document::KeyboardDeliveryOutcome::Delivered
-                        ) && crate::selection::confirm_target_delivery(&target, &text)
-                        {
-                            return Ok(InsertOutcome::Inserted);
-                        }
-                    }
-                    return Ok(InsertOutcome::PasteSent);
-                }
                 map_insert_status(status)
             })
             .await
@@ -5271,19 +5207,8 @@ fn replace_unwritten_target<T>(
 
 impl TextInsertionSession for TauriTextInsertionSession {
     fn supports_streaming(&self) -> bool {
-        // A position-checked destination is one final delivery. Re-reading the
-        // captured range after our own prefix would reject the remaining text;
-        // guessing an updated range would instead admit user caret movement.
-        #[cfg(not(mobile))]
-        if crate::selection::dictation_target_requires_position(&self.insertion_target) { return false; }
-        #[cfg(target_os = "macos")]
-        {
-            self.streaming_ready
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            cfg!(target_os = "windows")
-        }
+        // Capsule partials remain live; target writes stay in ordered finalization.
+        false
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
@@ -5653,17 +5578,9 @@ mod mac_insertion_lifecycle_tests {
 #[cfg(target_os = "windows")]
 fn windows_unicode_fallback(
     context: &DictationContext,
-    target: &crate::selection::SelectionInsertionTarget,
     text: &str,
 ) -> crate::types::InsertStatus {
     let inserter = crate::insertion::TextInserter::new();
-    if !crate::selection::selection_insertion_target_is_current(target) {
-        return if context.insertion.allow_non_tsf_fallback {
-            inserter.copy_fallback(text)
-        } else {
-            crate::types::InsertStatus::Failed
-        };
-    }
     let status = inserter.insert_via_unicode_keystrokes(
         text,
         crate::unicode_keystroke::WindowsSendInputOptions {

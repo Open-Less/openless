@@ -17,8 +17,6 @@ use openless_core::{
 };
 use tokio::sync::Notify;
 
-#[path = "../../../src-tauri/src/selection/target_position.rs"]
-mod target_position;
 
 #[derive(Default)]
 struct DelayedCredentials {
@@ -75,7 +73,6 @@ impl CredentialStore for DelayedCredentials {
     }
 }
 
-type PositionAnchor = Arc<Mutex<Option<(u64, u64)>>>;
 
 struct Focus {
     current: &'static str,
@@ -83,7 +80,6 @@ struct Focus {
     context_captured: Vec<&'static str>,
     prepared: Vec<&'static str>,
     delivered: Vec<(&'static str, String)>,
-    last_anchor: Option<PositionAnchor>,
     delivered_positions: Vec<(u64, u64)>,
     position: Option<(u64, u64)>,
 }
@@ -132,121 +128,48 @@ impl HostContextAdapter for FocusContextAdapter {
     }
 }
 
-struct FocusInserter {
-    focus: Arc<Mutex<Focus>>,
-    target: Option<&'static str>,
-    enforce_position: bool,
-    position: Option<PositionAnchor>,
-}
-
+struct FocusInserter { focus: Arc<Mutex<Focus>> }
 impl TextInserter for FocusInserter {
-    fn defer_preparation_until_stop(&self) -> bool { self.enforce_position }
+    fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let mut focus = self.focus.lock().unwrap();
         let target = focus.current;
         focus.captured.push(target);
-        let position = if self.enforce_position {
-            let anchor = focus
-                .last_anchor
-                .as_ref()
-                .filter(|anchor| {
-                    target_position::unchanged(*anchor.lock().unwrap(), focus.position)
-                })
-                .cloned()
-                .unwrap_or_else(|| Arc::new(Mutex::new(focus.position)));
-            focus.last_anchor = Some(anchor.clone());
-            Some(anchor)
-        } else {
-            None
-        };
         Some(CapturedTextTarget {
-            inserter: Arc::new(Self {
-                focus: self.focus.clone(),
-                target: Some(target),
-                enforce_position: self.enforce_position,
-                position,
-            }),
-            host_context: Arc::new(FocusContextAdapter {
-                focus: self.focus.clone(),
-                target,
-            }),
+            inserter: Arc::new(Self { focus: self.focus.clone() }),
+            host_context: Arc::new(FocusContextAdapter { focus: self.focus.clone(), target }),
         })
     }
-
-    fn begin(
-        &self,
-        _session_id: SessionId,
-        _context: Arc<DictationContext>,
-    ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
-        // Like the native adapter, an uncaptured inserter sees the current
-        // foreground target. This makes the old late-capture route fail.
+    fn begin(&self, _: SessionId, context: Arc<DictationContext>)
+        -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
+        assert!(!context.insertion.streaming);
+        assert!(!context.insertion.composition_input);
         let mut focus = self.focus.lock().unwrap();
-        if self.position.as_ref().is_some_and(|position| {
-            !target_position::unchanged(*position.lock().unwrap(), focus.position)
-        }) {
-            return Box::pin(async {
-                Err(BackendError::new(
-                    BackendErrorCode::InvalidState,
-                    "original input position changed; no text was inserted",
-                )
-                .target_unavailable())
-            });
-        }
-        let target = self.target.unwrap_or(focus.current);
-        focus.prepared.push(target);
-        let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession {
-            focus: self.focus.clone(),
-            target,
-            position: self.position.clone(),
-        });
+        let current = focus.current;
+        focus.prepared.push(current);
+        let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession { focus: self.focus.clone() });
         Box::pin(async move { Ok(session) })
     }
 }
-
-struct FocusSession {
-    focus: Arc<Mutex<Focus>>,
-    target: &'static str,
-    position: Option<PositionAnchor>,
-}
-
+struct FocusSession { focus: Arc<Mutex<Focus>> }
 impl TextInsertionSession for FocusSession {
-    fn write(&self, _text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
-        panic!("fixture has no streaming deltas")
+    fn write(&self, _: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
+        panic!("ordinary dictation must not stream into the target")
     }
-
-    fn copy(&self, _text: String) -> BoxFuture<'static, Result<(), BackendError>> {
-        panic!("successful target restoration must not use clipboard fallback")
+    fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
+        panic!("successful current-focus input must not use fallback")
     }
-
     fn finish(&self, text: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
         let mut focus = self.focus.lock().unwrap();
-        if let Some(position) = &self.position {
-            let mut anchor = position.lock().unwrap();
-            if !target_position::unchanged(*anchor, focus.position) {
-                return Box::pin(async {
-                    Err(BackendError::new(
-                        BackendErrorCode::InvalidState,
-                        "target changed before delivery",
-                    )
-                    .target_unavailable())
-                });
-            }
-            let original = focus.position.unwrap();
-            focus.delivered_positions.push(original);
-            focus.position = Some((original.0 + text.encode_utf16().count() as u64, 0));
-            *anchor = target_position::advanced(
-                *anchor,
-                text.encode_utf16().count() as u64,
-                focus.position,
-            );
+        if let Some(position) = focus.position {
+            focus.delivered_positions.push(position);
+            focus.position = Some((position.0 + text.encode_utf16().count() as u64, 0));
         }
-        focus.delivered.push((self.target, text));
+        let current = focus.current;
+        focus.delivered.push((current, text));
         Box::pin(async { Ok(InsertOutcome::Inserted) })
     }
-
-    fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
-        Box::pin(async { Ok(()) })
-    }
+    fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> { Box::pin(async { Ok(()) }) }
 }
 
 struct Fixture {
@@ -270,7 +193,7 @@ impl Fixture {
 
     async fn with_position_engine(
         build_engine: impl FnOnce(Arc<DelayedCredentials>) -> Arc<dyn openless_core::DictationEngine>,
-        enforce_position: bool,
+        _enforce_position: bool,
     ) -> Self {
         let directory = std::env::temp_dir().join(format!("openless-target-{}", SessionId::new()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -286,7 +209,6 @@ impl Fixture {
             context_captured: Vec::new(),
             prepared: Vec::new(),
             delivered: Vec::new(),
-            last_anchor: None,
             delivered_positions: Vec::new(),
             position: Some((4, 0)),
         }));
@@ -296,9 +218,6 @@ impl Fixture {
         dependencies.dictation_engine = build_engine(credentials.clone());
         dependencies.text_inserter = Arc::new(FocusInserter {
             focus: focus.clone(),
-            target: None,
-            enforce_position,
-            position: None,
         });
         let backend = Arc::new(
             OpenLessBackend::new(
@@ -349,7 +268,7 @@ async fn start(backend: Arc<OpenLessBackend>, route: u8) -> Result<SessionId, Ba
 }
 
 #[tokio::test]
-async fn every_dictation_entry_freezes_target_before_waiting_for_credentials() {
+async fn every_dictation_entry_freezes_prompt_app_but_delivers_to_current_focus() {
     for route in 0..3 {
         let fixture = Fixture::new().await;
         let starting = tokio::spawn(start(fixture.backend.clone(), route));
@@ -361,12 +280,12 @@ async fn every_dictation_entry_freezes_target_before_waiting_for_credentials() {
         let focus = fixture.focus.lock().unwrap();
         assert_eq!(
             focus.delivered,
-            vec![("A", "spoken".to_string())],
+            vec![("B", "spoken".to_string())],
             "route {route}"
         );
         assert_eq!(focus.captured, vec!["A"]);
         assert_eq!(focus.context_captured, vec!["A"]);
-        assert_eq!(focus.prepared, vec!["A"]);
+        assert_eq!(focus.prepared, vec!["B"]);
     }
 }
 
@@ -413,7 +332,7 @@ async fn no_insertion_skips_target_capture_and_native_preparation() {
 }
 
 #[tokio::test]
-async fn delayed_result_never_uses_a_moved_caret_or_a_successor_capture_in_the_same_control() {
+async fn ordinary_delayed_result_follows_current_focus_and_caret() {
     use openless_core::{DictationEngine, EngineFailure, EngineProgressSink, EngineResult};
 
     struct DelayedResult {
@@ -459,7 +378,6 @@ async fn delayed_result_never_uses_a_moved_caret_or_a_successor_capture_in_the_s
         let fixture = Fixture::with_position_engine(|_| engine, true).await;
         fixture.credentials.waited.store(true, Ordering::Release);
         fixture.focus.lock().unwrap().position = initial;
-        let mut events = fixture.backend.subscribe();
         let first = fixture.backend.start_dictation().await.unwrap();
         let stopping = tokio::spawn({ let backend = fixture.backend.clone(); async move { backend.stop_dictation_session(first).await } });
         tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
@@ -470,49 +388,15 @@ async fn delayed_result_never_uses_a_moved_caret_or_a_successor_capture_in_the_s
             None
         };
         release.notify_one();
-        if next_capture && initial == moved {
-            let first_result = stopping.await.unwrap().unwrap();
-            assert_eq!(first_result.session_id, first);
-            assert_eq!(
-                fixture.focus.lock().unwrap().delivered,
-                [("A", "retained result".into())]
-            );
-            let second = second.unwrap();
-            assert_eq!(
-                fixture.backend.snapshot().dictation.session_id,
-                Some(second)
-            );
-            fixture
-                .backend
-                .stop_dictation_session(second)
-                .await
-                .unwrap();
-            let focus = fixture.focus.lock().unwrap();
-            assert_eq!(focus.delivered.len(), 2);
-            assert_eq!(
-                focus.delivered_positions,
-                [(4, 0), (4 + "retained result".len() as u64, 0)]
-            );
-            continue;
-        }
-        let error = stopping.await.unwrap().unwrap_err();
-        assert_eq!(error.code, BackendErrorCode::InvalidState);
-        assert!(error.is_target_unavailable());
-        assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event|
-            event.session_id == Some(first) && matches!(event.kind,
-                openless_core::BackendEventKind::DictationStateChanged(snapshot)
-                    if snapshot.message.as_deref() == Some("input_target_changed"))));
-        assert!(fixture.focus.lock().unwrap().delivered.is_empty(), "old result reached the new caret");
-        let history = fixture.backend.list_history().unwrap();
-        let first_entry = history.iter().find(|entry| entry.id == first.to_string()).unwrap();
-        assert_eq!(first_entry.final_text, "retained result");
-        assert_eq!(first_entry.error_code.as_deref(), Some("insertTargetChanged"));
+        let result = stopping.await.unwrap().unwrap();
+        assert_eq!(result.session_id, first);
+        assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
         if let Some(second) = second {
             assert_eq!(fixture.backend.snapshot().dictation.session_id, Some(second));
-            let result = fixture.backend.stop_dictation_session(second).await.unwrap();
-            assert_eq!(result.session_id, second);
-            assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
+            fixture.backend.stop_dictation_session(second).await.unwrap();
+            assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 2);
         }
+        assert!(fixture.backend.list_history().unwrap().iter().all(|row| row.error_code.is_none()));
     }
 }
 
@@ -698,7 +582,9 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
         let mut prefs = backend.get_preferences();
         prefs.multimodal_pipeline_enabled = false;
         prefs.active_llm_provider = "ark".into();
-        prefs.streaming_insert = false;
+        prefs.streaming_insert = true;
+        prefs.hotkey.mode = openless_core::shared_types::HotkeyMode::Auto;
+        prefs.dictation_hotkey.primary = "Fn".into();
         prefs.polish_skip_max_chars = 0;
         prefs.cursor_context_enabled = true;
         prefs.translation_target_language = "English".into();
@@ -723,10 +609,14 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             ..Default::default()
         };
 
-        let first = backend
-            .start_dictation_with_options(options.clone())
-            .await
-            .unwrap();
+        let epoch = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let first = match backend.dispatch_dictation_hotkey_edge_with_options(
+            DictationHotkeyEdge::Pressed { press_id: 101, at: epoch }, options.clone()).await.unwrap() {
+                CliDispatchOutcome::DictationStarted(id) => id, other => panic!("{other:?}"),
+            };
+        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+            press_id: 101, at: epoch + std::time::Duration::from_millis(40),
+        }).await.unwrap();
         backend
             .toggle_dictation_translation_for_session(first)
             .unwrap();
@@ -735,13 +625,18 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             .unwrap();
         let stopping = tokio::spawn({
             let backend = backend.clone();
-            async move { backend.stop_dictation_session(first).await }
+            async move { backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Pressed { press_id: 102, at: epoch + std::time::Duration::from_secs(1) }).await }
         });
         tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified())
             .await
             .unwrap();
         assert_eq!(owner.load(Ordering::SeqCst), 0);
-        let second = backend.start_dictation_with_options(options).await.unwrap();
+        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id: 102, at: epoch + std::time::Duration::from_millis(1040) }).await.unwrap();
+        let second = match backend.dispatch_dictation_hotkey_edge_with_options(
+            DictationHotkeyEdge::Pressed { press_id: 103, at: epoch + std::time::Duration::from_millis(1100) }, options).await.unwrap() {
+                CliDispatchOutcome::DictationStarted(id) => id, other => panic!("rapid successor was lost: {other:?}"),
+            };
+        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id: 103, at: epoch + std::time::Duration::from_millis(1140) }).await.unwrap();
         backend
             .toggle_dictation_translation_for_session(second)
             .unwrap();
@@ -759,7 +654,7 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(first_result.inserted, DictationInsertStatus::Inserted);
+        assert!(matches!(first_result, CliDispatchOutcome::DictationCompleted(ref result) if result.inserted == DictationInsertStatus::Inserted));
         assert_eq!(
             fixture.focus.lock().unwrap().delivered,
             [("VS Code", "polished-first".into())]
@@ -777,34 +672,11 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             "finishing A must not stop B's microphone"
         );
 
-        if move_second {
-            fixture.focus.lock().unwrap().position = Some((88, 0));
-        }
-        let second_result = backend.stop_dictation_session(second).await;
-        if move_second {
-            assert!(second_result.unwrap_err().is_target_unavailable());
-            assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
-            assert_eq!(fixture.focus.lock().unwrap().position, Some((88, 0)));
-        } else {
-            assert_eq!(
-                second_result.unwrap().inserted,
-                DictationInsertStatus::Inserted
-            );
-            assert_eq!(
-                fixture.focus.lock().unwrap().delivered,
-                [
-                    ("VS Code", "polished-first".into()),
-                    ("VS Code", "translated-second".into()),
-                ]
-            );
-            assert_eq!(
-                fixture.focus.lock().unwrap().delivered_positions,
-                [
-                    (4, 0),
-                    (4 + "polished-first".encode_utf16().count() as u64, 0),
-                ]
-            );
-        }
+        if move_second { fixture.focus.lock().unwrap().position = Some((88, 0)); }
+        assert_eq!(backend.stop_dictation_session(second).await.unwrap().inserted, DictationInsertStatus::Inserted);
+        assert_eq!(fixture.focus.lock().unwrap().delivered, [
+            ("VS Code", "polished-first".into()), ("VS Code", "translated-second".into())
+        ]);
         assert_eq!(owner.load(Ordering::SeqCst), 0);
         {
             let sessions = sessions.lock().unwrap();
@@ -835,7 +707,7 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
 }
 
 #[tokio::test]
-async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app() {
+async fn routed_dictation_keeps_the_frozen_pack_and_delivers_to_current_focus() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -993,7 +865,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     assert!(first_system.contains("应用主要用途：fixture editor context"));
     assert!(first_system.contains("当前输入位置：代码编辑区（可信控件标签）"));
     expect_request(first_payload, "CODING-STYLE");
-    assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "VS Code");
+    assert_eq!(fixture.focus.lock().unwrap().delivered[0].0, "WeChat");
     assert_eq!(
         backend.app_style_routing().unwrap().apps[0].app.name,
         "VS Code"
@@ -1132,7 +1004,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
     let mut assigned_payload = serde_json::Value::Null;
     for _ in 0..3 {
         backend.start_dictation().await.unwrap();
-        // Switching windows during recording must not switch this style or target.
+        // Switching windows preserves the frozen style, while delivery follows current focus.
         fixture.focus.lock().unwrap().current = "WeChat";
         let result = backend.stop_dictation().await.unwrap();
         let payload = payloads.try_recv().unwrap();
@@ -1145,7 +1017,7 @@ async fn routed_dictation_sends_the_frozen_pack_and_delivers_to_the_original_app
         assert_eq!(result.polished_text, "一一一");
         assert_eq!(
             fixture.focus.lock().unwrap().delivered.last().unwrap(),
-            &("Notes", "一一一".into())
+            &("WeChat", "一一一".into())
         );
         let history = backend.list_history().unwrap();
         let entry = history

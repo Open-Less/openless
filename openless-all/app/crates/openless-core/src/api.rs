@@ -7703,13 +7703,7 @@ impl OpenLessBackend {
             .ok_or_else(|| {
                 BackendError::new(BackendErrorCode::InvalidArgument, "history entry not found")
             })?;
-        if entry.source != HistorySource::QuickNote
-            && entry.error_code.as_deref() != Some("recording")
-            && !matches!(
-                entry.error_code.as_deref(),
-                Some("transcribeFailed" | "emptyTranscript")
-            )
-        {
+        if !entry.can_apply_retranscription() {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidState,
                 "history entry is not a failed transcription",
@@ -8394,7 +8388,16 @@ impl OpenLessBackend {
         }
         if context.insertion.enabled {
             let defer_preparation = inserter.defer_preparation_until_stop();
-            let insertion_context = Arc::clone(&context);
+            // Deferred desktop delivery cannot open a live composition or a
+            // chunk writer while a predecessor is still delivering.
+            let insertion_context = if defer_preparation {
+                let mut insertion = (*context).clone();
+                insertion.insertion.streaming = false;
+                insertion.insertion.composition_input = false;
+                Arc::new(insertion)
+            } else {
+                Arc::clone(&context)
+            };
             let task_spawner = Arc::clone(&self.deps.task_spawner);
             let resources = Arc::clone(&starting_resources);
             let preparing: futures_util::future::BoxFuture<
@@ -8827,7 +8830,7 @@ impl OpenLessBackend {
             state.dictation_context = None;
             state.dictation_start_output_target = None;
             state.silence_monitor = None;
-            hotkey.terminal(std::time::Instant::now());
+            hotkey.submitted();
             self.voice_sessions.submit(session_id);
             // Reuse the semantic event; consumers re-read the capture and job snapshots.
             self.events.publish(Some(session_id), BackendEventKind::DictationJobsChanged(
@@ -10132,7 +10135,9 @@ impl OpenLessBackend {
         let mut state = self.state.write().expect("backend state lock poisoned");
         let Some(snapshot) = state.session_mut(session_id) else { return; };
         snapshot.phase = DictationPhase::Failed;
-        snapshot.message = Some(if error.code == BackendErrorCode::InvalidState && error.is_target_unavailable() {
+        snapshot.message = Some(if error.message == "transcription provider returned an empty transcript" {
+            "empty_transcript".to_string()
+        } else if error.code == BackendErrorCode::InvalidState && error.is_target_unavailable() {
             "input_target_changed".to_string()
         } else { format!("{:?}", error.code) });
         self.main_dictation_trace.record(
@@ -17075,6 +17080,8 @@ mod tests {
             "openless-core-empty-transcript-history-{}",
             uuid::Uuid::new_v4().simple()
         ));
+        let polisher = Arc::new(crate::testing::FixtureTextPolisher::failing(
+            BackendError::new(BackendErrorCode::InvalidArgument, "polish input must not be empty")));
         let engine = crate::dictation_engine::PipelineDictationEngine::new(
             Arc::new(crate::testing::FixtureAudioRecorder::new(
                 vec![vec![1, 0, 2, 0]],
@@ -17083,9 +17090,7 @@ mod tests {
             Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
                 "   ", 40,
             )),
-            Arc::new(crate::testing::FixtureTextPolisher::successful(
-                "must not be inserted",
-            )),
+            polisher.clone(),
         );
         let backend = OpenLessBackend::new(
             BackendConfig {
@@ -17099,7 +17104,7 @@ mod tests {
                 )),
                 dictation_engine: Arc::new(engine),
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 voice_activation_runtime: None,
@@ -17110,7 +17115,11 @@ mod tests {
             },
         )
         .unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.polish_skip_max_chars = 0;
+        backend.set_preferences(prefs).unwrap();
         backend.start().await.unwrap();
+        backend.activate_style_pack(crate::style_packs::BUILTIN_STYLE_PACK_STRUCTURED_ID).unwrap();
 
         let session_id = backend.start_dictation().await.unwrap();
         let error = backend
@@ -17128,6 +17137,9 @@ mod tests {
             crate::types::HistoryInsertStatus::Failed
         );
         assert!(backend.list_activity().unwrap().is_empty());
+        assert!(polisher.inputs().is_empty());
+        assert!(history[0].llm_provider.is_none());
+        assert!(history[0].polish_ms.is_none());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
