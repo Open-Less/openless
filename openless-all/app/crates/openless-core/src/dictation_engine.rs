@@ -309,6 +309,7 @@ impl DictationEngine for PipelineDictationEngine {
                 ));
             }
             let stable = context.recording.transcribe_after_stop;
+            let spill_to_archive = stable && context.recording.archive_processed;
             let has_local_fallback = context.asr_fallback.is_some();
             let transcript_partials: Arc<dyn TextStreamSink> = if stable {
                 Arc::new(DiscardTextStream)
@@ -394,7 +395,7 @@ impl DictationEngine for PipelineDictationEngine {
                     return Err(error);
                 }
             };
-            if stable {
+            if spill_to_archive {
                 if let Some(archive) = recording
                     .archive()
                     .filter(|archive| archive.is_available() && archive.write_error().is_none())
@@ -590,6 +591,7 @@ impl DictationEngine for PipelineDictationEngine {
                 ));
             }
             let stable = context.recording.transcribe_after_stop;
+            let spill_to_archive = stable && context.recording.archive_processed;
             let partials = if stable {
                 Arc::new(DiscardTextStream) as Arc<dyn TextStreamSink>
             } else {
@@ -604,7 +606,7 @@ impl DictationEngine for PipelineDictationEngine {
             let recording = recorder
                 .start(session_id, context, consumer, progress)
                 .await?;
-            if stable {
+            if spill_to_archive {
                 if let Some(archive) = recording
                     .archive()
                     .filter(|archive| archive.is_available() && archive.write_error().is_none())
@@ -5920,6 +5922,113 @@ mod tests {
         let error = buffered.finish().await.unwrap_err();
         assert_eq!(error.code, BackendErrorCode::InvalidArgument);
         assert_eq!(starts.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn stable_capture_spills_only_when_archive_matches_processed_pcm() {
+        struct WaveformArchive {
+            processed: bool,
+            len: usize,
+            reads: AtomicUsize,
+        }
+        impl RecordingArchive for WaveformArchive {
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+                let len = self.len as u64;
+                Box::pin(async move { Ok(len) })
+            }
+            fn read_pcm_range(
+                &self,
+                _: u64,
+                len: usize,
+            ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.reads.fetch_add(1, Ordering::AcqRel);
+                let value = if self.processed { 2 } else { 1 };
+                Box::pin(async move { Ok(vec![value; len]) })
+            }
+            fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        struct WaveformRecorder(Arc<WaveformArchive>);
+        struct WaveformRecording(Arc<WaveformArchive>);
+        impl ActiveRecording for WaveformRecording {
+            fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+                Some(self.0.clone())
+            }
+            fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        impl AudioRecorder for WaveformRecorder {
+            fn start(
+                &self,
+                _: SessionId,
+                _: Arc<DictationContext>,
+                consumer: Arc<dyn AudioConsumer>,
+                _: Arc<dyn RecordingProgressSink>,
+            ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+                let archive = self.0.clone();
+                Box::pin(async move {
+                    // Live ASR always receives enhanced PCM, even with raw-only debug retention.
+                    consumer.consume_pcm_chunk(&vec![2; archive.len]);
+                    Ok(Box::new(WaveformRecording(archive)) as Box<dyn ActiveRecording>)
+                })
+            }
+        }
+        for voice_capture in [false, true] {
+            for processed in [false, true] {
+                let archive = Arc::new(WaveformArchive {
+                    processed,
+                    len: STABLE_SPILL_THRESHOLD_BYTES + 3_200,
+                    reads: AtomicUsize::new(0),
+                });
+                let delivered = Arc::new(Mutex::new(Vec::new()));
+                let engine = PipelineDictationEngine::new(
+                    Arc::new(WaveformRecorder(archive.clone())),
+                    Arc::new(FixtureTranscriber {
+                        session: Arc::new(FixtureTranscriptionSession {
+                            pcm: delivered.clone(),
+                            cancels: Arc::new(AtomicUsize::new(0)),
+                            finish_entered: None,
+                            finish_release: None,
+                        }),
+                        starts: Arc::new(AtomicUsize::new(0)),
+                    }),
+                    noop_polisher(),
+                );
+                let mut context = (*raw_dictation_context()).clone();
+                context.recording.transcribe_after_stop = true;
+                context.recording.archive_processed = processed;
+                context.recording.archive_raw = !processed;
+                let context = Arc::new(context);
+                let id = SessionId::new();
+                if voice_capture {
+                    let capture = engine
+                        .start_voice_capture(
+                            id,
+                            context,
+                            Arc::new(DiscardTextStream),
+                            Arc::new(NoopRecordingProgress),
+                            crate::CancellationToken::new(),
+                        )
+                        .await
+                        .unwrap();
+                    capture.recording.stop().await.unwrap();
+                    capture.transcription.finish().await.unwrap();
+                } else {
+                    let progress = Arc::new(RecordingProgress::default());
+                    engine.start(id, context, progress.clone()).await.unwrap();
+                    engine.finish(id, progress).await.unwrap();
+                }
+                let pcm = delivered.lock().unwrap();
+                assert_eq!(pcm.len(), archive.len);
+                assert!(pcm.iter().all(|&sample| sample == 2), "ASR input changed to raw archive: voice={voice_capture}, processed={processed}");
+                assert_eq!(archive.reads.load(Ordering::Acquire) > 0, processed);
+            }
+        }
     }
 
     #[tokio::test]

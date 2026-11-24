@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-24T11:07:27Z",
+  "updated_at": "2026-11-24T11:10:59Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -161,9 +161,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "0282359d7310169df611482d034ce341b10c4286abf033a0ef3c2965b4f52b7f",
-      "size": 769982,
-      "normalized_sha256": "0282359d7310169df611482d034ce341b10c4286abf033a0ef3c2965b4f52b7f"
+      "sha256": "0ca69fd0f46ffd60059f276459f6196a5ab2e317e6b94c716f5be93cc8899c3e",
+      "size": 770114,
+      "normalized_sha256": "0ca69fd0f46ffd60059f276459f6196a5ab2e317e6b94c716f5be93cc8899c3e"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -414,9 +414,9 @@
     },
     "docs/development/long-recording.md": {
       "role": "index",
-      "sha256": "428cefe4370dadf53288e3192fe18cbaea640ca47adac8b724a2dbb793138115",
-      "size": 5809,
-      "normalized_sha256": "428cefe4370dadf53288e3192fe18cbaea640ca47adac8b724a2dbb793138115"
+      "sha256": "a9dfa0212db7df3b2c4ec3ab2da2f703d10e2fe0a2acbe0a659553a838d8d0fe",
+      "size": 5949,
+      "normalized_sha256": "a9dfa0212db7df3b2c4ec3ab2da2f703d10e2fe0a2acbe0a659553a838d8d0fe"
     },
     "docs/development/official-style-packs.md": {
       "role": "index",
@@ -2660,9 +2660,9 @@
     },
     "openless-all/app/crates/openless-core/src/dictation_engine.rs": {
       "role": "index",
-      "sha256": "f52854a8f179307edfd4a488d824109d40e42ddfa7b6ea82d13f26c00d1b0747",
-      "size": 245286,
-      "normalized_sha256": "f52854a8f179307edfd4a488d824109d40e42ddfa7b6ea82d13f26c00d1b0747"
+      "sha256": "6ea1f4b8fe7a8adde1fdec9773981e9eec6dc965dfd63f07102566a40e5f9d00",
+      "size": 250297,
+      "normalized_sha256": "6ea1f4b8fe7a8adde1fdec9773981e9eec6dc965dfd63f07102566a40e5f9d00"
     },
     "openless-all/app/crates/openless-core/src/domains.rs": {
       "role": "index",
