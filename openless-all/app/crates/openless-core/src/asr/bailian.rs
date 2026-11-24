@@ -1579,17 +1579,19 @@ mod tests {
             ((TARGET_AUDIO_CHUNK_BYTES * 5) as u64, input_len as u64)
         );
 
-        let recorded = frames.lock();
-        assert_eq!(recorded.len(), 5);
-        let span = recorded
-            .last()
-            .unwrap()
-            .0
-            .saturating_duration_since(recorded[0].0);
-        assert!(
-            span >= Duration::from_millis(140),
-            "expected >= 2x pacing across 4 intervals (~200ms), got {span:?}"
-        );
+        {
+            let recorded = frames.lock();
+            assert_eq!(recorded.len(), 5);
+            let span = recorded
+                .last()
+                .unwrap()
+                .0
+                .saturating_duration_since(recorded[0].0);
+            assert!(
+                span >= Duration::from_millis(140),
+                "expected >= 2x pacing across 4 intervals (~200ms), got {span:?}"
+            );
+        }
         server.await.unwrap();
     }
 

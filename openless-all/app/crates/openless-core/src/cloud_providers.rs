@@ -3401,8 +3401,10 @@ mod tests {
             )
             .await;
         }
-        let mut context = DictationContext::default();
-        context.llm = ProviderInvocation::new("strategy-channel", "custom");
+        let mut context = DictationContext {
+            llm: ProviderInvocation::new("strategy-channel", "custom"),
+            ..Default::default()
+        };
         context.llm.model = Some("fixture-model".into());
         context.polish.llm_thinking_enabled = true;
         context.polish.polish_request_overrides =
@@ -3918,9 +3920,11 @@ mod tests {
                     8
                 })
         {
-            let mut prefs = crate::UserPreferences::default();
-            prefs.translation_target_language = "English".into();
-            prefs.working_languages = vec!["简体中文".into()];
+            let prefs = crate::UserPreferences {
+                translation_target_language: "English".into(),
+                working_languages: vec!["简体中文".into()],
+                ..Default::default()
+            };
             let mut invocation = crate::ProviderInvocation::for_provider("deepseek");
             invocation.model = Some(crate::deepseek_suite::MODEL.into());
             let context = DictationContext::capture(

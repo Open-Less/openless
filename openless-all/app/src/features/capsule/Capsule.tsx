@@ -187,7 +187,6 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
 interface ClassicCapsuleProps {
   sessionId?: string;
   os: OS;
-  sessionId?: string;
   state: CapsuleState;
   level: number;
   insertedChars: number;
@@ -210,7 +209,6 @@ interface ClassicCapsuleProps {
 function ClassicCapsule({
   sessionId,
   os,
-  sessionId,
   state,
   level,
   insertedChars,
@@ -234,7 +232,7 @@ function ClassicCapsule({
   const reduced = useReducedMotion();
   // The top floating translation badge reflects only the current foreground session,
   // never background processing jobs (which show their own status on the rear satellite).
-  const translating = translation && isActiveCapsuleState(state);
+  const translating = translation && (state === 'recording' || state === 'transcribing' || state === 'polishing');
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
@@ -987,7 +985,6 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           <ClassicCapsule
             sessionId={displayedSession}
             os={os}
-            sessionId={transcriptViewRef.current.sessionId ?? undefined}
             state={renderedState}
             level={leaving ? 0 : level}
             insertedChars={insertedCharsRef.current}

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-24T10:55:06Z",
+  "updated_at": "2026-11-24T11:07:27Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -161,9 +161,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "cd8f3df7c455f478850ea6e224fbd12080f08f7f9f9792a2d18b5ba141e9536d",
-      "size": 769847,
-      "normalized_sha256": "cd8f3df7c455f478850ea6e224fbd12080f08f7f9f9792a2d18b5ba141e9536d"
+      "sha256": "0282359d7310169df611482d034ce341b10c4286abf033a0ef3c2965b4f52b7f",
+      "size": 769982,
+      "normalized_sha256": "0282359d7310169df611482d034ce341b10c4286abf033a0ef3c2965b4f52b7f"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -2090,9 +2090,9 @@
     },
     "openless-all/app/crates/openless-core/src/ask_search.rs": {
       "role": "index",
-      "sha256": "c52a4e52390824b91ff418442df5e8f72d8945f577e9ef3e347df17e6cb7b58e",
-      "size": 26283,
-      "normalized_sha256": "c52a4e52390824b91ff418442df5e8f72d8945f577e9ef3e347df17e6cb7b58e"
+      "sha256": "6486c066331ed59a733604777f2d816c27fae6f48ed2bf68503e652fb2b9deee",
+      "size": 26249,
+      "normalized_sha256": "6486c066331ed59a733604777f2d816c27fae6f48ed2bf68503e652fb2b9deee"
     },
     "openless-all/app/crates/openless-core/src/ask_voice_capture.rs": {
       "role": "index",
@@ -2102,9 +2102,9 @@
     },
     "openless-all/app/crates/openless-core/src/asr/bailian.rs": {
       "role": "index",
-      "sha256": "5ee2cd3682e3b9e8d4d81342ebf1389a025c66aa79db522a22791e04bb04f8c4",
-      "size": 63130,
-      "normalized_sha256": "5ee2cd3682e3b9e8d4d81342ebf1389a025c66aa79db522a22791e04bb04f8c4"
+      "sha256": "2e1ebfbf0002454c783ab69981f19f2d5ed7daa3f4fce11b576211f69eaba927",
+      "size": 63194,
+      "normalized_sha256": "2e1ebfbf0002454c783ab69981f19f2d5ed7daa3f4fce11b576211f69eaba927"
     },
     "openless-all/app/crates/openless-core/src/asr/dashscope_multimodal.rs": {
       "role": "index",
@@ -2222,9 +2222,9 @@
     },
     "openless-all/app/crates/openless-core/src/asr/qwen_realtime.rs": {
       "role": "index",
-      "sha256": "1aa47c089e6fef72e4593109a269b536dfa468e9cef7a8a919cf99162fc24576",
-      "size": 51926,
-      "normalized_sha256": "1aa47c089e6fef72e4593109a269b536dfa468e9cef7a8a919cf99162fc24576"
+      "sha256": "b1cad5d206eee4080520242d9954d96784c963b89f0108d7d16e25bf748bd9e5",
+      "size": 51986,
+      "normalized_sha256": "b1cad5d206eee4080520242d9954d96784c963b89f0108d7d16e25bf748bd9e5"
     },
     "openless-all/app/crates/openless-core/src/asr/stepfun_realtime.rs": {
       "role": "index",
@@ -2276,9 +2276,9 @@
     },
     "openless-all/app/crates/openless-core/src/assistant/budget.rs": {
       "role": "index",
-      "sha256": "8ca7ba262a7f0419ab9cbdfa0bb6f81d14dcf0d9b70408b5cdf2bc094def592b",
-      "size": 50156,
-      "normalized_sha256": "8ca7ba262a7f0419ab9cbdfa0bb6f81d14dcf0d9b70408b5cdf2bc094def592b"
+      "sha256": "cdbd7a742981192b7fbe9f1cbc771b69a56020eb8ab0f1ff235715bfc791ec8f",
+      "size": 50169,
+      "normalized_sha256": "cdbd7a742981192b7fbe9f1cbc771b69a56020eb8ab0f1ff235715bfc791ec8f"
     },
     "openless-all/app/crates/openless-core/src/assistant/call.rs": {
       "role": "index",
@@ -2366,9 +2366,9 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_providers.rs": {
       "role": "index",
-      "sha256": "3104ec7f30af5e19963c21ee95073bc80d7394614f8588c433965f92e855f280",
-      "size": 188005,
-      "normalized_sha256": "3104ec7f30af5e19963c21ee95073bc80d7394614f8588c433965f92e855f280"
+      "sha256": "a7ff008f8296584a730747bcfd2a0dc8ef08fbbdef4df32d38d17b71c75f9e74",
+      "size": 188066,
+      "normalized_sha256": "a7ff008f8296584a730747bcfd2a0dc8ef08fbbdef4df32d38d17b71c75f9e74"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync.rs": {
       "role": "index",
@@ -3074,9 +3074,9 @@
     },
     "openless-all/app/crates/openless-core/src/qa_service/standalone/tests.rs": {
       "role": "index",
-      "sha256": "d700ef3e592e3afa2b393d995e05fbd66e0f3c5b373ddd7c34cf60ff672ba335",
-      "size": 72149,
-      "normalized_sha256": "d700ef3e592e3afa2b393d995e05fbd66e0f3c5b373ddd7c34cf60ff672ba335"
+      "sha256": "8a417653ca4b10e845411f76fada906c915ee3f28a47ac8b3b99b55468dfa36e",
+      "size": 72176,
+      "normalized_sha256": "8a417653ca4b10e845411f76fada906c915ee3f28a47ac8b3b99b55468dfa36e"
     },
     "openless-all/app/crates/openless-core/src/recording_overlap_tests.rs": {
       "role": "index",
@@ -3260,9 +3260,9 @@
     },
     "openless-all/app/crates/openless-core/src/web_search/public_sources.rs": {
       "role": "index",
-      "sha256": "bcdae09982f62999ded221a1df4afaa3d56e7cc6786a71a6262dfc9fe04ba3c4",
-      "size": 16833,
-      "normalized_sha256": "bcdae09982f62999ded221a1df4afaa3d56e7cc6786a71a6262dfc9fe04ba3c4"
+      "sha256": "961973c81c37af7b2db5a67c178cb2a3cf7e8ca23e1a6a173daecf68ad1d2366",
+      "size": 16846,
+      "normalized_sha256": "961973c81c37af7b2db5a67c178cb2a3cf7e8ca23e1a6a173daecf68ad1d2366"
     },
     "openless-all/app/crates/openless-core/tests/auxiliary_voice_lifecycle.rs": {
       "role": "observe",
@@ -3488,9 +3488,9 @@
     },
     "openless-all/app/e2e/capsule-overlap.spec.ts": {
       "role": "observe",
-      "sha256": "4e3aaf7c9d8f30bb9fb7b494bccaf9737eb318752c1408248d8468ed092b8397",
-      "size": 16133,
-      "normalized_sha256": "4e3aaf7c9d8f30bb9fb7b494bccaf9737eb318752c1408248d8468ed092b8397"
+      "sha256": "8885f08e4a429b7b76d0eff0dec8a26ec6357498641ea8f080e2388b3d09768b",
+      "size": 16247,
+      "normalized_sha256": "8885f08e4a429b7b76d0eff0dec8a26ec6357498641ea8f080e2388b3d09768b"
     },
     "openless-all/app/e2e/capsule-reference-motion.spec.ts": {
       "role": "observe",
@@ -3578,15 +3578,15 @@
     },
     "openless-all/app/e2e/history-store.spec.ts": {
       "role": "observe",
-      "sha256": "475eee29370b50bfaca2a56b015d64187cd8fab244eeb7420d1dcc11a28ea7ed",
-      "size": 20088,
-      "normalized_sha256": "475eee29370b50bfaca2a56b015d64187cd8fab244eeb7420d1dcc11a28ea7ed"
+      "sha256": "2a39b16e11d9f73bfefe415024b33b19716482791ff78bb62fe8dd4c8dd43f87",
+      "size": 13110,
+      "normalized_sha256": "2a39b16e11d9f73bfefe415024b33b19716482791ff78bb62fe8dd4c8dd43f87"
     },
     "openless-all/app/e2e/interaction-polish.spec.ts": {
       "role": "observe",
-      "sha256": "9b05985d438cad477dc883fe0535f56ad4f859b5455543dac4a8ee5d4ad03f9c",
-      "size": 8275,
-      "normalized_sha256": "9b05985d438cad477dc883fe0535f56ad4f859b5455543dac4a8ee5d4ad03f9c"
+      "sha256": "6d8fe670fc10e530199c9f08f63f911a8942aea5c9eca3f4582292b2e71e1272",
+      "size": 3700,
+      "normalized_sha256": "6d8fe670fc10e530199c9f08f63f911a8942aea5c9eca3f4582292b2e71e1272"
     },
     "openless-all/app/e2e/live-input-settings.spec.ts": {
       "role": "observe",
@@ -4392,9 +4392,9 @@
     },
     "openless-all/app/harmony/ipc-audit.json": {
       "role": "index",
-      "sha256": "e8ecababe505d9c052cb776bed21eee2b320be6e045105e4590d17ae3625ac4c",
-      "size": 31914,
-      "normalized_sha256": "e8ecababe505d9c052cb776bed21eee2b320be6e045105e4590d17ae3625ac4c"
+      "sha256": "29bd8d14ec676300dba5d57581739942635ab2d77eb46554afab1e86c5482fc0",
+      "size": 29889,
+      "normalized_sha256": "29bd8d14ec676300dba5d57581739942635ab2d77eb46554afab1e86c5482fc0"
     },
     "openless-all/app/harmony/oh-package.json5": {
       "role": "index",
@@ -5634,9 +5634,9 @@
     },
     "openless-all/app/scripts/ci-consolidation.test.mjs": {
       "role": "index",
-      "sha256": "c7756911ece58ebe6863ebac3d87350a1bceae668cef7add18d4a1738b089832",
-      "size": 7541,
-      "normalized_sha256": "c7756911ece58ebe6863ebac3d87350a1bceae668cef7add18d4a1738b089832"
+      "sha256": "91de3939182c4b1449a5b303d9c100a041f3bad4059db2f2c149128c656bab9b",
+      "size": 7629,
+      "normalized_sha256": "91de3939182c4b1449a5b303d9c100a041f3bad4059db2f2c149128c656bab9b"
     },
     "openless-all/app/scripts/ci-impact.mjs": {
       "role": "index",
@@ -6366,9 +6366,9 @@
     },
     "openless-all/app/scripts/shared-backend-wire-contract.test.mjs": {
       "role": "index",
-      "sha256": "f47394045db027837a6ec1e3b0ed5b7eed8cb8f08cd3bf1bf3cadc0e393e4876",
-      "size": 28799,
-      "normalized_sha256": "f47394045db027837a6ec1e3b0ed5b7eed8cb8f08cd3bf1bf3cadc0e393e4876"
+      "sha256": "05ef43968390c338a54fb7f845fcfc5e5cb298ab39d975e27bbc6350682b1eda",
+      "size": 28947,
+      "normalized_sha256": "05ef43968390c338a54fb7f845fcfc5e5cb298ab39d975e27bbc6350682b1eda"
     },
     "openless-all/app/scripts/sherpa-onnx-android.mjs": {
       "role": "index",
@@ -6606,9 +6606,9 @@
     },
     "openless-all/app/scripts/windows-hang-diagnostics-contract.test.mjs": {
       "role": "index",
-      "sha256": "2214469b186adf1a1e453089ebc26e745cac19eafe74c4eb5962672599c7a644",
-      "size": 9758,
-      "normalized_sha256": "2214469b186adf1a1e453089ebc26e745cac19eafe74c4eb5962672599c7a644"
+      "sha256": "38d6eb85b60c522fe352a8d258191517747a460a705c53647638d0ac48939623",
+      "size": 9760,
+      "normalized_sha256": "38d6eb85b60c522fe352a8d258191517747a460a705c53647638d0ac48939623"
     },
     "openless-all/app/scripts/windows-hotkey-injection-smoke.ps1": {
       "role": "index",
@@ -6660,9 +6660,9 @@
     },
     "openless-all/app/scripts/windows-insertion-target-contract.test.mjs": {
       "role": "index",
-      "sha256": "74d045bba2fa69ba93478cd98bfb5170528e7e8aeec921bd5cbdf31e0b1392a1",
-      "size": 7003,
-      "normalized_sha256": "74d045bba2fa69ba93478cd98bfb5170528e7e8aeec921bd5cbdf31e0b1392a1"
+      "sha256": "099648483c3f581473e10af3e06aa320959780ec7fd598d43f6575788efc5a86",
+      "size": 7011,
+      "normalized_sha256": "099648483c3f581473e10af3e06aa320959780ec7fd598d43f6575788efc5a86"
     },
     "openless-all/app/scripts/windows-keyboard-list-removal.test.mjs": {
       "role": "index",
@@ -9155,9 +9155,9 @@
     },
     "openless-all/app/src/api/dictation.ts": {
       "role": "index",
-      "sha256": "d52ed38a59e78207233f6361a4d72278d80063c38bb0ac139b63bd9e15073d7c",
-      "size": 1907,
-      "normalized_sha256": "d52ed38a59e78207233f6361a4d72278d80063c38bb0ac139b63bd9e15073d7c"
+      "sha256": "5c67460617ae390073059eeeb8af1341b67cdf5a3f089b67cbd8975300540a7d",
+      "size": 2183,
+      "normalized_sha256": "5c67460617ae390073059eeeb8af1341b67cdf5a3f089b67cbd8975300540a7d"
     },
     "openless-all/app/src/api/files.ts": {
       "role": "index",
@@ -9377,9 +9377,9 @@
     },
     "openless-all/app/src/app/shell/navigation.ts": {
       "role": "index",
-      "sha256": "208fb76990dd47815362d6edab5414a002aa2f6083d8edd658e5c1cf31828dd1",
-      "size": 3478,
-      "normalized_sha256": "208fb76990dd47815362d6edab5414a002aa2f6083d8edd658e5c1cf31828dd1"
+      "sha256": "d1118e13c1187e6d5e6f27270a926c80baccd77850442a925f11551074fc1fda",
+      "size": 3371,
+      "normalized_sha256": "d1118e13c1187e6d5e6f27270a926c80baccd77850442a925f11551074fc1fda"
     },
     "openless-all/app/src/app/shell/pages.tsx": {
       "role": "index",
@@ -9809,9 +9809,9 @@
     },
     "openless-all/app/src/features/capsule/Capsule.tsx": {
       "role": "index",
-      "sha256": "1ea5188dc0cfbd0f32dc2a684487abf9a285cc77c6612df99d7a7f5ca7cf4a97",
-      "size": 42531,
-      "normalized_sha256": "1ea5188dc0cfbd0f32dc2a684487abf9a285cc77c6612df99d7a7f5ca7cf4a97"
+      "sha256": "ec530d70e98a7832d4f24d60f1057349017b6a65ca36e09e2841109cfaaed2db",
+      "size": 42472,
+      "normalized_sha256": "ec530d70e98a7832d4f24d60f1057349017b6a65ca36e09e2841109cfaaed2db"
     },
     "openless-all/app/src/features/capsule/CapsuleStyles.css": {
       "role": "index",
@@ -13279,9 +13279,9 @@
     },
     "openless-all/ios/CoreHost/Patches/ios-input-contracts.patch": {
       "role": "index",
-      "sha256": "f7a13e271402b9fdc72e2549a54edc1a020c608040fa92250b7ce00bf3a710a9",
-      "size": 73149,
-      "normalized_sha256": "f7a13e271402b9fdc72e2549a54edc1a020c608040fa92250b7ce00bf3a710a9"
+      "sha256": "ea46c1acbc825a06e5705fa886e6c03e6c344b3bf666c86ad4f46c7b18c0abe1",
+      "size": 70780,
+      "normalized_sha256": "ea46c1acbc825a06e5705fa886e6c03e6c344b3bf666c86ad4f46c7b18c0abe1"
     },
     "openless-all/ios/CoreHost/include/OpenLessCore.h": {
       "role": "index",

@@ -1279,16 +1279,18 @@ mod tests {
         );
         assert!(finish_seen.load(std::sync::atomic::Ordering::Acquire));
 
-        let recorded = frames.lock();
-        assert_eq!(recorded.len(), 6);
-        let span = recorded
-            .last()
-            .unwrap()
-            .saturating_duration_since(recorded[0]);
-        assert!(
-            span >= Duration::from_millis(180),
-            "expected >= 2x pacing (~250ms across 5 intervals), got {span:?}"
-        );
+        {
+            let recorded = frames.lock();
+            assert_eq!(recorded.len(), 6);
+            let span = recorded
+                .last()
+                .unwrap()
+                .saturating_duration_since(recorded[0]);
+            assert!(
+                span >= Duration::from_millis(180),
+                "expected >= 2x pacing (~250ms across 5 intervals), got {span:?}"
+            );
+        }
         server.await.unwrap();
     }
 

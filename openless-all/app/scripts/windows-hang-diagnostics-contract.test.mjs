@@ -141,7 +141,7 @@ assert.match(ime, /Event::SubmitAck/);
 assert.match(ime, /error\.is_outcome_unknown\(\) => Outcome::Unknown/);
 assert.match(recorder, /if let Some\(handle\) = join_handle\.lock\(\)\.take\(\) \{/);
 assert.match(recorder, /if let Some\(handle\) = self\.join_handle\.lock\(\)\.take\(\) \{/);
-assert.match(recorder, /not\(feature = "issue-1266-diagnostics"\), not\(test\)/);
+assert.match(recorder, /not\(feature = "issue-1266-diagnostics"\),\s*not\(test\)/);
 assert.match(recorder, /issue1266_debug::legacy\(event, outcome\)/);
 assert.ok(
   lib.indexOf('issue1266_debug::initialize();') <
