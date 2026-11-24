@@ -19,6 +19,19 @@ struct Presentation {
     foreground_captured: bool,
 }
 
+impl Presentation {
+    fn update_theme(&mut self, theme: openless_capsule::ThemeMode) -> bool {
+        let Some(frame) = self.frame.as_mut() else {
+            return false;
+        };
+        if frame.theme == theme {
+            return false;
+        }
+        frame.theme = theme;
+        true
+    }
+}
+
 pub(crate) struct NativeCapsule {
     executable: std::path::PathBuf,
     on_action: Arc<dyn Fn(String, Action) + Send + Sync>,
@@ -39,6 +52,13 @@ pub(crate) struct NativeCapsule {
 /// `DEFAULT_CAPSULE_EXIT_MS` (180) plus a frame: the default capsule's exit
 /// motion plays on the helper before the host reaps it.
 const EXIT_MS: u64 = 200;
+
+fn projected_dictation_session(
+    capture: Option<openless_core::SessionId>,
+    jobs: &[openless_core::DictationStateSnapshot],
+) -> Option<openless_core::SessionId> {
+    capture.or_else(|| jobs.first().and_then(|job| job.session_id))
+}
 
 impl NativeCapsule {
     pub(crate) fn new(app: tauri::AppHandle) -> Result<Self, String> {
@@ -66,24 +86,55 @@ impl NativeCapsule {
             Arc::new(move |session_id: String, action: Action| {
                 let app = app_for_action.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(ask) = app.try_state::<Arc<crate::ask_window::Desktop>>() {
+                        if (match action {
+                            Action::Cancel => ask.capsule_cancel(&session_id),
+                            Action::Confirm => ask.capsule_stop(&session_id),
+                            _ => false,
+                        }) || ask.recognizes_capsule(&session_id) {
+                            return;
+                        }
+                    }
                     let coordinator = app.state::<Arc<crate::coordinator::Coordinator>>();
                     let backend = coordinator.backend();
                     // Recheck Core ownership after the process/async hop. A delayed
                     // action can never operate on a newly started dictation.
+                    if let Ok(qa) = backend.services().qa.snapshot().await {
+                        if qa.session_id.map(|id| id.to_string()).as_deref()
+                            == Some(session_id.as_str())
+                        {
+                            match action {
+                                Action::Cancel => {
+                                    let _ = backend.services().qa.cancel(qa.session_id).await;
+                                }
+                                Action::Confirm
+                                    if qa.phase == openless_core::QaPhase::Recording =>
+                                {
+                                    if let Some(id) = qa.session_id {
+                                        let _ = backend.services().qa.stop_recording(id).await;
+                                    }
+                                }
+                                _ => {}
+                            }
+                            return;
+                        }
+                    }
                     let snapshot = backend.snapshot().dictation;
+                    let id = uuid::Uuid::parse_str(&session_id).ok().map(openless_core::SessionId::from_uuid);
                     if snapshot.session_id.map(|id| id.to_string()).as_deref()
                         != Some(session_id.as_str())
+                        && !backend.snapshot().processing_dictations.iter().any(|task| task.session_id == id)
                     {
                         return;
                     }
                     match action {
                         Action::Cancel => {
-                            coordinator.cancel_active_voice().await;
+                            if let Some(id) = id { let _ = backend.cancel_dictation(Some(id)).await; }
                         }
                         Action::Confirm
                             if snapshot.phase == openless_core::DictationPhase::Recording =>
                         {
-                            let _ = backend.stop_dictation().await;
+                            if let Some(id) = id { let _ = backend.submit_dictation_session(id, Default::default()).await; }
                         }
                         _ => {}
                     }
@@ -125,12 +176,42 @@ impl NativeCapsule {
     pub(crate) fn set_locale(&self, locale: String) {
         *self.locale.lock() = locale;
     }
+    fn current_theme(&self) -> openless_capsule::ThemeMode {
+        let coordinator = self.app.state::<Arc<crate::coordinator::Coordinator>>();
+        match coordinator.backend().get_preferences().theme_mode {
+            ThemeMode::System => openless_capsule::ThemeMode::System,
+            ThemeMode::Light => openless_capsule::ThemeMode::Light,
+            ThemeMode::Dark => openless_capsule::ThemeMode::Dark,
+        }
+    }
+    /// Restyle an existing helper without replaying recording state or reversing its exit.
+    pub(crate) fn refresh_theme(&self) {
+        let mut latest = self.latest.lock();
+        if latest.update_theme(self.current_theme()) {
+            self.send_frames(&latest);
+        }
+    }
     /// The text also feeds the "transcribing" label, so it is sent even when
     /// the transcript rail is turned off (`Frame::show_transcript`).
     pub(crate) fn update_transcript(&self, session_id: &str, text: String) {
         let mut latest = self.latest.lock();
         if let Some(frame) = latest.frame.as_mut() {
             if frame.update_transcript(session_id, text) {
+                self.send_frames(&latest);
+            }
+        }
+    }
+    pub(crate) fn update_processing_jobs(&self, jobs: &[openless_core::DictationStateSnapshot]) {
+        let mut latest = self.latest.lock();
+        if let Some(frame) = latest.frame.as_mut() {
+            let background: Vec<_> = jobs.iter().filter(|job| job.session_id.map(|id| id.to_string()).as_deref() != Some(frame.session_id.as_str())).collect();
+            let count = background.len();
+            let session_id = background.first().and_then(|job| job.session_id).map(|id| id.to_string());
+            let translation = background.first().is_some_and(|job| job.translation_active);
+            if frame.processing_count != count || frame.processing_session_id != session_id || frame.processing_translation != translation {
+                frame.processing_count = count;
+                frame.processing_translation = translation;
+                frame.processing_session_id = session_id;
                 self.send_frames(&latest);
             }
         }
@@ -229,14 +310,11 @@ impl NativeCapsule {
             CapsuleState::Cancelled => "cancelled",
             CapsuleState::Error => "failed",
         };
+        let snapshot = coordinator.backend().snapshot();
         let interactive = matches!(
             payload.state,
             CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-        ) && coordinator
-            .backend()
-            .snapshot()
-            .dictation
-            .session_id
+        ) && projected_dictation_session(snapshot.dictation.session_id, &snapshot.processing_dictations)
             .is_some_and(|id| Some(id.to_string()) == payload.session_id);
         let style = match preferences.capsule_style {
             CapsuleStyle::Siri => "siri",
@@ -251,7 +329,9 @@ impl NativeCapsule {
         } else {
             String::new()
         };
-        let frame = Frame {
+        let processing_jobs: Vec<_> = snapshot.processing_dictations.into_iter()
+            .filter(|job| job.session_id.map(|id| id.to_string()) != payload.session_id).collect();
+        let mut frame = Frame {
             session_id: payload.session_id.clone().unwrap_or_default(),
             sequence,
             state: CapsulePopupState {
@@ -264,6 +344,7 @@ impl NativeCapsule {
                 operating: payload.operating,
                 inserted_chars: payload.inserted_chars,
                 selection_polish: payload.selection_polish,
+                qa: payload.qa,
                 translation_target: payload
                     .translation
                     .then(|| self.translation_target(&preferences.translation_target_language)),
@@ -271,6 +352,9 @@ impl NativeCapsule {
             transcript,
             show_transcript: preferences.capsule_transcript_enabled,
             transcript_font_size: preferences.capsule_transcript_font_size as f32,
+            processing_count: processing_jobs.len(),
+            processing_translation: processing_jobs.first().is_some_and(|job| job.translation_active),
+            processing_session_id: processing_jobs.first().and_then(|task| task.session_id).map(|id| id.to_string()),
             labels: CapsuleLabels::for_locale(&self.locale.lock()),
             theme: match preferences.theme_mode {
                 ThemeMode::System => openless_capsule::ThemeMode::System,
@@ -289,6 +373,9 @@ impl NativeCapsule {
             preferences.capsule_display_mode,
         );
         let mut latest = self.latest.lock();
+        // Serialize with preference refreshes so an older pending frame cannot
+        // restore the previous theme after a settings event.
+        frame.theme = self.current_theme();
         // A new presentation reverses a running exit on the same helpers.
         self.exit_epoch.fetch_add(1, Ordering::SeqCst);
         let was_idle = latest.frame.is_none();
@@ -471,8 +558,7 @@ pub(crate) fn native_capsule_set_locale(app: tauri::AppHandle, locale: String) {
     ) {
         return;
     }
-    // Save even in regular mode: enabling low-memory mode then restarting
-    // silently must keep the UI language chosen before the restart.
+    // Persist the helper locale so it survives app restarts.
     if let Ok(directory) = app.path().app_config_dir() {
         if std::fs::create_dir_all(&directory).is_ok() {
             let temporary = directory.join("native-capsule.locale.tmp");
@@ -486,5 +572,73 @@ pub(crate) fn native_capsule_set_locale(app: tauri::AppHandle, locale: String) {
     }
     if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
         coordinator.tauri_host().set_native_capsule_locale(locale);
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    #[test]
+    fn input_owner_projects_the_first_job_only_after_capture_releases() {
+        let capture = openless_core::SessionId::new();
+        let first = openless_core::SessionId::new();
+        let second = openless_core::SessionId::new();
+        let job = |id| openless_core::DictationStateSnapshot {
+            session_id: Some(id), phase: openless_core::DictationPhase::Polishing,
+            ..Default::default()
+        };
+        assert_eq!(projected_dictation_session(Some(capture), &[job(first), job(second)]), Some(capture));
+        assert_eq!(projected_dictation_session(None, &[job(first), job(second)]), Some(first));
+        assert_eq!(projected_dictation_session(None, &[job(second)]), Some(second));
+        assert_eq!(projected_dictation_session(None, &[]), None);
+    }
+
+    #[test]
+    fn a_theme_change_preserves_the_active_session_and_exit_state() {
+        for phase in ["recording", "polishing", "completed"] {
+            for leaving in [false, true] {
+                let frame = Frame {
+                    session_id: "theme-session".into(),
+                    sequence: 42,
+                    state: CapsulePopupState {
+                        phase: phase.into(),
+                        audio_level: Some(0.4),
+                        ..Default::default()
+                    },
+                    transcript: "keep this transcript".into(),
+                    show_transcript: true,
+                    transcript_font_size: 15.0,
+                    processing_count: 0,
+                    processing_translation: false,
+                    processing_session_id: None,
+                    labels: CapsuleLabels::for_locale("zh-CN"),
+                    theme: openless_capsule::ThemeMode::Light,
+                    leaving,
+                    bounds: Some([10, 20, 460, 158]),
+                    interactive: !leaving,
+                };
+                let mut expected = frame.clone();
+                expected.theme = openless_capsule::ThemeMode::Dark;
+                let mut presentation = Presentation {
+                    frame: Some(frame),
+                    bounds: vec![Some([10, 20, 460, 158])],
+                    ..Default::default()
+                };
+                assert!(presentation.update_theme(openless_capsule::ThemeMode::Dark));
+                assert_eq!(presentation.frame.as_ref(), Some(&expected));
+                assert_eq!(presentation.bounds, vec![Some([10, 20, 460, 158])]);
+                assert!(!presentation.update_theme(openless_capsule::ThemeMode::Dark));
+                assert!(presentation.update_theme(openless_capsule::ThemeMode::System));
+            }
+        }
+    }
+
+    #[test]
+    fn a_theme_change_does_not_reopen_an_idle_capsule() {
+        let mut presentation = Presentation::default();
+        assert!(!presentation.update_theme(openless_capsule::ThemeMode::Dark));
+        assert!(presentation.frame.is_none());
+        assert!(presentation.bounds.is_empty());
     }
 }

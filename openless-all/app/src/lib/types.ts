@@ -31,12 +31,12 @@ export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 /** Recognition pipeline mode (issue #902): traditional = two-stage ASR + LLM;
  *  multimodal = one multimodal model turns audio + prompt into final text in a single step.
  *  The two configurations are fully isolated in the credentials vault; runtime reads only the current mode. */
-export type PipelineMode = 'traditional' | 'multimodal';
+export type PipelineMode = 'traditional' | 'multimodal' | 'deepseek';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
 export type HistorySource =
-  'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
+  'voice' | 'qa' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
@@ -124,6 +124,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  observationId?: number;
   expiresAtMs: number;
   id: string;
   pattern: string;
@@ -289,6 +290,58 @@ export interface StylePackExample {
   output: string;
 }
 
+export type AppCategory = string;
+
+export interface CatalogCategory {
+  id: AppCategory;
+  name: string;
+  labels?: Record<string, string>;
+  promptGuidance?: string;
+}
+
+export interface CatalogClient {
+  id: string;
+  name: string;
+  role: string;
+  category: AppCategory;
+  platforms: string[];
+  canonicalClientId?: string | null;
+  promptGuidance?: string;
+  identifiers: {
+    macosBundleIds: string[];
+    macosBundlePrefixes?: string[];
+    windowsExecutableStems: string[];
+    installedWebAppNames: string[];
+  };
+}
+
+export interface InputAppCatalog {
+  schemaVersion: number;
+  reviewedAt: string;
+  categories: CatalogCategory[];
+  clients: CatalogClient[];
+}
+
+export interface AppStyleEntry {
+  app: { id: string; name: string };
+  memberId: string;
+  category: AppCategory | null;
+  seen: boolean;
+  stylePackId: string | null;
+}
+
+export interface AppStyleRouting {
+  catalog: InputAppCatalog;
+  memberships: Record<string, AppCategory | null>;
+  categories: Partial<Record<AppCategory, string>>;
+  apps: AppStyleEntry[];
+}
+
+export type AppStyleAssignment =
+  | { target: 'category'; category: AppCategory; stylePackId: string | null }
+  | { target: 'app'; appId: string; stylePackId: string | null }
+  | { target: 'membership'; memberId: string; category: AppCategory | null };
+
 export interface StylePack {
   id: string;
   name: string;
@@ -370,15 +423,6 @@ export interface AudioDspConfig {
   processingOrder: AudioDspStage[];
 }
 
-/** Runtime health of the disposable native capsule sidecar (desktop only). */
-export interface NativeCapsuleStatus {
-  /** Whether the launch-time low-memory background switch is active. */
-  active: boolean;
-  /** False when the sidecar helper is missing or failed to initialize. */
-  available: boolean;
-  error: string | null;
-}
-
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -407,9 +451,9 @@ export interface UserPreferences {
   echoCancellationEnabled: boolean;
   audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
-  lowMemoryBackgroundEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
+  voiceActivationHotkeyLinked: boolean;
   voiceActivationWakeEnabled: boolean;
   voiceActivationFinishEnabled: boolean;
   voiceActivationWakePhrase: string;
@@ -453,12 +497,14 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** Legacy compat: `true` is equivalent to `windowsInsertionMode === 'sendInput'`. */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows: whether to show OpenLess in the system keyboard list (Win+Space) for non-TSF insertion. */
+  /** Legacy wire compatibility only; the Windows speech TIP never appears in Win+Space. */
   windowsShowOpenlessInKeyboardList: boolean;
   /** User's working languages (multi-select, native names); injected as a premise at the head of LLM polish/translate prompts. */
   workingLanguages: string[];
   /** Translation mode target language (single-select, native name); empty string = Shift translation disabled. See issue #4. */
   translationTargetLanguage: string;
+  /** Absent means untouched/default 1; an explicit 1 must remain persisted and synced. */
+  translationShiftTapCount?: number;
   /** Chinese output script preference: auto-synced from the UI language (simplified/traditional); not exposed as a separate setting. */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
   /** Final output language preference: auto-synced from the UI language; not exposed as a separate setting. */
@@ -466,6 +512,7 @@ export interface UserPreferences {
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
   qaCompanionKey: string;
+  qaShortcutBehavior?: QaShortcutBehavior;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
   /** Selection polish hotkey. null = disabled. */
@@ -555,6 +602,10 @@ export interface UserPreferences {
   polishContextWindowMinutes: number;
   /** Skip LLM polish when the transcript has at most N non-whitespace chars (issue #1032). 0 = off. */
   polishSkipMaxChars: number;
+  /** Enable the bounded post-ASR polish strategy hook (issue #1225). */
+  polishStrategyEnabled: boolean;
+  /** Rhai source evaluated by Core after corrected ASR and before polish. */
+  polishStrategyScript: string;
   /** Run silently at startup (no main window). Common for Windows auto-start — background + tray only,
    *  without the main window popping up. When on, no startup path shows the window; open it from the menu bar / tray. Default false. */
   startMinimized: boolean;
@@ -577,6 +628,7 @@ export interface UserPreferences {
   streamingInsertSaveClipboard: boolean;
   /** Windows TSF: show the live transcript as an underlined composition in the target. */
   windowsCompositionInput: boolean;
+  macosCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
@@ -584,10 +636,12 @@ export interface UserPreferences {
    *  managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
+  expressionLearningEnabled: boolean;
   vocabularyLearningSettings: {
     observationSeconds: number;
     suggestionSeconds: number;
     maxPhraseChars: number;
+    suggestionPosition: 'nearInput' | 'bottomRight';
   };
   /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;
@@ -706,7 +760,10 @@ export interface QaActivity {
   toolName?: string;
 }
 
+export type QaShortcutBehavior = 'record' | 'open' | 'draft';
+
 export interface QaStatePayload {
+  panelOpen?: boolean;
   activity?: QaActivity;
   kind: QaStateKind;
   /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */
@@ -800,6 +857,7 @@ export type CapsuleState =
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
 export interface CapsulePayload {
+  qa?: boolean;
   /** Session generation that owns this capsule frame. */
   sessionId?: string | null;
   state: CapsuleState;

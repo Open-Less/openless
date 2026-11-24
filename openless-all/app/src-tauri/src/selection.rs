@@ -7,10 +7,8 @@
 //! 2. **macOS / Windows** Cmd+C / Ctrl+C：snapshot 用户原剪贴板 → 模拟复制 → 80ms
 //!    后读出新内容 → 还原原剪贴板。
 //!
-//! Truncation policy: selections over 4000 chars keep head 2000 + tail 2000 + the
-//! `[…truncated…]` marker for QA context only. `omits_middle` is set so selection
-//! polish and selection voice refuse to paste a rewrite of that stand-in over the
-//! real selection (the omitted middle would otherwise be deleted).
+//! Explicit selections are captured in full, including boundary whitespace.
+//! Prompt budgets for unrelated QA/cursor context remain at their own call sites.
 //!
 //! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
 //! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
@@ -20,21 +18,22 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
-const SELECTION_MAX_CHARS: usize = 4000;
-const SELECTION_TRUNCATE_HEAD: usize = 2000;
-const SELECTION_TRUNCATE_TAIL: usize = 2000;
-const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
+#[cfg(any(target_os = "windows", test))]
+#[path = "selection/clipboard_capture.rs"]
+mod clipboard_capture;
+#[path = "selection/target_position.rs"]
+mod target_position;
+#[cfg(target_os = "windows")]
+use clipboard_capture::ClipboardPollOutcome;
 
 /// Selection context read from the foreground app.
-/// `text` may be a head/tail stand-in when `omits_middle` is set. Replacement
-/// flows must refuse those captures; QA may still use the stand-in as context.
+/// `text` is the complete selected range, including boundary whitespace.
 /// `source_app` is a human-readable label for the foreground app (optional).
 #[derive(Debug, Clone)]
 pub struct SelectionContext {
     pub text: String,
     pub source_app: Option<String>,
-    /// True when `text` dropped the middle of a selection longer than
-    /// [`SELECTION_MAX_CHARS`]. Pasting a rewrite of `text` would delete that middle.
+    /// Legacy capture metadata. Full-range capture always sets this to false.
     pub omits_middle: bool,
 }
 
@@ -48,16 +47,22 @@ pub struct SelectionContext {
 /// foreground window and the focused child control, plus their process/thread
 /// identities.
 ///
-/// On macOS we have no HWND equivalent; the closest robust fingerprint is the
-/// frontmost application (name + pid) plus the selected-text snapshot itself.
-/// Revalidation re-reads the current selection via AX (with the simulated
-/// Cmd+C fallback) and compares it to the captured text — if the user moved to
-/// another app or changed the selection during the cloud request, we refuse to
-/// paste.
+/// macOS retains the AX control identity and native window ID. Replacement
+/// validates the same control and re-reads the complete selection using native
+/// APIs without borrowing the clipboard during asynchronous validation.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget {
+    pub(crate) cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    strict_input_target: bool,
+    dictation_selection: Option<String>,
+    dictation_position: std::sync::Arc<parking_lot::Mutex<Option<(u64, u64)>>>,
+    pub(crate) original_clipboard: std::sync::Arc<parking_lot::Mutex<Option<u64>>>,
+    #[cfg(target_os = "windows")]
+    dictation_control: Option<Vec<i32>>,
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
+    #[cfg(target_os = "windows")]
+    windows_app: Option<openless_core::app_style_routing::InputApp>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -78,11 +83,14 @@ struct WindowsSelectionTarget {
 struct MacosSelectionTarget {
     /// Foreground app at capture time (NSWorkspace frontmostApplication, `name (bundle)` form).
     front_app: Option<String>,
+    name: Option<String>,
     /// Bundle identifier captured with the foreground app, used by the host-document safety gate.
     bundle_id: Option<String>,
     /// Foreground app pid at capture time — used to return focus to the original app after the
     /// preview is confirmed.
     front_app_pid: Option<i32>,
+    dictation_window: Option<u32>,
+    dictation_element: Option<std::sync::Arc<macos_ax::FocusedElement>>,
 }
 
 /// Result of the final target/selection revalidation immediately before a
@@ -125,6 +133,7 @@ pub(crate) enum SelectionCaptureMissReason {
     PrefetchHit,
     PrefetchMissLiveOk,
     ClipboardInitFailed,
+    #[cfg(any(target_os = "macos", test))]
     ClipboardSentinelWriteFailed,
     CopyShortcutFailed,
     ClipboardUnchangedSentinel,
@@ -141,6 +150,7 @@ impl SelectionCaptureMissReason {
             Self::PrefetchHit => "prefetch_hit",
             Self::PrefetchMissLiveOk => "prefetch_miss_live_ok",
             Self::ClipboardInitFailed => "clipboard_init_failed",
+            #[cfg(any(target_os = "macos", test))]
             Self::ClipboardSentinelWriteFailed => "clipboard_sentinel_write_failed",
             Self::CopyShortcutFailed => "copy_shortcut_failed",
             Self::ClipboardUnchangedSentinel => "clipboard_unchanged_sentinel",
@@ -334,8 +344,20 @@ fn capture_selection_source_app_hint() -> Option<String> {
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+        let foreground = unsafe { GetForegroundWindow() };
+        let windows = capture_windows_selection_target_for_window(foreground);
+        let windows_app = windows.map_or_else(
+            || windows_app_for_window(foreground),
+            |target| crate::activity_app_icons::app_for_pid(target.focused_process_id),
+        );
         return SelectionInsertionTarget {
-            windows: capture_windows_selection_target(),
+            windows,
+            windows_app,
+            dictation_control: crate::host_document::focused_input_identity(),
+            dictation_position: std::sync::Arc::new(parking_lot::Mutex::new(crate::host_document::focused_input_position())),
+            ..Default::default()
         };
     }
 
@@ -349,11 +371,16 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
             (None, None) => None,
         };
         return SelectionInsertionTarget {
+            dictation_position: std::sync::Arc::new(parking_lot::Mutex::new(crate::host_document::focused_input_position())),
             macos: Some(MacosSelectionTarget {
                 front_app,
+                name: front_app_name,
                 bundle_id,
                 front_app_pid,
+                dictation_window: front_app_pid.and_then(macos_front_window_id),
+                dictation_element: macos_ax::capture_focused_element(),
             }),
+            ..Default::default()
         };
     }
 
@@ -361,6 +388,256 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     {
         SelectionInsertionTarget::default()
     }
+}
+
+pub(crate) fn capture_dictation_insertion_target() -> SelectionInsertionTarget {
+    let mut target = capture_selection_insertion_target();
+    target.strict_input_target = true;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        *target.dictation_position.lock() = crate::host_document::focused_input_position();
+        if target
+            .dictation_position
+            .lock()
+            .is_some_and(|(_, length)| length > 0)
+        {
+            #[cfg(target_os = "macos")]
+            {
+                target.dictation_selection = read_selection_for_validation();
+            }
+            #[cfg(target_os = "windows")]
+            {
+                target.dictation_selection = crate::host_document::read_qa_selection();
+            }
+        }
+        let mut last = LAST_DICTATION_TARGET.lock();
+        if let Some(previous) = last.as_ref() {
+            if selection_insertion_target_is_current(previous)
+                && same_native_target(previous, &target)
+            {
+                target.dictation_position = std::sync::Arc::clone(&previous.dictation_position);
+            }
+        }
+        *last = Some(target.clone());
+    }
+    target
+}
+
+fn same_native_target(left: &SelectionInsertionTarget, right: &SelectionInsertionTarget) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        left.macos
+            .as_ref()
+            .zip(right.macos.as_ref())
+            .is_some_and(|(left, right)| {
+                left.front_app_pid == right.front_app_pid
+                    && left.dictation_window == right.dictation_window
+                    && left
+                        .dictation_element
+                        .as_ref()
+                        .zip(right.dictation_element.as_ref())
+                        .is_some_and(|(left, right)| left.same_as(right))
+            })
+    }
+    #[cfg(target_os = "windows")]
+    {
+        left.windows == right.windows
+            && left.dictation_control.is_some()
+            && left.dictation_control == right.dictation_control
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (left, right);
+        false
+    }
+}
+
+// Share only a still-current native anchor. Starting a recording is not a focus change.
+static LAST_DICTATION_TARGET: parking_lot::Mutex<Option<SelectionInsertionTarget>> =
+    parking_lot::Mutex::new(None);
+
+pub(crate) fn dictation_target_requires_position(target: &SelectionInsertionTarget) -> bool {
+    target.strict_input_target
+}
+
+/// Advance shared pending anchors only after confirmed delivery at the expected new caret.
+pub(crate) fn confirm_target_delivery(target: &SelectionInsertionTarget, text: &str) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if target.strict_input_target {
+        if !native_input_target_is_current(target) {
+            return false;
+        }
+        let mut position = target.dictation_position.lock();
+        if let Some(advanced) = target_position::advanced(
+            *position,
+            text.encode_utf16().count() as u64,
+            crate::host_document::focused_input_position(),
+        ) {
+            *position = Some(advanced);
+            return true;
+        }
+        return false;
+    }
+    true
+}
+
+pub(crate) fn protect_selection_original(
+    target: &SelectionInsertionTarget,
+    text: &str,
+) -> Result<(), String> {
+    if target.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("selection session cancelled".into());
+    }
+    let revision = crate::insertion::copy_text_to_clipboard_guarded(text, || {
+        !target.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    })?;
+    *target.original_clipboard.lock() = revision;
+    if target.original_clipboard.lock().is_none() {
+        return Err("selectionOriginalCopyFailed".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn selection_result_fallback(
+    target: &SelectionInsertionTarget,
+    text: &str,
+) -> Result<openless_core::InsertOutcome, openless_core::BackendError> {
+    if target.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::Cancelled,
+            "selection session cancelled",
+        ));
+    }
+    // A user copy after processing began owns the clipboard, even if its text is identical.
+    let expected = *target.original_clipboard.lock();
+    if crate::insertion::copy_text_to_clipboard_if_current(text, expected, || {
+        !target.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    })
+    .map_err(|error| {
+        openless_core::BackendError::new(openless_core::BackendErrorCode::Platform, error)
+    })? {
+        Ok(openless_core::InsertOutcome::CopiedFallback)
+    } else {
+        Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::InvalidState,
+            "selectionResultInHistory",
+        )
+        .target_unavailable())
+    }
+}
+
+#[path = "selection/recovery_notice.rs"]
+mod recovery_notice;
+pub(crate) use recovery_notice::original_recovery_message;
+
+/// Final native handoff. Clipboard restore is mandatory for selection workflows.
+pub(crate) fn insert_selection_result(
+    target: &SelectionInsertionTarget,
+    source_text: &str,
+    text: &str,
+    shortcut: crate::types::PasteShortcut,
+) -> Result<openless_core::InsertOutcome, openless_core::BackendError> {
+    if !selection_insertion_target_is_current(target) {
+        return selection_result_fallback(target, text);
+    }
+    #[cfg(target_os = "macos")]
+    let mut delivery = crate::host_document::KeyboardDelivery::capture();
+    if !selection_insertion_target_is_current(target) {
+        return selection_result_fallback(target, text);
+    }
+    let expected_clipboard = *target.original_clipboard.lock();
+    if !crate::insertion::clipboard_revision_matches(
+        expected_clipboard,
+        crate::insertion::clipboard_sequence(),
+    ) {
+        return Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::InvalidState,
+            "selectionResultInHistory",
+        ));
+    }
+    let status = crate::insertion::TextInserter::new().insert_guarded(
+        text,
+        true,
+        shortcut,
+        expected_clipboard,
+        || {
+            selection_insertion_target_is_current(target)
+                && (source_text.is_empty()
+                    || validate_selection_insertion_target(target, source_text)
+                        .error_code()
+                        .is_none())
+        },
+    );
+    match status {
+        crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent => {
+            #[cfg(target_os = "macos")]
+            if let Some(mut delivery) = delivery.take() {
+                delivery.record_posted(text, crate::types::MacosNewlineMode::ShiftReturn);
+                if matches!(
+                    delivery.finish(),
+                    crate::host_document::KeyboardDeliveryOutcome::Delivered
+                ) {
+                    return Ok(openless_core::InsertOutcome::Inserted);
+                }
+            }
+            Ok(openless_core::InsertOutcome::PasteSent)
+        }
+        crate::types::InsertStatus::NotRequested => Err(
+            openless_core::BackendError::new(
+                openless_core::BackendErrorCode::InvalidState,
+                "selectionResultInHistory",
+            )
+            .target_unavailable(),
+        ),
+        crate::types::InsertStatus::CopiedFallback => {
+            Ok(openless_core::InsertOutcome::CopiedFallback)
+        }
+        _ => Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::Platform,
+            "selectionResultInHistory",
+        )),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_front_window_id(pid: i32) -> Option<u32> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::*;
+
+    // The WindowServer returns its front-to-back order without Screen Recording
+    // permission. Use only numeric metadata; no titles or images are read.
+    let windows = copy_window_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )?;
+    let owner = CFString::from_static_string("kCGWindowOwnerPID");
+    let layer = CFString::from_static_string("kCGWindowLayer");
+    let number = CFString::from_static_string("kCGWindowNumber");
+    for window in windows.iter() {
+        // SAFETY: CGWindowListCopyWindowInfo returns an array of CFDictionaries.
+        let window = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule((*window).cast()) };
+        let value = |key: &CFString| window.find(key)?.downcast::<CFNumber>()?.to_i32();
+        if value(&owner) == Some(pid) && value(&layer) == Some(0) {
+            return u32::try_from(value(&number)?).ok().filter(|id| *id != 0);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_target_is_current(target: &MacosSelectionTarget, pid: i32) -> bool {
+    current_front_app_pid() == Some(pid)
+        && target.dictation_window.is_some_and(|window| {
+            macos_front_window_id(pid) == Some(window)
+                && current_front_app_pid() == Some(pid)
+                && target
+                    .dictation_element
+                    .as_ref()
+                    .is_some_and(|element| element.is_current())
+        })
 }
 
 /// Whether the target snapshot is sufficient to start a Selection Polish
@@ -392,24 +669,54 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
 /// Check that the foreground/focused target fingerprint has not changed since capture.
 /// Windows callers use this as a document-read fence, before and after synchronous UIA calls.
 pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionTarget) -> bool {
+    if target.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return false;
+    }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if !target_position::unchanged(
+            *target.dictation_position.lock(),
+            crate::host_document::focused_input_position(),
+        )
+    {
+        return false;
+    }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if target.strict_input_target
+        && target
+            .dictation_position
+            .lock()
+            .is_some_and(|(_, length)| length > 0)
+    {
+        #[cfg(target_os = "macos")]
+        let current_selection = read_selection_for_validation();
+        #[cfg(target_os = "windows")]
+        let current_selection = crate::host_document::read_qa_selection();
+        if target.dictation_selection.is_none() || target.dictation_selection != current_selection {
+            return false;
+        }
+    }
+    native_input_target_is_current(target)
+}
+
+fn native_input_target_is_current(target: &SelectionInsertionTarget) -> bool {
+    if target.cancelled.load(std::sync::atomic::Ordering::Acquire) { return false; }
     #[cfg(target_os = "windows")]
     {
         let Some(captured) = target.windows else {
             return false;
         };
-        return capture_windows_selection_target().as_ref() == Some(&captured);
+        return capture_windows_selection_target().as_ref() == Some(&captured)
+            && (target.dictation_control.as_ref().is_some_and(|identity| {
+                crate::host_document::focused_input_identity().as_ref() == Some(identity)
+            }));
     }
 
     #[cfg(target_os = "macos")]
     {
-        let Some(captured_pid) = target
-            .macos
-            .as_ref()
-            .and_then(|captured| captured.front_app_pid)
-        else {
-            return false;
-        };
-        return current_front_app_pid() == Some(captured_pid);
+        return target.macos.as_ref().is_some_and(|captured| {
+            (!target.strict_input_target || captured.dictation_window.is_some() && captured.dictation_element.is_some())
+                && captured.front_app_pid.is_some_and(|pid| macos_target_is_current(captured, pid))
+        });
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -421,14 +728,15 @@ pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionT
 
 /// Revalidate the target and the selected text immediately before insertion.
 ///
-/// The first and final HWND checks fence the temporary Ctrl+C used to read the
-/// current selection.  This keeps the race window down to the direct handoff
-/// to the inserter, while failing closed if the user moved to another app or
-/// another editor/control during the cloud request.
+/// Native text and position reads never borrow the clipboard. This can run inside the
+/// delivery gate immediately before paste, after an earlier caller-side validation.
 pub(crate) fn validate_selection_insertion_target(
     target: &SelectionInsertionTarget,
     expected_selection: &str,
 ) -> SelectionInsertionTargetValidation {
+    if !selection_insertion_target_is_current(target) {
+        return SelectionInsertionTargetValidation::TargetChanged;
+    }
     #[cfg(target_os = "windows")]
     {
         let Some(captured) = target.windows else {
@@ -441,7 +749,7 @@ pub(crate) fn validate_selection_insertion_target(
             return SelectionInsertionTargetValidation::TargetChanged;
         }
 
-        let current_selection = selected_text_for_validation();
+        let current_selection = crate::host_document::read_qa_selection();
         if !selection_text_matches(expected_selection, current_selection.as_deref()) {
             return SelectionInsertionTargetValidation::SelectionChanged;
         }
@@ -450,6 +758,9 @@ pub(crate) fn validate_selection_insertion_target(
             return SelectionInsertionTargetValidation::TargetUnavailable;
         };
         if !windows_selection_targets_match(captured, current_after_copy) {
+            return SelectionInsertionTargetValidation::TargetChanged;
+        }
+        if !selection_insertion_target_is_current(target) {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
         return SelectionInsertionTargetValidation::Valid;
@@ -471,11 +782,13 @@ pub(crate) fn validate_selection_insertion_target(
         {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
-        // Selection text consistency: AX direct read (same path as capture), falling back to
-        // simulated Cmd+C.
+        // Selection text consistency: read AX directly, without simulated Cmd+C.
         let current_selection = read_selection_for_validation();
         if !selection_text_matches(expected_selection, current_selection.as_deref()) {
             return SelectionInsertionTargetValidation::SelectionChanged;
+        }
+        if !selection_insertion_target_is_current(target) {
+            return SelectionInsertionTargetValidation::TargetChanged;
         }
         return SelectionInsertionTargetValidation::Valid;
     }
@@ -486,22 +799,13 @@ pub(crate) fn validate_selection_insertion_target(
     }
 }
 
-/// macOS only: re-read the full current selection (trimmed, not head/tail truncated)
-/// for validate to compare against expected_selection. A truncated stand-in must not
-/// compare equal to the live selection, or paste would delete the omitted middle.
-/// Degrades to simulated Cmd+C + clipboard snapshot when AX is unauthorized or the
-/// direct read fails (same fallback as `capture_selection_with_status`).
+/// Read the complete live range for exact replacement validation. Missing native
+/// range/text capability refuses automatic replacement; it never uses Copy here.
 #[cfg(target_os = "macos")]
 fn read_selection_for_validation() -> Option<String> {
-    if let Some(text) = macos_ax::read_selected_text() {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    let text = simulate_copy_and_read()?;
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    macos_ax::read_selected_text()
+        .filter(|text| !text.trim().is_empty())
+        .or_else(macos_ax::read_explicit_qa_text)
 }
 
 /// Return focus to the original selection target after the preview is confirmed. The preview
@@ -509,6 +813,18 @@ fn read_selection_for_validation() -> Option<String> {
 /// foreground window; restore the original target first, then run the strict selection validation
 /// above, avoiding a blind paste.
 pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
+    reactivate_insertion_target(target, true)
+}
+
+/// Ordinary dictation retains stable app-level macOS activation; selection replacement
+/// continues to require its captured control before the full source/range validation.
+pub(crate) fn reactivate_dictation_insertion_target(target: &SelectionInsertionTarget) -> bool {
+    reactivate_insertion_target(target, false)
+}
+
+fn reactivate_insertion_target(target: &SelectionInsertionTarget, strict_control: bool) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = strict_control;
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::HWND;
@@ -546,7 +862,7 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         // Do not reactivate it and sleep for 80ms on every delta; the caller
         // still validates the captured text control before posting keys.
         if current_front_app_pid() == Some(pid) {
-            return true;
+            return !strict_control || macos_target_is_current(captured, pid);
         }
         // The preview window is OpenLess's own window; after confirm, focus must go back to the
         // original app before pasting. NSRunningApplication activate is best-effort, and some
@@ -559,7 +875,8 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             // foreground was stolen by another app; repeated calls are idempotent.
             activate_app_by_pid(pid);
             std::thread::sleep(Duration::from_millis(80));
-            if current_front_app_pid() == Some(pid) {
+            if current_front_app_pid() == Some(pid)
+                && (!strict_control || macos_target_is_current(captured, pid)) {
                 return true;
             }
         }
@@ -620,6 +937,28 @@ pub(crate) fn selection_target_still_front(target: &SelectionInsertionTarget) ->
     true
 }
 
+/// Q&A accepts only an explicit native selection. Copy shortcuts can copy an
+/// entire editor line with no selection, so they are not evidence for this path.
+pub(crate) fn capture_explicit_qa_selection() -> (Option<SelectionContext>, SelectionInsertionTarget)
+{
+    let target = capture_selection_insertion_target();
+    #[cfg(target_os = "macos")]
+    let text = macos_ax::read_explicit_qa_text();
+    #[cfg(target_os = "windows")]
+    let text = crate::host_document::read_qa_selection();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let text: Option<String> = None;
+    let selection = text.filter(|text| !text.trim().is_empty()).map(|text| {
+        let (text, omits_middle) = stored_selection_text(&text);
+        SelectionContext {
+            text,
+            omits_middle,
+            source_app: current_front_app(),
+        }
+    });
+    (selection, target)
+}
+
 /// 捕获当前前台应用的选区；失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     capture_selection_with_status_diag().0
@@ -641,7 +980,7 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
-            let (text, omits_middle) = stored_selection_text(trimmed);
+            let (text, omits_middle) = stored_selection_text(&text);
             return (
                 SelectionCaptureOutcome {
                     selection: Some(SelectionContext {
@@ -677,7 +1016,7 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
                             .map(|a| format!(" front_app={a}"))
                             .unwrap_or_default()
                     );
-                    let (text, omits_middle) = stored_selection_text(trimmed);
+                    let (text, omits_middle) = stored_selection_text(&text);
                     return (
                         SelectionCaptureOutcome {
                             selection: Some(SelectionContext {
@@ -722,46 +1061,108 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
     )
 }
 
-/// True when `text` is the head/tail stand-in produced for an over-long selection.
-/// The stand-in length is fixed, so ordinary text that merely mentions the marker
-/// is not treated as a truncated capture.
-pub(crate) fn is_truncated_selection_stand_in(text: &str) -> bool {
-    let marker_len = SELECTION_TRUNCATED_MARKER.chars().count();
-    text.contains(SELECTION_TRUNCATED_MARKER)
-        && text.chars().count() == SELECTION_TRUNCATE_HEAD + marker_len + SELECTION_TRUNCATE_TAIL
-}
-
-/// Store a trimmed selection. Over-long text keeps a head/tail stand-in for QA
-/// context and sets `omits_middle` so replacement flows can refuse to paste it.
-fn stored_selection_text(trimmed: &str) -> (String, bool) {
-    if trimmed.chars().count() > SELECTION_MAX_CHARS {
-        (truncate_selection(trimmed), true)
-    } else {
-        (trimmed.to_string(), false)
-    }
-}
-
-/// Truncate lengthwise to head + tail + marker.
-fn truncate_selection(text: &str) -> String {
-    let total: usize = text.chars().count();
-    if total <= SELECTION_MAX_CHARS {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(SELECTION_TRUNCATE_HEAD).collect();
-    let tail_start = total.saturating_sub(SELECTION_TRUNCATE_TAIL);
-    let tail: String = text.chars().skip(tail_start).collect();
-    format!("{head}{SELECTION_TRUNCATED_MARKER}{tail}")
-}
-
-// ─────────────────────────── Simulated-copy fallback (mac/win) ───────────────────────────
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn simulate_copy_and_read() -> Option<String> {
-    simulate_copy_and_read_diag().ok()
+/// Preserve the explicit selection exactly; validation compares the same bytes.
+fn stored_selection_text(text: &str) -> (String, bool) {
+    (text.to_string(), false)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_simulate_copy_and_read_diag()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_simulate_copy_and_read_diag()
+    }
+}
+
+/// Windows: detect the simulated Ctrl+C by watching the clipboard sequence number instead of
+/// writing a sentinel first. The sentinel used to land in Windows Clipboard History (Win+V) as
+/// `__openless_qa_sentinel_*__` entries on every capture (issues #1331 / #1335), and writing it
+/// woke the history listener mid-capture. Watching the sequence number removes that extra write
+/// and keeps these internal markers out of the user's clipboard history.
+#[cfg(target_os = "windows")]
+fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    let Some(_delivery) = crate::insertion::clipboard_delivery::try_lock() else {
+        return Err(SelectionCaptureMissReason::ClipboardReadFailed);
+    };
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[selection] clipboard init failed: {e}");
+            return Err(SelectionCaptureMissReason::ClipboardInitFailed);
+        }
+    };
+    let (post_ok, outcome) =
+        clipboard_capture::capture_with_restore(&mut clipboard).map_err(|e| {
+            log::warn!("[selection] clipboard backup failed; skipping simulated copy: {e}");
+            SelectionCaptureMissReason::ClipboardReadFailed
+        })?;
+
+    if !post_ok {
+        return Err(SelectionCaptureMissReason::CopyShortcutFailed);
+    }
+    match outcome {
+        // The sequence never moved → Ctrl+C did not take effect or the target has no selection.
+        ClipboardPollOutcome::Unchanged => {
+            Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel)
+        }
+        ClipboardPollOutcome::Unreadable => Err(SelectionCaptureMissReason::ClipboardReadFailed),
+        ClipboardPollOutcome::Captured(text) if text.is_empty() => {
+            Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy)
+        }
+        ClipboardPollOutcome::Captured(text) => Ok(text),
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
+    type Error = arboard::Error;
+
+    fn backup_text(&mut self) -> Result<Option<String>, Self::Error> {
+        match self.get_text() {
+            Ok(text) => Ok(Some(text)),
+            // Only a missing text format may be treated as an absent text backup. Contention
+            // and other access failures must stop capture before Ctrl+C overwrites the user data.
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome, u64) {
+        use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
+        let baseline_sequence = unsafe { GetClipboardSequenceNumber() };
+        let mut post_ok = post_copy_shortcut();
+        log::info!("[selection] post_copy: post_ok={post_ok}");
+        if !post_ok {
+            log::warn!("[selection] post_copy_shortcut failed");
+        }
+        let (outcome, sequence) =
+            windows_poll_clipboard_after_copy(self, baseline_sequence, &mut post_ok);
+        (post_ok, outcome, sequence)
+    }
+
+    fn sequence(&self) -> u64 {
+        unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() as u64 }
+    }
+
+    fn restore_text(&mut self, text: &str) {
+        if let Err(error) = self.set_text(text) {
+            log::warn!("[selection] clipboard restore failed: {error}");
+        }
+    }
+}
+
+/// macOS: write a sentinel so a failed Cmd+C can be told apart from a target app that has no
+/// selection, then restore the user's clipboard.
+#[cfg(target_os = "macos")]
+fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    let Some(_delivery) = crate::insertion::clipboard_delivery::try_lock() else {
+        return Err(SelectionCaptureMissReason::ClipboardReadFailed);
+    };
     // a) Snapshot the current clipboard (backup used to restore the original state)
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -772,9 +1173,10 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     };
     let original = match clipboard.get_text() {
         Ok(t) => Some(t),
+        Err(arboard::Error::ContentNotAvailable) => None,
         Err(e) => {
-            log::info!("[selection] clipboard get_text returned err (likely empty): {e}");
-            None
+            log::warn!("[selection] clipboard backup failed; skipping simulated copy: {e}");
+            return Err(SelectionCaptureMissReason::ClipboardReadFailed);
         }
     };
 
@@ -787,13 +1189,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         return Err(SelectionCaptureMissReason::ClipboardSentinelWriteFailed);
     }
 
-    // Windows + Clipboard History: writing the sentinel wakes an async listener that may
-    // briefly own/open the clipboard. Target-app Ctrl+C then fails silently and leaves
-    // the sentinel in place (user A/B: history OFF → OK, history ON → fail). Settle first.
-    #[cfg(target_os = "windows")]
-    windows_wait_clipboard_settle_after_write();
-
-    // c) Simulate Cmd+C / Ctrl+C
+    // c) Simulate Cmd+C
     let mut post_ok = post_copy_shortcut();
     log::info!(
         "[selection] post_copy: post_ok={} original_was_some={}",
@@ -806,19 +1202,18 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         // restore it via the flow below.
     }
 
-    // d) Wait for the clipboard to update; Windows with clipboard history needs polling and,
-    //    if necessary, re-sending Ctrl+C.
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::thread::sleep(Duration::from_millis(80));
-    }
-
-    #[cfg(target_os = "windows")]
-    let captured = windows_poll_clipboard_after_copy(&mut clipboard, &sentinel, &mut post_ok);
-    #[cfg(not(target_os = "windows"))]
+    std::thread::sleep(Duration::from_millis(80));
+    let copied_sequence = crate::insertion::clipboard_sequence();
     let captured = clipboard.get_text().ok();
 
-    // f) Restore the original clipboard
+    // A newer external copy takes priority over this temporary borrow.
+    if !crate::insertion::clipboard_revision_matches(
+        copied_sequence,
+        crate::insertion::clipboard_sequence(),
+    ) {
+        return Err(SelectionCaptureMissReason::ClipboardReadFailed);
+    }
+    // d) Restore the original clipboard
     if let Some(ref prev) = original {
         if let Err(e) = clipboard.set_text(prev) {
             log::warn!("[selection] clipboard restore failed: {e}");
@@ -834,6 +1229,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     classify_simulated_copy_result(post_ok, captured, &sentinel)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn classify_simulated_copy_result(
     post_ok: bool,
     captured: Option<String>,
@@ -852,17 +1248,6 @@ fn classify_simulated_copy_result(
     Ok(captured)
 }
 
-/// Read the full current selection (trimmed, not head/tail truncated). This is
-/// used only by the Windows final safety check; the clipboard helper snapshots
-/// and restores the user's clipboard. Comparing against the untruncated text
-/// stops a head/tail stand-in from authorizing a paste over the omitted middle.
-#[cfg(target_os = "windows")]
-fn selected_text_for_validation() -> Option<String> {
-    let text = simulate_copy_and_read()?;
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
     actual.is_some_and(|actual| actual == expected)
@@ -870,12 +1255,19 @@ fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
 
 #[cfg(target_os = "windows")]
 fn capture_windows_selection_target() -> Option<WindowsSelectionTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    capture_windows_selection_target_for_window(unsafe { GetForegroundWindow() })
+}
+
+#[cfg(target_os = "windows")]
+fn capture_windows_selection_target_for_window(
+    foreground: windows::Win32::Foundation::HWND,
+) -> Option<WindowsSelectionTarget> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+        GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
     unsafe {
-        let foreground = GetForegroundWindow();
         if foreground.0.is_null() {
             return None;
         }
@@ -923,7 +1315,7 @@ fn windows_selection_targets_match(
     captured == current
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn uuid_like_token() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -960,18 +1352,38 @@ mod macos_ax {
 
     const AX_ERROR_SUCCESS: AxError = 0;
 
+    #[repr(C)]
+    struct CfRange {
+        location: isize,
+        length: isize,
+    }
+
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
+        fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
         fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+        fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+        fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, seconds: f32) -> AxError;
+        fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
         fn AXUIElementCopyAttributeValue(
             element: AxUiElementRef,
             attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> AxError;
+        fn AXUIElementCopyParameterizedAttributeValue(
+            element: AxUiElementRef,
+            attribute: CFStringRef,
+            parameter: CFTypeRef,
             value: *mut CFTypeRef,
         ) -> AxError;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
+        fn CFEqual(left: CFTypeRef, right: CFTypeRef) -> u8;
+        fn CFRetain(value: CFTypeRef) -> CFTypeRef;
+        fn CFGetTypeID(value: CFTypeRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
         fn CFRelease(cf: CFTypeRef);
         fn CFStringCreateWithCString(
             allocator: CFAllocatorRef,
@@ -986,10 +1398,43 @@ mod macos_ax {
             encoding: u32,
         ) -> u8;
         fn CFStringGetLength(s: CFStringRef) -> isize;
+        fn CFStringGetCharacters(s: CFStringRef, range: CfRange, buffer: *mut u16);
         fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
     }
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    /// A retained native identity, never an AX text snapshot. AX objects may be
+    /// compared from the insertion worker; ownership ends with the segment.
+    #[derive(Debug)]
+    pub(super) struct FocusedElement(usize);
+    impl Drop for FocusedElement {
+        fn drop(&mut self) {
+            unsafe {
+                CFRelease(self.0 as CFTypeRef);
+            }
+        }
+    }
+    impl FocusedElement {
+        pub(super) fn same_as(&self, other: &Self) -> bool {
+            unsafe { CFEqual(self.0 as CFTypeRef, other.0 as CFTypeRef) != 0 }
+        }
+        pub(super) fn is_current(&self) -> bool {
+            capture_focused_element().is_some_and(|current| unsafe {
+                CFEqual(self.0 as CFTypeRef, current.0 as CFTypeRef) != 0
+            })
+        }
+    }
+    pub(super) fn capture_focused_element() -> Option<std::sync::Arc<FocusedElement>> {
+        unsafe {
+            let system = AXUIElementCreateSystemWide();
+            if system.is_null() { return None; }
+            AXUIElementSetMessagingTimeout(system, 0.2);
+            let element = attribute(system, b"AXFocusedUIElement\0");
+            CFRelease(system as CFTypeRef);
+            element.map(|element| std::sync::Arc::new(FocusedElement(element as usize)))
+        }
+    }
 
     /// Query the system-wide AX tree for the focused element, then read its selected text.
     /// Returns None on failure (missing permission / no focus / control lacks the selection
@@ -1042,6 +1487,158 @@ mod macos_ax {
 
             let result = cfstring_to_rust(selected);
             CFRelease(selected);
+            result
+        }
+    }
+
+    unsafe fn attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<CFTypeRef> {
+        let key = cfstring_from_static(name)?;
+        let mut value = std::ptr::null();
+        let result = AXUIElementCopyAttributeValue(element, key, &mut value);
+        CFRelease(key);
+        if result == AX_ERROR_SUCCESS && !value.is_null() {
+            Some(value)
+        } else {
+            if !value.is_null() {
+                CFRelease(value);
+            }
+            None
+        }
+    }
+    unsafe fn string_attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<String> {
+        let value = attribute(element, name)?;
+        let text = if CFGetTypeID(value) == CFStringGetTypeID() {
+            cfstring_to_rust(value)
+        } else {
+            None
+        };
+        CFRelease(value);
+        text
+    }
+    /// Web content may expose its selection through text markers on an ancestor.
+    /// This path reads selected ranges only and never falls back to document text or Copy.
+    pub fn read_explicit_qa_text() -> Option<String> {
+        read_explicit_text(None).ok().flatten()
+    }
+
+    unsafe fn selected_string(value: CFTypeRef, bounded: bool) -> Result<Option<String>, ()> {
+        if CFGetTypeID(value) != CFStringGetTypeID() {
+            return Ok(None);
+        }
+        if !bounded {
+            return Ok(cfstring_to_rust(value));
+        }
+        let length = CFStringGetLength(value);
+        if length > 8_000 {
+            return Err(());
+        }
+        if length <= 0 {
+            return Ok(None);
+        }
+        let mut units = vec![0u16; length as usize];
+        CFStringGetCharacters(value, CfRange { location: 0, length }, units.as_mut_ptr());
+        Ok(String::from_utf16(&units).ok())
+    }
+
+    pub fn read_explicit_text(expected_pid: Option<i32>) -> Result<Option<String>, ()> {
+        unsafe {
+            let system = match expected_pid {
+                Some(pid) => AXUIElementCreateApplication(pid),
+                None => AXUIElementCreateSystemWide(),
+            };
+            if system.is_null() {
+                return Ok(None);
+            }
+            let _timeout = expected_pid.map(|_| AXUIElementSetMessagingTimeout(system, 0.12));
+            let focused = attribute(system, b"AXFocusedUIElement\0");
+            let Some(focused) = focused else {
+                CFRelease(system as CFTypeRef);
+                return Ok(None);
+            };
+            let mut pid = 0;
+            if expected_pid.is_some_and(|expected| {
+                AXUIElementGetPid(focused as AxUiElementRef, &mut pid) != AX_ERROR_SUCCESS
+                    || pid != expected
+            }) || string_attribute(focused as AxUiElementRef, b"AXSubrole\0").as_deref()
+                == Some("AXSecureTextField")
+                || (expected_pid.is_some()
+                    && string_attribute(focused as AxUiElementRef, b"AXRole\0").as_deref()
+                        == Some("AXSecureTextField"))
+            {
+                CFRelease(focused);
+                CFRelease(system as CFTypeRef);
+                return Ok(None);
+            }
+            if expected_pid.is_some() {
+                CFRetain(focused);
+            }
+            let mut current = focused;
+            let mut result = Ok(None);
+            for _ in 0..8 {
+                if expected_pid.is_some_and(|expected| {
+                    AXUIElementGetPid(current as AxUiElementRef, &mut pid) != AX_ERROR_SUCCESS
+                        || pid != expected
+                }) {
+                    break;
+                }
+                if expected_pid.is_some() {
+                    let _ = AXUIElementSetMessagingTimeout(current as AxUiElementRef, 0.12);
+                }
+                if let Some(value) = attribute(current as AxUiElementRef, b"AXSelectedText\0") {
+                    result = selected_string(value, expected_pid.is_some())
+                        .map(|text| text.filter(|text| !text.trim().is_empty()));
+                    CFRelease(value);
+                    if !matches!(result, Ok(None)) {
+                        break;
+                    }
+                }
+                if let Some(range) =
+                    attribute(current as AxUiElementRef, b"AXSelectedTextMarkerRange\0")
+                {
+                    if let Some(key) = cfstring_from_static(b"AXStringForTextMarkerRange\0") {
+                        let mut value = std::ptr::null();
+                        if AXUIElementCopyParameterizedAttributeValue(
+                            current as AxUiElementRef,
+                            key,
+                            range,
+                            &mut value,
+                        ) == AX_ERROR_SUCCESS
+                            && !value.is_null()
+                        {
+                            result = selected_string(value, expected_pid.is_some())
+                                .map(|text| text.filter(|text| !text.trim().is_empty()));
+                            CFRelease(value);
+                        }
+                        CFRelease(key);
+                    }
+                    CFRelease(range);
+                    if !matches!(result, Ok(None)) {
+                        break;
+                    }
+                }
+                let Some(parent) = attribute(current as AxUiElementRef, b"AXParent\0") else {
+                    break;
+                };
+                if parent == current {
+                    CFRelease(parent);
+                    break;
+                }
+                CFRelease(current);
+                current = parent;
+            }
+            CFRelease(current);
+            if expected_pid.is_some() {
+                let same = attribute(system, b"AXFocusedUIElement\0").is_some_and(|now| {
+                    let same = CFEqual(focused, now) != 0;
+                    CFRelease(now);
+                    same
+                });
+                CFRelease(focused);
+                if !same {
+                    result = Ok(None);
+                }
+            }
+            CFRelease(system as CFTypeRef);
             result
         }
     }
@@ -1159,108 +1756,72 @@ mod macos_paste {
 
 // ─────────────────────────── Windows Ctrl+C send ───────────────────────────
 
-/// After we write a sentinel, Clipboard History (and other listeners) may briefly open
-/// the clipboard. Wait until nobody holds it and the sequence number stops moving.
-#[cfg(target_os = "windows")]
-fn windows_wait_clipboard_settle_after_write() {
-    use windows::Win32::System::DataExchange::{
-        GetClipboardSequenceNumber, GetOpenClipboardWindow,
-    };
-
-    const MAX_MS: u64 = 250;
-    const STEP_MS: u64 = 10;
-    let start = std::time::Instant::now();
-    let mut last_seq = unsafe { GetClipboardSequenceNumber() };
-    let mut stable_rounds = 0u32;
-    let mut open_cleared = false;
-    let mut seq_stable = false;
-
-    while (start.elapsed().as_millis() as u64) < MAX_MS {
-        let open_is_free = match unsafe { GetOpenClipboardWindow() } {
-            Ok(hwnd) => hwnd.0.is_null(),
-            Err(_) => true,
-        };
-        let seq = unsafe { GetClipboardSequenceNumber() };
-        if open_is_free {
-            open_cleared = true;
-            if seq == last_seq {
-                stable_rounds += 1;
-                // ~30ms of unchanged seq with clipboard free → history likely caught up.
-                if stable_rounds >= 3 {
-                    seq_stable = true;
-                    break;
-                }
-            } else {
-                stable_rounds = 0;
-                last_seq = seq;
-            }
-        } else {
-            open_cleared = false;
-            stable_rounds = 0;
-            last_seq = seq;
-        }
-        std::thread::sleep(Duration::from_millis(STEP_MS));
-    }
-
-    let waited_ms = start.elapsed().as_millis() as u64;
-    log::info!(
-        "[selection] clipboard_settle: waited_ms={} open_cleared={} seq_stable={}",
-        waited_ms,
-        open_cleared,
-        seq_stable
-    );
-}
-
-/// Poll until clipboard leaves the sentinel (selection copy landed). One Ctrl+C resend
+/// Poll the clipboard sequence number (not its text) until the target app's Ctrl+C lands.
+/// Watching the sequence avoids writing a sentinel — the old sentinel showed up in Windows
+/// Clipboard History as `__openless_qa_sentinel_*__` entries (#1331 / #1335). One Ctrl+C resend
 /// mid-window covers the case where the first chord hit a still-busy clipboard.
 #[cfg(target_os = "windows")]
 fn windows_poll_clipboard_after_copy(
     clipboard: &mut arboard::Clipboard,
-    sentinel: &str,
+    baseline_sequence: u32,
     post_ok: &mut bool,
-) -> Option<String> {
+) -> (ClipboardPollOutcome, u64) {
+    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
     const MAX_MS: u64 = 450;
     const STEP_MS: u64 = 25;
     let start = std::time::Instant::now();
     let mut attempts = 0u32;
     let mut resent_ctrl_c = false;
-    let mut captured = None;
+    let mut changed = false;
+    let mut last_sequence;
 
-    while (start.elapsed().as_millis() as u64) < MAX_MS {
+    loop {
         attempts += 1;
-        match clipboard.get_text() {
-            Ok(text) if text != sentinel => {
-                captured = Some(text);
-                break;
-            }
-            Ok(text) => {
-                captured = Some(text);
-            }
-            Err(_) => {
-                captured = None;
+        last_sequence = unsafe { GetClipboardSequenceNumber() };
+        if last_sequence != baseline_sequence {
+            changed = true;
+            // The clipboard may be transiently held by another process (Clipboard History,
+            // cloud clipboard). Keep polling until the deadline instead of failing immediately.
+            if let Ok(text) = clipboard.get_text() {
+                log::info!(
+                    "[selection] clipboard_poll: waited_ms={} attempts={} resent={} changed=true",
+                    start.elapsed().as_millis() as u64,
+                    attempts,
+                    resent_ctrl_c
+                );
+                if unsafe { GetClipboardSequenceNumber() } == last_sequence {
+                    return (ClipboardPollOutcome::Captured(text), last_sequence as u64);
+                }
             }
         }
 
-        // Halfway through: if still on sentinel, resend Ctrl+C once.
-        if !resent_ctrl_c && (start.elapsed().as_millis() as u64) >= 150 {
+        if start.elapsed().as_millis() as u64 >= MAX_MS {
+            break;
+        }
+        // Halfway through: if nothing landed yet, resend Ctrl+C once.
+        if !resent_ctrl_c && start.elapsed().as_millis() as u64 >= 150 {
             if post_copy_shortcut() {
                 *post_ok = true;
                 resent_ctrl_c = true;
-                log::info!("[selection] clipboard_poll: resent Ctrl+C after settle miss");
+                log::info!("[selection] clipboard_poll: resent Ctrl+C after sequence miss");
             }
         }
         std::thread::sleep(Duration::from_millis(STEP_MS));
     }
 
-    let waited_ms = start.elapsed().as_millis() as u64;
     log::info!(
-        "[selection] clipboard_poll: waited_ms={} attempts={} resent={} still_sentinel={}",
-        waited_ms,
+        "[selection] clipboard_poll: waited_ms={} attempts={} resent={} changed={}",
+        start.elapsed().as_millis() as u64,
         attempts,
         resent_ctrl_c,
-        captured.as_deref() == Some(sentinel)
+        changed
     );
-    captured
+    if changed {
+        (ClipboardPollOutcome::Unreadable, last_sequence as u64)
+    } else {
+        (ClipboardPollOutcome::Unchanged, last_sequence as u64)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1384,32 +1945,8 @@ pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_window_title(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
-
-    unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        (!title.is_empty()).then_some(title)
-    }
-}
-
-#[cfg(target_os = "windows")]
 pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
-    use windows::Win32::Foundation::HWND;
-
-    target
-        .windows
-        .as_ref()
-        .and_then(|captured| windows_window_title(HWND(captured.foreground_window as *mut _)))
+    target.windows_app.as_ref().map(|app| app.name.clone())
 }
 
 #[cfg(target_os = "macos")]
@@ -1433,18 +1970,63 @@ pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option
     None
 }
 
+/// Identity comes from the same native target as the insertion adapter.
+pub(crate) fn input_app_for_target(target: &SelectionInsertionTarget) -> Option<openless_core::app_style_routing::InputApp> {
+    #[cfg(target_os = "macos")]
+    {
+        let captured = target.macos.as_ref()?;
+        let pid = captured.front_app_pid?;
+        if pid as u32 == std::process::id() {
+            return None;
+        }
+        openless_core::app_style_routing::InputApp::macos(
+            captured.bundle_id.as_deref()?,
+            captured.name.as_deref(),
+        )
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let captured = target.windows?;
+        if captured.focused_process_id == std::process::id() {
+            return None;
+        }
+        target.windows_app.clone()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = target;
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn ime_target_for_selection(
+    target: &SelectionInsertionTarget,
+) -> Option<crate::windows_ime_ipc::ImeSubmitTarget> {
+    let captured = target.windows?;
+    Some(crate::windows_ime_ipc::ImeSubmitTarget {
+        process_id: captured.focused_process_id,
+        thread_id: captured.focused_thread_id,
+        window_handle: captured.focused_window,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_for_window(hwnd: windows::Win32::Foundation::HWND) -> Option<openless_core::app_style_routing::InputApp> {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    crate::activity_app_icons::app_for_pid(pid)
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    // Windows has no bundle id concept; the window title is the only identity we get for free.
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return (None, None);
-        }
-        (windows_window_title(hwnd), None)
-    }
+    (windows_app_for_window(unsafe { GetForegroundWindow() }).map(|app| app.name), None)
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -1452,7 +2034,7 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the window title on
+/// The foreground app's display string, like `"Safari (com.apple.Safari)"` (the executable name on
 /// Windows). For display / prompt use only; for decisions use [`current_front_app_parts`].
 pub(crate) fn current_front_app() -> Option<String> {
     match current_front_app_parts() {
@@ -1483,7 +2065,7 @@ unsafe fn ns_string_to_rust(ns_string: *mut objc2::runtime::AnyObject) -> Option
 }
 
 #[cfg(target_os = "macos")]
-fn current_front_app_pid() -> Option<i32> {
+pub(crate) fn current_front_app_pid() -> Option<i32> {
     current_front_app_snapshot().2
 }
 
@@ -1492,52 +2074,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn truncate_short_passes_through() {
-        let text = "hello world";
-        assert_eq!(truncate_selection(text), text);
-    }
-
-    #[test]
-    fn truncate_long_keeps_head_and_tail() {
-        let head: String = "a".repeat(SELECTION_TRUNCATE_HEAD);
-        let middle: String = "b".repeat(2_000);
-        let tail: String = "c".repeat(SELECTION_TRUNCATE_TAIL);
-        let combined = format!("{head}{middle}{tail}");
-        let out = truncate_selection(&combined);
-        assert!(out.contains("[…truncated…]"));
-        assert!(out.starts_with(&"a".repeat(50)));
-        assert!(out.ends_with(&"c".repeat(50)));
-        // The middle "b" run must be cut
-        assert!(!out.contains(&"b".repeat(20)));
-    }
-
-    #[test]
-    fn overlong_selection_is_flagged_and_does_not_match_the_live_text() {
-        let head: String = "a".repeat(SELECTION_TRUNCATE_HEAD);
-        let middle: String = "b".repeat(2_000);
-        let tail: String = "c".repeat(SELECTION_TRUNCATE_TAIL);
-        let live = format!("{head}{middle}{tail}");
-        let (stored, omits_middle) = stored_selection_text(&live);
-        assert!(omits_middle);
-        assert!(stored.contains("[…truncated…]"));
-        assert!(!stored.contains(&"b".repeat(20)));
-        // Final paste validation compares the stored stand-in with the full
-        // live selection. They must not match, or the paste deletes `middle`.
-        assert!(!selection_text_matches(&stored, Some(&live)));
-        assert!(is_truncated_selection_stand_in(&stored));
-        assert!(!is_truncated_selection_stand_in(&live));
-        assert!(!is_truncated_selection_stand_in(
-            "keep this\n[…truncated…]\nnote"
-        ));
-    }
-
-    #[test]
-    fn selection_at_the_replacement_limit_is_kept_whole() {
-        let live = "字".repeat(SELECTION_MAX_CHARS);
-        let (stored, omits_middle) = stored_selection_text(&live);
-        assert!(!omits_middle);
-        assert_eq!(stored, live);
-        assert!(selection_text_matches(&stored, Some(&live)));
+    fn captures_preserve_whitespace_and_the_middle_at_any_length() {
+        for length in [32, 4001, 16001, 48000] {
+            let live = format!(
+                " \n{} UNIQUE_MIDDLE_选区 {}\n\t",
+                "字".repeat(length / 2),
+                "尾".repeat(length / 2)
+            );
+            let (stored, omits_middle) = stored_selection_text(&live);
+            assert!(!omits_middle);
+            assert_eq!(stored, live);
+            assert!(selection_text_matches(&stored, Some(&live)));
+            assert!(!selection_text_matches(&stored, Some(live.trim())));
+        }
     }
 
     #[test]
@@ -1656,11 +2205,13 @@ mod tests {
     #[test]
     fn windows_requires_a_captured_target_before_contacting_the_provider() {
         assert!(!selection_insertion_target_is_captured(
-            &SelectionInsertionTarget { windows: None }
+            &SelectionInsertionTarget::default()
         ));
         assert!(selection_insertion_target_is_captured(
             &SelectionInsertionTarget {
                 windows: Some(windows_target(10)),
+                windows_app: None,
+                ..Default::default()
             }
         ));
     }

@@ -1,6 +1,5 @@
 import { C, Lh, R, S, T, cardShadow } from '../common/Tokens';
 import { symbolOf } from './Icons';
-import { Glass } from './Material';
 
 /**
  * Shared surfaces for the native pages.

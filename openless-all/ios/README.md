@@ -1,5 +1,7 @@
 # OpenLess iOS
 
+[English](README.md) | [简体中文](README.zh.md)
+
 Native iPhone app, keyboard extension, and recording widget. The app uses SwiftUI and UIKit; the keyboard combines UIKit controls with KeyboardKit. The main app owns audio capture, speech recognition, and the shared Rust Core.
 
 ## Version and platform support

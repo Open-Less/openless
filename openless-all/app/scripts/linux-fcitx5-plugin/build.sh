@@ -21,9 +21,9 @@ cmake --build "$BUILD_DIR" --parallel
 echo "==> Plugin built: ${BUILD_DIR}/libopenless.so"
 
 if [ "${1:-}" = "install" ]; then
-    echo "==> Installing (requires sudo)..."
-    sudo cmake --install "$BUILD_DIR"
-    echo "==> Done. Restart fcitx5 to pick up the new plugin."
+  echo "==> Installing (requires sudo)..."
+  sudo cmake --install "$BUILD_DIR"
+  echo "==> Done. Restart fcitx5 to pick up the new plugin."
 else
-    echo "==> Use '$0 install' to install system-wide."
+  echo "==> Use '$0 install' to install system-wide."
 fi

@@ -3,7 +3,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const marketplaceSource = readFileSync(join(appRoot, 'src/pages/Marketplace.tsx'), 'utf8');
+const marketplaceSource = readFileSync(
+  join(appRoot, 'src/features/marketplace/package-actions.ts'),
+  'utf8',
+);
 
 if (marketplaceSource.includes('await logClientError(')) {
   throw new Error('Marketplace install must not await client error logging');

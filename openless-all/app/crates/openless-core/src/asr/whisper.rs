@@ -185,6 +185,19 @@ impl WhisperBatchASR {
         let client = crate::net::http();
 
         let request = match self.request_format {
+            AsrRequestFormat::DeepSeek => {
+                anyhow::ensure!(
+                    pcm_duration_ms(pcm) <= 120_000 && wav.len() <= 8 * 1024 * 1024,
+                    "DeepSeek ASR accepts at most 120 seconds and 8 MiB per upload"
+                );
+                let file = reqwest::multipart::Part::bytes(wav)
+                    .file_name("audio.wav")
+                    .mime_str("audio/wav")?;
+                client
+                    .post(&url)
+                    .bearer_auth(&self.api_key)
+                    .multipart(reqwest::multipart::Form::new().part("file", file))
+            }
             AsrRequestFormat::Multipart => {
                 let wav_part = reqwest::multipart::Part::bytes(wav)
                     .file_name("audio.wav")
@@ -440,7 +453,54 @@ pub fn split_pcm_by_duration(pcm: &[u8], max_chunk_duration_ms: Option<u64>) -> 
         return vec![pcm];
     }
 
-    pcm.chunks(bytes_per_chunk).collect()
+    let mut chunks = Vec::new();
+    let mut rest = pcm;
+    while rest.len() > bytes_per_chunk {
+        let (chunk, tail) = rest.split_at(quiet_cut_offset(rest, max_chunk_duration_ms));
+        chunks.push(chunk);
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        chunks.push(rest);
+    }
+    chunks
+}
+
+/// Picks where to end a chunk: the quietest moment shortly before the limit,
+/// so a split lands in a pause instead of cutting a word in two. Ties resolve
+/// to the point closest to the limit.
+fn quiet_cut_offset(pcm: &[u8], max_chunk_duration_ms: u64) -> usize {
+    const BYTES_PER_MS: usize = 32;
+    const STEP_BYTES: usize = 20 * BYTES_PER_MS;
+    // Wide enough that a stop consonant's brief closure doesn't pass for a pause.
+    const HALF_WINDOW_BYTES: usize = 100 * BYTES_PER_MS;
+    const MAX_SEARCH_MS: u64 = 15_000;
+
+    let max_bytes = max_chunk_duration_ms as usize * BYTES_PER_MS;
+    let search_bytes = (max_chunk_duration_ms / 10).min(MAX_SEARCH_MS) as usize * BYTES_PER_MS;
+    let lowest = max_bytes
+        .saturating_sub(search_bytes)
+        .max(HALF_WINDOW_BYTES);
+
+    let mut best = max_bytes;
+    let mut best_energy = u64::MAX;
+    let mut cut = max_bytes;
+    while cut >= lowest {
+        if let Some(window) = pcm.get(cut - HALF_WINDOW_BYTES..cut + HALF_WINDOW_BYTES) {
+            let energy = window
+                .as_chunks::<PCM_BYTES_PER_SAMPLE>()
+                .0
+                .iter()
+                .map(|s| u64::from(i16::from_le_bytes([s[0], s[1]]).unsigned_abs()))
+                .sum();
+            if energy < best_energy {
+                best_energy = energy;
+                best = cut;
+            }
+        }
+        cut -= STEP_BYTES;
+    }
+    best
 }
 
 fn transcription_url(base_url: &str, endpoint_path: Option<&str>) -> Result<String> {
@@ -801,6 +861,37 @@ mod tests {
     }
 
     #[test]
+    fn split_pcm_by_duration_cuts_in_a_pause_and_loses_nothing() {
+        // Sample 8000: speech.
+        let mut pcm: Vec<u8> = std::iter::repeat_n([0x40u8, 0x1f], 16_000 * 65)
+            .flatten()
+            .collect();
+        let pause = 32_000 * 28..32_000 * 29;
+        pcm[pause.clone()].fill(0);
+
+        let chunks = split_pcm_by_duration(&pcm, Some(30_000));
+
+        assert!(pause.contains(&chunks[0].len()), "{}", chunks[0].len());
+        assert!(chunks.iter().all(|chunk| chunk.len() <= 32_000 * 30));
+        assert_eq!(chunks.concat(), pcm);
+    }
+
+    #[test]
+    fn long_groq_recording_chunks_fit_the_25_mb_upload_limit() {
+        // 17 min: the recording that came back 413 when sent as one WAV.
+        let pcm = vec![0u8; 32_000 * 1023];
+        let limit = crate::provider_rules::batch_asr_chunk_limit_ms(
+            "groq",
+            crate::provider_rules::AdvancedAsrConfig::default(),
+        );
+
+        let chunks = split_pcm_by_duration(&pcm, limit);
+
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks.iter().all(|chunk| chunk.len() + 44 < 25_000_000));
+    }
+
+    #[test]
     fn split_pcm_by_duration_zero_limit_falls_back_to_single_chunk() {
         let pcm = vec![0u8; 96_000];
         assert_eq!(split_pcm_by_duration(&pcm, Some(0)), vec![pcm.as_slice()]);
@@ -1151,6 +1242,43 @@ mod tests {
 
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "openrouter ok");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn deepseek_sends_only_wav_file_to_tools_asr() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            let text = String::from_utf8_lossy(&request);
+            assert!(text.starts_with("POST /v1/tools/asr HTTP/1.1"));
+            assert!(text
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-key"));
+            assert!(text.contains("name=\"file\""));
+            for field in ["model", "prompt", "language", "response_format"] {
+                assert!(!text.contains(&format!("name=\"{field}\"")));
+            }
+            assert!(text.contains("RIFF"));
+            write_json_response(
+                &mut stream,
+                r#"{"text":"Shanghai weather","duration_ms":1000}"#,
+            );
+        });
+        let asr = WhisperBatchASR::new(
+            "test-key".into(),
+            format!("http://{addr}/v1"),
+            "deepseek-asr".into(),
+            Some("private hotwords".into()),
+            Some(120_000),
+            true,
+        )
+        .with_request_format(AsrRequestFormat::DeepSeek)
+        .with_endpoint_path("/tools/asr");
+        asr.consume_pcm_chunk(&vec![0; 32_000]);
+        assert_eq!(asr.transcribe().await.unwrap().text, "Shanghai weather");
         server.join().unwrap();
     }
 

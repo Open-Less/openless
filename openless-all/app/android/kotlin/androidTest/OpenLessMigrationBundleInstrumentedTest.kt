@@ -33,9 +33,8 @@ class OpenLessMigrationBundleInstrumentedTest {
         val next = JSONObject(before).apply {
             getJSONObject("preferences").put("locale", "zh-CN").put("themeMode", "dark")
             getJSONObject("strokeFrequency").put("new-word", "1,2")
-            getJSONObject("pinyinLearnedPhrases").put("xx", "new-word,3")
         }.toString()
-        for (stage in listOf("preferences", "strokeFrequency", "pinyinLearnedPhrases")) {
+        for (stage in listOf("preferences", "strokeFrequency")) {
             val lease = OpenLessMigrationState.acquire(JSONObject(OpenLessMigrationState.capture(context)).getString("revision"))
             try {
                 val result = runCatching {
@@ -61,7 +60,7 @@ class OpenLessMigrationBundleInstrumentedTest {
         val lease = OpenLessMigrationState.acquire(captured.getString("revision"))
         try {
             assertFalse(OpenLessMigrationState.settings { error("must not run") })
-            StrokeUserFrequency(context).record("test", "word")
+            StrokeUserFrequency.associations(context).record("test", "word")
             assertEquals(0, JSONObject(OpenLessMigrationState.captureLocked(context, lease)).getJSONObject("strokeFrequency").length())
             OpenLessMigrationState.replace(context, lease, captured.getJSONObject("value").toString())
         } finally { OpenLessMigrationState.finish(lease, false) }
@@ -100,26 +99,18 @@ class OpenLessMigrationBundleInstrumentedTest {
     }
 
     @Test
-    fun legacyPinyinBackupRoundTripsUnderTheMigrationFence() {
+    fun legacyPinyinEntriesAreAcceptedButNotRestored() {
         val context = isolatedContext()
         OpenLessMigrationState.initialize(context, false)
-        // Complete the privacy cleanup before seeding a compatible legacy backup.
-        OpenLessMigrationState.capture(context)
-        val backup = LegacyPinyinBackup(context)
-        backup.importAll(mapOf("before" to "旧词,2"))
         val before = JSONObject(OpenLessMigrationState.capture(context))
-        assertEquals("旧词,2", before.getJSONObject("value").getJSONObject("pinyinLearnedPhrases").getString("before"))
-        val next = JSONObject(before.getJSONObject("value").toString()).apply {
-            put("pinyinLearnedPhrases", JSONObject().put("after", "新词,3"))
+        assertEquals(0, before.getJSONObject("value").getJSONObject("pinyinLearnedPhrases").length())
+        val legacy = JSONObject(before.getJSONObject("value").toString()).apply {
+            put("pinyinLearnedPhrases", JSONObject().put("before", "旧词,2"))
         }
         val lease = OpenLessMigrationState.acquire(before.getString("revision"))
         try {
-            assertTrue(runCatching { backup.importAll(mapOf("unexpected" to "blocked,1")) }.isFailure)
-            assertEquals(mapOf("before" to "旧词,2"), backup.exportAll())
-            OpenLessMigrationState.replace(context, lease, next.toString())
-            assertEquals(mapOf("after" to "新词,3"), backup.exportAll())
-            OpenLessMigrationState.replace(context, lease, before.getJSONObject("value").toString())
-            assertEquals(mapOf("before" to "旧词,2"), backup.exportAll())
+            OpenLessMigrationState.replace(context, lease, legacy.toString())
+            assertEquals(0, JSONObject(OpenLessMigrationState.captureLocked(context, lease)).getJSONObject("pinyinLearnedPhrases").length())
         } finally { OpenLessMigrationState.finish(lease, false) }
     }
 

@@ -306,6 +306,8 @@ impl Drop for ValidatedSyncDocuments {
 pub struct ExportedDocuments {
     pub generation: Revision,
     pub documents: ValidatedSyncDocuments,
+    /// Local-only receipt: an upgrade materialized formerly opaque preferences.
+    pub materialized_preferences: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -56,6 +56,7 @@ impl PolishMode {
 pub enum HistorySource {
     #[default]
     Voice,
+    Qa,
     QuickNote,
     SelectionPolish,
     SelectionVoiceEdit,
@@ -112,6 +113,19 @@ pub struct DictationSession {
     pub asr_ms: Option<u64>,
     #[serde(default)]
     pub polish_ms: Option<u64>,
+}
+
+impl DictationSession {
+    /// Empty ASR was historically mislabeled as a polish failure. Repair those
+    /// rows too, but never replace a real transcript or completed result.
+    pub fn can_apply_retranscription(&self) -> bool {
+        self.source == HistorySource::QuickNote
+            || matches!(self.error_code.as_deref(), Some("recording" | "transcribeFailed" | "emptyTranscript"))
+            || (self.error_code.as_deref() == Some("polishFailed")
+                && self.raw_transcript.trim().is_empty()
+                && self.final_text.trim().is_empty()
+                && self.asr_transcript.as_deref().is_none_or(|text| text.trim().is_empty()))
+    }
 }
 
 /// Origin of a deterministic correction rule.

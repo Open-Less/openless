@@ -15,9 +15,10 @@ for (const row of rows) {
   if (!previous || weight > previous) best.set(character, weight);
 }
 
-const result = [...best.entries()]
-  .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  .map(([character, weight]) => `${character}\t${weight}`)
-  .join('\n') + '\n';
+const result =
+  [...best.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([character, weight]) => `${character}\t${weight}`)
+    .join('\n') + '\n';
 fs.writeFileSync(output, result, 'utf8');
 console.log(`generated ${best.size} character frequencies`);

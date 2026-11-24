@@ -90,7 +90,9 @@ pub fn apply_selection_voice_target(
     fcitx5::apply_selection_target(session_id, source, replacement)
 }
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
-pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
+pub use i18n::{
+    fmt_catalog as fmt_l10n, provider_error_text, tr_catalog as tr_l10n, Lang, LocalePref, LANGS,
+};
 pub use local_hotkeys::{
     next_local_press_id, plugin_event_hotkey, style_pack_raw, translation_hotkey_event,
     HotkeyDeduplicator, LocalHotkey, LocalHotkeyEdge, LocalHotkeyEdgeKind, HOTKEY_DEDUPE_WINDOW,

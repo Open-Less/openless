@@ -1,6 +1,8 @@
 # OpenLess All-Platform
 
-This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
+[English](README.md) | [简体中文](README.zh.md)
+
+This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md) and [architecture and API map](../docs/architecture.md).
 
 ## Native iOS app and keyboard
 
@@ -18,12 +20,11 @@ The runnable sources live in `app/`:
 - `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
 - `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
 
-The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
+The Tauri manifest includes path dependencies under `app/src-tauri/vendor/` (`cpal`, `tauri-runtime-wry`). These crates are vendored in the repository, so **there are no Git submodules to initialize** — a fresh clone is ready to build. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require them.
+
+Use Node.js 22 and Rust 1.99 or newer. The development command below starts the desktop Tauri host. See the Android section for its generated platform project.
 
 ```bash
-# Tauri source development — pull in vendored submodules
-git submodule update --init --recursive
-
 cd app
 npm ci
 npm run tauri dev
@@ -31,7 +32,7 @@ npm run tauri dev
 
 ## Shared backend and Linux host
 
-This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. Remaining Host/UI work and product acceptance are tracked in the [Linux handoff](../docs/linux-egui-handoff/README.md).
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. See the [Linux host interface](../docs/development/linux.md) for integration and the [Linux requirements](../docs/requirements.md#linux) for remaining work.
 
 ```bash
 cd app
@@ -41,7 +42,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
+Linux packaging is manual while device and packaging acceptance is pending: the dedicated CI workflows (`check-linux-egui.yml`, `release-linux-egui.yml`) were removed and desktop releases no longer dispatch Linux. The local scripts still build deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). Restoring automated Linux releases requires the acceptance evidence described in [`RELEASING.md`](../RELEASING.md) and [Linux requirements](../docs/requirements.md#linux).
 
 ## macOS Build
 
@@ -55,7 +56,7 @@ INSTALL=0 ./scripts/build-mac.sh
 Generated macOS artifacts:
 
 - `app/src-tauri/target/release/bundle/macos/OpenLess.app`
-- `app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`
+- `app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel)
 
 For local install during development:
 
@@ -82,8 +83,7 @@ Open a Developer PowerShell, or call `vcvars64.bat`, then run:
 
 ```powershell
 cd app
-npm ci
-npm run tauri -- build
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-package-msvc.ps1
 ```
 
 Required Visual Studio Installer components:
@@ -129,6 +129,7 @@ coordinator `handle_pressed` / `handle_released` path, asserts the log contains
 
 ```powershell
 cd app
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-hotkey-injection-smoke.ps1 -ExePath .\.artifacts\windows-gnu\dev\openless.exe
 ```
 
 ### Windows Runtime Notes
@@ -140,24 +141,32 @@ cd app
 - Text insertion through `Ctrl+V` is treated as copy fallback unless the app can
   confirm insertion.
 
+## Android Build
+
+See the [Android build guide](app/android/README.md#build-and-ci) for the toolchain, generated scaffolding, APK build commands, ABI selection, and device verification.
+
+## HarmonyOS Build
+
+The ArkTS/ArkWeb host builds through the frontend script; see [`app/harmony/README.md`](app/harmony/README.md) for the toolchain details.
+
+```bash
+cd app
+bash scripts/build-harmony-frontend.sh
+```
+
+Requirements: HarmonyOS Command Line Tools, Python 3, and `rustup target add aarch64-unknown-linux-ohos`. The unsigned HAP is written to `app/harmony/openless-project/entry/build/default/outputs/default/`; the `release-harmony.yml` workflow attaches it to releases, while AppGallery packages are submitted manually. Installing on a device additionally needs a Huawei debug certificate for `openless.hm.com` and a debug Profile that contains that device — see [`app/harmony/README.md`](app/harmony/README.md).
+
+## iOS Build
+
+iOS has independent versioning. See the [iOS project guide](ios/README.md#build-from-source) for the toolchain, native build, signing, device installation, and unsigned IPA packaging.
+
 ## Release Signing
 
-Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
+Follow the [release policy](../RELEASING.md) for Beta and Stable signing, notarization, and publication checks. Local macOS packaging uses ad-hoc signing when Apple signing material is absent.
 
-Required GitHub secrets:
+## Third-party components
 
-- `APPLE_CERTIFICATE`
-- `APPLE_CERTIFICATE_PASSWORD`
-- `APPLE_ID`
-- `APPLE_PASSWORD`
-- `APPLE_TEAM_ID`
-
-Optional:
-
-- `APPLE_PROVIDER_SHORT_NAME`
-- `KEYCHAIN_PASSWORD`
-
-Manual workflow runs can still produce ad-hoc signed test builds, but tagged macOS releases fail if signing/notarization secrets are missing.
+The overview yearly activity card ports [Rare UI GitHub Activity](../docs/ATTRIBUTION.md#rare-ui-github-activity) (Copyright (c) 2026 Swami Malode). The license is MIT plus the Commons Clause. Cell size, gap, radius, padding, month labels, tooltip, and the expandable panel stay with the upstream component; local dictation counts replace GitHub contributions, and the apps with the most voice input replace repositories. The same credit is in the app under Settings → About and updates → Component credits. See [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md).
 
 ## Ignored Local Output
 

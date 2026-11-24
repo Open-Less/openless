@@ -55,10 +55,13 @@ for (const [word, count] of rows) {
   if (!previous || count > previous) best.set(word, count);
 }
 
-const result = [...best.entries()]
-  .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  .slice(0, limit)
-  .map(([word, count]) => `${word}\t${count}`)
-  .join('\n') + '\n';
+const result =
+  [...best.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([word, count]) => `${word}\t${count}`)
+    .join('\n') + '\n';
 fs.writeFileSync(output, result, 'utf8');
-console.log(`generated ${Math.min(best.size, limit)} English word frequencies (of ${best.size} candidates)`);
+console.log(
+  `generated ${Math.min(best.size, limit)} English word frequencies (of ${best.size} candidates)`,
+);

@@ -21,10 +21,10 @@ def lsappinfo(*args):
     )
 
 
-def frame(sequence, style, phase="recording"):
+def frame(sequence, style, phase="recording", theme="system"):
     return {
         "type": "frame",
-        "version": 1,
+        "version": 2,
         "frame": {
             "session_id": "native-macos-regression",
             "sequence": sequence,
@@ -45,11 +45,12 @@ def frame(sequence, style, phase="recording"):
             },
             "bounds": [500, 500, 460, 158],
             "interactive": style != "siri",
+            "theme": theme,
         },
     }
 
 
-def run_cycle(helper, style, ending):
+def run_cycle(helper, style, ending, theme):
     with tempfile.TemporaryFile(mode="w+") as errors:
         child = subprocess.Popen(
             [str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -81,16 +82,16 @@ def run_cycle(helper, style, ending):
             if not ready:
                 errors.seek(0)
                 raise AssertionError(f"helper exited before Ready ({child.poll()}): {errors.read()}")
-            assert json.loads(ready) == {"type": "ready", "version": 1}, ready
-            for sequence, phase in enumerate(["recording", "thinking", "done"], 1):
-                child.stdin.write(json.dumps(frame(sequence, style, phase)) + "\n")
+            assert json.loads(ready) == {"type": "ready", "version": 2}, ready
+            for sequence, phase in enumerate(["recording", "polishing", "completed"], 1):
+                child.stdin.write(json.dumps(frame(sequence, style, phase, theme)) + "\n")
                 child.stdin.flush()
                 time.sleep(0.15)
             if ending == "shutdown":
-                child.stdin.write('{"type":"shutdown","version":1}\n')
+                child.stdin.write('{"type":"shutdown","version":2}\n')
                 child.stdin.flush()
             elif ending == "idle":
-                child.stdin.write(json.dumps(frame(4, style, "idle")) + "\n")
+                child.stdin.write(json.dumps(frame(4, style, "idle", theme)) + "\n")
                 child.stdin.flush()
             # Keep the pipe open for explicit messages so EOF cannot mask a
             # broken Shutdown/Idle handler.
@@ -106,7 +107,7 @@ def run_cycle(helper, style, ending):
             assert types["UIElement"] > 0, f"no LaunchServices registration sampled: {types}"
             assert set(types) == {"UIElement"}, f"unexpected application type: {types}"
             assert not foreground, "helper became the foreground application"
-            return {"style": style, "ending": ending, "exit": code,
+            return {"style": style, "theme": theme, "ending": ending, "exit": code,
                     "types": dict(types), "exit_ms": round(elapsed * 1000)}
         finally:
             stop.set()
@@ -154,7 +155,8 @@ def main():
         results = []
         for index in range(args.cycles):
             result = run_cycle(helper, ["classic", "typeless", "siri"][index % 3],
-                               ["shutdown", "eof", "idle"][(index // 3) % 3])
+                               ["shutdown", "eof", "idle"][(index // 3) % 3],
+                               ["light", "dark", "system"][(index // 3) % 3])
             results.append(result)
             print(json.dumps(result), flush=True)
         print(json.dumps({"passed": len(results), "samples": sum(

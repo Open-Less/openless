@@ -46,6 +46,16 @@ pub struct CapturedTextTarget {
 }
 
 pub trait HostContextAdapter: Send + Sync {
+    /// Stable identity, when this adapter is attached to a frozen insertion target.
+    fn input_app(&self) -> Option<crate::app_style_routing::InputApp> {
+        None
+    }
+    /// Reliable semantic location from the same frozen insertion target, never inferred
+    /// from document text or window titles. Called only with cursor context enabled.
+    /// Hosts without a trusted control label/role leave this unavailable.
+    fn input_location(&self) -> Option<String> {
+        None
+    }
     /// Capture foreground application metadata for attribution and input policy.
     /// `include_cursor=false` forbids reading document/AX text, not querying the
     /// application identity. Hosts must honor this before any document access.
@@ -118,6 +128,9 @@ pub struct VoiceDictationHandoff {
 /// decides lifecycle and stale-event policy; the host decides how local ASR and
 /// the native capture stream are implemented.
 pub trait VoiceActivationRuntime: Send + Sync + 'static {
+    /// Apply runtime-only standby intent even before a recognizer exists.
+    fn set_capture_paused(&self, _revision: u64, _paused: bool) {}
+
     fn configure(
         &self,
         config: VoiceActivationConfig,
@@ -566,6 +579,13 @@ pub trait RecordingControlSink: Send + Sync {
 pub trait RecordingArchive: Send + Sync {
     fn is_available(&self) -> bool;
 
+    /// Validate the finalized canonical archive without loading all audio when
+    /// the host can inspect its header and file metadata directly.
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let read = self.read_pcm();
+        Box::pin(async move { read.await.map(|pcm| pcm.len() as u64) })
+    }
+
     /// Move an undecided capture into the permanent quick-note archive.
     /// Hosts that do not need separate storage can keep the default no-op.
     fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -697,10 +717,22 @@ pub struct TranscriptOutput {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TranscriptMetadata {
+    /// Detected language, when the ASR provider reports one.
+    pub language: Option<String>,
+    /// Provider confidence in the final transcript, when available.
+    pub confidence: Option<f32>,
+}
+
 /// One provider transcription session that receives PCM while recording.
 pub trait TranscriptionSession: AudioConsumer {
     fn asr_call_label(&self) -> Option<crate::auxiliary::AsrCallLabel> {
         None
+    }
+
+    fn transcript_metadata(&self) -> TranscriptMetadata {
+        TranscriptMetadata::default()
     }
 
     /// Drain provider notices discovered during finalization. This lets a
@@ -792,11 +824,19 @@ pub trait TextPolisher: Send + Sync {
 }
 
 pub trait TextInserter: Send + Sync {
+    /// Desktop keyboard/input-source preparation must run in the serialized
+    /// processing lane, so a recording never owns another segment's native state.
+    fn defer_preparation_until_stop(&self) -> bool { false }
     /// Freeze the native destination and its matching host-context reader before context or
     /// credentials can await. Only capture identity here; input-source changes belong to `begin`
     /// and its existing cancellation cleanup. Target-independent adapters use None.
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         None
+    }
+
+    /// Host-owned editors can bind feedback to this exact recording before Starting is emitted.
+    fn capture_target_for_session(&self, _session_id: SessionId) -> Option<CapturedTextTarget> {
+        self.capture_target()
     }
 
     fn begin(
@@ -841,6 +881,14 @@ pub trait TextInsertionSession: Send + Sync {
 /// document baseline. Keeping that decision here prevents macOS AX code from
 /// owning vocabulary policy or accepting a report from a stale generation.
 pub trait EditObservationSink: Send + Sync {
+    fn observation_id(&self) -> Option<u64> {
+        None
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        None
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }

@@ -1,10 +1,11 @@
 // Theme preference: localStorage boot cache + Rust UserPreferences.theme_mode authority.
 // Applies via html[data-ol-theme] + CSS variables — no React re-render for color changes.
 
-import { getSettings, isTauri } from './ipc';
+import { getSettings } from './ipc/settings';
+import { isTauri } from './ipc/shared';
 import { syncWindowsCaptionTheme } from './platform';
 import { syncMacOSWindowTheme } from './nativeWindowTheme';
-import type { ThemeMode } from './types';
+import type { ThemeMode, UserPreferences } from './types';
 
 export type ThemePreference = ThemeMode;
 export type ResolvedTheme = 'light' | 'dark';
@@ -17,6 +18,8 @@ let systemListener: MediaQueryList | null = null;
 let systemHandler: ((event: MediaQueryListEvent) => void) | null = null;
 let activePreference: ThemePreference = 'system';
 let preferenceRevision = 0;
+let initialized = false;
+let initialTheme: Promise<void> = Promise.resolve();
 
 function readStoredPreference(): ThemePreference {
   try {
@@ -71,17 +74,13 @@ function detachSystemListener(): void {
 
 export function applyThemeMode(resolved: ResolvedTheme): void {
   const root = document.documentElement;
-  if (resolved === 'dark') {
-    root.dataset.olTheme = 'dark';
-  } else {
-    delete root.dataset.olTheme;
-  }
+  root.dataset.olTheme = resolved;
   root.style.colorScheme = resolved;
   void syncWindowsCaptionTheme(resolved === 'dark');
 }
 
-function syncNativeAppearance(preference: ThemePreference): void {
-  void syncMacOSWindowTheme(preference).then((applied) => {
+function syncNativeAppearance(preference: ThemePreference): Promise<void> {
+  return syncMacOSWindowTheme(preference).then((applied) => {
     // matchMedia may still reflect the old explicit native appearance until
     // NSApplication's override has been cleared. Re-read it after that change.
     if (applied && preference === 'system' && activePreference === preference) {
@@ -90,7 +89,7 @@ function syncNativeAppearance(preference: ThemePreference): void {
   });
 }
 
-export function applyThemeFromPreference(pref: ThemePreference): void {
+export function applyThemeFromPreference(pref: ThemePreference): Promise<void> {
   preferenceRevision++;
   activePreference = pref;
   writeStoredPreference(pref);
@@ -100,14 +99,20 @@ export function applyThemeFromPreference(pref: ThemePreference): void {
     detachSystemListener();
   }
   applyThemeMode(resolveTheme(pref));
-  syncNativeAppearance(pref);
+  return syncNativeAppearance(pref);
 }
 
 export function setThemePreference(pref: ThemePreference): void {
-  applyThemeFromPreference(pref);
+  void applyThemeFromPreference(pref);
+}
+
+export function initialThemeReady(): Promise<void> {
+  return initialTheme;
 }
 
 export function initThemeMode(): void {
+  if (initialized) return;
+  initialized = true;
   activePreference = readStoredPreference();
   if (activePreference === 'system') {
     attachSystemListener();
@@ -116,16 +121,33 @@ export function initThemeMode(): void {
 
   if (!isTauri) return;
   const requestedRevision = preferenceRevision;
-  void getSettings()
+  // This subscription belongs to the WebView lifetime, including hidden capsules
+  // and transcript mirrors that never mount HotkeySettingsProvider.
+  initialTheme = (async () => {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      await listen<Partial<UserPreferences>>('prefs:changed', ({ payload }) => {
+        const preference = payload?.themeMode;
+        if (preference === 'light' || preference === 'dark' || preference === 'system') {
+          void applyThemeFromPreference(preference);
+        }
+      });
+    } catch (error) {
+      console.warn('[theme] failed to subscribe to preference changes', error);
+    }
+    // Subscribe before the boot read. A newer event or local choice invalidates
+    // this response even if a hidden WebView's initial IPC finishes late.
+    return getSettings();
+  })()
     .then((prefs) => {
       if (requestedRevision !== preferenceRevision) return;
       const rustPref = prefs.themeMode ?? 'system';
       // The boot cache paints the page only. Rust has already initialized
       // native appearance, so a stale cache must never overwrite it.
       if (rustPref === activePreference) {
-        syncNativeAppearance(rustPref);
+        return syncNativeAppearance(rustPref);
       } else {
-        applyThemeFromPreference(rustPref);
+        return applyThemeFromPreference(rustPref);
       }
     })
     .catch((error) => {

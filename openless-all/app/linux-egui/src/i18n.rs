@@ -468,6 +468,16 @@ pub const CATALOG: &[Msg] = &[
             "사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.",
         ),
     },
+    Msg {
+        key: "settings.providers.llmThinkingRequired",
+        text: row(
+            "该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。",
+            "此模型不接受關閉思考。請開啟模型旁的「思考」開關後重新驗證。",
+            "This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.",
+            "このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。",
+            "이 모델은 사고를 끌 수 없습니다. 모델 옆의 \"사고\"를 켠 뒤 다시 검증하세요.",
+        ),
+    },
     // ---- Shell / navigation ------------------------------------------------
 
     Msg {
@@ -2727,11 +2737,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.sections.general",
         text: row(
-            "录音与输入",
             "通用",
-            "Recording & input",
-            "録音と入力",
-            "녹음 및 입력",
+            "通用",
+            "General",
+            "一般",
+            "일반",
         ),
     },
     Msg {
@@ -2803,11 +2813,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.title",
         text: row(
-            "录音与输入",
-            "錄音與輸入",
-            "Recording & input",
-            "録音と入力",
-            "녹음 및 입력",
+            "麦克风与录音",
+            "麥克風與錄音",
+            "Microphone and recording",
+            "マイクと録音",
+            "마이크와 녹음",
         ),
     },
     Msg {
@@ -4498,11 +4508,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.descriptions.general",
         text: row(
-            "选择麦克风、设置录音方式与文字输入，也可连接手机输入。",
-            "選擇麥克風、設定錄音方式與文字輸入，也可連接手機輸入。",
-            "Choose a microphone, adjust recording and text input, or connect your phone.",
-            "マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。",
-            "마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.",
+            "麦克风监听、胶囊样式、文字插入，也可连接手机远程输入。",
+            "麥克風監聽、膠囊樣式、文字插入，也可連接手機遠端輸入。",
+            "Microphone monitoring, capsule style, text insertion, and remote input.",
+            "マイク監視、カプセルのスタイル、文字の挿入、リモート入力。",
+            "마이크 모니터링, 캡슐 스타일, 텍스트 삽입, 원격 입력.",
         ),
     },
     Msg {
@@ -4733,6 +4743,46 @@ pub const CATALOG: &[Msg] = &[
             "Skip polish for short dictations (max characters)",
             "短い入力は整形をスキップ（最大文字数）",
             "짧은 입력은 다듬기 건너뛰기(최대 글자 수)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_enabled_desc",
+        text: row(
+            "在 ASR 后运行受限的本地策略；异常会回退到默认润色规则，脚本无法访问文件、网络或凭据。",
+            "在 ASR 後執行受限的本機策略；異常會回退到預設潤色規則，腳本無法存取檔案、網路或憑證。",
+            "Run a bounded local policy after ASR; errors fall back to normal polish and the script cannot access files, network, or credentials.",
+            "ASR 後に制限付きのローカル戦略を実行します。エラー時は通常の整形に戻り、外部アクセスはできません。",
+            "ASR 후 제한된 로컬 전략을 실행합니다. 오류는 일반 다듬기로 되돌아가며 외부 접근은 없습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_enabled_label",
+        text: row(
+            "使用自定义润色策略",
+            "使用自訂潤色策略",
+            "Use custom polish strategy",
+            "カスタム整形戦略を使う",
+            "사용자 지정 다듬기 전략 사용",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_script_desc",
+        text: row(
+            "定义 strategy(input)，返回 skip、polish 或 request。缺失的语言、置信度和模型值为 ()。",
+            "定義 strategy(input)，回傳 skip、polish 或 request。缺少的語言、信心度和模型值為 ()。",
+            "Define strategy(input) and return skip, polish, or request. Missing language, confidence, and model values are ().",
+            "strategy(input) を定義し、skip、polish、request のいずれかを返します。不明な値は () です。",
+            "strategy(input)을 정의하고 skip, polish 또는 request를 반환합니다. 없는 값은 ()입니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_script_label",
+        text: row(
+            "润色策略脚本",
+            "潤色策略腳本",
+            "Polish strategy script",
+            "整形戦略スクリプト",
+            "다듬기 전략 스크립트",
         ),
     },
     Msg {
@@ -7997,6 +8047,15 @@ pub fn tr_catalog<L: IntoLang>(lang: L, key: &'static str) -> &'static str {
     tr(CATALOG, lang, key)
 }
 
+/// Localize provider guidance at display time; stored validation codes stay unchanged.
+pub fn provider_error_text(lang: Lang, message: &str) -> &str {
+    if message == "llmThinkingRequired" || message.ends_with(": llmThinkingRequired") {
+        tr_catalog(lang, "settings.providers.llmThinkingRequired")
+    } else {
+        message
+    }
+}
+
 /// Global formatted lookup against [`CATALOG`].
 pub fn fmt_catalog<L: IntoLang>(lang: L, key: &str, args: &[&dyn Display]) -> String {
     fmt(CATALOG, lang, key, args)
@@ -8031,12 +8090,12 @@ mod tests {
     use super::*;
 
     const TEST_CATALOG: &[Msg] = &[
-    Msg {
+        Msg {
             key: "k.full",
             text: row("完整", "完整", "Full", "完全", "전체"),
         },
         // `k.missing_en` deliberately leaves `en` empty to exercise fallback.
-    Msg {
+        Msg {
             key: "k.missing_en",
             text: row("来源", "來源", "", "ソース", "출처"),
         },
@@ -8048,6 +8107,24 @@ mod tests {
         assert_eq!(tr(TEST_CATALOG, Lang::ZhCn, "k.missing_en"), "来源");
         // Fully translated keys return their own locale.
         assert_eq!(tr(TEST_CATALOG, Lang::En, "k.full"), "Full");
+    }
+
+    #[test]
+    fn thinking_required_provider_errors_are_localized_without_changing_other_errors() {
+        for lang in LANGS {
+            let expected = tr_catalog(lang, "settings.providers.llmThinkingRequired");
+            assert_ne!(expected, "settings.providers.llmThinkingRequired");
+            for message in [
+                "llmThinkingRequired",
+                "Provider: llmThinkingRequired",
+                "LLM provider failed: parse error: llmThinkingRequired",
+            ] {
+                assert_eq!(provider_error_text(lang, message), expected);
+            }
+            for message in ["providerHttpStatus:401", "notllmThinkingRequired"] {
+                assert_eq!(provider_error_text(lang, message), message);
+            }
+        }
     }
 
     #[test]

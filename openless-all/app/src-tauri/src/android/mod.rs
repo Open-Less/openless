@@ -12,6 +12,8 @@ pub(crate) mod local_migration;
 pub mod native_bridge;
 pub mod overlay;
 pub mod shizuku;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod update_pipeline;
 #[cfg(target_os = "android")]
 pub mod updater;
 pub mod updater_logic;

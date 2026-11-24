@@ -82,12 +82,23 @@ fn backend() -> (OpenLessBackend, std::path::PathBuf) {
         "openless-selection-voice-contract-{}",
         uuid::Uuid::new_v4().simple()
     ));
+    let mut dependencies = BackendDependencies::unsupported();
+    dependencies.selection_runtime = Some(Arc::new(FixtureSelectionRuntime::successful(
+        SelectionCapture {
+            text: "fixture".into(),
+            source_app: None,
+        },
+        InsertOutcome::Inserted,
+    )));
+    dependencies.selection_polisher = Some(Arc::new(
+        openless_core::testing::FixtureTextPolisher::successful("unused"),
+    ));
     let backend = OpenLessBackend::new(
         BackendConfig {
             data_dir: data_dir.clone(),
             ..BackendConfig::default()
         },
-        BackendDependencies::unsupported(),
+        dependencies,
     )
     .unwrap();
     (backend, data_dir)
@@ -360,7 +371,7 @@ async fn recording_fault_fails_only_the_current_selection_voice_session_and_rele
 }
 
 #[tokio::test]
-async fn voice_edit_enforces_the_envelope_cap_for_preview_translation_and_context() {
+async fn voice_edit_preserves_full_drafts_for_preview_translation_and_context() {
     let cap = openless_core::prompts::MAX_XML_ENVELOPE_CHARS;
     for length in [cap - 1, cap, cap + 1] {
         for translation in [false, true] {
@@ -404,11 +415,7 @@ async fn voice_edit_enforces_the_envelope_cap_for_preview_translation_and_contex
                         .await
                         .map(|result| result.preview.text)
                 };
-                if length > cap {
-                    assert_eq!(result.unwrap_err().code, BackendErrorCode::InvalidArgument);
-                    assert!(polisher.calls().is_empty());
-                    assert!(voice.preview(None).await.unwrap().is_none());
-                } else {
+                {
                     assert_eq!(
                         result.unwrap(),
                         if translation {
@@ -614,7 +621,7 @@ async fn preview_apply_consumes_state_only_after_the_host_confirms_success() {
         .await
         .unwrap();
     assert!(voice.preview(Some(session_id)).await.unwrap().is_some());
-    assert!(backend.list_history().unwrap().is_empty());
+    assert_eq!(backend.list_history().unwrap().len(), 1);
 
     let ticket = voice
         .begin_preview_apply(Some(session_id), "edited 1粒".to_string())
@@ -673,7 +680,7 @@ async fn paste_sent_completes_direct_and_qa_previews_once_without_claiming_inser
             .await
             .unwrap();
         assert!(voice.preview(owner).await.unwrap().is_some());
-        assert!(backend.list_history().unwrap().is_empty());
+        assert_eq!(backend.list_history().unwrap().len(), 1);
 
         let ticket = voice
             .begin_preview_apply(owner, "replacement".into())

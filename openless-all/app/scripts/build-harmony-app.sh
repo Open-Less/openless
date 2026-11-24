@@ -12,8 +12,11 @@ export npm_config_cache="$CACHE_ROOT/npm"
 SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/local-test}"
 export OPENLESS_HARMONY_CLIPBOARD_ACCESS="${OPENLESS_HARMONY_CLIPBOARD_ACCESS:-0}"
 case "$OPENLESS_HARMONY_CLIPBOARD_ACCESS" in
-  0|1) ;;
-  *) echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2; exit 1 ;;
+  0 | 1) ;;
+  *)
+    echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2
+    exit 1
+    ;;
 esac
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 export OPENLESS_RIME_PREFIX="$CACHE_ROOT/mobile-rime/harmony/install"
@@ -23,10 +26,14 @@ fi
 mkdir -p "$BUILD_PROJECT" "$HVIGOR_USER_HOME" "$CACHE_ROOT/npm"
 bash "$APP_ROOT/scripts/build-harmony-backend.sh"
 # Build a disposable copy so every Hvigor intermediate stays in the shared cache.
-python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" "$SIGNING_DIR" <<'PY'
+python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" << 'PY'
 from pathlib import Path
 import json, os, shutil, sys
-source, target, signing = map(Path, sys.argv[1:])
+source, target = map(Path, sys.argv[1:])
+# Replace the staged ArkTS source tree so deleted modules are not recompiled.
+staged_ets = target / 'entry/src/main/ets'
+if staged_ets.exists():
+    shutil.rmtree(staged_ets)
 shutil.copytree(source, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.hvigor', 'build', 'oh_modules', 'local.properties'))
 # The ArkWeb shell is gone: drop any bundle an older build staged, otherwise the
 # reusable project directory keeps shipping ~40 MB of dead web assets.

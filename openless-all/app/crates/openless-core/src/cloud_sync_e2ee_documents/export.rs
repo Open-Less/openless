@@ -159,6 +159,13 @@ pub fn export_snapshot(mut snapshot: ExportSnapshot) -> DocumentResult<ExportedD
             .ok_or(DocumentError::InvalidDocument)?;
         pack.remove("iconPath");
         pack.remove("active");
+        // Released v1 clients reject builtin identities they do not ship. Send the
+        // real entity as an imported pack; never substitute a dangling selection.
+        if pack.get("kind").and_then(Value::as_str) == Some("builtin")
+            && !legacy_builtin_style_id(&id)
+        {
+            pack.insert("kind".into(), json!("imported"));
+        }
         documents.push(document(DocumentKind::StylePacks, id, to_value(&entry)?));
     }
     for (sort_index, mut entry) in std::mem::take(&mut snapshot.history)
@@ -202,6 +209,19 @@ pub fn export_snapshot(mut snapshot: ExportSnapshot) -> DocumentResult<ExportedD
     // Retained documents must be explicit source profiles or unknown preferences. Never let
     // an archive silently replace live source fields or resurrect a deleted record.
     for retained in std::mem::take(&mut snapshot.retained_documents) {
+        if retained.kind == DocumentKind::Preferences
+            && preference_field(&retained.id)
+                .is_some_and(|field| field.class == PreferenceClass::Portable)
+            && retained.id != "capsuleDisplayModeV2"
+        {
+            // Newly understood settings stay authoritative until materialized by
+            // the journalled restore. An explicit native choice, including the
+            // default, supersedes them. New optional fields must omit None.
+            if !preferences.contains_key(&retained.id) {
+                documents.push(retained);
+            }
+            continue;
+        }
         let capsule_v2 =
             retained.kind == DocumentKind::Preferences && retained.id == "capsuleDisplayModeV2";
         if capsule_v2
@@ -246,7 +266,15 @@ pub fn export_snapshot(mut snapshot: ExportSnapshot) -> DocumentResult<ExportedD
     Ok(ExportedDocuments {
         generation: snapshot.generation,
         documents: validate_sync_documents(set, snapshot.base_revision)?,
+        materialized_preferences: false,
     })
+}
+
+pub(crate) fn legacy_builtin_style_id(id: &str) -> bool {
+    matches!(
+        id,
+        "builtin.raw" | "builtin.light" | "builtin.structured" | "builtin.formal"
+    )
 }
 
 /// Reads only registered logical accounts. Each error aborts the entire export.

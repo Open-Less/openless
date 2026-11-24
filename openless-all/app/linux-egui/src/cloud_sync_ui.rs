@@ -109,6 +109,7 @@ pub enum CloudSyncAction {
 pub enum CloudSyncOp {
     Prepare {
         consent_version: String,
+        expected_scope: openless_core::cloud_sync_e2ee::ConsentScope,
     },
     Create {
         password: String,
@@ -160,8 +161,11 @@ impl CloudSyncOp {
         use openless_core::cloud_sync_e2ee::AuthState;
         let status = |status: EncryptedSyncStatus| SyncOutcome::Status(Box::new(status));
         match operation {
-            Self::Prepare { consent_version } => backend
-                .cloud_sync_e2ee_prepare_enable(consent_version)
+            Self::Prepare {
+                consent_version,
+                expected_scope,
+            } => backend
+                .cloud_sync_e2ee_prepare_enable(consent_version, Some(expected_scope))
                 .await
                 .map(|prepared| SyncOutcome::Prepared(Box::new(prepared)))
                 .map_err(|error| error.to_string()),
@@ -562,6 +566,7 @@ impl CloudSyncUi {
             return false;
         };
         !self.working()
+            && status.consent_version.as_deref() == Some(CONSENT_VERSION)
             && !status.recovery_required
             && (status.pending_operation_id.is_some()
                 || (status.enabled

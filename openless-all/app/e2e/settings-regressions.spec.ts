@@ -1,7 +1,10 @@
+import { fixtureOrigin } from './support/server';
+import { openExperiments } from './support/experiments';
+import { openMicrophoneSettings, settleNavigation, settleSelectDismissal } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 async function openSettings(page: Page) {
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -12,7 +15,7 @@ test('110% is the fresh default; explicit 100% survives reload and the settings 
   page,
 }) => {
   const dialog = await openSettings(page);
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await expect(dialog.getByRole('button', { name: '返回应用', exact: true })).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0);
   expect(
@@ -25,9 +28,9 @@ test('110% is the fresh default; explicit 100% survives reload and the settings 
   await expect(interfaceSize).toContainText('110%');
   await interfaceSize.click();
   await page.getByRole('option', { name: '100%', exact: true }).click();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1');
   await page.reload();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   expect(
     await page.evaluate(
@@ -46,9 +49,21 @@ test('returning to recording at 100% has stable control geometry and one shortcu
   for (let attempt = 0; attempt < 3; attempt++) {
     await dialog.getByRole('button', { name: '外观与语言', exact: true }).click();
     await expect(page.locator('.ol-typography')).toBeVisible();
-    await dialog.getByRole('button', { name: '录音与输入', exact: true }).click();
+    await dialog
+      .getByRole('navigation', { name: '设置分类' })
+      .getByRole('button', { name: '通用', exact: true })
+      .click();
+    await openMicrophoneSettings(dialog);
+    await settleNavigation(dialog);
     const key = dialog.locator('.ol-shortcut-binding').first();
     await expect(key).toBeVisible();
+    await key.evaluate(async (element) => {
+      await Promise.all(
+        element.ownerDocument
+          .getAnimations()
+          .map((animation) => animation.finished.catch(() => undefined)),
+      );
+    });
     const positions = await key.evaluate(async (element) => {
       const values: number[] = [];
       for (let frame = 0; frame < 18; frame++) {
@@ -73,6 +88,98 @@ test('returning to recording at 100% has stable control geometry and one shortcu
   expect(errors).toEqual([]);
 });
 
+test('returning to General retires Appearance when its animation finishes during the click', async ({
+  page,
+}) => {
+  const dialog = await openSettings(page);
+  const viewport = dialog.locator('.ol-settings-content-pane .ol-transition-viewport');
+  const surfaces = viewport.locator(':scope > [data-transition-phase]');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (
+        this.matches('.ol-transition-page-with-header[data-transition-phase="enter"]') &&
+        this.querySelector('[data-section="appearance"]')
+      ) {
+        Element.prototype.animate = animate;
+        // Finish the painted entrance while the real return click is being handled.
+        animation.pause();
+        const duration = animation.effect?.getComputedTiming().activeDuration ?? 0;
+        animation.currentTime = duration / 2;
+        document.addEventListener('click', () => animation.finish(), { capture: true, once: true });
+      }
+      return animation;
+    };
+  });
+
+  const rail = dialog.getByRole('navigation', { name: '设置分类' });
+  const appearance = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
+  await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await expect(appearance).toHaveAttribute('data-transition-phase', 'enter');
+  await rail.getByRole('button', { name: '通用', exact: true }).click();
+  await settleNavigation(dialog);
+  await expect(surfaces).toHaveCount(1);
+  await expect(surfaces.locator('[data-section="appearance"]')).toHaveCount(0);
+  const recording = dialog.getByRole('button', { name: /^麦克风与录音/ });
+  await recording.click();
+  await expect(dialog.getByRole('heading', { name: '麦克风与录音', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(recording).toBeFocused();
+  await expect(surfaces).toHaveCount(1);
+});
+
+test('settings retains the old title with its form and focuses a subpage after the incoming surface settles', async ({
+  page,
+}) => {
+  const dialog = await openSettings(page);
+  const viewport = dialog.locator('.ol-settings-content-pane .ol-transition-viewport').first();
+  const surfaces = viewport.locator(':scope > [data-transition-phase]');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this.matches('.ol-transition-page-with-header[data-transition-phase="enter"]')) {
+        Element.prototype.animate = animate;
+        animation.pause();
+        animation.currentTime = Number(animation.effect!.getComputedTiming().activeDuration) * 0.5;
+      }
+      return animation;
+    };
+  });
+  const rail = dialog.getByRole('navigation', { name: '设置分类' });
+  await rail.getByRole('button', { name: '外观与语言', exact: true }).click();
+  const outgoing = surfaces.filter({ has: page.locator('[data-section="general"]') });
+  const incoming = surfaces.filter({ has: page.locator('[data-section="appearance"]') });
+  await expect(outgoing).toHaveAttribute('data-transition-phase', 'retained');
+  await expect(incoming).toHaveAttribute('data-transition-phase', 'enter');
+  await expect(outgoing.locator('h2')).toHaveText('通用');
+  await expect(incoming.locator('h2')).toHaveText('外观与语言');
+  await expect(outgoing).toHaveCSS('opacity', '1');
+  await expect(outgoing).toHaveCSS('filter', 'none');
+  const enteringOpacity = await incoming.evaluate((node) => Number(getComputedStyle(node).opacity));
+  expect(enteringOpacity).toBeGreaterThan(0);
+  expect(enteringOpacity).toBeLessThan(1);
+  expect(await outgoing.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
+  expect(await incoming.evaluate((el) => (el as HTMLElement).inert)).toBe(true);
+  await incoming.evaluate((el) =>
+    el
+      .getAnimations()
+      .find((a) => a.id === 'ol-page-enter')!
+      .play(),
+  );
+  await settleNavigation(dialog);
+  await expect(surfaces).toHaveCount(1);
+  await expect(incoming).toHaveCSS('filter', 'none');
+  await rail.getByRole('button', { name: '通用', exact: true }).click();
+  await settleNavigation(dialog);
+  const entry = dialog.getByRole('button', { name: /^麦克风与录音/ });
+  await entry.click();
+  await expect(dialog.getByRole('heading', { name: '麦克风与录音', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(entry).toBeFocused();
+});
+
 for (const scale of [1, 1.1]) {
   test(`long official menus keep user scroll through live option updates at ${Math.round(scale * 100)}%`, async ({
     page,
@@ -80,7 +187,6 @@ for (const scale of [1, 1.1]) {
     await page.setViewportSize({ width: 1100, height: 1200 });
     await page.goto(fixture);
     await page.evaluate((scale) => {
-      document.documentElement.style.zoom = String(scale);
       document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
     }, scale);
     const trigger = page.getByRole('combobox', { name: 'Long menu', exact: true });
@@ -104,20 +210,26 @@ for (const scale of [1, 1.1]) {
     );
     await page.getByRole('option', { name: /^Option 59/ }).click();
     await expect(trigger).toContainText('Option 59');
+    await settleSelectDismissal(page);
     const searchable = page.getByRole('combobox', { name: 'Searchable menu', exact: true });
     await searchable.click();
-    await page.getByRole('combobox', { name: 'Search options', exact: true }).fill('Option 58');
-    await expect(page.getByRole('option')).toHaveCount(1);
-    await page.getByRole('option', { name: /^Option 58/ }).click();
+    const searchPopup = page.locator('.ol-select-popup[data-open]');
+    const search = searchPopup.getByRole('combobox', { name: 'Search options', exact: true });
+    await expect(search).toBeFocused();
+    await expect(searchPopup).toHaveCSS('opacity', '1');
+    await search.pressSequentially('Option 58');
+    await expect(search).toHaveValue('Option 58');
+    await expect(searchPopup.getByRole('option')).toHaveCount(1);
+    await searchPopup.getByRole('option', { name: /^Option 58/ }).click();
     await expect(searchable).toContainText('Option 58');
   });
 }
 
-test('experimental download cancel and switch-off share state, do not reappear, and do not push later rows', async ({
+test('experimental download cancels from its Settings page without pushing later rows', async ({
   page,
 }) => {
   await openSettings(page);
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   await page.locator('[data-ol-advanced-entry="localModels"]').click();
   const sense = page.locator('[data-experimental-model="sense-voice"]');
   const next = page.locator('[data-experimental-model="embedding-gemma"]');
@@ -125,12 +237,15 @@ test('experimental download cancel and switch-off share state, do not reappear, 
   // Native WebViews retain CSS from previously visited model pages. Load it
   // late, as on device, rather than testing only the first clean browser entry.
   await page.addStyleTag({
-    content: readFileSync(new URL('../src/pages/LocalAsr/local-asr.css', import.meta.url), 'utf8'),
+    content: readFileSync(
+      new URL('../src/features/local-asr/local-asr.css', import.meta.url),
+      'utf8',
+    ),
   });
   await expect(toggle).toBeEnabled();
   const before = (await next.boundingBox())!.y;
   await toggle.click();
-  const card = page.locator('.ol-download-card[data-download-id="sense-voice"]');
+  const card = page.locator('[data-notification-key="download:experimental:sense-voice"]');
   await expect(card).toBeVisible();
   expect(Math.abs((await next.boundingBox())!.y - before)).toBeLessThan(1);
   const statusText = await sense.locator('.ol-experimental-model-status').evaluate((element) => {
@@ -141,12 +256,10 @@ test('experimental download cancel and switch-off share state, do not reappear, 
     return { right: text.right, progressRight: progress.right };
   });
   expect(Math.abs(statusText.right - statusText.progressRight)).toBeLessThan(2);
-  await card.getByRole('button', { name: '取消', exact: true }).click();
-  await expect(toggle).toHaveAttribute('aria-checked', 'false');
-  await expect(card).toHaveCount(0);
-  await toggle.click();
-  await expect(card).toBeVisible();
-  await toggle.click();
+  const cancel = card.getByRole('button', { name: '取消下载', exact: true });
+  await expect(cancel).toBeEnabled();
+  await expect(cancel).toHaveAttribute('data-action-style', 'cancel-icon');
+  await cancel.click();
   await expect(card).toHaveCount(0);
   await page.waitForTimeout(2100);
   await expect(card).toHaveCount(0);
@@ -172,7 +285,7 @@ test('shared modal Escape retains an inert exit and restores focus', async ({ pa
             const card = document.querySelector<HTMLElement>('.ol-dialog-card');
             document.body.dataset.modalExit = JSON.stringify({
               present: !!card,
-              inert: card?.inert,
+              inert: !!card?.closest('[inert]'),
             });
           }
         });
@@ -193,7 +306,7 @@ test('experimental completion guidance consumes Escape without closing settings'
   page,
 }) => {
   const settings = await openSettings(page);
-  await settings.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(settings);
   await page.locator('[data-ol-advanced-entry="localModels"]').click();
   await page.getByRole('switch', { name: 'SenseVoice Small', exact: true }).click();
   const guide = page.getByRole('dialog', { name: '下载完成，还需选择语音渠道', exact: true });
@@ -240,18 +353,19 @@ test('voice activation opens model setup without leaving the multimodal pipeline
       get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     });
   });
-  await page.goto('http://127.0.0.1:5326/?os=win');
+  await page.goto(`${fixtureOrigin}/?os=win`);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   const categories = dialog.getByRole('navigation', { name: '设置分类' });
-  await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await categories.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   const models = dialog.locator('.ol-service-views').getByRole('button', { name: /^本地模型/ });
   await expect(models).toBeDisabled();
-  await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await categories.locator('button.ol-settings-rail-btn', { hasText: '通用' }).click();
+  await openMicrophoneSettings(dialog);
   await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
   const download = dialog.getByRole('button', {
-    name: '前往 AI 服务与模型下载 Zipformer',
+    name: '前往 AI 与模型下载 Zipformer',
     exact: true,
   });
   await expect(download).toBeVisible();
@@ -283,9 +397,10 @@ test('voice activation opens model setup without leaving the multimodal pipeline
   ).toBeDisabled();
   expect(await providerState()).toEqual(before);
   await page.screenshot({ path: testInfo.outputPath('voice-activation-model-setup.png') });
-  await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await categories.locator('button.ol-settings-rail-btn', { hasText: '通用' }).click();
+  await openMicrophoneSettings(dialog);
   await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
-  await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await categories.locator('button.ol-settings-rail-btn', { hasText: 'AI 与模型' }).click();
   await expect(models).toBeDisabled();
 });
 
@@ -293,18 +408,256 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   page,
 }, testInfo) => {
   const dialog = await openSettings(page);
-  const cancellation = dialog.getByRole('switch', { name: '播放回声抑制', exact: true });
+  await openMicrophoneSettings(dialog);
   const mute = dialog.getByRole('switch', { name: '录音时静音', exact: true });
-  await expect(cancellation).not.toBeChecked();
+  await expect(mute).toBeVisible();
   const muted = await mute.isChecked();
+  await openExperiments(dialog);
+  await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
+  const cancellation = dialog.getByRole('switch', { name: '播放回声抑制', exact: true });
+  await expect(cancellation).not.toBeChecked();
   await cancellation.click();
   await expect(cancellation).toBeChecked();
+  await dialog.getByRole('button', { name: '通用', exact: true }).click();
+  await openMicrophoneSettings(dialog);
   await expect(mute).toHaveAttribute('aria-checked', String(muted));
-  await dialog.getByRole('button', { name: '外观与语言', exact: true }).click();
-  await dialog.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await openExperiments(dialog);
+  await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
   await expect(cancellation).toBeChecked();
   await cancellation.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('playback-echo-cancellation.png') });
   await cancellation.click();
   await expect(cancellation).not.toBeChecked();
+});
+
+test('Windows wake shortcut linkage is opt-in, keyboard accessible and preserves recording mode', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'userAgent', {
+      get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    });
+  });
+  await page.goto(`${fixtureOrigin}/?os=win`);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const categories = dialog.getByRole('navigation', { name: '设置分类' });
+  await openMicrophoneSettings(dialog);
+  const linkage = dialog.getByRole('switch', { name: '与录音快捷键联动', exact: true });
+  await expect(linkage).toHaveCount(0);
+  await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
+  await expect(linkage).not.toBeChecked();
+  const mode = await page.evaluate(
+    async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
+  );
+  await linkage.focus();
+  await page.keyboard.press('Space');
+  await expect(linkage).toBeChecked();
+  await expect(dialog.getByText('已临时暂停唤醒监听', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
+    ),
+  ).toBe(mode);
+  await categories.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'AI 与模型', exact: true })).toBeVisible();
+  await settleNavigation(dialog);
+  await openMicrophoneSettings(dialog);
+  await expect(linkage).toBeChecked();
+  await linkage.click();
+  await expect(linkage).not.toBeChecked();
+  expect(
+    await page.evaluate(
+      async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode,
+    ),
+  ).toBe(mode);
+});
+
+
+test('settings search matches foreign-language category aliases without changing displayed labels', async ({ page }) => {
+  const dialog = await openSettings(page);
+  const search = dialog.getByRole('searchbox');
+  await search.fill('language');
+  const result = dialog.locator('.ol-settings-scroll').getByRole('button', { name: '外观与语言', exact: true });
+  await expect(result).toBeVisible();
+  await expect(result).toContainText('调整主题');
+  await search.fill('Sprache');
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(page.getByRole('combobox', { name: '界面大小', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: '外观与语言', exact: true })).toBeVisible();
+});
+
+
+test('the download mirror uses the shared popup above the actual narrow catalog modal', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixture}?catalog`);
+  const dialog = page.getByRole('dialog');
+  const mirror = page.getByRole('combobox', { name: 'Download mirror', exact: true });
+  await mirror.click();
+  const option = page.getByRole('option', { name: 'Mirror', exact: true });
+  await expect(option).toBeVisible();
+  expect(await option.evaluate((node) => {
+    const bounds = node.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    return hit !== null && node.contains(hit) && !node.closest('[inert]');
+  })).toBe(true);
+  await option.click();
+  await expect(mirror).toContainText('Mirror');
+  await expect(dialog).toBeVisible();
+  await mirror.click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
+  // Exercise Escape after the popup has painted too, not just its queued-open frame.
+  await mirror.click();
+  await expect(mirror).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
+});
+
+test('Escape from an exiting mirror popup cancels its queued reopening', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixture}?catalog`);
+  const dialog = page.getByRole('dialog');
+  const mirror = page.getByRole('combobox', { name: 'Download mirror', exact: true });
+  await mirror.click();
+  const option = page.getByRole('option', { name: 'Mirror', exact: true });
+  await expect(option).toBeVisible();
+  // Keep the previous popup mounted, as it was during the WebKit failure.
+  await page.addStyleTag({ content: '.ol-select-popup[data-ending-style] { transition-duration: 1s !important; }' });
+  await option.click();
+  await expect(mirror).toContainText('Mirror');
+  await page.locator('.ol-select-popup .ol-select-item[data-selected]').evaluate((node) => {
+    const trigger = document.querySelector('[aria-label="Download mirror"]')!;
+    // Both events precede Base UI's next animation frame. Escape still targets
+    // the old popup while its focus handoff is pending.
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    node.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(mirror).toBeFocused();
+});
+
+test('Select owns Escape after Root accepts a click but before open commits', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=accepted`);
+  const dialog = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-observed')).toHaveText('false');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(mirror).toBeFocused();
+});
+
+test('Select respects a controlled open that refuses closing and then delegates ordinary Escape', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=held`);
+  await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false]');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false,false]');
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+});
+
+test('Select releases refused controlled opening requests', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=refused`);
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true]');
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,true]');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+for (const mode of ['disabled', 'removed', 'new-layer']) {
+  test(`Select revokes its opening transition when ${mode}`, async ({ page }) => {
+    await page.goto(`${fixture}?handoff=${mode}`);
+    await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+    const parent = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+    if (mode === 'new-layer') {
+      await expect(page.getByRole('dialog', { name: 'Handoff child', exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog', { name: 'Handoff child', exact: true })).toHaveCount(0);
+      await expect(parent).toBeVisible();
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+    } else {
+      if (mode === 'disabled') await expect(page.getByRole('combobox')).toBeDisabled();
+      else await expect(page.getByRole('combobox')).toHaveCount(0);
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(parent).toHaveCount(0);
+    }
+  });
+}
+
+test('Select leaves composition-end Escape to IME during its opening handoff', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=ime`);
+  await page.getByRole('combobox', { name: 'Handoff mirror', exact: true }).click();
+  await expect(page.getByTestId('handoff-observed')).toHaveText('false');
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true]');
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+});
+
+test('Select keeps a newer open intent after revoking its accepted predecessor', async ({ page }) => {
+  await page.goto(`${fixture}?handoff=new-intent`);
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.click();
+  await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false,true]');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByTestId('handoff-complete')).toHaveText('true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Handoff dialog', exact: true })).toBeVisible();
+  await expect(mirror).toBeFocused();
+});
+
+test('Select keeps the WebKit composition-end guard across tasks before queued open', async ({ page, browserName }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.goto(`${fixture}?handoff=queued-ime`);
+  await page.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
+  const mirror = page.getByRole('combobox', { name: 'Handoff mirror', exact: true });
+  await mirror.evaluate((trigger) => {
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    trigger.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    trigger.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    window.addEventListener('keydown', (event) => {
+      (window as Window & { imeEscapePrevented?: boolean }).imeEscapePrevented = event.defaultPrevented;
+    }, { capture: true, once: true });
+  });
+  // The 0ms task has run, but neither the WebKit 5ms guard nor the queued
+  // animation frame has elapsed. This clock controls only this IME boundary.
+  await page.clock.runFor(1);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as Window & { imeEscapePrevented?: boolean }).imeEscapePrevented))
+    .toBe(browserName !== 'webkit');
+  await page.clock.runFor(32);
+  const dialog = page.getByRole('dialog', { name: 'Handoff dialog', exact: true });
+  await expect(dialog).toBeVisible();
+  if (browserName === 'webkit') {
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(250);
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+    await expect(page.getByTestId('handoff-requests')).toHaveText('[true,false]');
+    await expect(dialog).toBeVisible();
+  } else {
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+  }
 });

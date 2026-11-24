@@ -209,7 +209,7 @@ class OpenLessLocalMigrationActivity : Activity() {
             .setPositiveButton(ui("继续选择文件", "Choose destination")) { _, _ ->
                 val password = field.text.toString()
                 if (password.isBlank()) {
-                    Toast.makeText(this, ui("密码不能为空", "Password cannot be empty"), Toast.LENGTH_SHORT).show()
+                    OpenLessNativeNotice.makeText(this, ui("密码不能为空", "Password cannot be empty"), Toast.LENGTH_SHORT).show()
                 } else {
                     onConfirmed(password)
                 }
@@ -220,7 +220,7 @@ class OpenLessLocalMigrationActivity : Activity() {
 
     private fun launchMigrationExportPicker(mode: String, includeCredentials: Boolean, password: String?) {
         if (!OpenLessMigrationBundlePolicy.validateExport(mode, includeCredentials, password)) {
-            Toast.makeText(this, ui("导出选项无效", "Invalid export options"), Toast.LENGTH_SHORT).show()
+            OpenLessNativeNotice.makeText(this, ui("导出选项无效", "Invalid export options"), Toast.LENGTH_SHORT).show()
             return
         }
         pendingExportMode = mode
@@ -234,7 +234,7 @@ class OpenLessLocalMigrationActivity : Activity() {
         }
         runCatching { startActivityForResult(intent, requestCodeExportSave) }.onFailure {
             clearPendingExport()
-            Toast.makeText(this, ui("找不到文件管理器", "No file manager available"), Toast.LENGTH_LONG).show()
+            OpenLessNativeNotice.makeText(this, ui("找不到文件管理器", "No file manager available"), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -250,7 +250,7 @@ class OpenLessLocalMigrationActivity : Activity() {
             type = "application/octet-stream"
         }
         runCatching { startActivityForResult(intent, requestCodeImportOpen) }
-            .onFailure { Toast.makeText(this, ui("找不到文件选择器", "No file picker available"), Toast.LENGTH_SHORT).show() }
+            .onFailure { OpenLessNativeNotice.makeText(this, ui("找不到文件选择器", "No file picker available"), Toast.LENGTH_SHORT).show() }
     }
 
     private fun showLegacyImportWarning() {
@@ -273,7 +273,7 @@ class OpenLessLocalMigrationActivity : Activity() {
             type = "application/json"
         }
         runCatching { startActivityForResult(intent, requestCodeLegacyImportOpen) }
-            .onFailure { Toast.makeText(this, ui("找不到文件选择器", "No file picker available"), Toast.LENGTH_SHORT).show() }
+            .onFailure { OpenLessNativeNotice.makeText(this, ui("找不到文件选择器", "No file picker available"), Toast.LENGTH_SHORT).show() }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
@@ -311,7 +311,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         result.onSuccess { (bundleBase64, inspection) -> showMigrationImportSummary(bundleBase64, inspection) }
                             .onFailure { error ->
-                                Toast.makeText(this, ui("读取或校验失败：${error.message}", "Read or validation failed: ${error.message}"), Toast.LENGTH_LONG).show()
+                                OpenLessNativeNotice.makeText(this, ui("读取或校验失败：${error.message}", "Read or validation failed: ${error.message}"), Toast.LENGTH_LONG).show()
                             }
                     }
                 }.start()
@@ -324,7 +324,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         if (json.isNullOrBlank()) {
-                            Toast.makeText(this, ui("读取旧版配置失败或文件超过 4 MiB", "Read failed or legacy file exceeds 4 MiB"), Toast.LENGTH_SHORT).show()
+                            OpenLessNativeNotice.makeText(this, ui("读取旧版配置失败或文件超过 4 MiB", "Read failed or legacy file exceeds 4 MiB"), Toast.LENGTH_SHORT).show()
                         } else {
                             showImportCategoryDialog(json)
                         }
@@ -337,7 +337,7 @@ class OpenLessLocalMigrationActivity : Activity() {
     private fun showImportCategoryDialog(json: String) {
         val present = OpenLessSettingsExport.categoriesPresent(json)
         if (present.isEmpty()) {
-            Toast.makeText(
+            OpenLessNativeNotice.makeText(
                 this,
                 ui(
                     "这不是旧版设置 JSON；如果文件是 .omb 解压目录中的 documents.json，请使用“导入迁移文件”导入整个 .omb 文件。",
@@ -356,7 +356,7 @@ class OpenLessLocalMigrationActivity : Activity() {
             .setPositiveButton(ui("导入", "Import")) { _, _ ->
                 val selected = categories.filterIndexed { index, _ -> checked[index] }.toSet()
                 if (selected.isEmpty()) {
-                    Toast.makeText(this, ui("没有选择任何内容", "Nothing selected"), Toast.LENGTH_SHORT).show()
+                    OpenLessNativeNotice.makeText(this, ui("没有选择任何内容", "Nothing selected"), Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 Thread {
@@ -411,9 +411,9 @@ class OpenLessLocalMigrationActivity : Activity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 result.onSuccess { inspection ->
-                    Toast.makeText(this, ui("已导出迁移文件（${inspection.optInt("documentCount")} 项）", "Migration bundle exported (${inspection.optInt("documentCount")} documents)"), Toast.LENGTH_LONG).show()
+                    OpenLessNativeNotice.makeText(this, ui("已导出迁移文件（${inspection.optInt("documentCount")} 项）", "Migration bundle exported (${inspection.optInt("documentCount")} documents)"), Toast.LENGTH_LONG).show()
                 }.onFailure { error ->
-                    Toast.makeText(this, ui("导出失败：${error.message}", "Export failed: ${error.message}"), Toast.LENGTH_LONG).show()
+                    OpenLessNativeNotice.makeText(this, ui("导出失败：${error.message}", "Export failed: ${error.message}"), Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -479,7 +479,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                         confirmMigration(bundleBase64, password, mode, preview, choices, allowStaleRetry)
                     }
                 }.onFailure { error ->
-                    Toast.makeText(this, ui("预览失败：${error.message}", "Preview failed: ${error.message}"), Toast.LENGTH_LONG).show()
+                    OpenLessNativeNotice.makeText(this, ui("预览失败：${error.message}", "Preview failed: ${error.message}"), Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -548,7 +548,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                     else -> null
                 }
                 if (side == null) {
-                    Toast.makeText(this, ui("必须选择一侧", "Choose one side"), Toast.LENGTH_SHORT).show()
+                    OpenLessNativeNotice.makeText(this, ui("必须选择一侧", "Choose one side"), Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 choices.put(org.json.JSONObject().put("conflictId", conflict.getString("conflictId")).put("side", side))
@@ -593,14 +593,14 @@ class OpenLessLocalMigrationActivity : Activity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         result.onSuccess {
-                            Toast.makeText(this, ui("导入完成，备份已保留", "Import complete; backup retained"), Toast.LENGTH_LONG).show()
+                            OpenLessNativeNotice.makeText(this, ui("导入完成，备份已保留", "Import complete; backup retained"), Toast.LENGTH_LONG).show()
                             setContentView(buildContent())
                         }.onFailure { error ->
                             if (allowStaleRetry && error.message?.contains("migration_bundle_stale_preview") == true) {
-                                Toast.makeText(this, ui("本机配置已变化，请重新确认预览", "Local configuration changed; review the new preview"), Toast.LENGTH_LONG).show()
+                                OpenLessNativeNotice.makeText(this, ui("本机配置已变化，请重新确认预览", "Local configuration changed; review the new preview"), Toast.LENGTH_LONG).show()
                                 previewMigration(bundleBase64, password, mode, allowStaleRetry = false)
                             } else {
-                                Toast.makeText(this, ui("导入未完成：${error.message}", "Import not completed: ${error.message}"), Toast.LENGTH_LONG).show()
+                                OpenLessNativeNotice.makeText(this, ui("导入未完成：${error.message}", "Import not completed: ${error.message}"), Toast.LENGTH_LONG).show()
                             }
                         }
                     }

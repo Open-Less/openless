@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /**
  * Coordinates the native local migration page's legacy JSON compatibility flow — collects
- * whichever of the seven categories the user selected into one JSON object
+ * whichever of the five categories the user selected into one JSON object
  * for export, and applies whichever categories are both present in an
  * imported file and still checked. Deliberately its own file rather than
  * folded into an Activity, keeping this self-contained
@@ -26,7 +26,6 @@ internal object OpenLessSettingsExport {
         CLOUD_NOTES("cloudNotes", "云笔记地址 / Token", "Cloud notes URL / token"),
         HAPTIC("haptic", "震动反馈", "Haptic feedback"),
         STROKE_FREQUENCY("strokeFrequency", "笔画调频", "Stroke ranking"),
-        PINYIN_LEARNED_PHRASES("pinyinLearnedPhrases", "旧版拼音备份", "Legacy pinyin backup"),
         PROVIDER_SELECTION("providerSelection", "ASR / LLM / 风格包 选择", "ASR / LLM / style pack selection"),
         CREDENTIALS("credentials", "ASR / LLM API Key（明文，敏感）", "ASR / LLM API keys (plaintext, sensitive)"),
     }
@@ -63,10 +62,7 @@ internal object OpenLessSettingsExport {
             )
         }
         if (Category.STROKE_FREQUENCY in selected) {
-            root.put(Category.STROKE_FREQUENCY.key, JSONObject(StrokeUserFrequency(app).exportAll()))
-        }
-        if (Category.PINYIN_LEARNED_PHRASES in selected) {
-            root.put(Category.PINYIN_LEARNED_PHRASES.key, JSONObject(LegacyPinyinBackup(app).exportAll()))
+            root.put(Category.STROKE_FREQUENCY.key, JSONObject(StrokeUserFrequency.exportCombined(app)))
         }
         if (Category.PROVIDER_SELECTION in selected || Category.CREDENTIALS in selected) {
             val response = JSONObject(OpenLessNative.nativeExportProviderSettings(Category.CREDENTIALS in selected))
@@ -94,8 +90,10 @@ internal object OpenLessSettingsExport {
                 put("englishSuggestionsEnabled", prefs.getBoolean("english_suggestions_enabled", true))
                 put("debugFeaturesEnabled", prefs.getBoolean("key_debug_features_enabled", false))
             })
-            put("strokeFrequency", JSONObject(StrokeUserFrequency(app).exportAll()))
-            put("pinyinLearnedPhrases", JSONObject(LegacyPinyinBackup(app).exportAll()))
+            put("strokeFrequency", JSONObject(StrokeUserFrequency.exportCombined(app)))
+            // Bundle schema 1 requires this field. It held LitePinyin's learning,
+            // which Rime replaced; the Rime user dictionary has its own export.
+            put("pinyinLearnedPhrases", JSONObject())
         }.toString()
     }
 
@@ -118,9 +116,8 @@ internal object OpenLessSettingsExport {
         beforeWrite("preferences")
         check(editor.commit()) { "Portable settings save failed" }
         beforeWrite("strokeFrequency")
-        StrokeUserFrequency(app).importAll(root.getJSONObject("strokeFrequency").toStringMap())
-        beforeWrite("pinyinLearnedPhrases")
-        LegacyPinyinBackup(app).importAll(root.getJSONObject("pinyinLearnedPhrases").toStringMap())
+        StrokeUserFrequency.importCombined(app, root.getJSONObject("strokeFrequency").toStringMap())
+        // "pinyinLearnedPhrases" is validated but no longer restored anywhere (see exportPortable()).
     }
 
     private fun parsePortable(json: String): JSONObject {
@@ -186,12 +183,7 @@ internal object OpenLessSettingsExport {
                         require(amplitude in 1..255 && duration in 1..1000) { "Invalid haptic settings" }
                         check(OpenLessMigrationState.settings { check(prefs.edit().putBoolean("key_haptic_enabled", enabled).putInt("key_haptic_amplitude", amplitude).putLong("key_haptic_duration_ms", duration).commit()) }) { "migration_android_busy" }
                     }
-                    Category.STROKE_FREQUENCY -> StrokeUserFrequency(app).importAll(value.toStringMap())
-                    Category.PINYIN_LEARNED_PHRASES -> {
-                        require(root.optInt("learningPrivacyVersion", 0) >= ImeLearningPolicy.PRIVACY_VERSION) { "Legacy learned phrases cannot be safely restored" }
-                        check(ImeLearningPolicy.migrate(app)) { "Learning data cleanup failed" }
-                        LegacyPinyinBackup(app).importAll(value.toStringMap())
-                    }
+                    Category.STROKE_FREQUENCY -> StrokeUserFrequency.importCombined(app, value.toStringMap())
                     else -> Unit
                 }
                 applied.add(category)

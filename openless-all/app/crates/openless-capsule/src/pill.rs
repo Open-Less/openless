@@ -1,6 +1,6 @@
 //! Draws the default recording capsule, translation target, transcript rail and
 //! selection notice, anchored to the bottom of the helper window.
-use crate::motion::{Spring, Tween, EASE, EASE_IN_OUT, LINEAR, MORPH};
+use crate::motion::{Spring, Tween, EASE, LINEAR, MORPH};
 use crate::renderer::CapsuleAction;
 use crate::{icons, shapes, Frame};
 use egui::emath::TSTransform;
@@ -22,7 +22,7 @@ const BUTTON_RADIUS: f32 = 12.0;
 const BUTTON_OFFSET: f32 = RECORDING_WIDTH / 2.0 - 4.0 - BUTTON_RADIUS;
 // Measured from the 60 fps reference: 232×64 physical pixels at 2×.
 const ENVELOPE: [f32; 11] = [0.22, 0.34, 0.48, 0.65, 0.82, 1.0, 0.82, 0.65, 0.48, 0.34, 0.22];
-const STACK_GAP: f32 = 8.0;
+const STACK_GAP: f32 = 24.0;
 const BADGE_HEIGHT: f32 = 28.0;
 const RAIL_HEIGHT: f32 = 52.0;
 const RAIL_PAD: f32 = 18.0;
@@ -32,17 +32,61 @@ const RAIL_MAX_WIDTH: f32 = 444.0;
 const RAIL_TAIL_CHARS: usize = 160;
 
 const BLUE: Color32 = Color32::from_rgb(0x25, 0x63, 0xeb);
-const BLUE_HOVER: Color32 = Color32::from_rgb(0x1d, 0x4e, 0xd8);
 const BORDER: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
-const SWEEP: Color32 = Color32::from_rgb(0xdb, 0xea, 0xfe);
-const CANCEL_BG: Color32 = Color32::from_rgb(0xf0, 0xf0, 0xf2);
-const CANCEL_HOVER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
-const CANCEL_INK: Color32 = Color32::from_rgb(0x52, 0x52, 0x5b);
-const ERROR: Color32 = Color32::from_rgb(0xdc, 0x26, 0x26);
 
-/// `tokens.css` values for the parts that follow the app theme. The pill and
-/// the badge shell are `color-scheme: light` and never change.
+struct PillPalette {
+    fill: Color32,
+    border: Color32,
+    highlight: Color32,
+    ink: Color32,
+    sweep: Color32,
+    cancel: Color32,
+    cancel_hover: Color32,
+    cancel_ink: Color32,
+    confirm: Color32,
+    confirm_hover: Color32,
+    error: Color32,
+    shadow: Color32,
+}
+
+fn pill_palette(dark: bool) -> PillPalette {
+    let rgba = Color32::from_rgba_unmultiplied;
+    if dark {
+        PillPalette {
+            fill: rgba(28, 34, 45, 224),
+            border: rgba(218, 231, 255, 66),
+            highlight: rgba(235, 244, 255, 33),
+            ink: Color32::from_rgb(167, 199, 255),
+            sweep: rgba(90, 145, 240, 56),
+            cancel: rgba(225, 235, 255, 26),
+            cancel_hover: rgba(225, 235, 255, 46),
+            cancel_ink: Color32::from_rgb(226, 234, 247),
+            confirm: Color32::from_rgb(57, 121, 243),
+            confirm_hover: Color32::from_rgb(82, 142, 255),
+            error: Color32::from_rgb(255, 155, 153),
+            shadow: Color32::from_black_alpha(97),
+        }
+    } else {
+        PillPalette {
+            fill: rgba(255, 255, 255, 219),
+            border: rgba(79, 91, 115, 61),
+            highlight: rgba(255, 255, 255, 209),
+            ink: Color32::from_rgb(29, 78, 216),
+            sweep: rgba(147, 197, 253, 71),
+            cancel: rgba(102, 116, 139, 26),
+            cancel_hover: rgba(102, 116, 139, 46),
+            cancel_ink: Color32::from_rgb(82, 93, 110),
+            confirm: BLUE,
+            confirm_hover: Color32::from_rgb(29, 78, 216),
+            error: Color32::from_rgb(201, 45, 54),
+            shadow: rgba(15, 23, 42, 46),
+        }
+    }
+}
+
+/// App-theme surfaces shared with the WebView pill, badge and transcript rail.
 struct Tokens {
+    pill: PillPalette,
     surface: Color32,
     line: Color32,
     shadow: Color32,
@@ -60,6 +104,7 @@ fn tokens(dark: bool) -> Tokens {
     let rgba = Color32::from_rgba_unmultiplied;
     if dark {
         Tokens {
+            pill: pill_palette(dark),
             surface: Color32::from_rgb(0x1b, 0x22, 0x2c),
             line: rgba(226, 232, 240, 31),
             shadow: rgba(0, 0, 0, 122),
@@ -68,13 +113,13 @@ fn tokens(dark: bool) -> Tokens {
             ink: Color32::from_rgb(0xf4, 0xf7, 0xfb),
             medium: 460.0,
             semibold: 560.0,
-            // rgba(24, 24, 27, .98) over the white badge.
             control: Color32::from_rgb(29, 29, 32),
             control_line: Color32::from_rgb(0x3f, 0x3f, 0x46),
             control_ink: Color32::from_rgb(0xfa, 0xfa, 0xfa),
         }
     } else {
         Tokens {
+            pill: pill_palette(dark),
             surface: Color32::from_rgb(0xfa, 0xfa, 0xfa),
             line: rgba(0, 0, 0, 26),
             shadow: rgba(15, 17, 22, 41),
@@ -149,6 +194,7 @@ enum Target {
     Confirm,
     /// `.ol-default-processing-cancel`: the whole processing pill.
     Processing,
+    Background,
 }
 
 /// `CapsuleWaveform`: the level is smoothed per frame, then shaped by the
@@ -345,6 +391,10 @@ impl Rail {
 }
 
 pub struct DefaultCapsule {
+    glass: Option<(Rect, f32)>,
+    rear: Option<Rect>,
+    rear_lift: Tween,
+    badge_bottom: Option<Tween>,
     started: bool,
     width: Tween,
     opacity: Tween,
@@ -366,10 +416,14 @@ pub struct DefaultCapsule {
 impl Default for DefaultCapsule {
     fn default() -> Self {
         Self {
+            glass: None,
+            rear: None,
+            rear_lift: Tween::at(20.0),
+            badge_bottom: None,
             started: false,
             width: Tween::at(COMPACT_WIDTH),
             opacity: Tween::at(0.0),
-            lift: Tween::at(8.0),
+            lift: Tween::at(6.0),
             layer: Tween::at(0.0),
             actions: Tween::at(0.0),
             status: Tween::at(0.0),
@@ -397,6 +451,7 @@ fn status_label(frame: &Frame) -> String {
     } else {
         state.text.trim()
     };
+    let message = if matches!(message, "empty_transcript" | "未识别到语音，录音已保留，可在历史中重新转录") { &labels.empty_transcript } else { message };
     let fallback = |text: &str| {
         if message.is_empty() {
             text.to_owned()
@@ -405,6 +460,7 @@ fn status_label(frame: &Frame) -> String {
         }
     };
     match state.phase.as_str() {
+        "transcribing" | "polishing" if state.translation_active => labels.translating.clone(),
         "transcribing" | "polishing" => fallback(if state.operating {
             &labels.using
         } else {
@@ -421,8 +477,34 @@ fn status_label(frame: &Frame) -> String {
 }
 
 impl DefaultCapsule {
+    /// The platform material follows the painted pill, never the transparent host rectangle.
+    /// Only real controls own input; the transcript and central label are visual surfaces.
+    pub fn input_regions(&self, frame: &Frame) -> Vec<Rect> {
+        if !frame.interactive || frame.leaving || frame.state.selection_polish || frame.state.style == "siri"
+            || !matches!(frame.state.phase.as_str(), "recording" | "transcribing" | "polishing") { return Vec::new(); }
+        let Some((shell, opacity)) = self.glass else { return Vec::new(); };
+        if opacity <= 0.001 { return Vec::new(); }
+        let center = shell.center();
+        let mut regions = vec![Rect::from_center_size(
+            pos2(if frame.state.phase == "recording" { center.x - BUTTON_OFFSET } else { shell.left() + 16.0 }, center.y), egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0))];
+        if frame.state.phase == "recording" {
+            regions.push(Rect::from_center_size(pos2(center.x + BUTTON_OFFSET, center.y),
+                egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0)));
+        }
+        if frame.processing_session_id.is_some() {
+            if let Some(rear) = self.rear {
+                regions.push(Rect::from_min_max(rear.min, pos2(rear.right(), shell.top())));
+            }
+        }
+        regions
+    }
+
+    pub fn glass_surface(&self) -> Option<(Rect, f32)> {
+        self.glass
+    }
+
     /// Draws the capsule for `frame` and reports a clicked control. `dark`
-    /// is the resolved app theme; the pill itself is theme independent.
+    /// is the resolved app theme for the pill and every companion surface.
     pub fn show(
         &mut self,
         ui: &egui::Ui,
@@ -434,6 +516,8 @@ impl DefaultCapsule {
         let now = ui.input(|input| input.time);
         let stage = ui.max_rect();
         let tokens = tokens(dark);
+        self.glass = None;
+        self.rear = None;
         if frame.state.selection_polish {
             if notice(&painter, stage, frame, &tokens, now) && !reduced {
                 ui.ctx().request_repaint();
@@ -448,13 +532,13 @@ impl DefaultCapsule {
         let processing = matches!(phase, "transcribing" | "polishing");
         let leaving = frame.leaving;
         let label = status_label(frame);
-        let label_format = format(12.0, 500.0, 18.0, if phase == "failed" { ERROR } else { BLUE });
+        let label_format = format(12.0, 500.0, 18.0, if phase == "failed" { tokens.pill.error } else { tokens.pill.ink });
         let label_width = painter
             .layout_job(LayoutJob::single_section(label.clone(), label_format.clone()))
             .size()
             .x;
         // `scrollWidth + 28`, rounded up so a label that fits is never ellipsized.
-        let status_width = (label_width.ceil() + 2.0 * STATUS_PADDING).clamp(80.0, 300.0);
+        let status_width = if phase != "failed" { RECORDING_WIDTH } else { (label_width.ceil() + 2.0 * STATUS_PADDING + if processing { 28.0 } else { 0.0 }).clamp(RECORDING_WIDTH, if label == frame.labels.empty_transcript { 444.0 } else { 300.0 }) };
         let time = |seconds: f64| if reduced { 0.0 } else { seconds };
 
         if !self.started {
@@ -481,16 +565,16 @@ impl DefaultCapsule {
         self.opacity.set(
             now,
             if leaving { 0.0 } else { 1.0 },
-            time(if leaving { 0.16 } else { 0.1 }),
+            time(if leaving { 0.18 } else { 0.24 }),
             0.0,
-            EASE_IN_OUT,
+            MORPH,
         );
         self.lift.set(
             now,
-            if leaving { 7.0 } else { 0.0 },
-            time(if leaving { 0.18 } else { 0.22 }),
+            if leaving { 5.0 } else { 0.0 },
+            time(if leaving { 0.18 } else { 0.24 }),
             0.0,
-            EASE_IN_OUT,
+            MORPH,
         );
         // CSS opacity transitions of the layers inside the shell.
         let layer_visible = recording || warming;
@@ -510,7 +594,13 @@ impl DefaultCapsule {
             time(if layer_visible { 0.0 } else { 0.12 }),
             LINEAR,
         );
-        let badge_visible = state.translation_active && recording && !leaving;
+        let badge_visible = (state.translation_active && matches!(phase, "recording" | "transcribing" | "polishing")
+            || state.qa
+                && matches!(
+                    state.phase.as_str(),
+                    "recording" | "transcribing" | "polishing"
+                ))
+            && !leaving;
         let (badge_duration, badge_delay) = if badge_visible { (0.2, 0.04) } else { (0.12, 0.0) };
         for (tween, target) in [
             (&mut self.badge_opacity, if badge_visible { 1.0 } else { 0.0 }),
@@ -536,11 +626,25 @@ impl DefaultCapsule {
             pos2(center_x - width / 2.0, body_top + lift),
             pos2(center_x + width / 2.0, body_bottom + lift),
         );
+        self.glass = Some((shell, opacity));
+        let rear_visible = (recording || processing) && !leaving && frame.processing_count > 0;
+        if rear_visible {
+            self.rear_lift.set(now, 0.0, time(0.22), 0.0, MORPH);
+        } else {
+            self.rear_lift.jump(20.0);
+        }
+        let rear_label = format!("{}{}", if frame.processing_translation { &frame.labels.translating } else { &frame.labels.transcribing },
+            if frame.processing_count > 1 { format!(" · {}", frame.processing_count) } else { String::new() });
+        if rear_visible {
+            let galley = painter.layout_no_wrap(rear_label.clone(), egui::FontId::proportional(11.0), tokens.pill.ink);
+            self.rear = Some(Rect::from_min_size(pos2(center_x - (galley.size().x + 20.0).clamp(60.0, 96.0) / 2.0, body_top - 18.0 + self.rear_lift.value(now)),
+                vec2((galley.size().x + 20.0).clamp(60.0, 96.0), 22.0)));
+        }
         let outline = shapes::stadium(shell);
-        let cancel_center = pos2(center_x - BUTTON_OFFSET, shell.center().y);
+        let cancel_center = pos2(if processing { shell.left() + 16.0 } else { center_x - BUTTON_OFFSET }, shell.center().y);
         let confirm_center = pos2(center_x + BUTTON_OFFSET, shell.center().y);
 
-        // Pointer: the buttons while recording, the whole pill while processing.
+        // Pointer ownership is restricted to the end controls, including cancellation while processing.
         let (pointer, pressed, released, down) = ui.input(|input| {
             (
                 input.pointer.hover_pos(),
@@ -553,9 +657,14 @@ impl DefaultCapsule {
             .filter(|&point| {
                 frame.interactive
                     && !leaving
-                    && shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
+                    && (shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
+                        || frame.processing_session_id.is_some()
+                            && self.rear.is_some_and(|rear| rear.contains(point)))
             })
             .and_then(|point| {
+                if frame.processing_session_id.is_some() && point.y < shell.top() && self.rear.is_some_and(|rear| rear.contains(point)) {
+                    return Some(Target::Background);
+                }
                 if recording {
                     if point.distance(cancel_center) <= BUTTON_RADIUS {
                         Some(Target::Cancel)
@@ -564,7 +673,7 @@ impl DefaultCapsule {
                     } else {
                         None
                     }
-                } else if processing {
+                } else if processing && point.distance(cancel_center) <= BUTTON_RADIUS {
                     Some(Target::Processing)
                 } else {
                     None
@@ -579,6 +688,7 @@ impl DefaultCapsule {
                 action = match target {
                     Target::Confirm => CapsuleAction::Confirm,
                     Target::Cancel | Target::Processing => CapsuleAction::Cancel,
+                    Target::Background => CapsuleAction::CancelProcessing,
                 };
             }
         } else if !down {
@@ -610,6 +720,12 @@ impl DefaultCapsule {
             && matches!(phase, "recording" | "transcribing" | "polishing")
             && !rail_text.is_empty();
         let rail_bottom = body_top - STACK_GAP;
+        if let Some(rear) = self.rear {
+            painter.rect_filled(rear, 20, tokens.pill.fill);
+            painter.rect_stroke(rear, 20, Stroke::new(1.0, tokens.pill.border), StrokeKind::Inside);
+            painter.text(pos2(rear.center().x, rear.top() + 10.0), egui::Align2::CENTER_CENTER,
+                rear_label, egui::FontId::proportional(11.0), tokens.pill.ink);
+        }
         if rail_visible {
             let rail = self.rail.get_or_insert_with(|| Rail::new(center_x));
             rail.update(
@@ -628,11 +744,14 @@ impl DefaultCapsule {
         }
         let badge_bottom = body_top
             - STACK_GAP
-            - if rail_visible && state.translation_active {
-                RAIL_HEIGHT + STACK_GAP
+            - if rail_visible && (state.translation_active || state.qa) {
+                RAIL_HEIGHT + 8.0
             } else {
                 0.0
             };
+        let badge_position = self.badge_bottom.get_or_insert_with(|| Tween::at(badge_bottom));
+        badge_position.set(now, badge_bottom, time(0.22), 0.0, MORPH);
+        let badge_bottom = badge_position.value(now);
         let badge_opacity = self.badge_opacity.value(now);
         if badge_opacity > 0.0 {
             let badge = badge(
@@ -655,7 +774,7 @@ impl DefaultCapsule {
             }
         }
 
-        // The pill: shadow, paper, translation tint, border, processing sweep.
+        // The pill keeps a translucent material, a lit rim and readable controls in both themes.
         let fade = |color: Color32| color.gamma_multiply(opacity);
         let pixels_per_point = ui.ctx().pixels_per_point();
         painter.add(
@@ -663,11 +782,15 @@ impl DefaultCapsule {
                 offset: [0, 2],
                 blur: 8,
                 spread: 0,
-                color: fade(Color32::from_black_alpha(36)),
+                color: fade(tokens.pill.shadow),
             }
             .as_shape(shell, RADIUS),
         );
-        painter.rect_filled(shell, RADIUS, fade(Color32::WHITE));
+        painter.rect_filled(shell, RADIUS, fade(tokens.pill.fill));
+        painter.add(shapes::inset_shadow(
+            shell.shrink(1.0), HEIGHT / 2.0 - 1.0, pixels_per_point,
+            1.0, 1.0, 0.0, fade(tokens.pill.highlight),
+        ));
         if state.translation_active && layer_visible {
             painter.add(shapes::inset_shadow(
                 shell.shrink(1.0),
@@ -679,12 +802,12 @@ impl DefaultCapsule {
                 fade(Color32::from_rgba_unmultiplied(37, 99, 235, 166)),
             ));
         }
-        painter.rect_stroke(shell, RADIUS, Stroke::new(1.0, fade(BORDER)), StrokeKind::Inside);
+        painter.rect_stroke(shell, RADIUS, Stroke::new(1.0, fade(tokens.pill.border)), StrokeKind::Inside);
         if let Some(since) = self.sweep_since.filter(|_| !reduced) {
             // `ol-capsule-sweep`: −100% → 0 over 85% of 2.4s, linear, then hold.
             let progress = (((now - since) % 2.4) / (2.4 * 0.85)).min(1.0) as f32;
             let sweep = shapes::stadium(shell.translate(vec2(-width * (1.0 - progress), 0.0)));
-            painter.add(shapes::fill_clipped(&sweep, &outline, fade(SWEEP)));
+            painter.add(shapes::fill_clipped(&sweep, &outline, fade(tokens.pill.sweep)));
         }
 
         // Recording layer: waveform and the two buttons, clipped by the shell.
@@ -701,7 +824,7 @@ impl DefaultCapsule {
                 painter.rect_filled(
                     Rect::from_center_size(pos2(x, shell.center().y), vec2(1.5, height)),
                     1,
-                    BLUE.gamma_multiply(layer),
+                    tokens.pill.ink.gamma_multiply(layer),
                 );
             }
             let actions = layer * self.actions.value(now);
@@ -711,8 +834,8 @@ impl DefaultCapsule {
                     (
                         Target::Cancel,
                         cancel_center,
-                        lerp_color(CANCEL_BG, CANCEL_HOVER, self.cancel_hover.value(now)),
-                        CANCEL_INK,
+                        lerp_color(tokens.pill.cancel, tokens.pill.cancel_hover, self.cancel_hover.value(now)),
+                        tokens.pill.cancel_ink,
                         icons::IconName::Close,
                         15.0,
                         1.8,
@@ -720,7 +843,7 @@ impl DefaultCapsule {
                     (
                         Target::Confirm,
                         confirm_center,
-                        lerp_color(BLUE, BLUE_HOVER, self.confirm_hover.value(now)),
+                        lerp_color(tokens.pill.confirm, tokens.pill.confirm_hover, self.confirm_hover.value(now)),
                         Color32::WHITE,
                         icons::IconName::Check,
                         17.0,
@@ -751,6 +874,14 @@ impl DefaultCapsule {
             }
         }
 
+        if processing && !leaving {
+            let fill = if hovered == Some(Target::Processing) { tokens.pill.cancel_hover } else { tokens.pill.cancel };
+            painter.add(shapes::fill_clipped(&shapes::circle(cancel_center, BUTTON_RADIUS), &outline, fade(fill)));
+            if let Some(texture) = icons::texture(ui.ctx(), icons::IconName::Close, 15.0, 1.8) {
+                painter.add(shapes::image_clipped(texture.id(), snapped_square(cancel_center, 15.0, pixels_per_point), &outline, fade(tokens.pill.cancel_ink)));
+            }
+        }
+
         // Status: one centred, ellipsized line inside 14px padding.
         let status = self.status.value(now) * opacity;
         if status > 0.0 {
@@ -758,13 +889,14 @@ impl DefaultCapsule {
                 &painter,
                 &label,
                 label_format,
-                width - 2.0 * STATUS_PADDING,
+                width - 2.0 * STATUS_PADDING - if processing { 28.0 } else { 0.0 },
             );
-            let pos = shell.center() - galley.size() * 0.5;
+            let pos = shell.center() + vec2(if processing { 14.0 } else { 0.0 }, 0.0) - galley.size() * 0.5;
             painter.add(text(pos, galley, status));
         }
 
         let animating = [
+            &self.rear_lift,
             &self.width,
             &self.opacity,
             &self.lift,
@@ -780,6 +912,7 @@ impl DefaultCapsule {
         .iter()
         .any(|tween| tween.active(now))
             || (!reduced && ((recording && !leaving) || self.sweep_since.is_some()))
+            || self.badge_bottom.as_ref().is_some_and(|tween| tween.active(now))
             || self.rail.as_ref().is_some_and(|rail| rail.animating(now));
         if animating {
             ui.ctx().request_repaint();
@@ -792,7 +925,7 @@ fn lerp_color(from: Color32, to: Color32, t: f32) -> Color32 {
     from.lerp_to_gamma(to, t.clamp(0.0, 1.0))
 }
 
-/// `.ol-classic-translation`: "Translate to" and the target language chip.
+/// `.ol-classic-translation`: translation status and the active target chip.
 /// The chip is a label here: the native helper has no language menu.
 fn badge(
     painter: &Painter,
@@ -802,10 +935,33 @@ fn badge(
     opacity: f32,
     pixels_per_point: f32,
 ) -> Vec<Shape> {
+    if frame.state.qa || frame.state.phase != "recording" || !frame.state.translation_active {
+        let label = painter.layout_job(LayoutJob::single_section(
+            if frame.state.qa { frame.labels.asking.clone() } else { frame.labels.translating.clone() },
+            format(11.0, 500.0, 16.5, tokens.pill.ink),
+        ));
+        let size = label.size();
+        let rect = Rect::from_min_size(
+            pos2(
+                bottom_center.x - size.x / 2.0 - 10.0,
+                bottom_center.y - 26.0,
+            ),
+            vec2(size.x + 20.0, 26.0),
+        );
+        return vec![
+            egui::epaint::RectShape::filled(rect, 8, tokens.pill.fill.gamma_multiply(opacity))
+                .into(),
+            text(
+                pos2(rect.left() + 10.0, rect.center().y - size.y / 2.0),
+                label,
+                opacity,
+            ),
+        ];
+    }
     let fade = |color: Color32| color.gamma_multiply(opacity);
     let label = painter.layout_job(LayoutJob::single_section(
-        frame.labels.translate_to.clone(),
-        format(11.0, 400.0, 16.5, BLUE),
+        frame.labels.translating.clone(),
+        format(11.0, 400.0, 16.5, tokens.pill.ink),
     ));
     let target = frame
         .state
@@ -848,7 +1004,7 @@ fn badge(
         }
         .as_shape(rect, 6)
         .into(),
-        egui::epaint::RectShape::filled(rect, 6, fade(Color32::WHITE)).into(),
+        egui::epaint::RectShape::filled(rect, 6, fade(tokens.pill.fill)).into(),
         shapes::inset_shadow(
             rect.shrink(1.0),
             5.0,
@@ -861,7 +1017,7 @@ fn badge(
         egui::epaint::RectShape::stroke(
             rect,
             6,
-            Stroke::new(1.0, fade(SWEEP)),
+            Stroke::new(1.0, fade(tokens.pill.sweep)),
             StrokeKind::Inside,
         )
         .into(),
@@ -1019,6 +1175,27 @@ mod tests {
     use super::*;
     use crate::{CapsuleLabels, CapsulePopupState, ThemeMode};
 
+    #[test]
+    fn both_pill_themes_keep_status_text_readable_over_light_and_dark_desktops() {
+        let luminance = |rgb: [f32; 3]| {
+            let linear = rgb.map(|c| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) });
+            0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        };
+        for dark in [false, true] {
+            let palette = pill_palette(dark);
+            let fill = palette.fill.to_srgba_unmultiplied();
+            assert_eq!(fill[0] < 128, dark, "the pill must follow the selected theme");
+            for desktop in [0.0, 1.0] {
+                let alpha = fill[3] as f32 / 255.0;
+                let background = [0, 1, 2].map(|i| fill[i] as f32 / 255.0 * alpha + desktop * (1.0 - alpha));
+                let ink = palette.ink.to_srgba_unmultiplied();
+                let foreground = [0, 1, 2].map(|i| ink[i] as f32 / 255.0);
+                let (a, b) = (luminance(background), luminance(foreground));
+                assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+            }
+        }
+    }
+
     fn frame(phase: &str) -> Frame {
         Frame {
             session_id: "s".into(),
@@ -1030,12 +1207,54 @@ mod tests {
             transcript: String::new(),
             show_transcript: false,
             transcript_font_size: 15.0,
+            processing_count: 0,
+            processing_translation: false,
+            processing_session_id: None,
             labels: CapsuleLabels::for_locale("zh-CN"),
             theme: ThemeMode::System,
             leaving: false,
             bounds: None,
             interactive: true,
         }
+    }
+
+    #[test]
+    fn input_ownership_is_limited_to_visible_controls() {
+        let mut capsule = DefaultCapsule::default();
+        capsule.glass = Some((Rect::from_min_size(pos2(0.0, 0.0), vec2(116.0,32.0)), 1.0));
+        let recording = frame("recording");
+        let regions = capsule.input_regions(&recording);
+        assert_eq!(regions.len(), 2);
+        assert!(!regions.iter().any(|r| r.contains(pos2(58.0,16.0))));
+        assert!(regions.iter().any(|r| r.contains(pos2(16.0,16.0))));
+        assert_eq!(capsule.input_regions(&frame("polishing")).len(), 1);
+        assert!(capsule.input_regions(&frame("completed")).is_empty());
+        let mut siri=recording.clone();siri.state.style="siri".into();
+        assert!(capsule.input_regions(&siri).is_empty());
+    }
+
+    #[test]
+    fn rear_pill_only_claims_its_exposed_area() {
+        let mut capsule = DefaultCapsule::default();
+        capsule.glass = Some((Rect::from_min_size(pos2(172.0, 124.0), vec2(116.0, 32.0)), 1.0));
+        capsule.rear = Some(Rect::from_min_size(pos2(182.0, 106.0), vec2(96.0, 22.0)));
+        let mut recording = frame("recording");
+        recording.processing_count = 1;
+        recording.processing_session_id = Some("old-a".into());
+        let regions = capsule.input_regions(&recording);
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[2].height(), 18.0);
+        assert!(regions[2].contains(pos2(240.0, 114.0)));
+        assert!(!regions[2].contains(pos2(240.0, 134.0)));
+        let mut processing = recording.clone();
+        processing.state.phase = "polishing".into();
+        let processing_regions = capsule.input_regions(&processing);
+        assert_eq!(processing_regions.len(), 2);
+        assert_eq!(processing_regions[1], regions[2]);
+        assert!(recording.accepts("old-a", 1, crate::Action::Cancel));
+        assert!(!recording.accepts("old-a", 1, crate::Action::Confirm));
+        recording.processing_session_id = Some("old-b".into());
+        assert!(!recording.accepts("old-a", 1, crate::Action::Cancel));
     }
 
     #[test]
@@ -1050,6 +1269,8 @@ mod tests {
         assert_eq!(status_label(&thinking), "thinking");
         thinking.state.operating = true;
         assert_eq!(status_label(&thinking), "using");
+        thinking.state.translation_active = true;
+        assert_eq!(status_label(&thinking), "正在翻译");
 
         // While transcribing, the live recognition replaces the message.
         let mut transcribing = frame("transcribing");

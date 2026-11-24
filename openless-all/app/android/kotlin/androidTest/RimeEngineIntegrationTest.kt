@@ -2,6 +2,7 @@ package com.openless.app
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.core.app.ActivityScenario
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.Before
@@ -195,6 +196,182 @@ class RimeEngineIntegrationTest {
             val rows = typePinyin(privateSession, "nihao").getJSONArray("candidates")
             assertFalse((0 until rows.length()).any { rows.getString(it) == "拟蚝" })
         } finally { OpenLessRime.request("destroy", privateSession) }
+    }
+
+    @Test fun userDictionaryExportsAndMergesSnapshots() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.initialize(context)
+        repeat(3) {
+            val session = OpenLessRime.request("create", "", "learning").getString("session")
+            try {
+                var state = typePinyin(session, "nihao")
+                state = choose(session, state, "拟")
+                state = choose(session, OpenLessRime.request("candidates", session), "蚝")
+                assertEquals("拟蚝", state.getString("commit"))
+                OpenLessRime.request("ack", session)
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        val open = OpenLessRime.request("create", "", "learning").getString("session")
+        val exported = java.io.File(context.cacheDir, "test-export-pinyin_simp.userdb.txt")
+        val incoming = java.io.File(context.cacheDir, "test-import-pinyin_simp.userdb.txt")
+        try {
+            assertTrue(OpenLessRime.exportUserDictionary(context, exported))
+            // Exporting closes every session so the dictionary can be read.
+            try {
+                OpenLessRime.request("state", open)
+                fail("Sessions must be closed by an export")
+            } catch (_: IllegalStateException) {}
+            val text = exported.readText()
+            assertTrue(RimeUserDictionaryFile.entryCount(text) > 0)
+            assertTrue(text.lines().any { it.split('\t').getOrNull(1) == "拟蚝" })
+            // Another device's snapshot holding a word this one never learned —
+            // on a spelling no other test types, since the dictionary is shared,
+            // and made of rare characters that sentence composition (which
+            // builds 剖剖 from the common 剖) never puts together on its own.
+            val header = text.lines().filter { it.startsWith("#") }.joinToString("\n")
+            fun importRow(row: String) {
+                incoming.writeText("$header\n$row\n")
+                OpenLessRime.importUserDictionary(context, incoming)
+            }
+            fun candidatesFor(input: String): List<String> {
+                val session = OpenLessRime.request("create", "", "learning").getString("session")
+                try {
+                    val rows = typePinyin(session, input).getJSONArray("candidates")
+                    return (0 until rows.length()).map { rows.getString(it) }
+                } finally { OpenLessRime.request("destroy", session) }
+            }
+            assertFalse("No such word before the import", "抔掊" in candidatesFor("poupou"))
+            try {
+                importRow("pou pou \t抔掊\tc=9 d=9 t=1")
+                assertTrue("Imported words become candidates", "抔掊" in candidatesFor("poupou"))
+                assertTrue("Importing merges instead of replacing", "拟蚝" in candidatesFor("nihao"))
+                importRow("pou pou \t抔掊\tc=-10 d=0 t=1")
+                assertTrue("Importing a deletion marker must retain local words", "抔掊" in candidatesFor("poupou"))
+            } finally {
+                // Fixture cleanup deliberately uses the raw native restore; the
+                // keyboard import API above filters tombstones before calling it.
+                incoming.writeText("$header\npou pou \t抔掊\tc=-10 d=0 t=1\n")
+                RimeTaskQueue.run { OpenLessRime.request("user_dict_import", "", incoming.absolutePath) }
+            }
+            assertFalse("The cleanup import deletes the word again", "抔掊" in candidatesFor("poupou"))
+        } finally {
+            exported.delete()
+            incoming.delete()
+        }
+    }
+
+    @Test fun fuzzyPinyinPatchIsDeployedAndRemoved() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.initialize(context)
+        fun candidatesFor(input: String): List<String> {
+            val session = OpenLessRime.request("create", "", "private").getString("session")
+            try {
+                val rows = typePinyin(session, input).getJSONArray("candidates")
+                return (0 until rows.length()).map { rows.getString(it) }
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        assertFalse("知" in candidatesFor("zi"))
+        try {
+            OpenLessRime.applyFuzzyPinyin(context, setOf("zcs"))
+            assertTrue("z = zh after the patch", "知" in candidatesFor("zi"))
+        } finally {
+            OpenLessRime.applyFuzzyPinyin(context, emptySet())
+        }
+        assertFalse(java.io.File(context.filesDir, "rime-user/openless_pinyin_private.custom.yaml").exists())
+        assertFalse("知" in candidatesFor("zi"))
+    }
+
+    @Test fun controllerStartsANewSessionAfterSessionsWereClosed() = withController { controller, committed ->
+        drain(controller) { for (letter in "ni") controller.appendLetter(letter) {} }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.exportUserDictionary(context, java.io.File(context.cacheDir, "test-reset-pinyin_simp.userdb.txt").apply { deleteOnExit() })
+        // The half-typed "ni" went with the closed session; typing continues in a new one.
+        drain(controller) {
+            for (letter in "nihao") controller.appendLetter(letter) {}
+            controller.space {}
+        }
+        assertEquals("你好", committed.toString())
+    }
+
+    @Test fun exportRequestedDuringEditorDeliveryWaitsForAcknowledgement() = withController { controller, committed ->
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val caller = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val requested = CountDownLatch(1)
+        val scratch = java.io.File(context.cacheDir, "test-in-flight-export.userdb.txt")
+        var export: java.util.concurrent.Future<*>? = null
+        try {
+            drain(controller) {
+                controller.bindCommit { text ->
+                    committed.append(text)
+                    if (export == null) {
+                        export = caller.submit {
+                            requested.countDown()
+                            OpenLessRime.exportUserDictionary(context, scratch)
+                        }
+                    }
+                    check(requested.await(5, TimeUnit.SECONDS))
+                    true
+                }
+                for (letter in "nihao") controller.appendLetter(letter) {}
+                controller.insertLiteral("!") {}
+            }
+            export!!.get(30, TimeUnit.SECONDS)
+            drain(controller) { controller.refresh {} }
+            assertEquals("你好!", committed.toString())
+            assertTrue(controller.isEmpty())
+        } finally {
+            caller.shutdownNow()
+            scratch.delete()
+        }
+    }
+
+    @Test fun exportBetweenFailedEditorWriteAndRetryRetainsTextAndPunctuation() = withController { controller, committed ->
+        val failed = CountDownLatch(1)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val scratch = java.io.File(context.cacheDir, "test-failed-write-export.userdb.txt")
+        try {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                controller.bindCommit { failed.countDown(); false }
+                for (letter in "nihao") controller.appendLetter(letter) {}
+                controller.insertLiteral("!") {}
+            }
+            assertTrue(failed.await(30, TimeUnit.SECONDS))
+            OpenLessRime.exportUserDictionary(context, scratch)
+            drain(controller) {
+                controller.bindCommit { committed.append(it); true }
+                controller.refresh {}
+            }
+            assertEquals("你好!", committed.toString())
+        } finally { scratch.delete() }
+    }
+
+    @Test fun exportChecklistSurvivesActivityRecreationWithoutAddingSensitiveSections() {
+        val field = OpenLessKeyboardSettingsActivity::class.java.getDeclaredField("pendingExport").apply { isAccessible = true }
+        val selected = setOf(KeyboardDataFile.Section.SETTINGS, KeyboardDataFile.Section.STROKE)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = android.content.Intent(context, OpenLessKeyboardSettingsActivity::class.java)
+        assertNotNull("Keyboard settings must be registered in the target app", context.packageManager.resolveActivity(intent, 0))
+        try {
+            ActivityScenario.launch<OpenLessKeyboardSettingsActivity>(intent).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertEquals(emptySet<KeyboardDataFile.Section>(), field.get(activity))
+                    field.set(activity, selected)
+                }
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    assertEquals(selected, field.get(activity))
+                    field.set(activity, emptySet<KeyboardDataFile.Section>())
+                }
+                scenario.recreate()
+                scenario.onActivity { activity -> assertEquals(emptySet<KeyboardDataFile.Section>(), field.get(activity)) }
+            }
+        } finally {
+            // Each recreation queues a dictionary count/export. Finish those
+            // before later tests create disposable raw native sessions.
+            val worker = OpenLessKeyboardSettingsActivity::class.java.getDeclaredField("rimeWorker").apply { isAccessible = true }
+                .get(null) as java.util.concurrent.ExecutorService
+            worker.submit {}.get(30, TimeUnit.SECONDS)
+        }
     }
 
     private fun withController(test: (RimePinyinController, StringBuilder) -> Unit) {

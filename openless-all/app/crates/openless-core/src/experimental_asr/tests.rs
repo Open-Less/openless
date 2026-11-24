@@ -336,9 +336,7 @@ async fn register_is_idempotent_append_only_and_keeps_existing_routes() {
     f.phase(Model::SenseVoice, ExperimentalAsrPhase::Disabled)
         .await;
     assert!(f.store.is_installed(&Model::SenseVoice.target()).unwrap());
-    f.service.delete_model(Model::SenseVoice).unwrap();
-    f.phase(Model::SenseVoice, ExperimentalAsrPhase::Disabled)
-        .await;
+    f.service.delete_model(Model::SenseVoice).await.unwrap();
     assert!(!f
         .store
         .model_dir(&Model::SenseVoice.target())

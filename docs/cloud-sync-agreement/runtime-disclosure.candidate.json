@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "status": "development-disclosure-candidate",
+  "proposedConsentVersion": "encrypted-full-snapshot-v2",
+  "replacesConsentVersion": "encrypted-full-snapshot-v1",
+  "contentOwner": "Independent cloud sync agreement author",
+  "sourceBaseline": "a6f4ad5bad93e4c19c8b9acb3369b152c58bfdde",
+  "factReviewDate": "2026-11-18",
+  "sourceIndex": "facts-and-legal-review.md",
+  "releaseBoundary": {
+    "purpose": "Candidate factual disclosure for the current development build; not the final legally reviewed service agreement.",
+    "acceptanceMeaning": "Explicit confirmation of this version of sync scope and handling disclosure on this device. No claim of a server-side legal acceptance receipt.",
+    "versionRationale": "The disclosure identifies the user-confirmed individual developer, free service, global intended audience and Mivra server sponsorship. It expressly describes the upload and limited use of registered API keys, authentication and metadata, password recovery and deletion. Previous local confirmation does not authorize the updated disclosure.",
+    "formalAgreementEffectiveDate": null,
+    "legalReviewComplete": false,
+    "translations": "Use zh-CN and en below as the authored source. Other locales may be faithful translations; do not introduce additional promises, dates, entities or legal conclusions."
+  },
+  "implementationContract": [
+    "Keep the existing Core and typed IPC consent constants aligned at encrypted-full-snapshot-v2. This authored candidate does not change source code or establish a legally effective agreement version.",
+    "An already enabled client whose local consent version differs from encrypted-full-snapshot-v2 must require explicit confirmation again. Do not migrate v1 to v2 or infer acceptance from enabled, signed-in or unlocked state.",
+    "Block new submissions and pending-operation resubmission before the version is accepted. Keep the consent gate ahead of reconciliation and of any path that could resubmit an outstanding operation; preparation can fetch metadata for review. Previously submitted requests cannot be recalled.",
+    "Show the updated notice globally for an affected enabled client, not only after opening sync settings. Do not call prepare_enable on mount, dialog display, scroll, checkbox changes, cancel or dismiss.",
+    "Keep the checkbox initially unchecked on every fresh review. Only the explicit confirm action may call the existing Core preparation path. Wait for its result before displaying accepted state.",
+    "Cancel or dismiss must not persist v2 or trigger upload. Keep later review reachable. Account or origin changes and stale dialog results must not accept the wrong scope.",
+    "Continue to distinguish confirmation, password/unlock/restore completion and successful synchronization. Acknowledging this disclosure does not itself prove any upload completed.",
+    "Display the development and legal-review boundary below. This candidate may supply factual development disclosure; the four longer draft documents remain review material and must not be silently presented as final effective terms.",
+    "Before enabling or confirming the updated scope, show that the client uploads registered API keys as ciphertext after local encryption. Describe cloud sync, provider requests and sync authentication separately; show the disclosure on first use as well as re-consent."
+  ],
+  "locales": {
+    "zh-CN": {
+      "title": "云同步服务告知与协议草案更新",
+      "updatedTitle": "协议已修改，请仔细阅读",
+      "updatedDescription": "云同步服务告知与协议草案已修改，请仔细阅读。继续同步前需要重新确认，旧版本的确认不会自动沿用。",
+      "apiKeyNotice": "启用后将上传已登记的 API 密钥（在客户端加密后作为密文随快照上传）。OpenLess 云同步服务仅保存和传递含这些密钥的加密快照，不使用这些密钥调用模型、转写或其他服务。同步服务器接收密文，不接收 API 密钥明文或解密密钥。",
+      "apiProviderUse": "使用您配置的转写或模型服务时，OpenLess 客户端使用相应的 API 密钥向您配置的服务端点认证；同步服务另行处理登录认证及必要元数据。",
+      "intro": "请在继续前了解同步资料的范围（包括私密文本历史）、密码与认证，以及关闭和删除方式。",
+      "sections": [
+        {
+          "id": "provider",
+          "title": "由个人开发者免费提供",
+          "body": "云同步由 OpenLess 个人开发者提供，面向全球用户，由开发者及赞助商共同免费支持。OpenLess 不收取本同步服务费用，服务器赞助商为 Mivra（悠雾云数据）。您自行使用的网络及第三方模型、转写等服务可能另行收费。",
+          "sources": [
+            "U1",
+            "W1"
+          ]
+        },
+        {
+          "id": "scope",
+          "title": "上传已登记的 API 密钥、文本历史和设备档案",
+          "body": "客户端上传包含已登记的 API 密钥等服务凭据的加密快照。快照还包括登记的应用与界面偏好、服务渠道、词典与词汇预设、纠正规则、风格内容和适用图标、私密文本历史、每日活动次数／字符数／时长，以及包含设备标识、系统、架构、应用版本及需保留或复查的设置、路径、渠道和窗口位置的设备档案。当前按登记范围整体同步；若希望排除 API 密钥或历史，请保持同步关闭。",
+          "sources": [
+            "F03"
+          ]
+        },
+        {
+          "id": "excluded",
+          "title": "录音文件和登录凭据不进入备份",
+          "body": "快照不包含录音文件、模型权重、缓存、程序或系统凭据库文件，也不包含同步密码、解密密钥、OpenLess 管理的 GitHub／OAuth 登录态及令牌、同步令牌、设备私钥、远程输入 PIN 或系统权限授权。光标上下文开关可同步，实际光标文本不进入同步文档。恢复其他设备档案不会自动执行其中路径、授予权限或启动 Agent。",
+          "sources": [
+            "F03",
+            "F04",
+            "F09"
+          ]
+        },
+        {
+          "id": "encryption",
+          "title": "在本机加密，并妥善保存密码",
+          "body": "客户端使用 Argon2id 从同步密码在本机派生密钥，再以 XChaCha20-Poly1305 对快照进行认证加密，通过 HTTPS 上传。同步服务器接收快照密文，不接收 API 密钥明文、同步密码或派生解密密钥。密码在本机按 NFC 规范化，当前要求 12–128 个字符并含 ASCII 大写、小写和数字，创建或改密还会检查常见弱密码。“记住密钥”依赖本设备系统安全存储。我们无法找回原密码；改密需提供当前密码，设备已解锁时也适用。密码遗失且本地资料无法取得时，云端内容可能永久无法读取。弱密码、设备失陷或软件漏洞仍可能导致资料泄露。",
+          "sources": [
+            "F05",
+            "F06",
+            "F07",
+            "F10"
+          ]
+        },
+        {
+          "id": "authentication",
+          "title": "认证和必要元数据仍需处理",
+          "body": "官方同步认证会将 GitHub 访问令牌单独发送给同步服务以换取短期会话；登录凭据在认证链路处理，并从快照文档中排除。服务端处理账号标识、登录名、vault／key／操作标识、版本、操作类型、密文大小与摘要、加密参数及同步时间等协议资料。自定义服务器使用其实际认证安排。基础设施法律实体、部署地区、日志与处理安排仍待核实；密文及可关联元数据的隐私处理须结合实际安排审查。",
+          "sources": [
+            "F06",
+            "F08",
+            "W1"
+          ]
+        },
+        {
+          "id": "runtime",
+          "title": "确认告知与同步完成是不同步骤",
+          "body": "同步需要启用、认证可用且设备已解锁。首次接入已有云端快照时，先验证并确认恢复预览；日常可合并变更可能自动应用，冲突需要复查。启用和确认是准备步骤，上传结果以相应操作状态为准。“结果未知”时应先核对原操作；已到达服务器的请求可能在取消后完成，已进入持久化的恢复事务仍须完成提交或回滚。",
+          "sources": [
+            "F02",
+            "F09",
+            "F11",
+            "F12"
+          ]
+        },
+        {
+          "id": "controls",
+          "title": "关闭、退出和删除各有不同作用",
+          "body": "关闭、锁定或退出后，云端快照继续保留；删除云端备份需要另行确认。删除当前快照后，本机资料保留，包括离线设备上的本机副本。官方公开能力接口在本次核对时声明服务备份副本最多保留 7 天。其他账号资料、日志、收据及删除标记的期限须另行确认；当前恢复流程读取当前快照。实际备份清理机制仍须运营核实。",
+          "sources": [
+            "F13",
+            "F14",
+            "F15"
+          ]
+        }
+      ],
+      "draftBoundary": "这是当前开发版的云同步事实告知与协议草案更新。服务提供者的完整身份和联系渠道、基础设施处理安排及完整法律条款仍待确认与法律审查。正式条款及生效日期待定；提供者在免费和赞助模式下仍依法承担相应责任。",
+      "checkbox": "我已阅读以上更新告知，了解客户端会上传已登记的 API 密钥及私密文本的密文、密码找回和删除方式，并同意按本页说明进行加密同步。",
+      "confirm": "同意更新告知并继续",
+      "cancel": "暂不同意",
+      "cancelHint": "暂不同意不会记录本次确认；在重新确认前，本设备暂停后续同步。已经发出的请求仍可能完成。",
+      "firstTimeTitle": "云同步服务告知与协议草案",
+      "firstTimeCheckbox": "我已阅读以上告知，了解客户端会上传已登记的 API 密钥及私密文本的密文、密码找回和删除方式，并同意按本页说明进行加密同步。",
+      "firstTimeConfirm": "同意并继续",
+      "firstTimeCancelHint": "暂不同意时，本机保持同步关闭，确认状态和云端备份保持原状。"
+    },
+    "en": {
+      "title": "Cloud sync disclosure and draft agreement update",
+      "updatedTitle": "The cloud sync disclosure has changed",
+      "updatedDescription": "The cloud sync disclosure and draft agreement have changed. Please read them carefully and confirm again before continuing. Your previous confirmation will not carry over automatically.",
+      "apiKeyNotice": "When you enable sync, it uploads your registered API keys as ciphertext after encrypting them on your device. OpenLess cloud sync stores and transfers the encrypted snapshot containing these keys and does not use them to call models, transcription or other services. The sync server receives ciphertext and does not receive plaintext API keys or the decryption key.",
+      "apiProviderUse": "When you use a transcription or model service you have configured, the OpenLess client uses the corresponding API key to authenticate to your configured service endpoint. The sync service separately handles sign-in and necessary metadata.",
+      "intro": "Before continuing, review what is synced (including private text history), how passwords and authentication are handled, and how to turn off sync or delete your backup.",
+      "sections": [
+        {
+          "id": "provider",
+          "title": "Provided free by an individual developer",
+          "body": "OpenLess cloud sync is provided by an individual developer for users worldwide, with free support from the developer and sponsors. OpenLess charges no fee for this sync service. The server sponsor is Mivra, also branded 悠雾云数据. Your network provider and separately configured model, transcription or other services may charge their own fees."
+        },
+        {
+          "id": "scope",
+          "title": "Uploads registered API keys, text history and device profiles",
+          "body": "The client uploads an encrypted snapshot containing registered API keys and other registered service credentials. It also includes registered app and interface preferences, service channels, dictionaries and vocabulary presets, correction rules, style content and applicable icons, private text history, daily activity counts, character counts and duration, and device profiles. Profiles include device identifiers, OS, architecture, app version and device settings, paths, channels and window positions to retain or review. Sync covers the registered scope as a whole. Leave sync off if you want to exclude API keys or history."
+        },
+        {
+          "id": "excluded",
+          "title": "Audio files and sign-in credentials are excluded from the backup",
+          "body": "Snapshots exclude audio files, model weights, caches, programs and system credential-store files. They also exclude your sync password, decryption keys, OpenLess-managed GitHub/OAuth sign-in state and tokens, sync tokens, device private keys, remote-input PINs and system permission grants. The cursor-context switch can sync; actual cursor text is not included in sync documents. Restoring another device's profile does not execute its paths, grant permissions or start an Agent."
+        },
+        {
+          "id": "encryption",
+          "title": "Encrypt locally and keep your password safe",
+          "body": "The client uses Argon2id to derive a key from your sync password on your device, then uses XChaCha20-Poly1305 authenticated encryption before uploading the snapshot over HTTPS. The sync server receives snapshot ciphertext and does not receive plaintext API keys, your sync password or the derived decryption key. Passwords are normalized locally to NFC. The current policy requires 12–128 characters with ASCII uppercase, lowercase and a digit; creating or changing a password also checks common weak patterns. Remembering the key relies on this device's secure storage. We cannot recover the original password. Changing it requires the current password, even on an unlocked device. If you lose the password and cannot access a local copy, cloud content may be permanently unreadable. Weak passwords, compromised devices or software flaws may still expose data."
+        },
+        {
+          "id": "authentication",
+          "title": "Authentication and necessary metadata are handled separately",
+          "body": "For official sync authentication, the client separately sends a GitHub access token to the sync service to obtain a short-lived session. Sign-in credentials are handled in the authentication process and excluded from the snapshot. The server handles protocol information including account identifiers, login, vault/key/operation identifiers, versions, operation types, ciphertext size and digest, encryption parameters and sync times. Custom servers use their actual authentication arrangements. Infrastructure legal entities, locations, logs and processing arrangements still require verification; privacy review must account for ciphertext and linkable metadata."
+        },
+        {
+          "id": "runtime",
+          "title": "Confirmation and completed sync are different steps",
+          "body": "Sync requires it to be enabled, authentication to be available and this device to be unlocked. Connecting to an existing snapshot for the first time requires verification and confirmation of a restore preview. Routine changes that can be merged may apply automatically; conflicts need review. Check the operation status for upload results. An unknown outcome requires checking the original operation. A request already sent can complete after cancellation; a started persistent restore transaction still has to commit or roll back."
+        },
+        {
+          "id": "controls",
+          "title": "Turning off, signing out and deleting have different effects",
+          "body": "The cloud snapshot remains when you turn off sync, lock the device for sync or sign out. Deletion requires separate confirmation and preserves local data, including copies on offline devices. At the time of review, the official public capability endpoint declared a maximum of seven days for service backup copies. Retention for other account data, logs, receipts and deletion markers requires separate confirmation. The current restore process reads the current snapshot. Actual backup cleanup still requires operational verification."
+        }
+      ],
+      "draftBoundary": "This is the current development build's factual sync disclosure and draft agreement update. The provider's complete identity and contact channels, infrastructure processing arrangements and full legal terms still require confirmation and legal review. Final terms and their effective date are pending. The provider remains responsible under applicable law while offering the service for free and with sponsorship.",
+      "checkbox": "I have read the updated disclosure, understand that the client will upload encrypted copies of registered API keys and private text, and understand the limits of password recovery and deletion. I agree to encrypted sync as described here.",
+      "confirm": "Agree to the update and continue",
+      "cancel": "Not now",
+      "cancelHint": "Declining does not record this confirmation. Further sync on this device is paused until you confirm again. Requests already sent may still complete.",
+      "firstTimeTitle": "Cloud sync disclosure and draft agreement",
+      "firstTimeCheckbox": "I have read this disclosure, understand that the client will upload encrypted copies of registered API keys and private text, and understand the limits of password recovery and deletion. I agree to encrypted sync as described here.",
+      "firstTimeConfirm": "Agree and continue",
+      "firstTimeCancelHint": "If you decline, sync remains off on this device and your confirmation status and cloud backup stay as they are."
+    }
+  }
+}
