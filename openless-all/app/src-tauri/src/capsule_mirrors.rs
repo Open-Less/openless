@@ -286,8 +286,8 @@ pub(crate) fn ensure_capsule_mirror<R: tauri::Runtime>(
     .build()?;
     #[cfg(target_os = "macos")]
     {
-        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-        use tauri_nspanel::WebviewWindowExt;
+        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
+        use tauri_nspanel::WebviewWindowExt;  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
         let panel = match window.to_panel() {
             Ok(panel) => panel,
             Err(error) => {

@@ -83,17 +83,23 @@ unsafe extern "system" fn hit_test_subclass_proc(
 }
 
 /// 安装/更新命中测试区域（胶囊本体，不抢焦点）。
-pub fn install_hit_test(hwnd: HWND, rect: HitRect) -> windows::core::Result<()> {
-    install(hwnd, rect, false)
+///
+/// 参数是裸 `HWND`（以 `usize` 传递），宿主不需要认识 windows crate 类型。
+pub fn install_hit_test(raw_hwnd: usize, rect: HitRect) -> windows::core::Result<()> {
+    install(raw_hwnd, rect, false)
 }
 
 /// 安装/更新命中测试区域（卡片，允许激活）。
-pub fn install_card_hit_test(hwnd: HWND, rect: HitRect) -> windows::core::Result<()> {
-    install(hwnd, rect, true)
+pub fn install_card_hit_test(raw_hwnd: usize, rect: HitRect) -> windows::core::Result<()> {
+    install(raw_hwnd, rect, true)
 }
 
 /// 不替换子类链，只改激活策略。
-pub fn set_no_activate(hwnd: HWND, no_activate: bool) {
+pub fn set_no_activate(raw_hwnd: usize, no_activate: bool) {
+    if raw_hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(raw_hwnd as *mut std::ffi::c_void);
     let mut data = 0;
     unsafe {
         if GetWindowSubclass(hwnd, Some(hit_test_subclass_proc), SUBCLASS_ID, Some(&mut data))
@@ -104,10 +110,11 @@ pub fn set_no_activate(hwnd: HWND, no_activate: bool) {
     }
 }
 
-fn install(hwnd: HWND, rect: HitRect, no_activate: bool) -> windows::core::Result<()> {
-    if hwnd.0.is_null() {
+fn install(raw_hwnd: usize, rect: HitRect, no_activate: bool) -> windows::core::Result<()> {
+    if raw_hwnd == 0 {
         return Err(windows::core::Error::from_hresult(E_INVALIDARG));
     }
+    let hwnd = HWND(raw_hwnd as *mut std::ffi::c_void);
     let mut data = 0;
     unsafe {
         // 子类可能仍在链上（只是被别的回调覆盖），此时原地更新状态。

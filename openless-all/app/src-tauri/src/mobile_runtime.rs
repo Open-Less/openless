@@ -142,24 +142,10 @@ fn install_android_jni_context() {
 
 #[cfg(target_os = "android")]
 fn initialize_android_ndk_context_for_audio() {
-    static INIT: std::sync::Once = std::sync::Once::new();
-
-    INIT.call_once(|| {
-        let Some(context) = tao::platform::android::prelude::main_android_context() else {
-            log::warn!("[android] tao Android context unavailable; audio backend may fail");
-            return;
-        };
-
-        let result = std::panic::catch_unwind(|| unsafe {
-            ndk_context::initialize_android_context(context.java_vm, context.context_jobject);
-        });
-
-        if result.is_ok() {
-            log::info!("[android] initialized ndk-context for audio backend");
-        } else {
-            log::warn!("[android] ndk-context was already initialized or rejected initialization");
-        }
-    });
+    // ndk-context 初始化由平台层负责（它已经持有 JavaVM/Context）。
+    if openless_platform::android::context::install_ndk_context() {
+        log::info!("[android] initialized ndk-context for audio backend");
+    }
 }
 
 #[cfg(not(target_os = "android"))]

@@ -20,9 +20,9 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
+// Windows「零剪贴板」选区读取（TSF → UIA）在平台层。
 #[cfg(target_os = "windows")]
-#[path = "selection/zero_clipboard.rs"]
-mod zero_clipboard;
+use openless_platform::windows::selection as zero_clipboard;
 // 选区截断参数：所有平台共用（Android 的 QA 选区同样需要上限）。
 const SELECTION_MAX_CHARS: usize = 4000;
 const SELECTION_TRUNCATE_HEAD: usize = 2000;

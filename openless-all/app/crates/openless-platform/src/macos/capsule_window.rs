@@ -145,3 +145,64 @@ pub fn pressed_mouse_buttons() -> usize {
         pressed
     }
 }
+
+// ─────────────────────── 胶囊窗口展示（不激活） ───────────────────────
+
+/// 胶囊窗口层级：略高于普通浮动窗口，仍在系统弹窗之下。
+pub const CAPSULE_WINDOW_LEVEL: i64 = 25;
+
+/// 始终可见的 collectionBehavior：可加入所有 Space + 不随 Space 移动 + 全屏辅助。
+pub const CAPSULE_BEHAVIOR: usize = (1 << 0) | (1 << 4) | (1 << 8);
+
+/// 重设前的过渡值：只保留"不随 Space 移动 + 全屏辅助"两位。
+///
+/// macOS 在切换 Space 时会把 canJoinAllSpaces 位重置，先设低位再设完整位，
+/// 才能让窗口稳定出现在当前 Space 上。
+pub const CAPSULE_BEHAVIOR_LOW: usize = (1 << 4) | (1 << 8);
+
+/// 以"不抢焦点"的方式显示胶囊窗口，并设置层级与跨 Space 行为。
+///
+/// `reassert_spaces = true` 时先设置过渡位，调用方需在约 30ms 后
+/// 调用 [`reassert_capsule_behavior`] 补齐完整位（AppKit 的异步行为）。
+///
+/// # Safety
+/// `window` 必须是有效的 `NSWindow*`，且调用在主线程。
+pub unsafe fn show_capsule_without_activating(
+    window: *mut std::ffi::c_void,
+    reassert_spaces: bool,
+) -> Result<(), String> {
+    use objc2::runtime::AnyObject;
+
+    if window.is_null() {
+        return Err("null NSWindow".to_string());
+    }
+    let ns = window as *mut AnyObject;
+    unsafe {
+        let _: () = objc2::msg_send![ns, setLevel: CAPSULE_WINDOW_LEVEL];
+        if reassert_spaces {
+            let current: usize = objc2::msg_send![ns, collectionBehavior];
+            if current != CAPSULE_BEHAVIOR {
+                log::warn!(
+                    "[capsule] collectionBehavior drifted to {current} (expected {CAPSULE_BEHAVIOR}); re-registering"
+                );
+            }
+            let _: () = objc2::msg_send![ns, setCollectionBehavior: CAPSULE_BEHAVIOR_LOW];
+        } else {
+            let _: () = objc2::msg_send![ns, setCollectionBehavior: CAPSULE_BEHAVIOR];
+        }
+        let _: () = objc2::msg_send![ns, orderFrontRegardless];
+    }
+    Ok(())
+}
+
+/// 补齐完整 collectionBehavior（配合 `show_capsule_without_activating(reassert_spaces = true)`）。
+///
+/// # Safety
+/// `window` 必须是有效的 `NSWindow*`，且调用在主线程。
+pub unsafe fn reassert_capsule_behavior(window: *mut std::ffi::c_void) {
+    if window.is_null() {
+        return;
+    }
+    let ns = window as *mut objc2::runtime::AnyObject;
+    let _: () = unsafe { objc2::msg_send![ns, setCollectionBehavior: CAPSULE_BEHAVIOR] };
+}

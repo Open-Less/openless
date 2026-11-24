@@ -212,48 +212,14 @@ fn capsule_card_hit_rect(window_width: i32, window_height: i32) -> CapsuleHitTes
 }
 
 #[cfg(target_os = "windows")]
-fn set_capsule_input_region(
-    hwnd: windows::Win32::Foundation::HWND,
-    rect: CapsuleHitTestRect,
-) -> tauri::Result<()> {
-    use windows::Win32::Foundation::BOOL;
-    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ};
-
-    if hwnd.0.is_null() {
-        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "cannot set input region for a null HWND"
-        )));
-    }
-
-    let radius = ((rect.bottom - rect.top) / 2).max(1);
-    let region =
-        unsafe { CreateRoundRectRgn(rect.left, rect.top, rect.right, rect.bottom, radius, radius) };
-    if region.0.is_null() {
-        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "CreateRoundRectRgn returned a null region"
-        )));
-    }
-    let result = unsafe { SetWindowRgn(hwnd, region, BOOL(1)) };
-    if result == 0 {
-        unsafe {
-            let _ = DeleteObject(HGDIOBJ(region.0));
-        }
-        return Err(tauri::Error::Anyhow(anyhow::anyhow!("SetWindowRgn failed")));
-    }
-    Ok(())
+fn set_capsule_input_region(raw_hwnd: usize, rect: CapsuleHitTestRect) -> tauri::Result<()> {
+    openless_platform::windows::window::set_round_rect_region(raw_hwnd, rect, None)
+        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))
 }
 
 #[cfg(target_os = "windows")]
-fn clear_capsule_input_region(hwnd: windows::Win32::Foundation::HWND) {
-    use windows::Win32::Foundation::BOOL;
-    use windows::Win32::Graphics::Gdi::{SetWindowRgn, HRGN};
-
-    if hwnd.0.is_null() {
-        return;
-    }
-    unsafe {
-        let _ = SetWindowRgn(hwnd, HRGN::default(), BOOL(1));
-    }
+fn clear_capsule_input_region(raw_hwnd: usize) {
+    openless_platform::windows::window::clear_window_region(raw_hwnd);
 }
 
 #[cfg(target_os = "windows")]
@@ -264,8 +230,6 @@ fn configure_capsule_hit_test<R: tauri::Runtime>(
     translation_active: bool,
 ) -> tauri::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
     let Ok(handle) = window.window_handle() else {
         return Ok(());
@@ -273,22 +237,18 @@ fn configure_capsule_hit_test<R: tauri::Runtime>(
     let RawWindowHandle::Win32(raw) = handle.as_raw() else {
         return Ok(());
     };
-    let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
-    if hwnd.0.is_null() {
+    let hwnd = raw.hwnd.get() as usize;
+    let Some((width, height)) = openless_platform::windows::window::client_size(hwnd) else {
         return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "capsule window returned a null HWND"
+            "capsule window returned no client rect"
         )));
-    }
-    let mut client = RECT::default();
-    unsafe {
-        GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
-    }
+    };
     let Some(rect) = capsule_control_hit_rect(
         style,
         transcript_visible,
         translation_active,
-        client.right - client.left,
-        client.bottom - client.top,
+        width,
+        height,
     ) else {
         return Ok(());
     };
@@ -305,8 +265,6 @@ fn configure_card_hit_test<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> tauri::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
     let Ok(handle) = window.window_handle() else {
         return Ok(());
@@ -314,17 +272,13 @@ fn configure_card_hit_test<R: tauri::Runtime>(
     let RawWindowHandle::Win32(raw) = handle.as_raw() else {
         return Ok(());
     };
-    let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
-    if hwnd.0.is_null() {
+    let hwnd = raw.hwnd.get() as usize;
+    let Some((width, height)) = openless_platform::windows::window::client_size(hwnd) else {
         return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "card window returned a null HWND"
+            "card window returned no client rect"
         )));
-    }
-    let mut client = RECT::default();
-    unsafe {
-        GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
-    }
-    let rect = capsule_card_hit_rect(client.right - client.left, client.bottom - client.top);
+    };
+    let rect = capsule_card_hit_rect(width, height);
     clear_capsule_input_region(hwnd);
     install_capsule_card_hit_test_proc(hwnd, rect)
         .map_err(|error| tauri::Error::Anyhow(error.into()))
@@ -342,10 +296,7 @@ fn clear_capsule_input_region_for_window<R: tauri::Runtime>(
     let RawWindowHandle::Win32(raw) = handle.as_raw() else {
         return Ok(());
     };
-    let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
-    if !hwnd.0.is_null() {
-        clear_capsule_input_region(hwnd);
-    }
+    clear_capsule_input_region(raw.hwnd.get() as usize);
     Ok(())
 }
 
@@ -386,11 +337,10 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
     #[cfg(target_os = "macos")]
     if crate::desktop_resources::active() {
         if let Ok(raw) = window.ns_window() {
-            unsafe {
-                use objc2::{msg_send, runtime::AnyObject};
-                let panel = raw as *mut AnyObject;
-                let _: () = msg_send![panel, orderFrontRegardless];
-            }
+            // SAFETY: 这段调用来自 tauri 的窗口回调，已在主线程。
+            let _ = unsafe {
+                openless_platform::macos::window::show_without_activating(raw, None)
+            };
         }
         return;
     }
@@ -415,11 +365,6 @@ fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     show: bool,
 ) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    };
 
     let Ok(handle) = window.window_handle() else {
         log::warn!(
@@ -433,45 +378,16 @@ fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
         );
         return false;
     };
-    let hwnd = HWND(raw.hwnd.get() as *mut _);
-    if hwnd.0.is_null() {
-        log::warn!("[capsule] no_activate failed: Win32 handle is null");
-        return false;
-    }
-
-    if show {
-        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-    }
-    let position_result = if show {
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )
+    match openless_platform::windows::window::set_topmost_no_activate(
+        raw.hwnd.get() as usize,
+        show,
+    ) {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!("[capsule] no_activate failed: {error}");
+            false
         }
-    } else {
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            )
-        }
-    };
-    if let Err(error) = position_result {
-        log::warn!("[capsule] no_activate failed: SetWindowPos returned {error}");
-        return false;
     }
-    true
 }
 
 #[cfg(target_os = "windows")]
@@ -489,38 +405,23 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     reassert_spaces: bool,
 ) -> bool {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-
     let Ok(handle) = window.ns_window() else {
         return false;
     };
-    let ns_window = handle as *mut AnyObject;
-    if ns_window.is_null() {
+    // 层级 / 跨 Space 行为 / 不抢焦点全部在平台层。
+    // SAFETY: 这里由 tauri 的窗口回调驱动，已在主线程。
+    if unsafe {
+        openless_platform::macos::capsule_window::show_capsule_without_activating(
+            handle,
+            reassert_spaces,
+        )
+    }
+    .is_err()
+    {
         return false;
     }
-
-    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
-    const STATIONARY: usize = 1 << 4;
-    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-    const BEHAVIOR: usize = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
-    unsafe {
-        let _: () = msg_send![ns_window, setLevel: 25i64];
-        if reassert_spaces {
-            let current: usize = msg_send![ns_window, collectionBehavior];
-            if current != BEHAVIOR {
-                log::warn!(
-                    "[capsule] collectionBehavior drifted to {current} (expected {BEHAVIOR}); re-registering"
-                );
-            }
-            let low = STATIONARY | FULL_SCREEN_AUXILIARY;
-            let _: () = msg_send![ns_window, setCollectionBehavior: low];
-        } else {
-            let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
-        }
-        let _: () = msg_send![ns_window, orderFrontRegardless];
-    }
     if reassert_spaces {
+        // macOS 在切换 Space 时会重置 canJoinAllSpaces；30ms 后补齐完整位。
         let app = app.clone();
         let window = window.clone();
         std::thread::spawn(move || {
@@ -529,12 +430,9 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
                 let Ok(handle) = window.ns_window() else {
                     return;
                 };
-                let ns_window = handle as *mut AnyObject;
-                if ns_window.is_null() {
-                    return;
-                }
+                // SAFETY: run_on_main_thread 保证在主线程。
                 unsafe {
-                    let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+                    openless_platform::macos::capsule_window::reassert_capsule_behavior(handle);
                 }
             });
         });
@@ -561,11 +459,6 @@ fn hide_capsule_mirror<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), &'static str> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SW_HIDE,
-    };
 
     window.hide().map_err(|_| "tauri_hide_failed")?;
     let handle = window
@@ -574,25 +467,8 @@ fn hide_capsule_mirror<R: tauri::Runtime>(
     let RawWindowHandle::Win32(raw) = handle.as_raw() else {
         return Err("non_win32_handle");
     };
-    let hwnd = HWND(raw.hwnd.get() as *mut _);
-    if hwnd.0.is_null() {
-        return Err("null_win32_handle");
-    }
-
-    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_NOTOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
-        )
-    }
-    .map_err(|_| "win32_hide_failed")?;
-    Ok(())
+    openless_platform::windows::window::hide_window_topmost(raw.hwnd.get() as usize)
+        .map_err(|_| "win32_hide_failed")
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -604,35 +480,8 @@ fn hide_capsule_mirror<R: tauri::Runtime>(
 
 #[cfg(target_os = "windows")]
 fn hide_capsule_window_if_present() {
-    use std::iter::once;
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
-    };
-
-    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return,
-    };
-    if hwnd == HWND::default() || hwnd.0.is_null() {
-        return;
-    }
-
-    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_NOTOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
-        )
-    };
+    // 上一版本可能留下一个标题为 "OpenLess Capsule" 的独立窗口；按标题隐藏它。
+    openless_platform::windows::window::hide_window_by_title("OpenLess Capsule");
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1264,10 +1113,7 @@ impl TauriCapsuleWindow {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             if let Ok(handle) = window.window_handle() {
                 if let RawWindowHandle::Win32(raw) = handle.as_raw() {
-                    set_capsule_no_activate(
-                        windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _),
-                        false,
-                    );
+                    set_capsule_no_activate(raw.hwnd.get() as usize, false);
                 }
             }
         }
@@ -1533,10 +1379,6 @@ impl TauriCapsuleWindow {
         {
             use crate::capsule_mirrors::MonitorRect;
             use crate::vocab_card_placement::{place_card, Rect, Screen};
-            use windows::Win32::Foundation::{HWND, RECT};
-            use windows::Win32::UI::WindowsAndMessaging::{
-                GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindow,
-            };
             let Some(window) = self.window() else {
                 return Ok(());
             };
@@ -1568,30 +1410,25 @@ impl TauriCapsuleWindow {
             let mut anchor = None;
             let mut source_monitor = None;
             if let Some(snapshot) = snapshot {
-                let hwnd = HWND(snapshot.window as *mut _);
-                let mut pid = 0;
-                let mut bounds = RECT::default();
-                let valid_window = unsafe {
-                    IsWindow(hwnd).as_bool() && {
-                        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-                        pid == snapshot.process_id
-                    }
-                };
+                // 窗口仍然有效、pid 未变、位置未动、且仍是前台 —— 全部由平台层查询。
+                use openless_platform::windows::window as platform_window;
+                let valid_window = platform_window::is_window(snapshot.window)
+                    && platform_window::process_id_of_window(snapshot.window)
+                        == Some(snapshot.process_id);
                 if valid_window {
                     source_monitor =
                         crate::capsule_mirrors::monitor_rect_for_hwnd(&self.app, snapshot.window);
-                    let unchanged = unsafe {
-                        GetWindowRect(hwnd, &mut bounds).is_ok() && GetForegroundWindow() == hwnd
-                    };
-                    let current = Rect {
-                        left: bounds.left,
-                        top: bounds.top,
-                        right: bounds.right,
-                        bottom: bounds.bottom,
-                    };
+                    let unchanged = platform_window::is_foreground(snapshot.window);
+                    let current = platform_window::window_rect(snapshot.window)
+                        .map(|bounds| Rect {
+                            left: bounds.left,
+                            top: bounds.top,
+                            right: bounds.right,
+                            bottom: bounds.bottom,
+                        });
                     if position == openless_core::shared_types::VocabularySuggestionPosition::NearInput
                         && unchanged
-                        && current == snapshot.window_rect
+                        && current == Some(snapshot.window_rect)
                         && id.is_some_and(|id| {
                             state
                                 .as_ref()
@@ -1642,9 +1479,6 @@ impl TauriCapsuleWindow {
             };
             if let Some(p) = place_card(screen, anchor, width, height, edge_margin) {
                 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
-                };
                 let handle = window
                     .window_handle()
                     .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!("{error}")))?;
@@ -1653,17 +1487,15 @@ impl TauriCapsuleWindow {
                         "card has no Win32 window"
                     )));
                 };
-                unsafe {
-                    SetWindowPos(
-                        HWND(raw.hwnd.get() as *mut _),
-                        HWND::default(),
+                {
+                    openless_platform::windows::window::move_window_no_activate(
+                        raw.hwnd.get() as usize,
                         p.x,
                         p.y,
                         p.width as i32,
                         p.height as i32,
-                        SWP_NOACTIVATE | SWP_NOZORDER,
                     )
-                    .map_err(|error| tauri::Error::Anyhow(error.into()))?;
+                    .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
                 }
             } else {
                 return Err(tauri::Error::Anyhow(anyhow::anyhow!(
@@ -2074,10 +1906,7 @@ impl TauriCapsuleWindow {
         let RawWindowHandle::Win32(raw) = handle.as_raw() else {
             return;
         };
-        let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
-        if hwnd.0.is_null() {
-            return;
-        }
+        let hwnd = raw.hwnd.get() as usize;
         let _ = install_capsule_hit_test_proc(
             hwnd,
             CapsuleHitTestRect {

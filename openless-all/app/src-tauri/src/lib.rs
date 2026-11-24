@@ -871,7 +871,7 @@ fn run_desktop() {
     // tauri#9556 / #11488). capsule.to_panel() in setup below depends on the panel registry
     // this plugin registers; the plugin is macOS-only.
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
+    let builder = builder.plugin(tauri_nspanel::init());  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
     // Keep one instance across installed and development copies sharing the same app identifier.
     let builder = builder.plugin(tauri_plugin_single_instance::init(single_instance_callback));
     builder
@@ -929,8 +929,8 @@ fn run_desktop() {
                 // with collectionBehavior alone — tauri#9556 / #11488).
                 #[cfg(target_os = "macos")]
                 {
-                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                    use tauri_nspanel::WebviewWindowExt;
+                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
+                    use tauri_nspanel::WebviewWindowExt;  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
                     match capsule.to_panel() {
                         Ok(panel) => {
                             // Non-activating: showing/clicking never activates this app
@@ -1787,16 +1787,10 @@ pub(crate) fn refresh_tray_microphone_menu(_app: &AppHandle) -> tauri::Result<()
     Ok(())
 }
 
-/// Win11 22H2+ (Build 22621+) syncs the native title bar immersive dark / caption / text /
-/// border colors. DwmSetWindowAttribute errors on older Windows: warn only, never block startup.
+/// 同步原生标题栏配色（DWM）→ 平台层。
 #[cfg(target_os = "windows")]
 fn apply_windows_caption_theme<R: Runtime>(window: &tauri::WebviewWindow<R>, dark: bool) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
-        DWMWA_USE_IMMERSIVE_DARK_MODE,
-    };
 
     let handle = match window.window_handle().map(|h| h.as_raw()) {
         Ok(RawWindowHandle::Win32(handle)) => handle,
@@ -1809,46 +1803,9 @@ fn apply_windows_caption_theme<R: Runtime>(window: &tauri::WebviewWindow<R>, dar
             return;
         }
     };
-    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
-
-    // COLORREF 0x00BBGGRR — light matches the WindowChrome glass start color rgb(245,245,247);
-    // dark matches tokens.css --ol-surface (#141922) / --ol-ink (#f4f7fb) / --ol-surface-2 (#1a202b).
-    let immersive_dark: i32 = i32::from(dark);
-    let caption_color: u32 = if dark { 0x0022_1914 } else { 0x00F7_F5F5 };
-    let text_color: u32 = if dark { 0x00FB_F7F4 } else { 0x002A_170F };
-    let border_color: u32 = if dark { 0x002B_201A } else { 0x00E8_E8E8 };
-
-    unsafe {
-        set_dwm_window_attribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            &immersive_dark,
-            "immersive dark mode",
-        );
-        set_dwm_window_attribute(hwnd, DWMWA_CAPTION_COLOR, &caption_color, "caption color");
-        set_dwm_window_attribute(hwnd, DWMWA_TEXT_COLOR, &text_color, "text color");
-        set_dwm_window_attribute(hwnd, DWMWA_BORDER_COLOR, &border_color, "border color");
-    }
+    openless_platform::windows::window::apply_caption_theme(handle.hwnd.get() as usize, dark);
 }
 
-#[cfg(target_os = "windows")]
-unsafe fn set_dwm_window_attribute<T>(
-    hwnd: windows::Win32::Foundation::HWND,
-    attribute: windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE,
-    value: &T,
-    label: &str,
-) {
-    use windows::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-
-    if let Err(e) = DwmSetWindowAttribute(
-        hwnd,
-        attribute,
-        value as *const _ as *const core::ffi::c_void,
-        std::mem::size_of_val(value) as u32,
-    ) {
-        log::warn!("[main] set {label} failed (likely pre-22H2 Win): {e}");
-    }
-}
 
 /// Syncs the main window's native title bar on frontend theme change; no-op off Windows.
 #[tauri::command]
@@ -2241,18 +2198,8 @@ fn activate_menu_bar_mode<R: Runtime>(_app: &AppHandle<R>) {}
 #[cfg(target_os = "macos")]
 fn activate_app<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.run_on_main_thread(|| {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject, Bool};
-
-        unsafe {
-            let Some(cls) = AnyClass::get("NSApplication") else {
-                return;
-            };
-            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
-            if !ns_app.is_null() {
-                let _: () = msg_send![ns_app, activateIgnoringOtherApps: Bool::YES];
-            }
-        }
+        // SAFETY: run_on_main_thread 保证在主线程。
+        unsafe { openless_platform::macos::window::activate_app() };
     });
 }
 
@@ -2266,32 +2213,18 @@ fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
 pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) {
     let main = app.get_webview_window("main");
     let _ = app.run_on_main_thread(move || {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject, Bool};
+        // SAFETY: run_on_main_thread 保证在主线程。
         unsafe {
-            let Some(cls) = AnyClass::get("NSApplication") else {
-                return;
-            };
-            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
-            if ns_app.is_null() {
-                return;
-            }
-            let is_active: Bool = msg_send![ns_app, isActive];
-            if !is_active.as_bool() {
+            if !openless_platform::macos::window::app_is_active() {
                 return;
             }
             let Some(main) = main else {
                 return;
             };
             match main.ns_window() {
-                Ok(handle) => {
-                    let main_win = handle as *mut AnyObject;
-                    if !main_win.is_null() {
-                        let _: () = msg_send![main_win, makeKeyWindow];
-                    }
-                }
-                Err(e) => log::warn!("[main] ns_window unavailable for key restore: {e}"),
-            };
+                Ok(handle) => openless_platform::macos::window::make_key_window(handle),
+                Err(error) => log::warn!("[main] ns_window unavailable for key restore: {error}"),
+            }
         }
     });
 }
@@ -2300,19 +2233,8 @@ pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) 
 fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
     let (tx, rx) = mpsc::channel();
     let _ = app.run_on_main_thread(move || {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject, Bool};
-
-        unsafe {
-            let Some(cls) = AnyClass::get("NSApplication") else {
-                let _ = tx.send(());
-                return;
-            };
-            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
-            if !ns_app.is_null() {
-                let _: () = msg_send![ns_app, activateIgnoringOtherApps: Bool::YES];
-            }
-        }
+        // SAFETY: run_on_main_thread 保证在主线程。
+        unsafe { openless_platform::macos::window::activate_app() };
         let _ = tx.send(());
     });
     let _ = rx.recv_timeout(Duration::from_millis(800));
@@ -3026,18 +2948,16 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
     {
         let window_clone = window.clone();
         let _ = app.run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
             match window_clone.ns_window() {
                 Ok(handle) => {
-                    let ns = handle as *mut AnyObject;
-                    if ns.is_null() {
+                    // SAFETY: run_on_main_thread 保证在主线程。
+                    if unsafe {
+                        openless_platform::macos::window::show_without_activating(handle, None)
+                    }
+                    .is_err()
+                    {
                         log::warn!("[qa] ns_window null; falling back to window.show()");
                         let _ = window_clone.show();
-                    } else {
-                        unsafe {
-                            let _: () = msg_send![ns, orderFrontRegardless];
-                        }
                     }
                 }
                 Err(e) => {
@@ -3084,19 +3004,14 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
 /// apps, so the panel must be able to overlay them.
 #[cfg(target_os = "macos")]
 fn make_chat_window_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, tag: &str) {
-    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-    use tauri_nspanel::WebviewWindowExt;
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
+    use tauri_nspanel::WebviewWindowExt;  // boundary-allow: tauri-nspanel 需要 tauri 窗口对象与插件注册，平台层不链接 tauri
     match window.to_panel() {
         Ok(panel) => {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            let raw = &*panel as *const _ as *mut AnyObject;
-            if !raw.is_null() {
-                unsafe {
-                    let current: usize = msg_send![raw, styleMask];
-                    let _: () = msg_send![raw, setStyleMask: current | (1usize << 7)];
-                }
-            }
+            // 非激活面板样式位（NSWindowStyleMaskNonactivatingPanel）由平台层设置。
+            let raw = &*panel as *const _ as *mut std::ffi::c_void;
+            // SAFETY: 这段在 tauri 窗口回调里，已在主线程。
+            unsafe { openless_platform::macos::window::set_nonactivating_panel_style(raw) };
             // Floating level (NSFloatingWindowLevel): above normal windows, below the
             // menu bar / capsule (25).
             panel.set_level(3);
@@ -3128,34 +3043,15 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     tag: &str,
 ) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyObject, Bool};
     let Ok(handle) = window.ns_window() else {
         log::warn!("[{tag}] ns_window unavailable; drag fix skipped");
         return;
     };
-    let ns_window = handle as *mut AnyObject;
-    if ns_window.is_null() {
-        log::warn!("[{tag}] ns_window null; drag fix skipped");
-        return;
-    }
-    // Exception guard: AppKit raises an NSException from inside setMovable when drag
-    // margins are inconsistent. Uncaught, the exception crosses the Rust boundary and
-    // aborts the whole app. Catch it and degrade to a log (dragging breaks but the app
-    // lives); the log names the specific exception to ease root-causing.
-    // SAFETY: the closure contains only two void-returning ObjC message sends and no Rust
-    // values needing destructors; exception unwinding past the closure frame stays
-    // memory-safe.
-    let result = unsafe {
-        objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
-            let _: () = msg_send![ns_window, setMovableByWindowBackground: Bool::YES];
-            let _: () = msg_send![ns_window, setMovable: Bool::YES];
-        }))
-    };
-    match result {
+    // SAFETY: 这段由 tauri 窗口回调驱动，已在主线程。
+    match unsafe { openless_platform::macos::window::make_draggable(handle) } {
         Ok(()) => log::info!("[{tag}] NSWindow movableByWindowBackground=YES"),
-        Err(e) => {
-            log::error!("[{tag}] drag setup raised ObjC exception (caught, drag disabled): {e:?}")
+        Err(error) => {
+            log::error!("[{tag}] drag setup raised ObjC exception (caught, drag disabled): {error}")
         }
     }
 }
@@ -3445,13 +3341,13 @@ pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     {
         let window_clone = window.clone();
         let _ = app.run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
             match window_clone.ns_window() {
-                Ok(handle) if !handle.is_null() => unsafe {
-                    let ns = handle as *mut AnyObject;
-                    let _: () = msg_send![ns, orderFrontRegardless];
-                },
+                Ok(handle) if !handle.is_null() => {
+                    // SAFETY: run_on_main_thread 保证在主线程。
+                    let _ = unsafe {
+                        openless_platform::macos::window::show_without_activating(handle, None)
+                    };
+                }
                 _ => {
                     let _ = window_clone.show();
                 }
@@ -3604,8 +3500,6 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
             return;
         }
 
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
         // This helper is also called from the Tokio worker that executes a text or
         // voice Agent turn. Keep every AppKit-backed window mutation on the main
         // thread; macOS aborts the process if a converted NSPanel is resized or moved
@@ -3624,14 +3518,14 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
         }
         match window_clone.ns_window() {
             Ok(handle) => {
-                let ns = handle as *mut AnyObject;
-                if ns.is_null() {
+                // SAFETY: 这段在 run_on_main_thread 里，已在主线程。
+                if unsafe {
+                    openless_platform::macos::window::show_without_activating(handle, None)
+                }
+                .is_err()
+                {
                     log::warn!("[less-computer] ns_window null; falling back to window.show()");
                     let _ = window_clone.show();
-                } else {
-                    unsafe {
-                        let _: () = msg_send![ns, orderFrontRegardless];
-                    }
                 }
             }
             Err(e) => {

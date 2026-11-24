@@ -112,3 +112,59 @@ fn poll_after_copy(baseline: u32, posted: &mut bool) -> CaptureOutcome {
         CaptureOutcome::Unchanged
     }
 }
+
+// ─────────────────── 零剪贴板选区读取（TSF → UIA） ───────────────────
+
+/// 这次选区是从哪条通道读到的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionSource {
+    /// 我们自己的 TSF 文本服务（`ITfContext::GetSelection`），完全不碰剪贴板。
+    Tsf,
+    /// UIA `TextPattern.GetSelection`，覆盖没激活 TSF 服务的应用。
+    Uia,
+}
+
+impl SelectionSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tsf => "TSF",
+            Self::Uia => "UIA",
+        }
+    }
+}
+
+/// 焦点选区及其来源。
+#[derive(Debug, Clone)]
+pub struct FocusedSelection {
+    pub text: String,
+    pub source: SelectionSource,
+}
+
+/// **不碰剪贴板**读取当前焦点选区：先 TSF，再 UIA。
+///
+/// 两条都失败时返回 `None`，由调用方决定是否回退到模拟 Ctrl+C
+/// （那条路必然写剪贴板，恢复后还要清理历史）。
+/// 返回的文本没有 trim，截断策略由调用方决定。
+pub fn read_focused_selection() -> Option<FocusedSelection> {
+    if let Some(text) = crate::ime::ipc::read_focused_selection_text() {
+        if !text.trim().is_empty() {
+            return Some(FocusedSelection {
+                text,
+                source: SelectionSource::Tsf,
+            });
+        }
+        log::debug!("[selection] TSF selection read returned whitespace-only text");
+    }
+
+    if let Some(text) = crate::ime::uia::read_qa_selection() {
+        if !text.trim().is_empty() {
+            return Some(FocusedSelection {
+                text,
+                source: SelectionSource::Uia,
+            });
+        }
+        log::debug!("[selection] UIA selection read returned whitespace-only text");
+    }
+
+    None
+}

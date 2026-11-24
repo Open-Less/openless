@@ -21,4 +21,6 @@ pub mod guide;
 pub mod front_app;
 #[cfg(feature = "capsule")]
 pub mod window;
+#[cfg(feature = "capsule")]
+pub mod locale;
 pub mod secure_input;

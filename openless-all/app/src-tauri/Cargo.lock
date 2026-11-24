@@ -4534,6 +4534,7 @@ dependencies = [
  "libc",
  "log",
  "minisign-verify 0.2.5",
+ "ndk-context",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
  "once_cell",

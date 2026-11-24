@@ -487,26 +487,10 @@ impl NativeCapsule {
     }
 }
 
-/// `[[NSLocale localeWithLocaleIdentifier:locale] localizedStringForLocaleIdentifier:code]`,
-/// the same CLDR "standard" name `Intl.DisplayNames` gives the WebView.
+/// macOS：用 Foundation 的 CLDR "standard" 名称，与 WebView 的 `Intl.DisplayNames` 一致。
 #[cfg(target_os = "macos")]
 fn localized_language_name(code: &str, locale: &str) -> Option<String> {
-    use objc2::{msg_send, runtime::AnyClass, runtime::AnyObject};
-    use objc2_foundation::NSString;
-    let class = AnyClass::get("NSLocale")?;
-    let (identifier, code) = (NSString::from_str(locale), NSString::from_str(code));
-    objc2::rc::autoreleasepool(|_| unsafe {
-        // SAFETY: both selectors take an NSString and return autoreleased
-        // objects that are copied out before the pool drains.
-        let ns_locale: *mut AnyObject = msg_send![class, localeWithLocaleIdentifier: &*identifier];
-        if ns_locale.is_null() {
-            return None;
-        }
-        let name: *mut NSString = msg_send![ns_locale, localizedStringForLocaleIdentifier: &*code];
-        name.as_ref()
-            .map(|name| name.to_string())
-            .filter(|name| !name.is_empty())
-    })
+    openless_platform::macos::locale::localized_language_name(code, locale)
 }
 
 /// Windows has no per-call display locale; the native name is shown instead.
