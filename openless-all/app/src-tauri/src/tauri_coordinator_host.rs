@@ -55,7 +55,7 @@ fn capsule_transcript_rail_position(
     translation_active: bool,
     transcript_visible: bool,
 ) -> Option<CapsuleTranscriptRailPosition> {
-    if !transcript_visible && (!translation_active || style == CapsuleStyle::Siri) {
+    if !transcript_visible && (!translation_active || matches!(style, CapsuleStyle::Siri | CapsuleStyle::Classic)) {
         return None;
     }
     match style {
@@ -76,16 +76,9 @@ fn capsule_transcript_rail_position(
             const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
             const RAIL_GAP: f64 = 24.0;
-            const BADGE_HEIGHT: f64 = 28.0;
-            const BADGE_GAP: f64 = 8.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
             let gap = RAIL_GAP;
-            let height = if transcript_visible { RAIL_HEIGHT } else { 0.0 }
-                + if translation_active {
-                    BADGE_HEIGHT + if transcript_visible { BADGE_GAP } else { 0.0 }
-                } else {
-                    0.0
-                };
+            let height = RAIL_HEIGHT;
             let top_offset = body_top - RAIL_GAP - height;
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
@@ -180,14 +173,21 @@ fn capsule_control_hit_rect(
         ),
         CapsuleStyle::Siri => unreachable!(),
     };
-    let _ = transcript_visible;
-    let scale =
-        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     // Windows clips the native input region as well as CSS. Include the language
-    // picker only while translation is active; the transcript remains click-through.
+    // picker (at the top above any transcript rail) only while translation is
+    // active; the transcript itself remains in the click-through rail HWND.
     let picker_visible = style == CapsuleStyle::Classic && translation_active;
     let interactive_width = if picker_visible { 260.0 } else { logical_body_width };
-    let interactive_height = logical_body_height + if picker_visible { 36.0 } else { 0.0 };
+    let interactive_height = if picker_visible {
+        logical_body_height
+            + 24.0
+            + 28.0
+            + if transcript_visible { 52.0 + 8.0 } else { 0.0 }
+    } else {
+        logical_body_height
+    };
+    let scale =
+        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     let body_width = (interactive_width * scale).round() as i32;
     let body_height = (interactive_height * scale).round() as i32;
     let bottom_inset = (logical_bottom_inset * scale).round() as i32;
@@ -3046,8 +3046,8 @@ mod tests {
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 88.0,
-                top_offset: 12.0,
+                height: 52.0,
+                top_offset: 48.0,
                 gap: 24.0,
             })
         );
@@ -3076,21 +3076,10 @@ mod tests {
         ] {
             assert_eq!(capsule_transcript_rail_position(style, false, false), None);
         }
-        let classic_badge =
-            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
-            (classic_badge.height, classic_badge.top_offset),
-            (28.0, 72.0)
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false),
+            None
         );
-        let body_top = 172.0 - 16.0 - 32.0;
-        let body_bottom = 172.0 - 16.0;
-        let lobe_top = body_top - 8.0 - 10.0;
-        let lobe_bottom = lobe_top + 20.0;
-        let badge_bottom = classic_badge.top_offset + classic_badge.height;
-        assert_eq!((body_top, body_bottom), (124.0, 156.0));
-        assert_eq!(body_top - badge_bottom, 24.0);
-        assert!(badge_bottom <= lobe_top, "the badge must clear the processing lobe");
-        assert_eq!(lobe_bottom - body_top, 2.0);
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
         assert!((typeless_badge.height - 20.0 * 0.447).abs() < 1e-12);
@@ -3119,6 +3108,24 @@ mod tests {
                 left: 172,
                 right: 288,
                 top: 124,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, false, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 72,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, true, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 12,
                 bottom: 156,
             })
         );

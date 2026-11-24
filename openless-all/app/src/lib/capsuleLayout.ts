@@ -59,8 +59,9 @@ export interface ClassicCapsuleGeometry {
 
 /**
  * Classic uses one 172px layout coordinate system on desktop. The body, badge
- * lane, and a sibling rail each get an explicit vertical anchor so an external
- * rail is not treated as a missing same-window rail.
+ * lane, and transcript rail keep the exact same vertical stacking on macOS and
+ * Windows: translation badge at the very top, transcript rail in the middle,
+ * and the capsule body at the bottom.
  */
 export function getClassicCapsuleGeometry(
   os: OS,
@@ -69,22 +70,16 @@ export function getClassicCapsuleGeometry(
   transcriptInSameWindow: boolean,
 ): ClassicCapsuleGeometry {
   void os;
+  void transcriptInSameWindow;
   const pillHeight = 32;
   const hostHeight = CLASSIC_CAPSULE_HOST_HEIGHT;
   const bodyBottom = hostHeight - CLASSIC_CAPSULE_BOTTOM_INSET;
   const bodyTop = bodyBottom - pillHeight;
   const railHeight = getCapsuleTranscriptRailHeight('classic');
-  const sameWindowRail = transcriptVisible && transcriptInSameWindow;
-  const externalBadgeLane = transcriptVisible && !transcriptInSameWindow && translationActive;
-  const railTop = transcriptVisible
-    ? bodyTop -
-      CLASSIC_CAPSULE_RAIL_GAP -
-      railHeight -
-      (externalBadgeLane ? CLASSIC_CAPSULE_BADGE_HEIGHT + CLASSIC_CAPSULE_BADGE_GAP : 0)
-    : null;
+  const railTop = transcriptVisible ? bodyTop - CLASSIC_CAPSULE_RAIL_GAP - railHeight : null;
   const badgeBottom =
     bodyTop -
-    (sameWindowRail && translationActive
+    (transcriptVisible && translationActive
       ? CLASSIC_CAPSULE_BADGE_GAP + railHeight + CLASSIC_CAPSULE_RAIL_GAP
       : CLASSIC_CAPSULE_RAIL_GAP);
   const badgeTop = badgeBottom - CLASSIC_CAPSULE_BADGE_HEIGHT;
@@ -104,8 +99,8 @@ export function getCapsuleTranscriptRailHeight(style: CapsuleStyle): number {
   return CAPSULE_TRANSCRIPT_RAIL_HEIGHTS[style];
 }
 
-/** Classic's translating badge lives above the body and must also clear the
- * external 52px rail when the rail is hosted in a sibling HWND. */
+/** Classic's translating badge lives at the top above the body and clears the
+ * 52px transcript rail (plus its 8px gap) whenever the rail is visible. */
 export function getClassicTranslationBadgeOffset(
   transcriptVisible: boolean,
   transcriptInSameWindow = true,
@@ -151,7 +146,8 @@ export function getCapsuleTranscriptRailPosition(
   translationActive: boolean,
   transcriptVisible: boolean,
 ): CapsuleTranscriptRailPosition | null {
-  if (!transcriptVisible && (!translationActive || style === 'siri')) return null;
+  if (!transcriptVisible && (!translationActive || style === 'siri' || style === 'classic'))
+    return null;
   if (style === 'siri') {
     const bodyTop = 0;
     const railHeight = 40;
@@ -163,12 +159,8 @@ export function getCapsuleTranscriptRailPosition(
     const gap = CLASSIC_CAPSULE_RAIL_GAP;
     return {
       width: 460,
-      height:
-        (transcriptVisible ? geometry.railHeight : 0) +
-        (translationActive
-          ? CLASSIC_CAPSULE_BADGE_HEIGHT + (transcriptVisible ? CLASSIC_CAPSULE_BADGE_GAP : 0)
-          : 0),
-      topOffset: geometry.railTop ?? geometry.badgeTop,
+      height: geometry.railHeight,
+      topOffset: geometry.railTop!,
       gap,
     };
   }
