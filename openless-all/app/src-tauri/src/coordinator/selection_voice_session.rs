@@ -795,9 +795,6 @@ impl Coordinator {
         if !crate::selection::reactivate_selection_insertion_target(&insertion_target) {
             return Err("selectionVoiceTargetUnavailable".to_string());
         }
-        if crate::selection::is_truncated_selection_stand_in(&ticket.source_text) {
-            return Err("selectionVoiceSelectionTooLong".to_string());
-        }
         // Empty source_text = caret insert (Help me write). Skip Ctrl+C content
         // re-validation that assumes a non-empty selection (#1014).
         if !ticket.source_text.trim().is_empty() {
