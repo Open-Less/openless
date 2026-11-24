@@ -233,7 +233,7 @@ test('permissions check once per entry and only recheck focus after opening syst
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   expect(await reads()).toBe(1);
   await page.getByRole('button', { name: 'Open System Settings', exact: true }).click();
-  expect(await page.evaluate(() => window.askEntrySettingsFixture.settingsOpened())).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.askEntrySettingsFixture.settingsOpened())).toBe(1);
   const beforeReturn = await reads();
   await page.evaluate(() => {
     window.askEntrySettingsFixture.grantMicrophone();

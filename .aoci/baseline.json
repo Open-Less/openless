@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-24T11:34:00Z",
+  "updated_at": "2026-11-24T11:55:26Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -161,9 +161,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "118157b3962898664770b871bac02a54c5e7aad5d8e23a04ca2e2f5280124eae",
-      "size": 771638,
-      "normalized_sha256": "118157b3962898664770b871bac02a54c5e7aad5d8e23a04ca2e2f5280124eae"
+      "sha256": "25eb580b913f74891bcefb08bf1ac1ceec34a536192e6004e5e71c98b1f8b7ce",
+      "size": 771632,
+      "normalized_sha256": "25eb580b913f74891bcefb08bf1ac1ceec34a536192e6004e5e71c98b1f8b7ce"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -3446,15 +3446,15 @@
     },
     "openless-all/app/e2e/ask-anything.spec.ts": {
       "role": "observe",
-      "sha256": "c8bc1e9722e29a04dd30bd5b2a2f73c4e2dd3adb5c6c361c3374648fb57e58f2",
+      "sha256": "c2631f8b2ec14b7cc9bf5d4528a86eef6c78e0d872bdce58a866243c3b7d51f8",
       "size": 4156,
-      "normalized_sha256": "c8bc1e9722e29a04dd30bd5b2a2f73c4e2dd3adb5c6c361c3374648fb57e58f2"
+      "normalized_sha256": "c2631f8b2ec14b7cc9bf5d4528a86eef6c78e0d872bdce58a866243c3b7d51f8"
     },
     "openless-all/app/e2e/ask-entry-settings.spec.ts": {
       "role": "observe",
-      "sha256": "fe2cd3396c7725f4fbc15ba149a9d4948eac16600a369c212034991be5524c68",
-      "size": 11306,
-      "normalized_sha256": "fe2cd3396c7725f4fbc15ba149a9d4948eac16600a369c212034991be5524c68"
+      "sha256": "d1081859b204e89fb3d6172a55065ff553cd4f0976028744fc27eb32f93464ab",
+      "size": 11317,
+      "normalized_sha256": "d1081859b204e89fb3d6172a55065ff553cd4f0976028744fc27eb32f93464ab"
     },
     "openless-all/app/e2e/ask-window.spec.ts": {
       "role": "observe",
@@ -3722,9 +3722,9 @@
     },
     "openless-all/app/e2e/shortcut-clear-dropdown.spec.ts": {
       "role": "observe",
-      "sha256": "80ce8ae208a08a2eef9094b9fe74ceb6abdc4cd5bf5e272035837887bde6cf50",
-      "size": 3863,
-      "normalized_sha256": "80ce8ae208a08a2eef9094b9fe74ceb6abdc4cd5bf5e272035837887bde6cf50"
+      "sha256": "4800b6942410affbcc4c7746d3a84637eb9823f8474dedd917fa7b958f3a297b",
+      "size": 3701,
+      "normalized_sha256": "4800b6942410affbcc4c7746d3a84637eb9823f8474dedd917fa7b958f3a297b"
     },
     "openless-all/app/e2e/siwc.spec.ts": {
       "role": "observe",
@@ -10691,9 +10691,9 @@
     },
     "openless-all/app/src/features/settings/shell/tabs.tsx": {
       "role": "index",
-      "sha256": "71fbcfa2e1c51fa490d17f5b1d9c70771203e286068ef5753174d5ef60ce2591",
-      "size": 27395,
-      "normalized_sha256": "71fbcfa2e1c51fa490d17f5b1d9c70771203e286068ef5753174d5ef60ce2591"
+      "sha256": "6d8305dd06ba56df12997bc7521a7c82f3732ac4732ba138c6ebbf55c71c8994",
+      "size": 27323,
+      "normalized_sha256": "6d8305dd06ba56df12997bc7521a7c82f3732ac4732ba138c6ebbf55c71c8994"
     },
     "openless-all/app/src/features/settings/shell/useSettingsLayer.ts": {
       "role": "index",
