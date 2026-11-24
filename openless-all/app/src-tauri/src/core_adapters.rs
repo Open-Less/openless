@@ -43,6 +43,28 @@ pub(crate) fn backend_slot() -> BackendSlot {
     Arc::new(Mutex::new(None))
 }
 
+fn publish_archive_recording_fault(
+    backend: &BackendSlot,
+    session_id: SessionId,
+    progress: &Arc<dyn RecordingProgressSink>,
+    message: String,
+) {
+    let error = BackendError::new(BackendErrorCode::Persistence, message);
+    let _ = progress.publish(openless_core::RecordingEvent::Fatal(error.clone()));
+    let backend = backend.lock().clone();
+    // Never join the audio worker from its own level callback. Core owns the
+    // asynchronous stop, ASR cancellation, history and admission cleanup.
+    tauri::async_runtime::spawn(async move {
+        if let Some(backend) = backend.and_then(|weak| weak.upgrade()) {
+            if let Err(error) = backend.report_recording_fault(session_id, error).await {
+                if error.code != BackendErrorCode::InvalidState {
+                    log::warn!("[recordings] archive fault cleanup failed: {error}");
+                }
+            }
+        }
+    });
+}
+
 /// Native audio callbacks and resource destructors do not inherit Tokio's
 /// thread-local context. Always enqueue on Tauri's shared executor instead of
 /// asking the callback thread for a runtime and silently losing its cleanup.
@@ -3218,6 +3240,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     Arc::new(Mutex::new(None));
                 let status_for_levels = Arc::clone(&archive_status_slot);
                 let fault_reported = AtomicBool::new(false);
+                let archive_fault_backend = Arc::clone(&backend_for_recording);
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
@@ -3227,9 +3250,12 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         .and_then(|status| status.error());
                     if let Some(error) = archive_error {
                         if !fault_reported.swap(true, Ordering::AcqRel) {
-                            let _ = level_progress.publish(openless_core::RecordingEvent::Fatal(
-                                BackendError::new(BackendErrorCode::Persistence, error),
-                            ));
+                            publish_archive_recording_fault(
+                                &archive_fault_backend,
+                                session_id,
+                                &level_progress,
+                                error,
+                            );
                         }
                     }
                     let _ = level_progress
@@ -3959,6 +3985,7 @@ impl AudioRecorder for TauriAudioRecorder {
                     Arc::new(Mutex::new(None));
                 let status_for_levels = Arc::clone(&archive_status_slot);
                 let fault_reported = AtomicBool::new(false);
+                let archive_fault_backend = Arc::clone(&backend_for_recording);
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
@@ -3968,9 +3995,12 @@ impl AudioRecorder for TauriAudioRecorder {
                         .and_then(|status| status.error());
                     if let Some(error) = archive_error {
                         if !fault_reported.swap(true, Ordering::AcqRel) {
-                            let _ = level_progress.publish(openless_core::RecordingEvent::Fatal(
-                                BackendError::new(BackendErrorCode::Persistence, error),
-                            ));
+                            publish_archive_recording_fault(
+                                &archive_fault_backend,
+                                session_id,
+                                &level_progress,
+                                error,
+                            );
                         }
                     }
                     let _ = level_progress
@@ -5943,6 +5973,88 @@ fn map_tauri_error(error: impl std::fmt::Display) -> BackendError {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn archive_fault_from_audio_thread_releases_capture_and_admission() {
+        struct Progress(std::sync::atomic::AtomicUsize);
+        impl RecordingProgressSink for Progress {
+            fn publish_level(&self, _: u64, _: f32) -> Result<(), BackendError> {
+                Ok(())
+            }
+            fn publish(&self, event: openless_core::RecordingEvent) -> Result<(), BackendError> {
+                assert!(matches!(event, openless_core::RecordingEvent::Fatal(_)));
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+        }
+        struct Host;
+        impl HostActions for Host {
+            fn request(&self, _: HostAction) -> Result<(), BackendError> {
+                Ok(())
+            }
+        }
+        let directory =
+            std::env::temp_dir().join(format!("openless-archive-fault-{}", uuid::Uuid::new_v4()));
+        let engine = Arc::new(openless_core::testing::FixtureDictationEngine::successful(
+            "", "",
+        ));
+        let mut dependencies = openless_core::BackendDependencies::unsupported();
+        dependencies.dictation_engine = engine.clone();
+        dependencies.host_actions = Arc::new(Host);
+        let backend = Arc::new(
+            openless_core::OpenLessBackend::new(
+                openless_core::BackendConfig {
+                    data_dir: directory.clone(),
+                    ..Default::default()
+                },
+                dependencies,
+            )
+            .unwrap(),
+        );
+        backend.start().await.unwrap();
+        let id = backend
+            .start_dictation_with_options(openless_core::DictationStartOptions {
+                insert_text: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let slot = backend_slot();
+        *slot.lock() = Some(Arc::downgrade(&backend));
+        let progress = Arc::new(Progress(std::sync::atomic::AtomicUsize::new(0)));
+        let sink: Arc<dyn RecordingProgressSink> = progress.clone();
+        // A native worker has no inherited Tokio runtime and must never block on cleanup.
+        std::thread::spawn(move || {
+            publish_archive_recording_fault(&slot, id, &sink, "disk write failed".into())
+        })
+        .join()
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while backend.snapshot().dictation.session_id.is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(progress.0.load(Ordering::Acquire), 1);
+        assert!(engine
+            .actions()
+            .contains(&openless_core::testing::FixtureEngineAction::Cancel(id)));
+        assert_eq!(
+            backend.list_history().unwrap()[0].error_code.as_deref(),
+            Some("recordingFailed")
+        );
+        let next = backend
+            .start_dictation_with_options(openless_core::DictationStartOptions {
+                insert_text: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        backend.cancel_dictation(Some(next)).await.unwrap();
+        drop(backend);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn live_input_retargets_only_before_any_write() {
         #[derive(Debug)]

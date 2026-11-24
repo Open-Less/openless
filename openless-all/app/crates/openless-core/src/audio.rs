@@ -734,6 +734,68 @@ pub fn decode_dictation_wav(wav: &[u8]) -> Result<&[u8], crate::BackendError> {
     pcm.ok_or_else(invalid)
 }
 
+/// Inspect only the header and metadata of an app-generated canonical WAV.
+pub fn canonical_archive_pcm_len(file: &mut std::fs::File) -> Result<u64, crate::BackendError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut inspect = || -> std::io::Result<u64> {
+        file.seek(SeekFrom::Start(0))?;
+        let mut header = [0; 44];
+        file.read_exact(&mut header)?;
+        let bytes = u32::from_le_bytes(header[40..44].try_into().unwrap());
+        let riff = u32::from_le_bytes(header[4..8].try_into().unwrap());
+        if &header[..4] != b"RIFF"
+            || &header[8..20] != b"WAVEfmt \x10\0\0\0"
+            || header[20..22] != 1u16.to_le_bytes()
+            || header[22..24] != 1u16.to_le_bytes()
+            || header[24..28] != 16_000u32.to_le_bytes()
+            || header[28..32] != 32_000u32.to_le_bytes()
+            || header[32..34] != 2u16.to_le_bytes()
+            || header[34..36] != 16u16.to_le_bytes()
+            || &header[36..40] != b"data"
+            || !bytes.is_multiple_of(2)
+            || bytes.checked_add(36) != Some(riff)
+            || file.metadata()?.len() != 44 + u64::from(bytes)
+        {
+            return Err(std::io::Error::other(
+                "recording archive is not a complete canonical PCM WAV",
+            ));
+        }
+        Ok(u64::from(bytes))
+    };
+    inspect().map_err(|error| {
+        crate::BackendError::new(crate::BackendErrorCode::Persistence, error.to_string())
+    })
+}
+
+/// Read one PCM range without allocating or scanning the rest of the archive.
+pub fn read_canonical_archive_pcm_range(
+    file: &mut std::fs::File,
+    offset: u64,
+    len: usize,
+) -> Result<Vec<u8>, crate::BackendError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let bytes = canonical_archive_pcm_len(file)?;
+    if !offset.is_multiple_of(2)
+        || !len.is_multiple_of(2)
+        || offset > bytes
+        || len as u64 > bytes - offset
+    {
+        return Err(crate::BackendError::new(
+            crate::BackendErrorCode::Persistence,
+            "recording PCM range is out of bounds",
+        ));
+    }
+    let mut read = || -> std::io::Result<Vec<u8>> {
+        file.seek(SeekFrom::Start(44 + offset))?;
+        let mut pcm = vec![0; len];
+        file.read_exact(&mut pcm)?;
+        Ok(pcm)
+    };
+    read().map_err(|error| {
+        crate::BackendError::new(crate::BackendErrorCode::Persistence, error.to_string())
+    })
+}
+
 impl PcmNormalizer {
     pub fn process(
         &mut self,
@@ -868,6 +930,41 @@ mod tests {
             .iter()
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect()
+    }
+
+    #[test]
+    fn canonical_archive_reads_sparse_tail_with_bounded_buffer_and_rejects_corruption() {
+        use std::io::{Seek, SeekFrom, Write};
+        let path =
+            std::env::temp_dir().join(format!("openless-range-{}.wav", uuid::Uuid::new_v4()));
+        let bytes = 32_000 * 31 * 60u32;
+        let mut header = encode_dictation_wav(&[]).unwrap();
+        header[4..8].copy_from_slice(&(36 + bytes).to_le_bytes());
+        header[40..44].copy_from_slice(&bytes.to_le_bytes());
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&header).unwrap();
+        file.set_len(44 + u64::from(bytes)).unwrap();
+        file.seek(SeekFrom::End(-4)).unwrap();
+        file.write_all(&[1, 2, 3, 4]).unwrap();
+        assert_eq!(
+            canonical_archive_pcm_len(&mut file).unwrap(),
+            u64::from(bytes)
+        );
+        assert_eq!(
+            read_canonical_archive_pcm_range(&mut file, u64::from(bytes) - 4, 4).unwrap(),
+            [1, 2, 3, 4]
+        );
+        assert!(read_canonical_archive_pcm_range(&mut file, u64::from(bytes) - 2, 4).is_err());
+        assert!(read_canonical_archive_pcm_range(&mut file, 1, 2).is_err());
+        file.set_len(46).unwrap();
+        assert!(canonical_archive_pcm_len(&mut file).is_err());
+        drop(file);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
