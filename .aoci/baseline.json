@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-24T11:19:22Z",
+  "updated_at": "2026-11-24T11:28:06Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -161,9 +161,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "ddd5f2d9e4a6db77e5805e26a26985c32f8d4f52bf8759d0f410c299b7006001",
-      "size": 771263,
-      "normalized_sha256": "ddd5f2d9e4a6db77e5805e26a26985c32f8d4f52bf8759d0f410c299b7006001"
+      "sha256": "670fbaf504e084cf88210c3638a20cd5615dffe56d500b10767bfa612839fa7f",
+      "size": 771480,
+      "normalized_sha256": "670fbaf504e084cf88210c3638a20cd5615dffe56d500b10767bfa612839fa7f"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -414,9 +414,9 @@
     },
     "docs/development/long-recording.md": {
       "role": "index",
-      "sha256": "df5db57e31a5f8d9a859ff60cf740921997d559493d5cea602dd3c3ece3f5dc9",
-      "size": 6224,
-      "normalized_sha256": "df5db57e31a5f8d9a859ff60cf740921997d559493d5cea602dd3c3ece3f5dc9"
+      "sha256": "ee3a5a5ee07fa6458a3c520663ddb1b951dde0c2aeefbb7d49baf4b90ae055af",
+      "size": 6415,
+      "normalized_sha256": "ee3a5a5ee07fa6458a3c520663ddb1b951dde0c2aeefbb7d49baf4b90ae055af"
     },
     "docs/development/official-style-packs.md": {
       "role": "index",
@@ -6486,9 +6486,9 @@
     },
     "openless-all/app/scripts/test-recorder-module.py": {
       "role": "index",
-      "sha256": "548f084d5a194236c2a33857cfe3d33dd2020121f9c6c4398df68e876acfa080",
-      "size": 3952,
-      "normalized_sha256": "548f084d5a194236c2a33857cfe3d33dd2020121f9c6c4398df68e876acfa080"
+      "sha256": "304b7cca0fd86c65465d682351495be17a9e77e2ce174efcba3275e7fdc1a0ac",
+      "size": 4009,
+      "normalized_sha256": "304b7cca0fd86c65465d682351495be17a9e77e2ce174efcba3275e7fdc1a0ac"
     },
     "openless-all/app/scripts/test-windows-hang-diagnostics.py": {
       "role": "index",
@@ -8435,9 +8435,9 @@
     },
     "openless-all/app/src-tauri/src/recorder.rs": {
       "role": "index",
-      "sha256": "9d00164c0ebc04c4f4c089f6ada4cd2fd235863b915a8ef4beb1acb68ee53680",
-      "size": 197581,
-      "normalized_sha256": "9d00164c0ebc04c4f4c089f6ada4cd2fd235863b915a8ef4beb1acb68ee53680"
+      "sha256": "d1544d4c8761dda58d9757ad3ae482bf65fb08771c2e37290f7d212ab5e50076",
+      "size": 200590,
+      "normalized_sha256": "d1544d4c8761dda58d9757ad3ae482bf65fb08771c2e37290f7d212ab5e50076"
     },
     "openless-all/app/src-tauri/src/recorder/android_capture.rs": {
       "role": "index",

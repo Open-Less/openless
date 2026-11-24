@@ -3790,13 +3790,11 @@ impl WavArchiver {
     }
 
     fn checkpoint_header(&mut self) -> Result<(), String> {
-        if let Some(error) = &self.failed {
-            return Err(error.clone());
-        }
+        // Repairing retained PCM is independent of whether capture already failed.
+        // Append remains disabled by the latched error, even after this succeeds.
         let Some(header) = checked_wav_header(self.data_bytes) else {
             let message = "wav archive exceeds 4 GiB RIFF limit".to_string();
-            self.failed = Some(message.clone());
-            return Err(message);
+            return Err(self.failed.get_or_insert(message).clone());
         };
         use std::io::{Seek, SeekFrom, Write};
         let result = (|| -> std::io::Result<()> {
@@ -3813,8 +3811,7 @@ impl WavArchiver {
             }
             Err(error) => {
                 let message = format!("wav archive header update failed: {error}");
-                self.failed = Some(message.clone());
-                Err(message)
+                Err(self.failed.get_or_insert(message).clone())
             }
         }
     }
@@ -3824,20 +3821,29 @@ impl WavArchiver {
             return self.failed.clone().map_or(Ok(()), Err);
         }
         self.finalized = true;
-        self.checkpoint_header()?;
-        if let Err(error) = self.file.sync_all() {
-            let message = format!("wav archive sync failed: {error}");
-            self.failed = Some(message.clone());
-            return Err(message);
+        if self.failed.is_some()
+            && self.file.metadata().map(|metadata| metadata.len()).ok()
+                != Some(44 + self.data_bytes)
+        {
+            // Retry a failed partial-append rollback before declaring retained sizes.
+            if let Err(error) = self.file.set_len(44 + self.data_bytes) {
+                log::warn!("[recordings] failed to truncate retained PCM: {error}");
+                return self.failed.clone().map_or(Ok(()), Err);
+            }
         }
-        Ok(())
+        let _ = self.checkpoint_header();
+        if let Err(error) = self.file.sync_all() {
+            self.failed
+                .get_or_insert_with(|| format!("wav archive sync failed: {error}"));
+        }
+        self.failed.clone().map_or(Ok(()), Err)
     }
 }
 
 impl Drop for WavArchiver {
     fn drop(&mut self) {
-        if !self.finalized && self.failed.is_none() && self.checkpoint_header().is_ok() {
-            let _ = self.file.sync_all();
+        if !self.finalized {
+            let _ = self.finalize();
         }
     }
 }
@@ -5171,6 +5177,58 @@ mod tests {
         }
         assert!(checked_wav_header(u64::from(u32::MAX) - 35).is_none());
         assert!(checked_wav_header(u64::from(u32::MAX) - 36).is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wav_archiver_failure_finalizes_retained_prefix_without_clearing_error() {
+        use std::io::{Seek, SeekFrom, Write};
+        for explicit_finalize in [false, true] {
+            let path = archive_test_path("openless-archive-retained-prefix");
+            let pcm = [1u8, 2].repeat(1_600);
+            let mut archiver = WavArchiver::create(&path).unwrap();
+            archiver.append(&pcm).unwrap();
+            let before = std::fs::read(&path).unwrap();
+            assert_eq!(&before[40..44], &0u32.to_le_bytes());
+            archiver.file = std::fs::File::open(&path).unwrap();
+            let original_error = archiver.append(&[3, 4]).unwrap_err();
+            archiver.file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            // Model a partial tail whose immediate rollback could not complete.
+            archiver.file.seek(SeekFrom::End(0)).unwrap();
+            archiver.file.write_all(&[0x7f]).unwrap();
+            assert_eq!(archiver.append(&[5, 6]).unwrap_err(), original_error);
+            if explicit_finalize {
+                assert_eq!(archiver.finalize().unwrap_err(), original_error);
+                assert_eq!(archiver.finalize().unwrap_err(), original_error);
+                assert_eq!(archiver.failed.as_deref(), Some(original_error.as_str()));
+            }
+            drop(archiver);
+            let wav = std::fs::read(&path).unwrap();
+            assert_eq!(
+                openless_core::audio::decode_dictation_wav(&wav).unwrap(),
+                pcm
+            );
+            assert_eq!(wav.len(), 44 + pcm.len());
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn wav_archiver_header_repair_keeps_the_first_failure() {
+        let path = archive_test_path("openless-archive-header-repair");
+        let mut archiver = WavArchiver::create(&path).unwrap();
+        archiver.append(&[1, 2, 3, 4]).unwrap();
+        archiver.file = std::fs::File::open(&path).unwrap();
+        let original_error = archiver.append(&[5, 6]).unwrap_err();
+        assert_eq!(archiver.checkpoint_header().unwrap_err(), original_error);
+        archiver.file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert_eq!(archiver.finalize().unwrap_err(), original_error);
+        drop(archiver);
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(
+            openless_core::audio::decode_dictation_wav(&wav).unwrap(),
+            [1, 2, 3, 4]
+        );
         std::fs::remove_file(path).unwrap();
     }
 
